@@ -13,6 +13,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import yaml from "js-yaml";
 import { ParLight } from "./ParLight.js";
+import { LedStrand } from "./LedStrand.js";
 
 // ─── Globals ────────────────────────────────────────────────────────────
 let scene, camera, renderer, composer, controls;
@@ -65,6 +66,7 @@ const params = {
   fixtureToolMode: "translate",
   parLights: [], // Safe fallback before config loads
   traces: [],    // Trace configs for group generator
+  ledStrands: [], // LED strand configs
 };
 
 // ─── Undo / Redo ─────────────────────────────────────────────────────────
@@ -79,6 +81,8 @@ function captureSnapshot() {
       snapshot.parLights = JSON.parse(JSON.stringify(params.parLights));
     } else if (key === 'traces') {
       snapshot.traces = JSON.parse(JSON.stringify(params.traces));
+    } else if (key === 'ledStrands') {
+      snapshot.ledStrands = JSON.parse(JSON.stringify(params.ledStrands));
     } else {
       snapshot[key] = params[key];
     }
@@ -100,12 +104,15 @@ function applySnapshot(snapshot) {
         params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
       } else if (key === 'traces') {
         params.traces = JSON.parse(JSON.stringify(snapshot.traces || []));
+      } else if (key === 'ledStrands') {
+        params.ledStrands = JSON.parse(JSON.stringify(snapshot.ledStrands || []));
       } else {
         params[key] = snapshot[key];
       }
     }
     rebuildParLights();
     if (window.rebuildTraceObjects) window.rebuildTraceObjects();
+    if (window.rebuildLedStrands) window.rebuildLedStrands();
     if (window.renderParGUI) window.renderParGUI();
     if (window.renderGeneratorGUI) window.renderGeneratorGUI();
     if (window.guiInstance) {
@@ -152,6 +159,10 @@ function extractParams(node) {
       });
       continue;
     }
+    if (key === "strands" && Array.isArray(node[key])) {
+      params.ledStrands = node[key];
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -185,6 +196,10 @@ function reconstructYAML(node) {
     }
     if (key === "traces" && Array.isArray(node[key])) {
       node[key] = params.traces;
+      continue;
+    }
+    if (key === "strands" && Array.isArray(node[key])) {
+      node[key] = params.ledStrands;
       continue;
     }
 
@@ -526,6 +541,10 @@ function onPointerDown(event) {
       // Trace handle clicked — open the generator GUI for this trace
       deselectAllFixtures();
       if (window.openTraceFolder) window.openTraceFolder(hit.userData.traceIndex);
+    } else if (hit.userData.isLedStrand) {
+      // LED strand handle clicked — open the strand GUI
+      deselectAllFixtures();
+      if (window.openStrandFolder && hit.userData.fixture) window.openStrandFolder(hit.userData.fixture.index);
     } else if (hit.userData.isParLight) {
       const fixtureIndex = hit.userData.fixture.index;
       if (event.shiftKey) {
@@ -591,6 +610,11 @@ function onTransformChange() {
   // Handle trace objects
   if (obj.userData.isTrace && window._onTraceTransformChange) {
     window._onTraceTransformChange(obj);
+    return;
+  }
+  // Handle LED strand objects
+  if (obj.userData.isLedStrand && window._onStrandTransformChange) {
+    window._onStrandTransformChange(obj);
     return;
   }
 
@@ -1349,6 +1373,11 @@ function setupGUI() {
           buildParLightsSection(parentFolder, entry);
           continue;
         }
+        // Special: ledStrandArray → build LED Strands UI
+        if (sectionMeta.type === "ledStrandArray") {
+          buildLedStrandsSection(parentFolder, entry);
+          continue;
+        }
 
         const folder = parentFolder.addFolder(sectionMeta.label);
         if (sectionMeta.collapsed) folder.close();
@@ -1372,20 +1401,8 @@ function setupGUI() {
 
   // ─── Par Lights Special Section ───
   function buildParLightsSection(parentFolder, sectionNode) {
-    const parFolder = parentFolder.addFolder(sectionNode._section.label);
-
-    // Add non-fixture controls (parsEnabled, etc.)
-    for (const key of Object.keys(sectionNode)) {
-      if (key === "_section" || key === "fixtures") continue;
-      const entry = sectionNode[key];
-      if (entry && typeof entry === "object" && entry.value !== undefined) {
-        if (params[key] === undefined) params[key] = entry.value;
-        addControl(parFolder, key, entry);
-      }
-    }
-
-    // ─── Layout Tools (clean sub-folder) ───
-    const layoutFolder = parFolder.addFolder("Layout Tools");
+    // ─── Layout Tools (top-level, above Par Lights) ───
+    const layoutFolder = parentFolder.addFolder("Layout Tools");
     layoutFolder.close();
 
     layoutFolder
@@ -1401,7 +1418,7 @@ function setupGUI() {
     function applySnap() {
       if (params.snapEnabled) {
         transformControl.setRotationSnap(THREE.MathUtils.degToRad(params.snapAngle));
-        transformControl.setTranslationSnap(params.snapAngle * 0.1); // proportional
+        transformControl.setTranslationSnap(params.snapAngle * 0.1);
       } else {
         transformControl.setRotationSnap(null);
         transformControl.setTranslationSnap(null);
@@ -1444,6 +1461,18 @@ function setupGUI() {
         "toggleSpace",
       )
       .name("Toggle Local/World [Q]");
+
+    const parFolder = parentFolder.addFolder(sectionNode._section.label);
+
+    // Add non-fixture controls (parsEnabled, etc.)
+    for (const key of Object.keys(sectionNode)) {
+      if (key === "_section" || key === "fixtures") continue;
+      const entry = sectionNode[key];
+      if (entry && typeof entry === "object" && entry.value !== undefined) {
+        if (params[key] === undefined) params[key] = entry.value;
+        addControl(parFolder, key, entry);
+      }
+    }
 
     const parListFolder = parFolder.addFolder("Light Instances");
 
@@ -2421,6 +2450,148 @@ function setupGUI() {
 
     window.renderParGUI = renderParGUI;
     renderParGUI();
+  }
+
+  // ─── LED Strands Section ─────────────────────────────────────────────────
+  function buildLedStrandsSection(parentFolder, sectionConfig) {
+    const strandFolder = parentFolder.addFolder(sectionConfig._section.label);
+    strandFolder.close();
+
+    // Master toggle
+    strandFolder.add(params, 'strandsEnabled').name('Master Enabled').onChange(v => {
+      (window.ledStrandFixtures || []).forEach(f => f.setVisibility(v));
+    });
+
+    window.ledStrandFixtures = [];
+
+    function rebuildLedStrands() {
+      if (window.ledStrandFixtures) {
+        window.ledStrandFixtures.forEach(f => f.destroy());
+      }
+      window.ledStrandFixtures = [];
+      params.ledStrands.forEach((config, index) => {
+        const fixture = new LedStrand(config, index, scene, interactiveObjects);
+        fixture.setVisibility(params.strandsEnabled !== false);
+        window.ledStrandFixtures.push(fixture);
+      });
+    }
+    window.rebuildLedStrands = rebuildLedStrands;
+
+    // Transform handler for strand handles
+    window._onStrandTransformChange = function(obj) {
+      if (!obj.userData.isLedStrand) return false;
+      const fixture = obj.userData.fixture;
+      if (!fixture) return false;
+      fixture.writeTransformToConfig(obj.userData.handleType);
+      fixture.rebuildVisuals();
+      debounceAutoSave();
+      return true;
+    };
+
+    // --- LED Strand GUI ---
+    window.strandGuiFolders = [];
+    window.openStrandFolder = function(strandIndex) {
+      strandFolder.open();
+      if (window.strandGuiFolders[strandIndex]) {
+        window.strandGuiFolders[strandIndex].open();
+      }
+    };
+
+    function renderStrandGUI() {
+      const existing = [...strandFolder.folders];
+      existing.forEach(f => f.destroy());
+      window.strandGuiFolders = [];
+
+      // New Strand button
+      const newBtnDiv = document.createElement('div');
+      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#2a2a2a;color:#88ff44;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+      const newBtn = document.createElement('button');
+      newBtn.textContent = '+ New Strand';
+      newBtn.style.cssText = btnStyle;
+      newBtn.onclick = () => {
+        pushUndo();
+        params.ledStrands.push({
+          name: `Strand ${params.ledStrands.length + 1}`,
+          startX: -3, startY: 5, startZ: 0,
+          endX: 3, endY: 5, endZ: 0,
+          color: '#ff8800',
+          intensity: 1.0,
+          ledCount: 10,
+        });
+        rebuildLedStrands();
+        renderStrandGUI();
+        debounceAutoSave();
+      };
+      newBtnDiv.appendChild(newBtn);
+      const children = strandFolder.domElement.querySelector('.children');
+      if (children) {
+        const old = children.querySelector('.strand-new-btn');
+        if (old) old.remove();
+        newBtnDiv.classList.add('strand-new-btn');
+        children.prepend(newBtnDiv);
+      }
+
+      // Strand sub-folders
+      params.ledStrands.forEach((strand, i) => {
+        const label = `💡 ${strand.name || `Strand ${i + 1}`}`;
+        const sFolder = strandFolder.addFolder(label);
+        sFolder.close();
+        window.strandGuiFolders[i] = sFolder;
+
+        sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
+          renderStrandGUI();
+          debounceAutoSave();
+        });
+
+        sFolder.addColor(strand, 'color').name('Color').onChange(() => {
+          rebuildLedStrands();
+          debounceAutoSave();
+        });
+
+        sFolder.add(strand, 'intensity', 0.1, 5, 0.1).name('Intensity').onChange(() => {
+          debounceAutoSave();
+        });
+
+        sFolder.add(strand, 'ledCount', 2, 100, 1).name('LED Count').onChange(() => {
+          rebuildLedStrands();
+          debounceAutoSave();
+        });
+
+        // Start/End position folders
+        const startF = sFolder.addFolder('Start Point (green)');
+        startF.close();
+        startF.add(strand, 'startX', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        startF.add(strand, 'startY', -100, 100, 0.5).name('Y').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        startF.add(strand, 'startZ', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        const endF = sFolder.addFolder('End Point (red)');
+        endF.close();
+        endF.add(strand, 'endX', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        endF.add(strand, 'endY', -100, 100, 0.5).name('Y').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+
+        // Delete button
+        const actDiv = document.createElement('div');
+        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕ Delete';
+        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#c33;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+        delBtn.onclick = () => {
+          pushUndo();
+          params.ledStrands.splice(i, 1);
+          rebuildLedStrands();
+          renderStrandGUI();
+          debounceAutoSave();
+        };
+        actDiv.appendChild(delBtn);
+        const sChildren = sFolder.domElement.querySelector('.children');
+        if (sChildren) sChildren.appendChild(actDiv);
+      });
+    }
+    window.renderStrandGUI = renderStrandGUI;
+
+    renderStrandGUI();
+    rebuildLedStrands();
   }
 
   // ─── Build the entire GUI from the config tree ───

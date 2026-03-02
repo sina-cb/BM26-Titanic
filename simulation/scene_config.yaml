@@ -9,13 +9,13 @@ atmosphere:
   _section:
     label: 🌌 Atmosphere
   ambientIntensity:
-    value: 0.03
+    value: 0.47
     label: Global Ambient
     min: 0
     max: 1
     step: 0.01
   exposure:
-    value: 0.5
+    value: 0.75
     label: Camera Exposure
     min: 0.1
     max: 3
@@ -276,7 +276,7 @@ parLights:
       z: 11.181129653118196
       rotX: 45.59222028844117
       rotY: 55.35298781935352
-      rotZ: -63.472995837108904
+      rotZ: -63.4729958371089
     - group: Line 1
       name: Line 1 1
       color: '#ffaa44'
@@ -286,7 +286,7 @@ parLights:
       x: 20.602963115872964
       y: 11.5
       z: 2.9966882244038895
-      rotX: -62.121681805657566
+      rotX: -62.12168180565754
       rotY: 134.19659356023698
       rotZ: -109.90917808922978
     - group: Line 1
@@ -298,7 +298,7 @@ parLights:
       x: 21.3080703203007
       y: 10.990002394587925
       z: 2.441619756117572
-      rotX: -62.121681805657566
+      rotX: -62.12168180565754
       rotY: 134.19659356023698
       rotZ: -109.90917808922978
     - group: Line 1
@@ -442,7 +442,7 @@ parLights:
       x: 29.769356773433568
       y: 4.8700311296430385
       z: -4.21920186331824
-      rotX: -62.121681805657566
+      rotX: -62.12168180565754
       rotY: 134.19659356023698
       rotZ: -109.90917808922978
     - group: Line 1
@@ -625,6 +625,126 @@ parLights:
       rotX: 74.96810675387201
       rotY: -51.35644581331218
       rotZ: -40.47966148021137
+    - group: Line 3
+      name: Line 3 1
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 33.09101811860076
+      y: 0.3297059978055028
+      z: -9.497909075362267
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 2
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 31.513967653302927
+      y: 1.4662772248880493
+      z: -8.279688638182801
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 3
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 29.936917188005097
+      y: 2.602848451970596
+      z: -7.061468201003333
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 4
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 28.359866722707267
+      y: 3.7394196790531424
+      z: -5.843247763823866
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 5
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 26.782816257409436
+      y: 4.875990906135689
+      z: -4.625027326644399
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 6
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 25.205765792111603
+      y: 6.0125621332182355
+      z: -3.4068068894649306
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 7
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 23.628715326813776
+      y: 7.149133360300782
+      z: -2.188586452285464
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 8
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 22.051664861515942
+      y: 8.285704587383329
+      z: -0.9703660151059967
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 9
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 20.474614396218115
+      y: 9.422275814465875
+      z: 0.24785442207346975
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
+    - group: Line 3
+      name: Line 3 10
+      color: '#00ffee'
+      intensity: 9
+      angle: 40
+      penumbra: 0.5
+      x: 18.89756393092028
+      y: 10.558847041548422
+      z: 1.466074859252938
+      rotX: 66.4373663977874
+      rotY: -35.24955454550508
+      rotZ: -23.504534400249415
   traces:
     - name: Line 1
       shape: line
@@ -649,21 +769,67 @@ parLights:
       radius: 3
       arc: 360
       spacing: 2
-      x: 23.276977477991707
+      x: 23.24675595289763
       y: 8.134174207006994
-      z: -7.252418055204268
+      z: -8.888387550940243
       rotX: -25
       rotY: 0
       rotZ: -25
       aimMode: lookAt
-      aimX: 26.963154813618235
+      aimX: 26.932933288524158
       aimY: 14.083250851184719
-      aimZ: -9.871590627137342
+      aimZ: -11.507560122873317
       lightColor: '#ffaa44'
       lightIntensity: 21
       lightAngle: 30
       groupName: Ring 3
       generated: true
+    - name: Line 3
+      shape: line
+      startX: 33.09101811860076
+      startY: 0.3297059978055028
+      startZ: -9.497909075362267
+      endX: 18.89756393092028
+      endY: 10.558847041548422
+      endZ: 1.466074859252938
+      spacing: 2
+      aimMode: direction
+      aimX: 33.386451705743184
+      aimY: 1.503469767011424
+      aimZ: -9.91594482790234
+      lightColor: '#00ffee'
+      lightIntensity: 9
+      lightAngle: 40
+      groupName: Line 3
+      generated: true
+ledStrands:
+  _section:
+    label: 🔌 LED Lights
+    type: ledStrandArray
+  strandsEnabled:
+    value: true
+    label: Master Enabled
+  strands:
+    - name: Strand 1
+      startX: -31.5
+      startY: 2.5
+      startZ: 13.5
+      endX: -28.29867971194932
+      endY: 12.5
+      endZ: 10.041042514034084
+      color: '#00ffaa'
+      intensity: 1.7
+      ledCount: 100
+    - name: Strand 2
+      startX: -26.74972095968297
+      startY: 5
+      startZ: 13.5
+      endX: -27.5
+      endY: 13.273020243045014
+      endZ: 10.5
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 100
 
 # ─── Options ──────────────────────────────────────────────────────────────
 options:
