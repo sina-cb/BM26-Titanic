@@ -1,0 +1,165 @@
+# BM26 Titanic — Scene Configuration
+# This file is the single source of truth for both scene state AND the GUI layout.
+# The UI is dynamically generated from this structure.
+# _section keys define GUI folders. Each control key carries UI metadata.
+# Order in this file = order in the GUI.
+
+# ─── Atmosphere ───────────────────────────────────────────────────────────
+atmosphere:
+  _section:
+    label: 🌌 Atmosphere
+  ambientIntensity:
+    value: 0.4
+    label: Global Ambient
+    min: 0
+    max: 1
+    step: 0.01
+  exposure:
+    value: 0.5
+    label: Camera Exposure
+    min: 0.1
+    max: 3
+    step: 0.05
+  moonlight:
+    _section:
+      label: 🌙 Moonlight
+      collapsed: true
+    moonEnabled:
+      value: true
+      label: Enabled
+    moonIntensity:
+      value: 0.95
+      label: Intensity
+      min: 0
+      max: 3
+      step: 0.05
+    moonColor:
+      value: '#8899cc'
+      label: Color
+      type: color
+    moonAngle:
+      value: 80
+      label: Elevation °
+      min: 0
+      max: 90
+      step: 1
+  bloom:
+    _section:
+      label: ✨ Bloom Glow
+      collapsed: true
+    bloomStrength:
+      value: 0.35
+      label: Strength
+      min: 0
+      max: 3
+      step: 0.05
+    bloomRadius:
+      value: 0.3
+      label: Radius
+      min: 0
+      max: 2
+      step: 0.05
+    bloomThreshold:
+      value: 0.92
+      label: Threshold
+      min: 0
+      max: 1
+      step: 0.01
+  towerFloods:
+    _section:
+      label: 🏗️ Tower Floods
+      collapsed: true
+    towersEnabled:
+      value: true
+      label: Enabled
+    towerIntensity:
+      value: 24.5
+      label: Intensity
+      min: 0
+      max: 30
+      step: 0.5
+    towerAngle:
+      value: 35
+      label: Cone Angle °
+      min: 10
+      max: 90
+      step: 1
+
+# ─── Model Transform ─────────────────────────────────────────────────────
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: -2
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 8
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 16
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: -90
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+
+# ─── Par Lights ───────────────────────────────────────────────────────────
+parLights:
+  _section:
+    label: 🎯 Par Lights
+    type: fixtureArray
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  fixtures: []
+
+# ─── Options ──────────────────────────────────────────────────────────────
+options:
+  _section:
+    label: ⚙️ Options
+  editMode:
+    value: false
+    label: 🛠️ Edit Mode (Flat Shading)
+    transient: true
+  showHelpers:
+    value: true
+    label: Show Light Fixtures
+    transient: true
+
+# ─── Configuration ────────────────────────────────────────────────────────
+config:
+  _section:
+    label: 💾 Configuration
+  autoSave:
+    value: false
+    label: Auto-Save on Change

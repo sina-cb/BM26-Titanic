@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BM26 Titanic — Lighting Simulation</title>
+    <meta
+      name="description"
+      content="Interactive 3D lighting simulation for the Burning Man 2026 Titanic Honoraria structure"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+          "js-yaml": "https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/+esm"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <!-- Loading overlay -->
+    <div id="loading-overlay">
+      <h1>Titanic</h1>
+      <div class="subtitle">Burning Man 2026 — Lighting Simulation</div>
+      <div class="progress-container">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div id="loading-status">Initializing…</div>
+    </div>
+
+    <!-- FPS counter -->
+    <div id="fps-counter"></div>
+
+    <!-- Info panel -->
+    <div id="info-panel">
+      <div class="title">BM26 TITANIC</div>
+      Orbit: Left-click + drag &nbsp;|&nbsp; Zoom: Scroll &nbsp;|&nbsp; Pan:
+      Right-click + drag
+    </div>
+
+    <!-- View presets -->
+    <div id="view-presets">
+      <button data-view="front">Front</button>
+      <button data-view="side">Side</button>
+      <button data-view="aerial">Aerial</button>
+      <button data-view="dramatic">Dramatic</button>
+      <button data-view="night-walk">Night Walk</button>
+    </div>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
