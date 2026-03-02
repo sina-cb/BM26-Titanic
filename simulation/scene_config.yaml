@@ -34,7 +34,7 @@ atmosphere:
       max: 3
       step: 0.05
     moonColor:
-      value: "#8899cc"
+      value: '#8899cc'
       label: Color
       type: color
     moonAngle:
@@ -142,9 +142,108 @@ parLights:
     value: true
     label: Master Enabled
   conesEnabled:
-    value: true
+    value: false
     label: Show Light Cones
-  fixtures: []
+  fixtures:
+    - name: Test 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -29.496027452125478
+      y: 2.7368713002838265
+      z: 16.32517870960132
+      rotX: -88.89885536395727
+      rotY: 0
+      rotZ: 0
+    - name: Test 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -27.47768759038979
+      y: 3.4947857271179483
+      z: 16.1584923385684
+      rotX: -86.35635956862149
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -25.47768759038979
+      y: 4.639566344147221
+      z: 16.1584923385684
+      rotX: -86.35635956862158
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -23.47768759038979
+      y: 5.850165000881833
+      z: 16.1584923385684
+      rotX: -86.35635956862158
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -21.47768759038979
+      y: 6.782128705706772
+      z: 16.1584923385684
+      rotX: -86.35635956862149
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy) (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -19.47768759038979
+      y: 7.974301711971685
+      z: 16.1584923385684
+      rotX: -86.35635956862149
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy) (copy) (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -17.47768759038979
+      y: 8.958166648741571
+      z: 16.1584923385684
+      rotX: -86.35635956862158
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy) (copy) (copy) (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -15.477687590389792
+      y: 10.007187933971812
+      z: 16.1584923385684
+      rotX: -86.35635956862158
+      rotY: 0
+      rotZ: 0
+    - name: Test 2 (copy) (copy) (copy) (copy) (copy) (copy) (copy)
+      color: '#ffaa44'
+      intensity: 21
+      angle: 35
+      penumbra: 0.5
+      x: -13.477687590389792
+      y: 11.159802801958808
+      z: 16.1584923385684
+      rotX: -86.35635956862158
+      rotY: 0
+      rotZ: 0
 
 # ─── Options ──────────────────────────────────────────────────────────────
 options:
