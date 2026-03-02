@@ -9,7 +9,7 @@ atmosphere:
   _section:
     label: 🌌 Atmosphere
   ambientIntensity:
-    value: 0.4
+    value: 0.03
     label: Global Ambient
     min: 0
     max: 1
@@ -28,7 +28,7 @@ atmosphere:
       value: true
       label: Enabled
     moonIntensity:
-      value: 0.95
+      value: 0.85
       label: Intensity
       min: 0
       max: 3
@@ -38,7 +38,7 @@ atmosphere:
       label: Color
       type: color
     moonAngle:
-      value: 80
+      value: 72
       label: Elevation °
       min: 0
       max: 90
@@ -48,13 +48,13 @@ atmosphere:
       label: ✨ Bloom Glow
       collapsed: true
     bloomStrength:
-      value: 0.35
+      value: 0.4
       label: Strength
       min: 0
       max: 3
       step: 0.05
     bloomRadius:
-      value: 0.3
+      value: 1
       label: Radius
       min: 0
       max: 2
@@ -73,13 +73,13 @@ atmosphere:
       value: true
       label: Enabled
     towerIntensity:
-      value: 24.5
+      value: 30
       label: Intensity
       min: 0
       max: 30
       step: 0.5
     towerAngle:
-      value: 35
+      value: 30
       label: Cone Angle °
       min: 10
       max: 90
@@ -145,105 +145,138 @@ parLights:
     value: false
     label: Show Light Cones
   fixtures:
-    - name: Test 1
+    - group: side1
+      name: Par 1
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
-      x: -29.496027452125478
-      y: 2.7368713002838265
-      z: 16.32517870960132
-      rotX: -88.89885536395727
-      rotY: 0
-      rotZ: 0
-    - name: Test 2
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
+      x: -29.050478092465735
+      y: 2.1023738903915805
+      z: 16.5
+      rotX: -69.92929496705824
+      rotY: -95.01402433609613
+      rotZ: -85.28906368744211
+    - group: side1
+      name: Par 2
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
-      x: -27.47768759038979
-      y: 3.4947857271179483
-      z: 16.1584923385684
-      rotX: -86.35635956862149
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy)
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
+      x: -26.962673757575267
+      y: 3.3394207420731443
+      z: 16.411936130991098
+      rotX: -74.45941932448031
+      rotY: -105.51874385966295
+      rotZ: -75.02266424219117
+    - group: chimney1
+      name: Par 3
+      color: '#00b3ff'
+      intensity: 37
+      angle: 74
+      penumbra: 0.45
+      x: -24.072478294618094
+      y: 6.7115386944651485
+      z: 9.240331438057705
+      rotX: 60.00006956400066
+      rotY: 90.00000000000011
+      rotZ: 60.000069564000725
+    - group: side1
+      name: Par 4
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
-      x: -25.47768759038979
-      y: 4.639566344147221
-      z: 16.1584923385684
-      rotX: -86.35635956862158
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy)
-      color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
       x: -23.47768759038979
-      y: 5.850165000881833
-      z: 16.1584923385684
-      rotX: -86.35635956862158
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy) (copy)
+      y: 5.287067456114564
+      z: 16.38723628097846
+      rotX: -69.68418537421289
+      rotY: -79.45308758098727
+      rotZ: 80.09576956646411
+    - group: side1
+      name: Par 5
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
       x: -21.47768759038979
-      y: 6.782128705706772
-      z: 16.1584923385684
-      rotX: -86.35635956862149
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy) (copy) (copy)
+      y: 6.5702610345539
+      z: 16.48982919172544
+      rotX: -69.68418537421289
+      rotY: -79.45308758098727
+      rotZ: 80.09576956646411
+    - group: side1
+      name: Par 6
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
-      x: -19.47768759038979
-      y: 7.974301711971685
-      z: 16.1584923385684
-      rotX: -86.35635956862149
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy) (copy) (copy) (copy)
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
+      x: -19.31869769682339
+      y: 7.747902934928101
+      z: 16.475176767871567
+      rotX: -64.75277287858783
+      rotY: -81.43123137674695
+      rotZ: 82.23926595984317
+    - group: side1
+      name: Par 7
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
       x: -17.47768759038979
       y: 8.958166648741571
-      z: 16.1584923385684
-      rotX: -86.35635956862158
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy) (copy) (copy) (copy) (copy)
+      z: 16.519293993392754
+      rotX: -64.75277287858783
+      rotY: -81.43123137674695
+      rotZ: 82.23926595984317
+    - group: side1
+      name: Par 8
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
       x: -15.477687590389792
       y: 10.007187933971812
-      z: 16.1584923385684
-      rotX: -86.35635956862158
-      rotY: 0
-      rotZ: 0
-    - name: Test 2 (copy) (copy) (copy) (copy) (copy) (copy) (copy)
+      z: 16.416259027569083
+      rotX: -64.75277287858783
+      rotY: -81.43123137674695
+      rotZ: 82.23926595984317
+    - group: side1
+      name: Par 9
       color: '#ffaa44'
-      intensity: 21
-      angle: 35
-      penumbra: 0.5
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
       x: -13.477687590389792
       y: 11.159802801958808
-      z: 16.1584923385684
-      rotX: -86.35635956862158
-      rotY: 0
-      rotZ: 0
+      z: 16.418836741014317
+      rotX: -64.75277287858783
+      rotY: -81.43123137674695
+      rotZ: 82.23926595984317
+    - group: side1
+      name: Par 10
+      color: '#ffaa44'
+      intensity: 15
+      angle: 33
+      penumbra: 0.45
+      x: -25.346359666332255
+      y: 4.150490548570045
+      z: 16.37137927591585
+      rotX: -69.97094944065003
+      rotY: -86.78345540086376
+      rotZ: 86.97762270046034
+    - group: chimney1
+      name: Par 11
+      color: '#00b3ff'
+      intensity: 37
+      angle: 74
+      penumbra: 0.45
+      x: -22.599213233435986
+      y: 7.6834901456208815
+      z: 11.181129653118196
+      rotX: 45.59222028844117
+      rotY: 55.35298781935352
+      rotZ: -63.472995837108904
 
 # ─── Options ──────────────────────────────────────────────────────────────
 options:

@@ -29,10 +29,9 @@ export class ParLight {
       1.5
     );
     this.light.position.set(config.x || 0, config.y || 1.5, config.z || 0);
-    this.light.castShadow = true;
-    this.light.shadow.mapSize.set(2048, 2048);
-    this.light.shadow.bias = -0.0005;
-    this.light.shadow.normalBias = 0.02;
+    // No shadow casting on par lights — WebGL has a hard limit on shadow-casting
+    // SpotLights (~4-8). The moonlight + tower floods provide scene shadows.
+    this.light.castShadow = false;
 
     this.scene.add(this.light);
     this.scene.add(this.light.target);

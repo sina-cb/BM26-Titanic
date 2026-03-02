@@ -22,6 +22,7 @@ let modelSize = new THREE.Vector3();
 let modelRadius = 1;
 let structureMaterial, editMaterial;
 let gridHelper, ground, starField;
+const modelMeshes = []; // Collected after model load for surface raycasting
 
 // Interaction / Transform
 let transformControl, raycaster, mouse;
@@ -35,17 +36,21 @@ function deselectAllFixtures() {
   }
   selectedFixtureIndices.clear();
 }
+let dragStartState = null; // Stores starting pos/rot for differential multi-select transforms
 
-// Generate next name by incrementing trailing number (or appending " 2")
+// Generate next name by finding the highest number with the same prefix and incrementing
 function nextFixtureName(baseName) {
   const match = baseName.match(/^(.+?)\s*(\d+)\s*$/);
-  const prefix = match ? match[1] : baseName;
-  const num = match ? parseInt(match[2], 10) : 1;
-  // Find the next available number
-  const existingNames = new Set(params.parLights.map(p => p.name));
-  let next = num + 1;
-  while (existingNames.has(`${prefix} ${next}`.trim())) next++;
-  return `${prefix} ${next}`.trim();
+  const prefix = match ? match[1].trim() : baseName.trim();
+  // Find the largest existing number with the same prefix
+  let maxNum = 0;
+  for (const p of params.parLights) {
+    const m = (p.name || '').match(/^(.+?)\s*(\d+)\s*$/);
+    if (m && m[1].trim() === prefix) {
+      maxNum = Math.max(maxNum, parseInt(m[2], 10));
+    }
+  }
+  return `${prefix} ${maxNum + 1}`;
 }
 
 const lights = { moon: null, towers: [], ambient: null, helpers: [] };
@@ -85,22 +90,27 @@ function pushUndo() {
 }
 
 function applySnapshot(snapshot) {
-  for (const key of Object.keys(snapshot)) {
-    if (key === 'parLights') {
-      params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
-    } else {
-      params[key] = snapshot[key];
+  if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+  try {
+    for (const key of Object.keys(snapshot)) {
+      if (key === 'parLights') {
+        params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
+      } else {
+        params[key] = snapshot[key];
+      }
     }
+    rebuildParLights();
+    if (window.renderParGUI) window.renderParGUI();
+    if (window.guiInstance) {
+      window.guiInstance.controllersRecursive().forEach(c => {
+        try { c.updateDisplay(); } catch (_) {}
+      });
+    }
+    if (window.applyAllHandlers) window.applyAllHandlers();
+    if (window.debounceAutoSave) window.debounceAutoSave();
+  } finally {
+    if (window._setGuiRebuilding) window._setGuiRebuilding(false);
   }
-  rebuildParLights();
-  if (window.renderParGUI) window.renderParGUI();
-  if (window.guiInstance) {
-    window.guiInstance.controllersRecursive().forEach(c => {
-      try { c.updateDisplay(); } catch (_) {}
-    });
-  }
-  if (window.applyAllHandlers) window.applyAllHandlers();
-  if (window.debounceAutoSave) window.debounceAutoSave();
 }
 
 function undo() {
@@ -241,11 +251,37 @@ function init() {
   mouse = new THREE.Vector2();
 
   transformControl = new TransformControls(camera, renderer.domElement);
-  transformControl.size = 0.6; // Smaller, less intrusive gizmo
-  transformControl.space = "world"; // Keep world space so translation axes don't rotate
+  transformControl.size = 0.6;
+  transformControl.space = "world";
+  transformControl.setRotationSnap(THREE.MathUtils.degToRad(5)); // Default 5° snap
+  transformControl.setTranslationSnap(0.5);
   transformControl.addEventListener("dragging-changed", (event) => {
-    controls.enabled = !event.value; // Disable orbit controls while dragging
-    if (event.value) pushUndo(); // Capture state when drag starts
+    controls.enabled = !event.value;
+    if (event.value) {
+      pushUndo();
+      // Capture starting state of all selected fixtures for differential transforms
+      if (selectedFixtureIndices.size > 1) {
+        const obj = transformControl.object;
+        const dragIdx = obj?.userData?.fixture?.index;
+        dragStartState = { dragIdx, fixtures: {} };
+        for (const idx of selectedFixtureIndices) {
+          const cfg = params.parLights[idx];
+          const f = window.parFixtures[idx];
+          if (cfg && f) {
+            dragStartState.fixtures[idx] = {
+              x: f.hitbox.position.x,
+              y: f.hitbox.position.y,
+              z: f.hitbox.position.z,
+              quat: f.hitbox.quaternion.clone(),
+            };
+          }
+        }
+      } else {
+        dragStartState = null;
+      }
+    } else {
+      dragStartState = null;
+    }
   });
   transformControl.addEventListener("change", onTransformChange);
   scene.add(transformControl);
@@ -256,11 +292,129 @@ function init() {
   // Events
   window.addEventListener("resize", onResize);
   window.addEventListener("pointerdown", onPointerDown);
-  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("keydown", onKeyDown, true); // capture phase to beat lil-gui focus
   setupViewPresets();
 
   // Start loop
   animate();
+}
+
+// ─── Snap-to-Surface Mode ────────────────────────────────────────────────
+let snapMode = false;
+let snapStep = 1; // 1 = position, 2 = aim direction
+let snapCursorGroup = null;
+let snapRingMat = null;
+let snapArrow = null;
+let lastSnapNormal = null;
+let lastSnapPoint = null;
+
+function createSnapCursor() {
+  snapCursorGroup = new THREE.Group();
+  snapCursorGroup.visible = false;
+
+  const ringGeo = new THREE.TorusGeometry(0.8, 0.06, 8, 32);
+  snapRingMat = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.9 });
+  const ring = new THREE.Mesh(ringGeo, snapRingMat);
+  snapCursorGroup.add(ring);
+
+  const dotGeo = new THREE.SphereGeometry(0.12, 8, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const dot = new THREE.Mesh(dotGeo, dotMat);
+  snapCursorGroup.add(dot);
+
+  const arrowDir = new THREE.Vector3(0, 0, 1);
+  snapArrow = new THREE.ArrowHelper(arrowDir, new THREE.Vector3(), 2.5, 0x00ccff, 0.6, 0.3);
+  snapCursorGroup.add(snapArrow);
+
+  scene.add(snapCursorGroup);
+}
+
+function setSnapStep(step) {
+  snapStep = step;
+  const indicator = document.getElementById('snap-indicator');
+  if (!indicator) return;
+  if (step === 1) {
+    indicator.textContent = 'Step 1/2 — Click on model surface to place fixture';
+    indicator.style.borderColor = '#00ccff';
+    indicator.style.color = '#00ccff';
+    indicator.style.background = 'rgba(0,204,255,0.15)';
+    if (snapRingMat) snapRingMat.color.setHex(0x00ccff);
+    if (snapArrow) snapArrow.setColor(0x00ccff);
+  } else {
+    indicator.textContent = 'Step 2/2 — Click where the light should aim';
+    indicator.style.borderColor = '#ffaa00';
+    indicator.style.color = '#ffaa00';
+    indicator.style.background = 'rgba(255,170,0,0.15)';
+    if (snapRingMat) snapRingMat.color.setHex(0xffaa00);
+    if (snapArrow) snapArrow.setColor(0xffaa00);
+  }
+}
+
+function toggleSnapMode(forceOff) {
+  if (forceOff === true) {
+    snapMode = false;
+  } else {
+    snapMode = !snapMode;
+  }
+  snapStep = 1;
+
+  if (!snapCursorGroup) createSnapCursor();
+  snapCursorGroup.visible = false;
+  lastSnapNormal = null;
+  lastSnapPoint = null;
+
+  renderer.domElement.style.cursor = snapMode ? 'crosshair' : 'default';
+
+  let indicator = document.getElementById('snap-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'snap-indicator';
+    indicator.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);border:1px solid #00ccff;color:#00ccff;padding:6px 16px;border-radius:6px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;backdrop-filter:blur(4px);';
+    document.body.appendChild(indicator);
+  }
+  indicator.style.display = snapMode ? 'block' : 'none';
+  if (snapMode) setSnapStep(1);
+}
+
+function onPointerMove(event) {
+  if (!snapMode || !snapCursorGroup) return;
+  if (event.target.closest && event.target.closest('.lil-gui')) {
+    snapCursorGroup.visible = false;
+    return;
+  }
+
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(modelMeshes, true);
+
+  if (intersects.length > 0) {
+    const hit = intersects[0];
+    const point = hit.point;
+    const faceNormal = hit.face.normal.clone();
+
+    // Transform normal from object local space to world space
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+    faceNormal.applyMatrix3(normalMatrix).normalize();
+
+    // Position cursor at intersection point, slightly offset along normal
+    snapCursorGroup.position.copy(point).addScaledVector(faceNormal, 0.05);
+
+    // Orient the cursor group so its local +Z aligns with the face normal
+    const up = new THREE.Vector3(0, 0, 1);
+    const quat = new THREE.Quaternion().setFromUnitVectors(up, faceNormal);
+    snapCursorGroup.quaternion.copy(quat);
+
+    snapCursorGroup.visible = true;
+    lastSnapNormal = faceNormal;
+    lastSnapPoint = point.clone();
+  } else {
+    snapCursorGroup.visible = false;
+    lastSnapNormal = null;
+    lastSnapPoint = null;
+  }
 }
 
 function onPointerDown(event) {
@@ -275,6 +429,66 @@ function onPointerDown(event) {
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
+  // ─── Snap Mode ───
+  if (snapMode && lastSnapPoint) {
+    const obj = transformControl.object;
+    if (!obj || !obj.userData.isParLight) return;
+    const fixture = obj.userData.fixture;
+
+    if (snapStep === 1 && lastSnapNormal) {
+      // Step 1: Place fixture at surface point
+      pushUndo();
+      const normal = lastSnapNormal;
+      const point = lastSnapPoint.clone().addScaledVector(normal, 0.5);
+
+      fixture.config.x = point.x;
+      fixture.config.y = point.y;
+      fixture.config.z = point.z;
+
+      // Orient along face normal (default, user can refine in step 2)
+      const defaultDir = new THREE.Vector3(0, 0, -1);
+      const quat = new THREE.Quaternion().setFromUnitVectors(defaultDir, normal);
+      const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+      fixture.config.rotX = THREE.MathUtils.radToDeg(euler.x);
+      fixture.config.rotY = THREE.MathUtils.radToDeg(euler.y);
+      fixture.config.rotZ = THREE.MathUtils.radToDeg(euler.z);
+
+      fixture.syncFromConfig();
+      fixture.updateVisualsFromHitbox();
+      transformControl.setSpace('local');
+      if (window.debounceAutoSave) window.debounceAutoSave();
+      syncGuiFolders();
+
+      // Move to step 2: aim
+      setSnapStep(2);
+    } else if (snapStep === 2) {
+      // Step 2: Aim the light at the clicked point
+      const target = lastSnapPoint.clone();
+      const pos = new THREE.Vector3(fixture.config.x, fixture.config.y, fixture.config.z);
+      const dir = target.sub(pos).normalize();
+
+      // Orient hitbox so -Z points toward the target
+      const defaultDir = new THREE.Vector3(0, 0, -1);
+      const quat = new THREE.Quaternion().setFromUnitVectors(defaultDir, dir);
+      const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+      fixture.config.rotX = THREE.MathUtils.radToDeg(euler.x);
+      fixture.config.rotY = THREE.MathUtils.radToDeg(euler.y);
+      fixture.config.rotZ = THREE.MathUtils.radToDeg(euler.z);
+
+      fixture.syncFromConfig();
+      fixture.updateVisualsFromHitbox();
+      if (window.debounceAutoSave) window.debounceAutoSave();
+      syncGuiFolders();
+
+      // Done — exit snap mode
+      toggleSnapMode(true);
+    }
+    return;
+  }
+  // ─── Normal selection mode ───
+  // If user is clicking on the TransformControls gizmo, don't change selection
+  if (transformControl.axis) return;
+
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(interactiveObjects, false);
 
@@ -285,7 +499,6 @@ function onPointerDown(event) {
     if (hit.userData.isParLight) {
       const fixtureIndex = hit.userData.fixture.index;
       if (event.shiftKey) {
-        // Toggle in multi-selection
         if (selectedFixtureIndices.has(fixtureIndex)) {
           selectedFixtureIndices.delete(fixtureIndex);
           hit.userData.fixture.setSelected(false);
@@ -294,7 +507,6 @@ function onPointerDown(event) {
           hit.userData.fixture.setSelected(true);
         }
       } else {
-        // Single select — clear others
         deselectAllFixtures();
         selectedFixtureIndices.add(fixtureIndex);
         hit.userData.fixture.setSelected(true);
@@ -302,10 +514,44 @@ function onPointerDown(event) {
     } else {
       deselectAllFixtures();
     }
+    syncGuiFolders();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
+    syncGuiFolders();
   }
+}
+
+// ─── GUI Folder Sync ───
+function syncGuiFolders() {
+  if (!window.parGuiFolders) return;
+  window.parGuiFolders.forEach((folder, idx) => {
+    if (!folder) return;
+    try {
+      const titleEl = folder.domElement.querySelector(':scope > .title');
+      if (selectedFixtureIndices.has(idx)) {
+        folder.open();
+        // Highlight: blue accent border + lighter background
+        if (titleEl) {
+          titleEl.style.borderLeft = '3px solid #4d9fff';
+          titleEl.style.background = 'rgba(77,159,255,0.12)';
+          titleEl.style.color = '#8cc4ff';
+        }
+        // Open parent group folder
+        if (folder.parent && typeof folder.parent.open === 'function') {
+          folder.parent.open();
+        }
+      } else {
+        folder.close();
+        // Remove highlight
+        if (titleEl) {
+          titleEl.style.borderLeft = '';
+          titleEl.style.background = '';
+          titleEl.style.color = '';
+        }
+      }
+    } catch (_) {}
+  });
 }
 
 function onTransformChange() {
@@ -313,16 +559,51 @@ function onTransformChange() {
   if (!obj || !obj.userData.fixture) return;
 
   const fixture = obj.userData.fixture;
+  const dragIdx = fixture.index;
 
-  // Apply Scale transformations to the internal config without warping the model
   fixture.handleTransformScale();
-
-  // Write bounding box world space to the local config (rotX, Y, Z, pos X, Y, Z)
   fixture.writeTransformToConfig();
-
-  // Save changes via fetch and sync visuals
-  if (window.debounceAutoSave) window.debounceAutoSave();
   fixture.updateVisualsFromHitbox();
+
+  // Apply differential transform to all other selected fixtures
+  if (dragStartState && dragStartState.dragIdx === dragIdx && selectedFixtureIndices.size > 1) {
+    const startDrag = dragStartState.fixtures[dragIdx];
+    if (startDrag) {
+      // Position delta (from hitbox world position, not config)
+      const dx = fixture.hitbox.position.x - startDrag.x;
+      const dy = fixture.hitbox.position.y - startDrag.y;
+      const dz = fixture.hitbox.position.z - startDrag.z;
+
+      // Rotation delta via quaternions: deltaQ = currentQ * startQ^-1
+      const currentQuat = fixture.hitbox.quaternion.clone();
+      const startQuatInv = startDrag.quat.clone().invert();
+      const deltaQuat = new THREE.Quaternion().multiplyQuaternions(currentQuat, startQuatInv);
+
+      for (const idx of selectedFixtureIndices) {
+        if (idx === dragIdx) continue;
+        const startOther = dragStartState.fixtures[idx];
+        const otherFixture = window.parFixtures[idx];
+        if (!startOther || !otherFixture) continue;
+
+        // Set position directly on hitbox
+        otherFixture.hitbox.position.set(
+          startOther.x + dx,
+          startOther.y + dy,
+          startOther.z + dz
+        );
+
+        // Set rotation directly on hitbox
+        const newQuat = new THREE.Quaternion().multiplyQuaternions(deltaQuat, startOther.quat);
+        otherFixture.hitbox.quaternion.copy(newQuat);
+
+        // Write back to config from hitbox
+        otherFixture.writeTransformToConfig();
+        otherFixture.updateVisualsFromHitbox();
+      }
+    }
+  }
+
+  if (window.debounceAutoSave) window.debounceAutoSave();
 }
 
 function onKeyDown(event) {
@@ -339,8 +620,47 @@ function onKeyDown(event) {
   }
 
   if (event.key === "Escape") {
+    if (snapMode) {
+      toggleSnapMode(true);
+      return;
+    }
     transformControl.detach();
     deselectAllFixtures();
+    syncGuiFolders();
+    return;
+  }
+  // ─── Transform mode shortcuts (T/R/S/Q) ───
+  const k = event.key.toLowerCase();
+  if (!event.ctrlKey && !event.metaKey) {
+    if (k === 't') {
+      if (transformControl.mode === 'translate') {
+        // Already in translate — toggle world ↔ local
+        transformControl.setSpace(transformControl.space === 'world' ? 'local' : 'world');
+      } else {
+        transformControl.setMode('translate');
+        transformControl.setSpace('world'); // 1st press always starts world
+      }
+      return;
+    }
+    if (k === 'r') {
+      if (transformControl.mode === 'rotate') {
+        transformControl.setSpace(transformControl.space === 'world' ? 'local' : 'world');
+      } else {
+        transformControl.setMode('rotate');
+        transformControl.setSpace('world');
+      }
+      return;
+    }
+    if (k === 's') { transformControl.setMode('scale'); return; }
+    if (k === 'q') {
+      transformControl.setSpace(transformControl.space === 'local' ? 'world' : 'local');
+      return;
+    }
+  }
+
+  // ─── P key: toggle snap mode ───
+  if (k === 'p' && !event.ctrlKey && !event.metaKey) {
+    toggleSnapMode();
     return;
   }
 
@@ -535,6 +855,7 @@ function onModelLoaded(obj) {
       child.geometry.deleteAttribute("normal");
       child.geometry.computeVertexNormals();
 
+      modelMeshes.push(child); // Collect for snap raycasting
       meshCount++;
     }
   });
@@ -763,10 +1084,25 @@ function setupGUI() {
       method: "POST",
       body: yamlStr,
     })
-      .then(() =>
-        console.log("Config successfully written to scene_config.yaml"),
-      )
+      .then(() => {
+        console.log("Config successfully written to scene_config.yaml");
+        showSaveToast();
+      })
       .catch((err) => console.error("Failed to write config:", err));
+  }
+
+  function showSaveToast() {
+    let toast = document.getElementById('save-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'save-toast';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a3a1a;border:1px solid #3c3;color:#3c3;padding:6px 20px;border-radius:6px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = '✓ Config saved';
+    toast.style.opacity = '1';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
   }
   window.exportConfig = exportConfig;
 
@@ -779,17 +1115,24 @@ function setupGUI() {
   window.debounceAutoSave = debounceAutoSave;
 
   // Push undo snapshot on any GUI change (debounced to avoid spamming on sliders)
+  // Guard flag prevents callbacks firing during programmatic GUI rebuilds
   let pendingUndoSnapshot = null;
-  gui.onFinishChange(() => {
-    if (pendingUndoSnapshot) {
-      undoStack.push(pendingUndoSnapshot);
-      if (undoStack.length > MAX_UNDO) undoStack.shift();
-      redoStack.length = 0;
-    }
-    pendingUndoSnapshot = null;
-    debounceAutoSave();
-  });
+  let guiRebuilding = false;
+  window._setGuiRebuilding = (v) => { guiRebuilding = v; };
+
+  if (typeof gui.onFinishChange === 'function') {
+    gui.onFinishChange(() => {
+      if (guiRebuilding) return;
+      if (pendingUndoSnapshot) {
+        undoStack.push(pendingUndoSnapshot);
+        if (undoStack.length > MAX_UNDO) undoStack.shift();
+        redoStack.length = 0;
+      }
+      pendingUndoSnapshot = null;
+    });
+  }
   gui.onChange(() => {
+    if (guiRebuilding) return;
     if (!pendingUndoSnapshot) {
       pendingUndoSnapshot = captureSnapshot();
     }
@@ -883,9 +1226,9 @@ function setupGUI() {
           child.material = isEditMode ? editMaterial : structureMaterial;
       });
       renderer.shadowMap.enabled = !isEditMode;
-      scene.traverse((child) => {
-        if (child.isLight && child.shadow) child.castShadow = !isEditMode;
-      });
+      // Only toggle shadows on moon + tower floods, NOT par lights
+      if (lights.moon) lights.moon.castShadow = !isEditMode;
+      lights.towers.forEach((t) => { t.castShadow = !isEditMode; });
       const bloom = composer.passes.find((p) => p.name === "bloom");
       if (bloom) bloom.enabled = !isEditMode;
       scene.background = new THREE.Color(isEditMode ? 0xaaaaaa : 0x030310);
@@ -1003,45 +1346,132 @@ function setupGUI() {
       }
     }
 
-    // Fixture Tool Mode (transient, not in YAML)
-    parFolder
+    // ─── Layout Tools (clean sub-folder) ───
+    const layoutFolder = parFolder.addFolder("Layout Tools");
+    layoutFolder.close();
+
+    layoutFolder
       .add(params, "fixtureToolMode", ["translate", "rotate", "scale"])
-      .name("🖱️ Fixture Tool")
+      .name("Mode")
       .onChange((v) => {
         transformControl.setMode(v);
       });
 
+    if (params.snapEnabled === undefined) params.snapEnabled = true;
+    if (params.snapAngle === undefined) params.snapAngle = 5;
+
+    function applySnap() {
+      if (params.snapEnabled) {
+        transformControl.setRotationSnap(THREE.MathUtils.degToRad(params.snapAngle));
+        transformControl.setTranslationSnap(params.snapAngle * 0.1); // proportional
+      } else {
+        transformControl.setRotationSnap(null);
+        transformControl.setTranslationSnap(null);
+      }
+    }
+
+    layoutFolder
+      .add(params, "snapEnabled")
+      .name("Snap")
+      .onChange(applySnap);
+
+    layoutFolder
+      .add(params, "snapAngle", [1, 5, 10, 15, 30, 45, 90])
+      .name("Snap Step (°)")
+      .onChange((v) => {
+        applySnap();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+        renderParGUI();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+      });
+
+    applySnap();
+
+    layoutFolder
+      .add(
+        { snapPlace: () => { toggleSnapMode(); } },
+        "snapPlace",
+      )
+      .name("Place on Surface [P]");
+
+    layoutFolder
+      .add(
+        {
+          toggleSpace: () => {
+            transformControl.setSpace(
+              transformControl.space === "local" ? "world" : "local"
+            );
+          },
+        },
+        "toggleSpace",
+      )
+      .name("Toggle Local/World [Q]");
+
     const parListFolder = parFolder.addFolder("Light Instances");
 
-    parListFolder
-      .add(
-        {
-          collapseAll: () => {
-            parListFolder.folders.forEach((f) => f.close());
-          },
-        },
-        "collapseAll",
-      )
-      .name("▼ Collapse All");
+    // ─── Compact toolbar row: Collapse All | Select All | Clear All ───
+    const toolbarDiv = document.createElement('div');
+    toolbarDiv.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
+    const btnStyle = 'flex:1;padding:3px 0;border:none;border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;';
+    const btnHover = 'background:#3a3a3a';
 
-    parListFolder
-      .add(
-        {
-          selectAll: () => {
-            deselectAllFixtures();
-            window.parFixtures.forEach((f) => {
-              selectedFixtureIndices.add(f.index);
-              f.setSelected(true);
-            });
-          },
-        },
-        "selectAll",
-      )
-      .name("☑ Select All");
+    const collapseBtn = document.createElement('button');
+    collapseBtn.textContent = '▼ Collapse';
+    collapseBtn.style.cssText = btnStyle;
+    collapseBtn.onmouseenter = () => collapseBtn.style.background = '#3a3a3a';
+    collapseBtn.onmouseleave = () => collapseBtn.style.background = '#2a2a2a';
+    collapseBtn.onclick = () => parListFolder.folders.forEach((f) => f.close());
+
+    const selectBtn = document.createElement('button');
+    selectBtn.textContent = '☑ Select All';
+    selectBtn.style.cssText = btnStyle;
+    selectBtn.onmouseenter = () => selectBtn.style.background = '#3a3a3a';
+    selectBtn.onmouseleave = () => selectBtn.style.background = '#2a2a2a';
+    selectBtn.onclick = () => {
+      deselectAllFixtures();
+      window.parFixtures.forEach((f) => {
+        selectedFixtureIndices.add(f.index);
+        f.setSelected(true);
+      });
+    };
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '🗑 Clear All';
+    clearBtn.style.cssText = btnStyle;
+    clearBtn.onmouseenter = () => clearBtn.style.background = '#3a3a3a';
+    clearBtn.onmouseleave = () => clearBtn.style.background = '#2a2a2a';
+    clearBtn.onclick = () => {
+      if (params.parLights.length === 0) return;
+      pushUndo();
+      params.parLights.length = 0;
+      if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+      renderParGUI();
+      rebuildParLights();
+      if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+      transformControl.detach();
+      debounceAutoSave();
+    };
+
+    toolbarDiv.appendChild(collapseBtn);
+    toolbarDiv.appendChild(selectBtn);
+    toolbarDiv.appendChild(clearBtn);
+    parListFolder.domElement.querySelector('.children').prepend(toolbarDiv);
 
     function renderParGUI() {
+      // Remember which groups were open before rebuild
+      const openGroups = new Set();
+      parListFolder.folders.forEach((f) => {
+        if (!f._closed) openGroups.add(f._title);
+      });
+
       const children = [...parListFolder.folders];
       children.forEach((f) => f.destroy());
+      window.parGuiFolders = [];
+
+      // Ensure all lights have a group
+      params.parLights.forEach((c) => {
+        if (!c.group) c.group = 'Default';
+      });
 
       // Helper: propagate a property change to all other selected fixtures
       function propagateToSelected(sourceIndex, property, value) {
@@ -1055,175 +1485,320 @@ function setupGUI() {
         }
       }
 
+      // Collect unique groups in order of appearance
+      const groupOrder = [];
+      const groupMap = new Map();
       params.parLights.forEach((config, index) => {
-        if (config.name === undefined) config.name = `Par Light ${index + 1}`;
-        if (config.x === undefined) config.x = 0;
-        if (config.y === undefined) config.y = 1.5;
-        if (config.z === undefined) config.z = 0;
-        if (config.rotX === undefined) config.rotX = 0;
-        if (config.rotY === undefined) config.rotY = 0;
-        if (config.rotZ === undefined) config.rotZ = 0;
-
-        const idxFolder = parListFolder.addFolder(config.name);
-        
-        // Auto-select this light in the 3D view when the folder is opened
-        function selectThisLight() {
-          const fixture = window.parFixtures[index];
-          if (fixture && fixture.hitbox) {
-            transformControl.attach(fixture.hitbox);
-          }
+        const g = config.group || 'Default';
+        if (!groupMap.has(g)) {
+          groupMap.set(g, []);
+          groupOrder.push(g);
         }
-        // lil-gui compat: onOpenClose not available in three@0.160.0 bundled version
-        if (typeof idxFolder.onOpenClose === 'function') {
-          idxFolder.onOpenClose((open) => { if (open) selectThisLight(); });
-        } else if (idxFolder.domElement) {
-          idxFolder.domElement.querySelector('.title')?.addEventListener('click', () => {
-            if (!idxFolder._closed) selectThisLight();
+        groupMap.get(g).push({ config, index });
+      });
+
+      // Ensure at least one group exists
+      if (groupOrder.length === 0) groupOrder.push('Default');
+
+      groupOrder.forEach((groupName) => {
+        const items = groupMap.get(groupName) || [];
+        const groupFolder = parListFolder.addFolder(`${groupName} (${items.length})`);
+        // Restore open state or default closed
+        if (openGroups.has(`${groupName} (${items.length - 1})`) ||
+            openGroups.has(`${groupName} (${items.length})`) ||
+            openGroups.has(`${groupName} (${items.length + 1})`)) {
+          groupFolder.open();
+        } else {
+          groupFolder.close();
+        }
+
+        // ─── Group toolbar (2 rows) ───
+        const gtbWrap = document.createElement('div');
+        gtbWrap.style.cssText = 'padding:2px 6px 4px;';
+        const gBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+
+        // Row 1: Select All | Visible toggle
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;gap:2px;margin-bottom:2px;';
+
+        const selBtn = document.createElement('button');
+        selBtn.textContent = '☑ Select All';
+        selBtn.style.cssText = gBtnStyle;
+        selBtn.onclick = () => {
+          deselectAllFixtures();
+          items.forEach(({ index }) => {
+            selectedFixtureIndices.add(index);
+            if (window.parFixtures[index]) {
+              window.parFixtures[index].setSelected(true);
+            }
           });
-        }
+          // Attach transform to first light in group for batch moving
+          if (items.length > 0 && window.parFixtures[items[0].index]) {
+            transformControl.attach(window.parFixtures[items[0].index].hitbox);
+          }
+          syncGuiFolders();
+          renderer.domElement.focus({ preventScroll: true });
+          document.activeElement?.blur?.();
+        };
 
-        idxFolder.add(config, "name").name("🏷️ Name").onFinishChange((v) => {
-          idxFolder.title(v);
-          propagateToSelected(index, 'name', v);
+        const visBtn = document.createElement('button');
+        // Track group visibility state
+        const groupHidden = items.length > 0 && items.every(({ index }) =>
+          window.parFixtures[index] && !window.parFixtures[index].light.visible
+        );
+        visBtn.textContent = groupHidden ? '○ Off' : '● On';
+        visBtn.style.cssText = gBtnStyle + (groupHidden ? 'color:#666;' : 'color:#6f6;');
+        visBtn.onclick = () => {
+          const turnOn = visBtn.textContent.includes('Off');
+          items.forEach(({ index }) => {
+            const f = window.parFixtures[index];
+            if (f) f.setVisibility(turnOn, params.conesEnabled !== false);
+          });
+          visBtn.textContent = turnOn ? '● On' : '○ Off';
+          visBtn.style.cssText = gBtnStyle + (turnOn ? 'color:#6f6;' : 'color:#666;');
+          renderer.domElement.focus({ preventScroll: true });
+          document.activeElement?.blur?.();
+        };
+
+        row1.appendChild(selBtn);
+        row1.appendChild(visBtn);
+
+        // Row 2: Rename | + Light | ✕ Delete
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'display:flex;gap:2px;';
+
+        const renameBtn = document.createElement('button');
+        renameBtn.textContent = '✏ Rename';
+        renameBtn.style.cssText = gBtnStyle;
+        renameBtn.onclick = () => {
+          const newName = prompt('Rename group:', groupName);
+          if (newName && newName !== groupName) {
+            params.parLights.forEach((c) => {
+              if (c.group === groupName) c.group = newName;
+            });
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            renderParGUI();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          }
+        };
+
+        const addBtn = document.createElement('button');
+        addBtn.textContent = '+ Light';
+        addBtn.style.cssText = gBtnStyle;
+        addBtn.onclick = () => {
+          pushUndo();
+          const idx = params.parLights.length + 1;
+          params.parLights.push({
+            group: groupName,
+            name: `Par Light ${idx}`,
+            color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
+            x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+          });
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          renderParGUI();
+          rebuildParLights();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
           debounceAutoSave();
-        });
+        };
 
-        idxFolder.addColor(config, "color").onChange((v) => {
-          selectThisLight();
-          window.syncLightFromConfig(index);
-          propagateToSelected(index, 'color', v);
-        });
-        idxFolder.add(config, "intensity", 0, 50, 0.5).onChange((v) => {
-          selectThisLight();
-          window.syncLightFromConfig(index);
-          propagateToSelected(index, 'intensity', v);
-        });
-        idxFolder
-          .add(config, "angle", 5, 90, 1)
-          .listen()
-          .onChange((v) => {
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕ Delete';
+        delBtn.style.cssText = gBtnStyle;
+        delBtn.onclick = () => {
+          if (groupOrder.length <= 1) return;
+          pushUndo();
+          params.parLights.forEach((c) => {
+            if (c.group === groupName) c.group = groupOrder.find(g => g !== groupName) || 'Default';
+          });
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          renderParGUI();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+          debounceAutoSave();
+        };
+
+        row2.appendChild(renameBtn);
+        row2.appendChild(addBtn);
+        row2.appendChild(delBtn);
+
+        gtbWrap.appendChild(row1);
+        gtbWrap.appendChild(row2);
+        const groupChildren = groupFolder.domElement.querySelector('.children');
+        if (groupChildren) groupChildren.prepend(gtbWrap);
+
+        // ─── Lights in this group ───
+        items.forEach(({ config, index }) => {
+          if (config.name === undefined) config.name = `Par Light ${index + 1}`;
+          if (config.x === undefined) config.x = 0;
+          if (config.y === undefined) config.y = 1.5;
+          if (config.z === undefined) config.z = 0;
+          if (config.rotX === undefined) config.rotX = 0;
+          if (config.rotY === undefined) config.rotY = 0;
+          if (config.rotZ === undefined) config.rotZ = 0;
+
+          const idxFolder = groupFolder.addFolder(config.name);
+          idxFolder.close();
+          window.parGuiFolders[index] = idxFolder;
+
+          function selectThisLight() {
+            const fixture = window.parFixtures[index];
+            if (fixture && fixture.hitbox) {
+              transformControl.attach(fixture.hitbox);
+            }
+          }
+          if (typeof idxFolder.onOpenClose === 'function') {
+            idxFolder.onOpenClose((open) => { if (open) selectThisLight(); });
+          } else if (idxFolder.domElement) {
+            idxFolder.domElement.querySelector('.title')?.addEventListener('click', () => {
+              if (!idxFolder._closed) selectThisLight();
+            });
+          }
+
+          idxFolder.add(config, "name").name("Name").onFinishChange((v) => {
+            idxFolder.title(v);
+            propagateToSelected(index, 'name', v);
+            debounceAutoSave();
+          });
+
+          idxFolder.addColor(config, "color").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'color', v);
+          });
+          idxFolder.add(config, "intensity", 0, 50, 0.5).onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'intensity', v);
+          });
+          idxFolder.add(config, "angle", 5, 90, 1).listen().onChange((v) => {
             selectThisLight();
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'angle', v);
           });
-        idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange((v) => {
-          selectThisLight();
-          window.syncLightFromConfig(index);
-          propagateToSelected(index, 'penumbra', v);
+          idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'penumbra', v);
+          });
+
+          // Position
+          const posFolder = idxFolder.addFolder("Position");
+          posFolder.close();
+          posFolder.add(config, "x", -200, 200, 0.01).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'x', v);
+          });
+          posFolder.add(config, "y", 0, 100, 0.01).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'y', v);
+          });
+          posFolder.add(config, "z", -200, 200, 0.01).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'z', v);
+          });
+
+          // Rotation
+          const rotFolder = idxFolder.addFolder("Rotation");
+          rotFolder.close();
+          const step = params.snapAngle || 5;
+          rotFolder.add(config, "rotX", -180, 180, step).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotX', v);
+          });
+          rotFolder.add(config, "rotY", -180, 180, step).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotY', v);
+          });
+          rotFolder.add(config, "rotZ", -180, 180, step).listen().onChange((v) => {
+            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
+          });
+
+          // Compact action row
+          const actDiv = document.createElement('div');
+          actDiv.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;';
+          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+
+          const dupBtn = document.createElement('button');
+          dupBtn.textContent = '⧉ Duplicate';
+          dupBtn.style.cssText = aBtnStyle;
+          dupBtn.onclick = () => {
+            pushUndo();
+            const clone = JSON.parse(JSON.stringify(config));
+            clone.name = nextFixtureName(clone.name || 'Par Light');
+            clone.x = (clone.x || 0) + 2;
+            params.parLights.push(clone);
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            renderParGUI();
+            rebuildParLights();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          };
+
+          const rmBtn = document.createElement('button');
+          rmBtn.textContent = '✕ Remove';
+          rmBtn.style.cssText = aBtnStyle;
+          rmBtn.onclick = () => {
+            pushUndo();
+            params.parLights.splice(index, 1);
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            renderParGUI();
+            rebuildParLights();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          };
+
+          // Move to group dropdown
+          const moveSelect = document.createElement('select');
+          moveSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;font-size:10px;font-family:inherit;cursor:pointer;';
+          const defaultOpt = document.createElement('option');
+          defaultOpt.textContent = '→ Move…';
+          defaultOpt.disabled = true;
+          defaultOpt.selected = true;
+          moveSelect.appendChild(defaultOpt);
+          groupOrder.forEach((g) => {
+            if (g === groupName) return;
+            const opt = document.createElement('option');
+            opt.value = g;
+            opt.textContent = g;
+            moveSelect.appendChild(opt);
+          });
+          moveSelect.onchange = () => {
+            config.group = moveSelect.value;
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            renderParGUI();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          };
+
+          actDiv.appendChild(dupBtn);
+          actDiv.appendChild(rmBtn);
+          if (groupOrder.length > 1) actDiv.appendChild(moveSelect);
+          const idxChildren = idxFolder.domElement.querySelector('.children');
+          if (idxChildren) idxChildren.appendChild(actDiv);
         });
-        idxFolder
-          .add(config, "x", -200, 200, 0.01)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'x', v);
-          });
-        idxFolder
-          .add(config, "y", 0, 100, 0.01)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'y', v);
-          });
-        idxFolder
-          .add(config, "z", -200, 200, 0.01)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'z', v);
-          });
-        idxFolder
-          .add(config, "rotX", -180, 180, 0.1)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'rotX', v);
-          });
-        idxFolder
-          .add(config, "rotY", -180, 180, 0.1)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'rotY', v);
-          });
-        idxFolder
-          .add(config, "rotZ", -180, 180, 0.1)
-          .listen()
-          .onChange((v) => {
-            selectThisLight();
-            window.syncLightFromConfig(index);
-            propagateToSelected(index, 'rotZ', v);
-          });
-
-        idxFolder
-          .add(
-            {
-              duplicate: () => {
-                pushUndo();
-                const clone = JSON.parse(JSON.stringify(config));
-                clone.name = nextFixtureName(clone.name || 'Par Light');
-                clone.x = (clone.x || 0) + 2;
-                params.parLights.push(clone);
-                renderParGUI();
-                rebuildParLights();
-                debounceAutoSave();
-                const newFixture = window.parFixtures[window.parFixtures.length - 1];
-                if (newFixture) transformControl.attach(newFixture.hitbox);
-              },
-            },
-            "duplicate",
-          )
-          .name("📋 Duplicate");
-
-        idxFolder
-          .add(
-            {
-              remove: () => {
-                pushUndo();
-                params.parLights.splice(index, 1);
-                renderParGUI();
-                rebuildParLights();
-                debounceAutoSave();
-              },
-            },
-            "remove",
-          )
-          .name("❌ Remove Light");
       });
     }
 
+    // ─── Add Group button ───
     parFolder
       .add(
         {
-          add: () => {
+          addGroup: () => {
+            const existingGroups = new Set(params.parLights.map(c => c.group || 'Default'));
+            const name = prompt('New group name:', `Group ${existingGroups.size + 1}`);
+            if (!name) return;
             pushUndo();
-            const index = params.parLights.length + 1;
             params.parLights.push({
-              name: `Par Light ${index}`,
-              color: "#ffaa44",
-              intensity: 5,
-              angle: 20,
-              penumbra: 0.5,
-              x: 0,
-              y: 1.5,
-              z: 0,
-              rotX: 0,
-              rotY: 0,
-              rotZ: 0,
+              group: name,
+              name: `Par Light ${params.parLights.length + 1}`,
+              color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
+              x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
             });
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
             rebuildParLights();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
             debounceAutoSave();
           },
         },
-        "add",
+        "addGroup",
       )
-      .name("➕ Add New Par Light");
+      .name("➕ Add Group");
 
     window.renderParGUI = renderParGUI;
     renderParGUI();
