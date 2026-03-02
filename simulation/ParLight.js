@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
 // Reusable Shared Geometries to save memory across hundreds of fixtures
-const canGeo = new THREE.CylinderGeometry(0.5, 0.4, 1.2, 16);
+const canGeo = new THREE.CylinderGeometry(0.15, 0.12, 0.36, 16);
 canGeo.rotateX(Math.PI / 2); // default points up, rotate to point -Z
 const canMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.5 });
 
 const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 32, 1, true);
 baseBeamGeo.translate(0, -0.5, 0); // Tip at origin
-baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards -Z
+baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards Z
 
 const hitboxGeo = new THREE.BoxGeometry(1.5, 1.5, 2.0);
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
@@ -51,7 +51,8 @@ export class ParLight {
     this.hitbox.setRotationFromEuler(euler);
 
     // Par Can visual
-    this.can = new THREE.Mesh(canGeo, canMat);
+    this.canMat = canMat.clone(); // Per-instance for selection highlighting
+    this.can = new THREE.Mesh(canGeo, this.canMat);
     this.scene.add(this.can);
     
     // Beam visual
@@ -137,9 +138,15 @@ export class ParLight {
     this.scene.remove(this.light.target);
 
     this.beam.material.dispose();
+    this.canMat.dispose();
 
     const ioIndex = this.interactiveObjects.indexOf(this.hitbox);
     if (ioIndex > -1) this.interactiveObjects.splice(ioIndex, 1);
+  }
+
+  setSelected(selected) {
+    this.canMat.emissive.setHex(selected ? 0x2288ff : 0x000000);
+    this.canMat.emissiveIntensity = selected ? 1.0 : 0;
   }
 
   setVisibility(visible, conesVisible = true) {

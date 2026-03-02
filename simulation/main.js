@@ -27,6 +27,26 @@ let gridHelper, ground, starField;
 let transformControl, raycaster, mouse;
 const interactiveObjects = [];
 window.parFixtures = [];
+const selectedFixtureIndices = new Set();
+
+function deselectAllFixtures() {
+  if (window.parFixtures) {
+    window.parFixtures.forEach(f => { try { f.setSelected(false); } catch (_) {} });
+  }
+  selectedFixtureIndices.clear();
+}
+
+// Generate next name by incrementing trailing number (or appending " 2")
+function nextFixtureName(baseName) {
+  const match = baseName.match(/^(.+?)\s*(\d+)\s*$/);
+  const prefix = match ? match[1] : baseName;
+  const num = match ? parseInt(match[2], 10) : 1;
+  // Find the next available number
+  const existingNames = new Set(params.parLights.map(p => p.name));
+  let next = num + 1;
+  while (existingNames.has(`${prefix} ${next}`.trim())) next++;
+  return `${prefix} ${next}`.trim();
+}
 
 const lights = { moon: null, towers: [], ambient: null, helpers: [] };
 const clock = new THREE.Clock();
@@ -40,6 +60,60 @@ const params = {
   fixtureToolMode: "translate",
   parLights: [], // Safe fallback before config loads
 };
+
+// ─── Undo / Redo ─────────────────────────────────────────────────────────
+const undoStack = [];
+const redoStack = [];
+const MAX_UNDO = 50;
+
+function captureSnapshot() {
+  const snapshot = {};
+  for (const key of Object.keys(params)) {
+    if (key === 'parLights') {
+      snapshot.parLights = JSON.parse(JSON.stringify(params.parLights));
+    } else {
+      snapshot[key] = params[key];
+    }
+  }
+  return snapshot;
+}
+
+function pushUndo() {
+  undoStack.push(captureSnapshot());
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function applySnapshot(snapshot) {
+  for (const key of Object.keys(snapshot)) {
+    if (key === 'parLights') {
+      params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
+    } else {
+      params[key] = snapshot[key];
+    }
+  }
+  rebuildParLights();
+  if (window.renderParGUI) window.renderParGUI();
+  if (window.guiInstance) {
+    window.guiInstance.controllersRecursive().forEach(c => {
+      try { c.updateDisplay(); } catch (_) {}
+    });
+  }
+  if (window.applyAllHandlers) window.applyAllHandlers();
+  if (window.debounceAutoSave) window.debounceAutoSave();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  redoStack.push(captureSnapshot());
+  applySnapshot(undoStack.pop());
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(captureSnapshot());
+  applySnapshot(redoStack.pop());
+}
 
 // Walk the YAML config tree and extract all { value: ... } entries into flat params
 function extractParams(node) {
@@ -171,6 +245,7 @@ function init() {
   transformControl.space = "world"; // Keep world space so translation axes don't rotate
   transformControl.addEventListener("dragging-changed", (event) => {
     controls.enabled = !event.value; // Disable orbit controls while dragging
+    if (event.value) pushUndo(); // Capture state when drag starts
   });
   transformControl.addEventListener("change", onTransformChange);
   scene.add(transformControl);
@@ -204,10 +279,32 @@ function onPointerDown(event) {
   const intersects = raycaster.intersectObjects(interactiveObjects, false);
 
   if (intersects.length > 0) {
-    transformControl.attach(intersects[0].object);
+    const hit = intersects[0].object;
+    transformControl.attach(hit);
+
+    if (hit.userData.isParLight) {
+      const fixtureIndex = hit.userData.fixture.index;
+      if (event.shiftKey) {
+        // Toggle in multi-selection
+        if (selectedFixtureIndices.has(fixtureIndex)) {
+          selectedFixtureIndices.delete(fixtureIndex);
+          hit.userData.fixture.setSelected(false);
+        } else {
+          selectedFixtureIndices.add(fixtureIndex);
+          hit.userData.fixture.setSelected(true);
+        }
+      } else {
+        // Single select — clear others
+        deselectAllFixtures();
+        selectedFixtureIndices.add(fixtureIndex);
+        hit.userData.fixture.setSelected(true);
+      }
+    } else {
+      deselectAllFixtures();
+    }
   } else if (!transformControl.axis) {
-    // If not hovering over the transform gizmo's axes, click outside deselects
     transformControl.detach();
+    deselectAllFixtures();
   }
 }
 
@@ -229,9 +326,91 @@ function onTransformChange() {
 }
 
 function onKeyDown(event) {
+  // ─── Undo / Redo (always active) ───
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+    event.preventDefault();
+    undo();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && (event.key === 'Z' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
+    event.preventDefault();
+    redo();
+    return;
+  }
+
   if (event.key === "Escape") {
     transformControl.detach();
+    deselectAllFixtures();
     return;
+  }
+
+  // ─── Delete selected par light(s) ───
+  if (event.key === 'Delete') {
+    if (selectedFixtureIndices.size > 0) {
+      pushUndo();
+      // Delete in reverse index order to maintain correct splice positions
+      const indices = [...selectedFixtureIndices].sort((a, b) => b - a);
+      for (const idx of indices) {
+        params.parLights.splice(idx, 1);
+      }
+      selectedFixtureIndices.clear();
+      transformControl.detach();
+      rebuildParLights();
+      if (window.renderParGUI) window.renderParGUI();
+      if (window.debounceAutoSave) window.debounceAutoSave();
+      return;
+    }
+  }
+
+  // ─── Duplicate selected par light(s) ───
+  if (event.key.toLowerCase() === 'd' && !event.ctrlKey && !event.metaKey) {
+    if (selectedFixtureIndices.size > 0) {
+      pushUndo();
+      const newIndices = [];
+      for (const idx of [...selectedFixtureIndices].sort((a, b) => a - b)) {
+        const srcConfig = params.parLights[idx];
+        if (srcConfig) {
+          const clone = JSON.parse(JSON.stringify(srcConfig));
+          clone.name = nextFixtureName(clone.name || 'Par Light');
+          clone.x = (clone.x || 0) + 2;
+          params.parLights.push(clone);
+          newIndices.push(params.parLights.length - 1);
+        }
+      }
+      rebuildParLights();
+      if (window.renderParGUI) window.renderParGUI();
+      if (window.debounceAutoSave) window.debounceAutoSave();
+      // Select the new duplicates
+      deselectAllFixtures();
+      for (const idx of newIndices) {
+        selectedFixtureIndices.add(idx);
+        if (window.parFixtures[idx]) window.parFixtures[idx].setSelected(true);
+      }
+      const last = window.parFixtures[newIndices[newIndices.length - 1]];
+      if (last) transformControl.attach(last.hitbox);
+      return;
+    }
+    // Fallback: single fixture under transform control
+    const obj = transformControl.object;
+    if (obj && obj.userData.isParLight) {
+      const srcConfig = obj.userData.fixture.config;
+      pushUndo();
+      const clone = JSON.parse(JSON.stringify(srcConfig));
+      clone.name = nextFixtureName(clone.name || 'Par Light');
+      clone.x = (clone.x || 0) + 2;
+      params.parLights.push(clone);
+      rebuildParLights();
+      if (window.renderParGUI) window.renderParGUI();
+      if (window.debounceAutoSave) window.debounceAutoSave();
+      const newFixture = window.parFixtures[window.parFixtures.length - 1];
+      if (newFixture) {
+        deselectAllFixtures();
+        selectedFixtureIndices.add(newFixture.index);
+        newFixture.setSelected(true);
+        transformControl.attach(newFixture.hitbox);
+      }
+      return;
+    }
   }
 
   if (!transformControl.object) return;
@@ -522,6 +701,9 @@ function setupLighting() {
 
 // ─── Dynamic Par Lights ─────────────────────────────────────────────────
 function rebuildParLights() {
+  // Clear selection since fixture objects are being rebuilt
+  selectedFixtureIndices.clear();
+
   if (window.parFixtures) {
     window.parFixtures.forEach((f) => f.destroy());
   }
@@ -550,6 +732,7 @@ window.syncLightFromConfig = function (index) {
 
 function setupGUI() {
   const gui = new GUI({ title: "🔦 Lighting Controls", width: 300 });
+  window.guiInstance = gui;
   gui.domElement.style.position = "fixed";
   gui.domElement.style.top = "10px";
   gui.domElement.style.right = "10px";
@@ -595,7 +778,21 @@ function setupGUI() {
   }
   window.debounceAutoSave = debounceAutoSave;
 
+  // Push undo snapshot on any GUI change (debounced to avoid spamming on sliders)
+  let pendingUndoSnapshot = null;
+  gui.onFinishChange(() => {
+    if (pendingUndoSnapshot) {
+      undoStack.push(pendingUndoSnapshot);
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack.length = 0;
+    }
+    pendingUndoSnapshot = null;
+    debounceAutoSave();
+  });
   gui.onChange(() => {
+    if (!pendingUndoSnapshot) {
+      pendingUndoSnapshot = captureSnapshot();
+    }
     debounceAutoSave();
   });
 
@@ -705,6 +902,15 @@ function setupGUI() {
     },
   };
 
+  // Expose applyAllHandlers for undo/redo to sync Three.js scene from params
+  window.applyAllHandlers = function () {
+    for (const key of Object.keys(handlers)) {
+      if (params[key] !== undefined) {
+        try { handlers[key](params[key]); } catch (_) {}
+      }
+    }
+  };
+
   // ─── Sync model transform params from live model ───
   if (model) {
     params.modelX = model.position.x;
@@ -807,9 +1013,47 @@ function setupGUI() {
 
     const parListFolder = parFolder.addFolder("Light Instances");
 
+    parListFolder
+      .add(
+        {
+          collapseAll: () => {
+            parListFolder.folders.forEach((f) => f.close());
+          },
+        },
+        "collapseAll",
+      )
+      .name("▼ Collapse All");
+
+    parListFolder
+      .add(
+        {
+          selectAll: () => {
+            deselectAllFixtures();
+            window.parFixtures.forEach((f) => {
+              selectedFixtureIndices.add(f.index);
+              f.setSelected(true);
+            });
+          },
+        },
+        "selectAll",
+      )
+      .name("☑ Select All");
+
     function renderParGUI() {
       const children = [...parListFolder.folders];
       children.forEach((f) => f.destroy());
+
+      // Helper: propagate a property change to all other selected fixtures
+      function propagateToSelected(sourceIndex, property, value) {
+        if (!selectedFixtureIndices.has(sourceIndex)) return;
+        for (const idx of selectedFixtureIndices) {
+          if (idx === sourceIndex) continue;
+          if (params.parLights[idx]) {
+            params.parLights[idx][property] = value;
+            window.syncLightFromConfig(idx);
+          }
+        }
+      }
 
       params.parLights.forEach((config, index) => {
         if (config.name === undefined) config.name = `Par Light ${index + 1}`;
@@ -822,82 +1066,125 @@ function setupGUI() {
 
         const idxFolder = parListFolder.addFolder(config.name);
         
-        idxFolder.add(config, "name").name("🏷️ Name").onChange((v) => {
+        // Auto-select this light in the 3D view when the folder is opened
+        function selectThisLight() {
+          const fixture = window.parFixtures[index];
+          if (fixture && fixture.hitbox) {
+            transformControl.attach(fixture.hitbox);
+          }
+        }
+        // lil-gui compat: onOpenClose not available in three@0.160.0 bundled version
+        if (typeof idxFolder.onOpenClose === 'function') {
+          idxFolder.onOpenClose((open) => { if (open) selectThisLight(); });
+        } else if (idxFolder.domElement) {
+          idxFolder.domElement.querySelector('.title')?.addEventListener('click', () => {
+            if (!idxFolder._closed) selectThisLight();
+          });
+        }
+
+        idxFolder.add(config, "name").name("🏷️ Name").onFinishChange((v) => {
           idxFolder.title(v);
+          propagateToSelected(index, 'name', v);
           debounceAutoSave();
         });
 
-        idxFolder
-          .add(
-            {
-              select: () => {
-                const fixture = window.parFixtures[index];
-                if (fixture && fixture.hitbox) {
-                  transformControl.attach(fixture.hitbox);
-                  console.log("Attached to light", index);
-                }
-              },
-            },
-            "select",
-          )
-          .name("🎯 Select & Move");
-
-        idxFolder.addColor(config, "color").onChange(() => {
+        idxFolder.addColor(config, "color").onChange((v) => {
+          selectThisLight();
           window.syncLightFromConfig(index);
+          propagateToSelected(index, 'color', v);
         });
-        idxFolder.add(config, "intensity", 0, 50, 0.5).onChange(() => {
+        idxFolder.add(config, "intensity", 0, 50, 0.5).onChange((v) => {
+          selectThisLight();
           window.syncLightFromConfig(index);
+          propagateToSelected(index, 'intensity', v);
         });
         idxFolder
           .add(config, "angle", 5, 90, 1)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'angle', v);
           });
-        idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange(() => {
+        idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange((v) => {
+          selectThisLight();
           window.syncLightFromConfig(index);
+          propagateToSelected(index, 'penumbra', v);
         });
         idxFolder
           .add(config, "x", -200, 200, 0.01)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'x', v);
           });
         idxFolder
           .add(config, "y", 0, 100, 0.01)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'y', v);
           });
         idxFolder
           .add(config, "z", -200, 200, 0.01)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'z', v);
           });
         idxFolder
           .add(config, "rotX", -180, 180, 0.1)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'rotX', v);
           });
         idxFolder
           .add(config, "rotY", -180, 180, 0.1)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'rotY', v);
           });
         idxFolder
           .add(config, "rotZ", -180, 180, 0.1)
           .listen()
-          .onChange(() => {
+          .onChange((v) => {
+            selectThisLight();
             window.syncLightFromConfig(index);
+            propagateToSelected(index, 'rotZ', v);
           });
+
+        idxFolder
+          .add(
+            {
+              duplicate: () => {
+                pushUndo();
+                const clone = JSON.parse(JSON.stringify(config));
+                clone.name = nextFixtureName(clone.name || 'Par Light');
+                clone.x = (clone.x || 0) + 2;
+                params.parLights.push(clone);
+                renderParGUI();
+                rebuildParLights();
+                debounceAutoSave();
+                const newFixture = window.parFixtures[window.parFixtures.length - 1];
+                if (newFixture) transformControl.attach(newFixture.hitbox);
+              },
+            },
+            "duplicate",
+          )
+          .name("📋 Duplicate");
 
         idxFolder
           .add(
             {
               remove: () => {
+                pushUndo();
                 params.parLights.splice(index, 1);
                 renderParGUI();
                 rebuildParLights();
@@ -914,6 +1201,7 @@ function setupGUI() {
       .add(
         {
           add: () => {
+            pushUndo();
             const index = params.parLights.length + 1;
             params.parLights.push({
               name: `Par Light ${index}`,
@@ -937,6 +1225,7 @@ function setupGUI() {
       )
       .name("➕ Add New Par Light");
 
+    window.renderParGUI = renderParGUI;
     renderParGUI();
   }
 
