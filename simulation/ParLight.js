@@ -142,9 +142,9 @@ export class ParLight {
     if (ioIndex > -1) this.interactiveObjects.splice(ioIndex, 1);
   }
 
-  setVisibility(visible) {
+  setVisibility(visible, conesVisible = true) {
     this.light.visible = visible;
     this.can.visible = visible;
-    this.beam.visible = visible;
+    this.beam.visible = visible && conesVisible;
   }
 }

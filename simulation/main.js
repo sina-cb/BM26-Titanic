@@ -536,6 +536,7 @@ function rebuildParLights() {
       interactiveObjects,
       modelRadius,
     );
+    fixture.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
     window.parFixtures.push(fixture);
   });
 }
@@ -670,7 +671,12 @@ function setupGUI() {
     },
     parsEnabled: (v) => {
       window.parFixtures.forEach((f) => {
-        f.setVisibility(v);
+        f.setVisibility(v, params.conesEnabled !== false);
+      });
+    },
+    conesEnabled: (v) => {
+      window.parFixtures.forEach((f) => {
+        f.setVisibility(params.parsEnabled !== false, v);
       });
     },
     editMode: (isEditMode) => {
@@ -806,6 +812,7 @@ function setupGUI() {
       children.forEach((f) => f.destroy());
 
       params.parLights.forEach((config, index) => {
+        if (config.name === undefined) config.name = `Par Light ${index + 1}`;
         if (config.x === undefined) config.x = 0;
         if (config.y === undefined) config.y = 1.5;
         if (config.z === undefined) config.z = 0;
@@ -813,7 +820,13 @@ function setupGUI() {
         if (config.rotY === undefined) config.rotY = 0;
         if (config.rotZ === undefined) config.rotZ = 0;
 
-        const idxFolder = parListFolder.addFolder(`Par Light ${index + 1}`);
+        const idxFolder = parListFolder.addFolder(config.name);
+        
+        idxFolder.add(config, "name").name("🏷️ Name").onChange((v) => {
+          idxFolder.title(v);
+          debounceAutoSave();
+        });
+
         idxFolder
           .add(
             {
@@ -901,7 +914,9 @@ function setupGUI() {
       .add(
         {
           add: () => {
+            const index = params.parLights.length + 1;
             params.parLights.push({
+              name: `Par Light ${index}`,
               color: "#ffaa44",
               intensity: 5,
               angle: 20,

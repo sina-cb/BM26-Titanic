@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "start": "concurrently \"npx http-server ../ -p 8080 -c-1 --cors\" \"node save-server.js\""
+  },
   "dependencies": {
     "js-yaml": "^4.1.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

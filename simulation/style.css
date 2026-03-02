@@ -141,3 +141,42 @@ canvas {
   background: rgba(240, 192, 96, 0.08);
   box-shadow: 0 0 16px rgba(240, 192, 96, 0.15);
 }
+
+/* ─── Compact/Dense GUI Overrides ─── */
+.lil-gui {
+  --background-color: rgba(15, 15, 20, 0.85);
+  --text-color: #d0d0d0;
+  --title-background-color: rgba(0, 0, 0, 0.6);
+  --widget-color: #333;
+  --hover-color: #444;
+  --focus-color: #555;
+  --number-color: #f0c060;
+  --string-color: #f0c060;
+  --font-size: 10px;
+  --input-font-size: 10px;
+  --padding: 4px;
+  --spacing: 4px;
+  --slider-knob-width: 2px;
+  --slider-input-width: 40px;
+  --folder-indent: 6px;
+}
+
+.lil-gui.root {
+  width: 320px !important;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.lil-gui .title {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lil-gui .controller {
+  margin-bottom: 1px;
+}
+
+.lil-gui .controller .name {
+  width: 40%;
+}

@@ -3,6 +3,17 @@ This directory contains the interactive 3D lighting simulation tool built for th
 
 The tool empowers lighting designers to pre-visualize night-time illumination, validate DMX fixture beam angles against realistic proxy geometry, and persist configuration states via a synchronized local filesystem architecture.
 
+## Quick Start
+To spin up both the frontend HTTP server and the backend YAML Node.js Save server simultaneously, run the following from the `simulation` directory:
+
+```bash
+cd simulation
+npm install
+npm start
+```
+
+Then, open your browser to [http://localhost:8080/simulation/](http://localhost:8080/simulation/).
+
 ---
 
 ## 🚀 Getting Started
