@@ -277,6 +277,393 @@ parLights:
       rotX: 45.59222028844117
       rotY: 55.35298781935352
       rotZ: -63.472995837108904
+    - group: Line 1
+      name: Line 1 1
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 20.602963115872964
+      y: 11.5
+      z: 2.9966882244038895
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 2
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 21.3080703203007
+      y: 10.990002394587925
+      z: 2.441619756117572
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 3
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.01317752472844
+      y: 10.480004789175853
+      z: 1.8865512878312545
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 4
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.71828472915618
+      y: 9.970007183763778
+      z: 1.3314828195449369
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 5
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 23.42339193358392
+      y: 9.460009578351704
+      z: 0.7764143512586195
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 6
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.12849913801166
+      y: 8.950011972939631
+      z: 0.22134588297230184
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 7
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.833606342439396
+      y: 8.440014367527557
+      z: -0.3337225853140158
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 8
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 25.538713546867136
+      y: 7.930016762115482
+      z: -0.8887910536003334
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 9
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.243820751294873
+      y: 7.420019156703408
+      z: -1.4438595218866506
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 10
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.948927955722613
+      y: 6.910021551291335
+      z: -1.9989279901729682
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 11
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 27.65403516015035
+      y: 6.400023945879261
+      z: -2.553996458459286
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 12
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 28.35914236457809
+      y: 5.890026340467187
+      z: -3.1090649267456043
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 13
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.064249569005828
+      y: 5.380028735055113
+      z: -3.664133395031921
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 14
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.769356773433568
+      y: 4.8700311296430385
+      z: -4.21920186331824
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 15
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 30.474463977861305
+      y: 4.360033524230965
+      z: -4.774270331604557
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 16
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.179571182289045
+      y: 3.8500359188188904
+      z: -5.3293387998908734
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 17
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.884678386716782
+      y: 3.340038313406817
+      z: -5.88440726817719
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 18
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 32.58978559114452
+      y: 2.8300407079947423
+      z: -6.439475736463509
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 19
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 33.29489279557226
+      y: 2.3200431025826695
+      z: -6.994544204749825
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Line 1
+      name: Line 1 20
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 34
+      y: 1.810045497170595
+      z: -7.549612673036144
+      rotX: -62.121681805657566
+      rotY: 134.19659356023698
+      rotZ: -109.90917808922978
+    - group: Ring 3
+      name: Ring 3 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.96567931400758
+      y: 6.985107542328527
+      z: -8.352568965470052
+      rotX: 65.06625088380783
+      rotY: -17.044438713931452
+      rotZ: -10.920082528299218
+    - group: Ring 3
+      name: Ring 3 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 8.06889942057935
+      z: -6.730236452812176
+      rotX: 50.04158933251067
+      rotY: -18.55273762511712
+      rotZ: -8.719081826501656
+    - group: Ring 3
+      name: Ring 3 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 9.18323409684811
+      z: -6.117726824146182
+      rotX: 37.983863391598334
+      rotY: -30.808279826703686
+      rotZ: -10.833977312176367
+    - group: Ring 3
+      name: Ring 3 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 9.806701991658228
+      z: -6.80164014201115
+      rotX: 31.791782682372077
+      rotY: -46.99522951781506
+      rotZ: -14.115945334577058
+    - group: Ring 3
+      name: Ring 3 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 9.647575547954222
+      z: -8.46196576412819
+      rotX: 32.56733833671133
+      rotY: -63.98819400622648
+      rotZ: -20.684141446716186
+    - group: Ring 3
+      name: Ring 3 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 8.780311797238628
+      z: -10.321818879444859
+      rotX: 39.853253168878226
+      rotY: -79.2426830243385
+      rotZ: -33.412226467079485
+    - group: Ring 3
+      name: Ring 3 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 7.610713087034228
+      z: -11.510953545339525
+      rotX: 52.061949677320264
+      rotY: -90.03853402026596
+      rotZ: -52.09234681766751
+    - group: Ring 3
+      name: Ring 3 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 6.686047652487411
+      z: -11.472960435880362
+      rotX: 66.51412403701407
+      rotY: -89.38322525781906
+      rotZ: -65.94965384989146
+    - group: Ring 3
+      name: Ring 3 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 6.438976726934243
+      z: -10.22561694922969
+      rotX: 74.96810675387201
+      rotY: -51.35644581331218
+      rotZ: -40.47966148021137
+  traces:
+    - name: Line 1
+      shape: line
+      startX: 20.602963115872964
+      startY: 11.5
+      startZ: 2.9966882244038895
+      endX: 34
+      endY: 1.810045497170595
+      endZ: -7.549612673036144
+      spacing: 1
+      aimMode: direction
+      aimX: 17
+      aimY: 2
+      aimZ: 6.5
+      lightColor: '#ffaa44'
+      lightIntensity: 10
+      lightAngle: 30
+      groupName: Line 1
+      generated: true
+    - name: Circle 3
+      shape: circle
+      radius: 3
+      arc: 360
+      spacing: 2
+      x: 23.276977477991707
+      y: 8.134174207006994
+      z: -7.252418055204268
+      rotX: -25
+      rotY: 0
+      rotZ: -25
+      aimMode: lookAt
+      aimX: 26.963154813618235
+      aimY: 14.083250851184719
+      aimZ: -9.871590627137342
+      lightColor: '#ffaa44'
+      lightIntensity: 21
+      lightAngle: 30
+      groupName: Ring 3
+      generated: true
 
 # ─── Options ──────────────────────────────────────────────────────────────
 options:

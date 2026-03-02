@@ -64,6 +64,7 @@ const params = {
   // Transient / UI-only (not saved to YAML)
   fixtureToolMode: "translate",
   parLights: [], // Safe fallback before config loads
+  traces: [],    // Trace configs for group generator
 };
 
 // ─── Undo / Redo ─────────────────────────────────────────────────────────
@@ -76,6 +77,8 @@ function captureSnapshot() {
   for (const key of Object.keys(params)) {
     if (key === 'parLights') {
       snapshot.parLights = JSON.parse(JSON.stringify(params.parLights));
+    } else if (key === 'traces') {
+      snapshot.traces = JSON.parse(JSON.stringify(params.traces));
     } else {
       snapshot[key] = params[key];
     }
@@ -95,12 +98,16 @@ function applySnapshot(snapshot) {
     for (const key of Object.keys(snapshot)) {
       if (key === 'parLights') {
         params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
+      } else if (key === 'traces') {
+        params.traces = JSON.parse(JSON.stringify(snapshot.traces || []));
       } else {
         params[key] = snapshot[key];
       }
     }
     rebuildParLights();
+    if (window.rebuildTraceObjects) window.rebuildTraceObjects();
     if (window.renderParGUI) window.renderParGUI();
+    if (window.renderGeneratorGUI) window.renderGeneratorGUI();
     if (window.guiInstance) {
       window.guiInstance.controllersRecursive().forEach(c => {
         try { c.updateDisplay(); } catch (_) {}
@@ -136,6 +143,15 @@ function extractParams(node) {
       params.parLights = node[key];
       continue;
     }
+    if (key === "traces" && Array.isArray(node[key])) {
+      params.traces = node[key];
+      // Restore _traceGenerated flag on fixtures belonging to trace groups
+      const traceGroupNames = new Set(params.traces.filter(t => t.generated).map(t => t.groupName || t.name));
+      params.parLights.forEach(light => {
+        if (traceGroupNames.has(light.group)) light._traceGenerated = true;
+      });
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -157,8 +173,18 @@ function reconstructYAML(node) {
     if (key === "_section") continue;
 
     if (key === "fixtures" && Array.isArray(node[key])) {
-      // Direct array sync
-      node[key] = params.parLights;
+      // Strip internal fields (prefixed with _) before saving
+      node[key] = params.parLights.map(light => {
+        const clean = {};
+        for (const k of Object.keys(light)) {
+          if (!k.startsWith('_')) clean[k] = light[k];
+        }
+        return clean;
+      });
+      continue;
+    }
+    if (key === "traces" && Array.isArray(node[key])) {
+      node[key] = params.traces;
       continue;
     }
 
@@ -496,7 +522,11 @@ function onPointerDown(event) {
     const hit = intersects[0].object;
     transformControl.attach(hit);
 
-    if (hit.userData.isParLight) {
+    if (hit.userData.isTrace) {
+      // Trace handle clicked — open the generator GUI for this trace
+      deselectAllFixtures();
+      if (window.openTraceFolder) window.openTraceFolder(hit.userData.traceIndex);
+    } else if (hit.userData.isParLight) {
       const fixtureIndex = hit.userData.fixture.index;
       if (event.shiftKey) {
         if (selectedFixtureIndices.has(fixtureIndex)) {
@@ -556,7 +586,15 @@ function syncGuiFolders() {
 
 function onTransformChange() {
   const obj = transformControl.object;
-  if (!obj || !obj.userData.fixture) return;
+  if (!obj) return;
+
+  // Handle trace objects
+  if (obj.userData.isTrace && window._onTraceTransformChange) {
+    window._onTraceTransformChange(obj);
+    return;
+  }
+
+  if (!obj.userData.fixture) return;
 
   const fixture = obj.userData.fixture;
   const dragIdx = fixture.index;
@@ -1503,6 +1541,9 @@ function setupGUI() {
       groupOrder.forEach((groupName) => {
         const items = groupMap.get(groupName) || [];
         const groupFolder = parListFolder.addFolder(`${groupName} (${items.length})`);
+
+        // Check if this is a trace-generated group (read-only)
+        const isTraceGroup = items.some(({ config }) => config._traceGenerated);
         // Restore open state or default closed
         if (openGroups.has(`${groupName} (${items.length - 1})`) ||
             openGroups.has(`${groupName} (${items.length})`) ||
@@ -1510,6 +1551,40 @@ function setupGUI() {
           groupFolder.open();
         } else {
           groupFolder.close();
+        }
+
+        // Trace-generated groups: show simplified read-only view with On/Off toggle
+        if (isTraceGroup) {
+          const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;cursor:pointer;font-size:10px;font-family:inherit;';
+          const traceRow = document.createElement('div');
+          traceRow.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;align-items:center;';
+
+          const groupHidden = items.length > 0 && items.every(({ index }) =>
+            window.parFixtures[index] && !window.parFixtures[index].light.visible
+          );
+          const visBtn = document.createElement('button');
+          visBtn.textContent = groupHidden ? '○ Off' : '● On';
+          visBtn.style.cssText = gBtnStyle2 + (groupHidden ? 'color:#666;' : 'color:#6f6;');
+          visBtn.onclick = () => {
+            const turnOn = visBtn.textContent.includes('Off');
+            items.forEach(({ index }) => {
+              const f = window.parFixtures[index];
+              if (f) f.setVisibility(turnOn, params.conesEnabled !== false);
+            });
+            visBtn.textContent = turnOn ? '● On' : '○ Off';
+            visBtn.style.cssText = gBtnStyle2 + (turnOn ? 'color:#6f6;' : 'color:#666;');
+            document.activeElement?.blur?.();
+          };
+
+          const lockLabel = document.createElement('span');
+          lockLabel.style.cssText = 'color:#888;font-size:10px;font-style:italic;margin-left:4px;';
+          lockLabel.textContent = '🔒 Generated — edit via Generator';
+
+          traceRow.appendChild(visBtn);
+          traceRow.appendChild(lockLabel);
+          const gc = groupFolder.domElement.querySelector('.children');
+          if (gc) gc.prepend(traceRow);
+          return;
         }
 
         // ─── Group toolbar (2 rows) ───
@@ -1799,6 +1874,550 @@ function setupGUI() {
         "addGroup",
       )
       .name("➕ Add Group");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ─── Group Generator (Traces) ─────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    const genFolder = parFolder.addFolder("📐 Group Generator");
+    genFolder.close();
+
+    // --- Trace 3D objects live here ---
+    window.traceObjects = window.traceObjects || [];
+
+    function destroyTraceObjects() {
+      (window.traceObjects || []).forEach(t => {
+        if (t.group) scene.remove(t.group);
+        if (t.hitbox) {
+          scene.remove(t.hitbox);
+          const ioIdx = interactiveObjects.indexOf(t.hitbox);
+          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
+        }
+        (t.handles || []).forEach(h => {
+          scene.remove(h);
+          const ioIdx = interactiveObjects.indexOf(h);
+          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
+        });
+      });
+      window.traceObjects = [];
+    }
+
+    function computeTracePoints(trace) {
+      const pts = [];
+      if (trace.shape === 'circle') {
+        const r = trace.radius || 5;
+        const arcRad = THREE.MathUtils.degToRad(trace.arc || 360);
+        const circumference = r * arcRad;
+        const count = Math.max(1, Math.round(circumference / (trace.spacing || 2)));
+        for (let i = 0; i < count; i++) {
+          const angle = (i / count) * arcRad;
+          pts.push(new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r));
+        }
+      } else {
+        // line: world-space start→end
+        const start = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+        const end   = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
+        const totalLen = start.distanceTo(end);
+        const count = Math.max(2, Math.round(totalLen / (trace.spacing || 2)));
+        for (let i = 0; i < count; i++) {
+          const t = i / (count - 1);
+          pts.push(new THREE.Vector3().lerpVectors(start, end, t));
+        }
+      }
+      return pts;
+    }
+
+    function buildTraceObject(trace, traceIndex) {
+      const handles = []; // For line: [startHandle, endHandle]; For circle: []
+
+      if (trace.shape === 'line') {
+        // ─── LINE: two draggable endpoint handles ───
+        const startPos = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+        const endPos = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
+
+        // Visual group (wireframe + preview dots) — rebuilt live
+        const grp = new THREE.Group();
+
+        // Wireframe line between endpoints
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([startPos, endPos]);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
+        grp.add(new THREE.Line(lineGeo, lineMat));
+
+        // Preview dots at light positions
+        const lightPts = computeTracePoints(trace);
+        const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
+        const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+        lightPts.forEach(p => {
+          const dot = new THREE.Mesh(dotGeo, dotMat);
+          dot.position.copy(p);
+          grp.add(dot);
+        });
+
+        scene.add(grp);
+
+        // Draggable handle spheres at scene root
+        const handleGeo = new THREE.SphereGeometry(0.4, 12, 12);
+        const startMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.7 });
+        const endMat   = new THREE.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.7 });
+
+        const startHandle = new THREE.Mesh(handleGeo, startMat);
+        startHandle.position.copy(startPos);
+        startHandle.userData = { isTrace: true, traceIndex, handleType: 'start' };
+        scene.add(startHandle);
+        interactiveObjects.push(startHandle);
+
+        const endHandle = new THREE.Mesh(handleGeo, endMat);
+        endHandle.position.copy(endPos);
+        endHandle.userData = { isTrace: true, traceIndex, handleType: 'end' };
+        scene.add(endHandle);
+        interactiveObjects.push(endHandle);
+
+        // Aim handle (yellow sphere)
+        const aimHandleGeo = new THREE.SphereGeometry(0.35, 12, 12);
+        const aimHandleMat = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.8 });
+        const aimHandle = new THREE.Mesh(aimHandleGeo, aimHandleMat);
+        aimHandle.position.set(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+        aimHandle.userData = { isTrace: true, traceIndex, handleType: 'aim' };
+        scene.add(aimHandle);
+        interactiveObjects.push(aimHandle);
+
+        // Dashed line from midpoint to aim handle
+        const mid = startPos.clone().lerp(endPos, 0.5);
+        const aimLineGeo = new THREE.BufferGeometry().setFromPoints([mid, aimHandle.position]);
+        const aimLineMat = new THREE.LineDashedMaterial({ color: 0xffcc00, dashSize: 0.5, gapSize: 0.3, transparent: true, opacity: 0.5 });
+        const aimLine = new THREE.Line(aimLineGeo, aimLineMat);
+        aimLine.computeLineDistances();
+        grp.add(aimLine);
+
+        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], traceIndex };
+
+      } else {
+        // ─── CIRCLE: center hitbox (existing approach) ───
+        const grp = new THREE.Group();
+        grp.position.set(trace.x || 0, trace.y || 5, trace.z || 0);
+        const euler = new THREE.Euler(
+          THREE.MathUtils.degToRad(trace.rotX || 0),
+          THREE.MathUtils.degToRad(trace.rotY || 0),
+          THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ'
+        );
+        grp.setRotationFromEuler(euler);
+
+        // Wireframe ring
+        const pathPts = [];
+        const r = trace.radius || 5;
+        const arcRad = THREE.MathUtils.degToRad(trace.arc || 360);
+        for (let i = 0; i <= 64; i++) {
+          const a = (i / 64) * arcRad;
+          pathPts.push(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+        }
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pathPts);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
+        grp.add(new THREE.Line(lineGeo, lineMat));
+
+        // Preview dots
+        const lightPts = computeTracePoints(trace);
+        const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
+        const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+        lightPts.forEach(p => {
+          const dot = new THREE.Mesh(dotGeo, dotMat);
+          dot.position.copy(p);
+          grp.add(dot);
+        });
+
+        scene.add(grp);
+
+        // Hitbox at scene root
+        const hitboxSize = (trace.radius || 5) * 2.5;
+        const hitboxGeo = new THREE.BoxGeometry(hitboxSize, 1, hitboxSize);
+        const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+        const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+        hitbox.userData = { isTrace: true, traceIndex };
+        hitbox.position.copy(grp.position);
+        hitbox.quaternion.copy(grp.quaternion);
+        scene.add(hitbox);
+        interactiveObjects.push(hitbox);
+
+        // Aim handle (yellow sphere)
+        const aimHandleGeo = new THREE.SphereGeometry(0.35, 12, 12);
+        const aimHandleMat = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.8 });
+        const aimHandle = new THREE.Mesh(aimHandleGeo, aimHandleMat);
+        aimHandle.position.set(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+        aimHandle.userData = { isTrace: true, traceIndex, handleType: 'aim' };
+        scene.add(aimHandle);
+        interactiveObjects.push(aimHandle);
+
+        return { group: grp, hitbox, handles: [aimHandle], traceIndex };
+      }
+    }
+
+    function rebuildTraceObjects() {
+      destroyTraceObjects();
+      params.traces.forEach((trace, i) => {
+        window.traceObjects.push(buildTraceObject(trace, i));
+      });
+    }
+    window.rebuildTraceObjects = rebuildTraceObjects;
+
+    function updateTracePreview(traceIndex) {
+      rebuildTraceObjects();
+    }
+
+    function writeTraceTransformToConfig(traceIndex) {
+      const tObj = window.traceObjects[traceIndex];
+      if (!tObj) return;
+      const trace = params.traces[traceIndex];
+      const hitbox = tObj.hitbox;
+      trace.x = hitbox.position.x;
+      trace.y = hitbox.position.y;
+      trace.z = hitbox.position.z;
+      const euler = new THREE.Euler().setFromQuaternion(hitbox.quaternion, 'YXZ');
+      trace.rotX = THREE.MathUtils.radToDeg(euler.x);
+      trace.rotY = THREE.MathUtils.radToDeg(euler.y);
+      trace.rotZ = THREE.MathUtils.radToDeg(euler.z);
+    }
+
+    // Clean trace transform handler — hitbox is at scene root,
+    // just copy its transform to the visual group
+    window._onTraceTransformChange = function(obj) {
+      if (!obj.userData.isTrace) return false;
+      const tIdx = obj.userData.traceIndex;
+      const tObj = window.traceObjects[tIdx];
+      if (!tObj) return false;
+      const trace = params.traces[tIdx];
+
+      if (obj.userData.handleType === 'aim') {
+        // Aim handle moved — update aim target
+        trace.aimX = obj.position.x;
+        trace.aimY = obj.position.y;
+        trace.aimZ = obj.position.z;
+      } else if (obj.userData.handleType === 'start' || obj.userData.handleType === 'end') {
+        // Line handle moved — compute delta and move aim handle too
+        const prevKey = obj.userData.handleType === 'start' ? 'startX' : 'endX';
+        const dx = obj.position.x - (trace[prevKey === 'startX' ? 'startX' : 'endX'] ?? 0);
+        const dy = obj.position.y - (trace[prevKey === 'startX' ? 'startY' : 'endY'] ?? 5);
+        const dz = obj.position.z - (trace[prevKey === 'startX' ? 'startZ' : 'endZ'] ?? 0);
+
+        // Move aim handle by same delta
+        trace.aimX = (trace.aimX || 0) + dx;
+        trace.aimY = (trace.aimY || 0) + dy;
+        trace.aimZ = (trace.aimZ || 0) + dz;
+
+        // Update the handle config
+        if (obj.userData.handleType === 'start') {
+          trace.startX = obj.position.x;
+          trace.startY = obj.position.y;
+          trace.startZ = obj.position.z;
+        } else {
+          trace.endX = obj.position.x;
+          trace.endY = obj.position.y;
+          trace.endZ = obj.position.z;
+        }
+
+        // Move the aim handle mesh to match
+        const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
+        if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
+
+        // Live-update the wireframe line + dots without full rebuild
+        if (tObj.group) {
+          scene.remove(tObj.group);
+          const grp = new THREE.Group();
+          const s = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+          const e = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
+          const lineGeo = new THREE.BufferGeometry().setFromPoints([s, e]);
+          const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
+          grp.add(new THREE.Line(lineGeo, lineMat));
+          const pts = computeTracePoints(trace);
+          const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
+          const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+          pts.forEach(p => { const d = new THREE.Mesh(dotGeo, dotMat); d.position.copy(p); grp.add(d); });
+          scene.add(grp);
+          tObj.group = grp;
+        }
+      } else {
+        // Circle hitbox — compute position delta and move aim handle too
+        const dx = obj.position.x - (trace.x || 0);
+        const dy = obj.position.y - (trace.y || 5);
+        const dz = obj.position.z - (trace.z || 0);
+
+        trace.aimX = (trace.aimX || 0) + dx;
+        trace.aimY = (trace.aimY || 0) + dy;
+        trace.aimZ = (trace.aimZ || 0) + dz;
+
+        const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
+        if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
+
+        tObj.group.position.copy(tObj.hitbox.position);
+        tObj.group.quaternion.copy(tObj.hitbox.quaternion);
+        trace.x = obj.position.x;
+        trace.y = obj.position.y;
+        trace.z = obj.position.z;
+        const euler = new THREE.Euler().setFromQuaternion(obj.quaternion, 'YXZ');
+        trace.rotX = THREE.MathUtils.radToDeg(euler.x);
+        trace.rotY = THREE.MathUtils.radToDeg(euler.y);
+        trace.rotZ = THREE.MathUtils.radToDeg(euler.z);
+      }
+      debounceAutoSave();
+      return true;
+    };
+
+    function generateGroupFromTrace(traceIndex) {
+      const trace = params.traces[traceIndex];
+      if (!trace) return;
+
+      pushUndo();
+
+      // Remove existing lights from this trace's group name
+      const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
+      params.parLights = params.parLights.filter(l => l.group !== groupName || !l._traceGenerated);
+
+      // Compute points
+      const pts = computeTracePoints(trace);
+      const isLine = trace.shape === 'line';
+      const grp = window.traceObjects[traceIndex]?.group;
+      if (!isLine && grp) grp.updateMatrixWorld(true);
+      const worldMatrix = (!isLine && grp) ? grp.matrixWorld : null;
+
+      pts.forEach((pt, i) => {
+        // Line points are already world-space; circle points need worldMatrix
+        const worldPt = worldMatrix ? pt.clone().applyMatrix4(worldMatrix) : pt.clone();
+
+        // Compute aim rotation
+        let rotX = 0, rotY = 0, rotZ = 0;
+        if (trace.aimMode === 'lookAt') {
+          const aimTarget = new THREE.Vector3(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+          const dir = aimTarget.clone().sub(worldPt).normalize();
+          const defaultDir = new THREE.Vector3(0, 0, -1);
+          const quat = new THREE.Quaternion().setFromUnitVectors(defaultDir, dir);
+          const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+          rotX = THREE.MathUtils.radToDeg(euler.x);
+          rotY = THREE.MathUtils.radToDeg(euler.y);
+          rotZ = THREE.MathUtils.radToDeg(euler.z);
+        } else if (trace.aimMode === 'direction') {
+          // Common direction: from first light toward aim handle, applied to all
+          const firstPt = worldMatrix ? pts[0].clone().applyMatrix4(worldMatrix) : pts[0].clone();
+          const aimTarget = new THREE.Vector3(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+          const dir = aimTarget.clone().sub(firstPt).normalize();
+          const defaultDir = new THREE.Vector3(0, 0, -1);
+          const quat = new THREE.Quaternion().setFromUnitVectors(defaultDir, dir);
+          const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+          rotX = THREE.MathUtils.radToDeg(euler.x);
+          rotY = THREE.MathUtils.radToDeg(euler.y);
+          rotZ = THREE.MathUtils.radToDeg(euler.z);
+        }
+
+        params.parLights.push({
+          group: groupName,
+          name: `${groupName} ${i + 1}`,
+          color: trace.lightColor || '#ffaa44',
+          intensity: trace.lightIntensity || 10,
+          angle: trace.lightAngle || 30,
+          penumbra: 0.5,
+          x: worldPt.x, y: worldPt.y, z: worldPt.z,
+          rotX, rotY, rotZ,
+          _traceGenerated: true,
+        });
+      });
+
+      trace.generated = true;
+
+      if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+      rebuildParLights();
+      renderParGUI();
+      if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+      debounceAutoSave();
+    }
+
+    // --- Build Generator GUI ---
+    window.traceGuiFolders = [];
+    window.openTraceFolder = function(traceIndex) {
+      genFolder.open();
+      if (window.traceGuiFolders[traceIndex]) {
+        window.traceGuiFolders[traceIndex].open();
+      }
+    };
+    function renderGeneratorGUI() {
+      // Clear existing trace folders
+      const existing = [...genFolder.folders];
+      existing.forEach(f => f.destroy());
+      window.traceGuiFolders = [];
+
+      // New Trace buttons
+      const newBtnDiv = document.createElement('div');
+      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#2a2a2a;color:#ff8800;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+
+      const newCircleBtn = document.createElement('button');
+      newCircleBtn.textContent = '○ New Circle';
+      newCircleBtn.style.cssText = btnStyle;
+      newCircleBtn.onclick = () => {
+        params.traces.push({
+          name: `Circle ${params.traces.length + 1}`,
+          shape: 'circle', radius: 5, arc: 360,
+          spacing: 2, x: 0, y: 5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+          aimMode: 'lookAt', aimX: 0, aimY: 0, aimZ: 0,
+          lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
+          groupName: `Ring ${params.traces.length + 1}`,
+          generated: false,
+        });
+        rebuildTraceObjects();
+        renderGeneratorGUI();
+        debounceAutoSave();
+      };
+
+      const newLineBtn = document.createElement('button');
+      newLineBtn.textContent = '— New Line';
+      newLineBtn.style.cssText = btnStyle;
+      newLineBtn.onclick = () => {
+        params.traces.push({
+          name: `Line ${params.traces.length + 1}`,
+          shape: 'line',
+          startX: -5, startY: 5, startZ: 0,
+          endX: 5, endY: 5, endZ: 0,
+          spacing: 2, 
+          aimMode: 'direction', aimX: 0, aimY: -1, aimZ: 0,
+          lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
+          groupName: `Line ${params.traces.length + 1}`,
+          generated: false,
+        });
+        rebuildTraceObjects();
+        renderGeneratorGUI();
+        debounceAutoSave();
+      };
+
+      newBtnDiv.appendChild(newCircleBtn);
+      newBtnDiv.appendChild(newLineBtn);
+
+      // Remove old button bar if present
+      const genChildren = genFolder.domElement.querySelector('.children');
+      if (genChildren) {
+        const oldBtns = genChildren.querySelector('.trace-new-btns');
+        if (oldBtns) oldBtns.remove();
+        newBtnDiv.classList.add('trace-new-btns');
+        genChildren.prepend(newBtnDiv);
+      }
+
+      // Trace sub-folders
+      params.traces.forEach((trace, i) => {
+        const label = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
+        const tFolder = genFolder.addFolder(label);
+        tFolder.close();
+        window.traceGuiFolders[i] = tFolder;
+
+        tFolder.add(trace, 'name').name('Name').onFinishChange(() => {
+          trace.groupName = trace.name;
+          renderGeneratorGUI();
+          debounceAutoSave();
+        });
+
+        if (trace.shape === 'circle') {
+          tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius').onChange(() => {
+            updateTracePreview(i);
+            debounceAutoSave();
+          });
+          tFolder.add(trace, 'arc', 10, 360, 5).name('Arc (°)').onChange(() => {
+            updateTracePreview(i);
+            debounceAutoSave();
+          });
+        } else {
+          // Line: Start/End XYZ
+          const startF = tFolder.addFolder('Start Point (green)');
+          startF.close();
+          startF.add(trace, 'startX', -100, 100, 0.5).name('X').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          const endF = tFolder.addFolder('End Point (red)');
+          endF.close();
+          endF.add(trace, 'endX', -100, 100, 0.5).name('X').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+        }
+
+        // Show computed light count
+        const lightPts = computeTracePoints(trace);
+        const countInfo = { count: `${lightPts.length} lights` };
+        const countCtrl = tFolder.add(countInfo, 'count').name('Preview').disable();
+
+        tFolder.add(trace, 'spacing', 0.5, 10, 0.25).name('Spacing (m)').onChange(() => {
+          const pts = computeTracePoints(trace);
+          countInfo.count = `${pts.length} lights`;
+          countCtrl.updateDisplay();
+          updateTracePreview(i);
+          debounceAutoSave();
+        });
+
+        // Aim mode
+        tFolder.add(trace, 'aimMode', ['lookAt', 'direction']).name('Aim Mode').onChange(() => {
+          renderGeneratorGUI();
+          debounceAutoSave();
+        });
+
+        // Select Aim Target button
+        const aimBtnDiv = document.createElement('div');
+        aimBtnDiv.style.cssText = 'padding:2px 6px;';
+        const aimBtn = document.createElement('button');
+        aimBtn.textContent = '🎯 Select Aim Target';
+        aimBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:#3a3a1a;color:#ffcc00;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+        aimBtn.onclick = () => {
+          const tObj = window.traceObjects[i];
+          if (!tObj) return;
+          // Find the aim handle (last in handles array for lines, first for circles)
+          const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
+          if (aimHandle) {
+            transformControl.attach(aimHandle);
+          }
+          aimBtn.blur();
+        };
+        aimBtnDiv.appendChild(aimBtn);
+        const aimChildren = tFolder.domElement.querySelector('.children');
+        if (aimChildren) aimChildren.appendChild(aimBtnDiv);
+
+        // Light defaults
+        const lightFolder = tFolder.addFolder('Light Defaults');
+        lightFolder.close();
+        lightFolder.addColor(trace, 'lightColor').name('Color');
+        lightFolder.add(trace, 'lightIntensity', 1, 50, 1).name('Intensity');
+        lightFolder.add(trace, 'lightAngle', 5, 90, 1).name('Angle');
+
+        // Action buttons
+        const actDiv = document.createElement('div');
+        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+        const aBtnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+
+        const genBtn = document.createElement('button');
+        genBtn.textContent = trace.generated ? '↻ Regenerate' : '✓ Generate';
+        genBtn.style.cssText = aBtnStyle + 'background:#1a3a1a;color:#3c3;';
+        genBtn.onclick = () => generateGroupFromTrace(i);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕ Delete';
+        delBtn.style.cssText = aBtnStyle + 'background:#3a1a1a;color:#c33;';
+        delBtn.onclick = () => {
+          pushUndo();
+          const trace = params.traces[i];
+          // Remove generated lights from this trace's group
+          if (trace) {
+            const groupName = trace.groupName || trace.name;
+            params.parLights = params.parLights.filter(l => !(l.group === groupName && l._traceGenerated));
+          }
+          params.traces.splice(i, 1);
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          rebuildParLights();
+          rebuildTraceObjects();
+          renderGeneratorGUI();
+          renderParGUI();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+          debounceAutoSave();
+        };
+
+        actDiv.appendChild(genBtn);
+        actDiv.appendChild(delBtn);
+        const tChildren = tFolder.domElement.querySelector('.children');
+        if (tChildren) tChildren.appendChild(actDiv);
+      });
+    }
+
+    renderGeneratorGUI();
+    window.renderGeneratorGUI = renderGeneratorGUI;
+    rebuildTraceObjects();
 
     window.renderParGUI = renderParGUI;
     renderParGUI();
