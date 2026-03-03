@@ -104,3 +104,59 @@ This platform features a suite of high-fidelity "skills" built specifically for 
 
 ### 5. Config State Parity (`scene_config.yaml`)
 Your sole source-of-truth. Every time the page boots, it fetches and parses this YAML file first, ensuring that `main.js` instantly boots up mirroring exactly where you left your lights.
+
+---
+
+## 📸 Puppeteer Renderer (`agent_render.js`)
+
+A GPU-accelerated Puppeteer script that opens the simulation in a real Chrome window for automated screenshot capture. Requires the servers to be running first (`npm start`).
+
+### Usage
+
+```bash
+# Open the sim in a live window (no captures, interactive)
+node agent_render.js --open
+
+# Capture the current camera view without moving it
+node agent_render.js --current
+
+# Navigate to a specific view and capture
+node agent_render.js --view dramatic
+
+# Capture all 5 preset views (front, side, aerial, dramatic, night-walk)
+node agent_render.js
+
+# Add --keep-alive to any command to keep the window open after captures
+node agent_render.js --current --keep-alive
+```
+
+### Output
+
+Screenshots are saved to `../.agent_renders/` (gitignored):
+
+| Mode | Output File |
+|---|---|
+| `--current` | `current_{timestamp}.png` |
+| `--view <name>` | `{name}.png` |
+| Default (all) | `front.png`, `side.png`, `aerial.png`, `dramatic.png`, `night-walk.png` |
+
+### Scripting Renders
+
+The renderer can be invoked from any Node.js script or shell pipeline:
+
+```bash
+# Start servers, render all views, stop servers
+npm start &
+sleep 5
+node agent_render.js
+kill %1
+
+# Just grab one quick screenshot
+node agent_render.js --view aerial
+```
+
+### Requirements
+
+- **GPU** — The script uses `--ignore-gpu-blocklist` and ANGLE/D3D11 for hardware WebGL rendering
+- **Servers running** — `npm start` must be active before running the renderer
+- **Puppeteer** — Already included as a devDependency

@@ -110,6 +110,136 @@ canvas {
   font-family: "Courier New", monospace;
   pointer-events: none;
 }
+/* ─── HUD Frame Overlay ─── */
+#hud-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+}
+
+/* Corner brackets */
+.hud-corner {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-color: rgba(240, 192, 96, 0.4);
+  border-style: solid;
+  border-width: 0;
+}
+
+.hud-corner.top-left {
+  top: 8px; left: 8px;
+  border-top-width: 2px;
+  border-left-width: 2px;
+}
+
+.hud-corner.top-right {
+  top: 8px; right: 8px;
+  border-top-width: 2px;
+  border-right-width: 2px;
+}
+
+.hud-corner.bottom-left {
+  bottom: 8px; left: 8px;
+  border-bottom-width: 2px;
+  border-left-width: 2px;
+}
+
+.hud-corner.bottom-right {
+  bottom: 8px; right: 8px;
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+}
+
+/* Edge scan lines */
+.hud-edge {
+  position: absolute;
+  background: rgba(240, 192, 96, 0.08);
+}
+
+.hud-edge.top, .hud-edge.bottom {
+  left: 48px; right: 48px;
+  height: 1px;
+}
+
+.hud-edge.top { top: 8px; }
+.hud-edge.bottom { bottom: 8px; }
+
+.hud-edge.left, .hud-edge.right {
+  top: 48px; bottom: 48px;
+  width: 1px;
+}
+
+.hud-edge.left { left: 8px; }
+.hud-edge.right { right: 8px; }
+
+/* Top bar */
+.hud-top-bar {
+  position: absolute;
+  top: 8px;
+  left: 48px;
+  right: 48px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: rgba(10, 10, 26, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  pointer-events: auto;
+}
+
+.hud-title {
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  color: rgba(240, 192, 96, 0.6);
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.hud-status {
+  font-size: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: #4f4;
+  padding: 1px 6px;
+  border: 1px solid rgba(68, 255, 68, 0.25);
+  border-radius: 3px;
+  background: rgba(68, 255, 68, 0.06);
+  animation: hud-pulse 2s ease-in-out infinite;
+}
+
+@keyframes hud-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.hud-close {
+  background: rgba(255, 85, 85, 0.1);
+  border: 1px solid rgba(255, 85, 85, 0.3);
+  color: #ff5555;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  font-size: 0.6rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  line-height: 1;
+  padding: 0;
+}
+
+.hud-close:hover {
+  color: #ff5555;
+  border-color: rgba(255, 85, 85, 0.4);
+  background: rgba(255, 85, 85, 0.1);
+}
 
 /* View presets */
 #view-presets {
@@ -118,24 +248,82 @@ canvas {
   right: 20px;
   z-index: 100;
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  align-items: center;
 }
 
-#view-presets button {
+#view-presets .preset-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(240, 192, 96, 0.2);
   background: rgba(10, 10, 26, 0.8);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(240, 192, 96, 0.2);
+  transition: all 0.25s ease;
+}
+
+#view-presets .preset-group:hover {
+  border-color: rgba(240, 192, 96, 0.45);
+}
+
+#view-presets .preset-name {
+  background: none;
+  border: none;
   color: #ccc;
-  padding: 7px 14px;
-  border-radius: 8px;
+  padding: 7px 10px;
   font-size: 0.7rem;
   cursor: pointer;
   letter-spacing: 0.06em;
   transition: all 0.25s ease;
+  white-space: nowrap;
+  font-family: inherit;
 }
 
-#view-presets button:hover {
+#view-presets .preset-name:hover {
+  color: #f0c060;
+  background: rgba(240, 192, 96, 0.08);
+}
+
+#view-presets .preset-action {
+  background: none;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  color: #666;
+  padding: 7px 5px;
+  font-size: 0.55rem;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  line-height: 1;
+}
+
+#view-presets .preset-action:hover {
+  color: #f0c060;
+  background: rgba(240, 192, 96, 0.1);
+}
+
+#view-presets .preset-action.remove:hover {
+  color: #ff5555;
+  background: rgba(255, 85, 85, 0.1);
+}
+
+#view-presets .preset-add {
+  background: rgba(10, 10, 26, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(240, 192, 96, 0.2);
+  color: #888;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  font-family: inherit;
+}
+
+#view-presets .preset-add:hover {
   border-color: rgba(240, 192, 96, 0.6);
   color: #f0c060;
   background: rgba(240, 192, 96, 0.08);

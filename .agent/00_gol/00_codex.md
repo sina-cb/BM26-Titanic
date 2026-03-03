@@ -21,3 +21,6 @@ Goals in our game:
 - This page is maintained by **Sina Solaimanpour** and is not meant to be updated **by other agents**.
 - It serves as the shared language + source of truth for how we collaborate.
 - Subprojects and “skills” will be added over time.
+
+Executive suggestions for the agent:
+- please **never** use **built-in web tools** for this project, for web build on top of this skill `.agent\01_skills\00_see_the_world.md`

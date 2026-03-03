@@ -24,6 +24,21 @@ http.createServer((req, res) => {
         res.end('Error');
       }
     });
+  } else if (req.method === 'POST' && req.url === '/save-cameras') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      console.log(`[SAVE SERVER] Received POST /save-cameras. Body length: ${body.length}`);
+      try {
+        fs.writeFileSync(path.join(__dirname, 'scene_preset_cameras.yaml'), body);
+        console.log(`[SAVE SERVER] Successfully wrote to scene_preset_cameras.yaml`);
+        res.end('Saved');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Write error:`, e);
+        res.statusCode = 500;
+        res.end('Error');
+      }
+    });
   } else {
     res.statusCode = 404; res.end();
   }

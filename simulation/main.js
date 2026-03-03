@@ -23,6 +23,7 @@ let model = null;
 let modelCenter = new THREE.Vector3();
 let modelSize = new THREE.Vector3();
 let modelRadius = 1;
+let cameraPresets = []; // Loaded from scene_preset_cameras.yaml
 let structureMaterial, editMaterial;
 let gridHelper, ground, starField;
 const modelMeshes = []; // Collected after model load for surface raycasting
@@ -360,6 +361,7 @@ function init() {
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true); // capture phase to beat lil-gui focus
   setupViewPresets();
+  setupHUD();
 
   // Start loop
   animate();
@@ -3042,47 +3044,119 @@ function setupGUI() {
   if (guiChildren) guiChildren.appendChild(saveDiv);
 }
 
-// ─── View Presets ───────────────────────────────────────────────────────
-function setupViewPresets() {
-  document.querySelectorAll("#view-presets button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const view = btn.dataset.view;
-      animateCamera(view);
+// ─── HUD Frame ──────────────────────────────────────────────────────────
+function setupHUD() {
+  const closeBtn = document.getElementById('hud-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        window.close();
+      }
     });
+  }
+}
+
+// ─── View Presets (YAML-driven) ─────────────────────────────────────────
+function setupViewPresets() {
+  renderViewPresetsUI();
+}
+
+function renderViewPresetsUI() {
+  const container = document.getElementById('view-presets');
+  if (!container) return;
+  container.innerHTML = '';
+
+  // + Add button (far left)
+  const addBtn = document.createElement('button');
+  addBtn.className = 'preset-add';
+  addBtn.textContent = '+';
+  addBtn.title = 'Add new camera preset from current view';
+  addBtn.onclick = () => {
+    const name = prompt('Preset name:');
+    if (!name || !name.trim()) return;
+    const key = name.trim().toLowerCase().replace(/\s+/g, '-');
+    cameraPresets.push({
+      name: name.trim(),
+      key,
+      position: {
+        x: Math.round(camera.position.x * 1000) / 1000,
+        y: Math.round(camera.position.y * 1000) / 1000,
+        z: Math.round(camera.position.z * 1000) / 1000,
+      },
+      target: {
+        x: Math.round(controls.target.x * 1000) / 1000,
+        y: Math.round(controls.target.y * 1000) / 1000,
+        z: Math.round(controls.target.z * 1000) / 1000,
+      },
+    });
+    saveCameraPresets();
+    renderViewPresetsUI();
+  };
+  container.appendChild(addBtn);
+
+  // Preset buttons
+  cameraPresets.forEach((preset, i) => {
+    const group = document.createElement('div');
+    group.className = 'preset-group';
+
+    // Name button — navigates camera
+    const nameBtn = document.createElement('button');
+    nameBtn.className = 'preset-name';
+    nameBtn.textContent = preset.name;
+    nameBtn.dataset.view = preset.key;
+    nameBtn.title = `Go to ${preset.name} view`;
+    nameBtn.onclick = () => animateCameraToPreset(preset);
+    group.appendChild(nameBtn);
+
+    // Update button — saves current camera to this preset
+    const updateBtn = document.createElement('button');
+    updateBtn.className = 'preset-action update';
+    updateBtn.innerHTML = '🔄';
+    updateBtn.title = `Update "${preset.name}" from current camera`;
+    updateBtn.onclick = (e) => {
+      e.stopPropagation();
+      preset.position = {
+        x: Math.round(camera.position.x * 1000) / 1000,
+        y: Math.round(camera.position.y * 1000) / 1000,
+        z: Math.round(camera.position.z * 1000) / 1000,
+      };
+      preset.target = {
+        x: Math.round(controls.target.x * 1000) / 1000,
+        y: Math.round(controls.target.y * 1000) / 1000,
+        z: Math.round(controls.target.z * 1000) / 1000,
+      };
+      saveCameraPresets();
+      // Flash feedback
+      updateBtn.style.color = '#4f4';
+      setTimeout(() => { updateBtn.style.color = ''; }, 600);
+    };
+    group.appendChild(updateBtn);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'preset-action remove';
+    removeBtn.innerHTML = '✕';
+    removeBtn.title = `Remove "${preset.name}"`;
+    removeBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!confirm(`Remove preset "${preset.name}"?`)) return;
+      cameraPresets.splice(i, 1);
+      saveCameraPresets();
+      renderViewPresetsUI();
+    };
+    group.appendChild(removeBtn);
+
+    container.appendChild(group);
   });
 }
 
-function animateCamera(viewName) {
-  if (!model) return;
+function animateCameraToPreset(preset) {
+  if (!preset || !preset.position || !preset.target) return;
 
-  const dist = modelRadius * 2.5;
-  const h = modelSize.y;
-  let targetPos, targetLook;
-
-  switch (viewName) {
-    case "front":
-      targetPos = new THREE.Vector3(0, h * 0.5, dist);
-      targetLook = modelCenter.clone();
-      break;
-    case "side":
-      targetPos = new THREE.Vector3(dist, h * 0.5, 0);
-      targetLook = modelCenter.clone();
-      break;
-    case "aerial":
-      targetPos = new THREE.Vector3(dist * 0.3, dist * 0.8, dist * 0.3);
-      targetLook = modelCenter.clone();
-      break;
-    case "dramatic":
-      targetPos = new THREE.Vector3(-dist * 0.5, h * 0.3, dist * 0.8);
-      targetLook = new THREE.Vector3(modelCenter.x, h * 0.4, modelCenter.z);
-      break;
-    case "night-walk":
-      targetPos = new THREE.Vector3(dist * 0.15, h * 0.1, dist * 0.2);
-      targetLook = new THREE.Vector3(modelCenter.x, h * 0.3, modelCenter.z);
-      break;
-    default:
-      return;
-  }
+  const targetPos = new THREE.Vector3(preset.position.x, preset.position.y, preset.position.z);
+  const targetLook = new THREE.Vector3(preset.target.x, preset.target.y, preset.target.z);
 
   // Smooth camera transition
   const startPos = camera.position.clone();
@@ -3103,6 +3177,23 @@ function animateCamera(viewName) {
     if (t < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
+}
+
+// Legacy compatibility: animateCamera by name (used by agent_render.js)
+function animateCamera(viewName) {
+  const preset = cameraPresets.find(p => p.key === viewName);
+  if (preset) {
+    animateCameraToPreset(preset);
+  }
+}
+
+function saveCameraPresets() {
+  const yamlStr = yaml.dump({ presets: cameraPresets });
+  fetch('http://localhost:8181/save-cameras', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: yamlStr,
+  }).catch(err => console.warn('Failed to save camera presets:', err));
 }
 
 // ─── Resize ─────────────────────────────────────────────────────────────
@@ -3167,20 +3258,43 @@ function animate() {
 }
 
 // ─── Start ──────────────────────────────────────────────────────────────
-fetch("scene_config.yaml?t=" + Date.now())
-  .then((res) => res.text())
-  .then((yamlText) => {
-    try {
-      const loaded = yaml.load(yamlText);
-      if (loaded) {
-        configTree = loaded;
-        extractParams(configTree);
-      }
-    } catch (err) {
-      console.warn("Failed to parse scene_config.yaml:", err);
+Promise.all([
+  fetch("scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
+  fetch("scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
+]).then(([sceneYaml, camerasYaml]) => {
+  // Load scene config
+  try {
+    const loaded = yaml.load(sceneYaml);
+    if (loaded) {
+      configTree = loaded;
+      extractParams(configTree);
     }
-    init();
-  })
-  .catch(() => {
-    init();
-  });
+  } catch (err) {
+    console.warn("Failed to parse scene_config.yaml:", err);
+  }
+
+  // Load camera presets
+  try {
+    const camData = yaml.load(camerasYaml);
+    if (camData && Array.isArray(camData.presets)) {
+      cameraPresets = camData.presets;
+    }
+  } catch (err) {
+    console.warn("Failed to parse scene_preset_cameras.yaml:", err);
+  }
+
+  // If no presets loaded, create defaults from model dimensions
+  if (cameraPresets.length === 0) {
+    cameraPresets = [
+      { name: 'Front', key: 'front', position: { x: 0, y: 5.5, z: 27.5 }, target: { x: 0, y: 4, z: 0 } },
+      { name: 'Side', key: 'side', position: { x: 27.5, y: 5.5, z: 0 }, target: { x: 0, y: 4, z: 0 } },
+      { name: 'Aerial', key: 'aerial', position: { x: 8.25, y: 22, z: 8.25 }, target: { x: 0, y: 4, z: 0 } },
+      { name: 'Dramatic', key: 'dramatic', position: { x: -13.75, y: 3.3, z: 22 }, target: { x: 0, y: 4.4, z: 0 } },
+      { name: 'Night Walk', key: 'night-walk', position: { x: 4.125, y: 1.1, z: 5.5 }, target: { x: 0, y: 3.3, z: 0 } },
+    ];
+  }
+
+  init();
+}).catch(() => {
+  init();
+});

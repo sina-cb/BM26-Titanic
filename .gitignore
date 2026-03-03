@@ -1,6 +1,10 @@
 # IDE / Editor
 .vscode/
 
+# Agent renders (generated output)
+.agent_renders/
+.puppeteer-endpoint
+
 # Dependencies
 node_modules/
 
