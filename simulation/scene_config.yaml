@@ -32,9 +32,9 @@ titanicEnd:
       floodColor: '#ffffff'
       floodIntensity: 5
       floodAngle: 40
-      showFaces: false
+      showFaces: true
       showWireframe: false
-      wireColor: '#88ddff'
+      wireColor: '#00b7ff'
     - name: Berg Beta
       seed: 60617
       x: 50.5
@@ -51,7 +51,7 @@ titanicEnd:
       floodColor: '#aaccff'
       floodIntensity: 4
       floodAngle: 50
-      showFaces: false
+      showFaces: true
       showWireframe: false
       wireColor: '#88ddff'
     - name: Berg Gamma
@@ -70,7 +70,7 @@ titanicEnd:
       floodColor: '#ffffff'
       floodIntensity: 20
       floodAngle: 90
-      showFaces: false
+      showFaces: true
       showWireframe: false
       wireColor: '#ff0088'
 atmosphere:
