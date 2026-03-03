@@ -596,27 +596,16 @@ function syncGuiFolders() {
   window.parGuiFolders.forEach((folder, idx) => {
     if (!folder) return;
     try {
-      const titleEl = folder.domElement.querySelector(':scope > .title');
       if (selectedFixtureIndices.has(idx)) {
         folder.open();
-        // Highlight: blue accent border + lighter background
-        if (titleEl) {
-          titleEl.style.borderLeft = '3px solid #4d9fff';
-          titleEl.style.background = 'rgba(77,159,255,0.12)';
-          titleEl.style.color = '#8cc4ff';
-        }
+        folder.domElement.classList.add('gui-card-selected');
         // Open parent group folder
         if (folder.parent && typeof folder.parent.open === 'function') {
           folder.parent.open();
         }
       } else {
         folder.close();
-        // Remove highlight
-        if (titleEl) {
-          titleEl.style.borderLeft = '';
-          titleEl.style.background = '';
-          titleEl.style.color = '';
-        }
+        folder.domElement.classList.remove('gui-card-selected');
       }
     } catch (_) {}
   });
@@ -1770,6 +1759,7 @@ function setupGUI() {
           if (config.rotZ === undefined) config.rotZ = 0;
 
           const idxFolder = groupFolder.addFolder(config.name);
+          idxFolder.domElement.classList.add('gui-card');
           idxFolder.close();
           window.parGuiFolders[index] = idxFolder;
 
@@ -2288,8 +2278,12 @@ function setupGUI() {
     window.traceGuiFolders = [];
     window.openTraceFolder = function(traceIndex) {
       genFolder.open();
+      if (window.traceGuiFolders) {
+        window.traceGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+      }
       if (window.traceGuiFolders[traceIndex]) {
         window.traceGuiFolders[traceIndex].open();
+        window.traceGuiFolders[traceIndex].domElement.classList.add('gui-card-selected');
       }
     };
     function renderGeneratorGUI() {
@@ -2357,8 +2351,21 @@ function setupGUI() {
       params.traces.forEach((trace, i) => {
         const label = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
         const tFolder = genFolder.addFolder(label);
+        tFolder.domElement.classList.add('gui-card');
         tFolder.close();
         window.traceGuiFolders[i] = tFolder;
+
+        // Selection highlight
+        if (typeof tFolder.onOpenClose === 'function') {
+          tFolder.onOpenClose((open) => {
+            if (open) {
+              (window.traceGuiFolders || []).forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+              tFolder.domElement.classList.add('gui-card-selected');
+            } else {
+              tFolder.domElement.classList.remove('gui-card-selected');
+            }
+          });
+        }
 
         tFolder.add(trace, 'name').name('Name').onFinishChange(() => {
           trace.groupName = trace.name;
@@ -2521,8 +2528,12 @@ function setupGUI() {
     window.strandGuiFolders = [];
     window.openStrandFolder = function(strandIndex) {
       strandFolder.open();
+      if (window.strandGuiFolders) {
+        window.strandGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+      }
       if (window.strandGuiFolders[strandIndex]) {
         window.strandGuiFolders[strandIndex].open();
+        window.strandGuiFolders[strandIndex].domElement.classList.add('gui-card-selected');
       }
     };
 
@@ -2565,8 +2576,21 @@ function setupGUI() {
       params.ledStrands.forEach((strand, i) => {
         const label = `💡 ${strand.name || `Strand ${i + 1}`}`;
         const sFolder = strandFolder.addFolder(label);
+        sFolder.domElement.classList.add('gui-card');
         sFolder.close();
         window.strandGuiFolders[i] = sFolder;
+
+        // Selection highlight
+        if (typeof sFolder.onOpenClose === 'function') {
+          sFolder.onOpenClose((open) => {
+            if (open) {
+              (window.strandGuiFolders || []).forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+              sFolder.domElement.classList.add('gui-card-selected');
+            } else {
+              sFolder.domElement.classList.remove('gui-card-selected');
+            }
+          });
+        }
 
         sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
           renderStrandGUI();
@@ -2633,9 +2657,13 @@ function setupGUI() {
       (window.icebergFixtures || []).forEach(f => f.setVisibility(v));
     });
 
-    // Focus on Select checkbox
-    if (params.icebergFocusOnSelect === undefined) params.icebergFocusOnSelect = true;
-    bergFolder.add(params, 'icebergFocusOnSelect').name('Focus on Select');
+    // Focus on Select checkbox (from config)
+    if (params.focusOnSelect === undefined) params.focusOnSelect = true;
+    // Ensure entry exists in configTree so reconstructYAML persists it
+    if (sectionConfig && !sectionConfig.focusOnSelect) {
+      sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
+    }
+    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
 
     window.icebergFixtures = [];
 
@@ -2700,9 +2728,15 @@ function setupGUI() {
     window.icebergGuiFolders = [];
     window.openIcebergFolder = function(idx) {
       bergFolder.open();
-      if (window.icebergGuiFolders[idx]) window.icebergGuiFolders[idx].open();
+      if (window.icebergGuiFolders) {
+        window.icebergGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+      }
+      if (window.icebergGuiFolders[idx]) {
+        window.icebergGuiFolders[idx].open();
+        window.icebergGuiFolders[idx].domElement.classList.add('gui-card-selected');
+      }
       // Fly to iceberg if focus checkbox is on
-      if (params.icebergFocusOnSelect && params.icebergs[idx]) {
+      if (params.focusOnSelect && params.icebergs[idx]) {
         flyToIceberg(params.icebergs[idx]);
       }
     };
@@ -2747,6 +2781,7 @@ function setupGUI() {
       params.icebergs.forEach((berg, i) => {
         const label = `🧊 ${berg.name || `Iceberg ${i + 1}`}`;
         const bFolder = bergFolder.addFolder(label);
+        bFolder.domElement.classList.add('gui-card');
         bFolder.close();
         window.icebergGuiFolders[i] = bFolder;
 
@@ -2754,7 +2789,14 @@ function setupGUI() {
         const titleEl = bFolder.domElement.querySelector('.title');
         if (titleEl) {
           titleEl.addEventListener('click', () => {
-            if (params.icebergFocusOnSelect && berg) {
+            // Highlight this card, deselect others
+            if (window.icebergGuiFolders) {
+              window.icebergGuiFolders.forEach(f => {
+                if (f) f.domElement.classList.remove('gui-card-selected');
+              });
+            }
+            bFolder.domElement.classList.add('gui-card-selected');
+            if (params.focusOnSelect && berg) {
               flyToIceberg(berg);
             }
           });
@@ -2799,7 +2841,7 @@ function setupGUI() {
         // LED
         const ledF = bFolder.addFolder('LED Wiring');
         ledF.close();
-        ledF.add(berg, 'ledPattern', ['spiral', 'parabolic']).name('Pattern').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        ledF.add(berg, 'ledPattern', ['edges', 'spiral', 'parabolic']).name('Pattern').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
         ledF.add(berg, 'ledDensity', 2, 12, 1).name('Density').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
         ledF.addColor(berg, 'ledColor').name('LED Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
 
@@ -2840,11 +2882,18 @@ function setupGUI() {
     buildGUI(configTree, gui);
   }
 
-  // ─── Config Section (always at bottom) ───
-  // Ensure the Save Button is explicitly available at the root
-  gui
-    .add({ save: exportConfig }, "save")
-    .name("💾 Overwrite scene_config.yaml");
+  // ─── Premium Save Button ───
+  const saveDiv = document.createElement('div');
+  saveDiv.style.cssText = 'padding:10px 6px 6px;';
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = '💾  Save Configuration';
+  saveBtn.style.cssText = 'width:100%;min-height:38px;padding:12px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(51,204,51,0.25);border-radius:8px;background:rgba(30,60,30,0.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(120,220,120,0.9);cursor:pointer;font-size:12px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,0.06),0 2px 8px rgba(0,0,0,0.3);';
+  saveBtn.onmouseenter = () => { saveBtn.style.borderColor = 'rgba(51,204,51,0.5)'; saveBtn.style.background = 'rgba(40,80,40,0.45)'; saveBtn.style.color = '#7f7'; saveBtn.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.1),0 4px 16px rgba(51,204,51,0.12)'; };
+  saveBtn.onmouseleave = () => { saveBtn.style.borderColor = 'rgba(51,204,51,0.25)'; saveBtn.style.background = 'rgba(30,60,30,0.35)'; saveBtn.style.color = 'rgba(120,220,120,0.9)'; saveBtn.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.06),0 2px 8px rgba(0,0,0,0.3)'; };
+  saveBtn.onclick = () => { exportConfig(); };
+  saveDiv.appendChild(saveBtn);
+  const guiChildren = gui.domElement.querySelector('.children');
+  if (guiChildren) guiChildren.appendChild(saveDiv);
 }
 
 // ─── View Presets ───────────────────────────────────────────────────────

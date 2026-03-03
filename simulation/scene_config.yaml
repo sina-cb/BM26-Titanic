@@ -12,55 +12,67 @@ titanicEnd:
   icebergsEnabled:
     value: true
     label: Master Enabled
+  focusOnSelect:
+    value: false
+    label: Focus on Select
   icebergs:
     - name: Berg Alpha
-      seed: 42231
-      x: -27
+      seed: 63208
+      x: -30.5
       y: 0
-      z: 44
-      radius: 5
-      height: 8
-      detail: 12
+      z: 54.5
+      radius: 8.5
+      height: 12.5
+      detail: 9
       peakCount: 4
-      ledPattern: spiral
+      ledPattern: edges
       ledDensity: 5
       ledColor: '#aaeeff'
       floodEnabled: true
       floodColor: '#ffffff'
       floodIntensity: 5
       floodAngle: 40
+      showFaces: false
+      showWireframe: false
+      wireColor: '#88ddff'
     - name: Berg Beta
-      seed: 7891
-      x: 46.5
+      seed: 60617
+      x: 50.5
       y: 0
-      z: 23
-      radius: 3.5
-      height: 5
+      z: 27.5
+      radius: 6.5
+      height: 14.5
       detail: 10
-      peakCount: 3
-      ledPattern: parabolic
+      peakCount: 5
+      ledPattern: edges
       ledDensity: 6
       ledColor: '#ccddff'
       floodEnabled: true
       floodColor: '#aaccff'
       floodIntensity: 4
       floodAngle: 50
+      showFaces: false
+      showWireframe: false
+      wireColor: '#88ddff'
     - name: Berg Gamma
       seed: 55555
       x: -15
       y: 0
       z: -35
-      radius: 6
-      height: 10
+      radius: 10.5
+      height: 12.5
       detail: 14
       peakCount: 5
-      ledPattern: spiral
+      ledPattern: edges
       ledDensity: 4
       ledColor: '#88ccff'
-      floodEnabled: true
+      floodEnabled: false
       floodColor: '#ffffff'
-      floodIntensity: 6
-      floodAngle: 35
+      floodIntensity: 20
+      floodAngle: 90
+      showFaces: false
+      showWireframe: false
+      wireColor: '#ff0088'
 atmosphere:
   _section:
     label: 🌌 Atmosphere
@@ -71,7 +83,7 @@ atmosphere:
     max: 1
     step: 0.01
   exposure:
-    value: 0.75
+    value: 1
     label: Camera Exposure
     min: 0.1
     max: 3
