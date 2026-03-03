@@ -4,6 +4,8 @@ Lighting design & simulation toolkit for the **Titanic** structure at Burning Ma
 
 > *Make it glow. Make it welcoming. Make it fun.*
 
+### 🌐 [**Live Demo →**](https://sina-cb.github.io/BM26-Titanic/simulation/)
+
 ---
 
 ## 🎯 Mission
