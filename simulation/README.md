@@ -16,6 +16,49 @@ Then, open your browser to [http://localhost:8080/simulation/](http://localhost:
 
 ---
 
+## 🛠️ Technology Stack
+
+### Core Libraries
+
+| Technology | Version | Role |
+|---|---|---|
+| **Three.js** | `0.160.0` | 3D rendering engine — scene graph, camera, lights, meshes, shadows |
+| **lil-gui** | (bundled with Three.js) | Lightweight GUI control panel |
+| **js-yaml** | `4.1.x` | YAML parsing/serialization for config persistence |
+| **chroma-js** | `3.1.2` | Color manipulation — LAB-space gradient interpolation |
+| **Node.js** | (runtime) | Backend save server |
+
+### Three.js Addons
+
+| Addon | Purpose |
+|---|---|
+| **OrbitControls** | Camera orbit, pan, and zoom |
+| **TransformControls** | Translate/rotate/scale gizmos for fixtures |
+| **FBXLoader** | Loads `.fbx` 3D model geometry |
+| **BufferGeometryUtils** | Mesh merging utilities |
+| **EffectComposer** + **UnrealBloomPass** | HDR post-processing bloom pipeline |
+
+### Architecture
+
+| Layer | Tech | Details |
+|---|---|---|
+| **Frontend** | Vanilla JS (ES Modules via `importmap`) | `main.js` + component classes (`ParLight.js`, `LedStrand.js`, `Iceberg.js`) |
+| **Styling** | Vanilla CSS + Google Fonts (Inter) | Dark theme with glassmorphism |
+| **State** | `scene_config.yaml` | Single source of truth — loaded on boot, auto-saved via HTTP POST |
+| **Save Server** | Node.js HTTP server on port `8181` | Minimal CORS endpoint: `POST /save` writes YAML to disk |
+| **Static Server** | `http-server` on port `8080` | Serves HTML/JS/CSS and 3D model assets |
+| **Dev Runner** | `concurrently` | Runs both servers in parallel via `npm start` |
+
+### Key Patterns
+
+- **Import Maps** — CDN-loaded ES modules, no bundler required
+- **YAML-driven config** — all scene state persisted in `scene_config.yaml`
+- **Undo/Redo** — snapshot-based state management (50-deep stack)
+- **Multi-select transforms** — quaternion-based differential deltas
+- **Snap-to-surface** — two-step raycast placement (position → aim)
+
+---
+
 ## 🚀 Getting Started
 
 To fully operate the simulation environment, you must start **two** background services simultaneously:

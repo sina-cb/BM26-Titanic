@@ -12,6 +12,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import yaml from "js-yaml";
+import chroma from "chroma-js";
 import { ParLight } from "./ParLight.js";
 import { LedStrand } from "./LedStrand.js";
 import { Iceberg } from "./Iceberg.js";
@@ -174,6 +175,10 @@ function extractParams(node) {
       params.icebergs = node[key];
       continue;
     }
+    if (key === "gradientStops" && Array.isArray(node[key])) {
+      params.gradientStops = node[key];
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -215,6 +220,10 @@ function reconstructYAML(node) {
     }
     if (key === "icebergs" && Array.isArray(node[key])) {
       node[key] = params.icebergs;
+      continue;
+    }
+    if (key === "gradientStops" && Array.isArray(node[key])) {
+      node[key] = params.gradientStops;
       continue;
     }
 
@@ -1288,6 +1297,10 @@ function setupGUI() {
       window.parFixtures.forEach((f) => {
         f.setVisibility(v, params.conesEnabled !== false);
       });
+      // Force generators off when par lights are disabled
+      if (window.setTraceObjectsVisibility) {
+        window.setTraceObjectsVisibility(v && params.generatorsVisible);
+      }
     },
     conesEnabled: (v) => {
       window.parFixtures.forEach((f) => {
@@ -1366,6 +1379,118 @@ function setupGUI() {
     return ctrl;
   }
 
+  // ─── Color Wave Section ─────────────────────────────────────────────────
+  function buildColorWaveSection(parentFolder, sectionConfig) {
+    const waveFolder = parentFolder.addFolder(sectionConfig._section.label);
+    if (sectionConfig._section.collapsed) waveFolder.close();
+
+    if (!params.gradientStops || params.gradientStops.length === 0) {
+      params.gradientStops = ['#8cc0ff', '#a699ff', '#cc8cff', '#a699ff', '#8cc0ff'];
+    }
+
+    // Ensure configTree entry exists
+    if (sectionConfig && !sectionConfig.gradientStops) {
+      sectionConfig.gradientStops = params.gradientStops;
+    }
+
+    // Enable + Speed
+    waveFolder.add(params, 'waveEnabled').name('Enabled').onChange(v => {
+      window.toggleColorWave(v);
+      if (!v && window.parFixtures) {
+        window.parFixtures.forEach(f => {
+          if (f && f.config) {
+            f.light.color.set(f.config.color);
+            if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
+          }
+        });
+      }
+      debounceAutoSave();
+    });
+    waveFolder.add(params, 'waveSpeed', 0.05, 2.0, 0.05).name('Speed').onChange(() => { debounceAutoSave(); });
+
+    // ─── Gradient Preview Bar ───
+    const previewDiv = document.createElement('div');
+    previewDiv.style.cssText = 'padding:4px 8px 8px;';
+    const previewBar = document.createElement('div');
+    previewBar.style.cssText = 'height:16px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);';
+    previewDiv.appendChild(previewBar);
+
+    function updatePreview() {
+      const stops = params.gradientStops;
+      if (!stops || stops.length === 0) return;
+      const cssStops = stops.map((c, i) => `${c} ${(i / (stops.length - 1)) * 100}%`).join(', ');
+      previewBar.style.background = `linear-gradient(90deg, ${cssStops})`;
+    }
+    updatePreview();
+
+    const wChildren = waveFolder.domElement.querySelector('.children');
+    if (wChildren) wChildren.appendChild(previewDiv);
+
+    // ─── Building gradient stop controls ───
+    let stopsFolder = null;
+
+    function renderStopControls() {
+      if (stopsFolder) {
+        stopsFolder.destroy();
+      }
+      stopsFolder = waveFolder.addFolder('Gradient Stops');
+
+      const stopProxy = {};
+      params.gradientStops.forEach((color, i) => {
+        const key = `stop${i}`;
+        stopProxy[key] = color;
+        stopsFolder.addColor(stopProxy, key).name(`Stop ${i + 1}`).onChange(v => {
+          params.gradientStops[i] = v;
+          updatePreview();
+          debounceAutoSave();
+        });
+      });
+
+      // Add / Remove buttons
+      const btnDiv = document.createElement('div');
+      btnDiv.style.cssText = 'display:flex;gap:4px;padding:4px 8px 6px;';
+
+      const addBtn = document.createElement('button');
+      addBtn.textContent = '+ Add Stop';
+      addBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:rgba(255,255,255,0.04);color:#aaa;cursor:pointer;font-size:11px;font-family:inherit;';
+      addBtn.onclick = () => {
+        // Duplicate the last color
+        const last = params.gradientStops[params.gradientStops.length - 1] || '#ffffff';
+        params.gradientStops.push(last);
+        renderStopControls();
+        updatePreview();
+        debounceAutoSave();
+      };
+      btnDiv.appendChild(addBtn);
+
+      if (params.gradientStops.length > 2) {
+        const rmBtn = document.createElement('button');
+        rmBtn.textContent = '− Remove Last';
+        rmBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid rgba(200,80,80,0.2);border-radius:4px;background:rgba(60,20,20,0.3);color:#c66;cursor:pointer;font-size:11px;font-family:inherit;';
+        rmBtn.onclick = () => {
+          params.gradientStops.pop();
+          renderStopControls();
+          updatePreview();
+          debounceAutoSave();
+        };
+        btnDiv.appendChild(rmBtn);
+      }
+
+      const sfChildren = stopsFolder.domElement.querySelector('.children');
+      if (sfChildren) sfChildren.appendChild(btnDiv);
+
+      // Re-add preview after stops
+      if (wChildren) wChildren.appendChild(previewDiv);
+    }
+
+    renderStopControls();
+
+    // Initial enable state
+    if (params.waveEnabled) {
+      window.toggleColorWave(true);
+    }
+  }
+
   // ─── Recursive GUI Builder ───
   function buildGUI(node, parentFolder) {
     for (const key of Object.keys(node)) {
@@ -1394,6 +1519,11 @@ function setupGUI() {
         // Special: icebergArray → build Icebergs UI
         if (sectionMeta.type === "icebergArray") {
           buildIcebergsSection(parentFolder, entry);
+          continue;
+        }
+        // Special: colorWave (has gradientStops)
+        if (entry.gradientStops) {
+          buildColorWaveSection(parentFolder, entry);
           continue;
         }
 
@@ -1788,7 +1918,7 @@ function setupGUI() {
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'color', v);
           });
-          idxFolder.add(config, "intensity", 0, 50, 0.5).onChange((v) => {
+          idxFolder.add(config, "intensity", 0, 200, 0.5).onChange((v) => {
             selectThisLight();
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'intensity', v);
@@ -1928,6 +2058,22 @@ function setupGUI() {
     // ═══════════════════════════════════════════════════════════════════════
     const genFolder = parFolder.addFolder("📐 Group Generator");
     genFolder.close();
+
+    // Show/hide generator trace objects
+    if (params.generatorsVisible === undefined) params.generatorsVisible = true;
+
+    function setTraceObjectsVisibility(visible) {
+      (window.traceObjects || []).forEach(t => {
+        if (t.group) t.group.visible = visible;
+        if (t.hitbox) t.hitbox.visible = visible;
+        (t.handles || []).forEach(h => { h.visible = visible; });
+      });
+    }
+    window.setTraceObjectsVisibility = setTraceObjectsVisibility;
+
+    genFolder.add(params, 'generatorsVisible').name('Show Generators').onChange(v => {
+      setTraceObjectsVisibility(v);
+    });
 
     // --- Trace 3D objects live here ---
     window.traceObjects = window.traceObjects || [];
@@ -2439,7 +2585,7 @@ function setupGUI() {
         const lightFolder = tFolder.addFolder('Light Defaults');
         lightFolder.close();
         lightFolder.addColor(trace, 'lightColor').name('Color');
-        lightFolder.add(trace, 'lightIntensity', 1, 50, 1).name('Intensity');
+        lightFolder.add(trace, 'lightIntensity', 1, 200, 1).name('Intensity');
         lightFolder.add(trace, 'lightAngle', 5, 90, 1).name('Angle');
 
         // Action buttons
@@ -2968,6 +3114,24 @@ function onResize() {
 }
 
 // ─── Animation Loop ─────────────────────────────────────────────────────
+// Experimental: color wave state
+let colorWaveEnabled = false;
+window.toggleColorWave = (v) => { colorWaveEnabled = v; };
+
+// Cached chroma scale — rebuilt when stops change
+let chromaScale = null;
+let lastStopsKey = '';
+
+function getChromaScale() {
+  const stops = params.gradientStops || ['#8cc0ff', '#cc8cff'];
+  const key = stops.join(',');
+  if (key !== lastStopsKey) {
+    chromaScale = chroma.scale(stops).mode('lab');
+    lastStopsKey = key;
+  }
+  return chromaScale;
+}
+
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -2979,6 +3143,24 @@ function animate() {
     document.getElementById("fps-counter").textContent = `${frameCount} FPS`;
     frameCount = 0;
     lastFpsTime = now;
+  }
+
+  // ─── Color Wave Effect (chroma.js LAB interpolation) ───
+  if (colorWaveEnabled && window.parFixtures && window.parFixtures.length > 0) {
+    const scale = getChromaScale();
+    const speed = (params.waveSpeed || 0.3) * 0.001;
+    const t = now * speed;
+    const count = window.parFixtures.length;
+    for (let i = 0; i < count; i++) {
+      const fixture = window.parFixtures[i];
+      if (!fixture || !fixture.light) continue;
+      const phase = ((i / count) + t) % 1.0;
+      const [r, g, b] = scale(phase).gl(); // returns [0-1, 0-1, 0-1, alpha]
+      fixture.light.color.setRGB(r, g, b);
+      if (fixture.beam && fixture.beam.material) {
+        fixture.beam.material.color.setRGB(r, g, b);
+      }
+    }
   }
 
   composer.render();

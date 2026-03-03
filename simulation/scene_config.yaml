@@ -27,14 +27,14 @@ titanicEnd:
       peakCount: 4
       ledPattern: edges
       ledDensity: 5
-      ledColor: '#aaeeff'
+      ledColor: "#aaeeff"
       floodEnabled: true
-      floodColor: '#ffffff'
+      floodColor: "#ffffff"
       floodIntensity: 5
       floodAngle: 40
       showFaces: true
       showWireframe: false
-      wireColor: '#00b7ff'
+      wireColor: "#00b7ff"
     - name: Berg Beta
       seed: 60617
       x: 50.5
@@ -46,14 +46,14 @@ titanicEnd:
       peakCount: 5
       ledPattern: edges
       ledDensity: 6
-      ledColor: '#ccddff'
+      ledColor: "#ccddff"
       floodEnabled: true
-      floodColor: '#aaccff'
+      floodColor: "#aaccff"
       floodIntensity: 4
       floodAngle: 50
       showFaces: true
       showWireframe: false
-      wireColor: '#88ddff'
+      wireColor: "#88ddff"
     - name: Berg Gamma
       seed: 55555
       x: -15
@@ -65,14 +65,14 @@ titanicEnd:
       peakCount: 5
       ledPattern: edges
       ledDensity: 4
-      ledColor: '#88ccff'
+      ledColor: "#88ccff"
       floodEnabled: false
-      floodColor: '#ffffff'
+      floodColor: "#ffffff"
       floodIntensity: 20
       floodAngle: 90
       showFaces: true
       showWireframe: false
-      wireColor: '#ff0088'
+      wireColor: "#ff0088"
 atmosphere:
   _section:
     label: 🌌 Atmosphere
@@ -102,7 +102,7 @@ atmosphere:
       max: 3
       step: 0.05
     moonColor:
-      value: '#8899cc'
+      value: "#8899cc"
       label: Color
       type: color
     moonAngle:
@@ -215,7 +215,7 @@ parLights:
   fixtures:
     - group: side1
       name: Par 1
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -227,7 +227,7 @@ parLights:
       rotZ: -85.28906368744211
     - group: side1
       name: Par 2
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -239,7 +239,7 @@ parLights:
       rotZ: -75.02266424219117
     - group: chimney1
       name: Par 3
-      color: '#00b3ff'
+      color: "#00b3ff"
       intensity: 37
       angle: 74
       penumbra: 0.45
@@ -251,7 +251,7 @@ parLights:
       rotZ: 60.000069564000725
     - group: side1
       name: Par 4
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -263,7 +263,7 @@ parLights:
       rotZ: 80.09576956646411
     - group: side1
       name: Par 5
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -275,7 +275,7 @@ parLights:
       rotZ: 80.09576956646411
     - group: side1
       name: Par 6
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -287,7 +287,7 @@ parLights:
       rotZ: 82.23926595984317
     - group: side1
       name: Par 7
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -299,7 +299,7 @@ parLights:
       rotZ: 82.23926595984317
     - group: side1
       name: Par 8
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -311,7 +311,7 @@ parLights:
       rotZ: 82.23926595984317
     - group: side1
       name: Par 9
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -323,7 +323,7 @@ parLights:
       rotZ: 82.23926595984317
     - group: side1
       name: Par 10
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 15
       angle: 33
       penumbra: 0.45
@@ -335,7 +335,7 @@ parLights:
       rotZ: 86.97762270046034
     - group: chimney1
       name: Par 11
-      color: '#00b3ff'
+      color: "#00b3ff"
       intensity: 37
       angle: 74
       penumbra: 0.45
@@ -347,7 +347,7 @@ parLights:
       rotZ: -63.4729958371089
     - group: Line 1
       name: Line 1 1
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -359,7 +359,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 2
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -371,7 +371,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 3
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -383,7 +383,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 4
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -395,7 +395,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 5
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -407,7 +407,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 6
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -419,7 +419,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 7
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -431,7 +431,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 8
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -443,7 +443,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 9
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -455,7 +455,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 10
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -467,7 +467,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 11
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -479,7 +479,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 12
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -491,7 +491,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 13
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -503,7 +503,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 14
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -515,7 +515,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 15
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -527,7 +527,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 16
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -539,7 +539,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 17
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -551,7 +551,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 18
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -563,7 +563,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 19
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -575,7 +575,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Line 1
       name: Line 1 20
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 10
       angle: 30
       penumbra: 0.5
@@ -587,7 +587,7 @@ parLights:
       rotZ: -109.90917808922978
     - group: Ring 3
       name: Ring 3 1
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -599,7 +599,7 @@ parLights:
       rotZ: -10.920082528299218
     - group: Ring 3
       name: Ring 3 2
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -611,7 +611,7 @@ parLights:
       rotZ: -8.719081826501656
     - group: Ring 3
       name: Ring 3 3
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -623,7 +623,7 @@ parLights:
       rotZ: -10.833977312176367
     - group: Ring 3
       name: Ring 3 4
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -635,7 +635,7 @@ parLights:
       rotZ: -14.115945334577058
     - group: Ring 3
       name: Ring 3 5
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -647,7 +647,7 @@ parLights:
       rotZ: -20.684141446716186
     - group: Ring 3
       name: Ring 3 6
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -659,7 +659,7 @@ parLights:
       rotZ: -33.412226467079485
     - group: Ring 3
       name: Ring 3 7
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -671,7 +671,7 @@ parLights:
       rotZ: -52.09234681766751
     - group: Ring 3
       name: Ring 3 8
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -683,7 +683,7 @@ parLights:
       rotZ: -65.94965384989146
     - group: Ring 3
       name: Ring 3 9
-      color: '#ffaa44'
+      color: "#ffaa44"
       intensity: 21
       angle: 30
       penumbra: 0.5
@@ -695,7 +695,7 @@ parLights:
       rotZ: -40.47966148021137
     - group: Line 3
       name: Line 3 1
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -707,7 +707,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 2
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -719,7 +719,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 3
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -731,7 +731,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 4
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -743,7 +743,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 5
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -755,7 +755,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 6
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -767,7 +767,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 7
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -779,7 +779,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 8
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -791,7 +791,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 9
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -803,7 +803,7 @@ parLights:
       rotZ: -23.504534400249415
     - group: Line 3
       name: Line 3 10
-      color: '#00ffee'
+      color: "#00ffee"
       intensity: 9
       angle: 40
       penumbra: 0.5
@@ -827,7 +827,7 @@ parLights:
       aimX: 17
       aimY: 2
       aimZ: 6.5
-      lightColor: '#ffaa44'
+      lightColor: "#ffaa44"
       lightIntensity: 10
       lightAngle: 30
       groupName: Line 1
@@ -847,7 +847,7 @@ parLights:
       aimX: 26.932933288524158
       aimY: 14.083250851184719
       aimZ: -11.507560122873317
-      lightColor: '#ffaa44'
+      lightColor: "#ffaa44"
       lightIntensity: 21
       lightAngle: 30
       groupName: Ring 3
@@ -865,7 +865,7 @@ parLights:
       aimX: 33.386451705743184
       aimY: 1.503469767011424
       aimZ: -9.91594482790234
-      lightColor: '#00ffee'
+      lightColor: "#00ffee"
       lightIntensity: 9
       lightAngle: 40
       groupName: Line 3
@@ -885,7 +885,7 @@ ledStrands:
       endX: -28.29867971194932
       endY: 12.5
       endZ: 10.041042514034084
-      color: '#00ffaa'
+      color: "#00ffaa"
       intensity: 1.7
       ledCount: 100
     - name: Strand 2
@@ -895,7 +895,7 @@ ledStrands:
       endX: -27.5
       endY: 13.273020243045014
       endZ: 10.5
-      color: '#ff8800'
+      color: "#ff8800"
       intensity: 1
       ledCount: 100
 
@@ -911,6 +911,27 @@ options:
     value: true
     label: Show Light Fixtures
     transient: true
+
+# ─── Color Wave ───────────────────────────────────────────────────────────
+colorWave:
+  _section:
+    label: 🌊 (Experimental) Color Wave
+    collapsed: true
+  waveEnabled:
+    value: false
+    label: Enabled
+  waveSpeed:
+    value: 0.3
+    label: Speed
+    min: 0.05
+    max: 2.0
+    step: 0.05
+  gradientStops:
+    - "#8cc0ff"
+    - "#a699ff"
+    - "#cc8cff"
+    - "#a699ff"
+    - "#8cc0ff"
 
 # ─── Configuration ────────────────────────────────────────────────────────
 config:
