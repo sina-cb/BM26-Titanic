@@ -180,3 +180,63 @@ canvas {
 .lil-gui .controller .name {
   width: 40%;
 }
+
+/* ─── Instance Card Styling ───
+   Applied to individual fixture/iceberg/generator/strand folders
+   to visually separate them as distinct configurable entities */
+.lil-gui.gui-card {
+  margin: 3px 0 !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: rgba(20, 20, 30, 0.6) !important;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+}
+
+.lil-gui.gui-card > .title {
+  border-radius: 5px 5px 0 0;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.lil-gui.gui-card.closed > .title {
+  border-radius: 5px;
+}
+
+.lil-gui.gui-card:hover {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(25, 25, 38, 0.7) !important;
+}
+
+/* Selected / focused card — warm gold accent */
+.lil-gui.gui-card.gui-card-selected {
+  border-color: rgba(240, 192, 96, 0.7) !important;
+  background: rgba(240, 192, 96, 0.08) !important;
+  box-shadow: 0 0 16px rgba(240, 192, 96, 0.18), inset 0 0 0 1px rgba(240, 192, 96, 0.12);
+}
+
+.lil-gui.gui-card.gui-card-selected > .title {
+  color: #f5d070 !important;
+  background: rgba(240, 192, 96, 0.15) !important;
+}
+
+.lil-gui.gui-card.gui-card-selected:hover {
+  border-color: rgba(240, 192, 96, 0.85) !important;
+  box-shadow: 0 0 22px rgba(240, 192, 96, 0.22), inset 0 0 0 1px rgba(240, 192, 96, 0.15);
+}
+
+/* ─── Recursive indentation for nested folders ─── */
+.lil-gui .lil-gui > .children {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Slightly brighter guide for deeper nesting */
+.lil-gui .lil-gui .lil-gui > .children {
+  border-left-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Even deeper levels */
+.lil-gui .lil-gui .lil-gui .lil-gui > .children {
+  border-left-color: rgba(255, 255, 255, 0.03);
+}

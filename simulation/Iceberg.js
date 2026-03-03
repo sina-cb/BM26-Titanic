@@ -236,6 +236,7 @@ export class Iceberg {
     const ledDensity = cfg.ledDensity || 5;
     const pattern = cfg.ledPattern || 'spiral';
     const linePoints = [];
+    let ledEdgeSet = null;
 
     for (let i = 0; i < triangles.length; i += 3) {
       const vA = vertices3D[triangles[i]];
@@ -243,7 +244,17 @@ export class Iceberg {
       const vC = vertices3D[triangles[i + 2]];
       if (!vA || !vB || !vC) continue;
 
-      if (pattern === 'spiral') {
+      if (pattern === 'edges') {
+        // Just trace triangle edges (deduplicated via set)
+        const edgeKey = (a, b) => Math.min(a, b) + ',' + Math.max(a, b);
+        const k1 = edgeKey(triangles[i], triangles[i+1]);
+        const k2 = edgeKey(triangles[i+1], triangles[i+2]);
+        const k3 = edgeKey(triangles[i+2], triangles[i]);
+        if (!ledEdgeSet) ledEdgeSet = new Set();
+        if (!ledEdgeSet.has(k1)) { linePoints.push(vA.clone(), vB.clone()); ledEdgeSet.add(k1); }
+        if (!ledEdgeSet.has(k2)) { linePoints.push(vB.clone(), vC.clone()); ledEdgeSet.add(k2); }
+        if (!ledEdgeSet.has(k3)) { linePoints.push(vC.clone(), vA.clone()); ledEdgeSet.add(k3); }
+      } else if (pattern === 'spiral') {
         let p1 = vA.clone(), p2 = vB.clone(), p3 = vC.clone();
         const decay = 0.15;
         const pts = [p1.clone(), p2.clone(), p3.clone()];
