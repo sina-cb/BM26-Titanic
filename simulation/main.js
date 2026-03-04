@@ -39,6 +39,7 @@ function deselectAllFixtures() {
     window.parFixtures.forEach(f => { try { f.setSelected(false); } catch (_) {} });
   }
   selectedFixtureIndices.clear();
+  if (window.setTraceSelected) window.setTraceSelected(-1, false);
 }
 let dragStartState = null; // Stores starting pos/rot for differential multi-select transforms
 
@@ -2097,6 +2098,68 @@ function setupGUI() {
       window.traceObjects = [];
     }
 
+    function setTraceSelected(traceIndex, isSelected) {
+      if (!window.traceObjects) return;
+      window.traceObjects.forEach((tObj, i) => {
+        if (!tObj || !tObj.materials) return;
+        const selected = (i === traceIndex && isSelected);
+        const color = selected ? 0xffff00 : 0xff8800; // Yellow vs Orange
+        const opacity = selected ? 1.0 : 0.7;
+        tObj.materials.lineMat.color.setHex(color);
+        tObj.materials.lineMat.opacity = opacity;
+        tObj.materials.dotMat.color.setHex(color);
+      });
+    }
+    window.setTraceSelected = setTraceSelected;
+
+    function flyToTrace(idx, trace) {
+      const tObj = window.traceObjects[idx];
+      if (!tObj) return;
+      
+      let targetX, targetY, targetZ;
+      if (trace.shape === 'circle') {
+        targetX = trace.x || 0;
+        targetY = trace.y || 5;
+        targetZ = trace.z || 0;
+      } else {
+        targetX = ((trace.startX || 0) + (trace.endX || 0)) / 2;
+        targetY = ((trace.startY || 5) + (trace.endY || 5)) / 2;
+        targetZ = ((trace.startZ || 0) + (trace.endZ || 0)) / 2;
+      }
+      
+      const p1 = new THREE.Vector3(trace.startX || 0, trace.startY || 5, trace.startZ || 0);
+      const p2 = new THREE.Vector3(trace.endX || 0, trace.endY || 5, trace.endZ || 0);
+      const radius = trace.shape === 'circle' ? (trace.radius || 5) : p1.distanceTo(p2) / 2;
+                     
+      const viewDist = Math.max(10, radius * 3);
+
+      const targetLook = new THREE.Vector3(targetX, targetY, targetZ);
+      const targetPos = new THREE.Vector3(
+        targetX + viewDist,
+        targetY + viewDist * 0.5,
+        targetZ + viewDist
+      );
+
+      const startPos = camera.position.clone();
+      const startTarget = controls.target.clone();
+      const duration = 800;
+      const startTime = performance.now();
+
+      function step(now) {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+        camera.position.lerpVectors(startPos, targetPos, ease);
+        controls.target.lerpVectors(startTarget, targetLook, ease);
+        controls.update();
+
+        if (t < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+    window.flyToTrace = flyToTrace;
+
     function computeTracePoints(trace) {
       const pts = [];
       if (trace.shape === 'circle') {
@@ -2184,7 +2247,7 @@ function setupGUI() {
         aimLine.computeLineDistances();
         grp.add(aimLine);
 
-        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], traceIndex };
+        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], traceIndex, materials: { lineMat, dotMat } };
 
       } else {
         // ─── CIRCLE: center hitbox (existing approach) ───
@@ -2241,7 +2304,7 @@ function setupGUI() {
         scene.add(aimHandle);
         interactiveObjects.push(aimHandle);
 
-        return { group: grp, hitbox, handles: [aimHandle], traceIndex };
+        return { group: grp, hitbox, handles: [aimHandle], traceIndex, materials: { lineMat, dotMat } };
       }
     }
 
@@ -2327,6 +2390,7 @@ function setupGUI() {
           pts.forEach(p => { const d = new THREE.Mesh(dotGeo, dotMat); d.position.copy(p); grp.add(d); });
           scene.add(grp);
           tObj.group = grp;
+          tObj.materials = { lineMat, dotMat }; // Preserve material refs for highlighting
         }
       } else {
         // Circle hitbox — compute position delta and move aim handle too
@@ -2495,6 +2559,29 @@ function setupGUI() {
         genChildren.prepend(newBtnDiv);
       }
 
+      // Ensure focusOnSelect exists for the generator folder too
+      if (params.focusOnSelect === undefined) params.focusOnSelect = true;
+
+      window.traceGuiFolders = [];
+      window.openTraceFolder = function(idx) {
+        genFolder.open();
+        if (window.traceGuiFolders) {
+          window.traceGuiFolders.forEach((f, i) => { 
+            if (f) f.domElement.classList.remove('gui-card-selected'); 
+          });
+        }
+        if (window.traceGuiFolders[idx]) {
+          window.traceGuiFolders[idx].open();
+          window.traceGuiFolders[idx].domElement.classList.add('gui-card-selected');
+        }
+        if (window.setTraceSelected) window.setTraceSelected(idx, true);
+        
+        // Fly to trace if focus checkbox is on
+        if (params.focusOnSelect && params.traces[idx]) {
+          if (window.flyToTrace) window.flyToTrace(idx, params.traces[idx]);
+        }
+      };
+
       // Trace sub-folders
       params.traces.forEach((trace, i) => {
         const label = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
@@ -2503,15 +2590,11 @@ function setupGUI() {
         tFolder.close();
         window.traceGuiFolders[i] = tFolder;
 
-        // Selection highlight
-        if (typeof tFolder.onOpenClose === 'function') {
-          tFolder.onOpenClose((open) => {
-            if (open) {
-              (window.traceGuiFolders || []).forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
-              tFolder.domElement.classList.add('gui-card-selected');
-            } else {
-              tFolder.domElement.classList.remove('gui-card-selected');
-            }
+        // Selection highlight on click
+        const titleEl = tFolder.domElement.querySelector('.title');
+        if (titleEl) {
+          titleEl.addEventListener('click', () => {
+            if (window.openTraceFolder) window.openTraceFolder(i);
           });
         }
 
