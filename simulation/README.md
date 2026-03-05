@@ -1,5 +1,5 @@
 # BM26 Titanic — Lighting Simulation Ecosystem
-This directory contains the interactive 3D lighting simulation tool built for the **Burning Man 2026 Titanic Honoraria** project. 
+This directory contains the interactive 3D lighting simulation tool built for the **Burning Man 2026 Titanic** project. 
 
 The tool empowers lighting designers to pre-visualize night-time illumination, validate DMX fixture beam angles against realistic proxy geometry, and persist configuration states via a synchronized local filesystem architecture.
 

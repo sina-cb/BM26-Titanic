@@ -23,6 +23,8 @@ let model = null;
 let modelCenter = new THREE.Vector3();
 let modelSize = new THREE.Vector3();
 let modelRadius = 1;
+
+window.THREE = THREE;
 let cameraPresets = []; // Loaded from scene_preset_cameras.yaml
 let structureMaterial, editMaterial;
 let gridHelper, ground, starField;
@@ -73,6 +75,7 @@ const params = {
   ledStrands: [], // LED strand configs
   icebergs: [],   // Iceberg configs
 };
+window.params = params;
 
 // ─── Undo / Redo ─────────────────────────────────────────────────────────
 const undoStack = [];
@@ -562,6 +565,18 @@ function onPointerDown(event) {
 
   if (intersects.length > 0) {
     const hit = intersects[0].object;
+
+    // Fast-path: if clicking a purely visual part of the trace (like the wireframe line or dots),
+    // don't attach the TransformControls gizmo (it would have physics implications),
+    // just instantly open the UI.
+    if (hit.userData.isTraceVisual) {
+      transformControl.detach();
+      deselectAllFixtures();
+      if (window.openTraceFolder) window.openTraceFolder(hit.userData.traceIndex);
+      syncGuiFolders();
+      return;
+    }
+
     transformControl.attach(hit);
 
     if (hit.userData.isTrace) {
@@ -2094,6 +2109,10 @@ function setupGUI() {
           const ioIdx = interactiveObjects.indexOf(h);
           if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
         });
+        (t.visuals || []).forEach(v => {
+          const ioIdx = interactiveObjects.indexOf(v);
+          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
+        });
       });
       window.traceObjects = [];
     }
@@ -2196,19 +2215,28 @@ function setupGUI() {
         // Visual group (wireframe + preview dots) — rebuilt live
         const grp = new THREE.Group();
 
+        const visuals = [];
+
         // Wireframe line between endpoints
         const lineGeo = new THREE.BufferGeometry().setFromPoints([startPos, endPos]);
         const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
-        grp.add(new THREE.Line(lineGeo, lineMat));
+        const lineMesh = new THREE.Line(lineGeo, lineMat);
+        lineMesh.userData = { isTraceVisual: true, traceIndex };
+        grp.add(lineMesh);
+        visuals.push(lineMesh);
+        interactiveObjects.push(lineMesh);
 
         // Preview dots at light positions
         const lightPts = computeTracePoints(trace);
-        const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
+        const dotGeo = new THREE.SphereGeometry(0.3, 8, 8); // slightly larger for easier clicking
         const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
         lightPts.forEach(p => {
           const dot = new THREE.Mesh(dotGeo, dotMat);
           dot.position.copy(p);
+          dot.userData = { isTraceVisual: true, traceIndex };
           grp.add(dot);
+          visuals.push(dot);
+          interactiveObjects.push(dot);
         });
 
         scene.add(grp);
@@ -2239,15 +2267,15 @@ function setupGUI() {
         scene.add(aimHandle);
         interactiveObjects.push(aimHandle);
 
-        // Dashed line from midpoint to aim handle
-        const mid = startPos.clone().lerp(endPos, 0.5);
-        const aimLineGeo = new THREE.BufferGeometry().setFromPoints([mid, aimHandle.position]);
+        // Dashed line from first light point to aim handle
+        const aimOrigin = lightPts.length > 0 ? lightPts[0] : startPos.clone().lerp(endPos, 0.5);
+        const aimLineGeo = new THREE.BufferGeometry().setFromPoints([aimOrigin, aimHandle.position]);
         const aimLineMat = new THREE.LineDashedMaterial({ color: 0xffcc00, dashSize: 0.5, gapSize: 0.3, transparent: true, opacity: 0.5 });
         const aimLine = new THREE.Line(aimLineGeo, aimLineMat);
         aimLine.computeLineDistances();
         grp.add(aimLine);
 
-        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], traceIndex, materials: { lineMat, dotMat } };
+        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], visuals, traceIndex, materials: { lineMat, dotMat }, aimLine };
 
       } else {
         // ─── CIRCLE: center hitbox (existing approach) ───
@@ -2260,6 +2288,8 @@ function setupGUI() {
         );
         grp.setRotationFromEuler(euler);
 
+        const visuals = [];
+
         // Wireframe ring
         const pathPts = [];
         const r = trace.radius || 5;
@@ -2270,16 +2300,23 @@ function setupGUI() {
         }
         const lineGeo = new THREE.BufferGeometry().setFromPoints(pathPts);
         const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
-        grp.add(new THREE.Line(lineGeo, lineMat));
+        const lineMesh = new THREE.Line(lineGeo, lineMat);
+        lineMesh.userData = { isTraceVisual: true, traceIndex };
+        grp.add(lineMesh);
+        visuals.push(lineMesh);
+        interactiveObjects.push(lineMesh);
 
         // Preview dots
         const lightPts = computeTracePoints(trace);
-        const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
+        const dotGeo = new THREE.SphereGeometry(0.3, 8, 8); // slightly larger
         const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
         lightPts.forEach(p => {
           const dot = new THREE.Mesh(dotGeo, dotMat);
           dot.position.copy(p);
+          dot.userData = { isTraceVisual: true, traceIndex };
           grp.add(dot);
+          visuals.push(dot);
+          interactiveObjects.push(dot);
         });
 
         scene.add(grp);
@@ -2287,7 +2324,8 @@ function setupGUI() {
         // Hitbox at scene root
         const hitboxSize = (trace.radius || 5) * 2.5;
         const hitboxGeo = new THREE.BoxGeometry(hitboxSize, 1, hitboxSize);
-        const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+        // colorWrite: false makes it invisible but raycastable, unlike visible: false
+        const hitboxMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
         const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
         hitbox.userData = { isTrace: true, traceIndex };
         hitbox.position.copy(grp.position);
@@ -2304,8 +2342,48 @@ function setupGUI() {
         scene.add(aimHandle);
         interactiveObjects.push(aimHandle);
 
-        return { group: grp, hitbox, handles: [aimHandle], traceIndex, materials: { lineMat, dotMat } };
+        // Dashed line from first light point to aim handle
+        let aimOrigin = new THREE.Vector3();
+        if (lightPts.length > 0) {
+           // circle points are local; apply group's world matrix
+           grp.updateMatrixWorld(true);
+           aimOrigin.copy(lightPts[0]).applyMatrix4(grp.matrixWorld);
+        } else {
+           aimOrigin.copy(grp.position);
+        }
+
+        const aimLineGeo = new THREE.BufferGeometry().setFromPoints([aimOrigin, aimHandle.position]);
+        const aimLineMat = new THREE.LineDashedMaterial({ color: 0xffcc00, dashSize: 0.5, gapSize: 0.3, transparent: true, opacity: 0.5 });
+        const aimLine = new THREE.Line(aimLineGeo, aimLineMat);
+        aimLine.computeLineDistances();
+        // Do not add to `grp`, add to `scene` so its dashed lines don't get double transformed by the group's rotation.
+        scene.add(aimLine);
+
+        return { group: grp, hitbox, handles: [aimHandle], visuals, traceIndex, materials: { lineMat, dotMat }, aimLine };
       }
+    }
+
+    function destroyTraceObjects() {
+      if (!window.traceObjects) window.traceObjects = [];
+      window.traceObjects.forEach(tObj => {
+        if (tObj.group) scene.remove(tObj.group);
+        if (tObj.hitbox) scene.remove(tObj.hitbox);
+        if (tObj.aimLine && tObj.aimLine.parent === scene) scene.remove(tObj.aimLine);
+        if (tObj.handles) tObj.handles.forEach(h => scene.remove(h));
+        if (tObj.visuals) tObj.visuals.forEach(v => {
+          const idx = interactiveObjects.indexOf(v);
+          if (idx !== -1) interactiveObjects.splice(idx, 1);
+        });
+        if (tObj.handles) tObj.handles.forEach(h => {
+          const idx = interactiveObjects.indexOf(h);
+          if (idx !== -1) interactiveObjects.splice(idx, 1);
+        });
+        if (tObj.hitbox) {
+          const idx = interactiveObjects.indexOf(tObj.hitbox);
+          if (idx !== -1) interactiveObjects.splice(idx, 1);
+        }
+      });
+      window.traceObjects = [];
     }
 
     function rebuildTraceObjects() {
@@ -2375,6 +2453,14 @@ function setupGUI() {
         const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
         if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
 
+        // Update sum dashed line target
+        if (tObj.aimLine) {
+          const pts = computeTracePoints(trace);
+          const aimOrigin = pts.length > 0 ? pts[0] : new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0).lerp(new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0), 0.5);
+          tObj.aimLine.geometry.setFromPoints([aimOrigin, aimHandle.position]);
+          tObj.aimLine.computeLineDistances();
+        }
+
         // Live-update the wireframe line + dots without full rebuild
         if (tObj.group) {
           scene.remove(tObj.group);
@@ -2388,6 +2474,7 @@ function setupGUI() {
           const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
           const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
           pts.forEach(p => { const d = new THREE.Mesh(dotGeo, dotMat); d.position.copy(p); grp.add(d); });
+          if (tObj.aimLine) grp.add(tObj.aimLine); // re-attach the preserved dash line to the new group
           scene.add(grp);
           tObj.group = grp;
           tObj.materials = { lineMat, dotMat }; // Preserve material refs for highlighting
@@ -2404,6 +2491,21 @@ function setupGUI() {
 
         const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
         if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
+
+        if (tObj.aimLine && aimHandle) {
+           const pts = computeTracePoints(trace);
+           let aimOrigin = new THREE.Vector3();
+           if (pts.length > 0) {
+              const euler = new THREE.Euler(THREE.MathUtils.degToRad(trace.rotX || 0), THREE.MathUtils.degToRad(trace.rotY || 0), THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ');
+              aimOrigin.copy(pts[0])
+                       .applyEuler(euler)
+                       .add(new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
+           } else {
+              aimOrigin.copy(obj.position);
+           }
+           tObj.aimLine.geometry.setFromPoints([aimOrigin, aimHandle.position]);
+           tObj.aimLine.computeLineDistances();
+        }
 
         tObj.group.position.copy(tObj.hitbox.position);
         tObj.group.quaternion.copy(tObj.hitbox.quaternion);
@@ -2561,6 +2663,10 @@ function setupGUI() {
 
       // Ensure focusOnSelect exists for the generator folder too
       if (params.focusOnSelect === undefined) params.focusOnSelect = true;
+      const existingFocusCtrl = genFolder.controllers.find(c => c.property === 'focusOnSelect');
+      if (!existingFocusCtrl) {
+        genFolder.add(params, 'focusOnSelect').name('Focus on Select').listen().onChange(() => { debounceAutoSave(); });
+      }
 
       window.traceGuiFolders = [];
       window.openTraceFolder = function(idx) {
@@ -2582,9 +2688,30 @@ function setupGUI() {
         }
       };
 
+      // Soft-selection for when users click the GUI directly (lets lil-gui manage open/close state natively)
+      window.clickTraceFolder = function(idx) {
+        if (window.traceGuiFolders) {
+          window.traceGuiFolders.forEach((f, i) => { 
+            if (f) f.domElement.classList.remove('gui-card-selected'); 
+          });
+        }
+        if (window.traceGuiFolders[idx]) {
+          window.traceGuiFolders[idx].domElement.classList.add('gui-card-selected');
+        }
+        if (window.setTraceSelected) window.setTraceSelected(idx, true);
+        
+        // Fly to trace if focus checkbox is on
+        if (params.focusOnSelect && params.traces[idx]) {
+          if (window.flyToTrace) window.flyToTrace(idx, params.traces[idx]);
+        }
+      };
+
       // Trace sub-folders
       params.traces.forEach((trace, i) => {
-        const label = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
+        // lil-gui returns the SAME folder if titles match, breaking all click listeners.
+        // Append invisible zero-width spaces (\u200B) to guarantee every label is unique.
+        const baseLabel = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
+        const label = baseLabel + '\u200B'.repeat(i);
         const tFolder = genFolder.addFolder(label);
         tFolder.domElement.classList.add('gui-card');
         tFolder.close();
@@ -2594,7 +2721,8 @@ function setupGUI() {
         const titleEl = tFolder.domElement.querySelector('.title');
         if (titleEl) {
           titleEl.addEventListener('click', () => {
-            if (window.openTraceFolder) window.openTraceFolder(i);
+            // Use the soft-select method so we don't fight lil-gui's native open/close toggle
+            if (window.clickTraceFolder) window.clickTraceFolder(i);
           });
         }
 
@@ -2714,6 +2842,13 @@ function setupGUI() {
     renderGeneratorGUI();
     window.renderGeneratorGUI = renderGeneratorGUI;
     rebuildTraceObjects();
+
+    // Auto-generate par lights for traces marked as already generated
+    params.traces.forEach((trace, i) => {
+      if (trace.generated) {
+        generateGroupFromTrace(i);
+      }
+    });
 
     window.renderParGUI = renderParGUI;
     renderParGUI();
@@ -2894,7 +3029,7 @@ function setupGUI() {
     if (sectionConfig && !sectionConfig.focusOnSelect) {
       sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
     }
-    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
+    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').listen().onChange(() => { debounceAutoSave(); });
 
     window.icebergFixtures = [];
 
@@ -3381,3 +3516,13 @@ Promise.all([
 }).catch(() => {
   init();
 });
+
+// --- TEMP RAYCAST HELPER ---
+window.modelMeshes = modelMeshes;
+window.getHullPort = function(x, y) {
+  const origin = new THREE.Vector3(x, y, 50);
+  const dir = new THREE.Vector3(0, 0, -1);
+  const ray = new THREE.Raycaster(origin, dir);
+  const intersects = ray.intersectObjects(modelMeshes, true);
+  return intersects.map(i => Number(i.point.z.toFixed(3)));
+};

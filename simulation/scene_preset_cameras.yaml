@@ -49,13 +49,13 @@ presets:
       x: -0.257
       'y': 2.619
       z: 1.068
-  - name: light_leak
-    key: light_leak
+  - name: Favorite
+    key: favorite
     position:
-      x: 30.671
-      'y': 15.124
-      z: 15.772
+      x: -17.012
+      'y': 14.022
+      z: 54.032
     target:
-      x: -5.265
-      'y': 7.211
-      z: 7.218
+      x: 4.549
+      'y': -1.804
+      z: -23.121

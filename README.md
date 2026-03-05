@@ -1,4 +1,4 @@
-# 🚢 Titanic — Burning Man 2026 Honoraria
+# 🚢 Titanic — Burning Man 2026
 
 Lighting design & simulation toolkit for the **Titanic** structure at Burning Man 2026.
 
@@ -32,10 +32,10 @@ BM26-Titanic/
 Browser-based Three.js lighting previewer with real-time par lights, LED strands, iceberg geometry, bloom post-processing, and YAML-persisted scene state. See [simulation/README.md](simulation/README.md) for full tech stack & setup.
 
 ### `/3d_models`
-Source 3D models (FBX + OBJ) of the Burning Man Honoraria structure from TE.
+Source 3D models (FBX + OBJ) of the Burning Man structure from TE.
 
 ### `/docs`
-Design references — Honoraria overview, lighting ideology, and iceberg concepts.
+Design references — Project overview, lighting ideology, and iceberg concepts.
 
 ---
 

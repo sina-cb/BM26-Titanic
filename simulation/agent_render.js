@@ -45,6 +45,8 @@ const args = process.argv.slice(2);
 const KEEP_ALIVE = args.includes('--keep-alive');
 const OPEN_ONLY = args.includes('--open');
 const CURRENT_ONLY = args.includes('--current');
+const RELOAD = args.includes('--reload');
+const RAYCAST_MODE = args.includes('--raycast');
 const VIEW_INDEX = args.indexOf('--view');
 const SINGLE_VIEW = VIEW_INDEX !== -1 ? args[VIEW_INDEX + 1] : null;
 
@@ -90,7 +92,7 @@ async function launchBrowser() {
 async function connectToExisting(wsEndpoint) {
   return puppeteer.connect({
     browserWSEndpoint: wsEndpoint,
-    defaultViewport: VIEWPORT,
+    defaultViewport: null,
   });
 }
 
@@ -201,7 +203,7 @@ async function main() {
     const existing = getExistingEndpoint();
     if (existing) {
       try {
-        const test = await puppeteer.connect({ browserWSEndpoint: existing });
+        const test = await puppeteer.connect({ browserWSEndpoint: existing, defaultViewport: null });
         const testPages = await test.pages();
         if (testPages.length > 0) {
           console.log('⚠️  Browser is already open! Use --current or --view to capture.');
@@ -272,6 +274,68 @@ async function main() {
       await browser.close();
       process.exit(1);
     }
+  }
+
+  // === RELOAD: Reload page from YAML without restarting browser ===
+  if (RELOAD) {
+    console.log('🔄 Reloading simulation from YAML...');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => {
+      return window.__SCENE_LOADED === true;
+    }, { timeout: 30000 }).catch(() => {
+      // Fallback: just wait a bit if __SCENE_LOADED flag isn't set
+    });
+    await new Promise(r => setTimeout(r, 3000));
+    console.log('✅ Reload complete.');
+  }
+
+  // === MODE: --raycast ===
+  if (RAYCAST_MODE) {
+    console.log('🔍 Running raycast utility to find port-side hull Z-coordinates...');
+    
+    // In raycast mode, we need to ensure the helper is available, 
+    // but main.js now permanently defines window.getHullPort.
+    // Let's just evaluate the points.
+    const pointsToQuery = [
+      { name: "Left Front Deck Start", x: 20, y: 11.5 },
+      { name: "Left Front Deck End", x: 34, y: 1.8 },
+      { name: "Left Front Wall Start", x: 33, y: 0.3 },
+      { name: "Left Front Wall End", x: 19, y: 10.5 },
+      { name: "Left Chimney Center", x: 23.2, y: 8.1 },
+      { name: "Left Center Auditorium Start", x: -13, y: 11 },
+      { name: "Left Center Auditorium End", x: -5, y: 9 },
+      { name: "Left Back Wall Start", x: -29, y: 2 },
+      { name: "Left Back Wall End", x: -13, y: 11 },
+    ];
+
+    console.log('⏳ Waiting for model meshes to populate...');
+    await page.waitForFunction(() => window.modelMeshes && window.modelMeshes.length > 0, { timeout: 30000 }).catch(() => {});
+    
+    console.log('📏 Raycasting results:');
+    const outData = {};
+    for (const pt of pointsToQuery) {
+      const res = await page.evaluate(({ x, y }) => {
+        if (typeof window.getHullPort === 'function') {
+          return window.getHullPort(x, y);
+        }
+        return null;
+      }, pt);
+      
+      if (res && res.length > 0) {
+        const maxZ = Number(Math.max(...res).toFixed(3));
+        outData[pt.name] = { x: pt.x, y: pt.y, z: maxZ, allHits: res };
+        console.log(`  ➤ ${pt.name.padEnd(30)} x: ${pt.x.toString().padStart(4)}, y: ${pt.y.toString().padStart(4)}  ==>  z: ${maxZ}`);
+      } else {
+        outData[pt.name] = { x: pt.x, y: pt.y, z: null, allHits: [] };
+        console.log(`  ➤ ${pt.name.padEnd(30)} x: ${pt.x.toString().padStart(4)}, y: ${pt.y.toString().padStart(4)}  ==>  NO HIT`);
+      }
+    }
+    
+    fs.writeFileSync('raycast_results.json', JSON.stringify(outData, null, 2));
+    console.log('💾 Saved full results to raycast_results.json');
+    
+    if (!isConnected) await browser.close();
+    process.exit(0);
   }
 
   // For all capture modes, hide UI first
