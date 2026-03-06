@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
 
 // ─── Simple seedable PRNG (matches Echoes Iceberg Generator V1) ───
 class RNG {
@@ -17,67 +19,152 @@ class RNG {
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
 export class Iceberg {
-  constructor(config, index, scene, interactiveObjects) {
+  constructor(config, index, scene, interactiveObjects, masterCfg) {
     this.config = config;
     this.index = index;
     this.scene = scene;
     this.interactiveObjects = interactiveObjects;
+    this.masterCfg = masterCfg || {};
 
     // Root group
     this.group = new THREE.Group();
     this.group.position.set(config.x || 0, config.y || 0, config.z || 0);
     this.scene.add(this.group);
 
-    // Interactive hitbox sized to iceberg
-    const r = config.radius || 4;
-    const h = config.height || 6;
-    const hitboxGeo = new THREE.BoxGeometry(r * 2.5, h * 1.5, r * 2.5);
-    this.hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
-    this.hitbox.position.set(config.x || 0, h / 2, config.z || 0);
-    this.hitbox.userData = { isIceberg: true, fixture: this };
-    this.scene.add(this.hitbox);
-    this.interactiveObjects.push(this.hitbox);
-
+    // Geometry is loaded separately
     this.solidMesh = null;
     this.wireMesh = null;
     this.ledLines = null;
     this.floodLight = null;
+    this.floodTarget = null;
+    
+    // Status flag
+    this.isGeometryLoaded = false;
 
-    this.rebuild();
+    // Fast-init features (hitbox, floodlight)
+    this.buildFast();
   }
 
-  rebuild() {
-    // ─── Cleanup ───
-    while (this.group.children.length) {
-      const child = this.group.children[0];
-      this.group.remove(child);
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-        else child.material.dispose();
-      }
-    }
-    this.solidMesh = null;
-    this.wireMesh = null;
-    this.ledLines = null;
-    this.floodLight = null;
+  buildFast() {
+    const cfg = this.config;
+    const masterCfg = this.masterCfg;
+    const r = cfg.radius || 4;
+    const h = cfg.height || 6;
+    const peakHeight = h; // Approx peak height
 
+    // Interactive hitbox sized to iceberg
+    if (!this.hitbox) {
+      const hitboxGeo = new THREE.BoxGeometry(r * 2.5, h * 1.5, r * 2.5);
+      this.hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+      this.hitbox.userData = { isIceberg: true, fixture: this };
+      this.scene.add(this.hitbox);
+      this.interactiveObjects.push(this.hitbox);
+    }
+    this.hitbox.position.set(cfg.x || 0, h / 2, cfg.z || 0);
+
+    // Instantiate Floodlight immediately at estimated peak height
+    if (!this.floodLight) {
+      this.floodLight = new THREE.SpotLight(0xffffff, 1, 1, Math.PI / 4, 0.5, 1.5);
+      this.floodLight.castShadow = false;
+      this.group.add(this.floodLight);
+
+      this.floodTarget = new THREE.Object3D();
+      this.group.add(this.floodTarget);
+      this.floodLight.target = this.floodTarget;
+    }
+    
+    // Position at top center temporarily until geometry loads
+    this.floodLight.position.set(0, peakHeight + 0.5, 0);
+    this.floodTarget.position.set(0, peakHeight + 10, 0);
+    
+    this.updateFloodlightProps();
+  }
+
+  updateFloodlightProps() {
+    if (!this.floodLight) return;
+    const cfg = this.config;
+    const master = this.masterCfg;
+    
+    // Check individual config first, fallback to master
+    const enabled = (cfg.floodEnabled !== undefined ? cfg.floodEnabled : master.masterFloodEnabled) !== false;
+    const color = cfg.floodColor || master.masterFloodColor || '#ffffff';
+    const intensity = cfg.floodIntensity !== undefined ? cfg.floodIntensity : (master.masterFloodIntensity || 50);
+    const angleDeg = cfg.floodAngle !== undefined ? cfg.floodAngle : (master.masterFloodAngle || 40);
+
+    this.floodLight.visible = enabled;
+    this.floodLight.color.set(color);
+    this.floodLight.intensity = intensity;
+    this.floodLight.angle = THREE.MathUtils.degToRad(angleDeg);
+    this.floodLight.distance = (cfg.radius || 4) * 15;
+  }
+
+  async buildGeometry(progressCallback) {
+    if (this.isGeometryLoaded) return;
+    
     const cfg = this.config;
     const rng = new RNG(cfg.seed || 42231);
     const radius = cfg.radius || 4;
     const height = cfg.height || 6;
     const detail = cfg.detail || 10;
     const peakCount = cfg.peakCount || 3;
+    const seed = cfg.seed || 12345;
+    
+    const filename = `iceberg_${seed}_r${radius}_h${height}_d${detail}_p${peakCount}.stl`;
+    const stlUrl = `models/${filename}`;
+    
+    let geo = null;
+    let triangles = [];
+    let vertices3D = [];
+    
+    // Attempt to load from cache
+    try {
+      const res = await fetch(stlUrl, { method: 'HEAD' });
+      if (res.ok) {
+        const loader = new STLLoader();
+        geo = await loader.loadAsync(stlUrl);
+        geo = BufferGeometryUtils.mergeVertices(geo);
+        geo.computeVertexNormals();
+        
+        // Recover top-surface triangles for LED string art
+        const posAttr = geo.getAttribute('position');
+        const indexAttr = geo.getIndex();
+        
+        for (let i = 0; i < posAttr.count; i++) {
+          vertices3D.push(new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)));
+        }
+        
+        for (let i = 0; i < indexAttr.count; i += 3) {
+          const a = indexAttr.getX(i);
+          const b = indexAttr.getX(i+1);
+          const c = indexAttr.getX(i+2);
+          
+          const vA = vertices3D[a];
+          const vB = vertices3D[b];
+          const vC = vertices3D[c];
+          
+          const cb = new THREE.Vector3().subVectors(vC, vB);
+          const ab = new THREE.Vector3().subVectors(vA, vB);
+          const normal = cb.cross(ab).normalize();
+          
+          if (normal.y > 0.01) triangles.push(a, b, c);
+        }
+      }
+    } catch (e) {
+      // Missing cache file, ignore
+    }
 
-    // ─── 1. Generate grid points (V1-style) ───
-    // Create a regular grid with jitter, only keep points inside circle
-    const step = (radius * 2) / detail;
-    const limit = radius * 1.1;
-    const gridMap = new Map(); // "gx,gz" → index
-    const rawPoints = [];      // [x, z] pairs
-    const gridCoords = [];     // grid coordinates for connectivity
+    if (!geo) {
+      // Yield to UI
+      await new Promise(r => setTimeout(r, 6));
 
-    for (let gx = 0, ix = -limit; ix <= limit; ix += step, gx++) {
+      // ─── 1. Generate grid points (V1-style) ───
+      const step = (radius * 2) / detail;
+      const limit = radius * 1.1;
+      const gridMap = new Map(); // "gx,gz" → index
+      const rawPoints = [];      // [x, z] pairs
+      const gridCoords = [];     // grid coordinates for connectivity
+
+      for (let gx = 0, ix = -limit; ix <= limit; ix += step, gx++) {
       for (let gz = 0, iz = -limit; iz <= limit; iz += step, gz++) {
         const jx = ix + rng.nextRange(-step * 0.35, step * 0.35);
         const jz = iz + rng.nextRange(-step * 0.35, step * 0.35);
@@ -90,7 +177,7 @@ export class Iceberg {
       }
     }
 
-    if (rawPoints.length < 3) return;
+    if (rawPoints.length < 3) return Promise.resolve();
 
     // ─── 2. Peaks for height field (V1-style) ───
     const peaks = [];
@@ -111,7 +198,7 @@ export class Iceberg {
     }
 
     // 3D vertices with height
-    const vertices3D = rawPoints.map(([px, pz]) => {
+    vertices3D = rawPoints.map(([px, pz]) => {
       let h = 0;
       for (const p of peaks) {
         const d = Math.sqrt((px - p.x) ** 2 + (pz - p.z) ** 2);
@@ -125,9 +212,11 @@ export class Iceberg {
       return new THREE.Vector3(px, h, pz);
     });
 
+    // Yield to allow UI Progress paint
+    await new Promise(r => setTimeout(r, 6));
+
     // ─── 3. Triangulate via grid connectivity ───
     // Connect adjacent grid points into triangle pairs
-    const triangles = []; // flat array of indices [i0, i1, i2, ...]
     const allGridKeys = [...gridMap.keys()];
 
     for (const key of allGridKeys) {
@@ -146,7 +235,11 @@ export class Iceberg {
       }
     }
 
-    if (triangles.length < 3) return;
+    if (triangles.length < 3) return Promise.resolve();
+
+    // Yield thread to UI
+    if (progressCallback) progressCallback();
+    await new Promise(r => setTimeout(r, 6));
 
     // ─── 4. Build solid mesh (V1-style: top + walls + bottom) ───
     const positions = [];
@@ -198,9 +291,10 @@ export class Iceberg {
     }
 
     // Build geometry
-    const geo = new THREE.BufferGeometry();
+    geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.computeVertexNormals();
+    } // End of !geo
 
     // Solid mesh
     const showFaces = cfg.showFaces !== false;
@@ -216,7 +310,7 @@ export class Iceberg {
     this.solidMesh = new THREE.Mesh(geo, iceMat);
     this.solidMesh.castShadow = true;
     this.solidMesh.receiveShadow = true;
-    this.solidMesh.visible = showFaces;
+    this.solidMesh.visible = showFaces && (this.masterCfg.icebergsEnabled !== false);
     this.group.add(this.solidMesh);
 
     // Wireframe mesh (illuminated edges)
@@ -228,7 +322,7 @@ export class Iceberg {
       opacity: showWire ? 0.7 : 0,
     });
     this.wireMesh = new THREE.LineSegments(wireGeo, wireMat);
-    this.wireMesh.visible = showWire;
+    this.wireMesh.visible = showWire && (this.masterCfg.icebergsEnabled !== false);
     this.group.add(this.wireMesh);
 
     // ─── 5. LED string art on top-surface faces ───
@@ -296,36 +390,22 @@ export class Iceberg {
         opacity: 0.9,
       });
       this.ledLines = new THREE.LineSegments(ledGeo, ledMat);
+      this.ledLines.visible = this.masterCfg.icebergsEnabled !== false;
       this.group.add(this.ledLines);
     }
-
-    // ─── 6. Flood light at highest peak ───
-    if (cfg.floodEnabled !== false) {
-      let maxH = 0;
-      const peakPos = new THREE.Vector3(0, 0, 0);
-      for (const v of vertices3D) {
-        if (v.y > maxH) { maxH = v.y; peakPos.copy(v); }
-      }
-
-      this.floodLight = new THREE.SpotLight(
-        cfg.floodColor || '#ffffff',
-        cfg.floodIntensity || 5,
-        radius * 15,
-        THREE.MathUtils.degToRad(cfg.floodAngle || 40),
-        0.5, 1.5
-      );
-      this.floodLight.position.copy(peakPos).add(new THREE.Vector3(0, 0.5, 0));
-      this.floodLight.castShadow = false;
-      this.group.add(this.floodLight);
-
-      const target = new THREE.Object3D();
-      target.position.set(0, maxH + 10, 0);
-      this.group.add(target);
-      this.floodLight.target = target;
+    
+    // Reposition the floodlight using exact peak now that we have vertices
+    if (this.floodLight) {
+        let maxH = 0;
+        const peakPos = new THREE.Vector3(0, 0, 0);
+        for (const v of vertices3D) {
+          if (v.y > maxH) { maxH = v.y; peakPos.copy(v); }
+        }
+        this.floodLight.position.copy(peakPos).add(new THREE.Vector3(0, 0.5, 0));
+        this.floodTarget.position.set(0, maxH + 10, 0);
     }
 
-    // Update hitbox
-    this.hitbox.position.set(cfg.x || 0, height / 2, cfg.z || 0);
+    this.isGeometryLoaded = true;
   }
 
   // ─── Config sync ───
@@ -338,7 +418,28 @@ export class Iceberg {
 
   syncFromConfig() {
     this.group.position.set(this.config.x || 0, this.config.y || 0, this.config.z || 0);
-    this.rebuild();
+    // Refresh properties on next load or update floodlight instantly if geom is loaded
+    this.updateFloodlightProps();
+    if (this.isGeometryLoaded) {
+      // Rebuild geometry if parameters changed
+      if (this.solidMesh) {
+          this.group.remove(this.solidMesh);
+          this.solidMesh.geometry.dispose();
+          this.solidMesh.material.dispose();
+      }
+      if (this.wireMesh) {
+          this.group.remove(this.wireMesh);
+          this.wireMesh.geometry.dispose();
+          this.wireMesh.material.dispose();
+      }
+      if (this.ledLines) {
+          this.group.remove(this.ledLines);
+          this.ledLines.geometry.dispose();
+          this.ledLines.material.dispose();
+      }
+      this.isGeometryLoaded = false;
+      this.buildGeometry();
+    }
   }
 
   destroy() {
@@ -362,13 +463,16 @@ export class Iceberg {
   }
 
   setVisibility(visible) {
-    this.group.visible = visible;
+    // Visibility toggle effects meshes, hitboxes BUT NOT floodlights unless master flood override is used
+    if (this.solidMesh) this.solidMesh.visible = visible && this.config.showFaces !== false;
+    if (this.wireMesh) this.wireMesh.visible = visible && this.config.showWireframe !== false;
+    if (this.ledLines) this.ledLines.visible = visible;
     this.hitbox.visible = visible;
   }
 
   // ─── Live toggle faces/wireframe without full rebuild ───
   updateVisibility() {
-    if (this.solidMesh) this.solidMesh.visible = this.config.showFaces !== false;
-    if (this.wireMesh) this.wireMesh.visible = this.config.showWireframe !== false;
+    if (this.solidMesh) this.solidMesh.visible = this.config.showFaces !== false && this.masterCfg.icebergsEnabled !== false;
+    if (this.wireMesh) this.wireMesh.visible = this.config.showWireframe !== false && this.masterCfg.icebergsEnabled !== false;
   }
 }

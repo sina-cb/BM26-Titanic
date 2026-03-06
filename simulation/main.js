@@ -926,8 +926,8 @@ function loadModel() {
   );
 }
 
-function onModelLoaded(obj) {
-  updateLoading(85, "Processing geometry…");
+async function onModelLoaded(obj) {
+  updateLoading(70, "Processing ship geometry…");
   model = obj;
 
   // Apply PBR material
@@ -990,7 +990,7 @@ function onModelLoaded(obj) {
   finalBox.getSize(modelSize);
   modelRadius = finalBox.max.distanceTo(finalBox.min) / 2; // Recalculate radius based on new box
 
-  updateLoading(90, "Setting up lights…");
+  updateLoading(85, "Setting up lights…");
 
   // Setup lighting
   setupLighting();
@@ -1002,6 +1002,23 @@ function onModelLoaded(obj) {
   controls.minDistance = modelRadius * 0.3;
   controls.maxDistance = modelRadius * 8;
   controls.update();
+
+  updateLoading(90, "Loading icebergs…");
+
+  // Instantiating initial icebergs here to hook into progress
+  window.icebergFixtures = [];
+  const totalBergs = params.icebergs.length;
+  
+  for (let index = 0; index < totalBergs; index++) {
+    const config = params.icebergs[index];
+    const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
+    fixture.setVisibility(params.icebergsEnabled !== false);
+    window.icebergFixtures.push(fixture);
+    updateLoading(90 + Math.floor((index / totalBergs) * 10), `Loading iceberg markers… (${index + 1}/${totalBergs})`);
+  }
+  
+  // Sort fixtures back into configuration order, because promises resolve randomly
+  window.icebergFixtures.sort((a, b) => a.index - b.index);
 
   // Setup GUI
   setupGUI();
@@ -1042,84 +1059,6 @@ function setupLighting() {
   // ── 3. Par Lights (ground-level uplights) ──
   rebuildParLights();
 
-  // ── 4. Tower Flood Lights (elevated, wider beam) ──
-  const towerPositions = [
-    { x: -1, z: -1 },
-    { x: 1, z: -1 },
-    { x: 1, z: 1 },
-    { x: -1, z: 1 },
-  ];
-  const towerColors = [0xeeeeff, 0xffeedd, 0xeeeeff, 0xffeedd];
-
-  for (let i = 0; i < 4; i++) {
-    const tp = towerPositions[i];
-    const towerDist = r * 1.2;
-    const towerHeight = h * 1.8;
-    const x = modelCenter.x + tp.x * towerDist;
-    const z = modelCenter.z + tp.z * towerDist;
-
-    const flood = new THREE.SpotLight(
-      towerColors[i],
-      12, // Increased intensity
-      r * 10, // Increased range to hit everything
-      Math.PI / 3, // Wider angle to light up all objects and ground
-      0.6,
-      1.2,
-    );
-    flood.position.set(x, towerHeight, z);
-    flood.target.position.copy(modelCenter);
-    flood.castShadow = true;
-    flood.shadow.mapSize.set(2048, 2048);
-    flood.shadow.bias = -0.0005;
-    flood.shadow.normalBias = 0.02;
-    scene.add(flood);
-    scene.add(flood.target);
-    lights.towers.push(flood);
-
-    // Tower pole visualization
-    const poleGeo = new THREE.CylinderGeometry(0.3, 0.4, towerHeight, 6);
-    const poleMat = new THREE.MeshStandardMaterial({
-      color: 0x333333,
-      roughness: 0.8,
-      metalness: 0.3,
-    });
-    const pole = new THREE.Mesh(poleGeo, poleMat);
-    pole.position.set(x, towerHeight / 2, z);
-    pole.castShadow = true;
-    scene.add(pole);
-    lights.helpers.push(pole);
-
-    // Flood light housing
-    const housingGeo = new THREE.ConeGeometry(1.5, 2.5, 8);
-    const housingMat = new THREE.MeshStandardMaterial({
-      color: 0x222222,
-      roughness: 0.5,
-      metalness: 0.5,
-    });
-    const housing = new THREE.Mesh(housingGeo, housingMat);
-    housing.position.set(x, towerHeight, z);
-    housing.rotation.x = Math.PI; // point down
-    // Tilt toward center
-    const dir = new THREE.Vector3()
-      .subVectors(modelCenter, housing.position)
-      .normalize();
-    housing.lookAt(modelCenter);
-    housing.rotateX(Math.PI / 2);
-    scene.add(housing);
-    lights.helpers.push(housing);
-
-    // Glow at the flood source
-    const glowGeo = new THREE.SphereGeometry(1.0, 8, 8);
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: towerColors[i],
-      transparent: true,
-      opacity: 0.9,
-    });
-    const glow = new THREE.Mesh(glowGeo, glowMat);
-    glow.position.set(x, towerHeight - 0.5, z);
-    scene.add(glow);
-    lights.helpers.push(glow);
-  }
 }
 
 // ─── Dynamic Par Lights ─────────────────────────────────────────────────
@@ -1645,7 +1584,7 @@ function setupGUI() {
     // ─── Compact toolbar row: Collapse All | Select All | Clear All ───
     const toolbarDiv = document.createElement('div');
     toolbarDiv.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
-    const btnStyle = 'flex:1;padding:3px 0;border:none;border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;';
+    const btnStyle = 'flex:1;padding:3px 0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;';
     const btnHover = 'background:#3a3a3a';
 
     const collapseBtn = document.createElement('button');
@@ -2134,7 +2073,7 @@ function setupGUI() {
     function flyToTrace(idx, trace) {
       const tObj = window.traceObjects[idx];
       if (!tObj) return;
-      
+
       let targetX, targetY, targetZ;
       if (trace.shape === 'circle') {
         targetX = trace.x || 0;
@@ -2145,17 +2084,17 @@ function setupGUI() {
         targetY = ((trace.startY || 5) + (trace.endY || 5)) / 2;
         targetZ = ((trace.startZ || 0) + (trace.endZ || 0)) / 2;
       }
-      
+
       const p1 = new THREE.Vector3(trace.startX || 0, trace.startY || 5, trace.startZ || 0);
       const p2 = new THREE.Vector3(trace.endX || 0, trace.endY || 5, trace.endZ || 0);
       const radius = trace.shape === 'circle' ? (trace.radius || 5) : p1.distanceTo(p2) / 2;
-                     
+
       const viewDist = Math.max(10, radius * 3);
 
       const targetLook = new THREE.Vector3(targetX, targetY, targetZ);
       const targetPos = new THREE.Vector3(
         targetX + viewDist,
-        targetY + viewDist * 0.5,
+        targetY + viewDist * 0.8,
         targetZ + viewDist
       );
 
@@ -2638,7 +2577,7 @@ function setupGUI() {
           shape: 'line',
           startX: -5, startY: 5, startZ: 0,
           endX: 5, endY: 5, endZ: 0,
-          spacing: 2, 
+          spacing: 2,
           aimMode: 'direction', aimX: 0, aimY: -1, aimZ: 0,
           lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
           groupName: `Line ${params.traces.length + 1}`,
@@ -2672,8 +2611,8 @@ function setupGUI() {
       window.openTraceFolder = function(idx) {
         genFolder.open();
         if (window.traceGuiFolders) {
-          window.traceGuiFolders.forEach((f, i) => { 
-            if (f) f.domElement.classList.remove('gui-card-selected'); 
+          window.traceGuiFolders.forEach((f, i) => {
+            if (f) f.domElement.classList.remove('gui-card-selected');
           });
         }
         if (window.traceGuiFolders[idx]) {
@@ -2681,7 +2620,7 @@ function setupGUI() {
           window.traceGuiFolders[idx].domElement.classList.add('gui-card-selected');
         }
         if (window.setTraceSelected) window.setTraceSelected(idx, true);
-        
+
         // Fly to trace if focus checkbox is on
         if (params.focusOnSelect && params.traces[idx]) {
           if (window.flyToTrace) window.flyToTrace(idx, params.traces[idx]);
@@ -2691,15 +2630,15 @@ function setupGUI() {
       // Soft-selection for when users click the GUI directly (lets lil-gui manage open/close state natively)
       window.clickTraceFolder = function(idx) {
         if (window.traceGuiFolders) {
-          window.traceGuiFolders.forEach((f, i) => { 
-            if (f) f.domElement.classList.remove('gui-card-selected'); 
+          window.traceGuiFolders.forEach((f, i) => {
+            if (f) f.domElement.classList.remove('gui-card-selected');
           });
         }
         if (window.traceGuiFolders[idx]) {
           window.traceGuiFolders[idx].domElement.classList.add('gui-card-selected');
         }
         if (window.setTraceSelected) window.setTraceSelected(idx, true);
-        
+
         // Fly to trace if focus checkbox is on
         if (params.focusOnSelect && params.traces[idx]) {
           if (window.flyToTrace) window.flyToTrace(idx, params.traces[idx]);
@@ -3022,7 +2961,7 @@ function setupGUI() {
     bergFolder.add(params, 'icebergsEnabled').name('Master Enabled').onChange(v => {
       (window.icebergFixtures || []).forEach(f => f.setVisibility(v));
     });
-
+    
     // Focus on Select checkbox (from config)
     if (params.focusOnSelect === undefined) params.focusOnSelect = true;
     // Ensure entry exists in configTree so reconstructYAML persists it
@@ -3031,18 +2970,58 @@ function setupGUI() {
     }
     bergFolder.add(params, 'focusOnSelect').name('Focus on Select').listen().onChange(() => { debounceAutoSave(); });
 
-    window.icebergFixtures = [];
+    // ─── Manual Load Button ───
+    const loadBtn = {
+      load: async () => {
+        if (!window.icebergFixtures || window.icebergFixtures.length === 0) return;
+        
+        // Show loading overlay
+        const loadingOverlay = document.getElementById("loading-overlay");
+        if (loadingOverlay) loadingOverlay.classList.remove("hidden");
+        
+        let loaded = 0;
+        const total = window.icebergFixtures.length;
+        
+        const promises = window.icebergFixtures.map(async (fixture) => {
+          await fixture.buildGeometry(() => {
+            loaded++;
+            updateLoading(Math.floor((loaded / total) * 100), `Generating iceberg meshes… (${loaded}/${total})`);
+          });
+        });
+        
+        await Promise.all(promises);
+        
+        if (loadingOverlay) loadingOverlay.classList.add("hidden");
+      }
+    };
+    bergFolder.add(loadBtn, 'load').name('🚀 Load Iceberg Geometry');
 
-    function rebuildIcebergs() {
+    // Master Flood Controls
+    const masterFloodF = bergFolder.addFolder('Master Flood Controls');
+    masterFloodF.add(params, 'masterFloodEnabled').name('Master Flood Enabled').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
+    masterFloodF.addColor(params, 'masterFloodColor').name('Master Color').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
+    masterFloodF.add(params, 'masterFloodIntensity', 0, 150, 1).name('Master Intensity').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
+    masterFloodF.add(params, 'masterFloodAngle', 10, 90, 1).name('Master Angle °').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
+
+    function updateMasterFloods() {
+      if (window.icebergFixtures) {
+        window.icebergFixtures.forEach(f => f.updateFloodlightProps());
+      }
+    }
+
+    async function rebuildIcebergs() {
       if (window.icebergFixtures) {
         window.icebergFixtures.forEach(f => f.destroy());
       }
       window.icebergFixtures = [];
-      params.icebergs.forEach((config, index) => {
-        const fixture = new Iceberg(config, index, scene, interactiveObjects);
+      const promises = params.icebergs.map(async (config, index) => {
+        const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
         fixture.setVisibility(params.icebergsEnabled !== false);
         window.icebergFixtures.push(fixture);
+        // Geometry loading is manual now
       });
+      await Promise.all(promises);
+      window.icebergFixtures.sort((a, b) => a.index - b.index);
     }
     window.rebuildIcebergs = rebuildIcebergs;
 
@@ -3128,7 +3107,8 @@ function setupGUI() {
           z: Math.round(Math.random() * 60 - 30),
           radius: 4, height: 6, detail: 10, peakCount: 3,
           ledPattern: 'spiral', ledDensity: 5, ledColor: '#aaeeff',
-          floodEnabled: true, floodColor: '#ffffff', floodIntensity: 5, floodAngle: 40,
+          floodEnabled: true, floodColor: '#ffffff', floodIntensity: 50, floodAngle: 40,
+          towerOffsetX: 0, towerOffsetY: 0, towerOffsetZ: 0,
         });
         rebuildIcebergs();
         renderIcebergGUI();
@@ -3212,12 +3192,19 @@ function setupGUI() {
         ledF.addColor(berg, 'ledColor').name('LED Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
 
         // Flood
-        const floodF = bFolder.addFolder('Flood Light');
+        const floodF = bFolder.addFolder('Local Flood Override');
         floodF.close();
         floodF.add(berg, 'floodEnabled').name('Enabled').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.addColor(berg, 'floodColor').name('Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodIntensity', 0, 20, 0.5).name('Intensity').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodAngle', 10, 90, 5).name('Angle').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        floodF.addColor(berg, 'floodColor').name('Local Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        floodF.add(berg, 'floodIntensity', 0, 150, 0.5).name('Local Intensity').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        floodF.add(berg, 'floodAngle', 10, 90, 1).name('Local Angle').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+
+        // Tower Offset
+        const offsetF = bFolder.addFolder('Tower Offset');
+        offsetF.close();
+        offsetF.add(berg, 'towerOffsetX', -20, 20, 0.1).name('Offset X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        offsetF.add(berg, 'towerOffsetY', -20, 20, 0.1).name('Offset Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        offsetF.add(berg, 'towerOffsetZ', -20, 20, 0.1).name('Offset Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
 
         // Delete
         const actDiv = document.createElement('div');
