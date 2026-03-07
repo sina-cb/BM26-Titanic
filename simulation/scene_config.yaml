@@ -35,7 +35,7 @@ titanicEnd:
     max: 90
     step: 1
   masterFloodDimmer:
-    value: 250
+    value: 71
     label: Master Flood Dimmer %
     min: 0
     max: 250
@@ -139,7 +139,7 @@ atmosphere:
     max: 1
     step: 0.01
   exposure:
-    value: 0.2
+    value: 0.4
     label: Camera Exposure
     min: 0.1
     max: 3
@@ -1912,14 +1912,14 @@ colorWave:
     value: true
     label: Enabled
   waveSpeed:
-    value: 0.05
+    value: 0.1
     label: Speed
     min: 0.05
     max: 2
     step: 0.05
   gradientStops:
     - '#ff0000'
-    - '#1100ff'
+    - '#ffffff'
 
 # ─── Configuration ────────────────────────────────────────────────────────
 config:
