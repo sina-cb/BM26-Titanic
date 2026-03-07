@@ -9,6 +9,7 @@ titanicEnd:
   _section:
     label: 🧊 The End (Titanic's End)
     type: icebergArray
+    collapsed: false
   icebergsEnabled:
     value: true
     label: Master Enabled
@@ -132,6 +133,7 @@ titanicEnd:
 atmosphere:
   _section:
     label: 🌌 Atmosphere
+    collapsed: true
   ambientIntensity:
     value: 0.5
     label: Global Ambient
@@ -243,6 +245,7 @@ parLights:
   _section:
     label: 🎯 Par Lights
     type: fixtureArray
+    collapsed: true
   parsEnabled:
     value: true
     label: Master Enabled
@@ -930,7 +933,7 @@ parLights:
       penumbra: 0.5
       x: -20.555555555555557
       y: 6.777777777777778
-mark       z: 1.1287188184162227
+      z: 1.1287188184162227
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
@@ -1867,6 +1870,7 @@ ledStrands:
   _section:
     label: 🔌 LED Lights
     type: ledStrandArray
+    collapsed: true
   strandsEnabled:
     value: true
     label: Master Enabled
@@ -1896,6 +1900,7 @@ ledStrands:
 options:
   _section:
     label: ⚙️ Options
+    collapsed: true
   editMode:
     value: false
     label: 🛠️ Edit Mode (Flat Shading)
@@ -1904,16 +1909,23 @@ options:
     value: true
     label: Show Light Fixtures
     transient: true
-colorWave:
+lightingEngine:
   _section:
-    label: 🌊 (Experimental) Color Wave
-    collapsed: true
-  waveEnabled:
+    label: 🎨 Lighting Engine
+    collapsed: false
+  lightingEnabled:
     value: true
-    label: Enabled
+    label: ⚡ Enable
+  lightingMode:
+    value: pixelblaze
+    label: Mode
+    options:
+      - gradient
+      - pixelblaze
+      - ndi
   waveSpeed:
     value: 0.1
-    label: Speed
+    label: Gradient Speed
     min: 0.05
     max: 2
     step: 0.05
@@ -1925,6 +1937,23 @@ colorWave:
 config:
   _section:
     label: 💾 Configuration
+    collapsed: false
   autoSave:
     value: false
     label: Auto-Save on Change
+_camera:
+  position:
+    x: -32.2303
+    y: 24.1902
+    z: 126.4607
+  target:
+    x: -2
+    y: 8
+    z: -5.3414
+_patternEditor:
+  x: 89
+  y: 90
+  width: 400
+  height: 520
+  collapsed: true
+  autoRun: true

@@ -75,6 +75,36 @@
       <div class="hud-edge right"></div>
     </div>
 
+    <!-- Pattern Editor (floating, draggable, collapsible) -->
+    <div id="pattern-editor-panel" class="hidden">
+      <div class="pe-header" id="pe-drag-handle">
+        <span class="pe-title">🎆 Pattern Editor</span>
+        <label style="display:flex;align-items:center;gap:3px;font-size:0.6rem;color:#888;cursor:pointer;"><input type="checkbox" id="pe-autorun" style="margin:0;accent-color:#f0c060;"> Auto</label>
+      <button class="pe-btn pe-save" id="pe-save-btn" title="Save current code to pattern file">💾</button>
+        <button class="pe-btn pe-run" id="pe-compile-btn" title="Compile & Run (Ctrl+Enter)">▶ Run</button>
+        <button class="pe-btn" id="pe-collapse-btn" title="Collapse">─</button>
+      </div>
+      <div class="pe-presets" id="pe-presets">
+        <div class="pe-preset-buttons" id="pe-preset-buttons"></div>
+        <div class="pe-preset-toolbar">
+          <button class="pe-toolbar-btn" id="pe-add-pattern" title="New pattern">+</button>
+          <button class="pe-toolbar-btn pe-danger" id="pe-del-pattern" title="Delete selected pattern">−</button>
+        </div>
+      </div>
+      <div class="pe-code-wrap">
+        <textarea class="pe-textarea" id="pe-code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+      </div>
+      <div class="pe-status ok" id="pe-status">
+        <span class="pe-status-icon">✓</span> Ready
+      </div>
+      <div class="pe-docs">
+        <div class="pe-docs-title">Quick Reference</div>
+        <code>hsv(h,s,v)</code> <code>rgb(r,g,b)</code> <code>time(interval)</code> <code>wave(v)</code> <code>triangle(v)</code><br>
+        <code>sin cos abs min max pow sqrt random perlin</code><br>
+        <code>pixelCount</code> · <code>PI</code> · <code>PI2</code> · Trig uses <em>turns</em> not radians
+      </div>
+    </div>
+
     <!-- View presets (populated dynamically from scene_preset_cameras.yaml) -->
     <div id="view-presets"></div>
 

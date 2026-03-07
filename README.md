@@ -49,6 +49,26 @@ npm start
 
 Then open [http://localhost:8080/simulation/](http://localhost:8080/simulation/) in your browser.
 
+`npm start` automatically kills any stale processes on ports **8080** and **8181**, then launches:
+
+| Service | Port | Purpose |
+|---|---|---|
+| **http-server** | `8080` | Serves the Three.js frontend & static assets |
+| **save-server** | `8181` | Node.js API for persisting scene config, camera presets, STL exports, and Pixelblaze pattern files |
+
+### 📸 Agent Render (`agent_render.js`)
+
+GPU-accelerated Puppeteer script for automated screenshot capture. Requires servers to be running (`npm start`).
+
+```bash
+node agent_render.js --open          # Interactive window (no captures)
+node agent_render.js --current       # Screenshot current camera view
+node agent_render.js --view dramatic # Capture a specific preset view
+node agent_render.js                 # Capture all 5 preset views
+```
+
+Screenshots are saved to `.agent_renders/` (gitignored). See [simulation/README.md](simulation/README.md) for full details.
+
 ---
 
 ## 👤 Maintainer

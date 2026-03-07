@@ -16,6 +16,7 @@ import chroma from "chroma-js";
 import { ParLight } from "./ParLight.js";
 import { LedStrand } from "./LedStrand.js";
 import { Iceberg } from "./Iceberg.js";
+import { MarsinEngine } from "./MarsinEngine.js";
 
 // ─── Globals ────────────────────────────────────────────────────────────
 let scene, camera, renderer, composer, controls;
@@ -1099,9 +1100,51 @@ function setupGUI() {
   gui.domElement.style.top = "10px";
   gui.domElement.style.right = "10px";
 
+  // ─── Section → Folder Map (for collapse persistence) ───
+  const _sectionFolderMap = new Map();
+  window._sectionFolderMap = _sectionFolderMap;
+
+  // Recursively sync _section.collapsed from actual GUI folder states
+  function syncCollapseState(node) {
+    if (!node || typeof node !== 'object') return;
+    for (const key of Object.keys(node)) {
+      if (key === '_section') continue;
+      const entry = node[key];
+      if (entry && typeof entry === 'object' && !Array.isArray(entry) && entry._section) {
+        const folder = _sectionFolderMap.get(entry._section);
+        if (folder) {
+          entry._section.collapsed = folder._closed;
+        }
+        syncCollapseState(entry);
+      }
+    }
+  }
+
   // ─── Save / Auto-Save ───
   function exportConfig() {
     reconstructYAML(configTree);
+    syncCollapseState(configTree);
+
+    // Persist camera state
+    configTree._camera = {
+      position: { x: +camera.position.x.toFixed(4), y: +camera.position.y.toFixed(4), z: +camera.position.z.toFixed(4) },
+      target: { x: +controls.target.x.toFixed(4), y: +controls.target.y.toFixed(4), z: +controls.target.z.toFixed(4) }
+    };
+
+    // Persist pattern editor window state
+    const pePanel = document.getElementById('pattern-editor-panel');
+    if (pePanel) {
+      const rect = pePanel.getBoundingClientRect();
+      configTree._patternEditor = {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        collapsed: pePanel.classList.contains('collapsed'),
+        autoRun: !!(document.getElementById('pe-autorun') && document.getElementById('pe-autorun').checked)
+      };
+    }
+
     let yamlStr = yaml.dump(configTree, {
       lineWidth: -1,
       noCompatMode: true,
@@ -1292,6 +1335,21 @@ function setupGUI() {
         window.icebergFixtures.forEach(f => f.setFixtureVisibility(v));
       }
     },
+    lightingEnabled: (v) => {
+      if (window.onLightingChange) window.onLightingChange();
+      if (!v && window.parFixtures) {
+        // Restore original par colors when lighting disabled
+        window.parFixtures.forEach(f => {
+          if (f && f.config) {
+            f.light.color.set(f.config.color);
+            if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
+          }
+        });
+      }
+    },
+    lightingMode: () => {
+      if (window.onLightingChange) window.onLightingChange();
+    },
   };
 
   // Expose applyAllHandlers for undo/redo to sync Three.js scene from params
@@ -1340,36 +1398,25 @@ function setupGUI() {
     return ctrl;
   }
 
-  // ─── Color Wave Section ─────────────────────────────────────────────────
-  function buildColorWaveSection(parentFolder, sectionConfig) {
-    const waveFolder = parentFolder.addFolder(sectionConfig._section.label);
-    if (sectionConfig._section.collapsed) waveFolder.close();
+  // ─── Lighting Engine Section ─────────────────────────────────────────────
+  function buildLightingEngineSection(parentFolder, sectionConfig) {
+    const engineFolder = parentFolder.addFolder(sectionConfig._section.label);
+    if (sectionConfig._section.collapsed) engineFolder.close();
+    _sectionFolderMap.set(sectionConfig._section, engineFolder);
 
+    // ── Gradient sub-controls ──
     if (!params.gradientStops || params.gradientStops.length === 0) {
       params.gradientStops = ['#8cc0ff', '#a699ff', '#cc8cff', '#a699ff', '#8cc0ff'];
     }
-
-    // Ensure configTree entry exists
     if (sectionConfig && !sectionConfig.gradientStops) {
       sectionConfig.gradientStops = params.gradientStops;
     }
 
-    // Enable + Speed
-    waveFolder.add(params, 'waveEnabled').name('Enabled').onChange(v => {
-      window.toggleColorWave(v);
-      if (!v && window.parFixtures) {
-        window.parFixtures.forEach(f => {
-          if (f && f.config) {
-            f.light.color.set(f.config.color);
-            if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
-          }
-        });
-      }
-      debounceAutoSave();
-    });
-    waveFolder.add(params, 'waveSpeed', 0.05, 2.0, 0.05).name('Speed').onChange(() => { debounceAutoSave(); });
+    const gradientFolder = engineFolder.addFolder('📊 Gradient Settings');
 
-    // ─── Gradient Preview Bar ───
+    addControl(gradientFolder, 'waveSpeed', sectionConfig.waveSpeed || { value: 0.1, label: 'Speed', min: 0.05, max: 2, step: 0.05 });
+
+    // Gradient preview bar
     const previewDiv = document.createElement('div');
     previewDiv.style.cssText = 'padding:4px 8px 8px;';
     const previewBar = document.createElement('div');
@@ -1384,17 +1431,14 @@ function setupGUI() {
     }
     updatePreview();
 
-    const wChildren = waveFolder.domElement.querySelector('.children');
-    if (wChildren) wChildren.appendChild(previewDiv);
+    const gChildren = gradientFolder.domElement.querySelector('.children');
+    if (gChildren) gChildren.appendChild(previewDiv);
 
-    // ─── Building gradient stop controls ───
+    // Gradient stop controls
     let stopsFolder = null;
-
     function renderStopControls() {
-      if (stopsFolder) {
-        stopsFolder.destroy();
-      }
-      stopsFolder = waveFolder.addFolder('Gradient Stops');
+      if (stopsFolder) stopsFolder.destroy();
+      stopsFolder = gradientFolder.addFolder('Gradient Stops');
 
       const stopProxy = {};
       params.gradientStops.forEach((color, i) => {
@@ -1407,7 +1451,6 @@ function setupGUI() {
         });
       });
 
-      // Add / Remove buttons
       const btnDiv = document.createElement('div');
       btnDiv.style.cssText = 'display:flex;gap:4px;padding:4px 8px 6px;';
 
@@ -1415,7 +1458,6 @@ function setupGUI() {
       addBtn.textContent = '+ Add Stop';
       addBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:rgba(255,255,255,0.04);color:#aaa;cursor:pointer;font-size:11px;font-family:inherit;';
       addBtn.onclick = () => {
-        // Duplicate the last color
         const last = params.gradientStops[params.gradientStops.length - 1] || '#ffffff';
         params.gradientStops.push(last);
         renderStopControls();
@@ -1439,17 +1481,64 @@ function setupGUI() {
 
       const sfChildren = stopsFolder.domElement.querySelector('.children');
       if (sfChildren) sfChildren.appendChild(btnDiv);
-
-      // Re-add preview after stops
-      if (wChildren) wChildren.appendChild(previewDiv);
+      if (gChildren) gChildren.appendChild(previewDiv);
     }
-
     renderStopControls();
 
-    // Initial enable state
-    if (params.waveEnabled) {
-      window.toggleColorWave(true);
+    // ── NDI placeholder ──
+    const ndiFolder = engineFolder.addFolder('📡 NDI (Chromatik)');
+    const ndiPlaceholder = document.createElement('div');
+    ndiPlaceholder.style.cssText = 'padding:12px;color:#888;font-size:12px;font-family:inherit;text-align:center;';
+    ndiPlaceholder.innerHTML = '🚧 <b>Under Construction</b><br><span style="color:#666;font-size:10px;">NDI input from Chromatik for DMX control plane</span>';
+    const ndiChildren = ndiFolder.domElement.querySelector('.children');
+    if (ndiChildren) ndiChildren.appendChild(ndiPlaceholder);
+    ndiFolder.close();
+
+    // ── Mode visibility ──
+    function updateModeVisibility() {
+      const mode = params.lightingMode || 'gradient';
+      const enabled = !!params.lightingEnabled;
+      gradientFolder.domElement.style.display = mode === 'gradient' ? '' : 'none';
+      ndiFolder.domElement.style.display = mode === 'ndi' ? '' : 'none';
+      // Show pattern editor only in pixelblaze mode when enabled
+      if (window.showPatternEditor) window.showPatternEditor(mode === 'pixelblaze' && enabled);
+      // Sync engine state
+      engineEnabled = mode === 'pixelblaze' && enabled;
+      lightingEnabled = enabled;
+      lightingMode = mode;
     }
+
+    // Add Enable + Mode controls WITH direct onChange for visibility
+    addControl(engineFolder, 'lightingEnabled', sectionConfig.lightingEnabled || { value: false, label: '⚡ Enable' })
+      .onChange(v => {
+        if (!v && window.parFixtures) {
+          window.parFixtures.forEach(f => {
+            if (f && f.config) {
+              f.light.color.set(f.config.color);
+              if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
+            }
+          });
+        }
+        updateModeVisibility();
+      });
+    addControl(engineFolder, 'lightingMode', sectionConfig.lightingMode || { value: 'gradient', label: 'Mode', options: ['gradient', 'pixelblaze', 'ndi'] })
+      .onChange(() => updateModeVisibility());
+
+    // Reorder: move Enable + Mode controllers to top of folder
+    const engineChildren = engineFolder.domElement.querySelector('.children');
+    if (engineChildren) {
+      const controllers = engineChildren.querySelectorAll(':scope > .controller');
+      const items = Array.from(controllers);
+      if (items.length >= 2) {
+        const enableCtrl = items[items.length - 2];
+        const modeCtrl = items[items.length - 1];
+        engineChildren.insertBefore(enableCtrl, engineChildren.firstChild);
+        engineChildren.insertBefore(modeCtrl, enableCtrl.nextSibling);
+      }
+    }
+
+    // Set initial state
+    updateModeVisibility();
   }
 
   // ─── Recursive GUI Builder ───
@@ -1482,14 +1571,15 @@ function setupGUI() {
           buildIcebergsSection(parentFolder, entry);
           continue;
         }
-        // Special: colorWave (has gradientStops)
-        if (entry.gradientStops) {
-          buildColorWaveSection(parentFolder, entry);
+        // Special: lightingEngine (has lightingMode + gradientStops)
+        if (entry.lightingMode || entry.gradientStops) {
+          buildLightingEngineSection(parentFolder, entry);
           continue;
         }
 
         const folder = parentFolder.addFolder(sectionMeta.label);
         if (sectionMeta.collapsed) folder.close();
+        _sectionFolderMap.set(sectionMeta, folder);
         buildGUI(entry, folder);
         continue;
       }
@@ -1572,6 +1662,8 @@ function setupGUI() {
       .name("Toggle Local/World [Q]");
 
     const parFolder = parentFolder.addFolder(sectionNode._section.label);
+    if (sectionNode._section.collapsed) parFolder.close();
+    _sectionFolderMap.set(sectionNode._section, parFolder);
 
     // Add non-fixture controls (parsEnabled, etc.)
     for (const key of Object.keys(sectionNode)) {
@@ -2800,7 +2892,8 @@ function setupGUI() {
   // ─── LED Strands Section ─────────────────────────────────────────────────
   function buildLedStrandsSection(parentFolder, sectionConfig) {
     const strandFolder = parentFolder.addFolder(sectionConfig._section.label);
-    strandFolder.close();
+    if (sectionConfig._section.collapsed !== false) strandFolder.close();
+    _sectionFolderMap.set(sectionConfig._section, strandFolder);
 
     // Master toggle
     strandFolder.add(params, 'strandsEnabled').name('Master Enabled').onChange(v => {
@@ -2959,7 +3052,8 @@ function setupGUI() {
   // ─── Icebergs Section ────────────────────────────────────────────────────
   function buildIcebergsSection(parentFolder, sectionConfig) {
     const bergFolder = parentFolder.addFolder(sectionConfig._section.label);
-    bergFolder.close();
+    if (sectionConfig._section.collapsed !== false) bergFolder.close();
+    _sectionFolderMap.set(sectionConfig._section, bergFolder);
 
     // Master toggle
     bergFolder.add(params, 'icebergsEnabled').name('Master Enabled').onChange(v => {
@@ -3421,10 +3515,298 @@ function onResize() {
   composer.setSize(window.innerWidth, window.innerHeight);
 }
 
+// ─── MarsinEngine (Pixelblaze Pattern Engine) ──────────────────────────
+const patternEngine = new MarsinEngine();
+let engineReady = false;
+let engineEnabled = false;
+
+// Pattern preset names → loaded from pb/ directory
+const PATTERN_PRESETS = {}; // populated by loadPatternPresets()
+let selectedPattern = null; // currently active pattern name
+
+function titleCase(name) {
+  return name.replace(/[_-]/g, ' ').replace(/(^|\s)\S/g, c => c.toUpperCase());
+}
+
+function renderPresetButtons() {
+  const container = document.getElementById('pe-preset-buttons');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const name of Object.keys(PATTERN_PRESETS).sort()) {
+    const btn = document.createElement('button');
+    btn.dataset.pattern = name;
+    btn.textContent = titleCase(name);
+    if (name === selectedPattern) btn.classList.add('active');
+    container.appendChild(btn);
+  }
+}
+
+async function loadPatternPresets() {
+  // Discover patterns from server
+  try {
+    const resp = await fetch(`http://localhost:8181/list-patterns`);
+    if (resp.ok) {
+      const names = await resp.json();
+      await Promise.all(names.map(async name => {
+        try {
+          const r = await fetch(`pb/${name}.js?t=${Date.now()}`);
+          if (r.ok) PATTERN_PRESETS[name] = await r.text();
+        } catch (e) { console.warn(`[PB] Failed to load pb/${name}.js`); }
+      }));
+    }
+  } catch (e) {
+    console.warn('[PB] list-patterns endpoint not available, trying static list');
+    const fallbackNames = ['rainbow', 'breathing', 'sparkle', 'fire', 'plasma', 'wipe'];
+    await Promise.all(fallbackNames.map(async name => {
+      try {
+        const r = await fetch(`pb/${name}.js?t=${Date.now()}`);
+        if (r.ok) PATTERN_PRESETS[name] = await r.text();
+      } catch (e) { /* skip */ }
+    }));
+  }
+  // Set default in editor
+  const textarea = document.getElementById('pe-code');
+  if (textarea && !textarea.value && PATTERN_PRESETS.rainbow) {
+    textarea.value = PATTERN_PRESETS.rainbow;
+    selectedPattern = 'rainbow';
+  }
+  renderPresetButtons();
+  console.log(`[PB] Loaded ${Object.keys(PATTERN_PRESETS).length} preset patterns`);
+}
+
+async function initPatternEngine() {
+  try {
+    await patternEngine.init('./lib/marsin-engine');
+    if (patternEngine.ready) {
+      engineReady = true;
+      console.log('[PB] Pattern engine ready');
+      compileEditorCode();
+    }
+  } catch (err) {
+    console.warn('[PB] Pattern engine not available:', err.message);
+  }
+}
+window.patternEngine = patternEngine;
+window.initPatternEngine = initPatternEngine;
+
+// ─── Pattern Editor Panel Wiring ──────────────────────────────────────
+function compileEditorCode() {
+  const textarea = document.getElementById('pe-code');
+  const statusEl = document.getElementById('pe-status');
+  if (!textarea || !statusEl) return;
+  const code = textarea.value;
+  if (!engineReady) {
+    statusEl.className = 'pe-status error';
+    statusEl.innerHTML = '<span class="pe-status-icon">✗</span> Engine not loaded';
+    return;
+  }
+  const ok = patternEngine.compile(code);
+  if (ok) {
+    statusEl.className = 'pe-status ok';
+    statusEl.innerHTML = '<span class="pe-status-icon">✓</span> Compiled OK';
+  } else {
+    const errMsg = patternEngine.getError();
+    statusEl.className = 'pe-status error';
+    statusEl.innerHTML = '<span class="pe-status-icon">✗</span> ' + errMsg;
+  }
+}
+
+function setupPatternEditor() {
+  const panel = document.getElementById('pattern-editor-panel');
+  const header = document.getElementById('pe-drag-handle');
+  const textarea = document.getElementById('pe-code');
+  const compileBtn = document.getElementById('pe-compile-btn');
+  const collapseBtn = document.getElementById('pe-collapse-btn');
+  const saveBtn = document.getElementById('pe-save-btn');
+  const addBtn = document.getElementById('pe-add-pattern');
+  const delBtn = document.getElementById('pe-del-pattern');
+  const presetsEl = document.getElementById('pe-presets');
+  if (!panel || !textarea) return;
+
+  // Compile button
+  compileBtn.addEventListener('click', compileEditorCode);
+
+  // Auto-run: debounced compile on input
+  const autoRunCheckbox = document.getElementById('pe-autorun');
+  let autoRunTimer = null;
+  textarea.addEventListener('input', () => {
+    if (autoRunCheckbox && autoRunCheckbox.checked) {
+      clearTimeout(autoRunTimer);
+      autoRunTimer = setTimeout(compileEditorCode, 300);
+    }
+  });
+
+  // Ctrl+Enter to compile, Tab inserts spaces
+  textarea.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      compileEditorCode();
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const s = textarea.selectionStart;
+      const en = textarea.selectionEnd;
+      textarea.value = textarea.value.substring(0, s) + '  ' + textarea.value.substring(en);
+      textarea.selectionStart = textarea.selectionEnd = s + 2;
+    }
+  });
+
+  // Preset buttons (click to load)
+  presetsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-pattern]');
+    if (!btn) return;
+    const key = btn.dataset.pattern;
+    if (PATTERN_PRESETS[key]) {
+      textarea.value = PATTERN_PRESETS[key];
+      selectedPattern = key;
+      renderPresetButtons();
+      compileEditorCode();
+    }
+  });
+
+  // Save: write editor code back to the selected pattern file
+  saveBtn.addEventListener('click', async () => {
+    const code = textarea.value;
+    if (!selectedPattern) {
+      // No pattern selected — prompt for name (same as add)
+      const name = prompt('Pattern name (lowercase, e.g. "my_pattern"):');
+      if (!name) return;
+      selectedPattern = name.toLowerCase().replace(/\s+/g, '_');
+    }
+    try {
+      const resp = await fetch('http://localhost:8181/save-pattern', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: selectedPattern, code }),
+      });
+      if (resp.ok) {
+        PATTERN_PRESETS[selectedPattern] = code;
+        renderPresetButtons();
+        const statusEl = document.getElementById('pe-status');
+        if (statusEl) {
+          statusEl.className = 'pe-status ok';
+          statusEl.innerHTML = '<span class="pe-status-icon">💾</span> Saved: ' + selectedPattern + '.js';
+        }
+      }
+    } catch (e) {
+      console.error('[PB] Save failed:', e);
+    }
+  });
+
+  // Add: create a new pattern
+  addBtn.addEventListener('click', async () => {
+    const name = prompt('New pattern name (lowercase, e.g. "strobe"):');
+    if (!name) return;
+    const key = name.toLowerCase().replace(/\s+/g, '_');
+    const template = '// ' + titleCase(key) + '\nexport function beforeRender(delta) {\n  t1 = time(0.1)\n}\nexport function render(index) {\n  hsv(t1 + index / pixelCount, 1, 1)\n}\n';
+    try {
+      const resp = await fetch('http://localhost:8181/save-pattern', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: key, code: template }),
+      });
+      if (resp.ok) {
+        PATTERN_PRESETS[key] = template;
+        selectedPattern = key;
+        textarea.value = template;
+        renderPresetButtons();
+        compileEditorCode();
+      }
+    } catch (e) {
+      console.error('[PB] Add pattern failed:', e);
+    }
+  });
+
+  // Delete: remove the selected pattern
+  delBtn.addEventListener('click', async () => {
+    if (!selectedPattern) return;
+    if (!confirm(`Delete pattern "${selectedPattern}"?`)) return;
+    try {
+      const resp = await fetch('http://localhost:8181/delete-pattern', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: selectedPattern }),
+      });
+      if (resp.ok) {
+        delete PATTERN_PRESETS[selectedPattern];
+        selectedPattern = null;
+        textarea.value = '';
+        renderPresetButtons();
+        const statusEl = document.getElementById('pe-status');
+        if (statusEl) {
+          statusEl.className = 'pe-status ok';
+          statusEl.innerHTML = '<span class="pe-status-icon">🗑️</span> Deleted';
+        }
+      }
+    } catch (e) {
+      console.error('[PB] Delete failed:', e);
+    }
+  });
+
+  // Collapse / expand
+  let isCollapsed = false;
+  collapseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    isCollapsed = !isCollapsed;
+    panel.classList.toggle('collapsed', isCollapsed);
+    collapseBtn.textContent = isCollapsed ? '□' : '─';
+  });
+  header.addEventListener('dblclick', () => {
+    isCollapsed = !isCollapsed;
+    panel.classList.toggle('collapsed', isCollapsed);
+    collapseBtn.textContent = isCollapsed ? '□' : '─';
+  });
+
+  // Dragging
+  let isDragging = false, dragOX = 0, dragOY = 0;
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    const r = panel.getBoundingClientRect();
+    dragOX = e.clientX - r.left;
+    dragOY = e.clientY - r.top;
+    document.body.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    panel.style.left = Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragOX)) + 'px';
+    panel.style.top = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOY)) + 'px';
+    panel.style.right = 'auto';
+  });
+  document.addEventListener('mouseup', () => {
+    if (isDragging) { isDragging = false; document.body.style.cursor = ''; }
+  });
+
+  // Show/hide
+  window.showPatternEditor = (show) => {
+    panel.classList.toggle('hidden', !show);
+  };
+}
+window.setupPatternEditor = setupPatternEditor;
+
 // ─── Animation Loop ─────────────────────────────────────────────────────
-// Experimental: color wave state
-let colorWaveEnabled = false;
-window.toggleColorWave = (v) => { colorWaveEnabled = v; };
+// Lighting engine state (driven by GUI)
+let lightingEnabled = false;
+let lightingMode = 'gradient'; // 'gradient' | 'pixelblaze' | 'ndi'
+
+// Hook for generic GUI builder: when lightingEnabled or lightingMode params change
+window.onLightingChange = () => {
+  lightingEnabled = !!params.lightingEnabled;
+  const newMode = params.lightingMode || 'gradient';
+  if (newMode !== lightingMode) {
+    lightingMode = newMode;
+    // Show pattern editor only in pixelblaze mode
+    if (window.showPatternEditor) window.showPatternEditor(lightingMode === 'pixelblaze' && lightingEnabled);
+    // Enable engine for pixelblaze
+    engineEnabled = lightingMode === 'pixelblaze' && lightingEnabled;
+  }
+  // Show/hide editor based on enable state too
+  if (window.showPatternEditor) window.showPatternEditor(lightingMode === 'pixelblaze' && lightingEnabled);
+  engineEnabled = lightingMode === 'pixelblaze' && lightingEnabled;
+};
+// Legacy compat
+window.toggleColorWave = (v) => { lightingEnabled = v; };
 
 // Cached chroma scale — rebuilt when stops change
 let chromaScale = null;
@@ -3453,8 +3835,8 @@ function animate() {
     lastFpsTime = now;
   }
 
-  // ─── Color Wave Effect (chroma.js LAB interpolation) ───
-  if (colorWaveEnabled && window.parFixtures && window.parFixtures.length > 0) {
+  // ─── Gradient Mode (chroma.js LAB interpolation) ───
+  if (lightingEnabled && lightingMode === 'gradient' && window.parFixtures && window.parFixtures.length > 0) {
     const scale = getChromaScale();
     const speed = (params.waveSpeed || 0.3) * 0.001;
     const t = now * speed;
@@ -3468,6 +3850,52 @@ function animate() {
       if (fixture.beam && fixture.beam.material) {
         fixture.beam.material.color.setRGB(r, g, b);
       }
+    }
+  }
+
+  // ─── Pixelblaze Pattern Engine ───
+  if (engineReady && engineEnabled) {
+    const elapsed = now * 0.001; // ms → seconds
+    patternEngine.beginFrame(elapsed);
+
+    // → Par Lights
+    if (window.parFixtures && window.parFixtures.length > 0) {
+      const count = window.parFixtures.length;
+      for (let i = 0; i < count; i++) {
+        const fixture = window.parFixtures[i];
+        if (!fixture || !fixture.light) continue;
+        const t = count > 1 ? i / (count - 1) : 0.5;
+        const { r, g, b } = patternEngine.renderPixel(i, t, 0, 0);
+        const rn = r / 255, gn = g / 255, bn = b / 255;
+        fixture.light.color.setRGB(rn, gn, bn);
+        if (fixture.beam && fixture.beam.material) {
+          fixture.beam.material.color.setRGB(rn, gn, bn);
+        }
+      }
+    }
+
+    // → LED Strands
+    if (window.ledStrandFixtures && window.ledStrandFixtures.length > 0) {
+      window.ledStrandFixtures.forEach(fixture => {
+        const count = fixture.config.ledCount || 10;
+        const children = fixture.group.children;
+        // Children layout: [wire, tube, housing0, bulb0, halo0, housing1, bulb1, halo1, ...]
+        const ledStartIdx = 2; // skip wire + tube
+        for (let led = 0; led < count; led++) {
+          const baseIdx = ledStartIdx + led * 3;
+          const bulb = children[baseIdx + 1]; // bulb mesh
+          const halo = children[baseIdx + 2]; // halo mesh
+          if (!bulb || !bulb.material) continue;
+
+          const t = count > 1 ? led / (count - 1) : 0.5;
+          const { r, g, b } = patternEngine.renderPixel(led, t, 0, 0);
+          const rn = r / 255, gn = g / 255, bn = b / 255;
+          bulb.material.color.setRGB(rn, gn, bn);
+          if (halo && halo.material) {
+            halo.material.color.setRGB(rn, gn, bn);
+          }
+        }
+      });
     }
   }
 
@@ -3512,6 +3940,41 @@ Promise.all([
   }
 
   init();
+
+  // Restore camera view from saved state
+  if (configTree._camera) {
+    const cam = configTree._camera;
+    if (cam.position) camera.position.set(cam.position.x, cam.position.y, cam.position.z);
+    if (cam.target) controls.target.set(cam.target.x, cam.target.y, cam.target.z);
+    controls.update();
+  }
+
+  // Initialize pattern editor + engine (chained to avoid race condition:
+  // presets must load before engine compiles, otherwise textarea is empty)
+  setupPatternEditor();
+  loadPatternPresets().then(() => {
+    initPatternEngine().then(() => {
+      // Sync lighting engine state from loaded config (pixelblaze activates on boot)
+      // Must run AFTER setupPatternEditor() so window.showPatternEditor exists,
+      // and AFTER initPatternEngine() so engineReady is true
+      if (window.onLightingChange) window.onLightingChange();
+    });
+  });
+
+  // Restore pattern editor window state
+  if (configTree._patternEditor) {
+    const pe = configTree._patternEditor;
+    const pePanel = document.getElementById('pattern-editor-panel');
+    if (pePanel) {
+      if (pe.x !== undefined) pePanel.style.left = pe.x + 'px';
+      if (pe.y !== undefined) pePanel.style.top = pe.y + 'px';
+      if (pe.width) pePanel.style.width = pe.width + 'px';
+      if (pe.height) pePanel.style.height = pe.height + 'px';
+      if (pe.collapsed) pePanel.classList.add('collapsed');
+      const autoRunCb = document.getElementById('pe-autorun');
+      if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
+    }
+  }
 }).catch(() => {
   init();
 });
