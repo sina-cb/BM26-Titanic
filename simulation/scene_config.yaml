@@ -29,7 +29,7 @@ titanicEnd:
     max: 500
     step: 1
   masterFloodAngle:
-    value: 51
+    value: 50
     label: Master Flood Angle °
     min: 10
     max: 90
@@ -930,7 +930,7 @@ parLights:
       penumbra: 0.5
       x: -20.555555555555557
       y: 6.777777777777778
-      z: 1.1287188184162227
+mark       z: 1.1287188184162227
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
