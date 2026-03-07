@@ -3,6 +3,7 @@
     "start": "concurrently \"npx http-server ../ -p 8080 -c-1 --cors\" \"node save-server.js\""
   },
   "dependencies": {
+    "acorn": "^8.16.0",
     "js-yaml": "^4.1.1"
   },
   "devDependencies": {

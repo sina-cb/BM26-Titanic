@@ -10,17 +10,42 @@ titanicEnd:
     label: 🧊 The End (Titanic's End)
     type: icebergArray
   icebergsEnabled:
-    value: false
+    value: true
     label: Master Enabled
   focusOnSelect:
     value: false
     label: Focus on Select
+  masterFloodEnabled:
+    value: true
+    label: Master Flood Enabled
+  masterFloodColor:
+    value: '#ffffff'
+    label: Master Flood Color
+    type: color
+  masterFloodIntensity:
+    value: 150
+    label: Master Flood Intensity
+    min: 0
+    max: 500
+    step: 1
+  masterFloodAngle:
+    value: 51
+    label: Master Flood Angle °
+    min: 10
+    max: 90
+    step: 1
+  masterFloodDimmer:
+    value: 250
+    label: Master Flood Dimmer %
+    min: 0
+    max: 250
+    step: 1
   icebergs:
     - name: Berg Alpha
       seed: 63208
-      x: -30.5
+      x: -63.5
       y: 0
-      z: 54.5
+      z: 59
       radius: 8.5
       height: 12.5
       detail: 9
@@ -30,16 +55,19 @@ titanicEnd:
       ledColor: '#aaeeff'
       floodEnabled: true
       floodColor: '#ffffff'
-      floodIntensity: 5
-      floodAngle: 40
+      floodIntensity: 150
+      floodAngle: 70
+      towerOffsetX: 0
+      towerOffsetY: 0
+      towerOffsetZ: 0
       showFaces: true
       showWireframe: false
       wireColor: '#00b7ff'
     - name: Berg Beta
       seed: 60617
-      x: 50.5
+      x: 62
       y: 0
-      z: 27.5
+      z: 57.5
       radius: 6.5
       height: 14.5
       detail: 10
@@ -49,16 +77,19 @@ titanicEnd:
       ledColor: '#ccddff'
       floodEnabled: true
       floodColor: '#aaccff'
-      floodIntensity: 4
-      floodAngle: 50
+      floodIntensity: 100
+      floodAngle: 60
+      towerOffsetX: 0
+      towerOffsetY: 0
+      towerOffsetZ: 0
       showFaces: true
       showWireframe: false
       wireColor: '#88ddff'
     - name: Berg Gamma
       seed: 55555
-      x: -76.5
+      x: -64
       y: 0
-      z: -21.5
+      z: -71
       radius: 10.5
       height: 12.5
       detail: 14
@@ -66,24 +97,49 @@ titanicEnd:
       ledPattern: edges
       ledDensity: 4
       ledColor: '#88ccff'
-      floodEnabled: false
+      floodEnabled: true
       floodColor: '#ffffff'
       floodIntensity: 20
       floodAngle: 90
+      towerOffsetX: 0
+      towerOffsetY: 0
+      towerOffsetZ: 0
       showFaces: true
       showWireframe: false
       wireColor: '#ff0088'
+    - name: Berg Delta
+      seed: 89210
+      x: 59.58564095230228
+      y: 0
+      z: -70.37910226236953
+      radius: 9
+      height: 11
+      detail: 11
+      peakCount: 3
+      ledPattern: edges
+      ledDensity: 5
+      ledColor: '#aaeeff'
+      floodEnabled: true
+      floodColor: '#ffffff'
+      floodIntensity: 50
+      floodAngle: 40
+      towerOffsetX: 0
+      towerOffsetY: 0
+      towerOffsetZ: 0
+      showFaces: true
+      showWireframe: true
+      wireColor: '#88ddff'
 atmosphere:
   _section:
     label: 🌌 Atmosphere
   ambientIntensity:
-    value: 0.47
+    value: 0.5
     label: Global Ambient
     min: 0
     max: 1
     step: 0.01
   exposure:
-    value: 1.75
+    value: 0.2
     label: Camera Exposure
     min: 0.1
     max: 3
@@ -133,25 +189,6 @@ atmosphere:
       min: 0
       max: 1
       step: 0.01
-  towerFloods:
-    _section:
-      label: 🏗️ Tower Floods
-      collapsed: true
-    towersEnabled:
-      value: true
-      label: Enabled
-    towerIntensity:
-      value: 30
-      label: Intensity
-      min: 0
-      max: 30
-      step: 0.5
-    towerAngle:
-      value: 30
-      label: Cone Angle °
-      min: 10
-      max: 90
-      step: 1
 
 # ─── Model Transform ─────────────────────────────────────────────────────
 modelTransform:
@@ -750,9 +787,9 @@ parLights:
       x: -13.350579302001757
       y: 12.5
       z: 11.516825602392782
-      rotX: -58.20270935326622
+      rotX: -58.20270935326621
       rotY: -90.517969410706
-      rotZ: 58.64399252364437
+      rotZ: 58.643992523644386
     - group: Left Center Auditorium
       name: Left Center Auditorium 6
       color: '#ff0000'
@@ -762,117 +799,9 @@ parLights:
       x: -13.353337052130676
       y: 12.5
       z: 13.405839944043674
-      rotX: -58.202709353266236
+      rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 1
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -19.68599841880675
-      y: 9.804457525532714
-      z: 8.61231073601136
-      rotX: 31.559080156917904
-      rotY: 90.33561859001496
-      rotZ: 31.73517520673026
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 2
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -20.264699074318624
-      y: 9.453916223069053
-      z: 10.54968689216576
-      rotX: 34.7097973593422
-      rotY: 74.13447311950019
-      rotZ: 26.5656783988916
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 3
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -21.788611207718077
-      y: 8.56633384536256
-      z: 11.599014942072566
-      rotX: 43.82782032790131
-      rotY: 60.212254251197095
-      rotZ: 26.259067100806504
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 4
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -23.54467939539067
-      y: 7.557020051321446
-      z: 11.269302629198132
-      rotX: 57.427952135821144
-      rotY: 52.33782944556022
-      rotZ: 30.13181769608785
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 5
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -24.711219815800433
-      y: 6.89824398245088
-      z: 9.714826009080593
-      rotX: 71.504835828577
-      rotY: 64.48421391415704
-      rotZ: 48.84777766573653
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 6
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -24.74239524158499
-      y: 6.89825428285587
-      z: 7.662941968356202
-      rotX: 71.90535569417757
-      rotY: 114.36762001215685
-      rotZ: 96.7186722814694
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 7
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -23.62361834454348
-      y: 7.557046132862445
-      z: 6.073749853830876
-      rotX: 57.93443966603171
-      rotY: 127.95821496467009
-      rotZ: 97.18205901865231
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 8
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -21.878377268621843
-      y: 8.566363504196671
-      z: 5.690850317794014
-      rotX: 44.15718499554899
-      rotY: 120.3906282631435
-      rotZ: 70.60636812690299
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 9
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -20.323289709437837
-      y: 9.453935581498174
-      z: 6.693406308611597
-      rotX: 34.8562441915446
-      rotY: 106.52967230884275
-      rotZ: 45.624914425695536
     - group: Left Back Wall
       name: Left Back Wall 1
       color: '#001eff'
@@ -1581,6 +1510,114 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -19.68599841880675
+      y: 9.804457525532714
+      z: 8.61231073601136
+      rotX: 31.559080156917904
+      rotY: 90.33561859001496
+      rotZ: 31.73517520673026
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.264699074318624
+      y: 9.453916223069053
+      z: 10.54968689216576
+      rotX: 34.7097973593422
+      rotY: 74.13447311950019
+      rotZ: 26.5656783988916
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.788611207718077
+      y: 8.56633384536256
+      z: 11.599014942072566
+      rotX: 43.82782032790131
+      rotY: 60.212254251197095
+      rotZ: 26.259067100806504
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.54467939539067
+      y: 7.557020051321445
+      z: 11.269302629198132
+      rotX: 57.427952135821144
+      rotY: 52.33782944556022
+      rotZ: 30.13181769608785
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.711219815800433
+      y: 6.898243982450879
+      z: 9.714826009080593
+      rotX: 71.50483582857704
+      rotY: 64.48421391415708
+      rotZ: 48.847777665736565
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.74239524158499
+      y: 6.898254282855869
+      z: 7.662941968356202
+      rotX: 71.9053556941776
+      rotY: 114.36762001215692
+      rotZ: 96.71867228146948
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.62361834454348
+      y: 7.557046132862444
+      z: 6.073749853830876
+      rotX: 57.93443966603171
+      rotY: 127.95821496467003
+      rotZ: 97.18205901865228
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.878377268621843
+      y: 8.566363504196671
+      z: 5.690850317794014
+      rotX: 44.15718499554899
+      rotY: 120.3906282631435
+      rotZ: 70.60636812690299
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.323289709437837
+      y: 9.453935581498174
+      z: 6.693406308611597
+      rotX: 34.8562441915446
+      rotY: 106.52967230884275
+      rotZ: 45.624914425695536
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 1
       color: '#f07100'
@@ -1875,14 +1912,14 @@ colorWave:
     value: true
     label: Enabled
   waveSpeed:
-    value: 0.3
+    value: 0.05
     label: Speed
     min: 0.05
     max: 2
     step: 0.05
   gradientStops:
-    - '#ff00c8'
-    - '#00ccff'
+    - '#ff0000'
+    - '#1100ff'
 
 # ─── Configuration ────────────────────────────────────────────────────────
 config:

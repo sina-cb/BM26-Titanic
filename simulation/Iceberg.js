@@ -74,8 +74,72 @@ export class Iceberg {
     }
     
     // Position at top center temporarily until geometry loads
-    this.floodLight.position.set(0, peakHeight + 0.5, 0);
-    this.floodTarget.position.set(0, peakHeight + 10, 0);
+    const towerHeight = peakHeight + 5;
+    const offsetX = cfg.towerOffsetX || 0;
+    const offsetY = cfg.towerOffsetY || 0;
+    const offsetZ = cfg.towerOffsetZ || 0;
+    const tx = offsetX;
+    const tz = offsetZ;
+    const baseHeight = towerHeight + offsetY;
+
+    this.floodLight.position.set(tx, baseHeight, tz);
+    // Target the center of the world (0, 10, 0) where the Titanic is
+    this.floodTarget.position.set(-(cfg.x || 0), 10 - (cfg.y || 0), -(cfg.z || 0));
+
+    // ─── Physical tower fixtures (pole, bracket, housing, glow) ───
+    if (this.fixtureGroup) {
+      this.group.remove(this.fixtureGroup);
+      this.fixtureGroup.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+    }
+    this.fixtureGroup = new THREE.Group();
+
+    // Tower pole
+    const poleGeo = new THREE.CylinderGeometry(0.3, 0.4, baseHeight, 6);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8, metalness: 0.3 });
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.set(tx, baseHeight / 2, tz);
+    pole.castShadow = true;
+    this.fixtureGroup.add(pole);
+
+    // Structural bracket
+    const bracketGeo = new THREE.BoxGeometry(1.6, 0.4, 0.6);
+    const bracketMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.9, metalness: 0.8 });
+    const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+    bracket.position.set(tx, baseHeight - 0.7, tz);
+    bracket.castShadow = true;
+    this.fixtureGroup.add(bracket);
+
+    // White LED pixel
+    const pixelGeo = new THREE.SphereGeometry(0.3, 16, 16);
+    const pixelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const pixel = new THREE.Mesh(pixelGeo, pixelMat);
+    pixel.position.set(tx, baseHeight - 0.7, tz);
+    pixel.translateZ(0.4);
+    this.fixtureGroup.add(pixel);
+
+    // Flood light housing (rectangular box)
+    const housingGeo = new THREE.BoxGeometry(2, 1, 1.5);
+    const housingMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.5 });
+    const housing = new THREE.Mesh(housingGeo, housingMat);
+    housing.position.set(tx, baseHeight, tz);
+    this.fixtureGroup.add(housing);
+
+    // Glow orb at the flood source
+    const finalColor = cfg.floodColor || masterCfg.masterFloodColor || '#ffffff';
+    const glowGeo = new THREE.SphereGeometry(1.0, 8, 8);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: finalColor,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const glow = new THREE.Mesh(glowGeo, glowMat);
+    glow.position.set(tx, baseHeight - 0.5, tz);
+    this.fixtureGroup.add(glow);
+
+    this.group.add(this.fixtureGroup);
     
     this.updateFloodlightProps();
   }
@@ -85,17 +149,25 @@ export class Iceberg {
     const cfg = this.config;
     const master = this.masterCfg;
     
-    // Check individual config first, fallback to master
-    const enabled = (cfg.floodEnabled !== undefined ? cfg.floodEnabled : master.masterFloodEnabled) !== false;
+    // Master is an AND override — if master is OFF, all floods are OFF
+    const masterEnabled = master.masterFloodEnabled !== false;
+    const localEnabled = cfg.floodEnabled !== false;
+    const enabled = masterEnabled && localEnabled;
+    
     const color = cfg.floodColor || master.masterFloodColor || '#ffffff';
-    const intensity = cfg.floodIntensity !== undefined ? cfg.floodIntensity : (master.masterFloodIntensity || 50);
-    const angleDeg = cfg.floodAngle !== undefined ? cfg.floodAngle : (master.masterFloodAngle || 40);
+    // Master intensity and angle always take priority over local
+    const baseIntensity = master.masterFloodIntensity !== undefined ? master.masterFloodIntensity : (cfg.floodIntensity || 50);
+    const angleDeg = master.masterFloodAngle !== undefined ? master.masterFloodAngle : (cfg.floodAngle || 40);
+    
+    // Apply master dimmer (0-250%) as a multiplier
+    const dimmer = (master.masterFloodDimmer !== undefined ? master.masterFloodDimmer : 100) / 100;
+    const intensity = baseIntensity * dimmer;
 
-    this.floodLight.visible = enabled;
+    this.floodLight.visible = enabled && dimmer > 0;
     this.floodLight.color.set(color);
     this.floodLight.intensity = intensity;
     this.floodLight.angle = THREE.MathUtils.degToRad(angleDeg);
-    this.floodLight.distance = (cfg.radius || 4) * 15;
+    this.floodLight.distance = (cfg.radius || 4) * 25;
   }
 
   async buildGeometry(progressCallback) {
@@ -402,7 +474,8 @@ export class Iceberg {
           if (v.y > maxH) { maxH = v.y; peakPos.copy(v); }
         }
         this.floodLight.position.copy(peakPos).add(new THREE.Vector3(0, 0.5, 0));
-        this.floodTarget.position.set(0, maxH + 10, 0);
+        // Keep targeting the ship at (0, 10, 0)
+        this.floodTarget.position.set(-(cfg.x || 0), 10 - (cfg.y || 0), -(cfg.z || 0));
     }
 
     this.isGeometryLoaded = true;
@@ -474,5 +547,9 @@ export class Iceberg {
   updateVisibility() {
     if (this.solidMesh) this.solidMesh.visible = this.config.showFaces !== false && this.masterCfg.icebergsEnabled !== false;
     if (this.wireMesh) this.wireMesh.visible = this.config.showWireframe !== false && this.masterCfg.icebergsEnabled !== false;
+  }
+
+  setFixtureVisibility(visible) {
+    if (this.fixtureGroup) this.fixtureGroup.visible = visible;
   }
 }
