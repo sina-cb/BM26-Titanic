@@ -39,6 +39,26 @@ http.createServer((req, res) => {
         res.end('Error');
       }
     });
+  } else if (req.method === 'POST' && req.url === '/save-stl') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      console.log(`[SAVE SERVER] Received POST /save-stl. Body length: ${body.length}`);
+      try {
+        const payload = JSON.parse(body);
+        const { filename, stlData } = payload;
+        if (!filename || !stlData) throw new Error('Missing filename or stlData');
+        const safeName = filename.replace(/[^a-z0-9_.-]/gi, '_');
+        const outPath = path.join(__dirname, 'models', safeName);
+        fs.writeFileSync(outPath, stlData);
+        console.log(`[SAVE SERVER] Successfully wrote to ${outPath}`);
+        res.end('Saved');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Write error:`, e);
+        res.statusCode = 500;
+        res.end('Error');
+      }
+    });
   } else {
     res.statusCode = 404; res.end();
   }

@@ -1,6 +1,6 @@
-# Black Rock City Honoraria — 2026 Full Proposal Draft
+# BM26 TITANIC — Art Installation Proposal Draft
 
-*Note: This is a prepared draft derived from the Honoraria guidelines. Sensitive/personal information has been redacted.*
+*Note: This is NOT an honoraria submission. It is a self-funded project proposal that uses the honoraria format as a structural template for documentation purposes. Sensitive/personal information has been redacted.*
 
 ## Summary
 
