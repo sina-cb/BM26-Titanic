@@ -9,7 +9,7 @@ titanicEnd:
   _section:
     label: 🧊 The End (Titanic's End)
     type: icebergArray
-    collapsed: false
+    collapsed: true
   icebergsEnabled:
     value: true
     label: Master Enabled
@@ -1943,9 +1943,9 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -32.2303
-    y: 24.1902
-    z: 126.4607
+    x: 92.2717
+    y: 19.503
+    z: 92.2717
   target:
     x: -2
     y: 8
@@ -1955,5 +1955,5 @@ _patternEditor:
   y: 90
   width: 400
   height: 520
-  collapsed: true
+  collapsed: false
   autoRun: true

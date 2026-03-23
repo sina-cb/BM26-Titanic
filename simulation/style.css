@@ -460,9 +460,12 @@ canvas {
 }
 
 #pattern-editor-panel.collapsed {
-  height: 34px;
-  min-height: 34px;
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
   border-radius: 8px;
+  resize: none;
+  overflow: hidden;
 }
 
 /* Header bar */

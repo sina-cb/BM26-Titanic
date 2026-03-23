@@ -24,3 +24,7 @@ Goals in our game:
 
 Executive suggestions for the agent:
 - please **never** use **built-in web tools** for this project, for web build on top of this skill `.agent\01_skills\00_see_the_world.md`
+- **never** wrap `import` statements in `try`/`except` — a missing dependency must crash immediately, not fail silently at runtime
+- **never** put `import` or `from … import` inside functions or methods — all imports go at the **top of the file**
+- before writing Python code, review the **Python style guide**: `.agent\00_gol\01_python_style.md`
+- before writing Node.js code, review the **Node.js style guide**: `.agent\00_gol\02_nodejs_style.md`

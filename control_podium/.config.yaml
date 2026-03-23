@@ -1,0 +1,42 @@
+# TITANIC Control Podium — Static Configuration
+# ================================================
+# Source of truth for the control podium system.
+# Defines node topology, radio parameters, and event protocol.
+#
+# Hardware pairing (MAC→role) is in .config.pairing.yaml (gitignored).
+# Deploy state is in .config.deploy.yaml (gitignored).
+#
+# To deploy firmware:  python deploy.py podium|server|all
+
+# Node definitions (logical roles — MACs paired in .config.pairing.yaml)
+nodes:
+  podium:
+    role: "Podium — sends events via LoRa"
+  server:
+    role: "Server — receives events from LoRa"
+
+# Radio parameters (must match firmware — rebuild + flash if changed)
+radio:
+  frequency: 915.0       # MHz — US ISM band (FCC-compliant)
+  bandwidth: 250.0       # kHz — wide for speed
+  spreading_factor: 7    # SF7 — fastest (~400ms one-way latency)
+  coding_rate: 5         # 4/5
+  tx_power: 22           # dBm (safe default, can go to 28)
+
+# Display configuration
+display:
+  timeout_sec: 10        # Auto-turn off OLED screen after N seconds of no button interaction
+
+# Serial communication
+serial:
+  baud: 115200
+  # Firmware protocol:
+  #   Firmware sends:   RX:<payload>:RSSI=<rssi>:SNR=<snr>\n
+  #   Firmware expects: <payload>\n  (transmits over LoRa immediately)
+  #   Firmware acks:    TX_OK\n  or  TX_FAIL:<code>\n
+  rx_prefix: "RX:"
+  tx_ack: "TX_OK"
+
+# Event protocol
+protocol:
+  prefix: "titanic:"     # All button events start with this

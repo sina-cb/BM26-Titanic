@@ -1,0 +1,98 @@
+# Endyshow 240W Stage Strobe LED Bar — 82 Channel Mode
+# ======================================================
+# OCR'd and confirmed by Sina against the physical manual.
+# Manual typo corrected: CH80 should be W16 (not AW16).
+# ⚠ RGB pixel order corrected: actual order is R,G,B
+#   (manual printed R,B,G for pixel 1 — verified on fixture).
+#
+# Layout:
+#   CH1–48    16 RGB pixels (3 ch each: R,G,B)
+#   CH49–64   16 Amber segments (1 ch each)
+#   CH65–80   16 White segments (1 ch each)
+#   CH81–82   RGB Strobe, ACW Strobe
+
+fixture:
+  name: "Endyshow 240W Stage Strobe LED Bar"
+  mode: "82-channel"
+  total_channels: 82
+
+rgb_pixels:
+  count: 16
+  channels_per_pixel: 3
+  channel_order: [red, green, blue]   # verified physical order
+  start_channel: 1
+  end_channel: 48
+  pixels:
+    - { pixel: 1,  r: 1,  g: 2,  b: 3  }
+    - { pixel: 2,  r: 4,  g: 5,  b: 6  }
+    - { pixel: 3,  r: 7,  g: 8,  b: 9  }
+    - { pixel: 4,  r: 10, g: 11, b: 12 }
+    - { pixel: 5,  r: 13, g: 14, b: 15 }
+    - { pixel: 6,  r: 16, g: 17, b: 18 }
+    - { pixel: 7,  r: 19, g: 20, b: 21 }
+    - { pixel: 8,  r: 22, g: 23, b: 24 }
+    - { pixel: 9,  r: 25, g: 26, b: 27 }
+    - { pixel: 10, r: 28, g: 29, b: 30 }
+    - { pixel: 11, r: 31, g: 32, b: 33 }
+    - { pixel: 12, r: 34, g: 35, b: 36 }
+    - { pixel: 13, r: 37, g: 38, b: 39 }
+    - { pixel: 14, r: 40, g: 41, b: 42 }
+    - { pixel: 15, r: 43, g: 44, b: 45 }
+    - { pixel: 16, r: 46, g: 47, b: 48 }
+
+amber_pixels:
+  count: 16
+  start_channel: 49
+  end_channel: 64
+  pixels:
+    - { pixel: 1,  channel: 49 }
+    - { pixel: 2,  channel: 50 }
+    - { pixel: 3,  channel: 51 }
+    - { pixel: 4,  channel: 52 }
+    - { pixel: 5,  channel: 53 }
+    - { pixel: 6,  channel: 54 }
+    - { pixel: 7,  channel: 55 }
+    - { pixel: 8,  channel: 56 }
+    - { pixel: 9,  channel: 57 }
+    - { pixel: 10, channel: 58 }
+    - { pixel: 11, channel: 59 }
+    - { pixel: 12, channel: 60 }
+    - { pixel: 13, channel: 61 }
+    - { pixel: 14, channel: 62 }
+    - { pixel: 15, channel: 63 }
+    - { pixel: 16, channel: 64 }
+
+white_pixels:
+  count: 16
+  start_channel: 65
+  end_channel: 80
+  pixels:
+    - { pixel: 1,  channel: 65 }
+    - { pixel: 2,  channel: 66 }
+    - { pixel: 3,  channel: 67 }
+    - { pixel: 4,  channel: 68 }
+    - { pixel: 5,  channel: 69 }
+    - { pixel: 6,  channel: 70 }
+    - { pixel: 7,  channel: 71 }
+    - { pixel: 8,  channel: 72 }
+    - { pixel: 9,  channel: 73 }
+    - { pixel: 10, channel: 74 }
+    - { pixel: 11, channel: 75 }
+    - { pixel: 12, channel: 76 }
+    - { pixel: 13, channel: 77 }
+    - { pixel: 14, channel: 78 }
+    - { pixel: 15, channel: 79 }
+    - { pixel: 16, channel: 80 }
+
+control_channels:
+  - channel: 81
+    function: "RGB Strobe"
+    ranges:
+      - { min: 0,   max: 9,   description: "No function" }
+      - { min: 10,  max: 255, description: "RGB Strobe (slow → fast)" }
+
+  - channel: 82
+    function: "ACW Strobe"
+    ranges:
+      - { min: 0,   max: 9,   description: "No function" }
+      - { min: 10,  max: 255, description: "ACW Strobe (slow → fast)" }

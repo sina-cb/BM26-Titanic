@@ -1,0 +1,135 @@
+'use strict';
+/**
+ * DmxUniverse — One Art-Net output universe (512 channels).
+ *
+ * Owns a 512-byte DMX buffer and an ArtNetSender pointed at one
+ * controller IP/universe/subnet/net.  Fixtures are placed into the
+ * universe via addFixture(); the universe assigns them their buffer
+ * offset and they write directly into this shared buffer.
+ *
+ * Call send() to flush the full buffer as one Art-Net UDP packet.
+ */
+
+const { ArtNetSender } = require('./artnet');
+
+class DmxUniverse {
+    /**
+     * @param {object} cfg              - Universe config block from universes.yaml
+     * @param {string} cfg.id
+     * @param {string} cfg.name
+     * @param {object} cfg.controller
+     * @param {string} cfg.controller.ip
+     * @param {number} [cfg.controller.port]
+     * @param {number} [cfg.controller.universe]
+     * @param {number} [cfg.controller.subnet]
+     * @param {number} [cfg.controller.net]
+     */
+    constructor(cfg) {
+        this.id   = cfg.id;
+        this.name = cfg.name || cfg.id;
+
+        // 512-byte DMX buffer — shared with all attached fixtures
+        this.buffer = Buffer.alloc(512, 0);
+
+        // Fixture map: label → fixture instance
+        this._fixtures = new Map();
+
+        // ArtNet sender (initialized in init())
+        const c = cfg.controller;
+        this._sender = new ArtNetSender({
+            host:     c.ip,
+            universe: c.universe  || 0,
+            subnet:   c.subnet    || 0,
+            net:      c.net       || 0,
+        });
+    }
+
+    // ── Fixture Management ─────────────────────────────────────────────────
+
+    /**
+     * Place a fixture into this universe.
+     * @param {import('./DmxFixture').DmxFixture} fixture
+     * @param {number} dmxStartAddress - 1-indexed DMX start address
+     */
+    addFixture(fixture, dmxStartAddress) {
+        const offset = dmxStartAddress - 1;   // convert to 0-indexed buffer offset
+        const end    = offset + fixture.totalChannels;
+
+        if (end > 512) {
+            throw new RangeError(
+                `[DmxUniverse:${this.id}] Fixture "${fixture.label}" ` +
+                `(start=${dmxStartAddress}, len=${fixture.totalChannels}) exceeds 512 channels`
+            );
+        }
+
+        fixture._attach(this.buffer, offset);
+        this._fixtures.set(fixture.label, fixture);
+
+        console.log(
+            `[DmxUniverse:${this.id}] Placed "${fixture.label}" ` +
+            `ch ${dmxStartAddress}–${dmxStartAddress + fixture.totalChannels - 1}`
+        );
+    }
+
+    /**
+     * Retrieve a fixture by label.
+     * @param {string} label
+     * @returns {import('./DmxFixture').DmxFixture}
+     */
+    fixture(label) {
+        const f = this._fixtures.get(label);
+        if (!f) throw new Error(`[DmxUniverse:${this.id}] Unknown fixture "${label}"`);
+        return f;
+    }
+
+    /** All fixtures as a Map<label, fixture> */
+    get fixtures() { return this._fixtures; }
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+
+    /** Open the UDP socket for this universe. */
+    async init() {
+        await this._sender.init();
+        console.log(`[DmxUniverse:${this.id}] Ready — ${this._fixtures.size} fixture(s)`);
+    }
+
+    /** Close the UDP socket. */
+    close() {
+        this._sender.close();
+        console.log(`[DmxUniverse:${this.id}] Closed`);
+    }
+
+    // ── Output ─────────────────────────────────────────────────────────────
+
+    /** Flush the full 512-byte buffer to the Art-Net node. */
+    send() {
+        this._sender.send(this.buffer);
+    }
+
+    /** Set a universe-global channel (1-indexed) and send immediately. */
+    setChannel(ch, val) {
+        if (ch < 1 || ch > 512) throw new RangeError('Channel must be 1–512');
+        this.buffer[ch - 1] = val & 0xFF;
+        this.send();
+    }
+
+    /**
+     * Bulk-copy a raw 512-byte buffer (e.g. from an external engine or sACN receiver).
+     * Does NOT send — call send() after to flush.
+     * @param {Buffer|Uint8Array} buf
+     */
+    writeRaw(buf) {
+        const len = Math.min(buf.length, 512);
+        buf.copy ? buf.copy(this.buffer, 0, 0, len)
+                 : this.buffer.set(buf.subarray(0, len), 0);
+    }
+
+    /** Zero the buffer and send a blackout packet. */
+    blackout() {
+        this.buffer.fill(0);
+        this.send();
+        console.log(`[DmxUniverse:${this.id}] Blackout`);
+    }
+}
+
+module.exports = { DmxUniverse };

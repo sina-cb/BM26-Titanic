@@ -111,6 +111,22 @@ http.createServer((req, res) => {
       res.statusCode = 500;
       res.end('Error');
     }
+  } else if (req.method === 'POST' && req.url === '/save-model') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const outPath = path.join(__dirname, 'pb', 'model', 'model.js');
+        fs.mkdirSync(path.join(__dirname, 'pb', 'model'), { recursive: true });
+        fs.writeFileSync(outPath, body);
+        console.log(`[SAVE SERVER] Saved model: ${outPath} (${body.length} bytes)`);
+        res.end('Saved');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Model save error:`, e);
+        res.statusCode = 500;
+        res.end('Error: ' + e.message);
+      }
+    });
   } else {
     res.statusCode = 404; res.end();
   }

@@ -1,0 +1,84 @@
+# BM26 Titanic — DMX Universe Configuration
+# ==========================================
+# Single source of truth for the physical DMX deployment topology.
+# Each universe maps to one Art-Net controller output (512 channels).
+#
+# Fixture schema:
+#   label:             Unique name within this universe
+#   type:              JS class name (EndyshowBar | UkingPar | ...)
+#   dmx_start_address: 1-indexed start channel in this universe
+#   config:
+#     layout:          Path to the channel-mode profile YAML (relative to dmx/)
+#
+# See docs/08_dmx_controller.md for full documentation.
+
+network:
+  local_ip: "10.1.1.172"
+  broadcast_ip: "10.1.1.255"
+  subnet_mask: "255.255.255.0"
+
+universes:
+  # ─── Test Bench Universe ────────────────────────────────────────────────
+  # Physical chain on the test bench:
+  #   wash_1 (Endyshow 240W, 135ch) → par_1 → par_2 → par_3 → par_4 (UKing 10ch each)
+  #   → vintage_1 → vintage_2 (Vintage LED 15ch each)
+  #
+  # DMX address map:
+  #   wash_1     CH1–135    (135 channels)
+  #   par_1      CH136–145  (10 channels)
+  #   par_2      CH146–155  (10 channels)
+  #   par_3      CH156–165  (10 channels)
+  #   par_4      CH166–175  (10 channels)
+  #   vintage_1  CH176–208  (33 channels)
+  #   vintage_2  CH209–241  (33 channels)
+  #
+  - id: "test_bench"
+    name: "Test Bench"
+    controller:
+      ip: "10.1.1.102" # PKnight ArtNet Node 1
+      port: 6454
+      universe: 0
+      subnet: 0
+      net: 0
+    fixtures:
+      - label: "wash_1"
+        type: "EndyshowBar"
+        dmx_start_address: 1
+        config:
+          layout: "fixtures/endyshow_240w_stage_strobe_led_bar/channels_135.yaml"
+
+      - label: "par_1"
+        type: "UkingPar"
+        dmx_start_address: 136
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_2"
+        type: "UkingPar"
+        dmx_start_address: 146
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_3"
+        type: "UkingPar"
+        dmx_start_address: 156
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_4"
+        type: "UkingPar"
+        dmx_start_address: 166
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "vintage_1"
+        type: "VintageLed"
+        dmx_start_address: 176
+        config:
+          layout: "fixtures/vintage_led_stage_light/channels_33.yaml"
+
+      - label: "vintage_2"
+        type: "VintageLed"
+        dmx_start_address: 209
+        config:
+          layout: "fixtures/vintage_led_stage_light/channels_33.yaml"

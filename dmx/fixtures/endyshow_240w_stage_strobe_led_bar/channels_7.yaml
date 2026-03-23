@@ -1,0 +1,45 @@
+# Endyshow 240W Stage Strobe LED Bar — 7 Channel Mode
+# =====================================================
+# OCR'd and confirmed by Sina against the physical manual.
+
+fixture:
+  name: "Endyshow 240W Stage Strobe LED Bar"
+  mode: "7-channel"
+  total_channels: 7
+
+control_channels:
+  - channel: 1
+    function: "Master Dimmer"
+    ranges:
+      - { min: 0, max: 255, description: "Total dimmer — 0=dark, 255=bright" }
+
+  - channel: 2
+    function: "Strobe"
+    ranges:
+      - { min: 0,   max: 9,   description: "No function" }
+      - { min: 10,  max: 255, description: "Strobe (slow → fast)" }
+
+  - channel: 3
+    function: "Red"
+    ranges:
+      - { min: 0, max: 255, description: "Red intensity 0–100%" }
+
+  - channel: 4
+    function: "Green"
+    ranges:
+      - { min: 0, max: 255, description: "Green intensity 0–100%" }
+
+  - channel: 5
+    function: "Blue"
+    ranges:
+      - { min: 0, max: 255, description: "Blue intensity 0–100%" }
+
+  - channel: 6
+    function: "Amber"
+    ranges:
+      - { min: 0, max: 255, description: "Amber intensity 0–100%" }
+
+  - channel: 7
+    function: "White"
+    ranges:
+      - { min: 0, max: 255, description: "White intensity 0–100%" }

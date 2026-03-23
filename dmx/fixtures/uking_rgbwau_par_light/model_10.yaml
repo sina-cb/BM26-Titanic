@@ -1,0 +1,69 @@
+# UKing RGBWAU PAR Light — Pixel Model (10ch mode)
+# Single DMX pixel with 18 visual dots in 3 concentric rings.
+# All 18 LEDs respond to the same channels simultaneously.
+# Dot ring layout is estimated from physical LED placement on the fixture face.
+
+model:
+  id: "uking_par_10"
+  name: "UKing RGBWAU PAR (10ch)"
+  fixture_type: "UkingPar"
+  channel_mode: 10
+
+  dimensions:
+    width: 150
+    height: 150
+    depth: 120
+
+  shell:
+    type: "cylinder"
+    dimensions: [150, 150, 120]
+    color: "#111111"
+    offset: [0, 0, -60]
+
+  pixels:
+    - id: "rgbwau_1"
+      type: "rgbwau"
+      size: 10
+      channels:
+        dimmer: 1
+        red: 2
+        green: 3
+        blue: 4
+        white: 5
+        amber: 6
+        purple: 7
+        strobe: 8
+        function: 9
+        function_speed: 10
+
+      # 18 visual dots — 3 concentric rings of 6 LEDs each.
+      # This is an estimated visual model for rendering.
+      # All dots display the same color (1 DMX pixel).
+      dots:
+        # Inner ring (r=22mm, 6 LEDs at 60° intervals) -> Circumference ~138mm. 10mm radius dots won't overlap.
+        - [22, 0, 0]
+        - [11, 19.05, 0]
+        - [-11, 19.05, 0]
+        - [-22, 0, 0]
+        - [-11, -19.05, 0]
+        - [11, -19.05, 0]
+        # Middle ring (r=44mm, 6 LEDs at 60° intervals, 30° offset)
+        - [38.1, 22, 0]
+        - [0, 44, 0]
+        - [-38.1, 22, 0]
+        - [-38.1, -22, 0]
+        - [0, -44, 0]
+        - [38.1, -22, 0]
+        # Outer ring (r=66mm, 6 LEDs at 60° intervals)
+        - [66, 0, 0]
+        - [33, 57.16, 0]
+        - [-33, 57.16, 0]
+        - [-66, 0, 0]
+        - [-33, -57.16, 0]
+        - [33, -57.16, 0]
+
+  controls:
+    - { channel: 1, function: "Total Dimmer", range: "0=dark, 255=max" }
+    - { channel: 8, function: "Total Strobe", range: "0=off, 1-255=slow→fast" }
+    - { channel: 9, function: "Function Select", range: "0-50=manual, 51-100=color, 101-150=jump, 151-200=fade, 201-250=pulse, 251-255=sound" }
+    - { channel: 10, function: "Function Speed", range: "0=slow, 255=fast" }

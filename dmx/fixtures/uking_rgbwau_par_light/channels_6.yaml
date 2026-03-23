@@ -1,0 +1,25 @@
+fixture:
+  name: "UKing RGBWAU PAR Light"
+  mode: "6-channel"
+  mode_id: "d001"
+  total_channels: 6
+
+channels:
+  - channel: 1
+    function: "Red"
+    description: "Red dimming — 0=dark, 255=bright"
+  - channel: 2
+    function: "Green"
+    description: "Green dimming — 0=dark, 255=bright"
+  - channel: 3
+    function: "Blue"
+    description: "Blue dimming — 0=dark, 255=bright"
+  - channel: 4
+    function: "White"
+    description: "White dimming — 0=dark, 255=bright"
+  - channel: 5
+    function: "Amber"
+    description: "Amber (yellow) — 0=dark, 255=bright"
+  - channel: 6
+    function: "Purple"
+    description: "Purple dimming — 0=dark, 255=bright"

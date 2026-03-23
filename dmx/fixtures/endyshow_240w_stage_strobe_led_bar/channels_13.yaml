@@ -1,0 +1,99 @@
+# Endyshow 240W Stage Strobe LED Bar — 13 Channel Mode
+# ======================================================
+# OCR'd and confirmed by Sina against the physical manual.
+#
+# Layout:
+#   CH1      Master dimmer
+#   CH2      RGB Strobe
+#   CH3      ACW Strobe
+#   CH4–6    R, G, B (single zone, whole bar)
+#   CH7–8    Amber, White (single zone)
+#   CH9–11   RGB Effect, RGB Speed, RGB Background Color
+#   CH12–13  ACW Effect, ACW Speed
+
+fixture:
+  name: "Endyshow 240W Stage Strobe LED Bar"
+  mode: "13-channel"
+  total_channels: 13
+
+control_channels:
+  - channel: 1
+    function: "Dimmer"
+    ranges:
+      - { min: 0, max: 255, description: "Master dimmer — 0=dark, 255=bright" }
+
+  - channel: 2
+    function: "RGB Strobe"
+    ranges:
+      - { min: 0,   max: 9,   description: "No function" }
+      - { min: 10,  max: 255, description: "RGB Strobe (slow → fast)" }
+
+  - channel: 3
+    function: "ACW Strobe"
+    ranges:
+      - { min: 0,   max: 9,   description: "No function" }
+      - { min: 10,  max: 255, description: "ACW Strobe (slow → fast)" }
+
+  - channel: 4
+    function: "Red"
+    ranges:
+      - { min: 0, max: 255, description: "Red intensity 0–100%" }
+
+  - channel: 5
+    function: "Green"
+    ranges:
+      - { min: 0, max: 255, description: "Green intensity 0–100%" }
+
+  - channel: 6
+    function: "Blue"
+    ranges:
+      - { min: 0, max: 255, description: "Blue intensity 0–100%" }
+
+  - channel: 7
+    function: "Amber"
+    ranges:
+      - { min: 0, max: 255, description: "Amber intensity 0–100%" }
+
+  - channel: 8
+    function: "White"
+    ranges:
+      - { min: 0, max: 255, description: "White intensity 0–100%" }
+
+  - channel: 9
+    function: "RGB Effect Channel"
+    ranges:
+      - { min: 0,   max: 2,   description: "No function" }
+      - { min: 3,   max: 5,   description: "Pattern 1 (CH4~6 can control the color)" }
+      - { min: 6,   max: 8,   description: "Pattern 2 (CH4~6 can control the color)" }
+      - { min: 108, max: 110, description: "Pattern 36 (CH4~6 can control the color)" }
+      - { min: 111, max: 113, description: "Pattern 37 (built-in pattern color)" }
+      - { min: 114, max: 116, description: "Pattern 38 (built-in pattern color)" }
+      - { min: 204, max: 206, description: "Pattern 68 (built-in pattern color)" }
+      - { min: 207, max: 209, description: "Auto running 1~68 effects" }
+      - { min: 210, max: 212, description: "Sound 1 (CH4~6 can control the color)" }
+      - { min: 213, max: 215, description: "Sound 2 (CH4~6 can control the color)" }
+      - { min: 216, max: 255, description: "Sound 3 (CH4~6 can control the color)" }
+
+  - channel: 10
+    function: "RGB Speed"
+    ranges:
+      - { min: 0, max: 255, description: "Effect speed — slow → fast" }
+
+  - channel: 11
+    function: "Effect Background Color Selection"
+    ranges:
+      - { min: 0, max: 255, description: "See RGB Background Color table in manual" }
+
+  - channel: 12
+    function: "ACW Effect Channel"
+    ranges:
+      - { min: 0,   max: 5,   description: "No function" }
+      - { min: 6,   max: 11,  description: "Pattern 1 (CH7~8 can control the color)" }
+      - { min: 12,  max: 17,  description: "Pattern 2 (CH7~8 can control the color)" }
+      - { min: 216, max: 221, description: "Pattern 36 (CH7~8 can control the color)" }
+      - { min: 222, max: 225, description: "Auto running 1~36 effect" }
+
+  - channel: 13
+    function: "ACW Speed"
+    ranges:
+      - { min: 0, max: 255, description: "Effect speed — slow → fast" }

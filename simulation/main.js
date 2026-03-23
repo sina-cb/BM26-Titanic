@@ -1173,7 +1173,106 @@ function setupGUI() {
         showSaveToast();
       })
       .catch((err) => console.error("Failed to write config:", err));
+
+    // Also export the pixel model for Pixelblaze patterns
+    saveModelJS();
   }
+
+  function saveModelJS() {
+    const pixels = [];
+
+    // Par lights → one pixel each
+    if (params.parLights) {
+      params.parLights.forEach((light, i) => {
+        pixels.push({
+          type: 'par',
+          name: light.name || `Par ${i + 1}`,
+          group: light.group || '',
+          x: +(light.x || 0),
+          y: +(light.y || 0),
+          z: +(light.z || 0),
+        });
+      });
+    }
+
+    // LED strands → one pixel per LED
+    if (params.ledStrands) {
+      params.ledStrands.forEach((strand) => {
+        const count = strand.ledCount || 10;
+        const sx = +(strand.startX || 0), sy = +(strand.startY || 0), sz = +(strand.startZ || 0);
+        const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
+        for (let j = 0; j < count; j++) {
+          const t = count > 1 ? j / (count - 1) : 0.5;
+          pixels.push({
+            type: 'led',
+            name: strand.name || 'Strand',
+            group: strand.name || '',
+            x: +(sx + (ex - sx) * t).toFixed(3),
+            y: +(sy + (ey - sy) * t).toFixed(3),
+            z: +(sz + (ez - sz) * t).toFixed(3),
+          });
+        }
+      });
+    }
+
+    // Iceberg LEDs
+    if (params.icebergs) {
+      params.icebergs.forEach((berg) => {
+        pixels.push({
+          type: 'iceberg',
+          name: berg.name || 'Iceberg',
+          group: berg.name || '',
+          x: +(berg.x || 0),
+          y: +(berg.y || 0),
+          z: +(berg.z || 0),
+        });
+      });
+    }
+
+    // Compute bounding box for normalization
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    pixels.forEach(p => {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    });
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const rangeZ = maxZ - minZ || 1;
+
+    // Build JS source
+    const lines = [
+      '// Auto-generated Pixelblaze model — do not edit manually',
+      '// Updated: ' + new Date().toISOString(),
+      '//',
+      '// Each pixel has: index, type, name, group, world coords (x,y,z),',
+      '// and normalized coords (nx,ny,nz) in [0..1]',
+      '',
+      'export const pixelCount = ' + pixels.length + ';',
+      '',
+      'export const pixels = [',
+    ];
+
+    pixels.forEach((p, i) => {
+      const nx = +((p.x - minX) / rangeX).toFixed(4);
+      const ny = +((p.y - minY) / rangeY).toFixed(4);
+      const nz = +((p.z - minZ) / rangeZ).toFixed(4);
+      lines.push(`  { i: ${i}, type: '${p.type}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${nx}, ny: ${ny}, nz: ${nz} },`);
+    });
+
+    lines.push('];');
+    lines.push('');
+
+    const modelJS = lines.join('\n');
+    fetch('http://localhost:8181/save-model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: modelJS,
+    }).catch(err => console.warn('[PB] Failed to save model:', err));
+  }
+  window.saveModelJS = saveModelJS;
 
   function showSaveToast() {
     let toast = document.getElementById('save-toast');
@@ -3745,14 +3844,27 @@ function setupPatternEditor() {
 
   // Collapse / expand
   let isCollapsed = false;
+  let _savedHeight = '';
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     isCollapsed = !isCollapsed;
+    if (isCollapsed) {
+      _savedHeight = panel.style.height;
+      panel.style.height = '';
+    } else if (_savedHeight) {
+      panel.style.height = _savedHeight;
+    }
     panel.classList.toggle('collapsed', isCollapsed);
     collapseBtn.textContent = isCollapsed ? '□' : '─';
   });
   header.addEventListener('dblclick', () => {
     isCollapsed = !isCollapsed;
+    if (isCollapsed) {
+      _savedHeight = panel.style.height;
+      panel.style.height = '';
+    } else if (_savedHeight) {
+      panel.style.height = _savedHeight;
+    }
     panel.classList.toggle('collapsed', isCollapsed);
     collapseBtn.textContent = isCollapsed ? '□' : '─';
   });
@@ -3940,6 +4052,9 @@ Promise.all([
   }
 
   init();
+
+  // Generate initial model file for Pixelblaze patterns
+  if (window.saveModelJS) window.saveModelJS();
 
   // Restore camera view from saved state
   if (configTree._camera) {
