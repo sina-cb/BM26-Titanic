@@ -6,6 +6,7 @@ const IDLE_COLORS = {
   rgb: '#333333',
   rgbw: '#333333',
   rgbwau: '#333333',
+  rgbwav: '#333333',
   single: '#444444', 
   warm: '#4a3b10'
 };
@@ -22,32 +23,32 @@ export function getDotColor(pixel, testPattern) {
   // Visual stub for DMX test patterns
   switch (testPattern) {
     case 'red':
-      if (['rgb', 'rgbw', 'rgbwau'].includes(pixel.type)) return '#ff0000';
+      if (['rgb', 'rgbw', 'rgbwau', 'rgbwav'].includes(pixel.type)) return '#ff0000';
       break;
     case 'green':
-      if (['rgb', 'rgbw', 'rgbwau'].includes(pixel.type)) return '#00ff00';
+      if (['rgb', 'rgbw', 'rgbwau', 'rgbwav'].includes(pixel.type)) return '#00ff00';
       break;
     case 'blue':
-      if (['rgb', 'rgbw', 'rgbwau'].includes(pixel.type)) return '#0000ff';
+      if (['rgb', 'rgbw', 'rgbwau', 'rgbwav'].includes(pixel.type)) return '#0000ff';
       break;
     case 'white':
       if (pixel.type === 'warm') return '#ffd700'; // Warm white
       if (pixel.color_hint === '#FFFFFF') return '#ffffff';
-      if (['rgbw', 'rgbwau'].includes(pixel.type)) return '#ffffff';
+      if (['rgbw', 'rgbwau', 'rgbwav'].includes(pixel.type)) return '#ffffff';
       break;
     case 'amber':
       if (pixel.type === 'warm') return '#ffbf00';
       if (pixel.color_hint === '#FFBF00') return '#ffbf00';
-      if (pixel.type === 'rgbwau') return '#ffbf00';
+      if (['rgbwau', 'rgbwav'].includes(pixel.type)) return '#ffbf00';
       break;
-    case 'purple':
-      if (pixel.type === 'rgbwau') return '#800080';
-      if (pixel.type === 'rgb') return '#800080'; // approximation
+    case 'violet':
+      if (['rgbwau', 'rgbwav'].includes(pixel.type)) return '#8a2be2'; // violet/purple
+      if (pixel.type === 'rgb') return '#8a2be2'; // approximation
       break;
     case 'all_on':
       if (pixel.type === 'warm') return '#ffd700';
       if (pixel.type === 'single') return pixel.color_hint || '#ffffff';
-      if (pixel.type === 'rgbwau') return '#fff8f0'; // mixed slightly warm
+      if (['rgbwau', 'rgbwav'].includes(pixel.type)) return '#fff8f0'; // mixed slightly warm
       return '#ffffff';
     case 'blackout':
       return '#000000';

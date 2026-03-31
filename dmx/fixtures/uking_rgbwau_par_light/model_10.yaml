@@ -65,5 +65,9 @@ model:
   controls:
     - { channel: 1, function: "Total Dimmer", range: "0=dark, 255=max" }
     - { channel: 8, function: "Total Strobe", range: "0=off, 1-255=slow→fast" }
-    - { channel: 9, function: "Function Select", range: "0-50=manual, 51-100=color, 101-150=jump, 151-200=fade, 201-250=pulse, 251-255=sound" }
+    - {
+        channel: 9,
+        function: "Function Select",
+        range: "0-50=manual, 51-100=color, 101-150=jump, 151-200=fade, 201-250=pulse, 251-255=sound",
+      }
     - { channel: 10, function: "Function Speed", range: "0=slow, 255=fast" }

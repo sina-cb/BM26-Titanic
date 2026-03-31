@@ -1,0 +1,65 @@
+fixture:
+  name: "SHEHDS 18x18W RGBWAV LED Bar"
+  mode: "12-channel"
+  mode_id: "12ch"
+  total_channels: 12
+
+channels:
+  - channel: 1
+    function: "Dimmer"
+    description: "Master dimmer — 0=off, 255=full"
+  - channel: 2
+    function: "Strobe"
+    description: "Strobe speed — 0=off, 1-255=slow→fast"
+  - channel: 3
+    function: "Auto mode"
+    description: "Auto mode / effect selection"
+    ranges:
+      - { min: 0,   max: 1,   description: "No function" }
+      - { min: 2,   max: 15,  description: "Auto mode 1" }
+      - { min: 16,  max: 30,  description: "Auto mode 2" }
+      - { min: 31,  max: 45,  description: "Auto mode 3" }
+      - { min: 46,  max: 60,  description: "Auto mode 4" }
+      - { min: 61,  max: 75,  description: "Auto mode 5" }
+      - { min: 76,  max: 90,  description: "Auto mode 6" }
+      - { min: 91,  max: 105, description: "Auto mode 7" }
+      - { min: 106, max: 120, description: "Auto mode 8" }
+      - { min: 121, max: 135, description: "Auto mode 9" }
+      - { min: 136, max: 150, description: "Auto mode 10" }
+      - { min: 151, max: 165, description: "Auto mode 11" }
+      - { min: 166, max: 180, description: "Auto mode 12" }
+      - { min: 181, max: 195, description: "Auto mode 13" }
+      - { min: 196, max: 210, description: "Auto mode 14" }
+      - { min: 211, max: 225, description: "Auto mode 15" }
+      - { min: 226, max: 240, description: "Color mode" }
+      - { min: 241, max: 255, description: "Sound mode" }
+  - channel: 4
+    function: "Auto speed"
+    description: "Auto mode speed — 0=slow, 255=fast"
+  - channel: 5
+    function: "8/16bit"
+    description: "Bit mode selection"
+    ranges:
+      - { min: 0,   max: 128, description: "When auto enabled: 8BT. When auto closed: 16BT" }
+      - { min: 129, max: 255, description: "When auto enabled: 16BT. When auto closed: 8BT" }
+  - channel: 6
+    function: "Red"
+    description: "Red intensity — 0=off, 255=full"
+  - channel: 7
+    function: "Green"
+    description: "Green intensity — 0=off, 255=full"
+  - channel: 8
+    function: "Blue"
+    description: "Blue intensity — 0=off, 255=full"
+  - channel: 9
+    function: "White"
+    description: "White intensity — 0=off, 255=full"
+  - channel: 10
+    function: "Amber"
+    description: "Amber intensity — 0=off, 255=full"
+  - channel: 11
+    function: "Violet"
+    description: "Violet intensity — 0=off, 255=full"
+  - channel: 12
+    function: "Back color"
+    description: "Back color mode — 0-255"

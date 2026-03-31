@@ -12,7 +12,7 @@ const { DmxHandler }    = require('./lib/DmxHandler');
 const { DmxUniverse }   = require('./lib/DmxUniverse');
 const { DmxFixture }    = require('./lib/DmxFixture');
 const { DmxRenderLoop } = require('./lib/DmxRenderLoop');
-const { EndyshowBar }   = require('./lib/fixtures/EndyshowBar');
+const { ShehdsBar }     = require('./lib/fixtures/ShehdsBar');
 const { UkingPar }      = require('./lib/fixtures/UkingPar');
 const { VintageLed }    = require('./lib/fixtures/VintageLed');
 
@@ -21,7 +21,7 @@ module.exports = {
     DmxUniverse,
     DmxFixture,
     DmxRenderLoop,
-    EndyshowBar,
+    ShehdsBar,
     UkingPar,
     VintageLed,
 };

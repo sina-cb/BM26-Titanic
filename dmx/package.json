@@ -4,9 +4,13 @@
   "description": "BM26 Titanic — DMX universe/fixture handler and Art-Net output layer",
   "main": "index.js",
   "scripts": {
+    "router": "node smart_router/sacn_smart_router.js",
+    "router:debug": "set DEBUG_PAYLOAD=true&& node smart_router/sacn_smart_router.js",
+    "testbench": "node test/testbench_helloworld.js --hold 3 --fade 1",
     "test": "node -e \"const { DmxHandler } = require('.'); const h = new DmxHandler(); h.load(); const u = h.universe('main'); const f = u.fixture('bar_1'); f.setPixel(1, 255, 128, 0); const ok = u.buffer[0] === 255 && u.buffer[1] === 128 && u.buffer[2] === 0; console.log(ok ? 'PASS' : 'FAIL', 'buffer:', u.buffer[0], u.buffer[1], u.buffer[2]);\""
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "sacn": "^4.6.2"
   }
 }

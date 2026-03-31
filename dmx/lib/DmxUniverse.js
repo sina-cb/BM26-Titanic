@@ -1,16 +1,21 @@
 'use strict';
 /**
- * DmxUniverse — One Art-Net output universe (512 channels).
+ * DmxUniverse — One sACN (E1.31) output universe (512 channels).
  *
- * Owns a 512-byte DMX buffer and an ArtNetSender pointed at one
- * controller IP/universe/subnet/net.  Fixtures are placed into the
- * universe via addFixture(); the universe assigns them their buffer
- * offset and they write directly into this shared buffer.
+ * Owns a 512-byte DMX buffer. Fixtures are placed into the universe
+ * via addFixture(); the universe assigns them their buffer offset and
+ * they write directly into this shared buffer.
  *
- * Call send() to flush the full buffer as one Art-Net UDP packet.
+ * Call send() to flush the full buffer as one sACN (E1.31) UDP packet.
+ *
+ * sACN priority (0-200) enables hardware-level source arbitration:
+ * when another source (e.g. Chromatik at priority 150) sends to the
+ * same universe, the PKnight node automatically follows the higher-
+ * priority source.  When that source stops, the node falls back to
+ * the lower-priority stream (this server at priority 100).
  */
 
-const { ArtNetSender } = require('./artnet');
+const { Sender } = require('sacn');
 
 class DmxUniverse {
     /**
@@ -18,11 +23,10 @@ class DmxUniverse {
      * @param {string} cfg.id
      * @param {string} cfg.name
      * @param {object} cfg.controller
-     * @param {string} cfg.controller.ip
-     * @param {number} [cfg.controller.port]
-     * @param {number} [cfg.controller.universe]
-     * @param {number} [cfg.controller.subnet]
-     * @param {number} [cfg.controller.net]
+     * @param {string} cfg.controller.ip           - Unicast destination IP
+     * @param {number} [cfg.controller.universe]    - sACN universe (1-63999, 1-indexed)
+     * @param {number} [cfg.controller.priority]    - sACN priority (0-200, default 100)
+     * @param {string} [cfg.controller.sourceName]  - sACN source name
      */
     constructor(cfg) {
         this.id   = cfg.id;
@@ -34,13 +38,23 @@ class DmxUniverse {
         // Fixture map: label → fixture instance
         this._fixtures = new Map();
 
-        // ArtNet sender (initialized in init())
+        // sACN configuration
         const c = cfg.controller;
-        this._sender = new ArtNetSender({
-            host:     c.ip,
-            universe: c.universe  || 0,
-            subnet:   c.subnet    || 0,
-            net:      c.net       || 0,
+        this._sacnUniverse  = c.universe || 1;
+        this._sacnPriority  = c.priority != null ? c.priority : 100;
+        this._sacnSourceName = c.sourceName || 'BM26-Titanic';
+        this._unicastIp      = c.ip;
+
+        // sACN sender (created in constructor, ready to send immediately)
+        this._sender = new Sender({
+            universe:              this._sacnUniverse,
+            reuseAddr:             true,
+            defaultPacketOptions: {
+                sourceName:     this._sacnSourceName,
+                priority:       this._sacnPriority,
+                useRawDmxValues: true,
+            },
+            ...(this._unicastIp ? { useUnicastDestination: this._unicastIp } : {}),
         });
     }
 
@@ -87,13 +101,21 @@ class DmxUniverse {
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
-    /** Open the UDP socket for this universe. */
+    /**
+     * Initialize the sACN sender.
+     * The sacn Sender is ready immediately after construction, but
+     * this method exists for API compatibility with the rest of the system.
+     */
     async init() {
-        await this._sender.init();
-        console.log(`[DmxUniverse:${this.id}] Ready — ${this._fixtures.size} fixture(s)`);
+        console.log(
+            `[DmxUniverse:${this.id}] sACN ready — universe ${this._sacnUniverse}, ` +
+            `priority ${this._sacnPriority}, ` +
+            `target ${this._unicastIp || 'multicast'}, ` +
+            `${this._fixtures.size} fixture(s)`
+        );
     }
 
-    /** Close the UDP socket. */
+    /** Close the sACN sender socket. */
     close() {
         this._sender.close();
         console.log(`[DmxUniverse:${this.id}] Closed`);
@@ -101,9 +123,28 @@ class DmxUniverse {
 
     // ── Output ─────────────────────────────────────────────────────────────
 
-    /** Flush the full 512-byte buffer to the Art-Net node. */
+    /**
+     * Convert the 512-byte buffer to the sacn payload format.
+     * Returns { 1: val, 2: val, ..., 512: val } with raw DMX values.
+     * @returns {object}
+     */
+    _bufferToPayload() {
+        const payload = {};
+        for (let i = 0; i < 512; i++) {
+            payload[i + 1] = this.buffer[i];
+        }
+        return payload;
+    }
+
+    /** Flush the full 512-byte buffer to the sACN network. */
     send() {
-        this._sender.send(this.buffer);
+        this._sender.send({
+            payload: this._bufferToPayload(),
+            sourceName: this._sacnSourceName,
+            priority: this._sacnPriority
+        }).catch(err => {
+            console.error(`[DmxUniverse:${this.id}] sACN send error:`, err.message);
+        });
     }
 
     /** Set a universe-global channel (1-indexed) and send immediately. */

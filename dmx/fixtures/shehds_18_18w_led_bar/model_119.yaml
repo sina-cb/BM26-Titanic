@@ -1,0 +1,170 @@
+# SHEHDS 18x18W RGBWAV LED Bar — Pixel Model (119ch, hardware-verified)
+# Linear bar with 18 individually addressable RGBWAV pixels.
+# Physical dimensions estimated from product listings (~1000mm × 90mm × 110mm).
+#
+# ⚠ Channel layout differs from manual. See channels_120.yaml for details.
+#   Pixels start at CH12 (not CH13). Total 119 channels.
+
+model:
+  id: "shehds_bar_119"
+  name: "SHEHDS 18x18W LED Bar (119ch)"
+  fixture_type: "ShehdsBar"
+  channel_mode: 119
+
+  dimensions:
+    width: 1000
+    height: 90
+    depth: 110
+
+  shell:
+    type: "box"
+    dimensions: [1000, 90, 110]
+    color: "#1a1a1a"
+    offset: [0, 0, -55]
+
+  pixels:
+    # 18 RGBWAV pixels in a linear row
+    # Pixel channels start at CH12 (after 11 master channels)
+    # Each pixel: 6ch (R, G, B, W, Amber, Violet)
+    - id: "pixel_1"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 12, green: 13, blue: 14, white: 15, amber: 16, violet: 17 }
+      dots: [[-472, 0, 0]]
+
+    - id: "pixel_2"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 18, green: 19, blue: 20, white: 21, amber: 22, violet: 23 }
+      dots: [[-416, 0, 0]]
+
+    - id: "pixel_3"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 24, green: 25, blue: 26, white: 27, amber: 28, violet: 29 }
+      dots: [[-361, 0, 0]]
+
+    - id: "pixel_4"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 30, green: 31, blue: 32, white: 33, amber: 34, violet: 35 }
+      dots: [[-305, 0, 0]]
+
+    - id: "pixel_5"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 36, green: 37, blue: 38, white: 39, amber: 40, violet: 41 }
+      dots: [[-250, 0, 0]]
+
+    - id: "pixel_6"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 42, green: 43, blue: 44, white: 45, amber: 46, violet: 47 }
+      dots: [[-194, 0, 0]]
+
+    - id: "pixel_7"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 48, green: 49, blue: 50, white: 51, amber: 52, violet: 53 }
+      dots: [[-139, 0, 0]]
+
+    - id: "pixel_8"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 54, green: 55, blue: 56, white: 57, amber: 58, violet: 59 }
+      dots: [[-83, 0, 0]]
+
+    - id: "pixel_9"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 60, green: 61, blue: 62, white: 63, amber: 64, violet: 65 }
+      dots: [[-28, 0, 0]]
+
+    - id: "pixel_10"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 66, green: 67, blue: 68, white: 69, amber: 70, violet: 71 }
+      dots: [[28, 0, 0]]
+
+    - id: "pixel_11"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 72, green: 73, blue: 74, white: 75, amber: 76, violet: 77 }
+      dots: [[83, 0, 0]]
+
+    - id: "pixel_12"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 78, green: 79, blue: 80, white: 81, amber: 82, violet: 83 }
+      dots: [[139, 0, 0]]
+
+    - id: "pixel_13"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 84, green: 85, blue: 86, white: 87, amber: 88, violet: 89 }
+      dots: [[194, 0, 0]]
+
+    - id: "pixel_14"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 90, green: 91, blue: 92, white: 93, amber: 94, violet: 95 }
+      dots: [[250, 0, 0]]
+
+    - id: "pixel_15"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 96, green: 97, blue: 98, white: 99, amber: 100, violet: 101 }
+      dots: [[305, 0, 0]]
+
+    - id: "pixel_16"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 102, green: 103, blue: 104, white: 105, amber: 106, violet: 107 }
+      dots: [[361, 0, 0]]
+
+    - id: "pixel_17"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 108, green: 109, blue: 110, white: 111, amber: 112, violet: 113 }
+      dots: [[416, 0, 0]]
+
+    - id: "pixel_18"
+      type: "rgbwav"
+      size: 14
+      channels:
+        { red: 114, green: 115, blue: 116, white: 117, amber: 118, violet: 119 }
+      dots: [[472, 0, 0]]
+
+  controls:
+    - { channel: 1, function: "Master Dimmer", range: "0=off, 255=full" }
+    - { channel: 2, function: "Strobe", range: "0=off, 1-255=slow→fast" }
+    - {
+        channel: 3,
+        function: "Function",
+        range: "Auto mode / effect selection",
+      }
+    - { channel: 4, function: "Speed", range: "0=slow, 255=fast" }
+    - { channel: 5, function: "BG Color", range: "Background color select" }
+    - { channel: 6, function: "Dim-Red", range: "0=off, 255=full" }
+    - { channel: 7, function: "Dim-Green", range: "0=off, 255=full" }
+    - { channel: 8, function: "Dim-Blue", range: "0=off, 255=full" }
+    - { channel: 9, function: "Dim-White", range: "0=off, 255=full" }
+    - { channel: 10, function: "Dim-Amber", range: "0=off, 255=full" }
+    - { channel: 11, function: "Dim-Violet", range: "0=off, 255=full" }

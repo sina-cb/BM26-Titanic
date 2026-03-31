@@ -4,7 +4,7 @@
  *
  * Loads universes.yaml, instantiates DmxUniverse objects, and places
  * the correct fixture subclass into each universe.  Manages the lifecycle
- * (init/close) of all Art-Net sockets.
+ * (init/close) of all sACN (E1.31) sockets.
  *
  * This is the single object a rendering engine needs:
  *
@@ -19,17 +19,18 @@ const path = require('path');
 const yaml = require('js-yaml');
 
 const { DmxUniverse }  = require('./DmxUniverse');
-const { EndyshowBar }  = require('./fixtures/EndyshowBar');
+
 const { UkingPar }     = require('./fixtures/UkingPar');
 const { VintageLed }   = require('./fixtures/VintageLed');
+const { ShehdsBar }    = require('./fixtures/ShehdsBar');
 
 // ── Fixture factory ────────────────────────────────────────────────────────
 // Maps fixture type name (as written in universes.yaml) → implementation class.
 // Add new entries here when new fixture subclasses are introduced.
 const FIXTURE_REGISTRY = {
-    'EndyshowBar': EndyshowBar,
     'UkingPar':    UkingPar,
     'VintageLed':  VintageLed,
+    'ShehdsBar':   ShehdsBar,
 };
 
 /**

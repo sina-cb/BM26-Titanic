@@ -7,7 +7,7 @@ const PATTERNS = [
   { id: 'blue', label: 'Static Blue', bg: '#4040ff' },
   { id: 'white', label: 'Static White', bg: '#ffffff', text: '#000' },
   { id: 'amber', label: 'Static Amber', bg: '#ffb000', text: '#000' },
-  { id: 'purple', label: 'Static Purple', bg: '#a020f0' },
+  { id: 'violet', label: 'Static Violet / UV', bg: '#8a2be2' },
   { id: 'all_on', label: 'All On', bg: '#dddddd', text: '#000' },
 ];
 

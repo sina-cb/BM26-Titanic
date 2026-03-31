@@ -93,9 +93,9 @@ async function main() {
     await handler.init();
 
     const bench    = handler.universe('test_bench');
-    const wash     = bench.fixture('wash_1');   // EndyshowBar — 32 RGB pixels + 16 amber + 16 white
     const pars     = ['par_1', 'par_2', 'par_3', 'par_4'].map(l => bench.fixture(l));
     const vintages = ['vintage_1', 'vintage_2'].map(l => bench.fixture(l));
+    const bars     = ['shehds_bar_1', 'shehds_bar_2'].map(l => bench.fixture(l));
 
     const ctrlIP = bench._sender ? bench._sender.host : '?';
 
@@ -103,18 +103,12 @@ async function main() {
     console.log('  🎨  TESTBENCH HELLO WORLD — Color Sequence');
     console.log('─'.repeat(56));
     console.log('  Universe : test_bench @ ' + ctrlIP);
-    console.log('  Fixtures : wash_1 (32px) + par_1–par_4 + vintage_1–vintage_2');
+    console.log('  Fixtures : par_1–par_4 + vintage_1–vintage_2 + shehds_bar_1–2 (18px)');
     console.log('  FPS      : ' + FPS);
     console.log('  Sequence : ' + COLORS.map(c => c.name).join(' → '));
     console.log('  Hold     : ' + HOLD_SEC + 's  |  Fade: ' + FADE_SEC + 's');
     console.log('  Ctrl+C to stop');
     console.log('═'.repeat(56) + '\n');
-
-    // Ensure wash strobes/effects are off
-    if (typeof wash.setRgbStrobe === 'function') wash.setRgbStrobe(0);
-    if (typeof wash.setAcwStrobe === 'function') wash.setAcwStrobe(0);
-    if (typeof wash.setRgbEffect === 'function') wash.setRgbEffect(0);
-    if (typeof wash.setAcwEffect === 'function') wash.setAcwEffect(0);
 
     const loop = new DmxRenderLoop(handler);
     let lastLabel = '';
@@ -122,11 +116,12 @@ async function main() {
     loop.start(FPS, ({ elapsed }) => {
         const c = getColor(elapsed);
 
-        // ── Wash (EndyshowBar): RGB pixels + amber/white segments ────────
-        // The wash bar has NO purple — during purple phase, RGB/amber/white all go to 0
-        wash.fillPixels(c.r, c.g, c.b);
-        wash.fillAmber(c.a);
-        wash.fillWhite(c.w);
+        // ── SHEHDS Bars: 18 RGBWAV pixels + master dimmer ────────────────
+        for (const bar of bars) {
+            bar.setDimmer(255);
+            bar.setStrobe(0);
+            bar.fillPixels(c.r, c.g, c.b, c.w, c.a, c.p);
+        }
 
         // ── Pars (UkingPar): full RGBWAP ─────────────────────────────────
         for (const par of pars) {
