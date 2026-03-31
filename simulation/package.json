@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "prestart": "powershell -Command \"Get-NetTCPConnection -LocalPort 8080,8181 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; exit 0\"",
+    "prestart": "npx -y kill-port 8080 8181 2>/dev/null || true",
     "start": "concurrently \"npx http-server ../ -p 8080 -c-1 --cors\" \"node save-server.js\""
   },
   "dependencies": {
