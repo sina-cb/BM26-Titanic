@@ -72,24 +72,26 @@ function deriveWhite(r, g, b) {
 /**
  * @param {boolean} driveAcw  If true, derive amber/white from RGB. If false, zero them (calibration).
  */
-function fillAll(wash, pars, vintages, r, g, b, driveAcw = false) {
-    const PIXELS = wash._rgbPixels;
+function fillAll(wash, pars, vintages, shehdsBars, r, g, b, driveAcw = false) {
+    if (wash) {
+        const PIXELS = wash._rgbPixels;
 
-    // Defeat any built-in strobe/effect modes on the wash
-    if (typeof wash.setRgbStrobe === 'function') wash.setRgbStrobe(0);
-    if (typeof wash.setAcwStrobe === 'function') wash.setAcwStrobe(0);
-    if (typeof wash.setRgbEffect === 'function') wash.setRgbEffect(0);
-    if (typeof wash.setAcwEffect === 'function') wash.setAcwEffect(0);
+        // Defeat any built-in strobe/effect modes on the wash
+        if (typeof wash.setRgbStrobe === 'function') wash.setRgbStrobe(0);
+        if (typeof wash.setAcwStrobe === 'function') wash.setAcwStrobe(0);
+        if (typeof wash.setRgbEffect === 'function') wash.setRgbEffect(0);
+        if (typeof wash.setAcwEffect === 'function') wash.setAcwEffect(0);
 
-    for (let px = 1; px <= PIXELS; px++) {
-        wash.setPixel(px, r, g, b);
-    }
-    // Amber + white segments — zero during static calibration so pure hue shows cleanly
-    for (let seg = 1; seg <= wash._amberPixels; seg++) {
-        wash.setChannel(wash._amberStart + seg - 1, driveAcw ? deriveAmber(r, g, b) : 0);
-    }
-    for (let seg = 1; seg <= wash._whitePixels; seg++) {
-        wash.setChannel(wash._whiteStart + seg - 1, driveAcw ? deriveWhite(r, g, b) : 0);
+        for (let px = 1; px <= PIXELS; px++) {
+            wash.setPixel(px, r, g, b);
+        }
+        // Amber + white segments — zero during static calibration so pure hue shows cleanly
+        for (let seg = 1; seg <= wash._amberPixels; seg++) {
+            wash.setChannel(wash._amberStart + seg - 1, driveAcw ? deriveAmber(r, g, b) : 0);
+        }
+        for (let seg = 1; seg <= wash._whitePixels; seg++) {
+            wash.setChannel(wash._whiteStart + seg - 1, driveAcw ? deriveWhite(r, g, b) : 0);
+        }
     }
 
     for (const par of pars) {
@@ -115,6 +117,12 @@ function fillAll(wash, pars, vintages, r, g, b, driveAcw = false) {
         v.setAuxEffect(0);
         v.fillHeadAuxRgb(r, g, b);
     }
+
+    for (const sb of shehdsBars) {
+        sb.setDimmer(255);
+        sb.setStrobe(0);
+        sb.fillPixels(r, g, b, driveAcw ? deriveWhite(r, g, b) : 0, driveAcw ? deriveAmber(r, g, b) : 0, 0); // violet=0
+    }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -123,9 +131,10 @@ async function main() {
     await handler.init();
 
     const bench    = handler.universe('test_bench');
-    const wash     = bench.fixture('wash_1');
-    const pars     = ['par_1', 'par_2', 'par_3', 'par_4'].map(l => bench.fixture(l));
-    const vintages = ['vintage_1', 'vintage_2'].map(l => bench.fixture(l));
+    const wash     = bench.fixtures.has('wash_1') ? bench.fixture('wash_1') : null;
+    const pars     = ['par_1', 'par_2', 'par_3', 'par_4'].filter(l => bench.fixtures.has(l)).map(l => bench.fixture(l));
+    const vintages = ['vintage_1', 'vintage_2'].filter(l => bench.fixtures.has(l)).map(l => bench.fixture(l));
+    const shehdsBars = ['shehds_bar_1', 'shehds_bar_2'].filter(l => bench.fixtures.has(l)).map(l => bench.fixture(l));
 
     const modeLabel = RED_STATIC   ? 'RED static'
                     : GREEN_STATIC ? 'GREEN static'
@@ -138,7 +147,7 @@ async function main() {
     console.log('─'.repeat(56));
     console.log(`  Mode     : ${modeLabel}`);
     console.log(`  Universe : test_bench @ ${bench._sender ? bench._sender.host : '?'}`);
-    console.log(`  Fixtures : wash_1 (32px) + par_1–par_4 + vintage_1–vintage_2`);
+    console.log(`  Fixtures : \${wash ? 'wash_1 (32px) + ' : ''}par_1–par_4 + vintage_1–vintage_2 + shehds_bar_1-shehds_bar_2`);
     console.log('  Ctrl+C to stop');
     console.log('═'.repeat(56) + '\n');
 
@@ -150,9 +159,9 @@ async function main() {
                         :                [0,   0,   0  ];   // WHITE_STATIC: 0 RGB, white/amber driven
 
         if (WHITE_STATIC) {
-            fillAll(wash, pars, vintages, 255, 255, 255);
+            fillAll(wash, pars, vintages, shehdsBars, 255, 255, 255);
         } else {
-            fillAll(wash, pars, vintages, r, g, b);
+            fillAll(wash, pars, vintages, shehdsBars, r, g, b);
         }
 
         bench.send();
@@ -169,16 +178,18 @@ async function main() {
             const baseHue = (elapsed * SPEED) % 1;
 
             // Wash: rainbow sweep across RGB pixels
-            const PIXELS = wash._rgbPixels;
-            for (let px = 1; px <= PIXELS; px++) {
-                const { r, g, b } = hsv((baseHue + (px - 1) / PIXELS) % 1, 1, 1);
-                wash.setPixel(px, r, g, b);
-            }
-            // Amber/white from per-segment average hue
-            for (let seg = 1; seg <= wash._amberPixels; seg++) {
-                const { r, g, b } = hsv((baseHue + (seg - 1) / wash._amberPixels) % 1, 1, 1);
-                wash.setChannel(wash._amberStart + seg - 1, deriveAmber(r, g, b));
-                wash.setChannel(wash._whiteStart + seg - 1, deriveWhite(r, g, b));
+            if (wash) {
+                const PIXELS = wash._rgbPixels;
+                for (let px = 1; px <= PIXELS; px++) {
+                    const { r, g, b } = hsv((baseHue + (px - 1) / PIXELS) % 1, 1, 1);
+                    wash.setPixel(px, r, g, b);
+                }
+                // Amber/white from per-segment average hue
+                for (let seg = 1; seg <= wash._amberPixels; seg++) {
+                    const { r, g, b } = hsv((baseHue + (seg - 1) / wash._amberPixels) % 1, 1, 1);
+                    wash.setChannel(wash._amberStart + seg - 1, deriveAmber(r, g, b));
+                    wash.setChannel(wash._whiteStart + seg - 1, deriveWhite(r, g, b));
+                }
             }
 
             // Pars: evenly spaced hues, dimmer open
@@ -202,6 +213,17 @@ async function main() {
                 vintages[i].setMainEffect(0);
                 vintages[i].setAuxEffect(0);
                 vintages[i].fillHeadAuxRgb(r, g, b);
+            }
+            
+            // Shehds Bars: rainbow sweep across 18 pixels
+            for (const sb of shehdsBars) {
+                sb.setDimmer(255);
+                sb.setStrobe(0);
+                const PIXELS = sb.pixelCount || 18;
+                for (let px = 1; px <= PIXELS; px++) {
+                    const { r, g, b } = hsv((baseHue + (px - 1) / PIXELS) % 1, 1, 1);
+                    sb.setPixel(px, r, g, b, deriveWhite(r, g, b), deriveAmber(r, g, b), 0);
+                }
             }
 
             bench.send();

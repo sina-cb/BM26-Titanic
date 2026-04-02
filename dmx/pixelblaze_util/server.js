@@ -31,46 +31,35 @@ const WASM_DIR       = path.join(__dirname, '..', '..', 'simulation', 'lib', 'ma
 const PATTERNS_DIR   = path.join(__dirname, '..', '..', 'simulation', 'pb');
 const PORT           = parseInt(process.env.PORT, 10) || 3000;
 
-// ── MarsinEngine (loaded dynamically because it's an Emscripten CJS module) ─
-let MarsinEngineModule = null;
+// ── MarsinEngine (ES Module wrapper) ───────────────────────────────────────
+let engine = null;
 let engineReady = false;
-
-// Internal engine state
-let engineHandle = 0;
-let compileFn, beginFrameFn, renderPixelFn, destroyVmFn, getErrorFn;
 
 async function initEngine() {
   try {
-    const factoryPath = path.join(WASM_DIR, 'marsin-engine.js');
-    if (!fs.existsSync(factoryPath)) {
-      console.error(`[Engine] WASM not found at ${factoryPath}`);
-      return;
+    // Dynamically import the ES module wrapper from the simulation folder
+    const simModule = await import('../../simulation/MarsinEngine.js');
+    engine = new simModule.MarsinEngine();
+    
+    await engine.init(WASM_DIR);
+    engineReady = engine.ready;
+    
+    if (engineReady) {
+      console.log('[Engine] MarsinEngine WASM loaded successfully via Wrapper');
+    } else {
+      console.error('[Engine] MarsinEngine failed to become ready');
     }
-    const factory = require(factoryPath);
-    MarsinEngineModule = await factory({
-      locateFile: (f) => f.endsWith('.wasm') ? path.join(WASM_DIR, 'marsin-engine.wasm') : f,
-    });
-
-    compileFn     = MarsinEngineModule.cwrap('marsin_compile',       'number', ['string']);
-    beginFrameFn  = MarsinEngineModule.cwrap('marsin_begin_frame',   null,     ['number', 'number']);
-    renderPixelFn = MarsinEngineModule.cwrap('marsin_render_pixel',  'number', ['number', 'number', 'number', 'number', 'number']);
-    destroyVmFn   = MarsinEngineModule.cwrap('marsin_destroy_vm',    null,     ['number']);
-    getErrorFn    = MarsinEngineModule.cwrap('marsin_get_error',     'string', []);
-
-    engineReady = true;
-    console.log('[Engine] MarsinEngine WASM loaded successfully');
   } catch (err) {
-    console.error('[Engine] Failed to load WASM:', err.message);
+    console.error('[Engine] Failed to load WASM Wrapper:', err.message);
   }
 }
 
 function compilePattern(code) {
-  if (!engineReady) return { ok: false, error: 'Engine not initialized' };
-  if (engineHandle) { destroyVmFn(engineHandle); engineHandle = 0; }
+  if (!engineReady || !engine) return { ok: false, error: 'Engine not initialized' };
 
-  engineHandle = compileFn(code);
-  if (engineHandle === 0) {
-    return { ok: false, error: getErrorFn() || 'Unknown compile error' };
+  const success = engine.compile(code);
+  if (!success) {
+    return { ok: false, error: engine.getError() || 'Unknown compile error' };
   }
   return { ok: true };
 }
@@ -93,23 +82,20 @@ let activeUniverseId = null;
  * Build a flat pixel list from all fixtures in a universe.
  * Each entry: { fixture, pixelIndex, fixtureType }
  * For EndyshowBar: maps to setPixel(n, r, g, b)
- * For UkingPar:    maps to setColor(r, g, b)
+ * For UkingPar:    maps to setColor(r, g, b, w, a, u)
  * For VintageLed:  maps to setAuxRgb(r, g, b) (global) + setHeadAuxRgb per head
  */
 function buildPixelMap(universe) {
   const pixels = [];
   for (const [label, fixture] of universe.fixtures) {
     const type = fixture.constructor.name;
-    if (type === 'EndyshowBar') {
-      // 32 individually addressable RGB pixels
-      for (let n = 1; n <= fixture._rgbPixels; n++) {
+    if (type === 'EndyshowBar' || type === 'ShehdsBar') {
+      for (let n = 1; n <= fixture.pixelCount; n++) {
         pixels.push({ fixture, type, pixelIndex: n });
       }
     } else if (type === 'UkingPar') {
-      // Single RGB pixel
       pixels.push({ fixture, type, pixelIndex: 1 });
     } else if (type === 'VintageLed') {
-      // 6 heads with per-head aux RGB (33ch mode) or 1 global aux RGB
       if (fixture._is33) {
         for (let h = 1; h <= 6; h++) {
           pixels.push({ fixture, type, pixelIndex: h });
@@ -132,16 +118,15 @@ function startRenderLoop(universeId) {
 
   console.log(`[Render] Starting loop on "${universeId}" — ${pixelCount} pixels`);
 
-  // Set fixtures to a clean state: dimmer max, strobe off, manual mode
   for (const [, fixture] of universe.fixtures) {
     const type = fixture.constructor.name;
     if (type === 'UkingPar') {
       fixture.setDimmer(255);
       fixture.setStrobe(0);
       fixture.setFunction(0);
-    } else if (type === 'EndyshowBar') {
-      fixture.setRgbStrobe(0);
-      fixture.setRgbEffect(0);
+    } else if (type === 'EndyshowBar' || type === 'ShehdsBar') {
+      fixture.setDimmer(255);
+      fixture.setStrobe(0);
     } else if (type === 'VintageLed') {
       fixture.setDimmer(255);
       fixture.setStrobe(0);
@@ -152,27 +137,26 @@ function startRenderLoop(universeId) {
 
   renderLoop = new DmxRenderLoop(dmxHandler);
   renderLoop.start(40, ({ elapsed }) => {
-    if (!engineHandle) return;
+    if (!engineReady || !engine) return;
 
-    beginFrameFn(engineHandle, elapsed);
+    engine.beginFrame(elapsed);
 
     for (let i = 0; i < pixelCount; i++) {
       const px   = pixelMap[i];
       const norm = pixelCount > 1 ? i / (pixelCount - 1) : 0;
-      const packed = renderPixelFn(engineHandle, i, norm, 0, 0);
-      const r = (packed >> 16) & 0xFF;
-      const g = (packed >> 8) & 0xFF;
-      const b = packed & 0xFF;
+      
+      const color = engine.renderPixel6ch(i, norm, 0, 0);
 
-      if (px.type === 'EndyshowBar') {
-        px.fixture.setPixel(px.pixelIndex, r, g, b);
+      if (px.type === 'EndyshowBar' || px.type === 'ShehdsBar') {
+        // SHEHDS utilizes standard RGB or falls back, passing r,g,b directly.
+        px.fixture.setPixel(px.pixelIndex, color.r, color.g, color.b);
       } else if (px.type === 'UkingPar') {
-        px.fixture.setColor(r, g, b);
+        px.fixture.setColor(color.r, color.g, color.b, color.w, color.a, color.u);
       } else if (px.type === 'VintageLed') {
         if (px.fixture._is33) {
-          px.fixture.setHeadAuxRgb(px.pixelIndex, r, g, b);
+          px.fixture.setHeadAuxRgb(px.pixelIndex, color.r, color.g, color.b);
         } else {
-          px.fixture.setAuxRgb(r, g, b);
+          px.fixture.setAuxRgb(color.r, color.g, color.b);
         }
       }
     }

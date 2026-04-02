@@ -161,7 +161,13 @@ async function showUI(page) {
       if (el) el.style.display = '';
     });
     document.querySelectorAll('.lil-gui').forEach(el => el.style.display = '');
+
+    // Select the 6ch pixel preset securely
+    const btns = Array.from(document.querySelectorAll('#pe-preset-buttons button'));
+    const target = btns.find(b => b.dataset.pattern === 'test_6ch_pixel');
+    if (target) target.click();
   });
+  await new Promise(r => setTimeout(r, 2000));
 }
 
 async function clickView(page, viewName) {

@@ -14,6 +14,7 @@ import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import yaml from "js-yaml";
 import chroma from "chroma-js";
 import { ParLight } from "./ParLight.js";
+import { ModelFixture } from "./ModelFixture.js";
 import { LedStrand } from "./LedStrand.js";
 import { Iceberg } from "./Iceberg.js";
 import { MarsinEngine } from "./MarsinEngine.js";
@@ -35,13 +36,19 @@ const modelMeshes = []; // Collected after model load for surface raycasting
 let transformControl, raycaster, mouse;
 const interactiveObjects = [];
 window.parFixtures = [];
+window.dmxSceneFixtures = [];
 const selectedFixtureIndices = new Set();
+const selectedDmxIndices = new Set();
 
 function deselectAllFixtures() {
   if (window.parFixtures) {
     window.parFixtures.forEach(f => { try { f.setSelected(false); } catch (_) {} });
   }
+  if (window.dmxSceneFixtures) {
+    window.dmxSceneFixtures.forEach(f => { try { f.setSelected(false); } catch (_) {} });
+  }
   selectedFixtureIndices.clear();
+  selectedDmxIndices.clear();
   if (window.setTraceSelected) window.setTraceSelected(-1, false);
 }
 let dragStartState = null; // Stores starting pos/rot for differential multi-select transforms
@@ -72,6 +79,7 @@ const params = {
   // Transient / UI-only (not saved to YAML)
   fixtureToolMode: "translate",
   parLights: [], // Safe fallback before config loads
+  dmxFixtures: [], // 3D physically modeled lights
   traces: [],    // Trace configs for group generator
   ledStrands: [], // LED strand configs
   icebergs: [],   // Iceberg configs
@@ -88,6 +96,8 @@ function captureSnapshot() {
   for (const key of Object.keys(params)) {
     if (key === 'parLights') {
       snapshot.parLights = JSON.parse(JSON.stringify(params.parLights));
+    } else if (key === 'dmxFixtures') {
+      snapshot.dmxFixtures = JSON.parse(JSON.stringify(params.dmxFixtures));
     } else if (key === 'traces') {
       snapshot.traces = JSON.parse(JSON.stringify(params.traces));
     } else if (key === 'ledStrands') {
@@ -113,6 +123,8 @@ function applySnapshot(snapshot) {
     for (const key of Object.keys(snapshot)) {
       if (key === 'parLights') {
         params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
+      } else if (key === 'dmxFixtures') {
+        params.dmxFixtures = JSON.parse(JSON.stringify(snapshot.dmxFixtures || []));
       } else if (key === 'traces') {
         params.traces = JSON.parse(JSON.stringify(snapshot.traces || []));
       } else if (key === 'ledStrands') {
@@ -124,10 +136,12 @@ function applySnapshot(snapshot) {
       }
     }
     rebuildParLights();
+    if (typeof rebuildDmxFixtures === 'function') rebuildDmxFixtures();
     if (window.rebuildTraceObjects) window.rebuildTraceObjects();
     if (window.rebuildLedStrands) window.rebuildLedStrands();
     if (window.rebuildIcebergs) window.rebuildIcebergs();
     if (window.renderParGUI) window.renderParGUI();
+    if (window.renderDmxGUI) window.renderDmxGUI();
     if (window.renderGeneratorGUI) window.renderGeneratorGUI();
     if (window.guiInstance) {
       window.guiInstance.controllersRecursive().forEach(c => {
@@ -162,6 +176,10 @@ function extractParams(node) {
     // Explicit array handling for fixtures
     if (key === "fixtures" && Array.isArray(node[key])) {
       params.parLights = node[key];
+      continue;
+    }
+    if (key === "dmxLights" && Array.isArray(node[key])) {
+      params.dmxFixtures = node[key];
       continue;
     }
     if (key === "traces" && Array.isArray(node[key])) {
@@ -208,6 +226,16 @@ function reconstructYAML(node) {
     if (key === "fixtures" && Array.isArray(node[key])) {
       // Strip internal fields (prefixed with _) before saving
       node[key] = params.parLights.map(light => {
+        const clean = {};
+        for (const k of Object.keys(light)) {
+          if (!k.startsWith('_')) clean[k] = light[k];
+        }
+        return clean;
+      });
+      continue;
+    }
+    if (key === "dmxLights" && Array.isArray(node[key])) {
+      node[key] = params.dmxFixtures.map(light => {
         const clean = {};
         for (const k of Object.keys(light)) {
           if (!k.startsWith('_')) clean[k] = light[k];
@@ -1059,36 +1087,130 @@ function setupLighting() {
 
   // ── 3. Par Lights (ground-level uplights) ──
   rebuildParLights();
+  if (typeof rebuildDmxFixtures === 'function') rebuildDmxFixtures();
 
 }
 
 // ─── Dynamic Par Lights ─────────────────────────────────────────────────
-function rebuildParLights() {
-  // Clear selection since fixture objects are being rebuilt
-  selectedFixtureIndices.clear();
-
-  if (window.parFixtures) {
-    window.parFixtures.forEach((f) => f.destroy());
+function rebuildParLights(force = false) {
+  if (!window.parFixtures) {
+    window.parFixtures = [];
   }
-  window.parFixtures = [];
 
-  // Rebuild from params using the new abstraction
+  if (force) {
+    selectedFixtureIndices.clear();
+    window.parFixtures.forEach((f) => f.destroy());
+    window.parFixtures = [];
+  }
+
+  while (window.parFixtures.length > params.parLights.length) {
+    const f = window.parFixtures.pop();
+    if (f) f.destroy();
+  }
+
   params.parLights.forEach((config, index) => {
-    const fixture = new ParLight(
-      config,
-      index,
-      scene,
-      interactiveObjects,
-      modelRadius,
-    );
+    let fixture = window.parFixtures[index];
+
+    if (!fixture) {
+      fixture = new ParLight(
+        config,
+        index,
+        scene,
+        interactiveObjects,
+        modelRadius,
+      );
+      window.parFixtures[index] = fixture;
+    } else {
+      fixture.config = config;
+      fixture.index = index;
+      fixture.syncFromConfig();
+    }
+    
     fixture.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
-    window.parFixtures.push(fixture);
   });
+
+  const invalidSelections = [];
+  for (const idx of selectedFixtureIndices) {
+    if (idx >= window.parFixtures.length) invalidSelections.push(idx);
+  }
+  invalidSelections.forEach(idx => selectedFixtureIndices.delete(idx));
+}
+
+function rebuildDmxFixtures(force = false) {
+  if (!window.dmxSceneFixtures) window.dmxSceneFixtures = [];
+
+  if (force) {
+    selectedDmxIndices.clear();
+    window.dmxSceneFixtures.forEach((f) => f.destroy());
+    window.dmxSceneFixtures = [];
+  }
+
+  while (window.dmxSceneFixtures.length > params.dmxFixtures.length) {
+    const f = window.dmxSceneFixtures.pop();
+    if (f) f.destroy();
+  }
+
+  params.dmxFixtures.forEach((config, index) => {
+    let fixture = window.dmxSceneFixtures[index];
+    
+    if (fixture) {
+      const currentType = fixture.config.type || 'None';
+      const newType = config.type || 'None';
+      if (currentType !== newType) {
+        fixture.destroy();
+        fixture = null;
+      }
+    }
+
+    if (!fixture) {
+      const fixtureType = config.type; 
+      const fixtureModel = fixtureType && window.fixtureModels && window.fixtureModels[fixtureType];
+
+      if (fixtureModel) {
+        fixture = new ModelFixture(
+          config,
+          index,
+          scene,
+          interactiveObjects,
+          modelRadius,
+          fixtureModel,
+        );
+      } else {
+        fixture = new ParLight(
+          config,
+          index,
+          scene,
+          interactiveObjects,
+          modelRadius,
+        );
+      }
+      window.dmxSceneFixtures[index] = fixture;
+    } else {
+      fixture.config = config;
+      fixture.index = index;
+      fixture.syncFromConfig();
+    }
+    
+    fixture.setVisibility(params.dmxEnabled !== false, params.conesEnabled !== false);
+  });
+
+  const invalidSelections = [];
+  for (const idx of selectedDmxIndices) {
+    if (idx >= window.dmxSceneFixtures.length) invalidSelections.push(idx);
+  }
+  invalidSelections.forEach(idx => selectedDmxIndices.delete(idx));
 }
 
 window.syncLightFromConfig = function (index) {
   if (window.parFixtures && window.parFixtures[index]) {
     window.parFixtures[index].syncFromConfig();
+    if (window.debounceAutoSave) window.debounceAutoSave();
+  }
+};
+
+window.syncDmxFromConfig = function (index) {
+  if (window.dmxSceneFixtures && window.dmxSceneFixtures[index]) {
+    window.dmxSceneFixtures[index].syncFromConfig();
     if (window.debounceAutoSave) window.debounceAutoSave();
   }
 };
@@ -1161,6 +1283,7 @@ function setupGUI() {
     yamlStr = header + yamlStr
       .replace(/^modelTransform:/m, '\n# ─── Model Transform ─────────────────────────────────────────────────────\nmodelTransform:')
       .replace(/^parLights:/m, '\n# ─── Par Lights ───────────────────────────────────────────────────────────\nparLights:')
+      .replace(/^dmxLights:/m, '\n# ─── DMX Lights ───────────────────────────────────────────────────────────\ndmxLights:')
       .replace(/^options:/m, '\n# ─── Options ──────────────────────────────────────────────────────────────\noptions:')
       .replace(/^config:/m, '\n# ─── Configuration ────────────────────────────────────────────────────────\nconfig:');
 
@@ -1192,6 +1315,38 @@ function setupGUI() {
           y: +(light.y || 0),
           z: +(light.z || 0),
         });
+      });
+    }
+
+    // DMX Fixtures → iterate actual physical pixels for mapping
+    if (params.dmxFixtures) {
+      params.dmxFixtures.forEach((light, i) => {
+        const fixture = window.dmxSceneFixtures ? window.dmxSceneFixtures[i] : null;
+        if (fixture && fixture.pixels && fixture.pixels.length > 0) {
+          fixture.pixels.forEach((px, j) => {
+            const worldPos = new THREE.Vector3();
+            if (px.dots) px.dots.getWorldPosition(worldPos);
+            else worldPos.set(light.x || 0, light.y || 0, light.z || 0);
+
+            pixels.push({
+              type: 'dmx',
+              name: light.name ? `${light.name} (Ch ${j + 1})` : `DMX ${i + 1} (Ch ${j + 1})`,
+              group: light.group || '',
+              x: +(worldPos.x).toFixed(3),
+              y: +(worldPos.y).toFixed(3),
+              z: +(worldPos.z).toFixed(3),
+            });
+          });
+        } else {
+          pixels.push({
+            type: 'dmx',
+            name: light.name || `DMX ${i + 1}`,
+            group: light.group || '',
+            x: +(light.x || 0),
+            y: +(light.y || 0),
+            z: +(light.z || 0),
+          });
+        }
       });
     }
 
@@ -1668,6 +1823,11 @@ function setupGUI() {
         // Special: icebergArray → build Icebergs UI
         if (sectionMeta.type === "icebergArray") {
           buildIcebergsSection(parentFolder, entry);
+          continue;
+        }
+        // Special: dmxArray → build DMX Lights UI
+        if (sectionMeta.type === "dmxArray") {
+          buildDmxLightsSection(parentFolder, entry);
           continue;
         }
         // Special: lightingEngine (has lightingMode + gradientStops)
@@ -2989,6 +3149,185 @@ function setupGUI() {
   }
 
   // ─── LED Strands Section ─────────────────────────────────────────────────
+  function buildDmxLightsSection(parentFolder, sectionConfig) {
+    let dmxFolder = null;
+    let dmxListFolder = null;
+    try {
+      if (!params.dmxFixtures) params.dmxFixtures = [];
+      dmxFolder = parentFolder.addFolder(sectionConfig._section.label || '🔌 DMX Light Fixtures');
+      if (!sectionConfig._section.collapsed) dmxFolder.open();
+      
+      dmxFolder.add(params, "dmxEnabled").name("Master Enabled").onChange(v => {
+        if (window.dmxSceneFixtures) {
+          window.dmxSceneFixtures.forEach(f => {
+            if (f) f.setVisibility(v, params.conesEnabled !== false);
+          });
+        }
+      });
+      
+      const dmxToolbarDiv = document.createElement('div');
+      dmxToolbarDiv.style.cssText = 'display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:4px;';
+      
+      const typeSelect = document.createElement('select');
+      typeSelect.style.cssText = 'flex:1;padding:4px;border:1px solid rgba(255,255,255,0.2);border-radius:4px;background:rgba(0,0,0,0.5);color:#fff;font-size:11px;';
+      const availableTypes = window.fixtureModels ? Object.keys(window.fixtureModels) : [];
+      if (availableTypes.length > 0) {
+        for (const k of availableTypes) {
+          const opt = document.createElement('option');
+          opt.value = k;
+          opt.textContent = window.fixtureModels[k].name || k;
+          typeSelect.appendChild(opt);
+        }
+      } else {
+        const opt = document.createElement('option');
+        opt.value = 'VintageLed';
+        opt.textContent = 'VintageLed';
+        typeSelect.appendChild(opt);
+      }
+      dmxToolbarDiv.appendChild(typeSelect);
+
+      const aBtn = document.createElement('button');
+      aBtn.textContent = '➕ Add';
+      aBtn.style.cssText = 'flex:1;padding:4px 0;border:1px solid rgba(255,255,255,0.2);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;font-size:11px;';
+      aBtn.onclick = () => {
+        pushUndo();
+        // Pick the selected model
+        const type = typeSelect.value || 'VintageLed';
+        params.dmxFixtures.push({
+          group: 'Stage',
+          name: nextFixtureName(type + ' '),
+          type: type,
+          color: '#ffffff', intensity: 15, angle: 25, penumbra: 0.5,
+          x: 0, y: 2.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+        });
+        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+        renderDmxGUI();
+        rebuildDmxFixtures();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+        debounceAutoSave();
+      };
+      dmxToolbarDiv.appendChild(aBtn);
+      
+      dmxListFolder = dmxFolder.addFolder("DMX Instances");
+      dmxListFolder.open();
+      dmxListFolder.domElement.querySelector('.children').prepend(dmxToolbarDiv);
+
+      window.renderDmxGUI = function renderDmxGUI() {
+        const children = [...dmxListFolder.folders];
+        children.forEach((f) => f.destroy());
+        window.dmxGuiFolders = [];
+
+        params.dmxFixtures.forEach((config, index) => {
+          const idxFolder = dmxListFolder.addFolder(config.name || `DMX ${index + 1}`);
+          idxFolder.domElement.classList.add('gui-card');
+          idxFolder.close();
+          window.dmxGuiFolders[index] = idxFolder;
+
+          function selectThisLight() {
+            const fixture = window.dmxSceneFixtures[index];
+            if (fixture && fixture.hitbox) {
+              transformControl.attach(fixture.hitbox);
+            }
+          }
+
+          if (typeof idxFolder.onOpenClose === 'function') {
+            idxFolder.onOpenClose((open) => { if (open) selectThisLight(); });
+          } else if (idxFolder.domElement) {
+            idxFolder.domElement.querySelector('.title')?.addEventListener('click', () => {
+              if (!idxFolder._closed) selectThisLight();
+            });
+          }
+
+          idxFolder.add(config, "name").name("Name").onFinishChange((v) => {
+            idxFolder.title(v);
+            debounceAutoSave();
+          });
+
+          const typeOptions = {};
+          if (window.fixtureModels) {
+            for (const [k, v] of Object.entries(window.fixtureModels)) {
+              const friendlyName = v.name || k;
+              typeOptions[friendlyName] = k;
+            }
+          }
+          if (Object.keys(typeOptions).length === 0) typeOptions['Default'] = 'VintageLed';
+
+          idxFolder.add(config, "type", typeOptions).name("Fixture Model").onChange((v) => {
+            pushUndo();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            rebuildDmxFixtures();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          });
+
+          idxFolder.addColor(config, "color").onChange((v) => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          idxFolder.add(config, "intensity", 0, 200, 0.5).onChange((v) => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          idxFolder.add(config, "angle", 5, 90, 1).listen().onChange((v) => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange((v) => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+
+          const posFolder = idxFolder.addFolder("Position");
+          posFolder.close();
+          posFolder.add(config, "x", -200, 200, 0.01).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          posFolder.add(config, "y", 0, 100, 0.01).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          posFolder.add(config, "z", -200, 200, 0.01).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+
+          const rotFolder = idxFolder.addFolder("Rotation");
+          rotFolder.close();
+          const step = params.snapAngle || 5;
+          rotFolder.add(config, "rotX", -180, 180, step).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          rotFolder.add(config, "rotY", -180, 180, step).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+          rotFolder.add(config, "rotZ", -180, 180, step).listen().onChange(() => {
+            selectThisLight(); window.syncDmxFromConfig(index);
+          });
+
+          const actDiv = document.createElement('div');
+          actDiv.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;';
+          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+
+          const rmBtn = document.createElement('button');
+          rmBtn.textContent = '✕ Remove';
+          rmBtn.style.cssText = aBtnStyle;
+          rmBtn.onclick = () => {
+            pushUndo();
+            params.dmxFixtures.splice(index, 1);
+            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+            renderDmxGUI();
+            rebuildDmxFixtures();
+            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+            debounceAutoSave();
+          };
+          actDiv.appendChild(rmBtn);
+
+          const idxChildren = idxFolder.domElement.querySelector('.children');
+          if (idxChildren) idxChildren.appendChild(actDiv);
+        });
+      };
+      
+      renderDmxGUI();
+
+    } catch (e) {
+      console.warn('DMX Fixtures GUI failed to build:', e);
+    }
+  }
+
   function buildLedStrandsSection(parentFolder, sectionConfig) {
     const strandFolder = parentFolder.addFolder(sectionConfig._section.label);
     if (sectionConfig._section.collapsed !== false) strandFolder.close();
@@ -3955,12 +4294,23 @@ function animate() {
     const count = window.parFixtures.length;
     for (let i = 0; i < count; i++) {
       const fixture = window.parFixtures[i];
-      if (!fixture || !fixture.light) continue;
+      if (!fixture) continue;
       const phase = ((i / count) + t) % 1.0;
       const [r, g, b] = scale(phase).gl(); // returns [0-1, 0-1, 0-1, alpha]
-      fixture.light.color.setRGB(r, g, b);
-      if (fixture.beam && fixture.beam.material) {
-        fixture.beam.material.color.setRGB(r, g, b);
+
+      if (fixture.pixels && fixture.pixels.length > 0) {
+        // ModelFixture: apply gradient across all pixels
+        for (let p = 0; p < fixture.pixels.length; p++) {
+          const subPhase = ((i / count) + (p / fixture.pixels.length) * 0.3 + t) % 1.0;
+          const [sr, sg, sb] = scale(subPhase).gl();
+          fixture.setPixelColorRGB(p, sr, sg, sb);
+        }
+      } else if (fixture.light) {
+        // ParLight
+        fixture.light.color.setRGB(r, g, b);
+        if (fixture.beam && fixture.beam.material) {
+          fixture.beam.material.color.setRGB(r, g, b);
+        }
       }
     }
   }
@@ -3970,18 +4320,59 @@ function animate() {
     const elapsed = now * 0.001; // ms → seconds
     patternEngine.beginFrame(elapsed);
 
-    // → Par Lights
+    // → Par Lights + ModelFixtures
     if (window.parFixtures && window.parFixtures.length > 0) {
-      const count = window.parFixtures.length;
-      for (let i = 0; i < count; i++) {
+      let pixelOffset = 0; // Global pixel counter across all fixtures
+      const totalFixtures = window.parFixtures.length;
+      for (let i = 0; i < totalFixtures; i++) {
         const fixture = window.parFixtures[i];
-        if (!fixture || !fixture.light) continue;
-        const t = count > 1 ? i / (count - 1) : 0.5;
-        const { r, g, b } = patternEngine.renderPixel(i, t, 0, 0);
-        const rn = r / 255, gn = g / 255, bn = b / 255;
-        fixture.light.color.setRGB(rn, gn, bn);
-        if (fixture.beam && fixture.beam.material) {
-          fixture.beam.material.color.setRGB(rn, gn, bn);
+        if (!fixture) { pixelOffset++; continue; }
+
+        if (fixture.pixels && fixture.pixels.length > 0) {
+          // ── ModelFixture: drive each pixel independently ──
+          const numPixels = fixture.pixels.length;
+          for (let p = 0; p < numPixels; p++) {
+            const globalIdx = pixelOffset + p;
+            const totalPixels = pixelOffset + numPixels; // approximate for t
+            const t = totalPixels > 1 ? globalIdx / (totalPixels - 1) : 0.5;
+
+            let rn, gn, bn;
+            const px6 = patternEngine.renderPixel6ch(globalIdx, t, 0, 0);
+            if (px6) {
+              // RGBWAU → RGB downmix
+              const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
+              rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
+              gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
+              bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
+            } else {
+              const px = patternEngine.renderPixel(globalIdx, t, 0, 0);
+              rn = px.r / 255; gn = px.g / 255; bn = px.b / 255;
+            }
+            fixture.setPixelColorRGB(p, rn, gn, bn);
+          }
+          pixelOffset += numPixels;
+        } else if (fixture.light) {
+          // ── Legacy ParLight: single light source ──
+          const t = totalFixtures > 1 ? pixelOffset / (totalFixtures - 1) : 0.5;
+          let rn, gn, bn;
+          const px6 = patternEngine.renderPixel6ch(pixelOffset, t, 0, 0);
+          if (px6) {
+            // RGBWAU → RGB downmix
+            const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
+            rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
+            gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
+            bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
+          } else {
+            const { r, g, b } = patternEngine.renderPixel(pixelOffset, t, 0, 0);
+            rn = r / 255; gn = g / 255; bn = b / 255;
+          }
+          fixture.light.color.setRGB(rn, gn, bn);
+          if (fixture.beam && fixture.beam.material) {
+            fixture.beam.material.color.setRGB(rn, gn, bn);
+          }
+          pixelOffset++;
+        } else {
+          pixelOffset++;
         }
       }
     }
@@ -4000,8 +4391,17 @@ function animate() {
           if (!bulb || !bulb.material) continue;
 
           const t = count > 1 ? led / (count - 1) : 0.5;
-          const { r, g, b } = patternEngine.renderPixel(led, t, 0, 0);
-          const rn = r / 255, gn = g / 255, bn = b / 255;
+          let rn, gn, bn;
+          const px6 = patternEngine.renderPixel6ch(led, t, 0, 0);
+          if (px6) {
+            const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
+            rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
+            gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
+            bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
+          } else {
+            const { r, g, b } = patternEngine.renderPixel(led, t, 0, 0);
+            rn = r / 255; gn = g / 255; bn = b / 255;
+          }
           bulb.material.color.setRGB(rn, gn, bn);
           if (halo && halo.material) {
             halo.material.color.setRGB(rn, gn, bn);
@@ -4018,7 +4418,10 @@ function animate() {
 Promise.all([
   fetch("scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
   fetch("scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
-]).then(([sceneYaml, camerasYaml]) => {
+  fetch("../dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("../dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("../dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+]).then(([sceneYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
   // Load scene config
   try {
     const loaded = yaml.load(sceneYaml);
@@ -4039,6 +4442,25 @@ Promise.all([
   } catch (err) {
     console.warn("Failed to parse scene_preset_cameras.yaml:", err);
   }
+
+  // Load fixture models
+  window.fixtureModels = {};
+  [
+    { raw: ukingModelYaml, file: 'model_10.yaml' },
+    { raw: shehdsModelYaml, file: 'model_119.yaml' },
+    { raw: vintageModelYaml, file: 'model_33.yaml' }
+  ].forEach(({ raw, file }) => {
+    try {
+      if (raw) {
+        let parsed = yaml.load(raw);
+        if (parsed && parsed.model && parsed.model.fixture_type) {
+          window.fixtureModels[parsed.model.fixture_type] = parsed.model;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to parse fixture model " + file + ":", err);
+    }
+  });
 
   // If no presets loaded, create defaults from model dimensions
   if (cameraPresets.length === 0) {

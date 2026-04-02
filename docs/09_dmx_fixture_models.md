@@ -658,3 +658,31 @@ This appendix records every known case where physical hardware testing produced 
 | Endyshow 240W Bar | RGB pixel order | R, B, G | **R, G, B** | `channels_135.yaml` L28 | 2026-03-21 |
 | Endyshow 240W Bar | CH97–112 function | Amber segments | **White segments** | `EndyshowBar.js` L55–60 | 2026-03-21 |
 | Endyshow 240W Bar | CH113–128 function | White segments | **Amber segments** | `EndyshowBar.js` L55–60 | 2026-03-21 |
+
+---
+
+## 10. Intermediate Integration Plan: `ModelFixture.js` & RGBWAU in `main.js`
+
+To bridge the gap before the complete Phase 3 Config Unification is implemented, a pragmatic integration layer will be injected into the existing simulation context (`main.js`) to support new pixel formats and multi-spot form factors:
+
+### 10.1 WebGL RGBWAU Downmixing
+The 3D monitoring viewport operates exclusively within the visible RGB color space, meaning the expanded 6-channel logic must be mathematically downsampled into standard textures:
+- **Change**: `patternEngine.renderPixel` calls will be upgraded to `renderPixel6ch(index, x, y, z)`.
+- **Downmix Math**: Raw output will be aggressively mapped to simulated RGB boundaries. 
+  - `W` (White) adds scalar intensity evenly to R, G, and B.
+  - `A` (Amber) contributes warmth natively into the Red and Green boundaries.
+  - `U` (UV/Purple) blends deep blues with localized red spikes.
+
+### 10.2 Universal YAML-Driven Fixture Rendering (`ModelFixture.js`)
+Instead of hardcoding each new fixture layout, `main.js` eagerly fetches the verified DMX model YAMLs (`model_119.yaml`, `model_10.yaml`, `model_33.yaml`) during boot. A new universal class, `ModelFixture.js`, accepts a parsed model object and constructs the corresponding 3D representation:
+- **Shell**: `BoxGeometry` or `CylinderGeometry` from the `shell` schema, with correct dimensions (mm → meters) and offset.
+- **Dots**: Each pixel's `dots` array creates small emissive `SphereGeometry` meshes at the exact spatial coordinates from the YAML.
+- **SpotLights**: One `SpotLight` per pixel, positioned at the centroid of its dots, with 25° default beam angle.
+- **Transform**: All elements live inside a `THREE.Group`. `TransformControls` on the hitbox moves the entire assembly in sync.
+- **API**: `setPixelColorRGB(pixelIndex, r, g, b)` sets the color of a specific pixel's spotlight, beam cone, and dot meshes.
+
+### 10.3 Dynamic GUI Typing & Render Loop
+- **Change**: `params.parLights` entries in `scene_config.yaml` gain an optional `type` field (`ShehdsBar`, `UkingPar`, `VintageLed`). Entries without a `type` default to the existing `ParLight` class.
+- **Execution**: `rebuildParLights()` checks `config.type` against the loaded `window.fixtureModels` registry. If a matching model exists, it instantiates a `ModelFixture` instead of a `ParLight`. The "Add Light" GUI gains dropdown options for each available DMX fixture type.
+- **Render Loop (Resolved)**: Each pixel inside a `ModelFixture` is independent. An 18-pixel Shehds Bar consumes 18 sequential indices from `renderPixel6ch(offset + i)`, enabling continuous sweep animations across the physical array — exactly mirroring real DMX address cascading.
+
