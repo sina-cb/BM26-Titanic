@@ -5965,6 +5965,1434 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 1
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 20.602963115872964
+      y: 11.5
+      z: 2.9966882244038895
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 2
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 21.3080703203007
+      y: 10.971184820985878
+      z: 2.441619756117572
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 3
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.01317752472844
+      y: 10.442369641971755
+      z: 1.8865512878312545
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 4
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.71828472915618
+      y: 9.913554462957634
+      z: 1.3314828195449369
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 5
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 23.42339193358392
+      y: 9.384739283943512
+      z: 0.7764143512586195
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 6
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.12849913801166
+      y: 8.85592410492939
+      z: 0.22134588297230184
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 7
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.833606342439396
+      y: 8.327108925915269
+      z: -0.3337225853140158
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 8
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 25.538713546867136
+      y: 7.798293746901146
+      z: -0.8887910536003334
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 9
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.243820751294873
+      y: 7.269478567887024
+      z: -1.4438595218866506
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 10
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.948927955722613
+      y: 6.740663388872902
+      z: -1.9989279901729682
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 11
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 27.65403516015035
+      y: 6.211848209858781
+      z: -2.553996458459286
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 12
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 28.35914236457809
+      y: 5.683033030844658
+      z: -3.1090649267456043
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 13
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.064249569005828
+      y: 5.154217851830537
+      z: -3.664133395031921
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 14
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.769356773433568
+      y: 4.625402672816414
+      z: -4.21920186331824
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 15
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 30.474463977861305
+      y: 4.096587493802293
+      z: -4.774270331604557
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 16
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.179571182289045
+      y: 3.5677723147881704
+      z: -5.3293387998908734
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 17
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.884678386716782
+      y: 3.038957135774048
+      z: -5.88440726817719
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 18
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 32.58978559114452
+      y: 2.5101419567599255
+      z: -6.439475736463509
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 19
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 33.29489279557226
+      y: 1.9813267777458048
+      z: -6.994544204749825
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 20
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 34
+      y: 1.4525115987316823
+      z: -7.549612673036144
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.96567931400758
+      y: 6.985107542328527
+      z: -8.352568965470052
+      rotX: 65.06625088380783
+      rotY: -17.044438713931452
+      rotZ: -10.920082528299218
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 8.06889942057935
+      z: -6.730236452812176
+      rotX: 50.04158933251067
+      rotY: -18.55273762511712
+      rotZ: -8.719081826501656
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 9.18323409684811
+      z: -6.117726824146182
+      rotX: 37.983863391598334
+      rotY: -30.808279826703686
+      rotZ: -10.833977312176367
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 9.806701991658228
+      z: -6.80164014201115
+      rotX: 31.791782682372077
+      rotY: -46.99522951781506
+      rotZ: -14.115945334577058
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 9.647575547954222
+      z: -8.46196576412819
+      rotX: 32.56733833671133
+      rotY: -63.98819400622648
+      rotZ: -20.684141446716186
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 8.780311797238628
+      z: -10.321818879444859
+      rotX: 39.853253168878226
+      rotY: -79.2426830243385
+      rotZ: -33.412226467079485
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 7.610713087034228
+      z: -11.510953545339525
+      rotX: 52.061949677320264
+      rotY: -90.03853402026596
+      rotZ: -52.09234681766751
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 6.686047652487411
+      z: -11.472960435880362
+      rotX: 66.51412403701407
+      rotY: -89.38322525781906
+      rotZ: -65.94965384989146
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 6.438976726934243
+      z: -10.22561694922969
+      rotX: 74.96810675387201
+      rotY: -51.35644581331218
+      rotZ: -40.47966148021137
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 1
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 21.013853861159475
+      y: 13
+      z: -0.5
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 2
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 24.187625727850858
+      y: 10.652367939087537
+      z: -2.987045126785574
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 3
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 27.36139759454224
+      y: 8.304735878175075
+      z: -5.474090253571148
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 4
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 30.53516946123362
+      y: 5.957103817262612
+      z: -7.961135380356723
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 5
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 33.708941327925004
+      y: 3.6094717563501497
+      z: -10.448180507142297
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 1
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 13.409044248777642
+      y: 12.564682056392941
+      z: -6.77967720411976
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 2
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 14.560358036019727
+      y: 12.560040893535568
+      z: -5.333318705428169
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 3
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 15.711671823261812
+      y: 12.555399730678195
+      z: -3.8869602067365796
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 4
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 16.862985610503895
+      y: 12.550758567820823
+      z: -2.4406017080449898
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 5
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 18.01429939774598
+      y: 12.54611740496345
+      z: -0.9942432093533995
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 6
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 19.165613184988064
+      y: 12.541476242106077
+      z: 0.4521152893381899
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 1
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.339548301486076
+      y: 12.5
+      z: 3.9607682357892084
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 2
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.342306051614996
+      y: 12.5
+      z: 5.849782577440101
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 3
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.345063801743915
+      y: 12.5
+      z: 7.738796919090994
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 4
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.347821551872837
+      y: 12.5
+      z: 9.627811260741886
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 5
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.350579302001757
+      y: 12.5
+      z: 11.516825602392782
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 6
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.353337052130676
+      y: 12.5
+      z: 13.405839944043674
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Back Wall
+      name: Left Back Wall 1
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -30
+      y: 1.5
+      z: 1.1015437161724524
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 2
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -29.055555555555557
+      y: 2.0277777777777777
+      z: 1.1042612263968294
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 3
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -28.11111111111111
+      y: 2.5555555555555554
+      z: 1.1069787366212065
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 4
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -27.166666666666668
+      y: 3.083333333333333
+      z: 1.1096962468455835
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 5
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -26.22222222222222
+      y: 3.611111111111111
+      z: 1.1124137570699606
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 6
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -25.27777777777778
+      y: 4.138888888888889
+      z: 1.1151312672943374
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 7
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -24.333333333333336
+      y: 4.666666666666666
+      z: 1.1178487775187145
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 8
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -23.38888888888889
+      y: 5.194444444444445
+      z: 1.1205662877430915
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 9
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -22.444444444444443
+      y: 5.722222222222222
+      z: 1.1232837979674686
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 10
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -21.5
+      y: 6.25
+      z: 1.1260013081918456
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 11
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -20.555555555555557
+      y: 6.777777777777778
+      z: 1.1287188184162227
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 12
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -19.61111111111111
+      y: 7.305555555555556
+      z: 1.1314363286405997
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 13
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -18.666666666666668
+      y: 7.833333333333333
+      z: 1.1341538388649768
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 14
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -17.72222222222222
+      y: 8.36111111111111
+      z: 1.1368713490893538
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 15
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -16.77777777777778
+      y: 8.88888888888889
+      z: 1.1395888593137307
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 16
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -15.833333333333332
+      y: 9.416666666666668
+      z: 1.1423063695381077
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 17
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -14.88888888888889
+      y: 9.944444444444445
+      z: 1.1450238797624848
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 18
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -13.944444444444446
+      y: 10.472222222222221
+      z: 1.1477413899868618
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 19
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -13
+      y: 11
+      z: 1.1504589002112389
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 1
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 24.98778918454627
+      y: 1.2914929720951713
+      z: -19.56127110184024
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 2
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 24.27639913943709
+      y: 1.8024670261954254
+      z: -19.004509545737317
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 3
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 23.56500909432791
+      y: 2.3134410802956795
+      z: -18.44774798963439
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 4
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 22.85361904921873
+      y: 2.8244151343959336
+      z: -17.890986433531467
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 5
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 22.142229004109552
+      y: 3.335389188496188
+      z: -17.33422487742854
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 6
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 21.430838959000372
+      y: 3.8463632425964422
+      z: -16.777463321325616
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 7
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 20.719448913891192
+      y: 4.357337296696697
+      z: -16.220701765222692
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 8
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 20.008058868782012
+      y: 4.868311350796951
+      z: -15.663940209119765
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 9
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 19.29666882367283
+      y: 5.379285404897205
+      z: -15.107178653016842
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 10
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 18.58527877856365
+      y: 5.890259458997459
+      z: -14.550417096913915
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 11
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 17.87388873345447
+      y: 6.401233513097713
+      z: -13.993655540810991
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 12
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 17.16249868834529
+      y: 6.912207567197967
+      z: -13.436893984708064
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 13
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 16.45110864323611
+      y: 7.423181621298221
+      z: -12.88013242860514
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 14
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 15.739718598126933
+      y: 7.934155675398476
+      z: -12.323370872502215
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 15
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 15.028328553017753
+      y: 8.44512972949873
+      z: -11.76660931639929
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 16
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 14.316938507908572
+      y: 8.956103783598984
+      z: -11.209847760296364
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 17
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 13.605548462799394
+      y: 9.46707783769924
+      z: -10.65308620419344
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 18
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 12.894158417690214
+      y: 9.978051891799492
+      z: -10.096324648090516
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 19
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 12.182768372581034
+      y: 10.489025945899748
+      z: -9.53956309198759
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 20
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 11.471378327471854
+      y: 11
+      z: -8.982801535884665
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 1
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -12.903329387309988
+      y: 11.307393605936221
+      z: 16.110380764000457
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 2
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -13.82279334886047
+      y: 10.788715605557035
+      z: 16.113167339583597
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 3
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -14.74225731041095
+      y: 10.27003760517785
+      z: 16.115953915166738
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 4
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -15.661721271961433
+      y: 9.751359604798663
+      z: 16.11874049074988
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 5
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -16.581185233511913
+      y: 9.232681604419476
+      z: 16.12152706633302
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 6
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -17.500649195062394
+      y: 8.71400360404029
+      z: 16.124313641916157
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 7
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -18.420113156612878
+      y: 8.195325603661104
+      z: 16.127100217499297
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 8
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -19.33957711816336
+      y: 7.676647603281918
+      z: 16.129886793082438
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 9
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -20.25904107971384
+      y: 7.157969602902732
+      z: 16.13267336866558
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 10
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -21.178505041264323
+      y: 6.639291602523545
+      z: 16.13545994424872
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 11
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -22.097969002814803
+      y: 6.120613602144359
+      z: 16.13824651983186
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 12
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -23.017432964365284
+      y: 5.601935601765172
+      z: 16.141033095415
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 13
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -23.936896925915768
+      y: 5.083257601385987
+      z: 16.14381967099814
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 14
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -24.85636088746625
+      y: 4.5645796010068
+      z: 16.146606246581282
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 15
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -25.77582484901673
+      y: 4.045901600627614
+      z: 16.149392822164423
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 16
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -26.695288810567213
+      y: 3.527223600248427
+      z: 16.15217939774756
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 17
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -27.614752772117694
+      y: 3.008545599869242
+      z: 16.1549659733307
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 18
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -28.534216733668174
+      y: 2.4898675994900543
+      z: 16.15775254891384
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 19
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -29.453680695218655
+      y: 1.9711895991108683
+      z: 16.16053912449698
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 20
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -30.37314465676914
+      y: 1.4525115987316823
+      z: 16.163325700080122
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -19.68599841880675
+      y: 9.804457525532714
+      z: 8.61231073601136
+      rotX: 31.559080156917904
+      rotY: 90.33561859001496
+      rotZ: 31.73517520673026
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.264699074318624
+      y: 9.453916223069053
+      z: 10.54968689216576
+      rotX: 34.7097973593422
+      rotY: 74.13447311950019
+      rotZ: 26.5656783988916
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.788611207718077
+      y: 8.56633384536256
+      z: 11.599014942072566
+      rotX: 43.82782032790131
+      rotY: 60.212254251197095
+      rotZ: 26.259067100806504
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.54467939539067
+      y: 7.557020051321445
+      z: 11.269302629198132
+      rotX: 57.427952135821144
+      rotY: 52.33782944556022
+      rotZ: 30.13181769608785
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.711219815800433
+      y: 6.898243982450879
+      z: 9.714826009080593
+      rotX: 71.50483582857704
+      rotY: 64.48421391415708
+      rotZ: 48.847777665736565
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.74239524158499
+      y: 6.898254282855869
+      z: 7.662941968356202
+      rotX: 71.9053556941776
+      rotY: 114.36762001215692
+      rotZ: 96.71867228146948
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.62361834454348
+      y: 7.557046132862444
+      z: 6.073749853830876
+      rotX: 57.93443966603171
+      rotY: 127.95821496467003
+      rotZ: 97.18205901865228
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.878377268621843
+      y: 8.566363504196671
+      z: 5.690850317794014
+      rotX: 44.15718499554899
+      rotY: 120.3906282631435
+      rotZ: 70.60636812690299
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.323289709437837
+      y: 9.453935581498174
+      z: 6.693406308611597
+      rotX: 34.8562441915446
+      rotY: 106.52967230884275
+      rotZ: 45.624914425695536
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 1
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -14.229550084726284
+      y: 13.427437915695661
+      z: 13.684831446595346
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 2
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -18.3473820790629
+      y: 11.071584853585172
+      z: 13.722199027277606
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 3
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -22.465214073399515
+      y: 8.715731791474681
+      z: 13.759566607959865
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 4
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -26.583046067736134
+      y: 6.359878729364191
+      z: 13.796934188642124
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 5
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -30.70087806207275
+      y: 4.004025667253702
+      z: 13.834301769324384
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
   traces:
     - name: Right Front Wall Generator
       shape: line
@@ -6187,7 +7615,7 @@ dmxLights:
     type: dmxArray
     collapsed: false
   dmxEnabled:
-    value: true
+    value: false
     label: Master Enabled
   fixtures:
     - group: Right Front Wall Generator
@@ -11902,12 +13330,1440 @@ dmxLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 1
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 20.602963115872964
+      y: 11.5
+      z: 2.9966882244038895
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 2
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 21.3080703203007
+      y: 10.971184820985878
+      z: 2.441619756117572
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 3
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.01317752472844
+      y: 10.442369641971755
+      z: 1.8865512878312545
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 4
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.71828472915618
+      y: 9.913554462957634
+      z: 1.3314828195449369
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 5
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 23.42339193358392
+      y: 9.384739283943512
+      z: 0.7764143512586195
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 6
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.12849913801166
+      y: 8.85592410492939
+      z: 0.22134588297230184
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 7
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.833606342439396
+      y: 8.327108925915269
+      z: -0.3337225853140158
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 8
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 25.538713546867136
+      y: 7.798293746901146
+      z: -0.8887910536003334
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 9
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.243820751294873
+      y: 7.269478567887024
+      z: -1.4438595218866506
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 10
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.948927955722613
+      y: 6.740663388872902
+      z: -1.9989279901729682
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 11
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 27.65403516015035
+      y: 6.211848209858781
+      z: -2.553996458459286
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 12
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 28.35914236457809
+      y: 5.683033030844658
+      z: -3.1090649267456043
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 13
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.064249569005828
+      y: 5.154217851830537
+      z: -3.664133395031921
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 14
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.769356773433568
+      y: 4.625402672816414
+      z: -4.21920186331824
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 15
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 30.474463977861305
+      y: 4.096587493802293
+      z: -4.774270331604557
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 16
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.179571182289045
+      y: 3.5677723147881704
+      z: -5.3293387998908734
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 17
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.884678386716782
+      y: 3.038957135774048
+      z: -5.88440726817719
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 18
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 32.58978559114452
+      y: 2.5101419567599255
+      z: -6.439475736463509
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 19
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 33.29489279557226
+      y: 1.9813267777458048
+      z: -6.994544204749825
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Front Wall Generator
+      name: Right Front Wall Generator 20
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 34
+      y: 1.4525115987316823
+      z: -7.549612673036144
+      rotX: -62.987428019501316
+      rotY: 134.19659356023698
+      rotZ: -110.8237374138408
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.96567931400758
+      y: 6.985107542328527
+      z: -8.352568965470052
+      rotX: 65.06625088380783
+      rotY: -17.044438713931452
+      rotZ: -10.920082528299218
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 8.06889942057935
+      z: -6.730236452812176
+      rotX: 50.04158933251067
+      rotY: -18.55273762511712
+      rotZ: -8.719081826501656
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 9.18323409684811
+      z: -6.117726824146182
+      rotX: 37.983863391598334
+      rotY: -30.808279826703686
+      rotZ: -10.833977312176367
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 9.806701991658228
+      z: -6.80164014201115
+      rotX: 31.791782682372077
+      rotY: -46.99522951781506
+      rotZ: -14.115945334577058
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 9.647575547954222
+      z: -8.46196576412819
+      rotX: 32.56733833671133
+      rotY: -63.98819400622648
+      rotZ: -20.684141446716186
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.69180373398019
+      y: 8.780311797238628
+      z: -10.321818879444859
+      rotX: 39.853253168878226
+      rotY: -79.2426830243385
+      rotZ: -33.412226467079485
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342654
+      y: 7.610713087034228
+      z: -11.510953545339525
+      rotX: 52.061949677320264
+      rotY: -90.03853402026596
+      rotZ: -52.09234681766751
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.718892039770417
+      y: 6.686047652487411
+      z: -11.472960435880362
+      rotX: 66.51412403701407
+      rotY: -89.38322525781906
+      rotZ: -65.94965384989146
+    - group: Right Top Chimney Generator
+      name: Right Top Chimney Generator 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.32957208494228
+      y: 6.438976726934243
+      z: -10.22561694922969
+      rotX: 74.96810675387201
+      rotY: -51.35644581331218
+      rotZ: -40.47966148021137
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 1
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 21.013853861159475
+      y: 13
+      z: -0.5
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 2
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 24.187625727850858
+      y: 10.652367939087537
+      z: -2.987045126785574
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 3
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 27.36139759454224
+      y: 8.304735878175075
+      z: -5.474090253571148
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 4
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 30.53516946123362
+      y: 5.957103817262612
+      z: -7.961135380356723
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Front Deck Generator
+      name: Right Front Deck Generator 5
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 33.708941327925004
+      y: 3.6094717563501497
+      z: -10.448180507142297
+      rotX: -55.81417629917045
+      rotY: 177.87699151174402
+      rotZ: -175.99270957058573
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 1
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 13.409044248777642
+      y: 12.564682056392941
+      z: -6.77967720411976
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 2
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 14.560358036019727
+      y: 12.560040893535568
+      z: -5.333318705428169
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 3
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 15.711671823261812
+      y: 12.555399730678195
+      z: -3.8869602067365796
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 4
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 16.862985610503895
+      y: 12.550758567820823
+      z: -2.4406017080449898
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 5
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 18.01429939774598
+      y: 12.54611740496345
+      z: -0.9942432093533995
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Right Center Auditorium Generator
+      name: Right Center Auditorium Generator 6
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 19.165613184988064
+      y: 12.541476242106077
+      z: 0.4521152893381899
+      rotX: -52.86838072153286
+      rotY: 125.4162025620287
+      rotZ: -87.87253744526163
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 1
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.339548301486076
+      y: 12.5
+      z: 3.9607682357892084
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 2
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.342306051614996
+      y: 12.5
+      z: 5.849782577440101
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 3
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.345063801743915
+      y: 12.5
+      z: 7.738796919090994
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 4
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.347821551872837
+      y: 12.5
+      z: 9.627811260741886
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 5
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.350579302001757
+      y: 12.5
+      z: 11.516825602392782
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Center Auditorium
+      name: Left Center Auditorium 6
+      color: '#ff0000'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.353337052130676
+      y: 12.5
+      z: 13.405839944043674
+      rotX: -58.20270935326621
+      rotY: -90.517969410706
+      rotZ: 58.643992523644386
+    - group: Left Back Wall
+      name: Left Back Wall 1
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -30
+      y: 1.5
+      z: 1.1015437161724524
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 2
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -29.055555555555557
+      y: 2.0277777777777777
+      z: 1.1042612263968294
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 3
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -28.11111111111111
+      y: 2.5555555555555554
+      z: 1.1069787366212065
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 4
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -27.166666666666668
+      y: 3.083333333333333
+      z: 1.1096962468455835
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 5
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -26.22222222222222
+      y: 3.611111111111111
+      z: 1.1124137570699606
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 6
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -25.27777777777778
+      y: 4.138888888888889
+      z: 1.1151312672943374
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 7
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -24.333333333333336
+      y: 4.666666666666666
+      z: 1.1178487775187145
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 8
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -23.38888888888889
+      y: 5.194444444444445
+      z: 1.1205662877430915
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 9
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -22.444444444444443
+      y: 5.722222222222222
+      z: 1.1232837979674686
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 10
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -21.5
+      y: 6.25
+      z: 1.1260013081918456
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 11
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -20.555555555555557
+      y: 6.777777777777778
+      z: 1.1287188184162227
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 12
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -19.61111111111111
+      y: 7.305555555555556
+      z: 1.1314363286405997
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 13
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -18.666666666666668
+      y: 7.833333333333333
+      z: 1.1341538388649768
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 14
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -17.72222222222222
+      y: 8.36111111111111
+      z: 1.1368713490893538
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 15
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -16.77777777777778
+      y: 8.88888888888889
+      z: 1.1395888593137307
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 16
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -15.833333333333332
+      y: 9.416666666666668
+      z: 1.1423063695381077
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 17
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -14.88888888888889
+      y: 9.944444444444445
+      z: 1.1450238797624848
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 18
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -13.944444444444446
+      y: 10.472222222222221
+      z: 1.1477413899868618
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Left Back Wall
+      name: Left Back Wall 19
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: -13
+      y: 11
+      z: 1.1504589002112389
+      rotX: -57.11179174735864
+      rotY: -78.9559569482906
+      rotZ: 48.29040706597206
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 1
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 24.98778918454627
+      y: 1.2914929720951713
+      z: -19.56127110184024
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 2
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 24.27639913943709
+      y: 1.8024670261954254
+      z: -19.004509545737317
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 3
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 23.56500909432791
+      y: 2.3134410802956795
+      z: -18.44774798963439
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 4
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 22.85361904921873
+      y: 2.8244151343959336
+      z: -17.890986433531467
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 5
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 22.142229004109552
+      y: 3.335389188496188
+      z: -17.33422487742854
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 6
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 21.430838959000372
+      y: 3.8463632425964422
+      z: -16.777463321325616
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 7
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 20.719448913891192
+      y: 4.357337296696697
+      z: -16.220701765222692
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 8
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 20.008058868782012
+      y: 4.868311350796951
+      z: -15.663940209119765
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 9
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 19.29666882367283
+      y: 5.379285404897205
+      z: -15.107178653016842
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 10
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 18.58527877856365
+      y: 5.890259458997459
+      z: -14.550417096913915
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 11
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 17.87388873345447
+      y: 6.401233513097713
+      z: -13.993655540810991
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 12
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 17.16249868834529
+      y: 6.912207567197967
+      z: -13.436893984708064
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 13
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 16.45110864323611
+      y: 7.423181621298221
+      z: -12.88013242860514
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 14
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 15.739718598126933
+      y: 7.934155675398476
+      z: -12.323370872502215
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 15
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 15.028328553017753
+      y: 8.44512972949873
+      z: -11.76660931639929
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 16
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 14.316938507908572
+      y: 8.956103783598984
+      z: -11.209847760296364
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 17
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 13.605548462799394
+      y: 9.46707783769924
+      z: -10.65308620419344
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 18
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 12.894158417690214
+      y: 9.978051891799492
+      z: -10.096324648090516
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 19
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 12.182768372581034
+      y: 10.489025945899748
+      z: -9.53956309198759
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Right Back Wall Generator
+      name: Right Back Wall Generator 20
+      color: '#001eff'
+      intensity: 18
+      angle: 30
+      penumbra: 0.5
+      x: 11.471378327471854
+      y: 11
+      z: -8.982801535884665
+      rotX: -71.71115059869975
+      rotY: 123.18997757262524
+      rotZ: -106.38336726422511
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 1
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -12.903329387309988
+      y: 11.307393605936221
+      z: 16.110380764000457
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 2
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -13.82279334886047
+      y: 10.788715605557035
+      z: 16.113167339583597
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 3
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -14.74225731041095
+      y: 10.27003760517785
+      z: 16.115953915166738
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 4
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -15.661721271961433
+      y: 9.751359604798663
+      z: 16.11874049074988
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 5
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -16.581185233511913
+      y: 9.232681604419476
+      z: 16.12152706633302
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 6
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -17.500649195062394
+      y: 8.71400360404029
+      z: 16.124313641916157
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 7
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -18.420113156612878
+      y: 8.195325603661104
+      z: 16.127100217499297
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 8
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -19.33957711816336
+      y: 7.676647603281918
+      z: 16.129886793082438
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 9
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -20.25904107971384
+      y: 7.157969602902732
+      z: 16.13267336866558
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 10
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -21.178505041264323
+      y: 6.639291602523545
+      z: 16.13545994424872
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 11
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -22.097969002814803
+      y: 6.120613602144359
+      z: 16.13824651983186
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 12
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -23.017432964365284
+      y: 5.601935601765172
+      z: 16.141033095415
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 13
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -23.936896925915768
+      y: 5.083257601385987
+      z: 16.14381967099814
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 14
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -24.85636088746625
+      y: 4.5645796010068
+      z: 16.146606246581282
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 15
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -25.77582484901673
+      y: 4.045901600627614
+      z: 16.149392822164423
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 16
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -26.695288810567213
+      y: 3.527223600248427
+      z: 16.15217939774756
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 17
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -27.614752772117694
+      y: 3.008545599869242
+      z: 16.1549659733307
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 18
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -28.534216733668174
+      y: 2.4898675994900543
+      z: 16.15775254891384
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 19
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -29.453680695218655
+      y: 1.9711895991108683
+      z: 16.16053912449698
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Front Wall Generator
+      name: Left Front Wall Generator 20
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -30.37314465676914
+      y: 1.4525115987316823
+      z: 16.163325700080122
+      rotX: -61.068243764489985
+      rotY: -93.69883453499051
+      rotZ: 64.35706001289255
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 1
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -19.68599841880675
+      y: 9.804457525532714
+      z: 8.61231073601136
+      rotX: 31.559080156917904
+      rotY: 90.33561859001496
+      rotZ: 31.73517520673026
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 2
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.264699074318624
+      y: 9.453916223069053
+      z: 10.54968689216576
+      rotX: 34.7097973593422
+      rotY: 74.13447311950019
+      rotZ: 26.5656783988916
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 3
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.788611207718077
+      y: 8.56633384536256
+      z: 11.599014942072566
+      rotX: 43.82782032790131
+      rotY: 60.212254251197095
+      rotZ: 26.259067100806504
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 4
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.54467939539067
+      y: 7.557020051321445
+      z: 11.269302629198132
+      rotX: 57.427952135821144
+      rotY: 52.33782944556022
+      rotZ: 30.13181769608785
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 5
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.711219815800433
+      y: 6.898243982450879
+      z: 9.714826009080593
+      rotX: 71.50483582857704
+      rotY: 64.48421391415708
+      rotZ: 48.847777665736565
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 6
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -24.74239524158499
+      y: 6.898254282855869
+      z: 7.662941968356202
+      rotX: 71.9053556941776
+      rotY: 114.36762001215692
+      rotZ: 96.71867228146948
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 7
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -23.62361834454348
+      y: 7.557046132862444
+      z: 6.073749853830876
+      rotX: 57.93443966603171
+      rotY: 127.95821496467003
+      rotZ: 97.18205901865228
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 8
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -21.878377268621843
+      y: 8.566363504196671
+      z: 5.690850317794014
+      rotX: 44.15718499554899
+      rotY: 120.3906282631435
+      rotZ: 70.60636812690299
+    - group: Left Top Chimney Generator
+      name: Left Top Chimney Generator 9
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: -20.323289709437837
+      y: 9.453935581498174
+      z: 6.693406308611597
+      rotX: 34.8562441915446
+      rotY: 106.52967230884275
+      rotZ: 45.624914425695536
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 1
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -14.229550084726284
+      y: 13.427437915695661
+      z: 13.684831446595346
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 2
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -18.3473820790629
+      y: 11.071584853585172
+      z: 13.722199027277606
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 3
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -22.465214073399515
+      y: 8.715731791474681
+      z: 13.759566607959865
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 4
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -26.583046067736134
+      y: 6.359878729364191
+      z: 13.796934188642124
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
+    - group: Left Front Deck Generator
+      name: Left Front Deck Generator 5
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -30.70087806207275
+      y: 4.004025667253702
+      z: 13.834301769324384
+      rotX: -50.91407249895412
+      rotY: -138.54063954849113
+      rotZ: 103.03110804737327
 
 # ─── Options ──────────────────────────────────────────────────────────────
 options:
   _section:
     label: ⚙️ Options
-    collapsed: true
+    collapsed: false
   editMode:
     value: false
     label: 🛠️ Edit Mode (Flat Shading)
@@ -11919,7 +14775,7 @@ options:
 lightingEngine:
   _section:
     label: 🎨 Lighting Engine
-    collapsed: false
+    collapsed: true
   lightingEnabled:
     value: true
     label: ⚡ Enable
@@ -11950,13 +14806,13 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -33.5325
-    y: 10.4622
-    z: 26.6246
+    x: -42.1926
+    y: 15.8236
+    z: 53.8425
   target:
-    x: -25.1919
-    y: 3.3232
-    z: 15.2369
+    x: -2
+    y: 8
+    z: -5.3414
 _patternEditor:
   x: 0
   y: 0
