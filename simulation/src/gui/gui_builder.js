@@ -14,6 +14,7 @@ import {
   lights, params, configTree,
   selectedFixtureIndices, selectedDmxIndices,
   undoStack, redoStack, MAX_UNDO,
+  setEngineEnabled, setLightingEnabled, setLightingMode,
 } from "../core/state.js";
 import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
@@ -25,10 +26,8 @@ import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { Iceberg } from "../fixtures/iceberg.js";
 
-// Forward declarations used in closures — set by onLightingChange
-let engineEnabled = false;
-let lightingEnabled = false;
-let lightingMode = 'gradient';
+// NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
+// Use the setters imported above to update them so animate.js sees changes.
 
 export
 function setupGUI() {
@@ -572,10 +571,10 @@ function setupGUI() {
       ndiFolder.domElement.style.display = mode === 'ndi' ? '' : 'none';
       // Show pattern editor only in pixelblaze mode when enabled
       if (window.showPatternEditor) window.showPatternEditor(mode === 'pixelblaze' && enabled);
-      // Sync engine state
-      engineEnabled = mode === 'pixelblaze' && enabled;
-      lightingEnabled = enabled;
-      lightingMode = mode;
+      // Sync engine state → state.js so animate.js sees the change
+      setEngineEnabled(mode === 'pixelblaze' && enabled);
+      setLightingEnabled(enabled);
+      setLightingMode(mode);
     }
 
     // Add Enable + Mode controls WITH direct onChange for visibility

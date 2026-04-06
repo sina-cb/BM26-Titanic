@@ -12,6 +12,11 @@ baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards Z
 const hitboxGeo = new THREE.BoxGeometry(1.5, 1.5, 2.0);
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
+// WebGL fragment shader limit: ~256 uniforms → max ~30 SpotLights active at once.
+// Beyond this, shaders fail to compile and the scene goes black.
+const MAX_ACTIVE_SPOTLIGHTS = 30;
+let activeSpotlightCount = 0;
+
 export class ParLight {
   constructor(config, index, scene, interactiveObjects, modelRadius) {
     this.config = config;
@@ -149,8 +154,20 @@ export class ParLight {
   }
 
   setVisibility(visible, conesVisible = true) {
-    this.light.visible = visible;
+    // Track active SpotLight count to stay under WebGL uniform limit
+    const wasActive = this.light.visible;
+    const wantActive = visible && (activeSpotlightCount < MAX_ACTIVE_SPOTLIGHTS || wasActive);
+    
+    if (wantActive && !wasActive) activeSpotlightCount++;
+    if (!wantActive && wasActive) activeSpotlightCount--;
+    
+    this.light.visible = wantActive;
     this.can.visible = visible;
-    this.beam.visible = visible && conesVisible;
+    // Beam cones always shown when fixture is visible (no WebGL limit on meshes)
+    this.beam.visible = visible;
+  }
+
+  static resetSpotlightCount() {
+    activeSpotlightCount = 0;
   }
 }

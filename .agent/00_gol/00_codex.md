@@ -30,3 +30,4 @@ Executive suggestions for the agent:
 - before writing Node.js code, review the **Node.js style guide**: `.agent\00_gol\02_nodejs_style.md`
 - **file naming convention**: all source files use `snake_case` (e.g., `par_light.js`, `marsin_engine.js`, `gui_builder.js`). No PascalCase or camelCase filenames. Class names inside files remain PascalCase.
 - Review the git rules: `.agent\00_gol\01_git.md`
+- **temporary/scratch files**: all one-off debug scripts, test helpers, and throwaway files **must** be created under `~/tmp/` (which is gitignored). Never place temp files in the source tree — it pollutes the codebase.
