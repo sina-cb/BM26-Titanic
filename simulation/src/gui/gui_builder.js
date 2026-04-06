@@ -563,23 +563,30 @@ function setupGUI() {
     }
     renderStopControls();
 
-    // ── NDI placeholder ──
-    const ndiFolder = engineFolder.addFolder('📡 NDI (Chromatik)');
-    const ndiPlaceholder = document.createElement('div');
-    ndiPlaceholder.style.cssText = 'padding:12px;color:#888;font-size:12px;font-family:inherit;text-align:center;';
-    ndiPlaceholder.innerHTML = '🚧 <b>Under Construction</b><br><span style="color:#666;font-size:10px;">NDI input from Chromatik for DMX control plane</span>';
-    const ndiChildren = ndiFolder.domElement.querySelector('.children');
-    if (ndiChildren) ndiChildren.appendChild(ndiPlaceholder);
-    ndiFolder.close();
+    // ── sACN Settings sub-folder ──
+    const sacnFolder = engineFolder.addFolder('📡 sACN Settings');
+    addControl(sacnFolder, 'sacn_enabled', sectionConfig.sacn_enabled || { value: true, label: '📡 Bridge Enabled' });
+    addControl(sacnFolder, 'sacn_universes', sectionConfig.sacn_universes || { value: '1,2,3,4', label: '📡 Listen Universes' });
+    addControl(sacnFolder, 'sacn_lockout_ms', sectionConfig.sacn_lockout_ms || { value: 10000, label: '📡 Source Lockout (ms)', min: 1000, max: 30000, step: 1000 });
+    addControl(sacnFolder, 'sacn_high_priority', sectionConfig.sacn_high_priority || { value: 150, label: '📡 High Priority', min: 100, max: 200, step: 10 });
+    addControl(sacnFolder, 'sacn_stale_ms', sectionConfig.sacn_stale_ms || { value: 2000, label: '📡 Source Stale (ms)', min: 500, max: 10000, step: 500 });
 
     // ── Mode visibility ──
+    const sacnMonitorPanel = document.getElementById('sacn-monitor-panel');
+
     function updateModeVisibility() {
       const mode = params.lightingMode || 'gradient';
       const enabled = !!params.lightingEnabled;
+      // Toggle sub-folders based on mode
       gradientFolder.domElement.style.display = mode === 'gradient' ? '' : 'none';
-      ndiFolder.domElement.style.display = mode === 'ndi' ? '' : 'none';
+      sacnFolder.domElement.style.display = mode === 'sacn_in' ? '' : 'none';
       // Show pattern editor only in pixelblaze mode when enabled
       if (window.showPatternEditor) window.showPatternEditor(mode === 'pixelblaze' && enabled);
+      // Show sACN monitor panel directly
+      if (sacnMonitorPanel) {
+        sacnMonitorPanel.classList.toggle('hidden', !(mode === 'sacn_in' && enabled));
+      }
+      if (window.showSacnMonitor) window.showSacnMonitor(mode === 'sacn_in' && enabled);
       // Sync engine state → state.js so animate.js sees the change
       setEngineEnabled(mode === 'pixelblaze' && enabled);
       setLightingEnabled(enabled);
@@ -598,9 +605,10 @@ function setupGUI() {
           });
         }
         updateModeVisibility();
+        if (window.onLightingChange) window.onLightingChange();
       });
     addControl(engineFolder, 'lightingMode', sectionConfig.lightingMode || { value: 'gradient', label: 'Mode', options: ['gradient', 'pixelblaze', 'sacn_in'] })
-      .onChange(() => updateModeVisibility());
+      .onChange(() => { updateModeVisibility(); if (window.onLightingChange) window.onLightingChange(); });
 
     // Reorder: move Enable + Mode controllers to top of folder
     const engineChildren = engineFolder.domElement.querySelector('.children');

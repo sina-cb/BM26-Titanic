@@ -27,15 +27,15 @@ const SACN_PORT = serverConfig.sacn_port || 6971;
 let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
 try {
   const sceneConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'scene_config.yaml'), 'utf8'));
-  if (sceneConfig && sceneConfig.sacn) {
-    const s = sceneConfig.sacn;
+  const s = sceneConfig && sceneConfig.colorWave;
+  if (s) {
     const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
-    const univStr = String(val(s.universes) || '1,2,3,4');
+    const univStr = String(val(s.sacn_universes) || '1,2,3,4');
     sacnOpts = {
       universes: univStr.split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u)),
-      lockoutMs: val(s.lockout_ms) || 10000,
-      highPriorityThreshold: val(s.high_priority_threshold) || 150,
-      sourceStaleMs: val(s.source_stale_ms) || 2000,
+      lockoutMs: val(s.sacn_lockout_ms) || 10000,
+      highPriorityThreshold: val(s.sacn_high_priority) || 150,
+      sourceStaleMs: val(s.sacn_stale_ms) || 2000,
     };
   }
 } catch (e) {
@@ -83,13 +83,17 @@ receiver.on('packet', (packet) => {
 
   if (priority >= HIGH_PRIORITY) {
     if (!highPriorityActive || activeSource !== sourceKey) {
-      console.log(`[sACN Bridge] 🔴 OVERRIDE — '${sourceKey}' (Priority ${priority}) in control.`);
+      const msg = `🔴 OVERRIDE — '${sourceKey}' (Priority ${priority}) in control.`;
+      console.log(`[sACN Bridge] ${msg}`);
+      broadcastLog(msg, 'warn');
       highPriorityActive = true;
       activeSource = sourceKey;
     }
     clearTimeout(highPriorityTimer);
     highPriorityTimer = setTimeout(() => {
-      console.log(`[sACN Bridge] 🟢 RELEASED — '${activeSource}' went silent for ${LOCKOUT_MS / 1000}s.`);
+      const msg = `🟢 RELEASED — '${activeSource}' went silent for ${LOCKOUT_MS / 1000}s.`;
+      console.log(`[sACN Bridge] ${msg}`);
+      broadcastLog(msg, 'source');
       highPriorityActive = false;
       activeSource = null;
     }, LOCKOUT_MS);
@@ -97,7 +101,9 @@ receiver.on('packet', (packet) => {
   } else {
     if (!highPriorityActive) {
       if (activeSource !== sourceKey) {
-        console.log(`[sACN Bridge] 🟡 ACTIVE — '${sourceKey}' (Priority ${priority}) forwarding.`);
+        const msg = `🟡 ACTIVE — '${sourceKey}' (Priority ${priority}) forwarding.`;
+        console.log(`[sACN Bridge] ${msg}`);
+        broadcastLog(msg, 'source');
         activeSource = sourceKey;
       }
       broadcastFrame(universe, priority, packet.payload);
@@ -108,12 +114,26 @@ receiver.on('packet', (packet) => {
   const now = Date.now();
   if (now - lastLogTime > 5000) {
     if (packetCount > 0 && clientCount > 0) {
-      console.log(`[sACN Bridge] ${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`);
+      const msg = `${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`;
+      console.log(`[sACN Bridge] ${msg}`);
+      broadcastLog(msg, 'info');
     }
     packetCount = 0;
     lastLogTime = now;
   }
 });
+
+/**
+ * Send a log message to all browser clients as JSON text.
+ * Browser sacn_input_source.js will forward these to the monitor panel.
+ */
+function broadcastLog(msg, type) {
+  if (wss.clients.size === 0) return;
+  const json = JSON.stringify({ type: 'log', msg, level: type || 'info' });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(json);
+  });
+}
 
 function broadcastFrame(universe, priority, payload) {
   if (wss.clients.size === 0) return;

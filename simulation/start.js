@@ -31,8 +31,10 @@ const saveServer = spawn('node', ['server/save-server.js'], {
 let sacnEnabled = false;
 try {
   const sceneConfig = yaml.load(fs.readFileSync(path.join(__dirname, 'config', 'scene_config.yaml'), 'utf8'));
-  sacnEnabled = sceneConfig && sceneConfig.sacn &&
-    (typeof sceneConfig.sacn.enabled === 'object' ? sceneConfig.sacn.enabled.value : sceneConfig.sacn.enabled);
+  const cw = sceneConfig && sceneConfig.colorWave;
+  if (cw && cw.sacn_enabled) {
+    sacnEnabled = typeof cw.sacn_enabled === 'object' ? cw.sacn_enabled.value : cw.sacn_enabled;
+  }
 } catch (e) { /* ignore */ }
 
 let sacnBridge = null;
@@ -45,7 +47,7 @@ if (sacnEnabled) {
     if (code !== null && code !== 0) console.log(`[start] sACN bridge exited with code ${code}`);
   });
 } else {
-  console.log(`[start] sACN bridge disabled (set sacn.enabled: true in scene_config.yaml)`);
+  console.log(`[start] sACN bridge disabled (set colorWave.sacn_enabled: true in scene_config.yaml)`);
 }
 
 function cleanup() {

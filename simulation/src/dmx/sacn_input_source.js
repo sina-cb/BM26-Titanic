@@ -134,10 +134,23 @@ export class SacnInputSource {
   }
 
   /**
-   * Handle incoming binary WebSocket message.
-   * Format: [universe(2)] [priority(1)] [dmx(512)] = 515 bytes
+   * Handle incoming WebSocket message.
+   * Binary: [universe(2)] [priority(1)] [dmx(512)] = 515 bytes
+   * Text/JSON: { type: 'log', msg, level }
    */
   _handleMessage(data) {
+    // Text message — log from bridge
+    if (typeof data === 'string') {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.type === 'log' && window.sacnLog) {
+          window.sacnLog(parsed.msg, parsed.level || 'info');
+        }
+      } catch (e) { /* ignore non-JSON */ }
+      return;
+    }
+
+    // Binary message — DMX frame
     if (!(data instanceof ArrayBuffer) || data.byteLength < 515) return;
 
     const view = new DataView(data);
@@ -150,7 +163,7 @@ export class SacnInputSource {
       // Ensure universe exists in router
       if (!window.dmxRouter.getUniverse(universe)) {
         window.dmxRouter.addUniverse(universe);
-        console.log(`[sACN Input] Auto-added universe ${universe} to router`);
+        if (window.sacnLog) window.sacnLog(`Auto-added universe ${universe}`, 'source');
       }
       window.dmxRouter.submitFrame(SACN_SOURCE_ID, priority || SACN_DEFAULT_PRIORITY, universe, dmx);
     }
@@ -164,9 +177,6 @@ export class SacnInputSource {
     const now = performance.now();
     if (now - this._lastLogTime > 5000) {
       this.stats.fps = Math.round(this._frameCount / 5);
-      if (this._frameCount > 0) {
-        console.log(`[sACN Input] ${this.stats.fps} fps, universe ${universe}, priority ${priority}`);
-      }
       this._frameCount = 0;
       this._lastLogTime = now;
     }
