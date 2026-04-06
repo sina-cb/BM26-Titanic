@@ -156,5 +156,24 @@ export function animate() {
     }
   }
 
+  // ─── DMX Router: merge sources and apply to patched fixtures ───
+  if (window.dmxRouter) {
+    window.dmxRouter.processFrame();
+
+    // Apply DMX frames to patched fixtures
+    if (window.parFixtures) {
+      for (const fixture of window.parFixtures) {
+        if (fixture && fixture.patchDef && fixture.fixtureDef) {
+          const slice = window.dmxRouter.getSlice(
+            fixture.patchDef.universe,
+            fixture.patchDef.addr,
+            fixture.fixtureDef.totalChannels || 10
+          );
+          if (slice) fixture.applyDmxFrame(slice);
+        }
+      }
+    }
+  }
+
   composer.render();
 }

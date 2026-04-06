@@ -28,6 +28,7 @@ import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
+import { UniverseRouter } from "./src/dmx/universe_router.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -215,6 +216,12 @@ Promise.all([
 
   // Initialize fixture definition registry
   initRegistry(window.fixtureModels);
+
+  // Initialize DMX universe router (universe 1 as default)
+  const dmxRouter = new UniverseRouter('highest_priority_source_lock');
+  dmxRouter.addUniverse(1);
+  window.dmxRouter = dmxRouter;
+  console.log('[DMX] Universe router initialized, universe 1 ready');
 
   // Default camera presets if none loaded
   if (cameraPresets.length === 0) {
