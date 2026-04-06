@@ -103,7 +103,7 @@ function setupGUI() {
       .replace(/^options:/m, '\n# ─── Options ──────────────────────────────────────────────────────────────\noptions:')
       .replace(/^config:/m, '\n# ─── Configuration ────────────────────────────────────────────────────────\nconfig:');
 
-    fetch("http://localhost:8181/save", {
+    fetch("http://localhost:6970/save", {
       method: "POST",
       body: yamlStr,
     })
@@ -237,7 +237,7 @@ function setupGUI() {
     lines.push('');
 
     const modelJS = lines.join('\n');
-    fetch('http://localhost:8181/save-model', {
+    fetch('http://localhost:6970/save-model', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: modelJS,

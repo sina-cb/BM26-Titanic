@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * start.js — Reads ports from config/server_config.yaml and launches
- * both the static HTTP server and the save server.
+ * the static HTTP server, save server, and sACN bridge.
  */
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -11,9 +11,10 @@ const yaml = require('js-yaml');
 const configPath = path.join(__dirname, 'config', 'server_config.yaml');
 const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
 const HTTP_PORT = config.http_port || 6969;
-const SAVE_PORT = config.save_port || 8181;
+const SAVE_PORT = config.save_port || HTTP_PORT + 1;
+const SACN_PORT = config.sacn_port || HTTP_PORT + 2;
 
-console.log(`[start] HTTP server on port ${HTTP_PORT}, Save server on port ${SAVE_PORT}`);
+console.log(`[start] HTTP: ${HTTP_PORT}  Save: ${SAVE_PORT}  sACN: ${SACN_PORT}`);
 console.log(`[start] Open: http://localhost:${HTTP_PORT}/simulation/`);
 
 const httpServer = spawn('npx', ['http-server', '../', '-p', String(HTTP_PORT), '-c-1', '--cors'], {
@@ -26,9 +27,31 @@ const saveServer = spawn('node', ['server/save-server.js'], {
   cwd: __dirname,
 });
 
+// sACN bridge — read scene config to check if enabled
+let sacnEnabled = false;
+try {
+  const sceneConfig = yaml.load(fs.readFileSync(path.join(__dirname, 'config', 'scene_config.yaml'), 'utf8'));
+  sacnEnabled = sceneConfig && sceneConfig.sacn &&
+    (typeof sceneConfig.sacn.enabled === 'object' ? sceneConfig.sacn.enabled.value : sceneConfig.sacn.enabled);
+} catch (e) { /* ignore */ }
+
+let sacnBridge = null;
+if (sacnEnabled) {
+  sacnBridge = spawn('node', ['server/sacn_bridge.js'], {
+    stdio: 'inherit',
+    cwd: __dirname,
+  });
+  sacnBridge.on('exit', (code) => {
+    if (code !== null && code !== 0) console.log(`[start] sACN bridge exited with code ${code}`);
+  });
+} else {
+  console.log(`[start] sACN bridge disabled (set sacn.enabled: true in scene_config.yaml)`);
+}
+
 function cleanup() {
   httpServer.kill();
   saveServer.kill();
+  if (sacnBridge) sacnBridge.kill();
   process.exit();
 }
 

@@ -38,7 +38,7 @@ function renderPresetButtons() {
 export async function loadPatternPresets() {
   // Discover patterns from server
   try {
-    const resp = await fetch(`http://localhost:8181/list-patterns`);
+    const resp = await fetch(`http://localhost:6970/list-patterns`);
     if (resp.ok) {
       const names = await resp.json();
       await Promise.all(names.map(async name => {
@@ -165,7 +165,7 @@ export function setupPatternEditor() {
       selectedPattern = name.toLowerCase().replace(/\s+/g, '_');
     }
     try {
-      const resp = await fetch('http://localhost:8181/save-pattern', {
+      const resp = await fetch('http://localhost:6970/save-pattern', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: selectedPattern, code }),
@@ -191,7 +191,7 @@ export function setupPatternEditor() {
     const key = name.toLowerCase().replace(/\s+/g, '_');
     const template = '// ' + titleCase(key) + '\nexport function beforeRender(delta) {\n  t1 = time(0.1)\n}\nexport function render(index) {\n  hsv(t1 + index / pixelCount, 1, 1)\n}\n';
     try {
-      const resp = await fetch('http://localhost:8181/save-pattern', {
+      const resp = await fetch('http://localhost:6970/save-pattern', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: key, code: template }),
@@ -213,7 +213,7 @@ export function setupPatternEditor() {
     if (!selectedPattern) return;
     if (!confirm(`Delete pattern "${selectedPattern}"?`)) return;
     try {
-      const resp = await fetch('http://localhost:8181/delete-pattern', {
+      const resp = await fetch('http://localhost:6970/delete-pattern', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: selectedPattern }),

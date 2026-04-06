@@ -1,12 +1,11 @@
 /**
- * sacn_bridge.js — sACN Receiver → WebSocket bridge.
+ * sacn_bridge.js — Standalone sACN → WebSocket bridge server.
  *
- * Attaches to the save-server's HTTP instance via WebSocket upgrade.
- * Receives sACN (E1.31) packets on the local network and forwards
- * the DMX frame data to browser clients on the '/sacn' WS path.
+ * Runs as a separate process, receives sACN (E1.31) packets on the
+ * local network and forwards DMX frame data to browser clients via WebSocket.
  *
- * Config is read from scene_config.yaml 'sacn' section:
- *   enabled, universes, lockout_ms, high_priority_threshold, source_stale_ms
+ * Config is read from scene_config.yaml 'sacn' section.
+ * Port is read from server_config.yaml 'sacn_port'.
  *
  * Protocol (WS messages, binary):
  *   Byte 0-1:  Universe number (uint16 LE)
@@ -15,176 +14,131 @@
  */
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const yaml = require('js-yaml');
+
+const SIM_ROOT = path.join(__dirname, '..');
+
+// ── Read config ────────────────────────────────────────────────────────
+const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
+const SACN_PORT = serverConfig.sacn_port || 6971;
+
+let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
+try {
+  const sceneConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'scene_config.yaml'), 'utf8'));
+  if (sceneConfig && sceneConfig.sacn) {
+    const s = sceneConfig.sacn;
+    const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
+    const univStr = String(val(s.universes) || '1,2,3,4');
+    sacnOpts = {
+      universes: univStr.split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u)),
+      lockoutMs: val(s.lockout_ms) || 10000,
+      highPriorityThreshold: val(s.high_priority_threshold) || 150,
+      sourceStaleMs: val(s.source_stale_ms) || 2000,
+    };
+  }
+} catch (e) {
+  console.warn('[sACN Bridge] Could not read scene_config.yaml:', e.message);
+}
+
+// ── Dependencies ───────────────────────────────────────────────────────
 let Receiver, WebSocketServer;
-
-try {
-  ({ Receiver } = require('sacn'));
-} catch (e) {
-  console.warn('[sACN Bridge] sacn package not installed — bridge disabled.');
-  console.warn('              Run: cd simulation && npm install sacn');
+try { ({ Receiver } = require('sacn')); } catch (e) {
+  console.error('[sACN Bridge] sacn package not installed. Run: npm install sacn');
+  process.exit(1);
+}
+try { WebSocketServer = require('ws').Server; } catch (e) {
+  console.error('[sACN Bridge] ws package not installed. Run: npm install ws');
+  process.exit(1);
 }
 
-try {
-  WebSocketServer = require('ws').Server;
-} catch (e) {
-  console.warn('[sACN Bridge] ws package not installed — bridge disabled.');
-  console.warn('              Run: cd simulation && npm install ws');
-}
+// ── WebSocket Server ───────────────────────────────────────────────────
+const wss = new WebSocketServer({ port: SACN_PORT });
+let clientCount = 0;
 
-/**
- * Attach sACN bridge WebSocket to an existing HTTP server.
- * @param {http.Server} httpServer — the save-server's HTTP instance
- * @param {object} options
- * @param {boolean} options.enabled — whether to start
- * @param {number[]} options.universes — sACN universes to listen on
- * @param {number} options.lockoutMs — high-priority lockout duration
- * @param {number} options.highPriorityThreshold — priority level that triggers lockout
- * @param {number} options.sourceStaleMs — source considered dead after this
- */
-function attachSacnBridge(httpServer, options = {}) {
-  const enabled = options.enabled !== undefined ? options.enabled : false;
-  const universes = options.universes || [1, 2, 3, 4];
-  const LOCKOUT_MS = options.lockoutMs || 10000;
-  const HIGH_PRIORITY = options.highPriorityThreshold || 150;
-  const SOURCE_STALE_MS = options.sourceStaleMs || 2000;
+wss.on('connection', (ws) => {
+  clientCount++;
+  console.log(`[sACN Bridge] Browser connected (${clientCount} client(s))`);
+  ws.on('close', () => { clientCount--; console.log(`[sACN Bridge] Browser disconnected (${clientCount} client(s))`); });
+  ws.on('error', (err) => console.error('[sACN Bridge] WS error:', err.message));
+});
 
-  if (!enabled) {
-    console.log('[sACN Bridge] Disabled in config.');
-    return null;
-  }
+// ── sACN Receiver ──────────────────────────────────────────────────────
+const receiver = new Receiver({ universes: sacnOpts.universes, reuseAddr: true });
 
-  if (!Receiver || !WebSocketServer) {
-    console.error('[sACN Bridge] Missing dependencies (sacn, ws). Bridge not started.');
-    return null;
-  }
+const LOCKOUT_MS = sacnOpts.lockoutMs;
+const HIGH_PRIORITY = sacnOpts.highPriorityThreshold;
 
-  // ── WebSocket Server — attached to save-server's HTTP via path '/sacn' ──
-  const wss = new WebSocketServer({ noServer: true });
-  let clientCount = 0;
+let activeSource = null;
+let highPriorityActive = false;
+let highPriorityTimer = null;
+let packetCount = 0;
+let lastLogTime = 0;
 
-  // Handle upgrade requests on '/sacn' path
-  httpServer.on('upgrade', (request, socket, head) => {
-    const url = new URL(request.url, 'http://localhost');
-    if (url.pathname === '/sacn') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
+receiver.on('packet', (packet) => {
+  const priority = packet.priority || 100;
+  const sourceKey = packet.sourceName || 'Unknown';
+  const universe = packet.universe || 1;
+
+  if (priority >= HIGH_PRIORITY) {
+    if (!highPriorityActive || activeSource !== sourceKey) {
+      console.log(`[sACN Bridge] 🔴 OVERRIDE — '${sourceKey}' (Priority ${priority}) in control.`);
+      highPriorityActive = true;
+      activeSource = sourceKey;
     }
-    // Other upgrade paths are ignored (not destroyed — other WS handlers may exist)
-  });
-
-  wss.on('connection', (ws) => {
-    clientCount++;
-    console.log(`[sACN Bridge] Browser connected (${clientCount} client(s))`);
-
-    ws.on('close', () => {
-      clientCount--;
-      console.log(`[sACN Bridge] Browser disconnected (${clientCount} client(s))`);
-    });
-
-    ws.on('error', (err) => {
-      console.error('[sACN Bridge] WebSocket error:', err.message);
-    });
-  });
-
-  // ── sACN Receiver ────────────────────────────────────────────────
-  const receiver = new Receiver({
-    universes: universes,
-    reuseAddr: true,
-  });
-
-  // State — priority routing (same logic as sacn_smart_router.js)
-  let activeSource = null;
-  let highPriorityActive = false;
-  let highPriorityTimer = null;
-  let packetCount = 0;
-  let lastLogTime = 0;
-
-  receiver.on('packet', (packet) => {
-    const priority = packet.priority || 100;
-    const sourceKey = packet.sourceName || 'Unknown';
-    const universe = packet.universe || 1;
-
-    // High-priority source override
-    if (priority >= HIGH_PRIORITY) {
-      if (!highPriorityActive || activeSource !== sourceKey) {
-        console.log(`[sACN Bridge] 🔴 OVERRIDE — '${sourceKey}' (Priority ${priority}) in control.`);
-        highPriorityActive = true;
+    clearTimeout(highPriorityTimer);
+    highPriorityTimer = setTimeout(() => {
+      console.log(`[sACN Bridge] 🟢 RELEASED — '${activeSource}' went silent for ${LOCKOUT_MS / 1000}s.`);
+      highPriorityActive = false;
+      activeSource = null;
+    }, LOCKOUT_MS);
+    broadcastFrame(universe, priority, packet.payload);
+  } else {
+    if (!highPriorityActive) {
+      if (activeSource !== sourceKey) {
+        console.log(`[sACN Bridge] 🟡 ACTIVE — '${sourceKey}' (Priority ${priority}) forwarding.`);
         activeSource = sourceKey;
       }
-      clearTimeout(highPriorityTimer);
-      highPriorityTimer = setTimeout(() => {
-        console.log(`[sACN Bridge] 🟢 RELEASED — '${activeSource}' went silent for ${LOCKOUT_MS / 1000}s.`);
-        highPriorityActive = false;
-        activeSource = null;
-      }, LOCKOUT_MS);
-
       broadcastFrame(universe, priority, packet.payload);
-    } else {
-      // Low-priority source — only forward if no high-priority lock
-      if (!highPriorityActive) {
-        if (activeSource !== sourceKey) {
-          console.log(`[sACN Bridge] 🟡 ACTIVE — '${sourceKey}' (Priority ${priority}) forwarding.`);
-          activeSource = sourceKey;
-        }
-        broadcastFrame(universe, priority, packet.payload);
-      }
     }
-
-    // Periodic stats
-    packetCount++;
-    const now = Date.now();
-    if (now - lastLogTime > 5000) {
-      if (packetCount > 0) {
-        console.log(`[sACN Bridge] ${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`);
-      }
-      packetCount = 0;
-      lastLogTime = now;
-    }
-  });
-
-  /**
-   * Broadcast a DMX frame to all connected WebSocket clients.
-   * Binary format: [universe(2)] [priority(1)] [dmx(512)] = 515 bytes
-   */
-  function broadcastFrame(universe, priority, payload) {
-    if (wss.clients.size === 0) return;
-
-    // Convert sACN payload object { channel: value } to 512-byte array
-    const dmx = new Uint8Array(512);
-    if (payload) {
-      for (const ch in payload) {
-        const idx = parseInt(ch, 10) - 1;
-        if (idx >= 0 && idx < 512) {
-          dmx[idx] = payload[ch];
-        }
-      }
-    }
-
-    // Build binary message: 2 bytes universe + 1 byte priority + 512 bytes DMX
-    const msg = Buffer.alloc(515);
-    msg.writeUInt16LE(universe, 0);
-    msg.writeUInt8(priority, 2);
-    dmx.forEach((v, i) => { msg[3 + i] = v; });
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === 1) { // WebSocket.OPEN
-        client.send(msg);
-      }
-    });
   }
 
-  console.log('═'.repeat(56));
-  console.log('  📡 sACN → WebSocket Bridge');
-  console.log('─'.repeat(56));
-  console.log(`  sACN Universes      : ${universes.join(', ')}`);
-  console.log(`  WebSocket Path      : ws://localhost:${httpServer.address()?.port || '?'}/sacn`);
-  console.log(`  Priority Threshold  : ≥${HIGH_PRIORITY}`);
-  console.log(`  Lockout Duration    : ${LOCKOUT_MS / 1000}s`);
-  console.log(`  Source Stale        : ${SOURCE_STALE_MS}ms`);
-  console.log('═'.repeat(56));
+  packetCount++;
+  const now = Date.now();
+  if (now - lastLogTime > 5000) {
+    if (packetCount > 0) {
+      console.log(`[sACN Bridge] ${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`);
+    }
+    packetCount = 0;
+    lastLogTime = now;
+  }
+});
 
-  return { wss, receiver };
+function broadcastFrame(universe, priority, payload) {
+  if (wss.clients.size === 0) return;
+  const dmx = new Uint8Array(512);
+  if (payload) {
+    for (const ch in payload) {
+      const idx = parseInt(ch, 10) - 1;
+      if (idx >= 0 && idx < 512) dmx[idx] = payload[ch];
+    }
+  }
+  const msg = Buffer.alloc(515);
+  msg.writeUInt16LE(universe, 0);
+  msg.writeUInt8(priority, 2);
+  dmx.forEach((v, i) => { msg[3 + i] = v; });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(msg);
+  });
 }
 
-module.exports = { attachSacnBridge };
+console.log('═'.repeat(56));
+console.log('  📡 sACN → WebSocket Bridge');
+console.log('─'.repeat(56));
+console.log(`  sACN Universes      : ${sacnOpts.universes.join(', ')}`);
+console.log(`  WebSocket Port      : ${SACN_PORT}`);
+console.log(`  Priority Threshold  : ≥${HIGH_PRIORITY}`);
+console.log(`  Lockout Duration    : ${LOCKOUT_MS / 1000}s`);
+console.log(`  Source Stale        : ${sacnOpts.sourceStaleMs}ms`);
+console.log('═'.repeat(56));

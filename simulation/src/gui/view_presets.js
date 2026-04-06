@@ -147,7 +147,7 @@ export function animateCamera(viewName) {
 
 export function saveCameraPresets() {
   const yamlStr = yaml.dump({ presets: cameraPresets });
-  fetch('http://localhost:8181/save-cameras', {
+  fetch('http://localhost:6970/save-cameras', {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: yamlStr,
