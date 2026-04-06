@@ -376,6 +376,14 @@ function setupGUI() {
         f.setVisibility(params.parsEnabled !== false, v);
       });
     },
+    generatorsVisible: (v) => {
+      if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
+    },
+    liteMode: () => {
+      // Rebuild all fixtures — SpotLights are created/skipped based on liteMode
+      if (window.rebuildParLights) window.rebuildParLights(true);
+      if (window.rebuildDmxFixtures) window.rebuildDmxFixtures(true);
+    },
     editMode: (isEditMode) => {
       if (!model) return;
       model.traverse((child) => {
@@ -1187,8 +1195,6 @@ function setupGUI() {
     genFolder.close();
 
     // Show/hide generator trace objects
-    if (params.generatorsVisible === undefined) params.generatorsVisible = true;
-
     function setTraceObjectsVisibility(visible) {
       (window.traceObjects || []).forEach(t => {
         if (t.group) t.group.visible = visible;
@@ -1197,10 +1203,6 @@ function setupGUI() {
       });
     }
     window.setTraceObjectsVisibility = setTraceObjectsVisibility;
-
-    genFolder.add(params, 'generatorsVisible').name('Show Generators').onChange(v => {
-      setTraceObjectsVisibility(v);
-    });
 
     // --- Trace 3D objects live here ---
     window.traceObjects = window.traceObjects || [];
@@ -1500,6 +1502,8 @@ function setupGUI() {
       params.traces.forEach((trace, i) => {
         window.traceObjects.push(buildTraceObject(trace, i));
       });
+      // Apply initial visibility from config
+      setTraceObjectsVisibility(params.generatorsVisible !== false);
     }
     window.rebuildTraceObjects = rebuildTraceObjects;
 

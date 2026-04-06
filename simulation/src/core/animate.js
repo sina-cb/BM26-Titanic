@@ -58,6 +58,7 @@ export function animate() {
         if (fixture.beam && fixture.beam.material) {
           fixture.beam.material.color.setRGB(r, g, b);
         }
+        if (fixture.setBulbColor) fixture.setBulbColor(r, g, b);
       }
     }
   }
@@ -114,6 +115,7 @@ export function animate() {
           if (fixture.beam && fixture.beam.material) {
             fixture.beam.material.color.setRGB(rn, gn, bn);
           }
+          if (fixture.setBulbColor) fixture.setBulbColor(rn, gn, bn);
           pixelOffset++;
         } else {
           pixelOffset++;

@@ -35,6 +35,7 @@ export function rebuildParLights(force = false) {
         scene,
         interactiveObjects,
         modelRadius,
+        !!params.liteMode,
       );
       window.parFixtures[index] = fixture;
     } else {

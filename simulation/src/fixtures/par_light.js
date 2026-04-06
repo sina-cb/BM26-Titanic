@@ -12,34 +12,51 @@ baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards Z
 const hitboxGeo = new THREE.BoxGeometry(1.5, 1.5, 2.0);
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
-// WebGL fragment shader limit: ~256 uniforms → max ~30 SpotLights active at once.
+// Lite mode: glowing sphere replaces SpotLight
+const bulbGeo = new THREE.SphereGeometry(0.25, 12, 8);
+const haloGeo = new THREE.SphereGeometry(0.6, 12, 8);
+
+// WebGL fragment shader limit: ~256 uniforms → max ~120 SpotLights active at once.
 // Beyond this, shaders fail to compile and the scene goes black.
-const MAX_ACTIVE_SPOTLIGHTS = 30;
+const MAX_ACTIVE_SPOTLIGHTS = 120;
 let activeSpotlightCount = 0;
 
 export class ParLight {
-  constructor(config, index, scene, interactiveObjects, modelRadius) {
+  constructor(config, index, scene, interactiveObjects, modelRadius, liteMode = false) {
     this.config = config;
     this.index = index;
     this.scene = scene;
     this.interactiveObjects = interactiveObjects;
     this.modelRadius = modelRadius;
+    this.liteMode = liteMode;
 
-    this.light = new THREE.SpotLight(
-      config.color,
-      config.intensity,
-      modelRadius * 3, // Distance
-      (config.angle * Math.PI) / 180,
-      config.penumbra,
-      1.5
-    );
-    this.light.position.set(config.x || 0, config.y || 1.5, config.z || 0);
-    // No shadow casting on par lights — WebGL has a hard limit on shadow-casting
-    // SpotLights (~4-8). The moonlight + tower floods provide scene shadows.
-    this.light.castShadow = false;
-
-    this.scene.add(this.light);
-    this.scene.add(this.light.target);
+    // ─── SpotLight (skipped in lite mode for GPU performance) ────────
+    if (!liteMode) {
+      this.light = new THREE.SpotLight(
+        config.color,
+        config.intensity,
+        modelRadius * 3, // Distance
+        (config.angle * Math.PI) / 180,
+        config.penumbra,
+        1.5
+      );
+      this.light.position.set(config.x || 0, config.y || 1.5, config.z || 0);
+      // No shadow casting — WebGL has a hard limit on shadow-casting SpotLights.
+      this.light.castShadow = false;
+      this.scene.add(this.light);
+      this.scene.add(this.light.target);
+    } else {
+      // Lightweight stub so the rest of the code can reference this.light safely
+      this.light = {
+        position: new THREE.Vector3(config.x || 0, config.y || 1.5, config.z || 0),
+        target: { position: new THREE.Vector3() },
+        color: new THREE.Color(config.color),
+        intensity: config.intensity,
+        angle: (config.angle * Math.PI) / 180,
+        penumbra: config.penumbra,
+        visible: false,
+      };
+    }
 
     // Hidden interactive hitbox
     this.hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
@@ -59,7 +76,7 @@ export class ParLight {
     this.can = new THREE.Mesh(canGeo, this.canMat);
     this.scene.add(this.can);
     
-    // Beam visual
+    // Beam visual (cone)
     const coneMat = new THREE.MeshBasicMaterial({
       color: config.color,
       transparent: true,
@@ -70,6 +87,26 @@ export class ParLight {
     });
     this.beam = new THREE.Mesh(baseBeamGeo, coneMat);
     this.scene.add(this.beam);
+
+    // ─── Glowing bulb (always created — lightweight emissive sphere) ────
+    this.bulbMat = new THREE.MeshBasicMaterial({
+      color: config.color,
+      transparent: false,
+    });
+    this.bulb = new THREE.Mesh(bulbGeo, this.bulbMat);
+    this.scene.add(this.bulb);
+
+    // Soft halo around bulb
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: config.color,
+      transparent: true,
+      opacity: 0.25,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.BackSide,
+    });
+    this.halo = new THREE.Mesh(haloGeo, this.haloMat);
+    this.scene.add(this.halo);
     
     // Link back to this class instance so TransformControls can update it
     this.hitbox.userData = { isParLight: true, fixture: this };
@@ -80,7 +117,7 @@ export class ParLight {
   }
 
   updateVisualsFromHitbox() {
-    // Sync Light
+    // Sync Light position/target
     this.light.position.copy(this.hitbox.position);
     const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.hitbox.quaternion);
     this.light.target.position.copy(this.hitbox.position).add(dir.multiplyScalar(100));
@@ -99,8 +136,15 @@ export class ParLight {
     this.beam.material.color.set(this.config.color);
     
     const coneLen = 3.0; // Short representation cone just in front of light
-    const radius = Math.tan(this.light.angle) * coneLen;
+    const angleRad = typeof this.light.angle === 'number' ? this.light.angle : THREE.MathUtils.degToRad(this.config.angle);
+    const radius = Math.tan(angleRad) * coneLen;
     this.beam.scale.set(radius, radius, coneLen);
+
+    // Sync bulb + halo
+    this.bulb.position.copy(this.hitbox.position);
+    this.bulbMat.color.set(this.config.color);
+    this.halo.position.copy(this.hitbox.position);
+    this.haloMat.color.set(this.config.color);
   }
 
   syncFromConfig() {
@@ -138,11 +182,17 @@ export class ParLight {
     this.scene.remove(this.hitbox);
     this.scene.remove(this.can);
     this.scene.remove(this.beam);
-    this.scene.remove(this.light);
-    this.scene.remove(this.light.target);
+    this.scene.remove(this.bulb);
+    this.scene.remove(this.halo);
+    if (!this.liteMode) {
+      this.scene.remove(this.light);
+      this.scene.remove(this.light.target);
+    }
 
     this.beam.material.dispose();
     this.canMat.dispose();
+    this.bulbMat.dispose();
+    this.haloMat.dispose();
 
     const ioIndex = this.interactiveObjects.indexOf(this.hitbox);
     if (ioIndex > -1) this.interactiveObjects.splice(ioIndex, 1);
@@ -154,17 +204,27 @@ export class ParLight {
   }
 
   setVisibility(visible, conesVisible = true) {
-    // Track active SpotLight count to stay under WebGL uniform limit
-    const wasActive = this.light.visible;
-    const wantActive = visible && (activeSpotlightCount < MAX_ACTIVE_SPOTLIGHTS || wasActive);
-    
-    if (wantActive && !wasActive) activeSpotlightCount++;
-    if (!wantActive && wasActive) activeSpotlightCount--;
-    
-    this.light.visible = wantActive;
+    if (!this.liteMode) {
+      // Cap active SpotLights to prevent WebGL "too many uniforms" shader crash.
+      const wasActive = this.light.visible;
+      const wantActive = visible && (activeSpotlightCount < MAX_ACTIVE_SPOTLIGHTS || wasActive);
+
+      if (wantActive && !wasActive) activeSpotlightCount++;
+      if (!wantActive && wasActive) activeSpotlightCount--;
+
+      this.light.visible = wantActive;
+    }
     this.can.visible = visible;
-    // Beam cones always shown when fixture is visible (no WebGL limit on meshes)
-    this.beam.visible = visible;
+    this.beam.visible = visible && conesVisible;
+    // Glowing bulb + halo always visible when fixture is on (regardless of conesEnabled)
+    this.bulb.visible = visible;
+    this.halo.visible = visible;
+  }
+
+  // Allow engines (gradient/pixelblaze) to color the bulb + halo
+  setBulbColor(r, g, b) {
+    this.bulbMat.color.setRGB(r, g, b);
+    this.haloMat.color.setRGB(r, g, b);
   }
 
   static resetSpotlightCount() {
