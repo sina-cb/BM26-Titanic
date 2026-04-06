@@ -28,3 +28,4 @@ Executive suggestions for the agent:
 - **never** put `import` or `from … import` inside functions or methods — all imports go at the **top of the file**
 - before writing Python code, review the **Python style guide**: `.agent\00_gol\01_python_style.md`
 - before writing Node.js code, review the **Node.js style guide**: `.agent\00_gol\02_nodejs_style.md`
+- **file naming convention**: all source files use `snake_case` (e.g., `par_light.js`, `marsin_engine.js`, `gui_builder.js`). No PascalCase or camelCase filenames. Class names inside files remain PascalCase.

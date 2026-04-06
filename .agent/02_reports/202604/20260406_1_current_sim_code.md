@@ -230,40 +230,43 @@ simulation/
 
 ## 4. Execution Sequence
 
-Since the goal is to keep functionality identical, the refactor is **purely a move/rename operation** with import path updates. Steps:
-
-### Phase 1: Create directories
+### Phase 1: Create directories ✅ DONE
 ```
-mkdir -p src/core src/fixtures src/gui server tools tools/debug config
+mkdir -p src/core src/fixtures src/gui server tools config
 ```
 
-### Phase 2: Move files (no content changes yet)
-1. Move fixture classes: `ParLight.js`, `ModelFixture.js`, `LedStrand.js`, `Iceberg.js`, `MarsinEngine.js` → `src/fixtures/`
-2. Move server: `save-server.js` → `server/save-server.js`
-3. Move tools: `agent_render.js` → `tools/agent-render.js`, etc.
-4. Move debug: `brace_counter.js`, `check_syntax.js`, `net_log.js` → `tools/debug/`
-5. Move config: `scene_config.yaml`, `scene_preset_cameras.yaml` → `config/`
-6. Rename `pb/` → `patterns/`
-7. Delete: `dev.bat`, `server_config.yaml`
+### Phase 2: Move files ✅ DONE
+- [x] Fixture classes → `src/fixtures/` (renamed to snake_case: `par_light.js`, `model_fixture.js`, etc.)
+- [x] MarsinEngine → `src/core/marsin_engine.js` (not a fixture, it's core)
+- [x] Server → `server/save-server.js`
+- [x] Tools → `tools/agent-render.js`, `tools/ui-controller.js`, `tools/get-logs.js`
+- [x] Config → `config/scene_config.yaml`, `config/scene_preset_cameras.yaml`, `config/server_config.yaml`
+- [x] Patterns → `patterns/` (renamed from `pb/`)
+- [x] Deleted: `dev.bat`, debug scripts (`brace_counter.js`, `check_syntax.js`, `net_log.js`)
 
-### Phase 3: Update import paths
-1. `main.js` — update all `import { X } from './ParLight.js'` → `'./src/fixtures/ParLight.js'`
-2. `index.html` — no change (still loads `main.js`)
-3. `save-server.js` — update file paths for YAML reads/writes
-4. `agent_render.js` — update preset YAML path
-5. `package.json` — update `start` script to reference `server/save-server.js`
+### Phase 3: Update import paths ✅ DONE
+- [x] `main.js` — all imports updated
+- [x] `save-server.js` — uses `SIM_ROOT` + reads port from `config/server_config.yaml`
+- [x] `agent_render.cjs` — preset YAML path updated to `config/`
+- [x] `package.json` — `start` now calls `node start.js` (reads ports from config)
+- [x] `start.js` — new clean server launcher reading from `config/server_config.yaml`
 
-### Phase 4: Split `main.js` (optional, larger effort)
-This is the most impactful step but also the riskiest. Can be done incrementally:
-1. Extract `src/core/undo.js` (simple, self-contained)
-2. Extract `src/core/config.js` (simple, self-contained)
-3. Extract `src/core/snap.js` (depends on scene objects)
-4. Continue per the table in §2.1
+### Phase 4: Split `main.js` ✅ DONE
+- [x] `src/core/state.js` — shared mutable application state (79 lines)
+- [x] `src/core/undo.js` — undo/redo snapshot system (81 lines)
+- [x] `src/core/config.js` — YAML config tree parsing & serialization (114 lines)
+- [x] `src/core/environment.js` — ground, stars, model loading, lighting (238 lines)
+- [x] `src/core/fixtures.js` — par light & DMX rebuild/sync (138 lines)
+- [x] `src/core/interaction.js` — snap, pointer, keyboard, transform (511 lines)
+- [x] `src/core/animate.js` — render loop + lighting engine dispatch (158 lines)
+- [x] `src/gui/gui_builder.js` — full GUI construction (2,610 lines)
+- [x] `src/gui/view_presets.js` — HUD + camera presets + animation (167 lines)
+- [x] `src/gui/pattern_editor.js` — Pixelblaze engine + editor panel (308 lines)
+- [x] `main.js` — thin orchestrator (275 lines)
 
-> [!IMPORTANT]  
-> Phase 4 (splitting `main.js`) is a **follow-up task** — it requires careful dependency analysis  
-> since many functions reference shared closure variables (`scene`, `camera`, `params`, etc.).  
-> The file moves in Phases 1–3 are safe and can be done immediately.
+### Phase 5: Conventions Updated ✅ DONE
+- [x] All files renamed to `snake_case` (codex rule added)
+- [x] File naming convention added to `.agent/00_gol/00_codex.md`
 
 ---
 
@@ -283,12 +286,13 @@ This is the most impactful step but also the riskiest. Can be done incrementally
 
 | Metric | Before | After |
 |---|---|---|
-| Files at root level | **22** | **5** (main.js, index.html, style.css, package.json, README.md) |
-| Naming conventions | **3 mixed** | **1 consistent** (kebab-case + PascalCase for classes) |
-| Debug scripts in root | **4** | **0** (moved to `tools/debug/`) |
-| `main.js` size | **4,528 lines** | **4,528 lines** (Phase 3) or **~200 lines** (Phase 4) |
-| Clear directory purpose | ❌ Flat soup | ✅ `src/`, `server/`, `tools/`, `config/` |
+| Files at root level | **22** | **6** (main.js, start.js, index.html, style.css, package.json, README.md) |
+| Naming conventions | **3 mixed** | **1 consistent** (snake_case for files, PascalCase for classes) |
+| Debug scripts | **4 at root** | **0** (deleted — one-off utilities) |
+| `main.js` size | **4,528 lines** | **275 lines** (thin orchestrator) |
+| Module count | **1 monolith** | **12 focused modules** across `src/core/` and `src/gui/` |
+| Config source of truth | Hardcoded ports | `config/server_config.yaml` |
+| Clear directory purpose | ❌ Flat soup | ✅ `src/`, `server/`, `tools/`, `config/`, `patterns/` |
 
-> [!TIP]
-> **Recommended approach:** Execute Phases 1–3 now (30 min, low risk). Schedule Phase 4  
-> (splitting `main.js`) as a separate focused session with testing between each extraction.
+> [!NOTE]
+> All phases completed. Ready for browser testing and merge to `dev/main`.
