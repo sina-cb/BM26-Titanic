@@ -293,11 +293,36 @@ export function onLightingChange() {
   setLightingEnabled(!!params.lightingEnabled);
   const newMode = params.lightingMode || 'gradient';
   setLightingMode(newMode);
+
   // Show pattern editor only in pixelblaze mode
   if (window.showPatternEditor) window.showPatternEditor(newMode === 'pixelblaze' && !!params.lightingEnabled);
-  const newEnabled = newMode === 'pixelblaze' && !!params.lightingEnabled;
-  engineEnabled = newEnabled;
-  setEngineEnabled(newEnabled);
+
+  // Pixelblaze engine
+  const pbEnabled = newMode === 'pixelblaze' && !!params.lightingEnabled;
+  engineEnabled = pbEnabled;
+  setEngineEnabled(pbEnabled);
+
+  // sACN input source — enable/disable based on mode
+  if (newMode === 'sacn_in' && !!params.lightingEnabled) {
+    // Lazy-load the sACN input module
+    if (!window._sacnInputLoaded) {
+      import('../dmx/sacn_input_source.js').then(({ getSacnInput }) => {
+        const sacn = getSacnInput();
+        sacn.enable();
+        window._sacnInputLoaded = true;
+        console.log('[Lighting] sACN input source enabled');
+      }).catch(err => {
+        console.error('[Lighting] Failed to load sACN input:', err);
+      });
+    } else if (window.sacnInput) {
+      window.sacnInput.enable();
+    }
+  } else {
+    // Disable sACN when not in sacn_in mode
+    if (window.sacnInput) {
+      window.sacnInput.disable();
+    }
+  }
 }
 
 // Expose on window for cross-module access
@@ -306,3 +331,4 @@ window.initPatternEngine = initPatternEngine;
 window.setupPatternEditor = setupPatternEditor;
 window.onLightingChange = onLightingChange;
 window.toggleColorWave = (v) => { setLightingEnabled(v); };
+

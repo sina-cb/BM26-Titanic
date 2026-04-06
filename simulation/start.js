@@ -26,6 +26,24 @@ const saveServer = spawn('node', ['server/save-server.js'], {
   cwd: __dirname,
 });
 
+// ── sACN Bridge (optional) ──────────────────────────────────────────────
+const sacnConfig = config.sacn || {};
+if (sacnConfig.enabled) {
+  try {
+    const { startSacnBridge } = require('./server/sacn_bridge');
+    startSacnBridge({
+      enabled: true,
+      universes: sacnConfig.universes || [1],
+      wsPort: sacnConfig.ws_port || 5555,
+    });
+  } catch (err) {
+    console.warn(`[start] sACN bridge failed to start: ${err.message}`);
+    console.warn(`[start] Install dependencies: npm install sacn ws`);
+  }
+} else {
+  console.log(`[start] sACN bridge disabled (set sacn.enabled: true in server_config.yaml)`);
+}
+
 function cleanup() {
   httpServer.kill();
   saveServer.kill();

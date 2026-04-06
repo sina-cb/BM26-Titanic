@@ -288,13 +288,13 @@ Parses the new unified YAML format:
 
 ### Phase 2: Router & sACN Input (Next Session)
 
-#### Step 2.1: Universe Frame Buffer
+#### Step 2.1: Universe Frame Buffer ✅
 **[NEW] `simulation/src/dmx/universe_frame_buffer.js`**
 - `Uint8Array(512)` per universe
 - Double-buffered (write buffer + read buffer, swap each frame)
 - `DmxFixtureRuntime.dmxSlice` is a view into the read buffer
 
-#### Step 2.2: Universe Router  
+#### Step 2.2: Universe Router ✅
 **[NEW] `simulation/src/dmx/universe_router.js`**
 - Accepts input from multiple sources (pixelblaze, sacn_in)
 - Implements `highest_priority_source_lock` and `highest_priority_per_patch`
@@ -310,7 +310,7 @@ Parses the new unified YAML format:
 - Add WebSocket server
 - Bridge sACN receiver packets → WebSocket → browser
 
-#### Step 2.4: Animate Integration
+#### Step 2.4: Animate Integration ✅ (wired, awaiting patched fixtures)
 **[MODIFY] `simulation/src/core/animate.js`**
 - Each frame: router merges inputs → frame buffer swaps → each DmxFixtureRuntime calls `applyDmxFrame()`
 - Pixelblaze engine writes to frame buffer as a source (priority 100)

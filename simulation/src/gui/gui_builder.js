@@ -599,7 +599,7 @@ function setupGUI() {
         }
         updateModeVisibility();
       });
-    addControl(engineFolder, 'lightingMode', sectionConfig.lightingMode || { value: 'gradient', label: 'Mode', options: ['gradient', 'pixelblaze', 'ndi'] })
+    addControl(engineFolder, 'lightingMode', sectionConfig.lightingMode || { value: 'gradient', label: 'Mode', options: ['gradient', 'pixelblaze', 'sacn_in'] })
       .onChange(() => updateModeVisibility());
 
     // Reorder: move Enable + Mode controllers to top of folder
