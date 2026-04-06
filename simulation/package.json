@@ -1,7 +1,7 @@
 {
   "scripts": {
-    "prestart": "npx -y kill-port 6969 8181 2>/dev/null || true",
-    "start": "concurrently \"npx http-server ../ -p 6969 -c-1 --cors\" \"node save-server.js\""
+    "prestart": "node -e \"const y=require('js-yaml'),f=require('fs');const c=y.load(f.readFileSync('config/server_config.yaml','utf8'));console.log(c.http_port+' '+c.save_port)\" | xargs npx -y kill-port 2>/dev/null || true",
+    "start": "node start.js"
   },
   "dependencies": {
     "acorn": "^8.16.0",

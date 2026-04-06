@@ -1,0 +1,5 @@
+# Server configuration for the BM26 Titanic simulation
+# Used by package.json start script and save-server.js
+
+http_port: 6969     # Static file server (http-server)
+save_port: 8181     # Save server (Node.js API)

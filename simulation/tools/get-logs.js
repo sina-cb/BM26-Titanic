@@ -1,8 +1,9 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 
 (async () => {
-  const wsEndpointUrl = fs.readFileSync('.puppeteer-endpoint', 'utf8').trim();
+  const wsEndpointUrl = fs.readFileSync(path.join(__dirname, '..', '.puppeteer-endpoint'), 'utf8').trim();
   const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpointUrl });
   const pages = await browser.pages();
   const page = pages.find(p => p.url().includes('localhost') || p.url().includes('127.0.0.1'));

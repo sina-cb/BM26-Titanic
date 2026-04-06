@@ -1,6 +1,14 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const yaml = require('js-yaml');
+
+// Resolve paths relative to the simulation root (parent of server/)
+const SIM_ROOT = path.join(__dirname, '..');
+
+// Read port from server_config.yaml
+const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
+const SAVE_PORT = serverConfig.save_port || 8181;
 
 http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,8 +23,8 @@ http.createServer((req, res) => {
       console.log(`[SAVE SERVER] Received POST /save. Body length: ${body.length}`);
       console.log(`[SAVE SERVER] Preview: ${body.substring(0, 100)}...`);
       try {
-        fs.writeFileSync(path.join(__dirname, 'scene_config.yaml'), body);
-        console.log(`[SAVE SERVER] Successfully wrote to scene_config.yaml`);
+        fs.writeFileSync(path.join(SIM_ROOT, 'config', 'scene_config.yaml'), body);
+        console.log(`[SAVE SERVER] Successfully wrote to config/scene_config.yaml`);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -30,8 +38,8 @@ http.createServer((req, res) => {
     req.on('end', () => {
       console.log(`[SAVE SERVER] Received POST /save-cameras. Body length: ${body.length}`);
       try {
-        fs.writeFileSync(path.join(__dirname, 'scene_preset_cameras.yaml'), body);
-        console.log(`[SAVE SERVER] Successfully wrote to scene_preset_cameras.yaml`);
+        fs.writeFileSync(path.join(SIM_ROOT, 'config', 'scene_preset_cameras.yaml'), body);
+        console.log(`[SAVE SERVER] Successfully wrote to config/scene_preset_cameras.yaml`);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -49,7 +57,7 @@ http.createServer((req, res) => {
         const { filename, stlData } = payload;
         if (!filename || !stlData) throw new Error('Missing filename or stlData');
         const safeName = filename.replace(/[^a-z0-9_.-]/gi, '_');
-        const outPath = path.join(__dirname, 'models', safeName);
+        const outPath = path.join(SIM_ROOT, 'models', safeName);
         fs.writeFileSync(outPath, stlData);
         console.log(`[SAVE SERVER] Successfully wrote to ${outPath}`);
         res.end('Saved');
@@ -67,8 +75,8 @@ http.createServer((req, res) => {
         const { name, code } = JSON.parse(body);
         if (!name || typeof code !== 'string') throw new Error('Missing name or code');
         const safeName = name.replace(/[^a-z0-9_-]/gi, '_');
-        const outPath = path.join(__dirname, 'pb', safeName + '.js');
-        fs.mkdirSync(path.join(__dirname, 'pb'), { recursive: true });
+        const outPath = path.join(SIM_ROOT, 'patterns', safeName + '.js');
+        fs.mkdirSync(path.join(SIM_ROOT, 'patterns'), { recursive: true });
         fs.writeFileSync(outPath, code);
         console.log(`[SAVE SERVER] Saved pattern: ${outPath}`);
         res.end('Saved');
@@ -86,7 +94,7 @@ http.createServer((req, res) => {
         const { name } = JSON.parse(body);
         if (!name) throw new Error('Missing name');
         const safeName = name.replace(/[^a-z0-9_-]/gi, '_');
-        const filePath = path.join(__dirname, 'pb', safeName + '.js');
+        const filePath = path.join(SIM_ROOT, 'patterns', safeName + '.js');
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
           console.log(`[SAVE SERVER] Deleted pattern: ${filePath}`);
@@ -103,8 +111,8 @@ http.createServer((req, res) => {
     });
   } else if (req.method === 'GET' && req.url === '/list-patterns') {
     try {
-      const pbDir = path.join(__dirname, 'pb');
-      const files = fs.existsSync(pbDir) ? fs.readdirSync(pbDir).filter(f => f.endsWith('.js')).map(f => f.replace(/\.js$/, '')) : [];
+      const patternsDir = path.join(SIM_ROOT, 'patterns');
+      const files = fs.existsSync(patternsDir) ? fs.readdirSync(patternsDir).filter(f => f.endsWith('.js')).map(f => f.replace(/\.js$/, '')) : [];
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(files));
     } catch (e) {
@@ -116,8 +124,8 @@ http.createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
-        const outPath = path.join(__dirname, 'pb', 'model', 'model.js');
-        fs.mkdirSync(path.join(__dirname, 'pb', 'model'), { recursive: true });
+        const outPath = path.join(SIM_ROOT, 'patterns', 'model', 'model.js');
+        fs.mkdirSync(path.join(SIM_ROOT, 'patterns', 'model'), { recursive: true });
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] Saved model: ${outPath} (${body.length} bytes)`);
         res.end('Saved');
@@ -130,4 +138,4 @@ http.createServer((req, res) => {
   } else {
     res.statusCode = 404; res.end();
   }
-}).listen(8181, () => console.log('Save server listening on 8181'));
+}).listen(SAVE_PORT, () => console.log(`Save server listening on ${SAVE_PORT}`));

@@ -22,7 +22,7 @@ const fs = require('fs');
 const yaml = require('js-yaml');
 
 // --- Config ---
-const PRESET_YAML = path.join(__dirname, '..', 'scene_preset_cameras.yaml');
+const PRESET_YAML = path.join(__dirname, '..', 'config', 'scene_preset_cameras.yaml');
 function loadPresetKeys() {
   try {
     const doc = yaml.load(fs.readFileSync(PRESET_YAML, 'utf8'));

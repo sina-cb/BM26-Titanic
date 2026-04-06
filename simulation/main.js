@@ -13,11 +13,11 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import yaml from "js-yaml";
 import chroma from "chroma-js";
-import { ParLight } from "./ParLight.js";
-import { ModelFixture } from "./ModelFixture.js";
-import { LedStrand } from "./LedStrand.js";
-import { Iceberg } from "./Iceberg.js";
-import { MarsinEngine } from "./MarsinEngine.js";
+import { ParLight } from "./src/fixtures/ParLight.js";
+import { ModelFixture } from "./src/fixtures/ModelFixture.js";
+import { LedStrand } from "./src/fixtures/LedStrand.js";
+import { Iceberg } from "./src/fixtures/Iceberg.js";
+import { MarsinEngine } from "./src/fixtures/MarsinEngine.js";
 
 // ─── Globals ────────────────────────────────────────────────────────────
 let scene, camera, renderer, composer, controls;
@@ -3958,7 +3958,7 @@ const patternEngine = new MarsinEngine();
 let engineReady = false;
 let engineEnabled = false;
 
-// Pattern preset names → loaded from pb/ directory
+// Pattern preset names → loaded from patterns/ directory
 const PATTERN_PRESETS = {}; // populated by loadPatternPresets()
 let selectedPattern = null; // currently active pattern name
 
@@ -3987,9 +3987,9 @@ async function loadPatternPresets() {
       const names = await resp.json();
       await Promise.all(names.map(async name => {
         try {
-          const r = await fetch(`pb/${name}.js?t=${Date.now()}`);
+          const r = await fetch(`patterns/${name}.js?t=${Date.now()}`);
           if (r.ok) PATTERN_PRESETS[name] = await r.text();
-        } catch (e) { console.warn(`[PB] Failed to load pb/${name}.js`); }
+        } catch (e) { console.warn(`[PB] Failed to load patterns/${name}.js`); }
       }));
     }
   } catch (e) {
@@ -3997,7 +3997,7 @@ async function loadPatternPresets() {
     const fallbackNames = ['rainbow', 'breathing', 'sparkle', 'fire', 'plasma', 'wipe'];
     await Promise.all(fallbackNames.map(async name => {
       try {
-        const r = await fetch(`pb/${name}.js?t=${Date.now()}`);
+        const r = await fetch(`patterns/${name}.js?t=${Date.now()}`);
         if (r.ok) PATTERN_PRESETS[name] = await r.text();
       } catch (e) { /* skip */ }
     }));
@@ -4416,8 +4416,8 @@ function animate() {
 
 // ─── Start ──────────────────────────────────────────────────────────────
 Promise.all([
-  fetch("scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
-  fetch("scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
+  fetch("config/scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
+  fetch("config/scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
   fetch("../dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("../dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("../dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),

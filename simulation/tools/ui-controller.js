@@ -1,10 +1,11 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 
 (async () => {
-  const endpointFile = '.puppeteer-endpoint';
+  const endpointFile = path.join(__dirname, '..', '.puppeteer-endpoint');
   if (!fs.existsSync(endpointFile)) {
-    console.error("No running simulation browser found. Run `node agent_render.js --open` first.");
+    console.error("No running simulation browser found. Run `node tools/agent-render.js --open` first.");
     process.exit(1);
   }
 

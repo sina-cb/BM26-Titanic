@@ -22,7 +22,7 @@ const fs = require('fs');
 const yaml = require('js-yaml');
 
 // --- Config ---
-const PRESET_YAML = path.join(__dirname, 'scene_preset_cameras.yaml');
+const PRESET_YAML = path.join(__dirname, '..', 'config', 'scene_preset_cameras.yaml');
 function loadPresetKeys() {
   try {
     const doc = yaml.load(fs.readFileSync(PRESET_YAML, 'utf8'));
@@ -34,11 +34,11 @@ function loadPresetKeys() {
 }
 const ALL_VIEWS = loadPresetKeys();
 const SIM_URL = 'http://localhost:8080/simulation/';
-const OUTPUT_DIR = path.join(__dirname, '..', '.agent_renders');
+const OUTPUT_DIR = path.join(__dirname, '..', '..', '.agent_renders');
 const VIEWPORT = { width: 1920, height: 1080 };
 const WINDOW_SIZE = { width: 2112, height: 1188 };
 const CAMERA_SETTLE_MS = 3000;
-const ENDPOINT_FILE = path.join(__dirname, '.puppeteer-endpoint');
+const ENDPOINT_FILE = path.join(__dirname, '..', '.puppeteer-endpoint');
 
 // --- CLI Parsing ---
 const args = process.argv.slice(2);
