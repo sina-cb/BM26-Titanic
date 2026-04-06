@@ -179,12 +179,13 @@ let _instance = null;
 
 /**
  * Get or create the sACN input source singleton.
- * @param {string} [wsUrl] — defaults to ws://localhost:5555
+ * @param {string} [wsUrl] — defaults to ws://localhost:8181/sacn
  * @returns {SacnInputSource}
  */
 export function getSacnInput(wsUrl) {
   if (!_instance) {
-    const url = wsUrl || `ws://${window.location.hostname || 'localhost'}:5555`;
+    const host = window.location.hostname || 'localhost';
+    const url = wsUrl || `ws://${host}:8181/sacn`;
     _instance = new SacnInputSource(url);
     window.sacnInput = _instance; // Expose for console debugging
   }

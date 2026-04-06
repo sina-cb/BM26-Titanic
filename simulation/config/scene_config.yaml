@@ -1929,7 +1929,7 @@ colorWave:
     options:
       - gradient
       - pixelblaze
-      - ndi
+      - sacn_in
     transient: true
   waveSpeed:
     value: 0.1
@@ -1940,6 +1940,36 @@ colorWave:
   gradientStops:
     - '#ff0000'
     - '#ffffff'
+
+# ─── sACN / DMX Network ──────────────────────────────────────────────────
+sacn:
+  _section:
+    label: 📡 sACN Network
+    collapsed: true
+  enabled:
+    value: true
+    label: Bridge Enabled
+  universes:
+    value: '1,2,3,4'
+    label: Listen Universes
+  lockout_ms:
+    value: 10000
+    label: Source Lockout (ms)
+    min: 1000
+    max: 30000
+    step: 1000
+  high_priority_threshold:
+    value: 150
+    label: High Priority Threshold
+    min: 100
+    max: 200
+    step: 10
+  source_stale_ms:
+    value: 2000
+    label: Source Stale Timeout (ms)
+    min: 500
+    max: 10000
+    step: 500
 
 # ─── Configuration ────────────────────────────────────────────────────────
 config:

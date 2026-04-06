@@ -2,10 +2,4 @@
 # Used by package.json start script and save-server.js
 
 http_port: 6969     # Static file server (http-server)
-save_port: 8181     # Save server (Node.js API)
-
-# sACN bridge — receives sACN/E1.31 over the network and forwards to browser via WebSocket
-sacn:
-  enabled: false      # Set to true to activate sACN bridge
-  ws_port: 5555       # WebSocket port for browser connection
-  universes: [1]      # sACN universes to listen on
+save_port: 8181     # Save server (Node.js API + sACN WebSocket bridge)

@@ -5,7 +5,9 @@
   },
   "dependencies": {
     "acorn": "^8.16.0",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "sacn": "^4.6.2",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

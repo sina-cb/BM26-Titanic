@@ -2,6 +2,7 @@
 
 > **Branch:** `dev/sacn` (based off `dev/main`)  
 > **Design Doc:** [11_sim_sacn_integration.md](file:///Users/ssolaimanpour/workspace/BM26-Titanic/docs/11_sim_sacn_integration.md)  
+> **Cross-ref:** Architecture sections 2-4, 7 from the design doc are implemented below.  
 > **Date:** 2026-04-06
 
 ---
@@ -300,7 +301,7 @@ Parses the new unified YAML format:
 - Implements `highest_priority_source_lock` and `highest_priority_per_patch`
 - Source staleness timeout (~2000ms)
 
-#### Step 2.3: sACN Input Source
+#### Step 2.3: sACN Input Source ✅
 **[NEW] `simulation/src/dmx/sacn_input_source.js`**
 - WebSocket client that connects to Node.js server
 - Receives DMX frames forwarded from sACN network
