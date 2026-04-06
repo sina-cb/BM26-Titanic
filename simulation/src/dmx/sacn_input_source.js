@@ -139,19 +139,37 @@ export class SacnInputSource {
    * Text/JSON: { type: 'log', msg, level }
    */
   _handleMessage(data) {
-    // Text message — log from bridge
+    // Text message — may arrive as string or ArrayBuffer (binaryType='arraybuffer')
     if (typeof data === 'string') {
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.type === 'log' && window.sacnLog) {
-          window.sacnLog(parsed.msg, parsed.level || 'info');
-        }
-      } catch (e) { /* ignore non-JSON */ }
+      this._handleTextMessage(data);
       return;
     }
 
-    // Binary message — DMX frame
-    if (!(data instanceof ArrayBuffer) || data.byteLength < 515) return;
+    // ArrayBuffer — could be DMX frame (515 bytes) or JSON log (shorter)
+    if (data instanceof ArrayBuffer) {
+      if (data.byteLength === 515) {
+        // DMX frame
+        this._handleDmxFrame(data);
+      } else {
+        // Try as text (JSON log from bridge)
+        try {
+          const text = new TextDecoder().decode(data);
+          this._handleTextMessage(text);
+        } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  _handleTextMessage(text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.type === 'log' && window.sacnLog) {
+        window.sacnLog(parsed.msg, parsed.level || 'info');
+      }
+    } catch (e) { /* ignore non-JSON */ }
+  }
+
+  _handleDmxFrame(data) {
 
     const view = new DataView(data);
     const universe = view.getUint16(0, true); // little-endian

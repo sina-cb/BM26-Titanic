@@ -59,8 +59,8 @@ let clientCount = 0;
 
 wss.on('connection', (ws) => {
   clientCount++;
-  console.log(`[sACN Bridge] Browser connected (${clientCount} client(s))`);
-  ws.on('close', () => { clientCount--; console.log(`[sACN Bridge] Browser disconnected (${clientCount} client(s))`); });
+  broadcastLog(`Browser connected (${clientCount} client(s))`, 'source');
+  ws.on('close', () => { clientCount--; broadcastLog(`Browser disconnected (${clientCount} client(s))`, 'warn'); });
   ws.on('error', (err) => console.error('[sACN Bridge] WS error:', err.message));
 });
 
@@ -84,7 +84,6 @@ receiver.on('packet', (packet) => {
   if (priority >= HIGH_PRIORITY) {
     if (!highPriorityActive || activeSource !== sourceKey) {
       const msg = `🔴 OVERRIDE — '${sourceKey}' (Priority ${priority}) in control.`;
-      console.log(`[sACN Bridge] ${msg}`);
       broadcastLog(msg, 'warn');
       highPriorityActive = true;
       activeSource = sourceKey;
@@ -92,7 +91,6 @@ receiver.on('packet', (packet) => {
     clearTimeout(highPriorityTimer);
     highPriorityTimer = setTimeout(() => {
       const msg = `🟢 RELEASED — '${activeSource}' went silent for ${LOCKOUT_MS / 1000}s.`;
-      console.log(`[sACN Bridge] ${msg}`);
       broadcastLog(msg, 'source');
       highPriorityActive = false;
       activeSource = null;
@@ -102,7 +100,6 @@ receiver.on('packet', (packet) => {
     if (!highPriorityActive) {
       if (activeSource !== sourceKey) {
         const msg = `🟡 ACTIVE — '${sourceKey}' (Priority ${priority}) forwarding.`;
-        console.log(`[sACN Bridge] ${msg}`);
         broadcastLog(msg, 'source');
         activeSource = sourceKey;
       }
@@ -115,7 +112,6 @@ receiver.on('packet', (packet) => {
   if (now - lastLogTime > 5000) {
     if (packetCount > 0 && clientCount > 0) {
       const msg = `${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`;
-      console.log(`[sACN Bridge] ${msg}`);
       broadcastLog(msg, 'info');
     }
     packetCount = 0;
