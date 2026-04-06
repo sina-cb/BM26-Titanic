@@ -34,7 +34,14 @@ export let lastFpsTime = 0;
 
 // ─── Config & GUI ───────────────────────────────────────────────────────
 export let configTree = null;
-export const params = {};
+export const params = {
+  parLights: [],
+  dmxFixtures: [],
+  icebergs: [],
+  ledStrands: [],
+  traces: [],
+  gradientStops: []
+};
 export let cameraPresets = [];
 export let gui = null;
 

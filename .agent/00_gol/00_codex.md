@@ -29,3 +29,4 @@ Executive suggestions for the agent:
 - before writing Python code, review the **Python style guide**: `.agent\00_gol\01_python_style.md`
 - before writing Node.js code, review the **Node.js style guide**: `.agent\00_gol\02_nodejs_style.md`
 - **file naming convention**: all source files use `snake_case` (e.g., `par_light.js`, `marsin_engine.js`, `gui_builder.js`). No PascalCase or camelCase filenames. Class names inside files remain PascalCase.
+- Review the git rules: `.agent\00_gol\01_git.md`

@@ -3,7 +3,7 @@
  */
 import * as THREE from "three";
 import yaml from "js-yaml";
-import { camera, controls, cameraPresets, setCameraPresets } from "./state.js";
+import { camera, controls, cameraPresets, setCameraPresets } from "../core/state.js";
 
 // ─── HUD Frame ──────────────────────────────────────────────────────────
 export function setupHUD() {
