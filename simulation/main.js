@@ -27,6 +27,7 @@ import { createGround, createStarField, loadModel, onModelLoaded } from "./src/c
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
+import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -211,6 +212,9 @@ Promise.all([
       console.warn("Failed to parse fixture model " + file + ":", err);
     }
   });
+
+  // Initialize fixture definition registry
+  initRegistry(window.fixtureModels);
 
   // Default camera presets if none loaded
   if (cameraPresets.length === 0) {

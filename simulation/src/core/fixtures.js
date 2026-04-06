@@ -1,13 +1,17 @@
 /**
- * fixtures.js — Par light and DMX fixture rebuild/sync logic.
+ * fixtures.js — Fixture rebuild/sync logic.
+ *
+ * Uses DmxFixtureRuntime (replaces legacy ParLight).
+ * Supports both old config format (parLights[]) and new format during transition.
  */
 import * as THREE from "three";
 import {
   scene, params, interactiveObjects, modelRadius,
   selectedFixtureIndices, selectedDmxIndices,
 } from "./state.js";
-import { ParLight } from "../fixtures/par_light.js";
+import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
+import { getDefinition } from "../dmx/fixture_definition_registry.js";
 
 export function rebuildParLights(force = false) {
   if (!window.parFixtures) {
@@ -25,19 +29,43 @@ export function rebuildParLights(force = false) {
     if (f) f.destroy();
   }
 
+  console.log(`[fixtures] rebuildParLights: ${params.parLights.length} fixtures, scene=${!!scene}, liteMode=${!!params.liteMode}`);
+
   params.parLights.forEach((config, index) => {
     let fixture = window.parFixtures[index];
 
+    // Detect fixture type change — must destroy and recreate
+    if (fixture) {
+      const currentType = fixture.fixtureDef?.fixtureType || 'UkingPar';
+      const newType = config.type || config.fixtureType || 'UkingPar';
+      if (currentType !== newType) {
+        fixture.destroy();
+        fixture = null;
+        window.parFixtures[index] = null;
+      }
+    }
+
     if (!fixture) {
-      fixture = new ParLight(
-        config,
-        index,
-        scene,
-        interactiveObjects,
-        modelRadius,
-        !!params.liteMode,
-      );
-      window.parFixtures[index] = fixture;
+      // Resolve fixture type — check config, fall back to UkingPar
+      const fixtureType = config.type || config.fixtureType || 'UkingPar';
+      const fixtureDef = getDefinition(fixtureType);
+
+      try {
+        fixture = new DmxFixtureRuntime(
+          config,
+          index,
+          scene,
+          interactiveObjects,
+          modelRadius,
+          fixtureDef,
+          null, // patchDef — unpatched in legacy mode
+          !!params.liteMode,
+        );
+        window.parFixtures[index] = fixture;
+      } catch (err) {
+        console.error(`[fixtures] Failed to create fixture ${index} (${fixtureType}):`, err);
+        return;
+      }
     } else {
       fixture.config = config;
       fixture.index = index;
@@ -94,12 +122,16 @@ export function rebuildDmxFixtures(force = false) {
           fixtureModel,
         );
       } else {
-        fixture = new ParLight(
+        const fixtureDef = getDefinition(fixtureType);
+        fixture = new DmxFixtureRuntime(
           config,
           index,
           scene,
           interactiveObjects,
           modelRadius,
+          fixtureDef,
+          null,
+          !!params.liteMode,
         );
       }
       window.dmxSceneFixtures[index] = fixture;

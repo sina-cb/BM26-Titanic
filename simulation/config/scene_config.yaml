@@ -243,7 +243,7 @@ modelTransform:
 # ─── Par Lights ───────────────────────────────────────────────────────────
 parLights:
   _section:
-    label: 🎯 Par Lights
+    label: 🔌 DMX Fixtures
     type: fixtureArray
     collapsed: false
   parsEnabled:

@@ -21,7 +21,8 @@ import { reconstructYAML } from "../core/config.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
-import { ParLight } from "../fixtures/par_light.js";
+import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
+import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { Iceberg } from "../fixtures/iceberg.js";
@@ -872,7 +873,7 @@ function setupGUI() {
           traceRow.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;align-items:center;';
 
           const groupHidden = items.length > 0 && items.every(({ index }) =>
-            window.parFixtures[index] && !window.parFixtures[index].light.visible
+            window.parFixtures[index] && !window.parFixtures[index].group.visible
           );
           const visBtn = document.createElement('button');
           visBtn.textContent = groupHidden ? '○ Off' : '● On';
@@ -931,7 +932,7 @@ function setupGUI() {
         const visBtn = document.createElement('button');
         // Track group visibility state
         const groupHidden = items.length > 0 && items.every(({ index }) =>
-          window.parFixtures[index] && !window.parFixtures[index].light.visible
+          window.parFixtures[index] && !window.parFixtures[index].group.visible
         );
         visBtn.textContent = groupHidden ? '○ Off' : '● On';
         visBtn.style.cssText = gBtnStyle + (groupHidden ? 'color:#666;' : 'color:#6f6;');
@@ -978,7 +979,8 @@ function setupGUI() {
           const idx = params.parLights.length + 1;
           params.parLights.push({
             group: groupName,
-            name: `Par Light ${idx}`,
+            name: `DMX Fixture ${idx}`,
+            fixtureType: 'UkingPar',
             color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
           });
@@ -1292,21 +1294,28 @@ function setupGUI() {
 
     function computeTracePoints(trace) {
       const pts = [];
+      // Get fixture width for spacing (use fixture dimensions if available)
+      const fixtureType = trace.fixtureType || 'UkingPar';
+      const fixtureDef = getDefinition(fixtureType);
+      const fixtureWidth = DmxFixtureRuntime.getFixtureWidth(fixtureDef);
+      // Effective spacing: at least the fixture width, or user-specified spacing
+      const effectiveSpacing = Math.max(trace.spacing || 2, fixtureWidth);
+
       if (trace.shape === 'circle') {
         const r = trace.radius || 5;
         const arcRad = THREE.MathUtils.degToRad(trace.arc || 360);
         const circumference = r * arcRad;
-        const count = Math.max(1, Math.round(circumference / (trace.spacing || 2)));
+        const count = Math.max(1, Math.round(circumference / effectiveSpacing));
         for (let i = 0; i < count; i++) {
           const angle = (i / count) * arcRad;
           pts.push(new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r));
         }
       } else {
-        // line: world-space start→end
+        // line: world-space start to end
         const start = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
         const end   = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
         const totalLen = start.distanceTo(end);
-        const count = Math.max(2, Math.round(totalLen / (trace.spacing || 2)));
+        const count = Math.max(2, Math.round(totalLen / effectiveSpacing));
         for (let i = 0; i < count; i++) {
           const t = i / (count - 1);
           pts.push(new THREE.Vector3().lerpVectors(start, end, t));
@@ -1682,12 +1691,15 @@ function setupGUI() {
         params.parLights.push({
           group: groupName,
           name: `${groupName} ${i + 1}`,
+          fixtureType: trace.fixtureType || 'UkingPar',
           color: trace.lightColor || '#ffaa44',
           intensity: trace.lightIntensity || 10,
           angle: trace.lightAngle || 30,
           penumbra: 0.5,
           x: worldPt.x, y: worldPt.y, z: worldPt.z,
-          rotX, rotY, rotZ,
+          rotX: rotX + (trace.fixtureRotOffX || 0),
+          rotY: rotY + (trace.fixtureRotOffY || 0),
+          rotZ: rotZ + (trace.fixtureRotOffZ || 0),
           _traceGenerated: true,
         });
       });
@@ -1735,6 +1747,7 @@ function setupGUI() {
           aimMode: 'lookAt', aimX: 0, aimY: 0, aimZ: 0,
           lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
           groupName: `Ring ${params.traces.length + 1}`,
+          fixtureType: 'UkingPar',
           generated: false,
         });
         rebuildTraceObjects();
@@ -1755,6 +1768,7 @@ function setupGUI() {
           aimMode: 'direction', aimX: 0, aimY: -1, aimZ: 0,
           lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
           groupName: `Line ${params.traces.length + 1}`,
+          fixtureType: 'UkingPar',
           generated: false,
         });
         rebuildTraceObjects();
@@ -1845,6 +1859,15 @@ function setupGUI() {
           debounceAutoSave();
         });
 
+        // Fixture type selector
+        if (!trace.fixtureType) trace.fixtureType = 'UkingPar';
+        const fixtureTypes = listTypes();
+        if (fixtureTypes.length > 0) {
+          tFolder.add(trace, 'fixtureType', fixtureTypes).name('Fixture Type').onChange(() => {
+            debounceAutoSave();
+          });
+        }
+
         if (trace.shape === 'circle') {
           tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius').onChange(() => {
             updateTracePreview(i);
@@ -1913,6 +1936,16 @@ function setupGUI() {
         lightFolder.addColor(trace, 'lightColor').name('Color');
         lightFolder.add(trace, 'lightIntensity', 1, 200, 1).name('Intensity');
         lightFolder.add(trace, 'lightAngle', 5, 90, 1).name('Angle');
+
+        // Fixture rotation offset
+        if (!('fixtureRotOffX' in trace)) trace.fixtureRotOffX = 0;
+        if (!('fixtureRotOffY' in trace)) trace.fixtureRotOffY = 0;
+        if (!('fixtureRotOffZ' in trace)) trace.fixtureRotOffZ = 0;
+        const rotOffFolder = tFolder.addFolder('Fixture Rotation Offset');
+        rotOffFolder.close();
+        rotOffFolder.add(trace, 'fixtureRotOffX', -180, 180, 5).name('X');
+        rotOffFolder.add(trace, 'fixtureRotOffY', -180, 180, 5).name('Y');
+        rotOffFolder.add(trace, 'fixtureRotOffZ', -180, 180, 5).name('Z');
 
         // Action buttons
         const actDiv = document.createElement('div');

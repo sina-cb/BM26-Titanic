@@ -91,11 +91,11 @@
 
 ---
 
-#### Step 1.1: Unified Config Format
+#### Step 1.1: Unified Config Format (in progress)
 
 **[MODIFY] `simulation/config/scene_config.yaml`**
 
-Migrate the current file to the new format. The new top-level structure:
+Migrate to the new format. The new top-level structure:
 
 ```yaml
 meta:
@@ -195,7 +195,7 @@ lighting:
 
 ---
 
-#### Step 1.2: Fixture Definition Registry
+#### Step 1.2: Fixture Definition Registry ✅
 
 **[NEW] `simulation/src/dmx/fixture_definition_registry.js`**
 
@@ -210,7 +210,7 @@ Responsibilities:
 
 ---
 
-#### Step 1.3: Patch Registry
+#### Step 1.3: Patch Registry ✅ (code written, not wired)
 
 **[NEW] `simulation/src/dmx/patch_registry.js`**
 
@@ -228,7 +228,7 @@ Responsibilities:
 
 ---
 
-#### Step 1.4: DmxFixtureRuntime (replaces ParLight)
+#### Step 1.4: DmxFixtureRuntime (replaces ParLight) ✅
 
 **[NEW] `simulation/src/fixtures/dmx_fixture_runtime.js`**
 
