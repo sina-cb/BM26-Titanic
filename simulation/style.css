@@ -727,11 +727,11 @@ canvas {
 #sacn-monitor-panel {
   position: fixed;
   top: 60px;
-  right: 14px;
+  left: 14px;
   width: 280px;
   min-width: 220px;
   max-width: 400px;
-  z-index: 95;
+  z-index: 200;
   display: flex;
   flex-direction: column;
   background: rgba(10, 10, 20, 0.92);
