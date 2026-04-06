@@ -88,7 +88,7 @@ export class SacnInputSource {
       this._ws.onopen = () => {
         this._connected = true;
         this.stats.connected = true;
-        console.log('[sACN Input] ✅ Connected to sACN bridge');
+        if (window.sacnLog) window.sacnLog('Connected to bridge', 'source');
       };
 
       this._ws.onmessage = (event) => {
@@ -99,15 +99,14 @@ export class SacnInputSource {
         this._connected = false;
         this.stats.connected = false;
         if (this._enabled) {
-          console.log(`[sACN Input] Disconnected — reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
+          if (window.sacnLog) window.sacnLog('Disconnected — reconnecting...', 'warn');
           this._reconnectTimer = setTimeout(() => this._connect(), RECONNECT_DELAY_MS);
         }
       };
 
-      this._ws.onerror = (err) => {
-        // Suppress noisy connection-refused errors
-        if (this._connected) {
-          console.warn('[sACN Input] WebSocket error');
+      this._ws.onerror = () => {
+        if (this._connected && window.sacnLog) {
+          window.sacnLog('WebSocket error', 'error');
         }
       };
     } catch (e) {

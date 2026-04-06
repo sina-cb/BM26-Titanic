@@ -107,7 +107,7 @@ receiver.on('packet', (packet) => {
   packetCount++;
   const now = Date.now();
   if (now - lastLogTime > 5000) {
-    if (packetCount > 0) {
+    if (packetCount > 0 && clientCount > 0) {
       console.log(`[sACN Bridge] ${packetCount} packets/5s from '${activeSource || 'none'}', ${clientCount} client(s)`);
     }
     packetCount = 0;

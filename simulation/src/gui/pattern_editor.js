@@ -294,33 +294,38 @@ export function onLightingChange() {
   const newMode = params.lightingMode || 'gradient';
   setLightingMode(newMode);
 
+  const isEnabled = !!params.lightingEnabled;
+
   // Show pattern editor only in pixelblaze mode
-  if (window.showPatternEditor) window.showPatternEditor(newMode === 'pixelblaze' && !!params.lightingEnabled);
+  if (window.showPatternEditor) window.showPatternEditor(newMode === 'pixelblaze' && isEnabled);
+
+  // Show sACN monitor only in sacn_in mode
+  if (window.showSacnMonitor) window.showSacnMonitor(newMode === 'sacn_in' && isEnabled);
 
   // Pixelblaze engine
-  const pbEnabled = newMode === 'pixelblaze' && !!params.lightingEnabled;
+  const pbEnabled = newMode === 'pixelblaze' && isEnabled;
   engineEnabled = pbEnabled;
   setEngineEnabled(pbEnabled);
 
   // sACN input source — enable/disable based on mode
-  if (newMode === 'sacn_in' && !!params.lightingEnabled) {
-    // Lazy-load the sACN input module
+  if (newMode === 'sacn_in' && isEnabled) {
     if (!window._sacnInputLoaded) {
       import('../dmx/sacn_input_source.js').then(({ getSacnInput }) => {
         const sacn = getSacnInput();
         sacn.enable();
         window._sacnInputLoaded = true;
-        console.log('[Lighting] sACN input source enabled');
+        if (window.sacnLog) window.sacnLog('sACN input enabled', 'source');
       }).catch(err => {
-        console.error('[Lighting] Failed to load sACN input:', err);
+        if (window.sacnLog) window.sacnLog('Failed to load sACN: ' + err.message, 'error');
       });
     } else if (window.sacnInput) {
       window.sacnInput.enable();
+      if (window.sacnLog) window.sacnLog('sACN input resumed', 'source');
     }
   } else {
-    // Disable sACN when not in sacn_in mode
     if (window.sacnInput) {
       window.sacnInput.disable();
+      if (window.sacnLog) window.sacnLog('sACN input disabled', 'warn');
     }
   }
 }

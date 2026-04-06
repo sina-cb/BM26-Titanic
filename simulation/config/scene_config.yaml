@@ -1924,13 +1924,13 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: pixelblaze
+    value: sacn_in
     label: Mode
     options:
       - gradient
       - pixelblaze
       - sacn_in
-    transient: true
+    transient: false
   waveSpeed:
     value: 0.1
     label: Speed

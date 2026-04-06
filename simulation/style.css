@@ -722,3 +722,153 @@ canvas {
   text-transform: uppercase;
   margin-bottom: 4px;
 }
+
+/* ─── sACN Monitor Panel ─── */
+#sacn-monitor-panel {
+  position: fixed;
+  top: 60px;
+  right: 14px;
+  width: 280px;
+  min-width: 220px;
+  max-width: 400px;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 20, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(96, 192, 240, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  transition: height 0.25s ease, opacity 0.2s ease;
+  overflow: hidden;
+  font-family: inherit;
+  resize: both;
+}
+
+#sacn-monitor-panel.hidden {
+  display: none;
+}
+
+#sacn-monitor-panel.collapsed .sacn-body {
+  display: none;
+}
+
+.sacn-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid rgba(96, 192, 240, 0.12);
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.sacn-header:active {
+  cursor: grabbing;
+}
+
+.sacn-title {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: rgba(96, 192, 240, 0.8);
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.sacn-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #555;
+  transition: background 0.3s ease;
+}
+
+.sacn-status-dot.connected {
+  background: #4cdf6e;
+  box-shadow: 0 0 6px rgba(76, 223, 110, 0.5);
+}
+
+.sacn-status-dot.receiving {
+  background: #60c0f0;
+  box-shadow: 0 0 6px rgba(96, 192, 240, 0.5);
+  animation: sacn-pulse 1s ease infinite;
+}
+
+@keyframes sacn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.sacn-body {
+  padding: 8px 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sacn-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sacn-stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.65rem;
+}
+
+.sacn-label {
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.55rem;
+}
+
+.sacn-value {
+  color: rgba(255, 255, 255, 0.85);
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 0.65rem;
+}
+
+.sacn-log-title {
+  font-size: 0.55rem;
+  color: rgba(96, 192, 240, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 6px;
+}
+
+.sacn-log {
+  max-height: 140px;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 0.55rem;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.5;
+}
+
+.sacn-log .sacn-entry {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sacn-log .sacn-entry.source {
+  color: rgba(96, 192, 240, 0.8);
+}
+
+.sacn-log .sacn-entry.warn {
+  color: rgba(240, 192, 96, 0.8);
+}
+
+.sacn-log .sacn-entry.error {
+  color: rgba(240, 96, 96, 0.8);
+}

@@ -105,6 +105,26 @@
       </div>
     </div>
 
+    <!-- sACN Monitor (floating, draggable, collapsible) -->
+    <div id="sacn-monitor-panel" class="hidden">
+      <div class="sacn-header" id="sacn-drag-handle">
+        <span class="sacn-title">📡 sACN Monitor</span>
+        <span class="sacn-status-dot" id="sacn-conn-dot"></span>
+        <button class="pe-btn" id="sacn-collapse-btn" title="Collapse">─</button>
+      </div>
+      <div class="sacn-body">
+        <div class="sacn-stats" id="sacn-stats">
+          <div class="sacn-stat-row"><span class="sacn-label">Status</span><span class="sacn-value" id="sacn-st-status">Disconnected</span></div>
+          <div class="sacn-stat-row"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-st-fps">0</span></div>
+          <div class="sacn-stat-row"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-st-frames">0</span></div>
+          <div class="sacn-stat-row"><span class="sacn-label">Universe</span><span class="sacn-value" id="sacn-st-universe">—</span></div>
+          <div class="sacn-stat-row"><span class="sacn-label">Priority</span><span class="sacn-value" id="sacn-st-priority">—</span></div>
+        </div>
+        <div class="sacn-log-title">Activity Log</div>
+        <div class="sacn-log" id="sacn-log"></div>
+      </div>
+    </div>
+
     <!-- View presets (populated dynamically from scene_preset_cameras.yaml) -->
     <div id="view-presets"></div>
 

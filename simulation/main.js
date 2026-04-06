@@ -34,6 +34,7 @@ import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
+import { setupSacnMonitor } from "./src/gui/sacn_monitor.js";
 
 // ─── Init ───────────────────────────────────────────────────────────────
 function init() {
@@ -249,8 +250,9 @@ Promise.all([
     ctrls.update();
   }
 
-  // Initialize pattern editor + engine
+  // Initialize pattern editor + sACN monitor
   setupPatternEditor();
+  setupSacnMonitor();
   loadPatternPresets().then(() => {
     initPatternEngine().then(() => {
       if (window.onLightingChange) window.onLightingChange();
