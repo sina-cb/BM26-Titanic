@@ -1,0 +1,185 @@
+# SHEHDS 18x18W RGBWAV LED Bar — Corrected Channel Layout
+#
+# ⚠ HARDWARE VERIFIED: The physical fixture reports 119 channels, NOT 120
+# as stated in the manual. The master channel order also differs from the
+# manual. This layout was verified by Sina on 2026-03-28 by observing
+# color output vs. expected values.
+#
+# Manual says 120ch:  Dimmer/Strobe/Dim-RGBWAV/Auto/Speed/8-16bit/BackColor + 108px
+# Real firmware 119ch: Dimmer/Strobe/Function/Speed/BgColor/Dim-RGBWAV + 108px
+#
+# Pixels start at CH12 (not CH13). Total = 11 master + 108 pixel = 119.
+
+fixture:
+  name: "SHEHDS 18x18W RGBWAV LED Bar"
+  mode: "119-channel (full, hardware-verified)"
+  mode_id: "119ch"
+  total_channels: 119
+  pixel_count: 18
+  channels_per_pixel: 6
+  pixel_start_channel: 12
+  pixel_order: [Red, Green, Blue, White, Amber, Violet]
+
+channels:
+  # ── Master Channels (CH1–11) — verified against hardware ──────────────
+  - channel: 1
+    function: "Dimmer"
+    description: "Master dimmer — 0=off, 255=full"
+  - channel: 2
+    function: "Strobe"
+    description: "Strobe speed — 0=off, 1-255=slow→fast"
+  - channel: 3
+    function: "Function"
+    description: "Auto mode / effect selection"
+  - channel: 4
+    function: "Speed"
+    description: "Auto mode speed — 0=slow, 255=fast"
+  - channel: 5
+    function: "BG Color"
+    description: "Background color select — 0-255"
+  - channel: 6
+    function: "Dim-Red"
+    description: "Master Red — 0=off, 255=full"
+  - channel: 7
+    function: "Dim-Green"
+    description: "Master Green — 0=off, 255=full"
+  - channel: 8
+    function: "Dim-Blue"
+    description: "Master Blue — 0=off, 255=full"
+  - channel: 9
+    function: "Dim-White"
+    description: "Master White — 0=off, 255=full"
+  - channel: 10
+    function: "Dim-Amber"
+    description: "Master Amber — 0=off, 255=full"
+  - channel: 11
+    function: "Dim-Violet"
+    description: "Master Violet — 0=off, 255=full"
+
+  # ── Pixel Channels (CH12–119) — 18 pixels × 6ch ──────────────────────
+  # Pixel 1 (CH12–17)
+  - { channel: 12,  function: "1# Red",    description: "Pixel 1 Red — 0-255" }
+  - { channel: 13,  function: "1# Green",  description: "Pixel 1 Green — 0-255" }
+  - { channel: 14,  function: "1# Blue",   description: "Pixel 1 Blue — 0-255" }
+  - { channel: 15,  function: "1# White",  description: "Pixel 1 White — 0-255" }
+  - { channel: 16,  function: "1# Amber",  description: "Pixel 1 Amber — 0-255" }
+  - { channel: 17,  function: "1# Violet", description: "Pixel 1 Violet — 0-255" }
+  # Pixel 2 (CH18–23)
+  - { channel: 18,  function: "2# Red",    description: "Pixel 2 Red — 0-255" }
+  - { channel: 19,  function: "2# Green",  description: "Pixel 2 Green — 0-255" }
+  - { channel: 20,  function: "2# Blue",   description: "Pixel 2 Blue — 0-255" }
+  - { channel: 21,  function: "2# White",  description: "Pixel 2 White — 0-255" }
+  - { channel: 22,  function: "2# Amber",  description: "Pixel 2 Amber — 0-255" }
+  - { channel: 23,  function: "2# Violet", description: "Pixel 2 Violet — 0-255" }
+  # Pixel 3 (CH24–29)
+  - { channel: 24,  function: "3# Red",    description: "Pixel 3 Red — 0-255" }
+  - { channel: 25,  function: "3# Green",  description: "Pixel 3 Green — 0-255" }
+  - { channel: 26,  function: "3# Blue",   description: "Pixel 3 Blue — 0-255" }
+  - { channel: 27,  function: "3# White",  description: "Pixel 3 White — 0-255" }
+  - { channel: 28,  function: "3# Amber",  description: "Pixel 3 Amber — 0-255" }
+  - { channel: 29,  function: "3# Violet", description: "Pixel 3 Violet — 0-255" }
+  # Pixel 4 (CH30–35)
+  - { channel: 30,  function: "4# Red",    description: "Pixel 4 Red — 0-255" }
+  - { channel: 31,  function: "4# Green",  description: "Pixel 4 Green — 0-255" }
+  - { channel: 32,  function: "4# Blue",   description: "Pixel 4 Blue — 0-255" }
+  - { channel: 33,  function: "4# White",  description: "Pixel 4 White — 0-255" }
+  - { channel: 34,  function: "4# Amber",  description: "Pixel 4 Amber — 0-255" }
+  - { channel: 35,  function: "4# Violet", description: "Pixel 4 Violet — 0-255" }
+  # Pixel 5 (CH36–41)
+  - { channel: 36,  function: "5# Red",    description: "Pixel 5 Red — 0-255" }
+  - { channel: 37,  function: "5# Green",  description: "Pixel 5 Green — 0-255" }
+  - { channel: 38,  function: "5# Blue",   description: "Pixel 5 Blue — 0-255" }
+  - { channel: 39,  function: "5# White",  description: "Pixel 5 White — 0-255" }
+  - { channel: 40,  function: "5# Amber",  description: "Pixel 5 Amber — 0-255" }
+  - { channel: 41,  function: "5# Violet", description: "Pixel 5 Violet — 0-255" }
+  # Pixel 6 (CH42–47)
+  - { channel: 42,  function: "6# Red",    description: "Pixel 6 Red — 0-255" }
+  - { channel: 43,  function: "6# Green",  description: "Pixel 6 Green — 0-255" }
+  - { channel: 44,  function: "6# Blue",   description: "Pixel 6 Blue — 0-255" }
+  - { channel: 45,  function: "6# White",  description: "Pixel 6 White — 0-255" }
+  - { channel: 46,  function: "6# Amber",  description: "Pixel 6 Amber — 0-255" }
+  - { channel: 47,  function: "6# Violet", description: "Pixel 6 Violet — 0-255" }
+  # Pixel 7 (CH48–53)
+  - { channel: 48,  function: "7# Red",    description: "Pixel 7 Red — 0-255" }
+  - { channel: 49,  function: "7# Green",  description: "Pixel 7 Green — 0-255" }
+  - { channel: 50,  function: "7# Blue",   description: "Pixel 7 Blue — 0-255" }
+  - { channel: 51,  function: "7# White",  description: "Pixel 7 White — 0-255" }
+  - { channel: 52,  function: "7# Amber",  description: "Pixel 7 Amber — 0-255" }
+  - { channel: 53,  function: "7# Violet", description: "Pixel 7 Violet — 0-255" }
+  # Pixel 8 (CH54–59)
+  - { channel: 54,  function: "8# Red",    description: "Pixel 8 Red — 0-255" }
+  - { channel: 55,  function: "8# Green",  description: "Pixel 8 Green — 0-255" }
+  - { channel: 56,  function: "8# Blue",   description: "Pixel 8 Blue — 0-255" }
+  - { channel: 57,  function: "8# White",  description: "Pixel 8 White — 0-255" }
+  - { channel: 58,  function: "8# Amber",  description: "Pixel 8 Amber — 0-255" }
+  - { channel: 59,  function: "8# Violet", description: "Pixel 8 Violet — 0-255" }
+  # Pixel 9 (CH60–65)
+  - { channel: 60,  function: "9# Red",    description: "Pixel 9 Red — 0-255" }
+  - { channel: 61,  function: "9# Green",  description: "Pixel 9 Green — 0-255" }
+  - { channel: 62,  function: "9# Blue",   description: "Pixel 9 Blue — 0-255" }
+  - { channel: 63,  function: "9# White",  description: "Pixel 9 White — 0-255" }
+  - { channel: 64,  function: "9# Amber",  description: "Pixel 9 Amber — 0-255" }
+  - { channel: 65,  function: "9# Violet", description: "Pixel 9 Violet — 0-255" }
+  # Pixel 10 (CH66–71)
+  - { channel: 66,  function: "10# Red",   description: "Pixel 10 Red — 0-255" }
+  - { channel: 67,  function: "10# Green", description: "Pixel 10 Green — 0-255" }
+  - { channel: 68,  function: "10# Blue",  description: "Pixel 10 Blue — 0-255" }
+  - { channel: 69,  function: "10# White", description: "Pixel 10 White — 0-255" }
+  - { channel: 70,  function: "10# Amber", description: "Pixel 10 Amber — 0-255" }
+  - { channel: 71,  function: "10# Violet",description: "Pixel 10 Violet — 0-255" }
+  # Pixel 11 (CH72–77)
+  - { channel: 72,  function: "11# Red",   description: "Pixel 11 Red — 0-255" }
+  - { channel: 73,  function: "11# Green", description: "Pixel 11 Green — 0-255" }
+  - { channel: 74,  function: "11# Blue",  description: "Pixel 11 Blue — 0-255" }
+  - { channel: 75,  function: "11# White", description: "Pixel 11 White — 0-255" }
+  - { channel: 76,  function: "11# Amber", description: "Pixel 11 Amber — 0-255" }
+  - { channel: 77,  function: "11# Violet",description: "Pixel 11 Violet — 0-255" }
+  # Pixel 12 (CH78–83)
+  - { channel: 78,  function: "12# Red",   description: "Pixel 12 Red — 0-255" }
+  - { channel: 79,  function: "12# Green", description: "Pixel 12 Green — 0-255" }
+  - { channel: 80,  function: "12# Blue",  description: "Pixel 12 Blue — 0-255" }
+  - { channel: 81,  function: "12# White", description: "Pixel 12 White — 0-255" }
+  - { channel: 82,  function: "12# Amber", description: "Pixel 12 Amber — 0-255" }
+  - { channel: 83,  function: "12# Violet",description: "Pixel 12 Violet — 0-255" }
+  # Pixel 13 (CH84–89)
+  - { channel: 84,  function: "13# Red",   description: "Pixel 13 Red — 0-255" }
+  - { channel: 85,  function: "13# Green", description: "Pixel 13 Green — 0-255" }
+  - { channel: 86,  function: "13# Blue",  description: "Pixel 13 Blue — 0-255" }
+  - { channel: 87,  function: "13# White", description: "Pixel 13 White — 0-255" }
+  - { channel: 88,  function: "13# Amber", description: "Pixel 13 Amber — 0-255" }
+  - { channel: 89,  function: "13# Violet",description: "Pixel 13 Violet — 0-255" }
+  # Pixel 14 (CH90–95)
+  - { channel: 90,  function: "14# Red",   description: "Pixel 14 Red — 0-255" }
+  - { channel: 91,  function: "14# Green", description: "Pixel 14 Green — 0-255" }
+  - { channel: 92,  function: "14# Blue",  description: "Pixel 14 Blue — 0-255" }
+  - { channel: 93,  function: "14# White", description: "Pixel 14 White — 0-255" }
+  - { channel: 94,  function: "14# Amber", description: "Pixel 14 Amber — 0-255" }
+  - { channel: 95,  function: "14# Violet",description: "Pixel 14 Violet — 0-255" }
+  # Pixel 15 (CH96–101)
+  - { channel: 96,  function: "15# Red",   description: "Pixel 15 Red — 0-255" }
+  - { channel: 97,  function: "15# Green", description: "Pixel 15 Green — 0-255" }
+  - { channel: 98,  function: "15# Blue",  description: "Pixel 15 Blue — 0-255" }
+  - { channel: 99,  function: "15# White", description: "Pixel 15 White — 0-255" }
+  - { channel: 100, function: "15# Amber", description: "Pixel 15 Amber — 0-255" }
+  - { channel: 101, function: "15# Violet",description: "Pixel 15 Violet — 0-255" }
+  # Pixel 16 (CH102–107)
+  - { channel: 102, function: "16# Red",   description: "Pixel 16 Red — 0-255" }
+  - { channel: 103, function: "16# Green", description: "Pixel 16 Green — 0-255" }
+  - { channel: 104, function: "16# Blue",  description: "Pixel 16 Blue — 0-255" }
+  - { channel: 105, function: "16# White", description: "Pixel 16 White — 0-255" }
+  - { channel: 106, function: "16# Amber", description: "Pixel 16 Amber — 0-255" }
+  - { channel: 107, function: "16# Violet",description: "Pixel 16 Violet — 0-255" }
+  # Pixel 17 (CH108–113)
+  - { channel: 108, function: "17# Red",   description: "Pixel 17 Red — 0-255" }
+  - { channel: 109, function: "17# Green", description: "Pixel 17 Green — 0-255" }
+  - { channel: 110, function: "17# Blue",  description: "Pixel 17 Blue — 0-255" }
+  - { channel: 111, function: "17# White", description: "Pixel 17 White — 0-255" }
+  - { channel: 112, function: "17# Amber", description: "Pixel 17 Amber — 0-255" }
+  - { channel: 113, function: "17# Violet",description: "Pixel 17 Violet — 0-255" }
+  # Pixel 18 (CH114–119)
+  - { channel: 114, function: "18# Red",   description: "Pixel 18 Red — 0-255" }
+  - { channel: 115, function: "18# Green", description: "Pixel 18 Green — 0-255" }
+  - { channel: 116, function: "18# Blue",  description: "Pixel 18 Blue — 0-255" }
+  - { channel: 117, function: "18# White", description: "Pixel 18 White — 0-255" }
+  - { channel: 118, function: "18# Amber", description: "Pixel 18 Amber — 0-255" }
+  - { channel: 119, function: "18# Violet",description: "Pixel 18 Violet — 0-255" }

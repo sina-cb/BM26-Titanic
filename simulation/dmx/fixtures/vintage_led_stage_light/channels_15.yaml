@@ -1,0 +1,151 @@
+# Vintage LED Stage Light (6 Vertical Retro Lights) — 15 Channel Mode
+# ====================================================================
+# OCR'd from the physical manual by Antigravity.
+
+fixture:
+  name: "Vintage LED Stage Light"
+  mode: "15-channel"
+  total_channels: 15
+
+control_channels:
+  - channel: 1
+    function: "Total Dimming"
+    ranges:
+      - { min: 0, max: 255, description: "Total dimming — 0=dark, 255=bright" }
+
+  - channel: 2
+    function: "Total Strobe"
+    ranges:
+      - { min: 0, max: 255, description: "Total strobe — 0=off, 255=fast" }
+
+  - channel: 3
+    function: "Main Light Warm Color 1"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 1 — 0=dark, 255=bright" }
+
+  - channel: 4
+    function: "Main Light Warm Color 2"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 2 — 0=dark, 255=bright" }
+
+  - channel: 5
+    function: "Main Light Warm Color 3"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 3 — 0=dark, 255=bright" }
+
+  - channel: 6
+    function: "Main Light Warm Color 4"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 4 — 0=dark, 255=bright" }
+
+  - channel: 7
+    function: "Main Light Warm Color 5"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 5 — 0=dark, 255=bright" }
+
+  - channel: 8
+    function: "Main Light Warm Color 6"
+    ranges:
+      - { min: 0, max: 255, description: "Warm color 6 — 0=dark, 255=bright" }
+
+  - channel: 9
+    function: "Auxiliary Light Red"
+    ranges:
+      - { min: 0, max: 255, description: "Red — 0=dark, 255=bright" }
+
+  - channel: 10
+    function: "Auxiliary Light Green"
+    ranges:
+      - { min: 0, max: 255, description: "Green — 0=dark, 255=bright" }
+
+  - channel: 11
+    function: "Auxiliary Light Blue"
+    ranges:
+      - { min: 0, max: 255, description: "Blue — 0=dark, 255=bright" }
+
+  - channel: 12
+    function: "Main Light Effect"
+    ranges:
+      - { min: 0,   max: 4,   description: "No effect" }
+      - { min: 5,   max: 11,  description: "Main light effect 1" }
+      - { min: 12,  max: 18,  description: "Main light effect 2" }
+      - { min: 19,  max: 25,  description: "Main light effect 3" }
+      - { min: 26,  max: 32,  description: "Main light effect 4" }
+      - { min: 33,  max: 39,  description: "Main light effect 5" }
+      - { min: 40,  max: 46,  description: "Main light effect 6" }
+      - { min: 47,  max: 53,  description: "Main light effect 7" }
+      - { min: 54,  max: 60,  description: "Main light effect 8" }
+      - { min: 61,  max: 67,  description: "Main light effect 9" }
+      - { min: 68,  max: 74,  description: "Main light effect 10" }
+      - { min: 75,  max: 81,  description: "Main light effect 11" }
+      - { min: 82,  max: 88,  description: "Main light effect 12" }
+      - { min: 89,  max: 95,  description: "Main light effect 13" }
+      - { min: 96,  max: 102, description: "Main light effect 14" }
+      - { min: 103, max: 109, description: "Main light effect 15" }
+      - { min: 110, max: 116, description: "Main light effect 16" }
+      - { min: 117, max: 123, description: "Main light effect 17" }
+      - { min: 124, max: 130, description: "Main light effect 18" }
+      - { min: 131, max: 137, description: "Main light effect 19" }
+      - { min: 138, max: 144, description: "Main light effect 20" }
+      - { min: 145, max: 151, description: "Main light effect 21" }
+      - { min: 152, max: 158, description: "Main light effect 22" }
+      - { min: 159, max: 165, description: "Main light effect 23" }
+      - { min: 166, max: 172, description: "Main light effect 24" }
+      - { min: 173, max: 179, description: "Main light effect 25" }
+      - { min: 180, max: 186, description: "Main light effect 26" }
+      - { min: 187, max: 193, description: "Main light effect 27" }
+      - { min: 194, max: 200, description: "Main light effect 28" }
+      - { min: 201, max: 207, description: "Main light effect 29" }
+      - { min: 208, max: 214, description: "Main light effect loop 30" }
+      - { min: 215, max: 239, description: "Main light + auxiliary light effect" }
+      - { min: 240, max: 244, description: "Voice control effect 1" }
+      - { min: 245, max: 249, description: "Voice control effect 2" }
+      - { min: 250, max: 255, description: "Voice control effect 3" }
+
+  - channel: 13
+    function: "Main Light Effect Speed / Voice Sensitivity"
+    ranges:
+      - { min: 0,   max: 127, description: "Forward speed adjustment — 0=slow, 127=fast" }
+      - { min: 128, max: 255, description: "Reverse speed adjustment — 128=slow, 255=fast; Voice control mode: voice control sensitivity 0–255" }
+
+  - channel: 14
+    function: "Auxiliary Light Effect"
+    description: "Auxiliary light effect, see Appendix 1 for details"
+    ranges:
+      - { min: 0,   max: 4,   description: "No effect" }
+      - { min: 5,   max: 11,  description: "Filling light effect 1" }
+      - { min: 12,  max: 18,  description: "Filling light effect 2" }
+      - { min: 19,  max: 25,  description: "Filling light effect 3" }
+      - { min: 26,  max: 32,  description: "Filling light effect 4" }
+      - { min: 33,  max: 39,  description: "Filling light effect 5" }
+      - { min: 40,  max: 46,  description: "Filling light effect 6" }
+      - { min: 47,  max: 53,  description: "Filling light effect 7" }
+      - { min: 54,  max: 60,  description: "Filling light effect 8" }
+      - { min: 61,  max: 67,  description: "Filling light effect 9" }
+      - { min: 68,  max: 74,  description: "Filling light effect 10" }
+      - { min: 75,  max: 81,  description: "Filling light effect 11" }
+      - { min: 82,  max: 88,  description: "Filling light effect 12" }
+      - { min: 89,  max: 95,  description: "Filling light effect 13" }
+      - { min: 96,  max: 102, description: "Filling light effect 14" }
+      - { min: 103, max: 109, description: "Filling light effect 15" }
+      - { min: 110, max: 116, description: "Filling light effect 16" }
+      - { min: 117, max: 123, description: "Filling light effect 17" }
+      - { min: 124, max: 130, description: "Filling light effect 18" }
+      - { min: 131, max: 137, description: "Filling light effect 19" }
+      - { min: 138, max: 144, description: "Filling light effect 20" }
+      - { min: 145, max: 151, description: "Filling light effect 21" }
+      - { min: 152, max: 158, description: "Filling light effect 22" }
+      - { min: 159, max: 165, description: "Filling light effect 23" }
+      - { min: 166, max: 172, description: "Filling light effect 24" }
+      - { min: 173, max: 179, description: "Filling light effect 25" }
+      - { min: 180, max: 186, description: "Filling light effect 26" }
+      - { min: 187, max: 193, description: "Filling light effect 27" }
+      - { min: 194, max: 200, description: "Filling light effect 28" }
+      - { min: 201, max: 207, description: "Filling light effect 29" }
+      - { min: 208, max: 255, description: "Filling light effect loop 30" }
+
+  - channel: 15
+    function: "Auxiliary Light Effect Speed"
+    ranges:
+      - { min: 0,   max: 127, description: "Forward speed adjustment — 0=slow, 127=fast" }
+      - { min: 128, max: 255, description: "Reverse speed adjustment — 128=slow, 255=fast" }

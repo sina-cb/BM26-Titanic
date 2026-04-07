@@ -1,0 +1,5 @@
+# Server configuration for the BM26 Titanic simulation
+
+http_port: 6969       # Static file server
+save_port: 6970       # Save server (http_port + 1)
+sacn_port: 6971       # sACN WebSocket bridge (http_port + 2)

@@ -1,10 +1,13 @@
 {
   "scripts": {
-    "start": "concurrently \"npx http-server ../ -p 8080 -c-1 --cors\" \"node save-server.js\""
+    "prestart": "node -e \"const y=require('js-yaml'),f=require('fs');const c=y.load(f.readFileSync('config/server_config.yaml','utf8'));console.log(c.http_port+' '+(c.save_port||c.http_port+1)+' '+(c.sacn_port||c.http_port+2))\" | xargs npx -y kill-port 2>/dev/null || true",
+    "start": "node start.js"
   },
   "dependencies": {
     "acorn": "^8.16.0",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "sacn": "^4.6.2",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

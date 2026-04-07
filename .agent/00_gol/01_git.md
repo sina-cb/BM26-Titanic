@@ -1,1 +1,1 @@
-Keep git simple, and for now just use the main branch.
+- Never do git operations until explicityly asked by the Human op.

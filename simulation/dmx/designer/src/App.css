@@ -1,0 +1,255 @@
+:root {
+  --bg-dark: #0f1115;
+  --bg-panel: #1a1d24;
+  --bg-hover: #252932;
+  --border: #303642;
+  --accent: #2c8fff;
+  --text-main: #e2e8f0;
+  --text-dim: #94a3b8;
+}
+
+* { box-sizing: border-box; }
+
+body, html, #root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  font-family: 'Inter', -apple-system, sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  overflow: hidden;
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.main-workspace {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.viewport-container {
+  flex: 1;
+  position: relative;
+  border-right: 1px solid var(--border);
+}
+
+.right-sidebar {
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.bottom-panel {
+  height: 250px;
+  background-color: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Toolbar */
+.toolbar {
+  height: 48px;
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 16px;
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 8px;
+  border-right: 1px solid var(--border);
+  padding-right: 16px;
+}
+
+.toolbar-title {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* Buttons */
+.btn {
+  background: var(--bg-dark);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn:hover { background: var(--bg-hover); }
+.btn.active { 
+  background: var(--accent); 
+  border-color: var(--accent);
+  color: white; 
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Panels */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.panel-header {
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,0.2);
+}
+
+.panel-content {
+  padding: 16px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.panel-content.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+
+.section {
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--accent);
+}
+
+.section-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 16px 0 8px 0;
+  text-transform: uppercase;
+}
+
+/* Forms */
+.prop-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.prop-row label, .prop-row span {
+  color: var(--text-dim);
+}
+
+input[type="text"], input[type="number"], select {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  width: 140px;
+  font-family: inherit;
+}
+
+.dot-editor {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dot-editor input { width: 100%; text-align: center; }
+
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Pixel List Table */
+.table-container {
+  flex: 1;
+  overflow-y: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+
+td {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+tr:hover td { background: var(--bg-hover); }
+tr.selected td { background: rgba(44, 143, 255, 0.15); }
+
+.mono { font-family: 'Fira Code', monospace; font-size: 12px; color: var(--text-dim); }
+
+.color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+/* Test Panel specific */
+.test-panel {
+  border-top: 1px solid var(--border);
+  background: var(--bg-dark);
+}
+
+.test-buttons {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.text-center { text-align: center; }
+.pulse { box-shadow: 0 0 8px currentColor; }

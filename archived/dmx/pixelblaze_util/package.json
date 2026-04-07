@@ -1,0 +1,15 @@
+{
+  "name": "bm26-pixelblaze-util",
+  "version": "1.0.0",
+  "description": "PixelBlaze pattern editor — live coding to physical DMX fixtures via Art-Net",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "js-yaml": "^4.1.0",
+    "ws": "^8.16.0"
+  }
+}

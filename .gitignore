@@ -12,3 +12,57 @@ node_modules/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ZeroG runtime (machine-specific)
+.agent/workspace.yaml
+.agent/pids/
+.vscode-antigravity/
+
+# Control podium runtime state (MACs, channel PSKs)
+control_podium/.config.pairing.yaml
+control_podium/.config.deploy.yaml
+__pycache__/
+*.pyc
+.pytest_cache/
+control_podium/logs/
+
+
+# Python caches
+*.py[cod]
+*.class
+*.so
+.mypy_cache/
+.tox/
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+venv/
+.venv/
+env/
+.env
+
+# PlatformIO / embedded caches
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode-test/
+
+# Node caches & logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.nyc_output/
+coverage/
+
+# IDE / Editor caches
+.idea/
+*.swp
+*.swo
+*~
+
+# Global Logs
+*.log
+tmp/

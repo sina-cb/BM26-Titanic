@@ -1,0 +1,27 @@
+# agent_fs.yaml — Agent filesystem visibility
+# .agent/ is always visible by default.
+# Add extra directories below for the mobile file viewer.
+
+extra_roots:
+  - name: Agent Config
+    path: .agent
+    access: ro
+    description: "Agent configuration, governance, skills, and reports"
+# Example:
+#  - name: Diet Tracking
+#    path: data/projects/diet
+
+maxFileSize: 1048576  # 1 MB
+
+allowedExtensions:
+  - .md
+  - .txt
+  - .json
+  - .yaml
+  - .html
+  - .log
+  - .png
+  - .jpg
+  - .jpeg
+  - .gif
+  - .webp

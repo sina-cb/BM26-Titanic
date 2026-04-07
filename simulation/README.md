@@ -1,10 +1,14 @@
-# BM26 Titanic — Lighting Simulation Ecosystem
-This directory contains the interactive 3D lighting simulation tool built for the **Burning Man 2026 Titanic** project. 
+# BM26 Titanic — Lighting Simulation
 
-The tool empowers lighting designers to pre-visualize night-time illumination, validate DMX fixture beam angles against realistic proxy geometry, and persist configuration states via a synchronized local filesystem architecture.
+Interactive 3D lighting simulator for the **Burning Man 2026 Titanic** project. Pre-visualize night-time illumination, manage DMX fixtures, and drive real sACN controllers — all from the browser.
 
-## Quick Start
-To spin up both the frontend HTTP server and the backend YAML Node.js Save server simultaneously, run the following from the `simulation` directory:
+> **Design Docs:** [sACN Architecture](../docs/11_sim_sacn_integration.md) · [DMX Fixtures](../docs/09_dmx_fixture_models.md) · [Pixelblaze Engine](../docs/06_pixelblaze_engine.md)
+>
+> **Reports:** [DMX Gap Analysis](../.agent/02_reports/202604/20260407_1_dmx_integration_gap_analysis.md) · [sACN Integration](../.agent/02_reports/202604/20260406_2_sacn_integration.md)
+
+---
+
+## ⚡ Quick Start
 
 ```bash
 cd simulation
@@ -12,7 +16,22 @@ npm install
 npm start
 ```
 
-Then, open your browser to [http://localhost:8080/simulation/](http://localhost:8080/simulation/).
+Open [http://localhost:6969/simulation/](http://localhost:6969/simulation/) in your browser.
+
+---
+
+## 🏗️ What `npm start` Launches
+
+`npm start` runs `start.js`, which spawns all required background services:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **http-server** | `6969` | Serves Three.js frontend & static assets |
+| **save-server** | `6970` | Node.js API for persisting scene config, camera presets, exports |
+| **sACN Input Bridge** | `6971` | Receives sACN from MarsinEngine/Chromatik → WebSocket to browser |
+| **sACN Output Bridge** | `6972` | Receives DMX from browser → sACN unicast to real controllers |
+
+Ports are configured in `config/server_config.yaml`.
 
 ---
 
@@ -22,11 +41,12 @@ Then, open your browser to [http://localhost:8080/simulation/](http://localhost:
 
 | Technology | Version | Role |
 |---|---|---|
-| **Three.js** | `0.160.0` | 3D rendering engine — scene graph, camera, lights, meshes, shadows |
-| **lil-gui** | (bundled with Three.js) | Lightweight GUI control panel |
-| **js-yaml** | `4.1.x` | YAML parsing/serialization for config persistence |
-| **chroma-js** | `3.1.2` | Color manipulation — LAB-space gradient interpolation |
-| **Node.js** | (runtime) | Backend save server |
+| **Three.js** | `0.160.0` | 3D rendering — scene graph, lights, meshes, shadows |
+| **lil-gui** | (bundled) | Lightweight GUI control panel |
+| **js-yaml** | `4.1.x` | YAML parsing for config persistence |
+| **chroma-js** | `3.1.2` | LAB-space color interpolation for gradients |
+| **sacn** | `4.6.x` | sACN (E1.31) protocol — used by bridge servers |
+| **ws** | `8.x` | WebSocket server for sACN bridges |
 
 ### Three.js Addons
 
@@ -35,128 +55,109 @@ Then, open your browser to [http://localhost:8080/simulation/](http://localhost:
 | **OrbitControls** | Camera orbit, pan, and zoom |
 | **TransformControls** | Translate/rotate/scale gizmos for fixtures |
 | **FBXLoader** | Loads `.fbx` 3D model geometry |
-| **BufferGeometryUtils** | Mesh merging utilities |
-| **EffectComposer** + **UnrealBloomPass** | HDR post-processing bloom pipeline |
+| **EffectComposer** + **UnrealBloomPass** | HDR bloom post-processing |
 
 ### Architecture
 
 | Layer | Tech | Details |
 |---|---|---|
-| **Frontend** | Vanilla JS (ES Modules via `importmap`) | `main.js` + component classes (`ParLight.js`, `LedStrand.js`, `Iceberg.js`) |
+| **Frontend** | Vanilla JS (ES Modules via `importmap`) | `main.js` + modular components |
 | **Styling** | Vanilla CSS + Google Fonts (Inter) | Dark theme with glassmorphism |
-| **State** | `scene_config.yaml` | Single source of truth — loaded on boot, auto-saved via HTTP POST |
-| **Save Server** | Node.js HTTP server on port `8181` | Minimal CORS endpoint: `POST /save` writes YAML to disk |
-| **Static Server** | `http-server` on port `8080` | Serves HTML/JS/CSS and 3D model assets |
-| **Dev Runner** | `concurrently` | Runs both servers in parallel via `npm start` |
-
-### Key Patterns
-
-- **Import Maps** — CDN-loaded ES modules, no bundler required
-- **YAML-driven config** — all scene state persisted in `scene_config.yaml`
-- **Undo/Redo** — snapshot-based state management (50-deep stack)
-- **Multi-select transforms** — quaternion-based differential deltas
-- **Snap-to-surface** — two-step raycast placement (position → aim)
+| **State** | `config/scene_config.yaml` | Single source of truth — auto-saved |
+| **DMX Pipeline** | `UniverseRouter` → `SacnOutputClient` | Multi-source merge with priority routing |
 
 ---
 
-## 🚀 Getting Started
+## 🎨 Features
 
-To fully operate the simulation environment, you must start **two** background services simultaneously:
+### Fixture Management (lil-gui Panel)
+- **Fixture Types:** UkingPar, ShehdsBar, VintageLed — loaded from `dmx/fixtures/`
+- **DMX Patch Controls:** Universe, address, controller IP per fixture
+- **Auto-Patch:** One-click "🎯 Auto-Patch All Unpatched" packing algorithm
+- **Multi-select:** Shift-click to select multiple fixtures, batch transforms
+- **Undo/Redo:** 50-deep snapshot stack (Ctrl+Z / Ctrl+Shift+Z)
 
-1. **The Web Server (Static Assets)**  
-   Serves the Three.js front-end, styles, scripts, and the `3d_models` payload.
-   ```bash
-   # From the project root (c:\Users\sina_\workspace\BM26-Titanic)
-   npx -y http-server . -p 8080 -c-1 --cors
-   ```
+### Procedural Generators
+- **Shape modes:** Circle and line generators for fixture arrays
+- **Aim modes:** `lookAt` (each fixture aims at a target) and `direction` (uniform)
+- **Lock toggle:** Prevent accidental regeneration of finalized arrays
+- **Controller IP:** Set once per generator — propagates to all generated fixtures
 
-2. **The Save Server (Config Bridge)**  
-   Runs an isolated Node.js API that catches GUI-driven state changes (like XYZ translations or angle tweaks) and natively mutates `scene_config.yaml` to prevent data-loss across refreshes.
-   ```bash
-   # From the simulation directory (c:\Users\sina_\workspace\BM26-Titanic\simulation)
-   node save-server.js
-   ```
+### sACN Integration
+- **Input:** Receives live DMX from MarsinEngine or Chromatik via WebSocket bridge
+- **Output:** Sends DMX to real controllers via sACN output bridge
+- **Router:** Multi-source priority merge (source lock / per-patch modes)
+- **Monitor:** Floating `📡 sACN Monitor` panel with live stats
 
-Once both servers are running, open your browser to [http://localhost:8080/simulation/](http://localhost:8080/simulation/) to launch the tool.
-
----
-
-## 🛠️ Simulation Skills & Features
-
-This platform features a suite of high-fidelity "skills" built specifically for the demands of large-scale, dust-covered architecture lighting.
-
-### 1. DMX Par Light Fixtures (`ParLight.js` Engine)
-- **Object-Oriented Fixtures:** Each directional spotlight is modeled natively with physics-accurate inner/outer angles and real-time shadows.
-- **Physical Proxies:** Employs a physical proxy mesh (the Can) and a soft, additive-blending volume cone directly tracing where the beam hits.
-- **Gizmo Synchronization:** Moving, scaling (which adjusts beam angle natively), or rotating a fixture via the Three.js `TransformControls` gizmos instantaneously rewrites real-world world-coordinate orientations accurately into the YAML state.
-
-### 2. Micro-Tower Perimeter Arrays
-- Procedurally generated perimeter light poles (default: 8) illuminating the central monument based on dynamically adjusted `modelRadius`.
-- Replicates generic LED array washes, complete with directional target tilting and origin-glowing materials for volumetric ambiance. 
-
-### 3. Atmospheric Post-Processing
-- **Unreal Bloom Engine:** A hardware-accelerated HDR pipeline replicating desert dust scattered light overexposure.
-- **Directional Moonlight Rig:** Emulates generic Black Rock Desert celestial illumination patterns mapped against adjustable `moonAngle` states.
-
-### 4. Interactive Command Plane (`lil-gui`)
-- The top-right drop-down GUI provides sub-millimeter precision tweaking for structural rotation, individual Light Fixture target data, exposure tone-mapping, and scene visibility modes.
-- Modifying values natively bridges back via HTTP `POST /save` to instantly update `scene_config.yaml`.
-
-### 5. Config State Parity (`scene_config.yaml`)
-Your sole source-of-truth. Every time the page boots, it fetches and parses this YAML file first, ensuring that `main.js` instantly boots up mirroring exactly where you left your lights.
+### Lighting Modes
+- **Pixelblaze Engine:** Client-side pattern rendering (rainbow, fire, breathing, etc.)
+- **sACN Input:** Live DMX from external sources
+- **Gradient:** Chroma.js LAB-space wave animation
+- **Off:** Blackout
 
 ---
 
-## 📸 Puppeteer Renderer (`agent_render.js`)
+## 📁 Directory Structure
 
-A GPU-accelerated Puppeteer script that opens the simulation in a real Chrome window for automated screenshot capture. Requires the servers to be running first (`npm start`).
-
-### Usage
-
-```bash
-# Open the sim in a live window (no captures, interactive)
-node agent_render.js --open
-
-# Capture the current camera view without moving it
-node agent_render.js --current
-
-# Navigate to a specific view and capture
-node agent_render.js --view dramatic
-
-# Capture all 5 preset views (front, side, aerial, dramatic, night-walk)
-node agent_render.js
-
-# Add --keep-alive to any command to keep the window open after captures
-node agent_render.js --current --keep-alive
+```
+simulation/
+├── config/
+│   ├── scene_config.yaml       # Scene state (fixtures, generators, camera)
+│   └── server_config.yaml      # Port configuration
+├── server/
+│   ├── save-server.js          # Config persistence API
+│   ├── sacn_bridge.js          # sACN input bridge (sACN → WS)
+│   └── sacn_output_bridge.js   # sACN output bridge (WS → sACN)
+├── src/
+│   ├── core/
+│   │   ├── animate.js          # Main render loop + DMX output
+│   │   └── state.js            # Global state management
+│   ├── dmx/
+│   │   ├── sacn_input_source.js    # Browser sACN receiver
+│   │   ├── sacn_output_client.js   # Browser sACN sender
+│   │   ├── universe_router.js      # Multi-source DMX merge
+│   │   └── universe_frame_buffer.js # Double-buffered DMX frames
+│   ├── fixtures/               # Fixture runtime classes
+│   └── gui/
+│       ├── gui_builder.js      # Main GUI (fixtures, generators, patch)
+│       ├── pattern_editor.js   # Lighting mode selector
+│       └── sacn_monitor.js     # sACN stats panel
+├── main.js                     # Application entry point
+├── index.html                  # HTML shell with import maps
+├── style.css                   # Global styles
+└── start.js                    # Multi-server launcher
 ```
 
-### Output
+---
 
-Screenshots are saved to `../.agent_renders/` (gitignored):
+## 📸 Agent Render (`agent_render.js`)
 
-| Mode | Output File |
-|---|---|
-| `--current` | `current_{timestamp}.png` |
-| `--view <name>` | `{name}.png` |
-| Default (all) | `front.png`, `side.png`, `aerial.png`, `dramatic.png`, `night-walk.png` |
-
-### Scripting Renders
-
-The renderer can be invoked from any Node.js script or shell pipeline:
+GPU-accelerated Puppeteer script for automated screenshot capture.
 
 ```bash
-# Start servers, render all views, stop servers
-npm start &
-sleep 5
-node agent_render.js
-kill %1
-
-# Just grab one quick screenshot
-node agent_render.js --view aerial
+node agent_render.js --open           # Interactive window
+node agent_render.js --current        # Screenshot current camera
+node agent_render.js --view dramatic  # Capture a specific preset
+node agent_render.js                  # Capture all 5 presets
 ```
 
-### Requirements
+Screenshots saved to `../.agent_renders/` (gitignored).
 
-- **GPU** — The script uses `--ignore-gpu-blocklist` and ANGLE/D3D11 for hardware WebGL rendering
-- **Servers running** — `npm start` must be active before running the renderer
-- **Puppeteer** — Already included as a devDependency
+---
+
+## 🔧 Configuration
+
+### `config/scene_config.yaml`
+Single source of truth for all scene state:
+- Fixture positions, rotations, colors, intensities
+- Generator traces (circle/line shapes, spacing, aim)
+- DMX patches (universe, address, controller IP)
+- Camera presets and render settings
+
+### `config/server_config.yaml`
+Server port assignments:
+```yaml
+http_port: 6969       # Static file server
+save_port: 6970       # Save server
+sacn_port: 6971       # sACN input bridge
+```

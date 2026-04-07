@@ -1,0 +1,43 @@
+fixture:
+  name: "UKing RGBWAU PAR Light"
+  mode: "10-channel"
+  mode_id: "A001"
+  total_channels: 10
+
+channels:
+  - channel: 1
+    function: "Total dimming"
+    description: "R, G, B, W, Y, P total dimming — 0=dark, 255=bright"
+  - channel: 2
+    function: "Red"
+    description: "Red dimming — 0=dark, 255=bright"
+  - channel: 3
+    function: "Green"
+    description: "Green dimming — 0=dark, 255=bright"
+  - channel: 4
+    function: "Blue"
+    description: "Blue dimming — 0=dark, 255=bright"
+  - channel: 5
+    function: "White"
+    description: "White dimming — 0=dark, 255=bright"
+  - channel: 6
+    function: "Amber"
+    description: "Amber (yellow) — 0=dark, 255=bright"
+  - channel: 7
+    function: "Purple"
+    description: "Purple dimming — 0=dark, 255=bright"
+  - channel: 8
+    function: "Total strobe"
+    description: "R, G, B, W, Y, P total strobe — 0=off, 1-255=slow→fast"
+  - channel: 9
+    function: "Function selection"
+    ranges:
+      - { min: 0,   max: 50,  description: "Manual — CH1–CH7 control" }
+      - { min: 51,  max: 100, description: "Color output (8 options, selected by CH10)" }
+      - { min: 101, max: 150, description: "Colors Jump Change" }
+      - { min: 151, max: 200, description: "Colors Gradate" }
+      - { min: 201, max: 250, description: "Colors Pulse Change" }
+      - { min: 251, max: 255, description: "Sound-Active" }
+  - channel: 10
+    function: "Function speed"
+    description: "Effect speed — 0=slow, 255=fast"

@@ -1,0 +1,98 @@
+# BM26 Titanic — DMX Universe Configuration (sACN / E1.31)
+# =========================================================
+# Single source of truth for the physical DMX deployment topology.
+# Each universe maps to one sACN output (512 channels).
+#
+# sACN notes:
+#   - universe: 1-indexed (sACN convention), range 1–63999
+#   - priority: 0–200, default 100. Higher priority wins at the receiver.
+#     Set Chromatik to priority 150 so it overrides this server (100).
+#   - ip: unicast destination. Omit for multicast.
+#
+# Fixture schema:
+#   label:             Unique name within this universe
+#   type:              JS class name (EndyshowBar | UkingPar | VintageLed)
+#   dmx_start_address: 1-indexed start channel in this universe
+#   config:
+#     layout:          Path to the channel-mode profile YAML (relative to dmx/)
+#
+# See docs/08_dmx_controller.md for full documentation.
+
+network:
+  local_ip: "10.1.1.172"
+  broadcast_ip: "10.1.1.255"
+  subnet_mask: "255.255.255.0"
+
+universes:
+  # ─── Test Bench Universe ────────────────────────────────────────────────
+  # Physical chain on the test bench:
+  #   par_1 → par_2 → par_3 → par_4 (UKing 10ch each)
+  #   → vintage_1 → vintage_2 (Vintage LED 33ch each)
+  #   → shehds_bar_1 → shehds_bar_2 (SHEHDS 18x18W 119ch each)
+  #
+  # DMX address map:
+  #   par_1        CH136–145  (10 channels)
+  #   par_2        CH146–155  (10 channels)
+  #   par_3        CH156–165  (10 channels)
+  #   par_4        CH166–175  (10 channels)
+  #   vintage_1    CH176–208  (33 channels)
+  #   vintage_2    CH209–241  (33 channels)
+  #   shehds_bar_1 CH242–360  (119 channels)
+  #   shehds_bar_2 CH361–479  (119 channels)
+  #   ─── CH1–135 unused, 480–512 free ───
+  #
+  - id: "test_bench"
+    name: "Test Bench"
+    controller:
+      ip: "127.0.0.1"        # Local router (Smart Priority) — avoids hitting hardware directly
+      universe: 1            # sACN universe (1-indexed)
+      priority: 100 # sACN priority (Chromatik should use 150 to override)
+      sourceName: "BM26-Titanic"
+    fixtures:
+      - label: "par_1"
+        type: "UkingPar"
+        dmx_start_address: 136
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_2"
+        type: "UkingPar"
+        dmx_start_address: 146
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_3"
+        type: "UkingPar"
+        dmx_start_address: 156
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "par_4"
+        type: "UkingPar"
+        dmx_start_address: 166
+        config:
+          layout: "fixtures/uking_rgbwau_par_light/channels_10.yaml"
+
+      - label: "vintage_1"
+        type: "VintageLed"
+        dmx_start_address: 176
+        config:
+          layout: "fixtures/vintage_led_stage_light/channels_33.yaml"
+
+      - label: "vintage_2"
+        type: "VintageLed"
+        dmx_start_address: 209
+        config:
+          layout: "fixtures/vintage_led_stage_light/channels_33.yaml"
+
+      - label: "shehds_bar_1"
+        type: "ShehdsBar"
+        dmx_start_address: 242
+        config:
+          layout: "fixtures/shehds_18_18w_led_bar/channels_119.yaml"
+
+      - label: "shehds_bar_2"
+        type: "ShehdsBar"
+        dmx_start_address: 362
+        config:
+          layout: "fixtures/shehds_18_18w_led_bar/channels_119.yaml"

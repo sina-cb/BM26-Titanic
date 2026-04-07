@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PixelBlaze Utility — BM26 Titanic</title>
+    <meta name="description" content="Live coding PixelBlaze patterns to physical DMX fixtures" />
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <!-- ── Header ───────────────────────────────────────────────── -->
+    <header id="app-header">
+      <div class="header-left">
+        <span class="logo">🎆</span>
+        <h1>PixelBlaze <span class="accent">Utility</span></h1>
+      </div>
+      <div class="header-right">
+        <div class="status-pill" id="status-pill">
+          <span class="status-dot"></span>
+          <span class="status-text" id="status-text">Connecting…</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ── Main Layout ──────────────────────────────────────────── -->
+    <main id="app-main">
+      <!-- Sidebar: Universe + Presets -->
+      <aside id="sidebar">
+        <section class="sidebar-section">
+          <h2>Target Universe</h2>
+          <select id="universe-select" disabled>
+            <option value="">Loading…</option>
+          </select>
+        </section>
+
+        <section class="sidebar-section">
+          <h2>Presets</h2>
+          <div id="preset-list" class="preset-list">
+            <!-- filled by JS -->
+          </div>
+        </section>
+
+        <section class="sidebar-section reference-section">
+          <h2>Quick Reference</h2>
+          <div class="ref-grid">
+            <code>hsv(h,s,v)</code>
+            <code>rgb(r,g,b)</code>
+            <code>time(interval)</code>
+            <code>wave(v)</code>
+            <code>triangle(v)</code>
+            <code>sin</code> <code>cos</code> <code>abs</code>
+            <code>min</code> <code>max</code> <code>pow</code>
+            <code>sqrt</code> <code>random</code> <code>clamp</code>
+          </div>
+          <p class="ref-note">
+            <code>pixelCount</code> · <code>PI</code> · <code>PI2</code> ·
+            Trig uses <em>turns</em> not radians
+          </p>
+        </section>
+      </aside>
+
+      <!-- Editor area -->
+      <div id="editor-area">
+        <div class="editor-toolbar">
+          <button id="btn-run" class="btn btn-primary" disabled title="Compile & Run (Ctrl+Enter)">
+            ▶ Run
+          </button>
+          <button id="btn-stop" class="btn btn-danger" disabled title="Stop & Blackout">
+            ■ Stop
+          </button>
+        </div>
+
+        <div class="editor-wrap">
+          <textarea
+            id="code-editor"
+            spellcheck="false"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            placeholder="Write your PixelBlaze pattern here…"
+          ></textarea>
+        </div>
+
+        <div id="status-bar" class="status-bar ok">
+          <span class="status-icon">✓</span>
+          <span id="status-msg">Ready — select a universe and click Run</span>
+        </div>
+      </div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
