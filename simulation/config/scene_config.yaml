@@ -250,7 +250,7 @@ parLights:
     value: true
     label: Master Enabled
   conesEnabled:
-    value: truw
+    value: true
     label: Show Light Cones
   generatorsVisible:
     value: false
