@@ -50,10 +50,20 @@ if (sacnEnabled) {
   console.log(`[start] sACN bridge disabled (set colorWave.sacn_enabled: true in scene_config.yaml)`);
 }
 
+// sACN output bridge — always starts (for sending DMX to real controllers)
+const sacnOutputBridge = spawn('node', ['server/sacn_output_bridge.js'], {
+  stdio: 'inherit',
+  cwd: __dirname,
+});
+sacnOutputBridge.on('exit', (code) => {
+  if (code !== null && code !== 0) console.log(`[start] sACN output bridge exited with code ${code}`);
+});
+
 function cleanup() {
   httpServer.kill();
   saveServer.kill();
   if (sacnBridge) sacnBridge.kill();
+  sacnOutputBridge.kill();
   process.exit();
 }
 
@@ -67,3 +77,4 @@ httpServer.on('exit', (code) => {
 saveServer.on('exit', (code) => {
   if (code !== null) console.log(`[start] Save server exited with code ${code}`);
 });
+

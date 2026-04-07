@@ -843,6 +843,91 @@ function setupGUI() {
       children.forEach((f) => f.destroy());
       window.parGuiFolders = [];
 
+      // ─── Auto-Patch All button ───
+      // Remove any stale auto-patch buttons from previous renders
+      const plChildrenCleanup = parListFolder.domElement.querySelector('.children');
+      if (plChildrenCleanup) {
+        plChildrenCleanup.querySelectorAll('.auto-patch-wrap').forEach(el => el.remove());
+      }
+      const autoPatchWrap = document.createElement('div');
+      autoPatchWrap.className = 'auto-patch-wrap';
+      autoPatchWrap.style.cssText = 'padding:4px 6px;border-bottom:1px solid #333;';
+      const autoPatchBtn = document.createElement('button');
+      autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
+      autoPatchBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:#1a2a3a;color:#6af;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      autoPatchBtn.onclick = () => {
+        let universe = 1;
+        let address = 1;
+
+        // Build occupancy map from already-patched fixtures
+        const occupied = new Map(); // universe -> Set of occupied addresses
+        params.parLights.forEach(c => {
+          if (c.dmxUniverse > 0 && c.dmxAddress > 0) {
+            if (!occupied.has(c.dmxUniverse)) occupied.set(c.dmxUniverse, new Set());
+            const fDef = getDefinition(c.fixtureType || 'UkingPar');
+            const fp = fDef?.footprint || 10;
+            for (let ch = c.dmxAddress; ch < c.dmxAddress + fp; ch++) {
+              occupied.get(c.dmxUniverse).add(ch);
+            }
+          }
+        });
+
+        // Find next free slot
+        const findFreeSlot = (footprint) => {
+          while (true) {
+            if (address + footprint - 1 > 512) {
+              universe++;
+              address = 1;
+            }
+            // Check for overlap with existing patches
+            let conflict = false;
+            if (occupied.has(universe)) {
+              for (let ch = address; ch < address + footprint; ch++) {
+                if (occupied.get(universe).has(ch)) {
+                  conflict = true;
+                  address = ch + 1;
+                  break;
+                }
+              }
+            }
+            if (!conflict) return { universe, address };
+          }
+        };
+
+        let patchedCount = 0;
+        pushUndo();
+        params.parLights.forEach(c => {
+          if (c.dmxUniverse > 0 && c.dmxAddress > 0) return; // already patched
+          const fDef = getDefinition(c.fixtureType || 'UkingPar');
+          const fp = fDef?.footprint || 10;
+          const slot = findFreeSlot(fp);
+          c.dmxUniverse = slot.universe;
+          c.dmxAddress = slot.address;
+          // Mark as occupied
+          if (!occupied.has(slot.universe)) occupied.set(slot.universe, new Set());
+          for (let ch = slot.address; ch < slot.address + fp; ch++) {
+            occupied.get(slot.universe).add(ch);
+          }
+          address = slot.address + fp;
+          universe = slot.universe;
+          patchedCount++;
+        });
+
+        if (patchedCount === 0) {
+          alert('All fixtures are already patched.');
+          return;
+        }
+
+        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+        renderParGUI();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+        debounceAutoSave();
+        console.log(`[Auto-Patch] Assigned ${patchedCount} fixtures across universes 1-${universe}`);
+      };
+      autoPatchWrap.appendChild(autoPatchBtn);
+      const plChildren = parListFolder.domElement.querySelector('.children');
+      if (plChildren) plChildren.prepend(autoPatchWrap);
+
       // Ensure all lights have a group
       params.parLights.forEach((c) => {
         if (!c.group) c.group = 'Default';
@@ -890,7 +975,7 @@ function setupGUI() {
           groupFolder.close();
         }
 
-        // Trace-generated groups: show simplified read-only view with On/Off toggle
+        // Trace-generated groups: show fixtures with limited editing (DMX patch only)
         if (isTraceGroup) {
           const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;cursor:pointer;font-size:10px;font-family:inherit;';
           const traceRow = document.createElement('div');
@@ -913,14 +998,105 @@ function setupGUI() {
             document.activeElement?.blur?.();
           };
 
-          const lockLabel = document.createElement('span');
-          lockLabel.style.cssText = 'color:#888;font-size:10px;font-style:italic;margin-left:4px;';
-          lockLabel.textContent = '🔒 Generated — edit via Generator';
+          const genLabel = document.createElement('span');
+          genLabel.style.cssText = 'color:#888;font-size:10px;font-style:italic;margin-left:4px;';
+          genLabel.textContent = '🔧 Generated';
 
           traceRow.appendChild(visBtn);
-          traceRow.appendChild(lockLabel);
+          traceRow.appendChild(genLabel);
           const gc = groupFolder.domElement.querySelector('.children');
           if (gc) gc.prepend(traceRow);
+
+          // Show individual generated fixtures with limited editing
+          items.forEach(({ config, index }, localIdx) => {
+            try {
+              if (!config.name) config.name = `Fixture ${localIdx + 1}`;
+              const folderTitle = `${config.name}`;
+              const genFixFolder = groupFolder.addFolder(folderTitle);
+              genFixFolder.domElement.classList.add('gui-card');
+              genFixFolder.close();
+              window.parGuiFolders[index] = genFixFolder;
+
+              // Name (editable)
+              genFixFolder.add(config, 'name').name('Name').onFinishChange((v) => {
+                genFixFolder.title(v);
+                debounceAutoSave();
+              });
+
+              // Generator info — styled DOM label instead of lil-gui controller
+              const infoDiv = document.createElement('div');
+              infoDiv.style.cssText = 'padding:2px 8px 4px;color:#888;font-size:9px;font-style:italic;';
+              infoDiv.textContent = '📍 Position controlled by generator';
+              const genChildren = genFixFolder.domElement.querySelector('.children');
+              if (genChildren) genChildren.appendChild(infoDiv);
+
+              // 📡 DMX Patch — compact DOM-based controls
+              if (config.dmxUniverse === undefined) config.dmxUniverse = 0;
+              if (config.dmxAddress === undefined) config.dmxAddress = 0;
+              const fixtureType = config.fixtureType || 'UkingPar';
+              const fDef = getDefinition(fixtureType);
+              const footprint = fDef?.footprint || 10;
+
+              const patchDiv = document.createElement('div');
+              patchDiv.style.cssText = 'padding:2px 8px 6px;';
+
+              // Header row
+              const patchHeader = document.createElement('div');
+              patchHeader.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:3px;';
+              patchHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:#666;font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
+              patchDiv.appendChild(patchHeader);
+
+              // Universe + Address row
+              const patchRow = document.createElement('div');
+              patchRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
+
+              const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:#777;font-size:9px;'; s.textContent = text; return s; };
+              const mkInput = (value, max, onchange) => {
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
+                inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+                inp.onchange = () => { onchange(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
+                return inp;
+              };
+
+              patchRow.appendChild(mkLabel('U:'));
+              const uniInput = mkInput(config.dmxUniverse, 63999, (v) => { config.dmxUniverse = v; uniInput.value = v; updateStatus(); debounceAutoSave(); });
+              patchRow.appendChild(uniInput);
+
+              patchRow.appendChild(mkLabel('Addr:'));
+              const addrInput = mkInput(config.dmxAddress, 512, (v) => { config.dmxAddress = v; addrInput.value = v; updateStatus(); debounceAutoSave(); });
+              patchRow.appendChild(addrInput);
+
+              // Status dot
+              const statusDot = document.createElement('span');
+              statusDot.style.cssText = 'font-size:10px;margin-left:auto;';
+              const updateStatus = () => {
+                const patched = config.dmxUniverse > 0 && config.dmxAddress > 0;
+                statusDot.textContent = patched ? '🟢' : '⚫';
+                statusDot.title = patched ? `Patched: U${config.dmxUniverse}:${config.dmxAddress}` : 'Unpatched';
+              };
+              updateStatus();
+              patchRow.appendChild(statusDot);
+
+              patchDiv.appendChild(patchRow);
+
+              // Controller IP row (inherited from generator, read-only)
+              const ipRow = document.createElement('div');
+              ipRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-top:3px;';
+              ipRow.appendChild(mkLabel('IP:'));
+              const ipDisplay = document.createElement('span');
+              ipDisplay.style.cssText = 'color:#999;font-size:9px;font-style:italic;';
+              ipDisplay.textContent = config.controllerIp || '(not set)';
+              ipRow.appendChild(ipDisplay);
+              patchDiv.appendChild(ipRow);
+
+              if (genChildren) genChildren.appendChild(patchDiv);
+            } catch (err) {
+              console.warn(`[GUI] Error creating generated fixture ${index} UI:`, err);
+            }
+          });
+
+          // Don't render full controls for generated groups
           return;
         }
 
@@ -995,18 +1171,40 @@ function setupGUI() {
           }
         };
 
+        // Fixture type selector + add button
+        const addWrap = document.createElement('div');
+        addWrap.style.cssText = 'display:flex;gap:2px;flex:1;';
+        const typeSelect = document.createElement('select');
+        typeSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;font-size:10px;font-family:inherit;cursor:pointer;';
+        const availableTypes = listTypes();
+        if (availableTypes.length === 0) availableTypes.push('UkingPar');
+        availableTypes.forEach(t => {
+          const def = getDefinition(t);
+          const ch = def ? def.footprint : '?';
+          const opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = `${t} (${ch}ch)`;
+          typeSelect.appendChild(opt);
+        });
         const addBtn = document.createElement('button');
-        addBtn.textContent = '+ Light';
-        addBtn.style.cssText = gBtnStyle;
+        addBtn.textContent = '+';
+        addBtn.title = 'Add fixture of selected type';
+        addBtn.style.cssText = 'padding:2px 8px;border:none;border-radius:3px;background:#1a3a1a;color:#6f6;cursor:pointer;font-size:10px;font-family:inherit;font-weight:bold;';
         addBtn.onclick = () => {
           pushUndo();
+          const selectedType = typeSelect.value;
+          const def = getDefinition(selectedType);
           const idx = params.parLights.length + 1;
           params.parLights.push({
             group: groupName,
-            name: `DMX Fixture ${idx}`,
-            fixtureType: 'UkingPar',
-            color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
+            name: `${selectedType} ${idx}`,
+            fixtureType: selectedType,
+            color: def?.defaultColor || '#ffaa44',
+            intensity: def?.defaultIntensity || 5,
+            angle: def?.defaultAngle || 20,
+            penumbra: def?.defaultPenumbra || 0.5,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+            dmxUniverse: 0, dmxAddress: 0, controllerIp: '',
           });
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
           renderParGUI();
@@ -1014,6 +1212,8 @@ function setupGUI() {
           if (window._setGuiRebuilding) window._setGuiRebuilding(false);
           debounceAutoSave();
         };
+        addWrap.appendChild(typeSelect);
+        addWrap.appendChild(addBtn);
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕ Delete';
@@ -1031,7 +1231,7 @@ function setupGUI() {
         };
 
         row2.appendChild(renameBtn);
-        row2.appendChild(addBtn);
+        row2.appendChild(addWrap);
         row2.appendChild(delBtn);
 
         gtbWrap.appendChild(row1);
@@ -1122,9 +1322,76 @@ function setupGUI() {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
           });
 
+          // ── 📡 DMX Patch — compact DOM controls ──
+          if (config.dmxUniverse === undefined) config.dmxUniverse = 0;
+          if (config.dmxAddress === undefined) config.dmxAddress = 0;
+          const fixtureType = config.fixtureType || 'UkingPar';
+          const fDef = getDefinition(fixtureType);
+          const footprint = fDef?.footprint || 10;
+
+          const patchDiv = document.createElement('div');
+          patchDiv.style.cssText = 'padding:3px 8px 6px;';
+
+          // Header
+          const patchHeader = document.createElement('div');
+          patchHeader.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:3px;';
+          patchHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:#666;font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
+          patchDiv.appendChild(patchHeader);
+
+          // Universe + Address row
+          const patchRow = document.createElement('div');
+          patchRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
+
+          const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:#777;font-size:9px;'; s.textContent = text; return s; };
+          const mkInput = (value, max, onchange) => {
+            const inp = document.createElement('input');
+            inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
+            inp.style.cssText = 'width:52px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+            inp.onchange = () => { onchange(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
+            return inp;
+          };
+
+          patchRow.appendChild(mkLabel('U:'));
+          const uniInput = mkInput(config.dmxUniverse, 63999, (v) => { config.dmxUniverse = v; uniInput.value = v; updatePatchStatus(); debounceAutoSave(); });
+          patchRow.appendChild(uniInput);
+
+          patchRow.appendChild(mkLabel('Addr:'));
+          const addrInput = mkInput(config.dmxAddress, 512, (v) => { config.dmxAddress = v; addrInput.value = v; updatePatchStatus(); debounceAutoSave(); });
+          patchRow.appendChild(addrInput);
+
+          // Status dot
+          const patchStatusDot = document.createElement('span');
+          patchStatusDot.style.cssText = 'font-size:10px;margin-left:auto;';
+          const updatePatchStatus = () => {
+            const patched = config.dmxUniverse > 0 && config.dmxAddress > 0;
+            patchStatusDot.textContent = patched ? '🟢' : '⚫';
+            patchStatusDot.title = patched ? `Patched: U${config.dmxUniverse}:${config.dmxAddress}` : 'Unpatched';
+          };
+          updatePatchStatus();
+          patchRow.appendChild(patchStatusDot);
+
+          patchDiv.appendChild(patchRow);
+
+          // Controller IP row
+          if (config.controllerIp === undefined) config.controllerIp = '';
+          const ipRow = document.createElement('div');
+          ipRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-top:3px;';
+          ipRow.appendChild(mkLabel('IP:'));
+          const ipInput = document.createElement('input');
+          ipInput.type = 'text';
+          ipInput.value = config.controllerIp || '';
+          ipInput.placeholder = '10.1.1.102';
+          ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
+          ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
+          ipRow.appendChild(ipInput);
+          patchDiv.appendChild(ipRow);
+
+          const idxChildren = idxFolder.domElement.querySelector('.children');
+          if (idxChildren) idxChildren.appendChild(patchDiv);
+
           // Compact action row
           const actDiv = document.createElement('div');
-          actDiv.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;';
+          actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;border-top:1px solid #333;margin-top:4px;';
           const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
 
           const dupBtn = document.createElement('button');
@@ -1182,8 +1449,8 @@ function setupGUI() {
           actDiv.appendChild(dupBtn);
           actDiv.appendChild(rmBtn);
           if (groupOrder.length > 1) actDiv.appendChild(moveSelect);
-          const idxChildren = idxFolder.domElement.querySelector('.children');
-          if (idxChildren) idxChildren.appendChild(actDiv);
+          const actChildren = idxFolder.domElement.querySelector('.children');
+          if (actChildren) actChildren.appendChild(actDiv);
         });
       });
     }
@@ -1725,6 +1992,7 @@ function setupGUI() {
           rotY: rotY + (trace.fixtureRotOffY || 0),
           rotZ: rotZ + (trace.fixtureRotOffZ || 0),
           _traceGenerated: true,
+          controllerIp: trace.controllerIp || '',
         });
       });
 
@@ -1885,12 +2153,16 @@ function setupGUI() {
 
         // Fixture type selector
         if (!trace.fixtureType) trace.fixtureType = 'UkingPar';
+        if (!trace.controllerIp) trace.controllerIp = '';
         const fixtureTypes = listTypes();
         if (fixtureTypes.length > 0) {
           tFolder.add(trace, 'fixtureType', fixtureTypes).name('Fixture Type').onChange(() => {
             debounceAutoSave();
           });
         }
+        tFolder.add(trace, 'controllerIp').name('🌐 Controller IP').onFinishChange(() => {
+          debounceAutoSave();
+        });
 
         if (trace.shape === 'circle') {
           tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius').onChange(() => {
@@ -1976,10 +2248,54 @@ function setupGUI() {
         actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
         const aBtnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
 
+        // Lock toggle
+        if (!('locked' in trace)) trace.locked = false;
+
+        const lockBtn = document.createElement('button');
+        lockBtn.textContent = trace.locked ? '🔒' : '🔓';
+        lockBtn.title = trace.locked ? 'Unlock generator' : 'Lock generator';
+        lockBtn.style.cssText = aBtnStyle + (trace.locked ? 'background:#3a3a1a;color:#cc0;' : 'background:#2a2a2a;color:#888;');
+        lockBtn.onclick = () => {
+          trace.locked = !trace.locked;
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          renderGeneratorGUI();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+          debounceAutoSave();
+        };
+
+        // Disable controllers when locked
+        if (trace.locked) {
+          const controllers = tFolder.controllersRecursive();
+          controllers.forEach(c => { try { c.disable(); } catch(_) {} });
+        }
+
         const genBtn = document.createElement('button');
         genBtn.textContent = trace.generated ? '↻ Regenerate' : '✓ Generate';
         genBtn.style.cssText = aBtnStyle + 'background:#1a3a1a;color:#3c3;';
-        genBtn.onclick = () => generateGroupFromTrace(i);
+        genBtn.onclick = () => {
+          // Check for custom DMX patches before regenerating
+          if (trace.generated) {
+            const groupName = trace.groupName || trace.name;
+            const patchedFixtures = params.parLights.filter(l =>
+              l.group === groupName && l._traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
+            );
+            if (patchedFixtures.length > 0) {
+              const names = patchedFixtures.slice(0, 5).map(l =>
+                `  • ${l.name || 'Fixture'} (U${l.dmxUniverse}:${l.dmxAddress})`
+              ).join('\n');
+              const extra = patchedFixtures.length > 5 ? `\n  ... and ${patchedFixtures.length - 5} more` : '';
+              const msg = `⚠ Regenerate "${groupName}"?\n\n${patchedFixtures.length} fixture(s) have custom DMX patches that will be reset:\n${names}${extra}\n\nContinue?`;
+              if (!confirm(msg)) return;
+            }
+          }
+          generateGroupFromTrace(i);
+        };
+
+        // Lock disables generate
+        if (trace.locked) {
+          genBtn.disabled = true;
+          genBtn.style.cssText = aBtnStyle + 'background:#222;color:#555;cursor:not-allowed;';
+        }
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕ Delete';
@@ -2002,6 +2318,7 @@ function setupGUI() {
           debounceAutoSave();
         };
 
+        actDiv.appendChild(lockBtn);
         actDiv.appendChild(genBtn);
         actDiv.appendChild(delBtn);
         const tChildren = tFolder.domElement.querySelector('.children');

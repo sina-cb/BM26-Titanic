@@ -100,6 +100,7 @@ function createRenderLoop(runtime, mapper, sacnOut, fps) {
   let running = false;
   let timer = null;
   let frameCount = 0;
+  let windowFrames = 0;
   let startTime = 0;
   let lastStatsTime = 0;
   const intervalMs = Math.round(1000 / fps);
@@ -126,13 +127,16 @@ function createRenderLoop(runtime, mapper, sacnOut, fps) {
     sacnOut.sendFrame(dmxBuffers);
 
     frameCount++;
+    windowFrames++;
 
     // Stats every 5 seconds
     if (now - lastStatsTime > 5000) {
-      const actualFps = Math.round(frameCount / ((now - startTime) / 1000));
+      const windowSec = (now - lastStatsTime) / 1000;
+      const windowFps = Math.round(windowFrames / windowSec);
       const renderMs = (performance.now() - now).toFixed(1);
-      process.stdout.write(`\r  ⚡ ${frameCount} frames, ${actualFps} fps, ${renderMs}ms/frame, ${mapper.patchedPixelCount} pixels`);
+      process.stdout.write(`\r  ⚡ ${frameCount} frames, ${windowFps} fps, ${renderMs}ms/frame, ${mapper.patchedPixelCount} pixels`);
       lastStatsTime = now;
+      windowFrames = 0;
     }
   }
 

@@ -171,9 +171,9 @@ function init() {
 Promise.all([
   fetch("config/scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
   fetch("config/scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
-  fetch("../dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch("../dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch("../dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
 ]).then(async ([sceneYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
   // Load scene config
   try {

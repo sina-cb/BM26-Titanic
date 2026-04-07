@@ -7,6 +7,11 @@ import {
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
   lightingEnabled, lightingMode, engineReady, engineEnabled,
 } from "./state.js";
+import { getSacnOutput } from "../dmx/sacn_output_client.js";
+
+// sACN output — lazily initialized
+let sacnOutputClient = null;
+let sacnOutputEnabled = false;
 
 // Cached chroma scale — rebuilt when stops change
 let chromaScale = null;
@@ -239,6 +244,42 @@ export function animate() {
             }
             patchAddr += footprint;
           }
+        }
+      }
+    }
+  }
+
+  // ─── sACN Output: send DMX to real controllers via bridge ───
+  if (window.dmxRouter && params.parLights) {
+    // Lazily enable output client
+    if (!sacnOutputEnabled) {
+      sacnOutputClient = getSacnOutput();
+      sacnOutputClient.enable();
+      sacnOutputEnabled = true;
+    }
+
+    if (sacnOutputClient && sacnOutputClient.connected) {
+      // Group fixtures by universe:controllerIp
+      const outputGroups = new Map(); // 'universe:ip' → { universe, ip, priority }
+
+      for (const config of params.parLights) {
+        if (!config) continue;
+        const u = config.dmxUniverse;
+        const addr = config.dmxAddress;
+        const ip = config.controllerIp;
+        if (!u || u <= 0 || !addr || addr <= 0 || !ip || ip === '0.0.0.0') continue;
+
+        const key = `${u}:${ip}`;
+        if (!outputGroups.has(key)) {
+          outputGroups.set(key, { universe: u, ip, priority: 100 });
+        }
+      }
+
+      // For each unique universe:ip pair, send the full universe buffer
+      for (const [, group] of outputGroups) {
+        const fullFrame = window.dmxRouter.getFullFrame(group.universe);
+        if (fullFrame) {
+          sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, fullFrame);
         }
       }
     }

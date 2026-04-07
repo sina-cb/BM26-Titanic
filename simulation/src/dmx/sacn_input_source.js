@@ -38,6 +38,7 @@ export class SacnInputSource {
       fps: 0,
       lastUniverse: 0,
       lastPriority: 0,
+      activeUniverses: new Set(),
     };
   }
 
@@ -191,12 +192,15 @@ export class SacnInputSource {
     this.stats.framesReceived++;
     this.stats.lastUniverse = universe;
     this.stats.lastPriority = priority;
+    this.stats.activeUniverses.add(universe);
 
     const now = performance.now();
     if (now - this._lastLogTime > 5000) {
       this.stats.fps = Math.round(this._frameCount / 5);
       this._frameCount = 0;
       this._lastLogTime = now;
+      // Reset active universes for next window (re-populated on next frames)
+      this.stats.activeUniverses = new Set();
     }
   }
 }

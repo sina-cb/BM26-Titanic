@@ -1,7 +1,7 @@
 /**
  * fixture_definition_registry.js — Central registry for fixture model definitions.
  *
- * Loads fixture model YAMLs at startup from dmx/fixtures directories.
+ * Loads fixture model YAMLs at startup from simulation/dmx/fixtures directories.
  * Provides getDefinition(fixtureType) and listTypes() for the simulation.
  *
  * A fixture definition contains:

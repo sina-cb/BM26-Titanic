@@ -9,7 +9,7 @@ titanicEnd:
   _section:
     label: 🧊 The End (Titanic's End)
     type: icebergArray
-    collapsed: false
+    collapsed: true
   icebergsEnabled:
     value: true
     label: Master Enabled
@@ -141,7 +141,7 @@ atmosphere:
     max: 1
     step: 0.01
   exposure:
-    value: 0.4
+    value: 1.1
     label: Camera Exposure
     min: 0.1
     max: 3
@@ -245,12 +245,12 @@ parLights:
   _section:
     label: 🔌 DMX Fixtures
     type: fixtureArray
-    collapsed: false
+    collapsed: true
   parsEnabled:
     value: true
     label: Master Enabled
   conesEnabled:
-    value: false
+    value: truw
     label: Show Light Cones
   generatorsVisible:
     value: false
@@ -258,6 +258,7 @@ parLights:
   fixtures:
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 1
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -268,8 +269,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 2
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -280,8 +285,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 3
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -292,8 +301,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 4
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -304,8 +317,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 5
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -316,8 +333,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 6
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -328,8 +349,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 7
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -340,8 +365,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 8
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -352,8 +381,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 9
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -364,8 +397,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 10
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -376,8 +413,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 11
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -388,8 +429,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 12
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -400,8 +445,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 13
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -412,8 +461,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 14
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -424,8 +477,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 15
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -436,8 +493,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 16
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -448,8 +509,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 17
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -460,8 +525,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 18
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -472,8 +541,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 19
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -484,8 +557,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Wall Generator
       name: Right Front Wall Generator 20
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -496,8 +573,12 @@ parLights:
       rotX: -62.987428019501316
       rotY: 134.19659356023698
       rotZ: -110.8237374138408
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 1
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -508,8 +589,12 @@ parLights:
       rotX: 65.06625088380783
       rotY: -17.044438713931452
       rotZ: -10.920082528299218
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 2
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -520,8 +605,12 @@ parLights:
       rotX: 50.04158933251067
       rotY: -18.55273762511712
       rotZ: -8.719081826501656
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 3
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -532,8 +621,12 @@ parLights:
       rotX: 37.983863391598334
       rotY: -30.808279826703686
       rotZ: -10.833977312176367
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 4
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -544,8 +637,12 @@ parLights:
       rotX: 31.791782682372077
       rotY: -46.99522951781506
       rotZ: -14.115945334577058
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 5
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -556,8 +653,12 @@ parLights:
       rotX: 32.56733833671133
       rotY: -63.98819400622648
       rotZ: -20.684141446716186
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 6
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -568,8 +669,12 @@ parLights:
       rotX: 39.853253168878226
       rotY: -79.2426830243385
       rotZ: -33.412226467079485
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 7
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -580,8 +685,12 @@ parLights:
       rotX: 52.061949677320264
       rotY: -90.03853402026596
       rotZ: -52.09234681766751
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 8
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -592,8 +701,12 @@ parLights:
       rotX: 66.51412403701407
       rotY: -89.38322525781906
       rotZ: -65.94965384989146
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Top Chimney Generator
       name: Right Top Chimney Generator 9
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -604,8 +717,12 @@ parLights:
       rotX: 74.96810675387201
       rotY: -51.35644581331218
       rotZ: -40.47966148021137
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Deck Generator
       name: Right Front Deck Generator 1
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -616,8 +733,12 @@ parLights:
       rotX: -55.81417629917045
       rotY: 177.87699151174402
       rotZ: -175.99270957058573
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Deck Generator
       name: Right Front Deck Generator 2
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -628,8 +749,12 @@ parLights:
       rotX: -55.81417629917045
       rotY: 177.87699151174402
       rotZ: -175.99270957058573
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Deck Generator
       name: Right Front Deck Generator 3
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -640,8 +765,12 @@ parLights:
       rotX: -55.81417629917045
       rotY: 177.87699151174402
       rotZ: -175.99270957058573
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Deck Generator
       name: Right Front Deck Generator 4
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -652,8 +781,12 @@ parLights:
       rotX: -55.81417629917045
       rotY: 177.87699151174402
       rotZ: -175.99270957058573
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Front Deck Generator
       name: Right Front Deck Generator 5
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -664,8 +797,12 @@ parLights:
       rotX: -55.81417629917045
       rotY: 177.87699151174402
       rotZ: -175.99270957058573
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 1
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -676,8 +813,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 2
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -688,8 +829,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 3
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -700,8 +845,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 4
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -712,8 +861,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 5
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -724,8 +877,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Center Auditorium Generator
       name: Right Center Auditorium Generator 6
+      fixtureType: UkingPar
       color: '#37ff00'
       intensity: 15
       angle: 45
@@ -736,8 +893,12 @@ parLights:
       rotX: -52.86838072153286
       rotY: 125.4162025620287
       rotZ: -87.87253744526163
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 1
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -748,8 +909,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 2
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -760,8 +925,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 3
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -772,8 +941,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 4
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -784,8 +957,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 5
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -796,8 +973,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Center Auditorium
       name: Left Center Auditorium 6
+      fixtureType: UkingPar
       color: '#ff0000'
       intensity: 50
       angle: 60
@@ -808,8 +989,12 @@ parLights:
       rotX: -58.20270935326621
       rotY: -90.517969410706
       rotZ: 58.643992523644386
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 1
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -820,8 +1005,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 2
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -832,8 +1021,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 3
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -844,8 +1037,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 4
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -856,8 +1053,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 5
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -868,8 +1069,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 6
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -880,8 +1085,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 7
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -892,8 +1101,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 8
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -904,8 +1117,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 9
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -916,8 +1133,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 10
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -928,8 +1149,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 11
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -940,8 +1165,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 12
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -952,8 +1181,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 13
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -964,8 +1197,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 14
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -976,8 +1213,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 15
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -988,8 +1229,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 16
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1000,8 +1245,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 17
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1012,8 +1261,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 18
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1024,8 +1277,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Back Wall
       name: Left Back Wall 19
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1036,8 +1293,12 @@ parLights:
       rotX: -57.11179174735864
       rotY: -78.9559569482906
       rotZ: 48.29040706597206
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 1
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1048,8 +1309,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 2
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1060,8 +1325,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 3
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1072,8 +1341,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 4
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1084,8 +1357,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 5
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1096,8 +1373,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 6
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1108,8 +1389,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 7
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1120,8 +1405,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 8
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1132,8 +1421,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 9
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1144,8 +1437,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 10
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1156,8 +1453,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 11
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1168,8 +1469,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 12
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1180,8 +1485,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 13
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1192,8 +1501,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 14
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1204,8 +1517,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 15
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1216,8 +1533,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 16
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1228,8 +1549,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 17
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1240,8 +1565,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 18
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1252,8 +1581,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 19
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1264,8 +1597,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Right Back Wall Generator
       name: Right Back Wall Generator 20
+      fixtureType: UkingPar
       color: '#001eff'
       intensity: 18
       angle: 30
@@ -1276,8 +1613,12 @@ parLights:
       rotX: -71.71115059869975
       rotY: 123.18997757262524
       rotZ: -106.38336726422511
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 1
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1288,8 +1629,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 2
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1300,8 +1645,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 3
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1312,8 +1661,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 4
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1324,8 +1677,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 5
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1336,8 +1693,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 6
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1348,8 +1709,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 7
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1360,8 +1725,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 8
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1372,8 +1741,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 9
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1384,8 +1757,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 10
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1396,8 +1773,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 11
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1408,8 +1789,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 12
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1420,8 +1805,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 13
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1432,8 +1821,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 14
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1444,8 +1837,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 15
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1456,8 +1853,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 16
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1468,8 +1869,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 17
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1480,8 +1885,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 18
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1492,8 +1901,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 19
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1504,8 +1917,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Wall Generator
       name: Left Front Wall Generator 20
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 10
       angle: 30
@@ -1516,8 +1933,12 @@ parLights:
       rotX: -61.068243764489985
       rotY: -93.69883453499051
       rotZ: 64.35706001289255
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 1
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1528,8 +1949,12 @@ parLights:
       rotX: 31.559080156917904
       rotY: 90.33561859001496
       rotZ: 31.73517520673026
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 2
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1540,8 +1965,12 @@ parLights:
       rotX: 34.7097973593422
       rotY: 74.13447311950019
       rotZ: 26.5656783988916
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 3
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1552,8 +1981,12 @@ parLights:
       rotX: 43.82782032790131
       rotY: 60.212254251197095
       rotZ: 26.259067100806504
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 4
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1564,8 +1997,12 @@ parLights:
       rotX: 57.427952135821144
       rotY: 52.33782944556022
       rotZ: 30.13181769608785
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 5
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1576,8 +2013,12 @@ parLights:
       rotX: 71.50483582857704
       rotY: 64.48421391415708
       rotZ: 48.847777665736565
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 6
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1588,8 +2029,12 @@ parLights:
       rotX: 71.9053556941776
       rotY: 114.36762001215692
       rotZ: 96.71867228146948
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 7
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1600,8 +2045,12 @@ parLights:
       rotX: 57.93443966603171
       rotY: 127.95821496467003
       rotZ: 97.18205901865228
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 8
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1612,8 +2061,12 @@ parLights:
       rotX: 44.15718499554899
       rotY: 120.3906282631435
       rotZ: 70.60636812690299
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Top Chimney Generator
       name: Left Top Chimney Generator 9
+      fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
@@ -1624,8 +2077,12 @@ parLights:
       rotX: 34.8562441915446
       rotY: 106.52967230884275
       rotZ: 45.624914425695536
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 1
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -1636,8 +2093,12 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 2
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -1648,8 +2109,12 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 3
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -1660,8 +2125,12 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 4
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -1672,8 +2141,12 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
     - group: Left Front Deck Generator
       name: Left Front Deck Generator 5
+      fixtureType: UkingPar
       color: '#f07100'
       intensity: 22
       angle: 50
@@ -1684,6 +2157,9 @@ parLights:
       rotX: -50.91407249895412
       rotY: -138.54063954849113
       rotZ: 103.03110804737327
+      controllerIp: ''
+      dmxUniverse: 0
+      dmxAddress: 0
   traces:
     - name: Right Front Wall Generator
       shape: line
@@ -1703,6 +2179,12 @@ parLights:
       lightAngle: 30
       groupName: Right Front Wall Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: true
+      controllerIp: ''
     - name: Right Top Chimney Generator
       shape: circle
       radius: 3
@@ -1723,6 +2205,12 @@ parLights:
       lightAngle: 30
       groupName: Right Top Chimney Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: true
+      controllerIp: ''
     - name: Right Front Deck Generator
       shape: line
       startX: 21.013853861159475
@@ -1741,6 +2229,12 @@ parLights:
       lightAngle: 50
       groupName: Right Front Deck Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Right Center Auditorium Generator
       shape: line
       startX: 13.409044248777642
@@ -1759,6 +2253,12 @@ parLights:
       lightAngle: 45
       groupName: Right Center Auditorium Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Left Center Auditorium Generator
       shape: line
       startX: -13.339548301486076
@@ -1777,6 +2277,12 @@ parLights:
       lightAngle: 60
       groupName: Left Center Auditorium
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Left Back Wall Generator
       shape: line
       startX: -30
@@ -1795,6 +2301,12 @@ parLights:
       lightAngle: 30
       groupName: Left Back Wall
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Right Back Wall Generator
       shape: line
       startX: 24.98778918454627
@@ -1813,6 +2325,12 @@ parLights:
       lightAngle: 30
       groupName: Right Back Wall Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Left Front Wall Generator
       shape: line
       startX: -12.903329387309988
@@ -1831,6 +2349,12 @@ parLights:
       lightAngle: 30
       groupName: Left Front Wall Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Left Top Chimney Generator
       shape: circle
       radius: 3
@@ -1851,6 +2375,12 @@ parLights:
       lightAngle: 30
       groupName: Left Top Chimney Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
     - name: Left Front Deck Generator
       shape: line
       startX: -14.229550084726284
@@ -1869,6 +2399,12 @@ parLights:
       lightAngle: 50
       groupName: Left Front Deck Generator
       generated: true
+      fixtureType: UkingPar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
 ledStrands:
   _section:
     label: 🔌 LED Lights
@@ -1924,7 +2460,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -1940,12 +2476,11 @@ colorWave:
   gradientStops:
     - '#ff0000'
     - '#ffffff'
-  # ── sACN Network Settings ──
   sacn_enabled:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: '1,2,3,4'
+    value: 1,2,3,4
     label: 📡 Listen Universes
   sacn_lockout_ms:
     value: 10000
@@ -1976,16 +2511,16 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -6.1934
-    y: 25.9991
-    z: 70.6265
+    x: -1.312
+    y: 26.12
+    z: 78.196
   target:
     x: -2
     y: 8
-    z: -5.3414
+    z: -5.341
 _patternEditor:
-  x: 14
-  y: 60
+  x: 0
+  y: 0
   width: 400
   height: 520
   collapsed: false

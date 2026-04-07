@@ -7,9 +7,9 @@ It provides a 3D interface for placing LED "dots", grouping them into DMX "pixel
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
-Make sure you are in the `dmx/designer` directory:
+Make sure you are in the `simulation/dmx/designer` directory:
 ```bash
-cd c:\Users\sina_\workspace\BM26-Titanic\dmx\designer
+cd simulation/dmx/designer
 npm install
 ```
 
@@ -26,7 +26,7 @@ npm run desktop
 
 ### Loading a Fixture Model
 1. Click the **Load YAML** button in the top-left toolbar.
-2. Navigate to one of the verification models created in `dmx/fixtures/`:
+2. Navigate to one of the verification models in `simulation/dmx/fixtures/`:
    - **Endyshow 240W Bar**: `fixtures\endyshow_240w_stage_strobe_led_bar\model_135.yaml`
    - **UKing PAR**: `fixtures\uking_rgbwau_par_light\model_10.yaml`
    - **Vintage LED**: `fixtures\vintage_led_stage_light\model_33.yaml`
@@ -38,7 +38,7 @@ npm run desktop
 - **Pixel List (Bottom)**: A quick spreadsheet view of every pixel in your fixture, including channel assignments and dot counts.
 
 ### Saving Your Work
-Once you've tuned the pixel mapping perfectly, click the **Save YAML** button in the toolbar. It will download the updated model YAML file which you can copy back into your `dmx/fixtures/` folder.
+Once you've tuned the pixel mapping perfectly, click the **Save YAML** button in the toolbar. It will download the updated model YAML file which you can copy back into your `simulation/dmx/fixtures/` folder.
 
 ---
 

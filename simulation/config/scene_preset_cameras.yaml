@@ -52,10 +52,10 @@ presets:
   - name: Favorite
     key: favorite
     position:
-      x: -17.012
-      'y': 14.022
-      z: 54.032
+      x: -1.312
+      'y': 26.12
+      z: 78.196
     target:
-      x: 4.549
-      'y': -1.804
-      z: -23.121
+      x: -2
+      'y': 8
+      z: -5.341

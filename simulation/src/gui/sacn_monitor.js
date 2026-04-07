@@ -105,7 +105,15 @@ function updateStats() {
   if (statusEl) statusEl.textContent = st.connected ? 'Connected' : 'Disconnected';
   if (fpsEl) fpsEl.textContent = st.fps;
   if (framesEl) framesEl.textContent = st.framesReceived.toLocaleString();
-  if (univEl) univEl.textContent = st.lastUniverse || '—';
+  if (univEl) {
+    const unis = st.activeUniverses;
+    if (unis && unis.size > 0) {
+      const sorted = [...unis].sort((a, b) => a - b);
+      univEl.textContent = `${sorted.length} [${sorted.join(',')}]`;
+    } else {
+      univEl.textContent = '—';
+    }
+  }
   if (priEl) priEl.textContent = st.lastPriority || '—';
 
   if (dot) {

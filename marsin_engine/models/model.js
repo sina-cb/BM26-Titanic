@@ -1,5 +1,5 @@
 // Auto-generated Pixelblaze model — do not edit manually
-// Updated: 2026-04-07T04:45:26.470Z
+// Updated: 2026-04-07T17:15:35.608Z
 //
 // Each pixel has: index, type, name, group, world coords (x,y,z),
 // normalized coords (nx,ny,nz) in [0..1], and DMX patch info

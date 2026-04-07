@@ -96,8 +96,8 @@ To keep the implementation clean and strictly separated, the core logic should f
 | `UniverseFrameBuffer` | `src/dmx/universe_frame_buffer.js` | ✅ Implemented — double-buffered read/write with HTP merge |
 | `PatchRegistry` | `src/dmx/patch_registry.js` | ✅ Implemented — validates non-overlapping patches, but not yet populated from config |
 | `DmxFixtureRuntime` | `src/fixtures/dmx_fixture_runtime.js` | ✅ Implemented — accepts patchDef + fixtureDef, applies DMX slices |
-| `SacnOutputDriver` | — | ❌ Not yet implemented (future: re-broadcast final output) |
-| `FixtureDefinitionRegistry` | — | 🟡 Partial — fixture types exist but no centralized registry |
+| `SacnOutputDriver` | `src/dmx/sacn_output_client.js` + `server/sacn_output_bridge.js` | ✅ Implemented — browser WS client sends frames to Node bridge, which forwards as sACN unicast |
+| `FixtureDefinitionRegistry` | `src/fixtures/fixture_definition_registry.js` | 🟡 Partial — fixture types exist but no centralized registry |
 
 ### Current Data Pipeline (Working)
 
@@ -111,9 +111,19 @@ MarsinEngine CLI ──sACN──▶ sacn_bridge.js ──WS──▶ SacnInputS
                                             animate.js sACN Direct Apply
                                             (sequential auto-pack mapping)
                                                    │
-                                                   ▼
-                                            Par/LED/Iceberg fixtures
-                                            (light.color, bulb color)
+                                    ┌──────────────┼──────────────┐
+                                    ▼                             ▼
+                             Par/LED/Iceberg              SacnOutputClient
+                             fixtures (visual)            (browser WS client)
+                                                          │
+                                                          ▼
+                                                   sacn_output_bridge.js
+                                                   (port 6972)
+                                                          │
+                                                   ┌──────┼──────┐
+                                                   ▼             ▼
+                                             sACN → IP_A   sACN → IP_B
+                                             (e.g. PKnight) (e.g. 10.1.1.x)
 ```
 
 > [!NOTE]
@@ -325,18 +335,88 @@ Features explicit interaction tools (Select, Add, **Move**, **Mount**, **Aim**, 
 ### Right Panel: Inspector
 Sectioned cards for Identity, Patch details, Placement adjustments, Render modes, and Live DMX read-outs.
 
+### Fixture Management (lil-gui, v1)
+
+These requirements apply to the current lil-gui-based right panel, prior to the full 3-pane redesign.
+
+#### Fixture Type Selector
+The "+ Light" button must offer a type-selection dropdown populated from the `FixtureDefinitionRegistry`. Available types include all fixture definitions loaded from `dmx/fixtures/` (e.g. UkingPar, ShehdsBar, VintageLed). Each option displays the fixture type name and channel footprint:
+
+```
+[+ Light ▾]
+  ├─ UkingPar (10ch)
+  ├─ ShehdsBar (119ch)
+  └─ VintageLed (33ch)
+```
+
+The selected type is written to `config.fixtureType` and used by `DmxFixtureRuntime` for channel layout and visual rendering.
+
+#### DMX Patch Controls per Fixture
+Each fixture card includes a "📡 DMX Patch" subfolder with:
+
+| Field | Type | Range | Notes |
+|-------|------|-------|-------|
+| Type | read-only | — | Fixture type and channel count |
+| Universe | number input | 1–63999 | Persisted as `config.dmxUniverse` |
+| Address | number input | 1–512 | Persisted as `config.dmxAddress` |
+| Footprint | read-only | — | Derived from fixture definition |
+| Status | label | — | "● Patched" or "○ Unpatched" |
+
+New fixtures start as **unpatched** (`dmxUniverse = 0, dmxAddress = 0`). A future "🎯 Auto-assign" button can pack unpatched fixtures into the next free slot.
+
+#### Generator Fixture Expansion
+Generator-created fixture groups show individual fixtures in an expandable list:
+
+```
+Left Front Deck Generator (5)
+  [● On] [🔒 Lock] [↻ Regenerate]
+  ├─ Left Front Deck 1        ← collapsed by default
+  │   📡 DMX Patch
+  │     Universe: [1]  Address: [41]  (10ch)
+  ├─ Left Front Deck 2
+  │   📡 DMX Patch
+  │     Universe: [1]  Address: [51]  (10ch)
+  └─ ...
+```
+
+**Rules:**
+- **DMX Patch** fields (universe, address) are **editable**
+- **Position, Rotation, Color, Intensity** are **read-only** (label: "Controlled by generator")
+- **Name** is editable
+- No Duplicate/Delete/Move buttons for generated fixtures
+
+#### Generator Lock Toggle
+Each generator has a `🔒 Lock` toggle:
+- **Locked:** Generator controls (count, spacing, offsets, generate button) are disabled. Prevents accidental changes.
+- **Unlocked:** Normal generator behavior.
+- Lock state persists in `trace.locked` (saved to config).
+
+#### Regeneration Confirmation
+When "↻ Regenerate" is clicked and fixtures in the group have custom DMX patches (`dmxUniverse` or `dmxAddress` set), the UI shows a confirmation dialog:
+
+```
+⚠ Regenerate "Left Front Deck Generator"?
+
+3 fixtures have custom DMX patches that will be reset:
+  • Left Front Deck 1 (U1:41)
+  • Left Front Deck 2 (U1:51)
+  • Left Front Deck 3 (U1:61)
+
+[Cancel] [Regenerate Anyway]
+```
+
 ### Explicit Workflows
 
 #### 1. Add and Patch a Fixture
-- Choose fixture type.
+- Choose fixture type from the type dropdown.
 - Place in 3D (fixture starts as `unpatched`).
-- Manually set universe and DMX address in the Patch inspector.
+- Manually set universe and DMX address in the 📡 DMX Patch subfolder.
 - Inspect and refine.
 
 #### 2. Repatch a Fixture
 - Select fixture.
-- Open Patch inspector.
-- Edit universe/address or visually drag in the patch strip.
+- Open 📡 DMX Patch subfolder.
+- Edit universe/address or visually drag in the patch strip (future).
 - Validate overlap / capacity.
 
 #### 3. Surface-Mount a Fixture
@@ -350,3 +430,6 @@ Sectioned cards for Identity, Patch details, Placement adjustments, Render modes
 - Click **Pack Unpatched Only** (or **Find Free Slot** for a single fixture).
 - Review proposed assignments.
 - Confirm to write patch entries. Existing patched fixtures are never moved.
+
+
+
