@@ -156,11 +156,11 @@ export function animate() {
     }
   }
 
-  // ─── DMX Router: merge sources and apply to patched fixtures ───
+  // ─── DMX Router: merge sources and apply to fixtures ───
   if (window.dmxRouter) {
     window.dmxRouter.processFrame();
 
-    // Apply DMX frames to patched fixtures
+    // Apply DMX frames to patched fixtures (DmxFixtureRuntime objects)
     if (window.parFixtures) {
       for (const fixture of window.parFixtures) {
         if (fixture && fixture.patchDef && fixture.fixtureDef) {
@@ -170,6 +170,75 @@ export function animate() {
             fixture.fixtureDef.totalChannels || 10
           );
           if (slice) fixture.applyDmxFrame(slice);
+        }
+      }
+    }
+
+    // ─── sACN Direct Apply (for legacy ParLight fixtures without patchDef) ───
+    // Uses same sequential auto-pack layout as MarsinEngine:
+    //   pars: 10ch each (dimmer, strobe, R, G, B, W, A, U, func, speed)
+    //   LEDs: 3ch each (R, G, B)
+    if (lightingMode === 'sacn_in' && window.parFixtures) {
+      let patchUniverse = 1;
+      let patchAddr = 1;
+
+      for (const fixture of window.parFixtures) {
+        if (!fixture) { patchAddr += 10; if (patchAddr > 502) { patchUniverse++; patchAddr = 1; } continue; }
+        if (fixture.patchDef) continue; // skip already-patched runtime fixtures
+
+        const footprint = 10; // all par fixtures are 10ch
+        if (patchAddr + footprint - 1 > 512) { patchUniverse++; patchAddr = 1; }
+
+        const slice = window.dmxRouter.getSlice(patchUniverse, patchAddr, footprint);
+        if (slice && (slice[2] || slice[3] || slice[4])) {
+          // Read RGB from channels 3-5 (offset 2-4 in the slice, 0-indexed)
+          const rn = slice[2] / 255;
+          const gn = slice[3] / 255;
+          const bn = slice[4] / 255;
+
+          if (fixture.pixels && fixture.pixels.length > 0) {
+            for (let p = 0; p < fixture.pixels.length; p++) {
+              fixture.setPixelColorRGB(p, rn, gn, bn);
+            }
+          } else if (fixture.light) {
+            fixture.light.color.setRGB(rn, gn, bn);
+            if (fixture.beam && fixture.beam.material) {
+              fixture.beam.material.color.setRGB(rn, gn, bn);
+            }
+            if (fixture.setBulbColor) fixture.setBulbColor(rn, gn, bn);
+          }
+        }
+        patchAddr += footprint;
+      }
+
+      // LED Strands
+      if (window.ledStrandFixtures) {
+        for (const fixture of window.ledStrandFixtures) {
+          const count = fixture.config.ledCount || 10;
+          const children = fixture.group.children;
+          const ledStartIdx = 2;
+          for (let led = 0; led < count; led++) {
+            const footprint = 3;
+            if (patchAddr + footprint - 1 > 512) { patchUniverse++; patchAddr = 1; }
+
+            const slice = window.dmxRouter.getSlice(patchUniverse, patchAddr, footprint);
+            if (slice) {
+              const rn = slice[0] / 255;
+              const gn = slice[1] / 255;
+              const bn = slice[2] / 255;
+
+              const baseIdx = ledStartIdx + led * 3;
+              const bulb = children[baseIdx + 1];
+              const halo = children[baseIdx + 2];
+              if (bulb && bulb.material) {
+                bulb.material.color.setRGB(rn, gn, bn);
+              }
+              if (halo && halo.material) {
+                halo.material.color.setRGB(rn, gn, bn);
+              }
+            }
+            patchAddr += footprint;
+          }
         }
       }
     }

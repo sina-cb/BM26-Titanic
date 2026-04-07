@@ -87,7 +87,46 @@ To keep the implementation clean and strictly separated, the core logic should f
 - `DmxFixtureRuntime`
 - `SacnOutputDriver`
 
----
+### Implementation Status
+
+| Module | File | Status |
+|--------|------|--------|
+| `SacnInputSource` | `src/dmx/sacn_input_source.js` | ✅ Implemented — receives sACN via WebSocket from bridge, submits to router |
+| `UniverseRouter` | `src/dmx/universe_router.js` | ✅ Implemented — multi-source merge with source_lock and per_patch modes |
+| `UniverseFrameBuffer` | `src/dmx/universe_frame_buffer.js` | ✅ Implemented — double-buffered read/write with HTP merge |
+| `PatchRegistry` | `src/dmx/patch_registry.js` | ✅ Implemented — validates non-overlapping patches, but not yet populated from config |
+| `DmxFixtureRuntime` | `src/fixtures/dmx_fixture_runtime.js` | ✅ Implemented — accepts patchDef + fixtureDef, applies DMX slices |
+| `SacnOutputDriver` | — | ❌ Not yet implemented (future: re-broadcast final output) |
+| `FixtureDefinitionRegistry` | — | 🟡 Partial — fixture types exist but no centralized registry |
+
+### Current Data Pipeline (Working)
+
+```
+MarsinEngine CLI ──sACN──▶ sacn_bridge.js ──WS──▶ SacnInputSource
+                           (port 6971)             │
+                                                   ▼
+                                            UniverseRouter
+                                                   │
+                                                   ▼
+                                            animate.js sACN Direct Apply
+                                            (sequential auto-pack mapping)
+                                                   │
+                                                   ▼
+                                            Par/LED/Iceberg fixtures
+                                            (light.color, bulb color)
+```
+
+> [!NOTE]
+> The current pipeline uses a "sACN Direct Apply" path in `animate.js` that reads DMX data from the router using a sequential auto-pack layout (pars=10ch, LEDs=3ch) matching the MarsinEngine's model export. This bypasses the `patchDef` requirement on legacy `ParLight` fixtures. Once fixtures are migrated to `DmxFixtureRuntime` with proper `patchDef`, the direct-apply path will be deprecated.
+
+### sACN Monitor Panel
+
+A floating `📡 sACN Monitor` panel in the browser UI shows:
+- Bridge connection status
+- Real-time packet activity logs
+- Source name and priority
+
+Managed by `src/gui/sacn_monitor.js`, positioned on the left side (z-index 200), draggable, collapsible, and scrollable.
 
 ## 5. What DMX Patching Means
 

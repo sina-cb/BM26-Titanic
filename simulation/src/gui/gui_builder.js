@@ -213,13 +213,28 @@ function setupGUI() {
     const rangeY = maxY - minY || 1;
     const rangeZ = maxZ - minZ || 1;
 
+    // ── Auto-pack DMX patches (sequential addressing) ──
+    // Footprint: par=10ch, led=3ch, iceberg=3ch
+    let patchUniverse = 1;
+    let patchAddr = 1;
+    pixels.forEach(p => {
+      const footprint = (p.type === 'par') ? 10 : 3;
+      if (patchAddr + footprint - 1 > 512) {
+        patchUniverse++;
+        patchAddr = 1;
+      }
+      p.patch = { universe: patchUniverse, addr: patchAddr, footprint };
+      p.channels = 3; // RGB output for v1
+      patchAddr += footprint;
+    });
+
     // Build JS source
     const lines = [
       '// Auto-generated Pixelblaze model — do not edit manually',
       '// Updated: ' + new Date().toISOString(),
       '//',
       '// Each pixel has: index, type, name, group, world coords (x,y,z),',
-      '// and normalized coords (nx,ny,nz) in [0..1]',
+      '// normalized coords (nx,ny,nz) in [0..1], and DMX patch info',
       '',
       'export const pixelCount = ' + pixels.length + ';',
       '',
@@ -230,7 +245,8 @@ function setupGUI() {
       const nx = +((p.x - minX) / rangeX).toFixed(4);
       const ny = +((p.y - minY) / rangeY).toFixed(4);
       const nz = +((p.z - minZ) / rangeZ).toFixed(4);
-      lines.push(`  { i: ${i}, type: '${p.type}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${nx}, ny: ${ny}, nz: ${nz} },`);
+      const patchStr = `{ universe: ${p.patch.universe}, addr: ${p.patch.addr}, footprint: ${p.patch.footprint} }`;
+      lines.push(`  { i: ${i}, type: '${p.type}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${nx}, ny: ${ny}, nz: ${nz}, patch: ${patchStr}, channels: ${p.channels} },`);
     });
 
     lines.push('];');

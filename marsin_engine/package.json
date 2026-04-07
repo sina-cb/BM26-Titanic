@@ -1,0 +1,16 @@
+{
+  "name": "marsin-engine",
+  "version": "1.0.0",
+  "description": "Multichannel Pixelblaze rendering engine with sACN output",
+  "type": "module",
+  "main": "engine.js",
+  "scripts": {
+    "start": "node engine.js",
+    "rainbow": "node engine.js --pattern rainbow",
+    "breathing": "node engine.js --pattern breathing",
+    "fire": "node engine.js --pattern fire"
+  },
+  "dependencies": {
+    "sacn": "^4.5.0"
+  }
+}

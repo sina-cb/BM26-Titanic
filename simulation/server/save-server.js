@@ -5,6 +5,7 @@ const yaml = require('js-yaml');
 
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
+const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
 
 // Read port from server_config.yaml
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
@@ -111,7 +112,7 @@ http.createServer((req, res) => {
     });
   } else if (req.method === 'GET' && req.url === '/list-patterns') {
     try {
-      const patternsDir = path.join(SIM_ROOT, 'patterns');
+      const patternsDir = path.join(ENGINE_ROOT, 'patterns');
       const files = fs.existsSync(patternsDir) ? fs.readdirSync(patternsDir).filter(f => f.endsWith('.js')).map(f => f.replace(/\.js$/, '')) : [];
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(files));
@@ -124,9 +125,14 @@ http.createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
-        const outPath = path.join(SIM_ROOT, 'patterns', 'model', 'model.js');
-        fs.mkdirSync(path.join(SIM_ROOT, 'patterns', 'model'), { recursive: true });
+        const outDir = path.join(ENGINE_ROOT, 'models');
+        fs.mkdirSync(outDir, { recursive: true });
+        const outPath = path.join(outDir, 'model.js');
         fs.writeFileSync(outPath, body);
+        // Also keep a copy in simulation for backward compat
+        const simModelDir = path.join(SIM_ROOT, 'patterns', 'model');
+        fs.mkdirSync(simModelDir, { recursive: true });
+        fs.writeFileSync(path.join(simModelDir, 'model.js'), body);
         console.log(`[SAVE SERVER] Saved model: ${outPath} (${body.length} bytes)`);
         res.end('Saved');
       } catch (e) {

@@ -729,8 +729,11 @@ canvas {
   top: 60px;
   left: 14px;
   width: 280px;
+  height: 380px;
   min-width: 220px;
+  min-height: 200px;
   max-width: 400px;
+  max-height: 80vh;
   z-index: 200;
   display: flex;
   flex-direction: column;
@@ -750,8 +753,13 @@ canvas {
   display: none;
 }
 
-#sacn-monitor-panel.collapsed .sacn-body {
-  display: none;
+#sacn-monitor-panel.collapsed {
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  border-radius: 8px;
+  resize: none;
+  overflow: hidden;
 }
 
 .sacn-header {
@@ -809,12 +817,15 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
 }
 
 .sacn-stats {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  flex-shrink: 0;
 }
 
 .sacn-stat-row {
@@ -847,7 +858,9 @@ canvas {
 }
 
 .sacn-log {
-  max-height: 140px;
+  flex: 1;
+  min-height: 60px;
+  max-height: 200px;
   overflow-y: auto;
   font-family: 'SF Mono', 'Menlo', monospace;
   font-size: 0.55rem;

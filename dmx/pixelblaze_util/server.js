@@ -28,7 +28,7 @@ const { DmxHandler, DmxRenderLoop } = require('../index');
 // ── Paths ──────────────────────────────────────────────────────────────────
 const UNIVERSES_YAML = path.join(__dirname, '..', 'universes.yaml');
 const WASM_DIR       = path.join(__dirname, '..', '..', 'simulation', 'lib', 'marsin-engine');
-const PATTERNS_DIR   = path.join(__dirname, '..', '..', 'simulation', 'pb');
+const PATTERNS_DIR   = path.join(__dirname, '..', '..', 'marsin_engine', 'patterns');
 const PORT           = parseInt(process.env.PORT, 10) || 3000;
 
 // ── MarsinEngine (ES Module wrapper) ───────────────────────────────────────
