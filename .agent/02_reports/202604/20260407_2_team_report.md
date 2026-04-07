@@ -187,6 +187,114 @@ The monolithic `main.js` (3,500+ lines) was split into 12 focused modules:
 
 Old DMX backend (DmxHandler, smart router, Pixelblaze WebSocket util) archived to `archived/dmx/`.
 
+### 3.10 Fixture Generators
+
+**File:** `src/gui/gui_builder.js` (function `generateGroupFromTrace`)
+
+Generators let you place arrays of DMX fixtures along geometric shapes with a single configuration. Instead of manually positioning 20 fixtures on a wall, you define a generator trace and it creates all the fixtures instantly.
+
+**Shape modes:**
+- **Circle** — Distributes fixtures evenly around a circle arc (used for chimney rings). Parameters: center position, radius, arc angle (0–360°), count.
+- **Line** — Distributes fixtures evenly along a straight line (used for walls and decks). Parameters: start point, end point, count.
+
+**Aim modes:**
+- **`lookAt`** — Each fixture aims at a target point (e.g., aimed at the ship center). Computes per-fixture quaternion rotation.
+- **`direction`** — All fixtures face the same direction (uniform orientation from first fixture to aim handle).
+
+**Key behaviors:**
+- Changing any generator parameter (shape, count, spacing, aim) regenerates all fixtures in the group
+- **Lock toggle** — Prevents accidental regeneration of finalized arrays. Locked generators have their controls greyed out.
+- **Controller IP** — Set on the generator trace; all generated fixtures inherit the same `controllerIp`
+- **Fixture type** — Inherits from scene defaults (currently UkingPar, ShehdsBar, or VintageLed)
+- **Fixture rotation offsets** — Per-generator X/Y/Z rotation offsets applied to all generated fixtures
+- Generated fixtures are tagged with `_traceGenerated: true` and `group: "<generator name>"` for identification
+
+### 3.11 DMX Fixture Library
+
+**Directory:** `simulation/dmx/fixtures/`
+
+Three fixture types have been fully profiled with channel YAML definitions and 3D pixel model YAMLs:
+
+| Fixture | Channels | Profile | Description |
+|---------|----------|---------|-------------|
+| **UKing RGBWAU Par** | 10ch | `channels_10.yaml` | Master dimmer, R, G, B, W, Amber, UV (Purple), strobe, function mode, speed. Single-pixel fixture. |
+| **SHEHDS 18×18W LED Bar** | 119ch | `channels_119.yaml` | 18 individually-addressable LED segments, each with R, G, B, W, Amber, UV. Plus 11 global channels (master, strobe, mode). |
+| **Vintage LED Stage Light** | 33ch | `channels_33.yaml` | 6 individually-addressable LED heads, each with R, G, B, W, Amber. Plus 3 global channels (master, strobe, mode). |
+
+Each fixture also has:
+- **Channel YAML** — Complete DMX channel map with function descriptions and value ranges
+- **Model YAML** — 3D pixel positions (normalized coordinates + DMX channel mappings) for sim rendering
+- **Hardware manual** — Original manufacturer PDFs and annotated screenshots in `manual/` folders
+- **Alternative profiles** — Some fixtures have multiple channel modes (e.g., SHEHDS has 12ch, 108ch, and 119ch modes)
+
+The `FixtureDefinitionRegistry` loads these YAMLs at startup and provides `getDefinition(fixtureType)` to the runtime fixture system.
+
+### 3.12 DMX Fixture Designer
+
+**Directory:** `simulation/dmx/designer/`
+
+Desktop Electron + React application for visually designing fixture pixel layouts:
+
+- **3D Viewport** (React Three Fiber) — Place LED dots in 3D space using instanced meshes for performance
+- **Properties Panel** — Edit individual dot/pixel coordinates, DMX channel assignments, and pixel types
+- **Pixel List** — Spreadsheet view of all pixels with channel assignments and dot counts
+- **DMX Test Panel** — Preview how pixels respond to test patterns (static red, blackout)
+- **Load/Save YAML** — Load existing model YAMLs, edit, and export updated versions
+
+**Tech stack:** Vite + React 19 + Zustand (state management) + React Three Fiber + js-yaml
+
+```bash
+cd simulation/dmx/designer
+npm install
+npm run desktop   # Launches Electron window
+```
+
+All three fixture models (UkingPar, ShehdsBar, VintageLed) were built and validated using this tool.
+
+### 3.13 Current Ship Lighting Layout
+
+The simulation currently has **119 fixtures** across **10 generator groups** covering the ship exterior:
+
+| Generator | Shape | Fixtures | Section |
+|-----------|-------|----------|----------|
+| Right Front Wall | Line | 20 | Forward starboard wall |
+| Left Front Wall | Line | 20 | Forward port wall |
+| Right Back Wall | Line | 20 | Aft starboard wall |
+| Left Back Wall | Line | 20 | Aft port wall |
+| Right Center Auditorium | Line | 6 | Starboard auditorium wall |
+| Left Center Auditorium | Line | 6 | Port auditorium wall |
+| Right Top Chimney | Circle | 9 | Starboard chimney ring |
+| Left Top Chimney | Circle | 9 | Port chimney ring |
+| Right Front Deck | Line | 5 | Starboard bow deck |
+| Left Front Deck | Line | 5 | Port bow deck |
+
+All fixtures are currently configured as UkingPar (10ch each). Generator traces have `lookAt` aim mode pointing fixtures toward the ship center. Most generators are unlocked pending final placement review.
+
+### 3.14 Control Podium (Ongoing)
+
+**Directory:** `control_podium/`
+**Design Doc:** [07_control_podium.md](../../docs/07_control_podium.md)
+
+The Control Podium is a **wireless show control station** for remote scene triggering on playa. Currently in firmware development phase.
+
+**Architecture:**
+- Two **Heltec WiFi LoRa V4** controllers (ESP32-S3 + SX1262) forming a point-to-point raw LoRa radio link at 915 MHz
+- **Podium node** (TX) — Operator-side with buttons and OLED display, sends cue commands
+- **Server node** (RX) — Attached to the visual server, receives commands and dispatches to Chromatik/MarsinEngine
+- **~50ms end-to-end latency** (40–300× faster than Meshtastic's 2–15s)
+
+**BLE Integration:**
+- Each controller runs a custom BLE GATT server with 14 characteristics (role, firmware version, uptime, TX/RX counts, RSSI, SNR, radio params, command input)
+- Phone monitoring via nRF Connect app
+
+**Software stack:**
+- Custom PlatformIO firmware (`podium_tx/main.cpp`, `server_rx/main.cpp`)
+- Python CLI (`cli.py`) for pairing, deployment, and monitoring
+- PySide6 **Control Center** desktop app showing real-time status of both nodes
+- Event protocol: `titanic:scene:<name>`, `titanic:cmd:<action>`, `titanic:fx:<name>`, `titanic:ping/pong`
+
+**Current status:** Firmware v1.2 (`ble-cmd`) deployed. Bidirectional LoRa + BLE working. Awaiting integration with Chromatik/MarsinEngine for actual scene triggering.
+
 ---
 
 ## 4. Repository Structure (Current)
@@ -214,7 +322,12 @@ BM26-Titanic/
 │   └── models/              # Pixel model (exported from sim)
 ├── docs/                    # 7 design documents
 ├── archived/                # Deprecated modules (old DMX backend)
-└── control_podium/          # Physical control station (Python)
+└── control_podium/          # Wireless show control station
+    ├── firmware/            # PlatformIO ESP32-S3 firmware (LoRa + BLE)
+    ├── companions/          # Python serial/BLE companion scripts
+    ├── utils/               # BLE discovery, serial parser, config store
+    ├── tests/               # HIL + unit test suite
+    └── cli.py               # CLI: pair, deploy, test, monitor
 ```
 
 ---
