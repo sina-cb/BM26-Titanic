@@ -24,7 +24,7 @@ const bulbGeo = new THREE.SphereGeometry(0.25, 12, 8);
 const haloGeo = new THREE.SphereGeometry(0.6, 12, 8);
 
 // ── SpotLight cap ────────────────────────────────────────────────────────
-const MAX_ACTIVE_SPOTLIGHTS = 120;
+const MAX_ACTIVE_SPOTLIGHTS = 150;
 let activeSpotlightCount = 0;
 
 export class DmxFixtureRuntime {
@@ -112,10 +112,19 @@ export class DmxFixtureRuntime {
 
     // ─── Build Pixels (dots + lights) ────────────────────────────────
     this.pixels = [];
+    this._repLights = [];  // Representative SpotLights for multi-pixel fixtures
     const hasPixelDef = fixtureDef && fixtureDef.pixels && fixtureDef.pixels.length > 0;
 
     if (hasPixelDef) {
-      // Multi-pixel fixture: create dot spheres from the YAML pixel layout
+      const numPixels = fixtureDef.pixels.length;
+      // For multi-pixel fixtures, create a small number of representative
+      // SpotLights evenly spaced along the pixel array instead of one per pixel.
+      // This prevents exhausting the global spotlight cap on bars with 18+ pixels
+      // while still casting visible light from multiple points.
+      const MAX_REP_LIGHTS = numPixels; // full 1:1 for testing
+      const repSpacing = numPixels > 1 ? (numPixels - 1) / (MAX_REP_LIGHTS - 1 || 1) : 0;
+
+      // First pass: build all pixel visuals (dots, bulbs, halos, beams)
       fixtureDef.pixels.forEach((pixelModel, pIndex) => {
         const dots = [];
         let avgX = 0, avgY = 0, avgZ = 0;
@@ -162,21 +171,7 @@ export class DmxFixtureRuntime {
         halo.position.copy(localPos);
         this.group.add(halo);
 
-        // SpotLight (only in full mode, with cap)
-        let spotLight = null;
-        if (!liteMode && activeSpotlightCount < MAX_ACTIVE_SPOTLIGHTS) {
-          spotLight = new THREE.SpotLight(
-            color, intensity, modelRadius * 3,
-            THREE.MathUtils.degToRad(angle), penumbra, 1.5
-          );
-          spotLight.position.set(avgX, avgY, avgZ);
-          spotLight.castShadow = false;
-          this.scene.add(spotLight);
-          this.scene.add(spotLight.target);
-          activeSpotlightCount++;
-        }
-
-        // Beam cone
+        // Beam cone (visual only, no SpotLight per pixel for multi-pixel fixtures)
         const coneMat = new THREE.MeshBasicMaterial({
           color: color,
           transparent: true,
@@ -191,7 +186,7 @@ export class DmxFixtureRuntime {
 
         this.pixels.push({
           model: pixelModel,
-          spotLight,
+          spotLight: null,   // assigned below for representative pixels only
           beam,
           bulb,
           bulbMat,
@@ -201,6 +196,35 @@ export class DmxFixtureRuntime {
           localPos,
         });
       });
+
+      // Second pass: create representative SpotLights at evenly-spaced pixel positions
+      if (!liteMode) {
+        for (let ri = 0; ri < MAX_REP_LIGHTS; ri++) {
+          if (activeSpotlightCount >= MAX_ACTIVE_SPOTLIGHTS) break;
+
+          // Pick the pixel index for this representative light
+          const pIndex = MAX_REP_LIGHTS === 1 ? Math.floor(numPixels / 2)
+            : Math.round(ri * repSpacing);
+          const p = this.pixels[pIndex];
+          if (!p) continue;
+
+          const repLight = new THREE.SpotLight(
+            color, intensity, modelRadius * 3,
+            THREE.MathUtils.degToRad(angle), penumbra, 1.5
+          );
+          repLight.position.set(p.localPos.x, p.localPos.y, p.localPos.z);
+          repLight.castShadow = false;
+          this.scene.add(repLight);
+          this.scene.add(repLight.target);
+          activeSpotlightCount++;
+
+          // Assign this SpotLight to the representative pixel
+          p.spotLight = repLight;
+
+          // Track for cleanup
+          this._repLights.push({ light: repLight, pixelIndex: pIndex });
+        }
+      }
     } else {
       // No pixel definition — single bulb (simple par light fallback)
       const bulbMat = new THREE.MeshBasicMaterial({ color: color });

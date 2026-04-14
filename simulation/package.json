@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "prestart": "node -e \"const y=require('js-yaml'),f=require('fs');const c=y.load(f.readFileSync('config/server_config.yaml','utf8'));console.log(c.http_port+' '+(c.save_port||c.http_port+1)+' '+(c.sacn_port||c.http_port+2))\" | xargs npx -y kill-port 2>/dev/null || true",
+    "prestart": "node tools/kill-ports.js",
     "start": "node start.js"
   },
   "dependencies": {

@@ -20,6 +20,7 @@ console.log(`[start] Open: http://localhost:${HTTP_PORT}/simulation/`);
 const httpServer = spawn('npx', ['http-server', '../', '-p', String(HTTP_PORT), '-c-1', '--cors'], {
   stdio: 'inherit',
   cwd: __dirname,
+  shell: process.platform === 'win32',
 });
 
 const saveServer = spawn('node', ['server/save-server.js'], {

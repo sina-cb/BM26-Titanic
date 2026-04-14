@@ -1999,7 +1999,7 @@ function setupGUI() {
       trace.generated = true;
 
       if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-      rebuildParLights();
+      rebuildParLights(true);
       renderParGUI();
       if (window._setGuiRebuilding) window._setGuiRebuilding(false);
       debounceAutoSave();
@@ -2310,7 +2310,7 @@ function setupGUI() {
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-          rebuildParLights();
+          rebuildParLights(true);
           rebuildTraceObjects();
           renderGeneratorGUI();
           renderParGUI();
