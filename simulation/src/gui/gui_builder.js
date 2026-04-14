@@ -311,7 +311,8 @@ function setupGUI() {
 
   // ─── Handler Registry ───
   // Maps flat param key → onChange callback. Only keys with side-effects need entries.
-  const bloomPass = composer.passes.find((p) => p.name === "bloom");
+  // Bloom controls via WebGPU node-based PostProcessing uniforms
+  const _bp = window._bloomParams || {};
   const handlers = {
     ambientIntensity: (v) => {
       lights.ambient.intensity = v;
@@ -338,13 +339,13 @@ function setupGUI() {
       );
     },
     bloomStrength: (v) => {
-      if (bloomPass) bloomPass.strength = v;
+      if (_bp.strength) _bp.strength.value = v;
     },
     bloomRadius: (v) => {
-      if (bloomPass) bloomPass.radius = v;
+      if (_bp.radius) _bp.radius.value = v;
     },
     bloomThreshold: (v) => {
-      if (bloomPass) bloomPass.threshold = v;
+      if (_bp.threshold) _bp.threshold.value = v;
     },
     towersEnabled: (v) => {
       lights.towers.forEach((t) => {
@@ -407,12 +408,11 @@ function setupGUI() {
         if (child.isMesh)
           child.material = isEditMode ? editMaterial : structureMaterial;
       });
-      renderer.shadowMap.enabled = !isEditMode;
       // Only toggle shadows on moon + tower floods, NOT par lights
       if (lights.moon) lights.moon.castShadow = !isEditMode;
       lights.towers.forEach((t) => { t.castShadow = !isEditMode; });
-      const bloom = composer.passes.find((p) => p.name === "bloom");
-      if (bloom) bloom.enabled = !isEditMode;
+      // Bloom toggle: set strength to 0 in edit mode
+      if (_bp.strength) _bp.strength.value = isEditMode ? 0 : (params.bloomStrength || 0.35);
       scene.background = new THREE.Color(isEditMode ? 0xaaaaaa : 0x030310);
       scene.fog.density = isEditMode ? 0 : 0.0004;
       gridHelper.visible = isEditMode;
@@ -1615,6 +1615,17 @@ function setupGUI() {
       return pts;
     }
 
+    // Orient a trace handle so local X aligns with the start→end path direction
+    function orientTraceHandle(handle, startPos, endPos) {
+      const dir = new THREE.Vector3().subVectors(endPos, startPos).normalize();
+      if (dir.lengthSq() < 0.0001) return; // degenerate — skip
+      const up = new THREE.Vector3(0, 1, 0);
+      // If path is nearly vertical, use a different up vector
+      if (Math.abs(dir.dot(up)) > 0.99) up.set(0, 0, 1);
+      const mtx = new THREE.Matrix4().lookAt(new THREE.Vector3(), dir, up);
+      handle.quaternion.setFromRotationMatrix(mtx);
+    }
+
     function buildTraceObject(trace, traceIndex) {
       const handles = []; // For line: [startHandle, endHandle]; For circle: []
 
@@ -1660,12 +1671,14 @@ function setupGUI() {
         const startHandle = new THREE.Mesh(handleGeo, startMat);
         startHandle.position.copy(startPos);
         startHandle.userData = { isTrace: true, traceIndex, handleType: 'start' };
+        orientTraceHandle(startHandle, startPos, endPos);
         scene.add(startHandle);
         interactiveObjects.push(startHandle);
 
         const endHandle = new THREE.Mesh(handleGeo, endMat);
         endHandle.position.copy(endPos);
         endHandle.userData = { isTrace: true, traceIndex, handleType: 'end' };
+        orientTraceHandle(endHandle, startPos, endPos);
         scene.add(endHandle);
         interactiveObjects.push(endHandle);
 
@@ -1866,6 +1879,16 @@ function setupGUI() {
         const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
         if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
 
+        // Re-orient both start/end handles along the updated path
+        const startH = (tObj.handles || []).find(h => h.userData.handleType === 'start');
+        const endH = (tObj.handles || []).find(h => h.userData.handleType === 'end');
+        if (startH && endH) {
+          const s = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+          const e = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
+          orientTraceHandle(startH, s, e);
+          orientTraceHandle(endH, s, e);
+        }
+
         // Update sum dashed line target
         if (tObj.aimLine) {
           const pts = computeTracePoints(trace);
@@ -1967,13 +1990,36 @@ function setupGUI() {
           rotY = THREE.MathUtils.radToDeg(euler.y);
           rotZ = THREE.MathUtils.radToDeg(euler.z);
         } else if (trace.aimMode === 'direction') {
-          // Common direction: from first light toward aim handle, applied to all
-          const firstPt = worldMatrix ? pts[0].clone().applyMatrix4(worldMatrix) : pts[0].clone();
+          // Align local X strictly with the generator path line
+          const startPt = worldMatrix ? pts[0].clone().applyMatrix4(worldMatrix) : pts[0].clone();
+          const endPt = worldMatrix ? pts[pts.length - 1].clone().applyMatrix4(worldMatrix) : pts[pts.length - 1].clone();
+          
+          let vecX = new THREE.Vector3().subVectors(endPt, startPt).normalize();
+          if (vecX.lengthSq() < 0.0001) vecX.set(1, 0, 0);
+
           const aimTarget = new THREE.Vector3(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
-          const dir = aimTarget.clone().sub(firstPt).normalize();
-          const defaultDir = new THREE.Vector3(0, 0, -1);
-          const quat = new THREE.Quaternion().setFromUnitVectors(defaultDir, dir);
-          const euler = new THREE.Euler().setFromQuaternion(quat, 'YXZ');
+          const midPt = startPt.clone().lerp(endPt, 0.5);
+          const toAim = new THREE.Vector3().subVectors(aimTarget, midPt);
+          
+          // Project aim vector onto the plane perpendicular to the path (vecX)
+          let vecMinusZ = toAim.clone().sub(vecX.clone().multiplyScalar(toAim.dot(vecX)));
+          if (vecMinusZ.lengthSq() < 0.0001) {
+            // Fallback if aim is exactly on the line
+            const up = new THREE.Vector3(0, 1, 0);
+            vecMinusZ = up.clone().sub(vecX.clone().multiplyScalar(up.dot(vecX)));
+            if (vecMinusZ.lengthSq() < 0.0001) vecMinusZ.set(0, 0, 1);
+          }
+          vecMinusZ.normalize();
+          
+          // Local Z is exactly opposite to forward
+          const vecZ = vecMinusZ.clone().negate();
+          
+          // Local Y is Z cross X
+          const vecY = new THREE.Vector3().crossVectors(vecZ, vecX).normalize();
+          
+          const mtx = new THREE.Matrix4().makeBasis(vecX, vecY, vecZ);
+          const euler = new THREE.Euler().setFromRotationMatrix(mtx, 'YXZ');
+          
           rotX = THREE.MathUtils.radToDeg(euler.x);
           rotY = THREE.MathUtils.radToDeg(euler.y);
           rotZ = THREE.MathUtils.radToDeg(euler.z);

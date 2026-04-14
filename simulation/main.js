@@ -3,12 +3,10 @@
  * Imports all modules, fetches config, and bootstraps the simulation.
  */
 import * as THREE from "three";
+import { pass, uniform } from "three/tsl";
+import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import yaml from "js-yaml";
 
 // ─── Core modules ───────────────────────────────────────────────────────
@@ -37,21 +35,21 @@ import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src
 import { setupSacnMonitor } from "./src/gui/sacn_monitor.js";
 
 // ─── Init ───────────────────────────────────────────────────────────────
-function init() {
-  // Renderer
-  const renderer = new THREE.WebGLRenderer({
+async function init() {
+  // Renderer — WebGPU (auto-fallback to WebGL 2 if unsupported)
+  const renderer = new THREE.WebGPURenderer({
     antialias: true,
     powerPreference: "high-performance",
   });
+  await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.55;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
   setRenderer(renderer);
+
+  console.log('[WebGPU] Renderer initialized:', renderer.backend?.constructor?.name || 'unknown backend');
 
   // Scene
   const scene = new THREE.Scene();
@@ -79,23 +77,30 @@ function init() {
   controls.target.set(0, 20, 0);
   setControls(controls);
 
-  // Post-processing
-  const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
+  // Post-processing — node-based (WebGPU compatible)
+  const postProcessing = new THREE.PostProcessing(renderer);
+  const scenePass = pass(scene, camera);
+  const scenePassColor = scenePass.getTextureNode('output');
 
-  const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.35, // strength
-    0.3,  // radius
-    0.92, // threshold
-  );
-  bloomPass.name = "bloom";
-  composer.addPass(bloomPass);
-  composer.addPass(new OutputPass());
-  setComposer(composer);
+  // Dynamic bloom uniforms (controllable from GUI)
+  const bloomStrengthU = uniform(0.35);
+  const bloomRadiusU = uniform(0.3);
+  const bloomThresholdU = uniform(0.92);
+  const bloomEffect = bloom(scenePassColor, bloomStrengthU, bloomRadiusU, bloomThresholdU);
+  postProcessing.outputNode = scenePassColor.add(bloomEffect);
+
+  // Store bloom controls for GUI access
+  window._bloomParams = {
+    strength: bloomStrengthU,
+    radius: bloomRadiusU,
+    threshold: bloomThresholdU,
+    enabled: true,
+  };
+
+  setComposer(postProcessing);
 
   // Store refs for resize handler
-  window._threeRefs = { renderer, composer };
+  window._threeRefs = { renderer };
 
   // Ground & Grid
   createGround();
@@ -149,7 +154,7 @@ function init() {
     }
   });
   transformControl.addEventListener("change", onTransformChange);
-  scene.add(transformControl);
+  scene.add(transformControl.getHelper());
   setTransformControl(transformControl);
 
   // Load model (triggers setupGUI when done)
@@ -235,7 +240,7 @@ Promise.all([
     ]);
   }
 
-  init();
+  await init();
 
   // Generate initial model file for Pixelblaze patterns
   if (window.saveModelJS) window.saveModelJS();
@@ -273,8 +278,8 @@ Promise.all([
       if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
     }
   }
-}).catch(() => {
-  init();
+}).catch(async () => {
+  await init();
 });
 
 // --- TEMP RAYCAST HELPER ---

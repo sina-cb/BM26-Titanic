@@ -79,6 +79,8 @@ async function launchBrowser() {
       '--enable-gpu',
       '--enable-webgl',
       '--enable-webgl2',
+      '--enable-unsafe-webgpu',
+      '--enable-features=Vulkan',
       '--use-gl=angle',
       '--use-angle=d3d11',
       '--disable-background-timer-throttling',

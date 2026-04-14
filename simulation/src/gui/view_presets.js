@@ -158,9 +158,8 @@ export function saveCameraPresets() {
 export function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  const { renderer, composer } = window._threeRefs || {};
+  const { renderer } = window._threeRefs || {};
   if (renderer) renderer.setSize(window.innerWidth, window.innerHeight);
-  if (composer) composer.setSize(window.innerWidth, window.innerHeight);
 }
 
 // Expose for external use

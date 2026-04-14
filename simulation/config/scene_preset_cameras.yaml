@@ -59,3 +59,13 @@ presets:
       x: -2
       'y': 8
       z: -5.341
+  - name: left_front
+    key: left_front
+    position:
+      x: -27.138
+      'y': 9.23
+      z: 40.065
+    target:
+      x: -8.603
+      'y': 6.003
+      z: -7.76

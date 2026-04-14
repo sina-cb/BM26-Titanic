@@ -32,7 +32,24 @@ export function pushUndo() {
 
 export function applySnapshot(snapshot) {
   if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+  const t0 = performance.now();
   try {
+    // Detect if fixture structure changed (count or types)
+    const oldParCount = params.parLights?.length || 0;
+    const newParCount = snapshot.parLights?.length || 0;
+    const parStructureChanged = oldParCount !== newParCount ||
+      (snapshot.parLights || []).some((cfg, i) => {
+        const old = params.parLights?.[i];
+        if (!old) return true;
+        return (cfg.type || cfg.fixtureType || 'UkingPar') !== (old.type || old.fixtureType || 'UkingPar');
+      });
+
+    // Detect which subsystems actually changed
+    const dmxChanged = JSON.stringify(params.dmxFixtures) !== JSON.stringify(snapshot.dmxFixtures || []);
+    const tracesChanged = JSON.stringify(params.traces) !== JSON.stringify(snapshot.traces || []);
+    const strandsChanged = JSON.stringify(params.ledStrands) !== JSON.stringify(snapshot.ledStrands || []);
+    const icebergsChanged = JSON.stringify(params.icebergs) !== JSON.stringify(snapshot.icebergs || []);
+
     for (const key of Object.keys(snapshot)) {
       if (key === 'parLights') {
         params.parLights = JSON.parse(JSON.stringify(snapshot.parLights));
@@ -48,21 +65,55 @@ export function applySnapshot(snapshot) {
         params[key] = snapshot[key];
       }
     }
-    if (window.rebuildParLights) window.rebuildParLights();
-    if (window.rebuildDmxFixtures) window.rebuildDmxFixtures();
-    if (window.rebuildTraceObjects) window.rebuildTraceObjects();
-    if (window.rebuildLedStrands) window.rebuildLedStrands();
-    if (window.rebuildIcebergs) window.rebuildIcebergs();
-    if (window.renderParGUI) window.renderParGUI();
-    if (window.renderDmxGUI) window.renderDmxGUI();
+
+    const t1 = performance.now();
+
+    if (parStructureChanged) {
+      if (window.rebuildParLights) window.rebuildParLights();
+    } else {
+      // Fast path — just sync positions/properties without recreating lights
+      if (window.parFixtures) {
+        for (let i = 0; i < window.parFixtures.length; i++) {
+          const f = window.parFixtures[i];
+          if (f) {
+            f.config = params.parLights[i];
+            f.syncFromConfig();
+          }
+        }
+      }
+    }
+
+    const t2 = performance.now();
+
+    // Only rebuild subsystems that actually changed
+    if (dmxChanged && window.rebuildDmxFixtures) window.rebuildDmxFixtures();
+    if (tracesChanged && window.rebuildTraceObjects) window.rebuildTraceObjects();
+    if (strandsChanged && window.rebuildLedStrands) window.rebuildLedStrands();
+    if (icebergsChanged && window.rebuildIcebergs) window.rebuildIcebergs();
+
+    const t3 = performance.now();
+
+    if (parStructureChanged) {
+      if (window.renderParGUI) window.renderParGUI();
+    }
+    if (dmxChanged && window.renderDmxGUI) window.renderDmxGUI();
     if (window.renderGeneratorGUI) window.renderGeneratorGUI();
+
+    const t4 = performance.now();
+
     if (window.guiInstance) {
       window.guiInstance.controllersRecursive().forEach(c => {
         try { c.updateDisplay(); } catch (_) {}
       });
     }
+
+    const t5 = performance.now();
+
     if (window.applyAllHandlers) window.applyAllHandlers();
     if (window.debounceAutoSave) window.debounceAutoSave();
+
+    const t6 = performance.now();
+    console.log(`[undo] total=${(t6-t0).toFixed(0)}ms | data=${(t1-t0).toFixed(0)} fixtures=${(t2-t1).toFixed(0)} subsys=${(t3-t2).toFixed(0)} gui=${(t4-t3).toFixed(0)} display=${(t5-t4).toFixed(0)} handlers=${(t6-t5).toFixed(0)} parStruct=${parStructureChanged}`);
   } finally {
     if (window._setGuiRebuilding) window._setGuiRebuilding(false);
   }

@@ -484,24 +484,14 @@ export function onKeyDown(event) {
 
   if (!transformControl.object) return;
 
-  // Maya (W,E,R) and Blender (G,R,S) style hotkeys
+  // Maya (W,E) style hotkeys for translate/rotate
   switch (event.key.toLowerCase()) {
     case "w":
     case "g":
-    case "t":
       transformControl.setMode("translate");
       break;
     case "e":
-    case "r":
       transformControl.setMode("rotate");
-      break;
-    case "s":
-      transformControl.setMode("scale");
-      break;
-    case "q":
-      transformControl.setSpace(
-        transformControl.space === "local" ? "world" : "local",
-      );
       break;
   }
 }
