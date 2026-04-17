@@ -141,7 +141,9 @@ wss.on('connection', (ws, req) => {
     const now = Date.now();
     if (now - lastStatsTime > 5000) {
       const fps = Math.round(frameCount / ((now - lastStatsTime) / 1000));
-      const msgStr = JSON.stringify({ type: 'log', msg: `[Bridge] ⚡ ${fps} fps, ${senderPool.size} sender(s) active` });
+      const targets = Array.from(senderPool.keys()); // e.g. ["1:10.0.0.1", "2:10.0.0.2"]
+      const displayTargets = targets.length > 4 ? targets.slice(0, 4).join(', ') + ` (+${targets.length - 4} more)` : targets.join(', ');
+      const msgStr = JSON.stringify({ type: 'log', msg: `[Bridge] ⚡ ${fps} fps → Routing to: [${displayTargets || 'None'}]` });
       ws.send(msgStr);
       frameCount = 0;
       lastStatsTime = now;

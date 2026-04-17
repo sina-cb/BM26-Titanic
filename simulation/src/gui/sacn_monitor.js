@@ -174,7 +174,13 @@ function updateOutStats() {
   if (statusEl) statusEl.textContent = st.connected ? 'Connected' : 'Disconnected';
   if (fpsEl) fpsEl.textContent = st.fps;
   if (framesEl) framesEl.textContent = st.framesSent?.toLocaleString() || '0';
-  if (univEl) univEl.textContent = 'Auto';
+  if (univEl) {
+    const unis = st.activeUniverses;
+    if (unis && unis.size > 0) {
+      const sorted = [...unis].sort((a, b) => a - b);
+      univEl.textContent = `${sorted.length} [${sorted.join(',')}]`;
+    } else univEl.textContent = '—';
+  }
 
   if (dot) {
     dot.className = 'sacn-status-dot';

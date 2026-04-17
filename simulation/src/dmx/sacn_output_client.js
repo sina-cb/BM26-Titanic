@@ -32,6 +32,7 @@ export class SacnOutputClient {
       connected: false,
       framesSent: 0,
       fps: 0,
+      activeUniverses: new Set(),
     };
   }
 
@@ -91,6 +92,7 @@ export class SacnOutputClient {
       this._ws.send(frame);
       this._frameCount++;
       this.stats.framesSent++;
+      this.stats.activeUniverses.add(universeId);
     } catch (e) {
       // Connection probably dropped
     }
