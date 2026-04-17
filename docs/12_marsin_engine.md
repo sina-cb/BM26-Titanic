@@ -19,7 +19,7 @@ MarsinEngine is a standalone, headless rendering engine for the BM26 Titanic lig
 │                                                               │
 │  ┌───────────┐   ┌──────────────┐   ┌──────────────────────┐ │
 │  │  Pattern   │   │  Pixel Model │   │   Render Backend     │ │
-│  │  Loader    │──▶│  (model.js)  │──▶│                      │ │
+│  │  Loader    │──▶│(test_bench.js)│──▶│                      │ │
 │  │            │   │  323 pixels  │   │  ┌────────────────┐  │ │
 │  │ rainbow.js │   │  + patches   │   │  │ CPU (WASM)     │  │ │
 │  │ fire.js    │   │  + coords    │   │  │ primary (v2)   │  │ │
@@ -119,7 +119,7 @@ v3 (future):   WASM renderer    → GPU mixer → sACN output
 
 ## 4. Pixel Model Format
 
-The simulation exports a model file (`models/model.js`) that includes pixel coordinates and DMX patch information:
+The simulation exports a model file (`models/test_bench.js` or `models/titanic.js`) that includes pixel coordinates and DMX patch information:
 
 ```js
 export const pixelCount = 323;
@@ -276,7 +276,8 @@ marsin_engine/
 │   ├── test_6ch_pixel.js
 │   └── wipe.js
 ├── models/                # Auto-generated from simulation
-│   └── model.js           # 323 pixels + DMX patch info (universe/addr/footprint)
+│   ├── test_bench.js      # 64 pixels + DMX patch info (universe/addr/footprint)
+│   └── titanic.js         # 323 pixels + DMX patch info
 └── node_modules/          # sacn dependency
 ```
 

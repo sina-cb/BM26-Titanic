@@ -51,7 +51,7 @@ export function generatePixelMap() {
             patch: (light.dmxUniverse > 0 && light.dmxAddress > 0) ? {
                universe: light.dmxUniverse,
                addr: light.dmxAddress,
-               footprint: fixture.fixtureDef ? (fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10
+               footprint: fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10
             } : null,
             channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
             // Bind the apply callback natively for the simulator

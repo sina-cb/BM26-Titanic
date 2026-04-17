@@ -32,9 +32,17 @@ const SACN_UDP_PORT = serverConfig.sacn_udp_port || 5568;
 
 let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
 try {
-  const sceneConfig = yaml.load(fs.readFileSync(sceneConfigPath, 'utf8'));
-  if (sceneName) console.log(`[sACN Bridge] Using scene config: ${sceneName}`);
-  const s = sceneConfig && sceneConfig.colorWave;
+  const commonPath = path.join(SIM_ROOT, 'scenes', 'common.yaml');
+  let s = null;
+  if (fs.existsSync(commonPath)) {
+    const commonConfig = yaml.load(fs.readFileSync(commonPath, 'utf8'));
+    if (commonConfig && commonConfig.colorWave) s = commonConfig.colorWave;
+  }
+  if (fs.existsSync(sceneConfigPath)) {
+    const sceneConfig = yaml.load(fs.readFileSync(sceneConfigPath, 'utf8'));
+    if (sceneConfig && sceneConfig.colorWave) s = sceneConfig.colorWave;
+  }
+
   if (s) {
     const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
     const univStr = String(val(s.sacn_universes) || '1,2,3,4');

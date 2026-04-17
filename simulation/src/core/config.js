@@ -60,14 +60,15 @@ export function extractParams(node, parentKey = null) {
 /**
  * Walk the config tree and update all value fields from current params (for saving).
  */
-export function reconstructYAML(node) {
+export function reconstructYAML(node, parentKey = null) {
   if (!node || typeof node !== "object") return;
   for (const key of Object.keys(node)) {
     if (key === "_section") continue;
 
     if (key === "fixtures" && Array.isArray(node[key])) {
+      const sourceList = (parentKey === "dmxLights" && params.dmxFixtures) ? params.dmxFixtures : params.parLights;
       // Strip internal fields (prefixed with _) before saving
-      node[key] = params.parLights.map(light => {
+      node[key] = sourceList.map(light => {
         const clean = {};
         for (const k of Object.keys(light)) {
           if (!k.startsWith('_')) clean[k] = light[k];
@@ -108,7 +109,7 @@ export function reconstructYAML(node) {
       if (entry.value !== undefined && !entry.transient) {
         entry.value = params[key];
       } else {
-        reconstructYAML(entry);
+        reconstructYAML(entry, key);
       }
     }
   }

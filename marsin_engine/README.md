@@ -13,11 +13,11 @@ Node.js CLI that renders **Pixelblaze-compatible patterns** against the simulati
 ```bash
 cd marsin_engine
 npm install
-node engine.js --pattern bioluminescence
+node engine.js --pattern bioluminescence --model test_bench
 ```
 
 The engine will:
-1. Load the pixel model from `models/model.js` (exported from the simulation)
+1. Load the pixel model from `models/test_bench.js` (or `titanic.js`, exported from the simulation)
 2. Compile the pattern
 3. Map rendered pixels to DMX universes
 4. Send sACN packets to `127.0.0.1` (simulation bridge by default)
@@ -27,20 +27,20 @@ The engine will:
 ## 📋 Usage
 
 ```bash
-# Render a pattern
-node engine.js --pattern rainbow
+# Render a pattern on a specific model
+node engine.js --pattern rainbow --model test_bench
 
 # List available patterns
 node engine.js --list
 
 # Custom FPS and priority
-node engine.js --pattern fire --fps 60 --priority 150
+node engine.js --pattern fire --model titanic --fps 60 --priority 150
 
 # Send directly to a physical controller
-node engine.js --pattern bioluminescence --dest 10.1.1.102
+node engine.js --pattern bioluminescence --model test_bench --dest 10.1.1.102
 
 # Compile-only test (no sACN output)
-node engine.js --pattern rainbow --dry-run
+node engine.js --pattern rainbow --model test_bench --dry-run
 
 # Full options
 node engine.js --help
@@ -51,6 +51,7 @@ node engine.js --help
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--pattern, -p` | *(required)* | Pattern name to render |
+| `--model, -m` | *(required)* | Model name to load (`test_bench`, `titanic`, etc.) |
 | `--fps` | `40` | Target framerate |
 | `--priority` | `100` | sACN source priority (0–200) |
 | `--dest` | `127.0.0.1` | sACN unicast destination IP |
@@ -63,9 +64,9 @@ node engine.js --help
 
 ```bash
 npm start                    # Starts with no pattern (shows help)
-npm run rainbow              # Shortcut: --pattern rainbow
-npm run breathing            # Shortcut: --pattern breathing
-npm run fire                 # Shortcut: --pattern fire
+npm run rainbow              # Shortcut: --pattern rainbow --model test_bench
+npm run breathing            # Shortcut: --pattern breathing --model test_bench
+npm run fire                 # Shortcut: --pattern fire --model test_bench
 ```
 
 ---
@@ -150,7 +151,7 @@ export function render(index, x, y, z) {
 
 ## 🗺️ Pixel Model
 
-The engine requires a pixel model exported from the simulation. Located at `models/model.js`, it contains:
+The engine requires a pixel model exported from the simulation. Located at `models/titanic.js` or `models/test_bench.js`, it contains:
 
 ```javascript
 export const pixelCount = 323;
@@ -179,7 +180,8 @@ marsin_engine/
 │   ├── dmx_mapper.js       # Pixel → DMX universe/channel mapping
 │   └── sacn_output.js      # sACN (E1.31) sender
 ├── models/
-│   └── model.js            # Pixel model (exported from simulation)
+│   ├── test_bench.js       # Test bench model
+│   └── titanic.js          # Full Titanic model
 ├── patterns/
 │   ├── bioluminescence.js
 │   ├── rainbow.js
@@ -197,7 +199,7 @@ The engine sends sACN to `127.0.0.1` by default, which is picked up by the simul
 To send to **real hardware** instead:
 
 ```bash
-node engine.js --pattern bioluminescence --dest 10.1.1.102
+node engine.js --pattern bioluminescence --model titanic --dest 10.1.1.102
 ```
 
 ### Priority System

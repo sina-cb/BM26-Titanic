@@ -6,9 +6,9 @@
   "main": "engine.js",
   "scripts": {
     "start": "node engine.js",
-    "rainbow": "node engine.js --pattern rainbow",
-    "breathing": "node engine.js --pattern breathing",
-    "fire": "node engine.js --pattern fire"
+    "rainbow": "node engine.js --pattern rainbow --model test_bench",
+    "breathing": "node engine.js --pattern breathing --model test_bench",
+    "fire": "node engine.js --pattern fire --model test_bench"
   },
   "dependencies": {
     "js-yaml": "^4.1.1",

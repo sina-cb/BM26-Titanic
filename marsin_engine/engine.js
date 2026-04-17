@@ -277,6 +277,15 @@ async function main() {
   // Set pixel coordinates for batch rendering
   runtime.setCoords(model.pixels);
 
+  // Set V2 metadata for batch rendering, mapping abbreviation keys
+  const metaArray = model.pixels.map(px => ({
+    controllerId: px.cId || 0,
+    sectionId: px.sId || 0,
+    fixtureId: px.fId || 0,
+    viewMask: px.vMask || 0
+  }));
+  runtime.setPixelMeta(metaArray);
+
   // 4. Create global DMX mapper (reusing simulation architecture!)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
   const universeIds = [];

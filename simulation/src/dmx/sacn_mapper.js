@@ -68,7 +68,7 @@ export function mapPixelsToSacn(list, dmxRouter) {
     // Auto-create missing universe buffers dynamically in the router if they exist in the model
     let buf = dmxRouter.getFullFrame(entry.patch.universe);
     if (!buf) {
-      if (dmxRouter.createUniverse) dmxRouter.createUniverse(entry.patch.universe);
+      if (dmxRouter.addUniverse) dmxRouter.addUniverse(entry.patch.universe);
       buf = dmxRouter.getFullFrame(entry.patch.universe);
       if (!buf) continue;
     }
