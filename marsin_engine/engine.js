@@ -14,7 +14,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createRuntime } from './lib/marsin_runtime.js';
+import { createWasmRuntime } from './lib/marsin_wasm_runtime.js';
 import { createDmxMapper } from './lib/dmx_mapper.js';
 import { createSacnOutput } from './lib/sacn_output.js';
 
@@ -30,7 +30,6 @@ function parseArgs() {
     priority: 100,
     dryRun: false,
     list: false,
-    backend: 'auto',
     destination: '127.0.0.1',
   };
 
@@ -41,7 +40,6 @@ function parseArgs() {
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
-      case '--backend':             opts.backend = args[++i]; break;
       case '--dest':                opts.destination = args[++i]; break;
       case '--help': case '-h':
         console.log(`
@@ -56,7 +54,6 @@ function parseArgs() {
     --priority <n>         sACN priority (default: 100)
     --dry-run              Load and compile only, no sACN output
     --list, -l             List available patterns
-    --backend <type>       Force backend: js, wasm, gpu (default: auto)
     --dest <ip>            sACN destination IP (default: 127.0.0.1)
     --help, -h             Show this help
 `);
@@ -96,7 +93,7 @@ async function loadModel() {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(runtime, mapper, sacnOut, fps) {
+function createRenderLoop(runtime, pixels, mapper, sacnOut, fps) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -104,6 +101,7 @@ function createRenderLoop(runtime, mapper, sacnOut, fps) {
   let startTime = 0;
   let lastStatsTime = 0;
   const intervalMs = Math.round(1000 / fps);
+  const pixelCount = pixels.length;
 
   function tick() {
     if (!running) return;
@@ -111,13 +109,18 @@ function createRenderLoop(runtime, mapper, sacnOut, fps) {
     const now = performance.now();
     const elapsed = (now - startTime) / 1000; // seconds
 
-    // Render all pixels
+    // Render all pixels in one WASM call (batch)
     runtime.beginFrame(elapsed);
-    const colors = [];
-    const { pixels } = runtime;
-    for (let i = 0; i < pixels.length; i++) {
-      const px = pixels[i];
-      colors.push(runtime.renderPixel(i, px.nx, px.ny, px.nz));
+    const rgbBuf = runtime.renderAll();
+
+    // Convert flat RGB buffer to color objects for DMX mapper
+    const colors = new Array(pixelCount);
+    for (let i = 0; i < pixelCount; i++) {
+      colors[i] = {
+        r: rgbBuf[i * 3],
+        g: rgbBuf[i * 3 + 1],
+        b: rgbBuf[i * 3 + 2],
+      };
     }
 
     // Map to DMX
@@ -164,10 +167,10 @@ async function main() {
   const opts = parseArgs();
 
   console.log(`
-  ╔══════════════════════════════════════╗
-  ║       🔥 MarsinEngine v1.0          ║
-  ║   Multichannel Rendering Pipeline   ║
-  ╚══════════════════════════════════════╝
+  ╔══════════════════════════════════════════╗
+  ║       🔥 MarsinEngine v2.0 (WASM VM)    ║
+  ║    Multichannel Rendering Pipeline       ║
+  ╚══════════════════════════════════════════╝
 `);
 
   // List patterns
@@ -206,16 +209,27 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Create runtime and compile
-  console.log(`  Compiling pattern (backend: ${opts.backend})...`);
-  const runtime = createRuntime(model.pixelCount);
-  runtime.pixels = model.pixels; // attach for coord lookup
+  // 3. Create WASM runtime and compile
+  console.log(`  Initializing WASM runtime...`);
+  let runtime;
+  try {
+    runtime = await createWasmRuntime(model.pixelCount);
+    console.log(`  ✅ WASM MarsinVM loaded (real compiler + VM)`);
+  } catch (err) {
+    console.error(`  ❌ Failed to load WASM runtime: ${err.message}`);
+    process.exit(1);
+  }
+
+  console.log(`  Compiling pattern...`);
   const result = runtime.compile(patternCode);
   if (!result.ok) {
     console.error(`  ❌ Compile error: ${result.error}`);
     process.exit(1);
   }
-  console.log('  ✅ Pattern compiled successfully');
+  console.log('  ✅ Pattern compiled via MarsinCompiler (bytecode)');
+
+  // Set pixel coordinates for batch rendering
+  runtime.setCoords(model.pixels);
 
   // 4. Create DMX mapper
   const mapper = createDmxMapper(model.pixels);
@@ -233,6 +247,7 @@ async function main() {
     runtime.beginFrame(0);
     const testColor = runtime.renderPixel(0, 0, 0, 0);
     console.log(`  Test render pixel 0: RGB(${testColor.r}, ${testColor.g}, ${testColor.b})\n`);
+    runtime.destroy();
     process.exit(0);
   }
 
@@ -245,8 +260,8 @@ async function main() {
   sacnOut.start();
 
   // 7. Start render loop
-  const loop = createRenderLoop(runtime, mapper, sacnOut, opts.fps);
-  console.log(`\n  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${mapper.universeIds.join(', ')}]\n`);
+  const loop = createRenderLoop(runtime, model.pixels, mapper, sacnOut, opts.fps);
+  console.log(`\n  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${mapper.universeIds.join(', ')}] (WASM MarsinVM)\n`);
   loop.start();
 
   // 8. Graceful shutdown
@@ -259,6 +274,7 @@ async function main() {
     const blackBuffers = mapper.mapFrame(blackColors);
     sacnOut.sendFrame(blackBuffers).then(() => {
       sacnOut.stop();
+      runtime.destroy();
       console.log(`  ✅ Shutdown complete (${loop.frameCount} frames rendered)\n`);
       process.exit(0);
     });

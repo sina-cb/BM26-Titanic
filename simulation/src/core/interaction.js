@@ -236,6 +236,7 @@ export function onTransformChange() {
   }
 
   if (window.debounceAutoSave) window.debounceAutoSave();
+  if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('transform');
 }
 
 // ─── Pointer Down ────────────────────────────────────────────────────────

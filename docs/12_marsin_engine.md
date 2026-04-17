@@ -84,9 +84,13 @@ A lightweight JavaScript implementation of the Pixelblaze API (`marsin_runtime.j
 | Math | `sin`, `cos`, `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round`, `random`, `clamp`, `mod`, `frac` |
 | Noise | `perlin(x, y, z, lacunarity, detail)` (simplex approx) |
 | Globals | `pixelCount`, `PI`, `PI2`, `E` |
+| Metadata | `controllerId`, `sectionId`, `fixtureId`, `viewMask` (Marsin extension — live-read per pixel via getters) |
 
 > [!NOTE]
 > `rgbwau()` downmixes the W/A/U channels into RGB for the v1 3-channel output path, matching the same mixing ratios used in the simulation's `animate.js`.
+
+> [!NOTE]
+> Metadata variables are Marsin extensions (Design 24: Model Views). They default to `0` when no metadata is configured. Use `rt.setPixelMeta([...])` to assign per-pixel metadata, or pass metadata to individual `rt.renderPixel(i, x, y, z, { sectionId: 1 })` calls.
 
 **Verified performance:** 39fps sustained, 0.2ms/frame for 323 pixels on Apple M-series.
 

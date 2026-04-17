@@ -204,6 +204,30 @@ export class LedStrand {
     this.endHandle.material.opacity = selected ? 1.0 : 0.7;
   }
 
+  /**
+   * Set the color of a specific LED by index.
+   * Robust accessor that avoids fragile child index arithmetic.
+   * Group children layout: [wire, tube, (housing, bulb, halo) × ledCount]
+   * @param {number} index - LED index (0-based)
+   * @param {number} r - Red (0-1)
+   * @param {number} g - Green (0-1)
+   * @param {number} b - Blue (0-1)
+   */
+  setLedColorRGB(index, r, g, b) {
+    const ledStartIdx = 2; // skip wire + tube
+    const baseIdx = ledStartIdx + index * 3;
+    const children = this.group.children;
+    // bulb = second in each LED triplet (housing, bulb, halo)
+    const bulb = children[baseIdx + 1];
+    const halo = children[baseIdx + 2];
+    if (bulb && bulb.material) {
+      bulb.material.color.setRGB(r, g, b);
+    }
+    if (halo && halo.material) {
+      halo.material.color.setRGB(r, g, b);
+    }
+  }
+
   setVisibility(visible) {
     this.group.visible = visible;
     this.startHandle.visible = visible;

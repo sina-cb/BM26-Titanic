@@ -27,6 +27,156 @@ function getChromaScale() {
   return chromaScale;
 }
 
+// ─── Metadata-Aware Batch Cache ──────────────────────────────────────────
+// One ordered render list, rebuilt only when topology/metadata changes.
+let _batchRenderList = null;    // Array of { apply(r,g,b) }
+let _batchCoords = null;        // Float32Array (3 floats per pixel: nx,ny,nz)
+let _batchMeta = null;          // Int32Array (4 ints per pixel: c,s,f,v)
+let _batchCacheVersion = 0;
+let _batchLastBuiltVersion = -1;
+
+/** Increment cache version — call when topology, position, or metadata changes. */
+window.invalidateMarsinBatchCache = function(reason) {
+  _batchCacheVersion++;
+  // console.log(`[BatchCache] Invalidated: ${reason} (v${_batchCacheVersion})`);
+};
+
+import * as THREE from "three";
+
+/** Rebuild the ordered render list, coordinate buffer, and metadata buffer. */
+function _rebuildBatchCache() {
+  try {
+  const list = [];
+
+  // Helper to clamp metadata to uint16 range
+  const clamp16 = (v) => Math.max(0, Math.min(65535, v | 0));
+
+  // ─── Par Fixtures (first) ──────────────────────────────────
+  if (window.parFixtures) {
+    const _worldPos = new THREE.Vector3();
+    for (const fixture of window.parFixtures) {
+      if (!fixture) continue;
+      const cfg = fixture.config || {};
+      const cId = clamp16(cfg.controllerId || 0);
+      const sId = clamp16(cfg.sectionId || 0);
+      const fId = clamp16(cfg.fixtureId || 0);
+      const vMask = clamp16(cfg.viewMask || 0);
+
+      if (fixture.pixels && fixture.pixels.length > 0) {
+        // Multi-pixel fixture — one entry per physical pixel
+        // Need the group's world matrix for localPos → worldPos
+        fixture.group.updateMatrixWorld(true);
+        for (let p = 0; p < fixture.pixels.length; p++) {
+          const px = fixture.pixels[p];
+          // localPos is in group-local space; transform to world
+          if (px.localPos) {
+            _worldPos.copy(px.localPos).applyMatrix4(fixture.group.matrixWorld);
+          } else {
+            fixture.group.getWorldPosition(_worldPos);
+          }
+          const localP = p; // capture for closure
+          list.push({
+            wx: _worldPos.x, wy: _worldPos.y, wz: _worldPos.z,
+            cId, sId, fId, vMask,
+            apply: (r, g, b) => fixture.setPixelColorRGB(localP, r, g, b),
+          });
+        }
+      } else if (fixture.light) {
+        // Simple fixture — one entry for the bulb
+        if (fixture.group) {
+          fixture.group.getWorldPosition(_worldPos);
+        } else {
+          _worldPos.set(cfg.x || 0, cfg.y || 0, cfg.z || 0);
+        }
+        list.push({
+          wx: _worldPos.x, wy: _worldPos.y, wz: _worldPos.z,
+          cId, sId, fId, vMask,
+          apply: (r, g, b) => {
+            fixture.light.color.setRGB(r, g, b);
+            if (fixture.beam && fixture.beam.material) {
+              fixture.beam.material.color.setRGB(r, g, b);
+            }
+            if (fixture.setBulbColor) fixture.setBulbColor(r, g, b);
+          },
+        });
+      }
+    }
+  }
+
+  // ─── LED Strands (second) ──────────────────────────────────
+  if (window.ledStrandFixtures) {
+    for (const fixture of window.ledStrandFixtures) {
+      const cfg = fixture.config || {};
+      const count = cfg.ledCount || 10;
+      const cId = clamp16(cfg.controllerId || 0);
+      const sId = clamp16(cfg.sectionId || 0);
+      const fId = clamp16(cfg.fixtureId || 0);
+      const vMask = clamp16(cfg.viewMask || 0);
+
+      const sx = cfg.startX || 0, sy = cfg.startY || 0, sz = cfg.startZ || 0;
+      const ex = cfg.endX || 0, ey = cfg.endY || 0, ez = cfg.endZ || 0;
+
+      for (let led = 0; led < count; led++) {
+        const t = count > 1 ? led / (count - 1) : 0.5;
+        const localLed = led; // capture for closure
+        const strandFixture = fixture; // capture for closure
+        list.push({
+          wx: sx + (ex - sx) * t,
+          wy: sy + (ey - sy) * t,
+          wz: sz + (ez - sz) * t,
+          cId, sId, fId, vMask,
+          apply: (r, g, b) => strandFixture.setLedColorRGB(localLed, r, g, b),
+        });
+      }
+    }
+  }
+
+  // ─── Normalize coordinates to [0,1] ────────────────────────
+  const n = list.length;
+  if (n === 0) {
+    _batchRenderList = null;
+    _batchCoords = null;
+    _batchMeta = null;
+    _batchLastBuiltVersion = _batchCacheVersion;
+    return;
+  }
+
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const e of list) {
+    if (e.wx < minX) minX = e.wx; if (e.wx > maxX) maxX = e.wx;
+    if (e.wy < minY) minY = e.wy; if (e.wy > maxY) maxY = e.wy;
+    if (e.wz < minZ) minZ = e.wz; if (e.wz > maxZ) maxZ = e.wz;
+  }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const rangeZ = maxZ - minZ || 1;
+
+  _batchCoords = new Float32Array(n * 3);
+  _batchMeta = new Int32Array(n * 4);
+
+  for (let i = 0; i < n; i++) {
+    const e = list[i];
+    _batchCoords[i * 3]     = (e.wx - minX) / rangeX;
+    _batchCoords[i * 3 + 1] = (e.wy - minY) / rangeY;
+    _batchCoords[i * 3 + 2] = (e.wz - minZ) / rangeZ;
+    _batchMeta[i * 4]       = e.cId;
+    _batchMeta[i * 4 + 1]   = e.sId;
+    _batchMeta[i * 4 + 2]   = e.fId;
+    _batchMeta[i * 4 + 3]   = e.vMask;
+  }
+
+  _batchRenderList = list;
+  _batchLastBuiltVersion = _batchCacheVersion;
+  } catch (err) {
+    console.error('[BatchCache] Failed to build render list:', err);
+    _batchRenderList = null;
+    _batchCoords = null;
+    _batchMeta = null;
+    _batchLastBuiltVersion = _batchCacheVersion; // prevent retry-loop
+  }
+}
 export function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -68,96 +218,37 @@ export function animate() {
     }
   }
 
-  // ─── Pixelblaze Pattern Engine ───
+  // ─── Pixelblaze Pattern Engine (Metadata-Aware Batch Pipeline) ───
   if (engineReady && engineEnabled) {
     const elapsed = now * 0.001;
     const patternEngine = window.patternEngine;
     patternEngine.beginFrame(elapsed);
 
-    // → Par Lights + ModelFixtures
-    if (window.parFixtures && window.parFixtures.length > 0) {
-      let pixelOffset = 0;
-      const totalFixtures = window.parFixtures.length;
-      for (let i = 0; i < totalFixtures; i++) {
-        const fixture = window.parFixtures[i];
-        if (!fixture) { pixelOffset++; continue; }
-
-        if (fixture.pixels && fixture.pixels.length > 0) {
-          const numPixels = fixture.pixels.length;
-          for (let p = 0; p < numPixels; p++) {
-            const globalIdx = pixelOffset + p;
-            const totalPixels = pixelOffset + numPixels;
-            const t = totalPixels > 1 ? globalIdx / (totalPixels - 1) : 0.5;
-
-            let rn, gn, bn;
-            const px6 = patternEngine.renderPixel6ch(globalIdx, t, 0, 0);
-            if (px6) {
-              const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
-              rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
-              gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
-              bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
-            } else {
-              const px = patternEngine.renderPixel(globalIdx, t, 0, 0);
-              rn = px.r / 255; gn = px.g / 255; bn = px.b / 255;
-            }
-            fixture.setPixelColorRGB(p, rn, gn, bn);
-          }
-          pixelOffset += numPixels;
-        } else if (fixture.light) {
-          const t = totalFixtures > 1 ? pixelOffset / (totalFixtures - 1) : 0.5;
-          let rn, gn, bn;
-          const px6 = patternEngine.renderPixel6ch(pixelOffset, t, 0, 0);
-          if (px6) {
-            const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
-            rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
-            gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
-            bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
-          } else {
-            const { r, g, b } = patternEngine.renderPixel(pixelOffset, t, 0, 0);
-            rn = r / 255; gn = g / 255; bn = b / 255;
-          }
-          fixture.light.color.setRGB(rn, gn, bn);
-          if (fixture.beam && fixture.beam.material) {
-            fixture.beam.material.color.setRGB(rn, gn, bn);
-          }
-          if (fixture.setBulbColor) fixture.setBulbColor(rn, gn, bn);
-          pixelOffset++;
-        } else {
-          pixelOffset++;
-        }
-      }
+    // Ensure batch cache is fresh
+    if (_batchCacheVersion !== _batchLastBuiltVersion) {
+      _rebuildBatchCache();
     }
 
-    // → LED Strands
-    if (window.ledStrandFixtures && window.ledStrandFixtures.length > 0) {
-      window.ledStrandFixtures.forEach(fixture => {
-        const count = fixture.config.ledCount || 10;
-        const children = fixture.group.children;
-        const ledStartIdx = 2; // skip wire + tube
-        for (let led = 0; led < count; led++) {
-          const baseIdx = ledStartIdx + led * 3;
-          const bulb = children[baseIdx + 1];
-          const halo = children[baseIdx + 2];
-          if (!bulb || !bulb.material) continue;
+    if (_batchRenderList && _batchRenderList.length > 0) {
+      const pixelCount = _batchRenderList.length;
+      const result = patternEngine.renderAllWithMeta6ch(
+        pixelCount, _batchCoords, _batchMeta
+      );
 
-          const t = count > 1 ? led / (count - 1) : 0.5;
-          let rn, gn, bn;
-          const px6 = patternEngine.renderPixel6ch(led, t, 0, 0);
-          if (px6) {
-            const W = px6.w || 0, A = px6.a || 0, U = px6.u || 0;
-            rn = Math.min(1, (px6.r + W * 0.8 + A * 0.9 + U * 0.4) / 255);
-            gn = Math.min(1, (px6.g + W * 0.8 + A * 0.6) / 255);
-            bn = Math.min(1, (px6.b + W * 0.8 + U * 0.7) / 255);
-          } else {
-            const { r, g, b } = patternEngine.renderPixel(led, t, 0, 0);
-            rn = r / 255; gn = g / 255; bn = b / 255;
-          }
-          bulb.material.color.setRGB(rn, gn, bn);
-          if (halo && halo.material) {
-            halo.material.color.setRGB(rn, gn, bn);
-          }
-        }
-      });
+      // Apply RGBWAU results by walking the same render list
+      for (let i = 0; i < pixelCount; i++) {
+        const entry = _batchRenderList[i];
+        const off = i * 6;
+        const R = result[off], G = result[off + 1], B = result[off + 2];
+        const W = result[off + 3], A = result[off + 4], U = result[off + 5];
+
+        // RGBWAU → RGB blend (preserved from legacy per-pixel path)
+        const rn = Math.min(1, (R + W * 0.8 + A * 0.9 + U * 0.4) / 255);
+        const gn = Math.min(1, (G + W * 0.8 + A * 0.6) / 255);
+        const bn = Math.min(1, (B + W * 0.8 + U * 0.7) / 255);
+
+        entry.apply(rn, gn, bn);
+      }
     }
   }
 

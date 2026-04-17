@@ -25,6 +25,8 @@ export class MarsinEngine {
     this._renderPixel = null;
     this._renderPixel6ch = null;
     this._renderAll = null;
+    this._renderAllWithMeta = null;
+    this._renderAllWithMeta6ch = null;
     this._renderAll6ch = null;
     this._destroyVm = null;
     this._getError = null;
@@ -118,13 +120,28 @@ export class MarsinEngine {
         ['number', 'number', 'number', 'number', 'number', 'number']);
       this._renderAll = this._module.cwrap('marsin_render_all', null,
         ['number', 'number', 'number', 'number']);
+      this._renderAllWithMeta = this._module.cwrap('marsin_render_all_with_meta', null,
+        ['number', 'number', 'number', 'number', 'number']);
+      this._renderAllWithMeta6ch = this._module.cwrap('marsin_render_all_with_meta_6ch', null,
+        ['number', 'number', 'number', 'number', 'number']);
       this._renderAll6ch = this._module.cwrap('marsin_render_all_6ch', null, 
         ['number', 'number', 'number', 'number']);
       this._destroyVm = this._module.cwrap('marsin_destroy_vm', null, ['number']);
       this._getError = this._module.cwrap('marsin_get_error', 'string', []);
 
+      // Validate critical exports are real functions
+      const requiredExports = {
+        renderAllWithMeta: this._renderAllWithMeta,
+        renderAllWithMeta6ch: this._renderAllWithMeta6ch,
+      };
+      for (const [name, fn] of Object.entries(requiredExports)) {
+        if (typeof fn !== 'function') {
+          throw new Error(`[MarsinEngine] Missing required WASM export: ${name}. Update marsin-engine.wasm.`);
+        }
+      }
+
       this._ready = true;
-      console.log('[MarsinEngine] WASM module loaded');
+      console.log('[MarsinEngine] WASM module loaded (metadata-aware 6ch exports verified)');
     } catch (err) {
       console.error('[MarsinEngine] Failed to load WASM module:', err);
       console.error('[MarsinEngine] Place marsin-engine.js + .wasm in', wasmDir);
@@ -282,6 +299,92 @@ export class MarsinEngine {
 
     this._module._free(outPtr);
     if (coordPtr) this._module._free(coordPtr);
+
+    return result;
+  }
+
+  /**
+   * Render all pixels at once, supplying metadata per pixel.
+   * @param {number} pixelCount - Number of pixels
+   * @param {Float32Array|null} coords - Coordinate buffer (3 floats per pixel: x,y,z)
+   * @param {Int32Array|null} metadata - Meta buffer (4 ints per pixel: c,s,f,v)
+   * @returns {Uint8Array} RGB buffer
+   */
+  renderAllWithMeta(pixelCount, coords = null, metadata = null) {
+    if (!this._handle || !this._ready) return new Uint8Array(pixelCount * 3);
+
+    const outSize = pixelCount * 3;
+    const outPtr = this._module._malloc(outSize);
+
+    let coordPtr = 0;
+    if (coords) {
+      const coordSize = pixelCount * 3 * 4;
+      coordPtr = this._module._malloc(coordSize);
+      this._module.HEAPF32.set(coords, coordPtr >> 2);
+    }
+
+    let metaPtr = 0;
+    if (metadata) {
+       const metaSize = pixelCount * 4 * 4;
+       metaPtr = this._module._malloc(metaSize);
+       this._module.HEAP32.set(metadata, metaPtr >> 2);
+    }
+
+    this._renderAllWithMeta(this._handle, outPtr, pixelCount, coordPtr, metaPtr);
+
+    const memView = this._getMemView();
+    const result = new Uint8Array(outSize);
+    if (memView) {
+      result.set(memView.subarray(outPtr, outPtr + outSize));
+    }
+
+    this._module._free(outPtr);
+    if (coordPtr) this._module._free(coordPtr);
+    if (metaPtr) this._module._free(metaPtr);
+
+    return result;
+  }
+
+  /**
+   * Render all pixels with metadata, returning 6-channel RGBWAU output.
+   * This is the primary render path for BM26 — no fallback.
+   * @param {number} pixelCount - Number of pixels
+   * @param {Float32Array|null} coords - Coordinate buffer (3 floats per pixel: x,y,z)
+   * @param {Int32Array|null} metadata - Meta buffer (4 ints per pixel: c,s,f,v)
+   * @returns {Uint8Array} RGBWAU buffer (6 bytes per pixel)
+   */
+  renderAllWithMeta6ch(pixelCount, coords = null, metadata = null) {
+    if (!this._handle || !this._ready) return new Uint8Array(pixelCount * 6);
+
+    const outSize = pixelCount * 6;
+    const outPtr = this._module._malloc(outSize);
+
+    let coordPtr = 0;
+    if (coords) {
+      const coordSize = pixelCount * 3 * 4;
+      coordPtr = this._module._malloc(coordSize);
+      // Re-resolve heap view after allocation (memory may have grown)
+      this._module.HEAPF32.set(coords, coordPtr >> 2);
+    }
+
+    let metaPtr = 0;
+    if (metadata) {
+      const metaSize = pixelCount * 4 * 4;
+      metaPtr = this._module._malloc(metaSize);
+      // Re-resolve heap view after allocation (memory may have grown)
+      this._module.HEAP32.set(metadata, metaPtr >> 2);
+    }
+
+    this._renderAllWithMeta6ch(this._handle, outPtr, pixelCount, coordPtr, metaPtr);
+
+    // Re-resolve HEAPU8 after WASM call (memory may have grown during execution)
+    const memView = new Uint8Array(this._module.HEAPU8.buffer);
+    const result = new Uint8Array(outSize);
+    result.set(memView.subarray(outPtr, outPtr + outSize));
+
+    this._module._free(outPtr);
+    if (coordPtr) this._module._free(coordPtr);
+    if (metaPtr) this._module._free(metaPtr);
 
     return result;
   }

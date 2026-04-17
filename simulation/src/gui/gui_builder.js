@@ -1037,6 +1037,18 @@ function setupGUI() {
               const fDef = getDefinition(fixtureType);
               const footprint = fDef?.footprint || 10;
 
+              // V2 metadata defaults — fixtureId auto-derived from DMX patch
+              if (config.controllerId === undefined) config.controllerId = 0;
+              if (config.sectionId === undefined) config.sectionId = 0;
+              if (config.fixtureId === undefined) config.fixtureId = Math.min(65535, config.dmxUniverse * 1000 + config.dmxAddress);
+              if (config.viewMask === undefined) config.viewMask = 0;
+
+              const autoFixtureId = () => {
+                config.fixtureId = Math.min(65535, config.dmxUniverse * 1000 + config.dmxAddress);
+                if (fixtureIdDisplay) fixtureIdDisplay.textContent = config.fixtureId;
+                if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
+              };
+
               const patchDiv = document.createElement('div');
               patchDiv.style.cssText = 'padding:2px 8px 6px;';
 
@@ -1060,11 +1072,11 @@ function setupGUI() {
               };
 
               patchRow.appendChild(mkLabel('U:'));
-              const uniInput = mkInput(config.dmxUniverse, 63999, (v) => { config.dmxUniverse = v; uniInput.value = v; updateStatus(); debounceAutoSave(); });
+              const uniInput = mkInput(config.dmxUniverse, 63999, (v) => { config.dmxUniverse = v; uniInput.value = v; updateStatus(); autoFixtureId(); debounceAutoSave(); });
               patchRow.appendChild(uniInput);
 
               patchRow.appendChild(mkLabel('Addr:'));
-              const addrInput = mkInput(config.dmxAddress, 512, (v) => { config.dmxAddress = v; addrInput.value = v; updateStatus(); debounceAutoSave(); });
+              const addrInput = mkInput(config.dmxAddress, 512, (v) => { config.dmxAddress = v; addrInput.value = v; updateStatus(); autoFixtureId(); debounceAutoSave(); });
               patchRow.appendChild(addrInput);
 
               // Status dot
@@ -1091,6 +1103,44 @@ function setupGUI() {
               patchDiv.appendChild(ipRow);
 
               if (genChildren) genChildren.appendChild(patchDiv);
+
+              // 🔖 V2 Metadata — compact DOM controls
+              const metaDiv = document.createElement('div');
+              metaDiv.style.cssText = 'padding:2px 8px 6px;';
+
+              const metaHeader = document.createElement('div');
+              metaHeader.style.cssText = 'margin-bottom:3px;';
+              metaHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">🔖 Metadata (V2)</span>`;
+              metaDiv.appendChild(metaHeader);
+
+              const metaRow1 = document.createElement('div');
+              metaRow1.style.cssText = 'display:flex;gap:4px;align-items:center;margin-bottom:2px;';
+              const metaChanged = () => {
+                if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
+                debounceAutoSave();
+              };
+
+              metaRow1.appendChild(mkLabel('Ctrl:'));
+              metaRow1.appendChild(mkInput(config.controllerId, 255, (v) => { config.controllerId = v; metaChanged(); }));
+              metaRow1.appendChild(mkLabel('Sect:'));
+              metaRow1.appendChild(mkInput(config.sectionId, 255, (v) => { config.sectionId = v; metaChanged(); }));
+              metaDiv.appendChild(metaRow1);
+
+              const metaRow2 = document.createElement('div');
+              metaRow2.style.cssText = 'display:flex;gap:4px;align-items:center;';
+              metaRow2.appendChild(mkLabel('Fix ID:'));
+              // fixtureId is auto-computed, show as read-only display
+              const fixtureIdDisplay = document.createElement('span');
+              fixtureIdDisplay.style.cssText = 'color:#6af;font-size:10px;font-weight:600;min-width:32px;';
+              fixtureIdDisplay.textContent = config.fixtureId;
+              fixtureIdDisplay.title = 'Auto: Universe × 1000 + Address';
+              metaRow2.appendChild(fixtureIdDisplay);
+
+              metaRow2.appendChild(mkLabel('View:'));
+              metaRow2.appendChild(mkInput(config.viewMask, 65535, (v) => { config.viewMask = v; metaChanged(); }));
+              metaDiv.appendChild(metaRow2);
+
+              if (genChildren) genChildren.appendChild(metaDiv);
             } catch (err) {
               console.warn(`[GUI] Error creating generated fixture ${index} UI:`, err);
             }
@@ -1205,6 +1255,7 @@ function setupGUI() {
             penumbra: def?.defaultPenumbra || 0.5,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
             dmxUniverse: 0, dmxAddress: 0, controllerIp: '',
+            controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
           });
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
           renderParGUI();
@@ -1248,6 +1299,11 @@ function setupGUI() {
           if (config.rotX === undefined) config.rotX = 0;
           if (config.rotY === undefined) config.rotY = 0;
           if (config.rotZ === undefined) config.rotZ = 0;
+          // V2 metadata defaults
+          if (config.controllerId === undefined) config.controllerId = 0;
+          if (config.sectionId === undefined) config.sectionId = 0;
+          if (config.fixtureId === undefined) config.fixtureId = 0;
+          if (config.viewMask === undefined) config.viewMask = 0;
 
           const idxFolder = groupFolder.addFolder(config.name);
           idxFolder.domElement.classList.add('gui-card');
@@ -1321,6 +1377,18 @@ function setupGUI() {
           rotFolder.add(config, "rotZ", -180, 180, step).listen().onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
           });
+
+          // V2 Metadata
+          const metaFolder = idxFolder.addFolder("🔖 Metadata (V2)");
+          metaFolder.close();
+          const metaChanged = () => {
+            if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
+            debounceAutoSave();
+          };
+          metaFolder.add(config, 'controllerId', 0, 255, 1).name('Controller ID').onChange(metaChanged);
+          metaFolder.add(config, 'sectionId', 0, 255, 1).name('Section ID').onChange(metaChanged);
+          metaFolder.add(config, 'fixtureId', 0, 255, 1).name('Fixture ID').onChange(metaChanged);
+          metaFolder.add(config, 'viewMask', 0, 65535, 1).name('View Mask').onChange(metaChanged);
 
           // ── 📡 DMX Patch — compact DOM controls ──
           if (config.dmxUniverse === undefined) config.dmxUniverse = 0;
@@ -1469,6 +1537,7 @@ function setupGUI() {
               name: `Par Light ${params.parLights.length + 1}`,
               color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
               x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+              controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
             });
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
@@ -2637,6 +2706,7 @@ function setupGUI() {
           color: '#ff8800',
           intensity: 1.0,
           ledCount: 10,
+          controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
         });
         rebuildLedStrands();
         renderStrandGUI();
@@ -2701,6 +2771,22 @@ function setupGUI() {
         endF.add(strand, 'endX', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
         endF.add(strand, 'endY', -100, 100, 0.5).name('Y').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
         endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+
+        // V2 Metadata
+        if (strand.controllerId === undefined) strand.controllerId = 0;
+        if (strand.sectionId === undefined) strand.sectionId = 0;
+        if (strand.fixtureId === undefined) strand.fixtureId = 0;
+        if (strand.viewMask === undefined) strand.viewMask = 0;
+        const strandMetaFolder = sFolder.addFolder('🔖 Metadata (V2)');
+        strandMetaFolder.close();
+        const strandMetaChanged = () => {
+          if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
+          debounceAutoSave();
+        };
+        strandMetaFolder.add(strand, 'controllerId', 0, 255, 1).name('Controller ID').onChange(strandMetaChanged);
+        strandMetaFolder.add(strand, 'sectionId', 0, 255, 1).name('Section ID').onChange(strandMetaChanged);
+        strandMetaFolder.add(strand, 'fixtureId', 0, 255, 1).name('Fixture ID').onChange(strandMetaChanged);
+        strandMetaFolder.add(strand, 'viewMask', 0, 65535, 1).name('View Mask').onChange(strandMetaChanged);
 
         // Delete button
         const actDiv = document.createElement('div');

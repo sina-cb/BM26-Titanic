@@ -110,6 +110,7 @@ export function applySnapshot(snapshot) {
     const t5 = performance.now();
 
     if (window.applyAllHandlers) window.applyAllHandlers();
+    if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('undo');
     if (window.debounceAutoSave) window.debounceAutoSave();
 
     const t6 = performance.now();
