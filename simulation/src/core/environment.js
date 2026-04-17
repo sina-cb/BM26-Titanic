@@ -76,7 +76,9 @@ export function loadModel(onLoaded) {
   const sceneName = window.__activeScene || 'titanic';
   if (sceneName !== 'titanic') {
     console.log(`[Model] Skipping Titanic model load for scene: ${sceneName}`);
-    onLoaded(new THREE.Group(), null, null, null, true);
+    const dummy = new THREE.Group();
+    dummy.userData.isDummy = true;
+    onLoaded(dummy);
     return;
   }
 
@@ -102,7 +104,8 @@ export function loadModel(onLoaded) {
   );
 }
 
-export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures, isDummy = false) {
+export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures) {
+  const isDummy = obj.userData && obj.userData.isDummy === true;
   updateLoading(70, "Processing geometry…");
   model = obj;
   setModel(model);
