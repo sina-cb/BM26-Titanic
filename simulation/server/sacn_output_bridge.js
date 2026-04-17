@@ -141,7 +141,8 @@ wss.on('connection', (ws, req) => {
     const now = Date.now();
     if (now - lastStatsTime > 5000) {
       const fps = Math.round(frameCount / ((now - lastStatsTime) / 1000));
-      console.log(`[Bridge] ⚡ ${fps} fps, ${senderPool.size} sender(s) active`);
+      const msgStr = JSON.stringify({ type: 'log', msg: `[Bridge] ⚡ ${fps} fps, ${senderPool.size} sender(s) active` });
+      ws.send(msgStr);
       frameCount = 0;
       lastStatsTime = now;
     }

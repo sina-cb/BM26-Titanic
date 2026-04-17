@@ -5,7 +5,7 @@
  * Appears when sacn_in lighting mode is selected; hides otherwise.
  */
 
-const MAX_LOG_ENTRIES = 50;
+const MAX_LOG_ENTRIES = 20;
 let _updateIntervalIn = null;
 let _updateIntervalOut = null;
 

@@ -118,6 +118,19 @@ export class SacnOutputClient {
         this._connected = true;
         this.stats.connected = true;
         console.log('[sACN Out] ✅ Connected to output bridge');
+        if (typeof window.sacnOutLog === 'function') window.sacnOutLog('Connected to output bridge');
+      };
+
+      this._ws.onmessage = (evt) => {
+        if (typeof evt.data === 'string') {
+          try {
+            const parsed = JSON.parse(evt.data);
+            if (parsed.type === 'log') {
+              if (typeof window.sacnOutLog === 'function') window.sacnOutLog(parsed.msg, parsed.level || 'info');
+              else console.log(parsed.msg);
+            }
+          } catch(e) {}
+        }
       };
 
       this._ws.onclose = () => {

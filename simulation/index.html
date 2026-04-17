@@ -125,7 +125,10 @@
           <div class="sacn-stat-row" title="Number of active sACN universes being received"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-in-st-universe">—</span></div>
           <div class="sacn-stat-row" title="sACN source priority (higher priority wins in multi-source merge)"><span class="sacn-label">Priority</span><span class="sacn-value" id="sacn-in-st-priority">—</span></div>
         </div>
-        <div class="sacn-log-title">Activity Log</div>
+        <div class="sacn-log-title" style="display:flex; justify-content:space-between;">
+          <span>Activity Log</span>
+          <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-in-log').innerHTML=''">Clear</span>
+        </div>
         <div class="sacn-log" id="sacn-in-log"></div>
       </div>
     </div>
@@ -144,7 +147,10 @@
           <div class="sacn-stat-row" title="Total DMX frames sent since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-out-st-frames">0</span></div>
           <div class="sacn-stat-row" title="Number of active sACN universes being pushed"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-out-st-universe">—</span></div>
         </div>
-        <div class="sacn-log-title">Activity Log</div>
+        <div class="sacn-log-title" style="display:flex; justify-content:space-between;">
+          <span>Activity Log</span>
+          <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-out-log').innerHTML=''">Clear</span>
+        </div>
         <div class="sacn-log" id="sacn-out-log"></div>
       </div>
     </div>
