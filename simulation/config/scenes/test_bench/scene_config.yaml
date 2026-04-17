@@ -253,7 +253,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: gradient
     label: Mode
     options:
       - gradient
