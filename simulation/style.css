@@ -886,49 +886,31 @@ canvas {
   color: rgba(240, 96, 96, 0.8);
 }
 
-/* ─── Scene Indicator / Switcher ─── */
-#scene-indicator {
-  position: fixed;
-  bottom: 20px;
-  left: 20px;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  background: rgba(10, 10, 26, 0.85);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(96, 192, 240, 0.25);
-  border-radius: 8px;
-  font-family: inherit;
-  transition: border-color 0.3s ease;
-}
-
-#scene-indicator:hover {
-  border-color: rgba(96, 192, 240, 0.5);
-}
-
-#scene-label {
-  font-size: 0.7rem;
-  color: rgba(96, 192, 240, 0.7);
-  pointer-events: none;
-}
-
+/* ─── Scene Switcher ─── */
 #scene-select {
-  background: transparent;
-  border: none;
-  color: #ccc;
-  font-size: 0.7rem;
+  background: rgba(240, 192, 96, 0.08);
+  border: 1px solid rgba(240, 192, 96, 0.3);
+  border-radius: 4px;
+  color: rgba(240, 192, 96, 0.9);
+  font-size: 0.6rem;
   font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   cursor: pointer;
   outline: none;
-  padding: 2px 4px;
+  padding: 2px 6px;
   -webkit-appearance: none;
   appearance: none;
+  transition: all 0.2s ease;
+}
+
+#scene-select:hover {
+  background: rgba(240, 192, 96, 0.15);
+  border-color: rgba(240, 192, 96, 0.6);
 }
 
 #scene-select option {
-  background: #1a1a2e;
-  color: #ccc;
+  background: #111;
+  color: rgba(240, 192, 96, 0.9);
 }

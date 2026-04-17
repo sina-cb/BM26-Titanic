@@ -73,6 +73,13 @@ export function createStarField() {
 
 // ─── Model Loading ──────────────────────────────────────────────────────
 export function loadModel(onLoaded) {
+  const sceneName = window.__activeScene || 'titanic';
+  if (sceneName !== 'titanic') {
+    console.log(`[Model] Skipping Titanic model load for scene: ${sceneName}`);
+    onLoaded(new THREE.Group(), null, null, null, true);
+    return;
+  }
+
   updateLoading(10, "Loading FBX model…");
 
   const loader = new FBXLoader();
@@ -95,8 +102,8 @@ export function loadModel(onLoaded) {
   );
 }
 
-export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures) {
-  updateLoading(70, "Processing ship geometry…");
+export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures, isDummy = false) {
+  updateLoading(70, "Processing geometry…");
   model = obj;
   setModel(model);
 
@@ -119,49 +126,58 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   setEditMaterial(editMaterial);
 
   let meshCount = 0;
-  model.traverse((child) => {
-    if (child.isMesh) {
-      child.material = structureMaterial;
-      child.castShadow = true;
-      child.receiveShadow = true;
+  if (!isDummy) {
+    model.traverse((child) => {
+      if (child.isMesh) {
+        child.material = structureMaterial;
+        child.castShadow = true;
+        child.receiveShadow = true;
 
-      // Delete original normals from Rhino (per-face flat) and recompute smooth
-      child.geometry.deleteAttribute("normal");
-      child.geometry.computeVertexNormals();
+        // Delete original normals from Rhino (per-face flat) and recompute smooth
+        child.geometry.deleteAttribute("normal");
+        child.geometry.computeVertexNormals();
 
-      modelMeshes.push(child); // Collect for snap raycasting
-      meshCount++;
-    }
-  });
-  console.log(`Loaded ${meshCount} mesh(es) from FBX`);
+        modelMeshes.push(child); // Collect for snap raycasting
+        meshCount++;
+      }
+    });
+  }
+  console.log(isDummy ? `Loaded dummy model for test bench` : `Loaded ${meshCount} mesh(es) from FBX`);
 
-  // Compute overall bounds to find the true center
-  const box = new THREE.Box3().setFromObject(model);
   modelCenter = new THREE.Vector3();
-  modelSize = new THREE.Vector3();
-  box.getCenter(modelCenter);
-  box.getSize(modelSize);
-  modelRadius = modelSize.length() / 2;
+  modelSize = new THREE.Vector3(100, 100, 100);
+  modelRadius = 50;
 
-  // Translate geometry vertices directly so the local origin (0,0,0)
-  // becomes the center of mass.
-  model.traverse((child) => {
-    if (child.isMesh) {
-      child.geometry.translate(-modelCenter.x, -box.min.y, -modelCenter.z);
-    }
-  });
+  if (!isDummy) {
+    // Compute overall bounds to find the true center
+    const box = new THREE.Box3().setFromObject(model);
+    box.getCenter(modelCenter);
+    box.getSize(modelSize);
+    modelRadius = modelSize.length() / 2;
+
+    // Translate geometry vertices directly so the local origin (0,0,0)
+    // becomes the center of mass.
+    model.traverse((child) => {
+      if (child.isMesh) {
+        child.geometry.translate(-modelCenter.x, -box.min.y, -modelCenter.z);
+      }
+    });
+  }
 
   // Apply requested default model pos/rot
-  model.position.set(-2, 8, 16);
-  model.rotation.set(THREE.MathUtils.degToRad(-90), 0, 0);
-
+  if (!isDummy) {
+    model.position.set(-2, 8, 16);
+    model.rotation.set(THREE.MathUtils.degToRad(-90), 0, 0);
+  }
   scene.add(model);
 
   // Recompute bounds after centering and initial transform
-  const finalBox = new THREE.Box3().setFromObject(model);
-  finalBox.getCenter(modelCenter);
-  finalBox.getSize(modelSize);
-  modelRadius = finalBox.max.distanceTo(finalBox.min) / 2;
+  if (!isDummy) {
+    const finalBox = new THREE.Box3().setFromObject(model);
+    finalBox.getCenter(modelCenter);
+    finalBox.getSize(modelSize);
+    modelRadius = finalBox.max.distanceTo(finalBox.min) / 2;
+  }
 
   setModelCenter(modelCenter);
   setModelSize(modelSize);

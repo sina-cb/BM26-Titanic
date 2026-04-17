@@ -66,7 +66,10 @@
       <div class="hud-corner bottom-right"></div>
       <!-- Top bar -->
       <div class="hud-top-bar">
-        <span class="hud-title">BM26 TITANIC — LIGHTING SIM</span>
+        <span class="hud-title">
+          BM26 TITANIC — LIGHTING SIM <span style="opacity:0.5;margin:0 4px;">//</span> 
+          <select id="scene-select" title="Switch scene"></select>
+        </span>
         <span class="hud-status" id="hud-status">LIVE</span>
         <button class="hud-close" id="hud-close" title="Exit (F11 or Alt+F4)">✕</button>
       </div>
@@ -125,12 +128,6 @@
         <div class="sacn-log-title">Activity Log</div>
         <div class="sacn-log" id="sacn-log"></div>
       </div>
-    </div>
-
-    <!-- Scene indicator / switcher -->
-    <div id="scene-indicator">
-      <span id="scene-label">🎬</span>
-      <select id="scene-select" title="Switch scene"></select>
     </div>
 
     <!-- View presets (populated dynamically from scene_preset_cameras.yaml) -->
