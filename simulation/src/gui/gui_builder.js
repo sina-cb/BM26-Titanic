@@ -874,7 +874,10 @@ function setupGUI() {
           c.viewMask = 0;
         });
         updateToast(`Cleared DMX patches`);
-        rebuildGUI();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+        renderParGUI();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+        debounceAutoSave();
       };
       // autoPatchBtn's onclick logic follows:
       autoPatchBtn.onclick = () => {
