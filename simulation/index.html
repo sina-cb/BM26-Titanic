@@ -110,23 +110,42 @@
       </div>
     </div>
 
-    <!-- sACN Monitor (floating, draggable, collapsible) -->
-    <div id="sacn-monitor-panel" class="hidden">
-      <div class="sacn-header" id="sacn-drag-handle">
-        <span class="sacn-title">📡 sACN Monitor</span>
-        <span class="sacn-status-dot" id="sacn-conn-dot"></span>
-        <button class="pe-btn" id="sacn-collapse-btn" title="Collapse">─</button>
+    <!-- sACN IN Monitor (floating, draggable, collapsible) -->
+    <div id="sacn-in-monitor-panel" class="hidden">
+      <div class="sacn-header" id="sacn-in-drag-handle">
+        <span class="sacn-title">📡 sACN IN Monitor (6971)</span>
+        <span class="sacn-status-dot" id="sacn-in-conn-dot"></span>
+        <button class="pe-btn" id="sacn-in-collapse-btn" title="Collapse">─</button>
       </div>
       <div class="sacn-body">
-        <div class="sacn-stats" id="sacn-stats">
-          <div class="sacn-stat-row" title="WebSocket connection to the sACN bridge server (port 6971)"><span class="sacn-label">Status</span><span class="sacn-value" id="sacn-st-status">Disconnected</span></div>
-          <div class="sacn-stat-row" title="Incoming sACN frames per second (measured over 5s window)"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-st-fps">0</span></div>
-          <div class="sacn-stat-row" title="Total DMX frames received since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-st-frames">0</span></div>
-          <div class="sacn-stat-row" title="Number of active sACN universes being received"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-st-universe">—</span></div>
-          <div class="sacn-stat-row" title="sACN source priority (higher priority wins in multi-source merge)"><span class="sacn-label">Priority</span><span class="sacn-value" id="sacn-st-priority">—</span></div>
+        <div class="sacn-stats" id="sacn-in-stats">
+          <div class="sacn-stat-row" title="WebSocket connection to the sACN IN bridge server"><span class="sacn-label">Status</span><span class="sacn-value" id="sacn-in-st-status">Disconnected</span></div>
+          <div class="sacn-stat-row" title="Incoming sACN frames per second (measured over 5s window)"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-in-st-fps">0</span></div>
+          <div class="sacn-stat-row" title="Total DMX frames received since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-in-st-frames">0</span></div>
+          <div class="sacn-stat-row" title="Number of active sACN universes being received"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-in-st-universe">—</span></div>
+          <div class="sacn-stat-row" title="sACN source priority (higher priority wins in multi-source merge)"><span class="sacn-label">Priority</span><span class="sacn-value" id="sacn-in-st-priority">—</span></div>
         </div>
         <div class="sacn-log-title">Activity Log</div>
-        <div class="sacn-log" id="sacn-log"></div>
+        <div class="sacn-log" id="sacn-in-log"></div>
+      </div>
+    </div>
+
+    <!-- sACN OUT Monitor (floating, draggable, collapsible) -->
+    <div id="sacn-out-monitor-panel" class="hidden">
+      <div class="sacn-header" id="sacn-out-drag-handle">
+        <span class="sacn-title">📡 sACN OUT Monitor (6972)</span>
+        <span class="sacn-status-dot" id="sacn-out-conn-dot"></span>
+        <button class="pe-btn" id="sacn-out-collapse-btn" title="Collapse">─</button>
+      </div>
+      <div class="sacn-body">
+        <div class="sacn-stats" id="sacn-out-stats">
+          <div class="sacn-stat-row" title="WebSocket connection to the sACN OUT bridge server"><span class="sacn-label">Status</span><span class="sacn-value" id="sacn-out-st-status">Disconnected</span></div>
+          <div class="sacn-stat-row" title="Outgoing sACN frames per second"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-out-st-fps">0</span></div>
+          <div class="sacn-stat-row" title="Total DMX frames sent since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-out-st-frames">0</span></div>
+          <div class="sacn-stat-row" title="Number of active sACN universes being pushed"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-out-st-universe">—</span></div>
+        </div>
+        <div class="sacn-log-title">Activity Log</div>
+        <div class="sacn-log" id="sacn-out-log"></div>
       </div>
     </div>
 

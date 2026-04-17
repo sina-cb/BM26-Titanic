@@ -32,7 +32,7 @@ import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
-import { setupSacnMonitor } from "./src/gui/sacn_monitor.js";
+import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 
 // ─── Init ───────────────────────────────────────────────────────────────
 async function init() {
@@ -281,7 +281,8 @@ Promise.all([
 
   // Initialize pattern editor + sACN monitor + Scene indicator
   setupPatternEditor();
-  setupSacnMonitor();
+  setupSacnInMonitor();
+  setupSacnOutMonitor();
   setupSceneIndicator();
   loadPatternPresets().then(() => {
     initPatternEngine().then(() => {

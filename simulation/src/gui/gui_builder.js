@@ -600,11 +600,19 @@ function setupGUI() {
       sacnFolder.domElement.style.display = mode === 'sacn_in' ? '' : 'none';
       // Show pattern editor only in pixelblaze mode when enabled
       if (window.showPatternEditor) window.showPatternEditor(mode === 'pixelblaze' && enabled);
-      // Show sACN monitor panel directly
-      if (sacnMonitorPanel) {
-        sacnMonitorPanel.classList.toggle('hidden', !(mode === 'sacn_in' && enabled));
+      // Show sACN monitors directly
+      const sacnInMonitorPanel = document.getElementById('sacn-in-monitor-panel');
+      if (sacnInMonitorPanel) {
+        sacnInMonitorPanel.classList.toggle('hidden', !(mode === 'sacn_in' && enabled));
       }
-      if (window.showSacnMonitor) window.showSacnMonitor(mode === 'sacn_in' && enabled);
+      if (window.showSacnInMonitor) window.showSacnInMonitor(mode === 'sacn_in' && enabled);
+
+      const sacnOutMonitorPanel = document.getElementById('sacn-out-monitor-panel');
+      if (sacnOutMonitorPanel) {
+        sacnOutMonitorPanel.classList.toggle('hidden', !enabled);
+      }
+      if (window.showSacnOutMonitor) window.showSacnOutMonitor(enabled);
+
       // Sync engine state → state.js so animate.js sees the change
       setEngineEnabled(mode === 'pixelblaze' && enabled);
       setLightingEnabled(enabled);

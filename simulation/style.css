@@ -724,7 +724,7 @@ canvas {
 }
 
 /* ─── sACN Monitor Panel ─── */
-#sacn-monitor-panel {
+#sacn-in-monitor-panel, #sacn-out-monitor-panel {
   position: fixed;
   top: 60px;
   left: 14px;
@@ -749,11 +749,15 @@ canvas {
   resize: both;
 }
 
-#sacn-monitor-panel.hidden {
+#sacn-out-monitor-panel {
+  top: 460px; /* position it lower so it doesn't strictly overlap the IN monitor */
+}
+
+#sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {
   display: none;
 }
 
-#sacn-monitor-panel.collapsed {
+#sacn-in-monitor-panel.collapsed, #sacn-out-monitor-panel.collapsed {
   height: 34px !important;
   min-height: 34px !important;
   max-height: 34px !important;
