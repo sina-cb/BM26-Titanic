@@ -174,30 +174,22 @@ async function init() {
 
 // ─── Scene Selection ────────────────────────────────────────────────────
 // URL param ?scene=<name> loads from config/scenes/<name>/scene_config.yaml
-// Default (no param) loads config/scene_config.yaml for backward compat.
+// Default (no param) loads titanic scene
 const _urlParams = new URLSearchParams(window.location.search);
-const _activeScene = _urlParams.get('scene') || null;
+const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
-const _sceneConfigPath = _activeScene
-  ? `config/scenes/${_activeScene}/scene_config.yaml`
-  : 'config/scene_config.yaml';
-const _camerasPath = _activeScene
-  ? `config/scenes/${_activeScene}/cameras.yaml`
-  : 'config/scene_preset_cameras.yaml';
-console.log(`[Scene] Loading: ${_activeScene || 'default'} → ${_sceneConfigPath}`);
+const _sceneConfigPath = `config/scenes/${_activeScene}/scene_config.yaml`;
+const _camerasPath = `config/scenes/${_activeScene}/cameras.yaml`;
+console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}`);
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
   fetch(_sceneConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-  // Fallback: also try old cameras path if scene-specific one is empty
-  fetch("config/scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, camerasYaml, fallbackCamerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
-  // Use fallback cameras if scene-specific cameras are empty
-  if (!camerasYaml && fallbackCamerasYaml) camerasYaml = fallbackCamerasYaml;
+]).then(async ([sceneYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
 
   // Load scene config
   try {

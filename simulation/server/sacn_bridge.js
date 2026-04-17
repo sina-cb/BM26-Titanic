@@ -22,10 +22,8 @@ const SIM_ROOT = path.join(__dirname, '..');
 
 // ── Scene selection via --scene <name> ─────────────────────────────────
 const sceneIdx = process.argv.indexOf('--scene');
-const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : null;
-const sceneConfigPath = sceneName
-  ? path.join(SIM_ROOT, 'config', 'scenes', sceneName, 'scene_config.yaml')
-  : path.join(SIM_ROOT, 'config', 'scene_config.yaml');
+const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : 'titanic';
+const sceneConfigPath = path.join(SIM_ROOT, 'config', 'scenes', sceneName, 'scene_config.yaml');
 
 // ── Read config ────────────────────────────────────────────────────────
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));

@@ -9,23 +9,16 @@ const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
 const SCENES_ROOT = path.join(SIM_ROOT, 'config', 'scenes');
 
 /**
- * Resolve scene-specific config path. If sceneName is provided,
- * returns config/scenes/<name>/scene_config.yaml. Otherwise default.
+ * Resolve scene-specific config path. If sceneName is omitted, defaults to 'titanic'.
  */
 function resolveSceneConfigPath(sceneName) {
-  if (sceneName) {
-    const safeName = sceneName.replace(/[^a-z0-9_-]/gi, '_');
-    return path.join(SCENES_ROOT, safeName, 'scene_config.yaml');
-  }
-  return path.join(SIM_ROOT, 'config', 'scene_config.yaml');
+  const safeName = (sceneName || 'titanic').replace(/[^a-z0-9_-]/gi, '_');
+  return path.join(SCENES_ROOT, safeName, 'scene_config.yaml');
 }
 
 function resolveSceneCamerasPath(sceneName) {
-  if (sceneName) {
-    const safeName = sceneName.replace(/[^a-z0-9_-]/gi, '_');
-    return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
-  }
-  return path.join(SIM_ROOT, 'config', 'scene_preset_cameras.yaml');
+  const safeName = (sceneName || 'titanic').replace(/[^a-z0-9_-]/gi, '_');
+  return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
 }
 
 // Read port from server_config.yaml
