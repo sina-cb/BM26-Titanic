@@ -41,10 +41,47 @@ http.createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       const outPath = resolveSceneConfigPath(sceneName);
+      const patchesPath = path.join(path.dirname(outPath), 'patches.yaml');
       console.log(`[SAVE SERVER] POST /save (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
-        // Ensure directory exists for scene-specific paths
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+        // Parse and decouple patching logic
+        const configTree = yaml.load(body);
+        if (configTree && configTree.parLights && Array.isArray(configTree.parLights.fixtures)) {
+          const patches = { patches: {} };
+          configTree.parLights.fixtures.forEach(fixture => {
+            const name = fixture.name;
+            if (name) {
+              patches.patches[name] = {
+                controllerIp: fixture.controllerIp,
+                dmxUniverse: fixture.dmxUniverse,
+                dmxAddress: fixture.dmxAddress,
+                controllerId: fixture.controllerId,
+                sectionId: fixture.sectionId,
+                fixtureId: fixture.fixtureId,
+                viewMask: fixture.viewMask,
+              };
+              // Clean structural tree
+              delete fixture.controllerIp;
+              delete fixture.dmxUniverse;
+              delete fixture.dmxAddress;
+              delete fixture.controllerId;
+              delete fixture.sectionId;
+              delete fixture.fixtureId;
+              delete fixture.viewMask;
+            }
+          });
+
+          // Write extracted patches.yaml
+          fs.writeFileSync(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
+          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath}`);
+          
+          // Re-serialize the cleaned structural tree
+          body = yaml.dump(configTree, { lineWidth: -1 });
+        }
+
+        // Write cleaned scene_config.yaml
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
         res.end('Saved');

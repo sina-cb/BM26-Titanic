@@ -180,23 +180,36 @@ const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
 const _sceneConfigPath = `config/scenes/${_activeScene}/scene_config.yaml`;
 const _camerasPath = `config/scenes/${_activeScene}/cameras.yaml`;
+const _patchesPath = `config/scenes/${_activeScene}/patches.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}`);
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
   fetch(_sceneConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
+]).then(async ([sceneYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
 
   // Load scene config
   try {
-    const loaded = yaml.load(sceneYaml);
-    if (loaded) {
-      setConfigTree(loaded);
-      extractParams(loaded);
+    if (sceneYaml) {
+      window.initialParams = yaml.load(sceneYaml);
+      
+      // Stitch decoupled patch data back into the fixture tree
+      if (patchesYaml && window.initialParams.parLights?.fixtures) {
+        const patchTree = yaml.load(patchesYaml);
+        const patches = patchTree?.patches || {};
+        window.initialParams.parLights.fixtures.forEach(fixture => {
+          if (fixture.name && patches[fixture.name]) {
+            Object.assign(fixture, patches[fixture.name]);
+          }
+        });
+      }
+      setConfigTree(window.initialParams);
+      extractParams(window.initialParams);
     }
   } catch (err) {
     console.warn(`Failed to parse ${_sceneConfigPath}:`, err);

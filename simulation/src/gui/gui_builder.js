@@ -853,10 +853,30 @@ function setupGUI() {
       }
       const autoPatchWrap = document.createElement('div');
       autoPatchWrap.className = 'auto-patch-wrap';
-      autoPatchWrap.style.cssText = 'padding:4px 6px;border-bottom:1px solid #333;';
+      autoPatchWrap.style.cssText = 'display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #333;';
       const autoPatchBtn = document.createElement('button');
       autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
-      autoPatchBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:#1a2a3a;color:#6af;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      autoPatchBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#1a2a3a;color:#6af;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      
+      const clearPatchBtn = document.createElement('button');
+      clearPatchBtn.textContent = '❌ Clear All Patches';
+      clearPatchBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      clearPatchBtn.onclick = () => {
+        if (!confirm('Clear all DMX patch mappings?')) return;
+        pushUndo();
+        params.parLights.forEach(c => {
+          c.controllerIp = '';
+          c.dmxUniverse = 0;
+          c.dmxAddress = 0;
+          c.controllerId = 0;
+          c.sectionId = 0;
+          c.fixtureId = 0;
+          c.viewMask = 0;
+        });
+        updateToast(`Cleared DMX patches`);
+        rebuildGUI();
+      };
+      // autoPatchBtn's onclick logic follows:
       autoPatchBtn.onclick = () => {
         let universe = 1;
         let address = 1;
@@ -927,6 +947,7 @@ function setupGUI() {
         console.log(`[Auto-Patch] Assigned ${patchedCount} fixtures across universes 1-${universe}`);
       };
       autoPatchWrap.appendChild(autoPatchBtn);
+      autoPatchWrap.appendChild(clearPatchBtn);
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
 

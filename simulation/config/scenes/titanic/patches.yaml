@@ -1,0 +1,697 @@
+patches:
+  Right Front Wall Generator 1:
+    controllerIp: ''
+    dmxUniverse: 1
+    dmxAddress: 1
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Wall Generator 2:
+    controllerIp: ''
+    dmxUniverse: 1
+    dmxAddress: 120
+    controllerId: 5
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Wall Generator 3:
+    controllerIp: ''
+    dmxUniverse: 1
+    dmxAddress: 239
+    controllerId: 8
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Wall Generator 4:
+    controllerIp: ''
+    dmxUniverse: 1
+    dmxAddress: 358
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Wall Generator 5:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 1
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 1:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 120
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 2:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 130
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 3:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 140
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 4:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 150
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 5:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 160
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 6:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 170
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 7:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 180
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 8:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 190
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Top Chimney Generator 9:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 200
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Deck Generator 1:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 210
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Deck Generator 2:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 243
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Deck Generator 3:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 276
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Front Deck Generator 4:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 309
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 1:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 342
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 2:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 352
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 3:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 362
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 4:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 372
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 5:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 382
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Center Auditorium Generator 6:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 392
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 1:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 402
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 2:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 412
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 3:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 422
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 4:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 432
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 5:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 442
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 6:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 452
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 1:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 462
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 2:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 472
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 3:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 482
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 4:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 492
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 5:
+    controllerIp: ''
+    dmxUniverse: 2
+    dmxAddress: 502
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 6:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 1
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 7:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 11
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 8:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 21
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 9:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 31
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 10:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 41
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 11:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 51
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 12:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 61
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 13:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 71
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 14:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 81
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 15:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 91
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 16:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 101
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 17:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 111
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 18:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 121
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Wall 19:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 131
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 1:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 141
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 2:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 151
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 3:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 161
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 4:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 171
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 5:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 181
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 6:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 191
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 7:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 201
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 8:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 211
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 9:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 221
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 10:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 231
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 11:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 241
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 12:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 251
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 13:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 261
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 14:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 271
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 15:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 281
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 16:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 291
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 17:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 301
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 18:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 311
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 19:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 321
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Wall Generator 20:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 331
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Wall Generator 1:
+    controllerIp: ''
+    dmxUniverse: 3
+    dmxAddress: 341
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Wall Generator 2:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 1
+    controllerId: 55
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Wall Generator 3:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 120
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Wall Generator 4:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 239
+    controllerId: 255
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Wall Generator 5:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 358
+    controllerId: 0
+    sectionId: 6
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 1:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 477
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 2:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 487
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 3:
+    controllerIp: ''
+    dmxUniverse: 4
+    dmxAddress: 497
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 4:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 1
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 5:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 11
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 6:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 21
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 7:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 31
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 8:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 41
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Top Chimney Generator 9:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 51
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Deck Generator 1:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 61
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Deck Generator 2:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 94
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Deck Generator 3:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 127
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Front Deck Generator 4:
+    controllerIp: ''
+    dmxUniverse: 5
+    dmxAddress: 160
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0

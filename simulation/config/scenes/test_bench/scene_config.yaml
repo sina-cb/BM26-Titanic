@@ -1,10 +1,3 @@
-# BM26 Titanic — Scene Configuration
-# This file is the single source of truth for both scene state AND the GUI layout.
-# The UI is dynamically generated from this structure.
-# _section keys define GUI folders. Each control key carries UI metadata.
-# Order in this file = order in the GUI.
-
-# ─── Atmosphere ───────────────────────────────────────────────────────────
 titanicEnd:
   _section:
     label: 🧊 Icebergs
@@ -103,8 +96,6 @@ atmosphere:
       min: 0
       max: 1
       step: 0.01
-
-# ─── Model Transform ─────────────────────────────────────────────────────
 modelTransform:
   _section:
     label: 📦 Model Transform
@@ -151,8 +142,6 @@ modelTransform:
     max: 180
     step: 1
     listen: true
-
-# ─── Par Lights ───────────────────────────────────────────────────────────
 parLights:
   _section:
     label: 🔌 DMX Fixtures
@@ -162,72 +151,116 @@ parLights:
     value: true
     label: Master Enabled
   conesEnabled:
-    value: true
+    value: false
     label: Show Light Cones
   generatorsVisible:
     value: false
     label: Show Generators
   fixtures:
-    - group: Test Bench
-      name: Test Par 1
+    - group: ParLights
+      name: Par 1
       fixtureType: UkingPar
       color: '#ff8800'
-      intensity: 20
+      intensity: 5
       angle: 45
       penumbra: 0.5
-      x: -3
-      y: 2
+      x: -1.0890105517684692
+      'y': 2
       z: 0
       rotX: -40.000000000000014
       rotY: 180
       rotZ: 180
-      controllerIp: ''
-      dmxUniverse: 1
-      dmxAddress: 1
-      controllerId: 0
-      sectionId: 0
-      fixtureId: 0
-      viewMask: 0
-    - group: Test Bench
-      name: Test Par 2
+    - group: ParLights
+      name: Par 2
       fixtureType: UkingPar
       color: '#0088ff'
-      intensity: 20
+      intensity: 5
       angle: 45
       penumbra: 0.5
       x: 0
-      y: 2
+      'y': 2
       z: 0
-      rotX: -35.00000000000001
+      rotX: -46.372989398756104
       rotY: 180
       rotZ: 180
-      controllerIp: ''
-      dmxUniverse: 1
-      dmxAddress: 11
-      controllerId: 0
-      sectionId: 0
-      fixtureId: 0
-      viewMask: 0
-    - group: Test Bench
-      name: Test Par 3
+    - group: ParLights
+      name: Par 3
       fixtureType: UkingPar
       color: '#00ff44'
-      intensity: 20
+      intensity: 5
       angle: 45
       penumbra: 0.5
-      x: 3
-      y: 2
+      x: 1.0025327475429853
+      'y': 2
       z: 0
       rotX: -35.00000000000001
       rotY: 180
       rotZ: 180
-      controllerIp: ''
-      dmxUniverse: 1
-      dmxAddress: 21
-      controllerId: 0
-      sectionId: 0
-      fixtureId: 0
-      viewMask: 0
+    - group: VintageLights
+      name: VintageLed 1
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 3
+      angle: 45
+      penumbra: 0.5
+      x: -1.264292127555557
+      'y': 6.4658253570051105
+      z: 13.415243709274957
+      rotX: -60.00000000000002
+      rotY: -3.180554681463517e-14
+      rotZ: -89.99999999999997
+    - group: VintageLights
+      name: VintageLed 2
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 3
+      angle: 45
+      penumbra: 0.5
+      x: 1.486378387947728
+      'y': 6.459954334092961
+      z: 13.303172373725316
+      rotX: -55.000000000000014
+      rotY: -2.2180511470781005e-14
+      rotZ: -93.34726508362832
+    - group: ParLights
+      name: Par 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 45
+      penumbra: 0.5
+      x: 1.9850830333933924
+      'y': 1.9999999999999998
+      z: -4.849303195384386e-16
+      rotX: -40.00000000000001
+      rotY: 180
+      rotZ: 180
+    - group: BarLights
+      name: Bar Left
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: -0.5258852174470876
+      'y': 1.5
+      z: 2.5930785236102416
+      rotX: -28.689305421806182
+      rotY: 180
+      rotZ: 180
+    - group: BarLights
+      name: Bar Right
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 0.5856155112872738
+      'y': 1.5
+      z: 2.6363428092944865
+      rotX: -28.7820191576347
+      rotY: 180
+      rotZ: 3.8546015400728305e-15
 ledStrands:
   _section:
     label: 💡 LED Strands
@@ -246,7 +279,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: gradient
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -286,8 +319,6 @@ colorWave:
     min: 500
     max: 10000
     step: 500
-
-# ─── Configuration ────────────────────────────────────────────────────────
 config:
   _section:
     label: 💾 Configuration
@@ -297,19 +328,17 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -18.9723
-    y: 3.1402
-    z: 9.1907
+    x: -12.9135
+    'y': 6.5135
+    z: 27.558
   target:
-    x: 0
-    y: 1
-    z: 0
-
-# ─── Options ──────────────────────────────────────────────────────────────
+    x: 3.1065
+    'y': 4.6118
+    z: 1.9259
 options:
   _section:
     label: ⚙️ Options
-    collapsed: false
+    collapsed: true
   editMode:
     value: false
     label: 🛠️ Edit Mode (Flat Shading)
@@ -322,8 +351,8 @@ options:
     label: Show Light Fixtures
 _patternEditor:
   x: 0
-  y: 0
-  width: 0
-  height: 0
+  'y': 0
+  width: 400
+  height: 520
   collapsed: false
   autoRun: false
