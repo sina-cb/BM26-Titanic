@@ -51,6 +51,11 @@ export function rebuildParLights(force = false) {
       const fixtureDef = getDefinition(fixtureType);
 
       try {
+        const patchDef = (config.dmxUniverse && config.dmxAddress) ? {
+          universe: config.dmxUniverse,
+          addr: config.dmxAddress
+        } : null;
+
         fixture = new DmxFixtureRuntime(
           config,
           index,
@@ -58,8 +63,7 @@ export function rebuildParLights(force = false) {
           interactiveObjects,
           modelRadius,
           fixtureDef,
-          null, // patchDef — unpatched in legacy mode
-          !!params.liteMode,
+          patchDef,
         );
         window.parFixtures[index] = fixture;
       } catch (err) {
@@ -69,6 +73,10 @@ export function rebuildParLights(force = false) {
     } else {
       fixture.config = config;
       fixture.index = index;
+      fixture.patchDef = (config.dmxUniverse && config.dmxAddress) ? {
+        universe: config.dmxUniverse,
+        addr: config.dmxAddress
+      } : null;
       fixture.syncFromConfig();
     }
     
@@ -80,6 +88,8 @@ export function rebuildParLights(force = false) {
     if (idx >= window.parFixtures.length) invalidSelections.push(idx);
   }
   invalidSelections.forEach(idx => selectedFixtureIndices.delete(idx));
+
+  if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('fixtures rebuilt');
 }
 
 export function rebuildDmxFixtures(force = false) {
@@ -131,7 +141,6 @@ export function rebuildDmxFixtures(force = false) {
           modelRadius,
           fixtureDef,
           null,
-          !!params.liteMode,
         );
       }
       window.dmxSceneFixtures[index] = fixture;
@@ -149,6 +158,10 @@ export function rebuildDmxFixtures(force = false) {
     if (idx >= window.dmxSceneFixtures.length) invalidSelections.push(idx);
   }
   invalidSelections.forEach(idx => selectedDmxIndices.delete(idx));
+
+  if (window.invalidateMarsinBatchCache) {
+    window.invalidateMarsinBatchCache('rebuildDmxFixtures');
+  }
 }
 
 // Sync individual fixture from its config (called from GUI)

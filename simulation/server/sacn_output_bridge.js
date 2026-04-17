@@ -28,15 +28,14 @@ const yaml = require('js-yaml');
 // ── Config ───────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 let port = 6972;
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--port' && args[i + 1]) port = parseInt(args[i + 1], 10);
-}
+let udpPort = 5568;
 
-// Try to read port from server_config.yaml
+// Try to read port from config.yaml
 try {
-  const cfgPath = path.join(__dirname, 'config', 'server_config.yaml');
+  const cfgPath = path.join(__dirname, '..', 'config.yaml');
   const cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8'));
   if (cfg.sacn_output_port) port = cfg.sacn_output_port;
+  if (cfg.sacn_udp_port) udpPort = cfg.sacn_udp_port;
 } catch (_) { /* use default */ }
 
 const STALE_SENDER_MS = 15000; // Close senders after 15s of no data
@@ -52,7 +51,7 @@ function getSender(universe, ip) {
   if (!entry) {
     const sender = new Sender({
       universe,
-      port: 5568,
+      port: udpPort,
       reuseAddr: true,
       useUnicastDestination: ip,
       defaultPacketOptions: {
@@ -121,9 +120,7 @@ wss.on('connection', (ws, req) => {
     // Build sACN payload (1-indexed)
     const payload = {};
     for (let ch = 0; ch < 512; ch++) {
-      if (dmx[ch] !== 0) {
-        payload[ch + 1] = dmx[ch];
-      }
+      payload[ch + 1] = dmx[ch];
     }
 
     const sender = getSender(universe, ip);

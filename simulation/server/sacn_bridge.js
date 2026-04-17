@@ -23,11 +23,12 @@ const SIM_ROOT = path.join(__dirname, '..');
 // ── Scene selection via --scene <name> ─────────────────────────────────
 const sceneIdx = process.argv.indexOf('--scene');
 const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : 'titanic';
-const sceneConfigPath = path.join(SIM_ROOT, 'config', 'scenes', sceneName, 'scene_config.yaml');
+const sceneConfigPath = path.join(SIM_ROOT, 'scenes', sceneName, 'scene_config.yaml');
 
 // ── Read config ────────────────────────────────────────────────────────
-const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
+const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SACN_PORT = serverConfig.sacn_port || 6971;
+const SACN_UDP_PORT = serverConfig.sacn_udp_port || 5568;
 
 let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
 try {
@@ -49,8 +50,8 @@ try {
 }
 
 // ── Dependencies ───────────────────────────────────────────────────────
-let Receiver, WebSocketServer;
-try { ({ Receiver } = require('sacn')); } catch (e) {
+let Receiver, Sender, WebSocketServer;
+try { ({ Receiver, Sender } = require('sacn')); } catch (e) {
   console.error('[sACN Bridge] sacn package not installed. Run: npm install sacn');
   process.exit(1);
 }
@@ -59,6 +60,53 @@ try { WebSocketServer = require('ws').Server; } catch (e) {
   process.exit(1);
 }
 
+// ── Build Outward Network Map (Option B) ───────────────────────────────
+const outgoingSenders = new Map(); // universe -> Map<ip, Sender>
+
+function loadRoutesForScene(sName) {
+  // Clear old
+  for (const uMap of outgoingSenders.values()) {
+    for (const sender of uMap.values()) {
+      try { sender.close(); } catch(e){}
+    }
+  }
+  outgoingSenders.clear();
+
+  try {
+    const patchesYamlPath = path.join(SIM_ROOT, 'scenes', sName, 'patches.yaml');
+    if (fs.existsSync(patchesYamlPath)) {
+      const pConf = yaml.load(fs.readFileSync(patchesYamlPath, 'utf8'));
+      if (pConf && pConf.patches) {
+        let routeCount = 0;
+        for (const patch of Object.values(pConf.patches)) {
+          const u = patch.dmxUniverse;
+          const ip = patch.controllerIp;
+          if (u > 0 && ip && ip !== '127.0.0.1' && ip !== '0.0.0.0' && ip.toLowerCase() !== 'localhost') {
+             if (!outgoingSenders.has(u)) outgoingSenders.set(u, new Map());
+             const uMap = outgoingSenders.get(u);
+             if (!uMap.has(ip)) {
+               uMap.set(ip, new Sender({ 
+                 universe: u, 
+                 useUnicastDestination: ip,
+                 reuseAddr: true,
+                 port: SACN_UDP_PORT
+               }));
+               console.log(`[sACN Bridge] Route Created: Universe ${u} -> Unicast ${ip}`);
+               routeCount++;
+             }
+          }
+        }
+        console.log(`[sACN Bridge] Loaded ${routeCount} route(s) for scene: ${sName}`);
+      }
+    }
+  } catch(e) {
+    console.warn('[sACN Bridge] Could not parse patches.yaml for routing:', e.message);
+  }
+}
+
+// Load initial routes
+loadRoutesForScene(sceneName);
+
 // ── WebSocket Server ───────────────────────────────────────────────────
 const wss = new WebSocketServer({ port: SACN_PORT });
 let clientCount = 0;
@@ -66,12 +114,23 @@ let clientCount = 0;
 wss.on('connection', (ws) => {
   clientCount++;
   broadcastLog(`Browser connected (${clientCount} client(s))`, 'source');
+  
+  ws.on('message', (msg) => {
+    try {
+      const data = JSON.parse(msg);
+      if (data.type === 'setScene' && data.scene) {
+        console.log(`[sACN Bridge] Browser requested route switch to scene: ${data.scene}`);
+        loadRoutesForScene(data.scene);
+      }
+    } catch(e) {}
+  });
+
   ws.on('close', () => { clientCount--; broadcastLog(`Browser disconnected (${clientCount} client(s))`, 'warn'); });
   ws.on('error', (err) => console.error('[sACN Bridge] WS error:', err.message));
 });
 
 // ── sACN Receiver ──────────────────────────────────────────────────────
-const receiver = new Receiver({ universes: sacnOpts.universes, reuseAddr: true });
+const receiver = new Receiver({ universes: sacnOpts.universes, port: SACN_UDP_PORT, reuseAddr: true });
 
 const LOCKOUT_MS = sacnOpts.lockoutMs;
 const HIGH_PRIORITY = sacnOpts.highPriorityThreshold;
@@ -101,7 +160,7 @@ receiver.on('packet', (packet) => {
       highPriorityActive = false;
       activeSource = null;
     }, LOCKOUT_MS);
-    broadcastFrame(universe, priority, packet.payload);
+    routeFrame(universe, priority, packet.payload);
   } else {
     if (!highPriorityActive) {
       if (activeSource !== sourceKey) {
@@ -109,7 +168,7 @@ receiver.on('packet', (packet) => {
         broadcastLog(msg, 'source');
         activeSource = sourceKey;
       }
-      broadcastFrame(universe, priority, packet.payload);
+      routeFrame(universe, priority, packet.payload);
     }
   }
 
@@ -137,7 +196,17 @@ function broadcastLog(msg, type) {
   });
 }
 
-function broadcastFrame(universe, priority, payload) {
+function routeFrame(universe, priority, payload) {
+  // 1. Relay to physical sACN devices directly
+  const ipTargets = outgoingSenders.get(universe);
+  if (ipTargets) {
+    for (const sender of ipTargets.values()) {
+      sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
+            .catch(err => console.error(`[sACN Bridge] Relay Error: ${err.message}`));
+    }
+  }
+
+  // 2. Broadcast to Browser WebSocket clients
   if (wss.clients.size === 0) return;
   const dmx = new Uint8Array(512);
   if (payload) {

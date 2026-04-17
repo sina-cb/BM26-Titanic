@@ -18,6 +18,7 @@ import {
 } from "../core/state.js";
 import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
+import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
@@ -119,147 +120,7 @@ function setupGUI() {
   }
 
   function saveModelJS() {
-    const pixels = [];
-
-    // Par lights → one pixel each
-    if (params.parLights) {
-      params.parLights.forEach((light, i) => {
-        pixels.push({
-          type: 'par',
-          name: light.name || `Par ${i + 1}`,
-          group: light.group || '',
-          x: +(light.x || 0),
-          y: +(light.y || 0),
-          z: +(light.z || 0),
-        });
-      });
-    }
-
-    // DMX Fixtures → iterate actual physical pixels for mapping
-    if (params.dmxFixtures) {
-      params.dmxFixtures.forEach((light, i) => {
-        const fixture = window.dmxSceneFixtures ? window.dmxSceneFixtures[i] : null;
-        if (fixture && fixture.pixels && fixture.pixels.length > 0) {
-          fixture.pixels.forEach((px, j) => {
-            const worldPos = new THREE.Vector3();
-            if (px.dots) px.dots.getWorldPosition(worldPos);
-            else worldPos.set(light.x || 0, light.y || 0, light.z || 0);
-
-            pixels.push({
-              type: 'dmx',
-              name: light.name ? `${light.name} (Ch ${j + 1})` : `DMX ${i + 1} (Ch ${j + 1})`,
-              group: light.group || '',
-              x: +(worldPos.x).toFixed(3),
-              y: +(worldPos.y).toFixed(3),
-              z: +(worldPos.z).toFixed(3),
-            });
-          });
-        } else {
-          pixels.push({
-            type: 'dmx',
-            name: light.name || `DMX ${i + 1}`,
-            group: light.group || '',
-            x: +(light.x || 0),
-            y: +(light.y || 0),
-            z: +(light.z || 0),
-          });
-        }
-      });
-    }
-
-    // LED strands → one pixel per LED
-    if (params.ledStrands) {
-      params.ledStrands.forEach((strand) => {
-        const count = strand.ledCount || 10;
-        const sx = +(strand.startX || 0), sy = +(strand.startY || 0), sz = +(strand.startZ || 0);
-        const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
-        for (let j = 0; j < count; j++) {
-          const t = count > 1 ? j / (count - 1) : 0.5;
-          pixels.push({
-            type: 'led',
-            name: strand.name || 'Strand',
-            group: strand.name || '',
-            x: +(sx + (ex - sx) * t).toFixed(3),
-            y: +(sy + (ey - sy) * t).toFixed(3),
-            z: +(sz + (ez - sz) * t).toFixed(3),
-          });
-        }
-      });
-    }
-
-    // Iceberg LEDs
-    if (params.icebergs) {
-      params.icebergs.forEach((berg) => {
-        pixels.push({
-          type: 'iceberg',
-          name: berg.name || 'Iceberg',
-          group: berg.name || '',
-          x: +(berg.x || 0),
-          y: +(berg.y || 0),
-          z: +(berg.z || 0),
-        });
-      });
-    }
-
-    // Compute bounding box for normalization
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    pixels.forEach(p => {
-      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-      if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
-    });
-    const rangeX = maxX - minX || 1;
-    const rangeY = maxY - minY || 1;
-    const rangeZ = maxZ - minZ || 1;
-
-    // ── Auto-pack DMX patches (sequential addressing) ──
-    // Footprint: par=10ch, led=3ch, iceberg=3ch
-    let patchUniverse = 1;
-    let patchAddr = 1;
-    pixels.forEach(p => {
-      const footprint = (p.type === 'par') ? 10 : 3;
-      if (patchAddr + footprint - 1 > 512) {
-        patchUniverse++;
-        patchAddr = 1;
-      }
-      p.patch = { universe: patchUniverse, addr: patchAddr, footprint };
-      p.channels = 3; // RGB output for v1
-      patchAddr += footprint;
-    });
-
-    // Build JS source
-    const lines = [
-      '// Auto-generated Pixelblaze model — do not edit manually',
-      '// Updated: ' + new Date().toISOString(),
-      '//',
-      '// Each pixel has: index, type, name, group, world coords (x,y,z),',
-      '// normalized coords (nx,ny,nz) in [0..1], and DMX patch info',
-      '',
-      'export const pixelCount = ' + pixels.length + ';',
-      '',
-      'export const pixels = [',
-    ];
-
-    pixels.forEach((p, i) => {
-      const nx = +((p.x - minX) / rangeX).toFixed(4);
-      const ny = +((p.y - minY) / rangeY).toFixed(4);
-      const nz = +((p.z - minZ) / rangeZ).toFixed(4);
-      const patchStr = `{ universe: ${p.patch.universe}, addr: ${p.patch.addr}, footprint: ${p.patch.footprint} }`;
-      lines.push(`  { i: ${i}, type: '${p.type}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${nx}, ny: ${ny}, nz: ${nz}, patch: ${patchStr}, channels: ${p.channels} },`);
-    });
-
-    lines.push('];');
-    lines.push('');
-
-    const modelJS = lines.join('\n');
-    const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
-    fetch(`http://localhost:6970/save-model${sceneParam}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: modelJS,
-    }).catch(err => console.warn('[PB] Failed to save model:', err));
+    exportModelJS();
   }
   window.saveModelJS = saveModelJS;
 
@@ -399,21 +260,18 @@ function setupGUI() {
     generatorsVisible: (v) => {
       if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
     },
-    liteMode: () => {
-      // Rebuild all fixtures — SpotLights are created/skipped based on liteMode
+    lightingProfile: (profile) => {
+      const isEditMode = profile === 'edit';
       if (window.rebuildParLights) window.rebuildParLights(true);
       if (window.rebuildDmxFixtures) window.rebuildDmxFixtures(true);
-    },
-    editMode: (isEditMode) => {
-      if (!model) return;
-      model.traverse((child) => {
-        if (child.isMesh)
-          child.material = isEditMode ? editMaterial : structureMaterial;
-      });
-      // Only toggle shadows on moon + tower floods, NOT par lights
+      if (model) {
+        model.traverse((child) => {
+          if (child.isMesh)
+            child.material = isEditMode ? editMaterial : structureMaterial;
+        });
+      }
       if (lights.moon) lights.moon.castShadow = !isEditMode;
       lights.towers.forEach((t) => { t.castShadow = !isEditMode; });
-      // Bloom toggle: set strength to 0 in edit mode
       if (_bp.strength) _bp.strength.value = isEditMode ? 0 : (params.bloomStrength || 0.35);
       scene.background = new THREE.Color(isEditMode ? 0xaaaaaa : 0x030310);
       scene.fog.density = isEditMode ? 0 : 0.0004;
@@ -2496,6 +2354,7 @@ function setupGUI() {
     let dmxListFolder = null;
     try {
       if (!params.dmxFixtures) params.dmxFixtures = [];
+      if (params.dmxEnabled === undefined) params.dmxEnabled = true;
       dmxFolder = parentFolder.addFolder(sectionConfig._section.label || '🔌 DMX Light Fixtures');
       if (!sectionConfig._section.collapsed) dmxFolder.open();
       
@@ -2586,15 +2445,25 @@ function setupGUI() {
           });
 
           const typeOptions = {};
+          // Include fixture definition registry types
+          const regTypes = listTypes ? listTypes() : [];
+          regTypes.forEach(t => { typeOptions[t] = t; });
           if (window.fixtureModels) {
             for (const [k, v] of Object.entries(window.fixtureModels)) {
               const friendlyName = v.name || k;
               typeOptions[friendlyName] = k;
             }
           }
+          const currentVal = config.type || config.fixtureType;
+          if (currentVal && !Object.values(typeOptions).includes(currentVal)) {
+            typeOptions[currentVal] = currentVal;
+          }
           if (Object.keys(typeOptions).length === 0) typeOptions['Default'] = 'VintageLed';
 
+          // map legacy fixtureType to type
+          if (!config.type && config.fixtureType) config.type = config.fixtureType;
           idxFolder.add(config, "type", typeOptions).name("Fixture Model").onChange((v) => {
+            config.fixtureType = v; // keep it synced
             pushUndo();
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             rebuildDmxFixtures();

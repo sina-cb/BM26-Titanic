@@ -14,28 +14,49 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import yaml from 'js-yaml';
 import { createWasmRuntime } from './lib/marsin_wasm_runtime.js';
-import { createDmxMapper } from './lib/dmx_mapper.js';
+import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
+import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function loadConfig() {
+  try {
+    const configPath = path.join(__dirname, 'config.yaml');
+    if (fs.existsSync(configPath)) {
+      return yaml.load(fs.readFileSync(configPath, 'utf8')) || {};
+    }
+  } catch (e) {
+    console.warn(`[Config] Failed to load config.yaml: ${e.message}`);
+  }
+  return {};
+}
+
 // ── CLI Argument Parser ───────────────────────────────────────────────────
 function parseArgs() {
   const args = process.argv.slice(2);
+  const config = loadConfig();
+  const cSacn = config.sacn || {};
+  const cEngine = config.engine || {};
+
   const opts = {
     pattern: null,
-    fps: 40,
-    priority: 100,
+    modelName: null,
+    fps: cEngine.fps || 40,
+    priority: cSacn.priority || 100,
     dryRun: false,
     list: false,
-    destination: '127.0.0.1',
+    destination: cSacn.destination || '127.0.0.1',
+    sourceName: cSacn.sourceName || 'MarsinEngine',
   };
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--pattern': case '-p':  opts.pattern = args[++i]; break;
+      case '--model': case '-m':    opts.modelName = args[++i]; break;
       case '--fps':                 opts.fps = parseInt(args[++i], 10) || 40; break;
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
       case '--dry-run':             opts.dryRun = true; break;
@@ -46,10 +67,11 @@ function parseArgs() {
   MarsinEngine — Multichannel Pixelblaze Rendering Engine
 
   Usage:
-    node engine.js --pattern <name> [options]
+    node engine.js --pattern <name> --model <name> [options]
 
   Options:
     --pattern, -p <name>   Pattern to render (required)
+    --model, -m <name>     Model file to load (required)
     --fps <n>              Target framerate (default: 40)
     --priority <n>         sACN priority (default: 100)
     --dry-run              Load and compile only, no sACN output
@@ -81,8 +103,8 @@ function loadPattern(name) {
 }
 
 // ── Model Loader ──────────────────────────────────────────────────────────
-async function loadModel() {
-  const modelPath = path.join(__dirname, 'models', 'model.js');
+async function loadModel(modelName) {
+  const modelPath = path.join(__dirname, 'models', `${modelName}.js`);
   if (!fs.existsSync(modelPath)) {
     throw new Error(`Model not found: ${modelPath}\nRun the simulation and save the model first.`);
   }
@@ -93,7 +115,7 @@ async function loadModel() {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(runtime, pixels, mapper, sacnOut, fps) {
+function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -101,7 +123,11 @@ function createRenderLoop(runtime, pixels, mapper, sacnOut, fps) {
   let startTime = 0;
   let lastStatsTime = 0;
   const intervalMs = Math.round(1000 / fps);
-  const pixelCount = pixels.length;
+  const pixelCount = model.pixels.length;
+
+  // We need metadata arrays for 6ch WASM call
+  // We can just construct them lazily the first time or pass 0 for null (if memory isn't used)
+  const metaBuf = null;
 
   function tick() {
     if (!running) return;
@@ -111,22 +137,33 @@ function createRenderLoop(runtime, pixels, mapper, sacnOut, fps) {
 
     // Render all pixels in one WASM call (batch)
     runtime.beginFrame(elapsed);
-    const rgbBuf = runtime.renderAll();
 
-    // Convert flat RGB buffer to color objects for DMX mapper
-    const colors = new Array(pixelCount);
+    // Call 6-channel function. 
+    // Wait, the runtime needs metaPtr? We can just pass 0 if none.
+    // In marsin_wasm_runtime.js, renderAll6ch() allocates internally if coords are set!
+    const outBuf = runtime.renderAll6ch();
+
+    // Reattach results directly onto model pixels so they have `.r`, `.g`, etc for sacn_mapper
     for (let i = 0; i < pixelCount; i++) {
-      colors[i] = {
-        r: rgbBuf[i * 3],
-        g: rgbBuf[i * 3 + 1],
-        b: rgbBuf[i * 3 + 2],
-      };
+      const off = i * 6;
+      model.pixels[i].r = outBuf[off] / 255;
+      model.pixels[i].g = outBuf[off + 1] / 255;
+      model.pixels[i].b = outBuf[off + 2] / 255;
+      model.pixels[i].w = outBuf[off + 3] / 255;
+      model.pixels[i].a = outBuf[off + 4] / 255;
+      model.pixels[i].u = outBuf[off + 5] / 255;
     }
 
-    // Map to DMX
-    const dmxBuffers = mapper.mapFrame(colors);
+    // Map to DMX (writes directly into dmxRouter's _read buffer via getFullFrame)
+    mapPixelsToSacn(model.pixels, dmxRouter);
 
-    // Send sACN
+    // Send sACN using the _read buffer
+    const dmxBuffers = {};
+    for (const u of universeIds) {
+      const frame = dmxRouter.getFullFrame(u);
+      if (frame) dmxBuffers[u] = frame;
+    }
+
     sacnOut.sendFrame(dmxBuffers);
 
     frameCount++;
@@ -137,7 +174,11 @@ function createRenderLoop(runtime, pixels, mapper, sacnOut, fps) {
       const windowSec = (now - lastStatsTime) / 1000;
       const windowFps = Math.round(windowFrames / windowSec);
       const renderMs = (performance.now() - now).toFixed(1);
-      process.stdout.write(`\r  ⚡ ${frameCount} frames, ${windowFps} fps, ${renderMs}ms/frame, ${mapper.patchedPixelCount} pixels`);
+      
+      let patchedCount = 0;
+      for (const px of model.pixels) if (px.patch && px.patch.universe) patchedCount++;
+
+      process.stdout.write(`\r  ⚡ ${frameCount} frames, ${windowFps} fps, ${renderMs}ms/frame, ${patchedCount} pixels`);
       lastStatsTime = now;
       windowFrames = 0;
     }
@@ -187,11 +228,16 @@ async function main() {
     process.exit(1);
   }
 
+  if (!opts.modelName) {
+    console.error('  ❌ No model specified. Use --model <name>');
+    process.exit(1);
+  }
+
   // 1. Load model
   console.log('  Loading model...');
   let model;
   try {
-    model = await loadModel();
+    model = await loadModel(opts.modelName);
     console.log(`  ✅ Model loaded: ${model.pixelCount} pixels`);
   } catch (err) {
     console.error(`  ❌ ${err.message}`);
@@ -231,11 +277,22 @@ async function main() {
   // Set pixel coordinates for batch rendering
   runtime.setCoords(model.pixels);
 
-  // 4. Create DMX mapper
-  const mapper = createDmxMapper(model.pixels);
-  console.log(`  ✅ DMX mapper: ${mapper.patchedPixelCount}/${mapper.totalPixelCount} pixels patched across ${mapper.universeIds.length} universe(s) [${mapper.universeIds.join(', ')}]`);
+  // 4. Create global DMX mapper (reusing simulation architecture!)
+  const dmxRouter = new UniverseRouter('highest_priority_source_lock');
+  const universeIds = [];
+  let patchedPixelCount = 0;
+  for (const px of model.pixels) {
+    if (px.patch && px.patch.universe) {
+      if (!universeIds.includes(px.patch.universe)) {
+        universeIds.push(px.patch.universe);
+        dmxRouter.addUniverse(px.patch.universe);
+      }
+      patchedPixelCount++;
+    }
+  }
+  console.log(`  ✅ Shared DMX mapper: ${patchedPixelCount}/${model.pixelCount} pixels patched across ${universeIds.length} universe(s) [${universeIds.join(', ')}]`);
 
-  if (mapper.patchedPixelCount === 0) {
+  if (patchedPixelCount === 0) {
     console.warn('  ⚠️  No patched pixels found in model. Running in render-only mode.');
     console.warn('     Re-export the model from the simulation after adding DMX patches.');
   }
@@ -243,25 +300,34 @@ async function main() {
   // 5. Dry run check
   if (opts.dryRun) {
     console.log('\n  🏁 Dry run complete. Pattern loads and compiles OK.\n');
-    // Quick render test
     runtime.beginFrame(0);
-    const testColor = runtime.renderPixel(0, 0, 0, 0);
-    console.log(`  Test render pixel 0: RGB(${testColor.r}, ${testColor.g}, ${testColor.b})\n`);
-    runtime.destroy();
+    const rgbBuf = runtime.renderAll6ch();
+    console.log(`  Test render pixel 0: RGBWAU(${rgbBuf[0]}, ${rgbBuf[1]}, ${rgbBuf[2]}, ${rgbBuf[3]}, ${rgbBuf[4]}, ${rgbBuf[5]})`);
+    for (let i = 0; i < model.pixels.length; i++) {
+        const off = i * 6;
+        model.pixels[i].r = rgbBuf[off] / 255;
+        model.pixels[i].g = rgbBuf[off + 1] / 255;
+        model.pixels[i].b = rgbBuf[off + 2] / 255;
+        model.pixels[i].w = rgbBuf[off + 3] / 255;
+        model.pixels[i].a = rgbBuf[off + 4] / 255;
+        model.pixels[i].u = rgbBuf[off + 5] / 255;
+    }
+    mapPixelsToSacn(model.pixels, dmxRouter);
     process.exit(0);
   }
 
   // 6. Create sACN output
   const sacnOut = createSacnOutput({
-    universes: mapper.universeIds,
+    universes: universeIds,
     priority: opts.priority,
     destination: opts.destination,
+    sourceName: opts.sourceName,
   });
   sacnOut.start();
 
   // 7. Start render loop
-  const loop = createRenderLoop(runtime, model.pixels, mapper, sacnOut, opts.fps);
-  console.log(`\n  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${mapper.universeIds.join(', ')}] (WASM MarsinVM)\n`);
+  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps);
+  console.log(`\n  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
   loop.start();
 
   // 8. Graceful shutdown
@@ -270,8 +336,21 @@ async function main() {
     loop.stop();
 
     // Send blackout frame
-    const blackColors = model.pixels.map(() => ({ r: 0, g: 0, b: 0 }));
-    const blackBuffers = mapper.mapFrame(blackColors);
+    for (let i = 0; i < model.pixels.length; i++) {
+        model.pixels[i].r = 0;
+        model.pixels[i].g = 0;
+        model.pixels[i].b = 0;
+        model.pixels[i].w = 0;
+        model.pixels[i].a = 0;
+        model.pixels[i].u = 0;
+    }
+    mapPixelsToSacn(model.pixels, dmxRouter);
+
+    const blackBuffers = {};
+    for (const u of universeIds) {
+      blackBuffers[u] = dmxRouter.getFullFrame(u);
+    }
+
     sacnOut.sendFrame(blackBuffers).then(() => {
       sacnOut.stop();
       runtime.destroy();

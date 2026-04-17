@@ -8,6 +8,8 @@ import {
   lightingEnabled, lightingMode, engineReady, engineEnabled,
 } from "./state.js";
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
+import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
+import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 
 // sACN output — lazily initialized
 let sacnOutputClient = null;
@@ -46,90 +48,14 @@ import * as THREE from "three";
 /** Rebuild the ordered render list, coordinate buffer, and metadata buffer. */
 function _rebuildBatchCache() {
   try {
-  const list = [];
-
-  // Helper to clamp metadata to uint16 range
-  const clamp16 = (v) => Math.max(0, Math.min(65535, v | 0));
-
-  // ─── Par Fixtures (first) ──────────────────────────────────
-  if (window.parFixtures) {
-    const _worldPos = new THREE.Vector3();
-    for (const fixture of window.parFixtures) {
-      if (!fixture) continue;
-      const cfg = fixture.config || {};
-      const cId = clamp16(cfg.controllerId || 0);
-      const sId = clamp16(cfg.sectionId || 0);
-      const fId = clamp16(cfg.fixtureId || 0);
-      const vMask = clamp16(cfg.viewMask || 0);
-
-      if (fixture.pixels && fixture.pixels.length > 0) {
-        // Multi-pixel fixture — one entry per physical pixel
-        // Need the group's world matrix for localPos → worldPos
-        fixture.group.updateMatrixWorld(true);
-        for (let p = 0; p < fixture.pixels.length; p++) {
-          const px = fixture.pixels[p];
-          // localPos is in group-local space; transform to world
-          if (px.localPos) {
-            _worldPos.copy(px.localPos).applyMatrix4(fixture.group.matrixWorld);
-          } else {
-            fixture.group.getWorldPosition(_worldPos);
-          }
-          const localP = p; // capture for closure
-          list.push({
-            wx: _worldPos.x, wy: _worldPos.y, wz: _worldPos.z,
-            cId, sId, fId, vMask,
-            apply: (r, g, b) => fixture.setPixelColorRGB(localP, r, g, b),
-          });
-        }
-      } else if (fixture.light) {
-        // Simple fixture — one entry for the bulb
-        if (fixture.group) {
-          fixture.group.getWorldPosition(_worldPos);
-        } else {
-          _worldPos.set(cfg.x || 0, cfg.y || 0, cfg.z || 0);
-        }
-        list.push({
-          wx: _worldPos.x, wy: _worldPos.y, wz: _worldPos.z,
-          cId, sId, fId, vMask,
-          apply: (r, g, b) => {
-            fixture.light.color.setRGB(r, g, b);
-            if (fixture.beam && fixture.beam.material) {
-              fixture.beam.material.color.setRGB(r, g, b);
-            }
-            if (fixture.setBulbColor) fixture.setBulbColor(r, g, b);
-          },
-        });
-      }
-    }
-  }
-
-  // ─── LED Strands (second) ──────────────────────────────────
-  if (window.ledStrandFixtures) {
-    for (const fixture of window.ledStrandFixtures) {
-      const cfg = fixture.config || {};
-      const count = cfg.ledCount || 10;
-      const cId = clamp16(cfg.controllerId || 0);
-      const sId = clamp16(cfg.sectionId || 0);
-      const fId = clamp16(cfg.fixtureId || 0);
-      const vMask = clamp16(cfg.viewMask || 0);
-
-      const sx = cfg.startX || 0, sy = cfg.startY || 0, sz = cfg.startZ || 0;
-      const ex = cfg.endX || 0, ey = cfg.endY || 0, ez = cfg.endZ || 0;
-
-      for (let led = 0; led < count; led++) {
-        const t = count > 1 ? led / (count - 1) : 0.5;
-        const localLed = led; // capture for closure
-        const strandFixture = fixture; // capture for closure
-        list.push({
-          wx: sx + (ex - sx) * t,
-          wy: sy + (ey - sy) * t,
-          wz: sz + (ez - sz) * t,
-          cId, sId, fId, vMask,
-          apply: (r, g, b) => strandFixture.setLedColorRGB(localLed, r, g, b),
-        });
-      }
-    }
-  }
+    const pixels = generatePixelMap();
+    const list = [];
+    pixels.forEach(px => {
+       list.push({
+         ...px,
+         wx: px.x, wy: px.y, wz: px.z // keep w coordinates for backward compatibility in interpolation
+       }); // Clone the pixel directly, including the bound `apply` function and patch maps
+    });
 
   // ─── Normalize coordinates to [0,1] ────────────────────────
   const n = list.length;
@@ -191,35 +117,29 @@ export function animate() {
   }
 
   // ─── Gradient Mode (chroma.js LAB interpolation) ───
-  if (lightingEnabled && lightingMode === 'gradient' && window.parFixtures && window.parFixtures.length > 0) {
+  if (lightingEnabled && lightingMode === 'gradient' && params.lightingProfile !== 'edit') {
     const scale = getChromaScale();
     const speed = (params.waveSpeed || 0.3) * 0.001;
     const t = now * speed;
-    const count = window.parFixtures.length;
-    for (let i = 0; i < count; i++) {
-      const fixture = window.parFixtures[i];
-      if (!fixture) continue;
-      const phase = ((i / count) + t) % 1.0;
-      const [r, g, b] = scale(phase).gl();
-
-      if (fixture.pixels && fixture.pixels.length > 0) {
-        for (let p = 0; p < fixture.pixels.length; p++) {
-          const subPhase = ((i / count) + (p / fixture.pixels.length) * 0.3 + t) % 1.0;
-          const [sr, sg, sb] = scale(subPhase).gl();
-          fixture.setPixelColorRGB(p, sr, sg, sb);
-        }
-      } else if (fixture.light) {
-        fixture.light.color.setRGB(r, g, b);
-        if (fixture.beam && fixture.beam.material) {
-          fixture.beam.material.color.setRGB(r, g, b);
-        }
-        if (fixture.setBulbColor) fixture.setBulbColor(r, g, b);
+    
+    // Ensure batch cache is fresh so we can map gradient to the unified _batchRenderList
+    if (_batchCacheVersion !== _batchLastBuiltVersion) _rebuildBatchCache();
+    
+    if (_batchRenderList && _batchRenderList.length > 0) {
+      const count = _batchRenderList.length;
+      for (let i = 0; i < count; i++) {
+         const entry = _batchRenderList[i];
+         const phase = ((entry.nx || 0) + (entry.ny || 0) + t) % 1.0;
+         const [r, g, b] = scale(phase).gl();
+         entry.r = r; entry.g = g; entry.b = b;
+         entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
+         if (entry.apply) entry.apply(r, g, b);
       }
     }
   }
 
   // ─── Pixelblaze Pattern Engine (Metadata-Aware Batch Pipeline) ───
-  if (engineReady && engineEnabled) {
+  if (engineReady && engineEnabled && params.lightingProfile !== 'edit') {
     const elapsed = now * 0.001;
     const patternEngine = window.patternEngine;
     patternEngine.beginFrame(elapsed);
@@ -242,106 +162,81 @@ export function animate() {
         const R = result[off], G = result[off + 1], B = result[off + 2];
         const W = result[off + 3], A = result[off + 4], U = result[off + 5];
 
-        // RGBWAU → RGB blend (preserved from legacy per-pixel path)
-        const rn = Math.min(1, (R + W * 0.8 + A * 0.9 + U * 0.4) / 255);
-        const gn = Math.min(1, (G + W * 0.8 + A * 0.6) / 255);
-        const bn = Math.min(1, (B + W * 0.8 + U * 0.7) / 255);
+        // Capture raw colors logically for sACN mapping
+        entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
+        entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
 
-        entry.apply(rn, gn, bn);
+        // RGBWAU → RGB blend for 3D visual preview
+        const rn = Math.min(1, entry.r + entry.w * 0.8 + entry.a * 0.9 + entry.u * 0.4);
+        const gn = Math.min(1, entry.g + entry.w * 0.8 + entry.a * 0.6);
+        const bn = Math.min(1, entry.b + entry.w * 0.8 + entry.u * 0.7);
+
+
+        if (entry.apply) entry.apply(rn, gn, bn);
       }
     }
   }
 
   // ─── DMX Router: merge sources and apply to fixtures ───
-  if (window.dmxRouter) {
-    window.dmxRouter.processFrame();
-
-    // Apply DMX frames to patched fixtures (DmxFixtureRuntime objects)
-    if (window.parFixtures) {
-      for (const fixture of window.parFixtures) {
-        if (fixture && fixture.patchDef && fixture.fixtureDef) {
-          const slice = window.dmxRouter.getSlice(
-            fixture.patchDef.universe,
-            fixture.patchDef.addr,
-            fixture.fixtureDef.totalChannels || 10
-          );
-          if (slice) fixture.applyDmxFrame(slice);
-        }
-      }
+  if (window.dmxRouter && params.lightingProfile !== 'edit') {
+    if (_batchCacheVersion !== _batchLastBuiltVersion) {
+      _rebuildBatchCache();
     }
-
-    // ─── sACN Direct Apply (for legacy ParLight fixtures without patchDef) ───
-    // Uses same sequential auto-pack layout as MarsinEngine:
-    //   pars: 10ch each (dimmer, strobe, R, G, B, W, A, U, func, speed)
-    //   LEDs: 3ch each (R, G, B)
-    if (lightingMode === 'sacn_in' && window.parFixtures) {
-      let patchUniverse = 1;
-      let patchAddr = 1;
-
-      for (const fixture of window.parFixtures) {
-        if (!fixture) { patchAddr += 10; if (patchAddr > 502) { patchUniverse++; patchAddr = 1; } continue; }
-        if (fixture.patchDef) continue; // skip already-patched runtime fixtures
-
-        const footprint = 10; // all par fixtures are 10ch
-        if (patchAddr + footprint - 1 > 512) { patchUniverse++; patchAddr = 1; }
-
-        const slice = window.dmxRouter.getSlice(patchUniverse, patchAddr, footprint);
-        if (slice && (slice[2] || slice[3] || slice[4])) {
-          // Read RGB from channels 3-5 (offset 2-4 in the slice, 0-indexed)
-          const rn = slice[2] / 255;
-          const gn = slice[3] / 255;
-          const bn = slice[4] / 255;
-
-          if (fixture.pixels && fixture.pixels.length > 0) {
-            for (let p = 0; p < fixture.pixels.length; p++) {
-              fixture.setPixelColorRGB(p, rn, gn, bn);
-            }
-          } else if (fixture.light) {
-            fixture.light.color.setRGB(rn, gn, bn);
-            if (fixture.beam && fixture.beam.material) {
-              fixture.beam.material.color.setRGB(rn, gn, bn);
-            }
-            if (fixture.setBulbColor) fixture.setBulbColor(rn, gn, bn);
-          }
-        }
-        patchAddr += footprint;
-      }
-
-      // LED Strands
-      if (window.ledStrandFixtures) {
-        for (const fixture of window.ledStrandFixtures) {
-          const count = fixture.config.ledCount || 10;
-          const children = fixture.group.children;
-          const ledStartIdx = 2;
-          for (let led = 0; led < count; led++) {
-            const footprint = 3;
-            if (patchAddr + footprint - 1 > 512) { patchUniverse++; patchAddr = 1; }
-
-            const slice = window.dmxRouter.getSlice(patchUniverse, patchAddr, footprint);
-            if (slice) {
-              const rn = slice[0] / 255;
-              const gn = slice[1] / 255;
-              const bn = slice[2] / 255;
-
-              const baseIdx = ledStartIdx + led * 3;
-              const bulb = children[baseIdx + 1];
-              const halo = children[baseIdx + 2];
-              if (bulb && bulb.material) {
-                bulb.material.color.setRGB(rn, gn, bn);
-              }
-              if (halo && halo.material) {
-                halo.material.color.setRGB(rn, gn, bn);
-              }
-            }
-            patchAddr += footprint;
-          }
-        }
-      }
+    
+    if (lightingMode === 'sacn_in') {
+       // Demap incoming DMX payload to 3D pixels natively
+       window.dmxRouter.processFrame(); // ensures unhandled receivers flush
+       demapSacnToPixels(_batchRenderList, window.dmxRouter);
+    } else {
+       // Map 3D Pixelblaze patterns into outgoing DMX frame chunks 
+       mapPixelsToSacn(_batchRenderList, window.dmxRouter);
     }
   }
 
+  // ─── sACN Blackout Trigger ───
+  if (!window.triggerSacnBlackout) {
+    window.triggerSacnBlackout = () => {
+      const btn = document.getElementById('sacn-out-blackout-btn');
+      if (window._sacnBlackoutActivated) {
+        console.log("[sACN] Resuming Output...");
+        window._sacnBlackoutActivated = false;
+        if (btn) {
+          btn.textContent = "BLACKOUT";
+          btn.style.background = "#800";
+          btn.style.color = "#fff";
+        }
+        // Let the animation loop re-enable it naturally
+      } else {
+        console.log("[sACN] Blackout Triggered!");
+        window._sacnBlackoutActivated = true;
+        if (btn) {
+          btn.textContent = "RESUME";
+          btn.style.background = "#080";
+          btn.style.color = "#fff";
+        }
+        if (sacnOutputClient && sacnOutputClient.connected) {
+          const outputGroups = new Map();
+          for (const config of params.parLights || []) {
+            if (!config) continue;
+            const u = config.dmxUniverse;
+            const ip = config.controllerIp;
+            if (u && ip && ip !== '0.0.0.0') {
+              outputGroups.set(`${u}:${ip}`, { universe: u, ip, priority: 100 });
+            }
+          }
+          const zeroBuffer = new Uint8Array(512);
+          for (const [, group] of outputGroups) {
+            sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, zeroBuffer);
+          }
+        }
+        sacnOutputEnabled = false;
+        if (sacnOutputClient) sacnOutputClient.disable();
+      }
+    };
+  }
+
   // ─── sACN Output: send DMX to real controllers via bridge ───
-  if (window.dmxRouter && params.parLights) {
+  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && params.lightingProfile !== 'edit') {
     // Lazily enable output client
     if (!sacnOutputEnabled) {
       sacnOutputClient = getSacnOutput();
@@ -350,9 +245,11 @@ export function animate() {
     }
 
     if (sacnOutputClient && sacnOutputClient.connected) {
-      // Group fixtures by universe:controllerIp
+      // Group fixtures by universe:controllerIp using deduplicated Map
       const outputGroups = new Map(); // 'universe:ip' → { universe, ip, priority }
 
+      // We still need to extract which IPs own which universe.
+      // (This could be cached, but for now loop 1x per frame over parLights)
       for (const config of params.parLights) {
         if (!config) continue;
         const u = config.dmxUniverse;
@@ -366,7 +263,7 @@ export function animate() {
         }
       }
 
-      // For each unique universe:ip pair, send the full universe buffer
+      // For each unique universe:ip pair, send the full universe buffer exactly ONCE
       for (const [, group] of outputGroups) {
         const fullFrame = window.dmxRouter.getFullFrame(group.universe);
         if (fullFrame) {

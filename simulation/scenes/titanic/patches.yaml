@@ -1,696 +1,696 @@
 patches:
   Right Front Wall Generator 1:
     controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 1
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Wall Generator 2:
     controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 120
-    controllerId: 5
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Wall Generator 3:
     controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 239
-    controllerId: 8
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Wall Generator 4:
     controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 358
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Wall Generator 5:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 1
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 1:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 120
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 2:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 130
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 3:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 140
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 4:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 150
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 5:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 160
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 6:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 170
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 7:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 180
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 8:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 190
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Top Chimney Generator 9:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 200
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Deck Generator 1:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 210
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Deck Generator 2:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 243
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Deck Generator 3:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 276
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Front Deck Generator 4:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 309
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 1:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 342
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 2:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 352
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 3:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 362
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 4:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 372
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 5:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 382
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Center Auditorium Generator 6:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 392
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 1:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 402
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 2:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 412
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 3:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 422
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 4:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 432
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 5:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 442
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Center Auditorium 6:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 452
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 1:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 462
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 2:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 472
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 3:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 482
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 4:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 492
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 5:
     controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 502
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 6:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 1
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 7:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 11
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 8:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 21
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 9:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 31
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 10:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 41
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 11:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 51
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 12:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 61
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 13:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 71
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 14:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 81
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 15:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 91
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 16:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 101
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 17:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 111
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 18:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 121
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Back Wall 19:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 131
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 1:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 141
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 2:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 151
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 3:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 161
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 4:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 171
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 5:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 181
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 6:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 191
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 7:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 201
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 8:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 211
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 9:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 221
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 10:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 231
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 11:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 241
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 12:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 251
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 13:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 261
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 14:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 271
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 15:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 281
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 16:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 291
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 17:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 301
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 18:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 311
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 19:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 321
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Right Back Wall Generator 20:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 331
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Wall Generator 1:
     controllerIp: ''
-    dmxUniverse: 3
-    dmxAddress: 341
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Wall Generator 2:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 1
-    controllerId: 55
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Wall Generator 3:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 120
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Wall Generator 4:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 239
-    controllerId: 255
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Wall Generator 5:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 358
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
-    sectionId: 6
+    sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 1:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 477
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 2:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 487
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 3:
     controllerIp: ''
-    dmxUniverse: 4
-    dmxAddress: 497
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 4:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 1
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 5:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 11
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 6:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 21
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 7:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 31
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 8:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 41
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Top Chimney Generator 9:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 51
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Deck Generator 1:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 61
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Deck Generator 2:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 94
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Deck Generator 3:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 127
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0
     viewMask: 0
   Left Front Deck Generator 4:
     controllerIp: ''
-    dmxUniverse: 5
-    dmxAddress: 160
+    dmxUniverse: 0
+    dmxAddress: 0
     controllerId: 0
     sectionId: 0
     fixtureId: 0

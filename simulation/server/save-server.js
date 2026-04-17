@@ -6,7 +6,7 @@ const yaml = require('js-yaml');
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
-const SCENES_ROOT = path.join(SIM_ROOT, 'config', 'scenes');
+const SCENES_ROOT = path.join(SIM_ROOT, 'scenes');
 
 /**
  * Resolve scene-specific config path. If sceneName is omitted, defaults to 'titanic'.
@@ -21,8 +21,8 @@ function resolveSceneCamerasPath(sceneName) {
   return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
 }
 
-// Read port from server_config.yaml
-const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
+// Read port from config.yaml
+const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SAVE_PORT = serverConfig.save_port || 6970;
 
 http.createServer((req, res) => {
@@ -81,9 +81,26 @@ http.createServer((req, res) => {
           body = yaml.dump(configTree, { lineWidth: -1 });
         }
 
+        // Split configTree into common and scene configurations
+        const commonKeys = ['atmosphere', 'options', 'colorWave', 'config', '_camera', '_patternEditor'];
+        const commonConfig = {};
+        const sceneConfig = {};
+        for (let k in configTree) {
+          if (commonKeys.includes(k)) {
+            commonConfig[k] = configTree[k];
+          } else {
+            sceneConfig[k] = configTree[k];
+          }
+        }
+
+        // Write common.yaml
+        const commonPath = path.join(SCENES_ROOT, 'common.yaml');
+        fs.writeFileSync(commonPath, yaml.dump(commonConfig, { lineWidth: -1 }));
+
         // Write cleaned scene_config.yaml
-        fs.writeFileSync(outPath, body);
-        console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
+        fs.writeFileSync(outPath, yaml.dump(sceneConfig, { lineWidth: -1 }));
+        
+        console.log(`[SAVE SERVER] ✅ Wrote ${commonPath} and ${outPath}`);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -118,7 +135,7 @@ http.createServer((req, res) => {
         const { filename, stlData } = payload;
         if (!filename || !stlData) throw new Error('Missing filename or stlData');
         const safeName = filename.replace(/[^a-z0-9_.-]/gi, '_');
-        const outPath = path.join(SIM_ROOT, 'models', safeName);
+        const outPath = path.join(SIM_ROOT, 'assets', safeName);
         fs.writeFileSync(outPath, stlData);
         console.log(`[SAVE SERVER] Successfully wrote to ${outPath}`);
         res.end('Saved');
@@ -136,8 +153,8 @@ http.createServer((req, res) => {
         const { name, code } = JSON.parse(body);
         if (!name || typeof code !== 'string') throw new Error('Missing name or code');
         const safeName = name.replace(/[^a-z0-9_-]/gi, '_');
-        const outPath = path.join(SIM_ROOT, 'patterns', safeName + '.js');
-        fs.mkdirSync(path.join(SIM_ROOT, 'patterns'), { recursive: true });
+        const outPath = path.join(ENGINE_ROOT, 'patterns', safeName + '.js');
+        fs.mkdirSync(path.join(ENGINE_ROOT, 'patterns'), { recursive: true });
         fs.writeFileSync(outPath, code);
         console.log(`[SAVE SERVER] Saved pattern: ${outPath}`);
         res.end('Saved');
@@ -155,7 +172,7 @@ http.createServer((req, res) => {
         const { name } = JSON.parse(body);
         if (!name) throw new Error('Missing name');
         const safeName = name.replace(/[^a-z0-9_-]/gi, '_');
-        const filePath = path.join(SIM_ROOT, 'patterns', safeName + '.js');
+        const filePath = path.join(ENGINE_ROOT, 'patterns', safeName + '.js');
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
           console.log(`[SAVE SERVER] Deleted pattern: ${filePath}`);
@@ -185,17 +202,20 @@ http.createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
+        if (!sceneName) {
+          res.writeHead(400);
+          res.end('Missing scene parameter');
+          return;
+        }
         // Determine model filename based on active scene
-        const modelFilename = sceneName ? `${sceneName}.js` : 'model.js';
+        const modelFilename = `${sceneName}.js`;
         const outDir = path.join(ENGINE_ROOT, 'models');
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
         fs.writeFileSync(outPath, body);
-        // Also keep a copy in simulation for backward compat
-        const simModelDir = path.join(SIM_ROOT, 'patterns', 'model');
-        fs.mkdirSync(simModelDir, { recursive: true });
-        fs.writeFileSync(path.join(simModelDir, 'model.js'), body);
-        console.log(`[SAVE SERVER] Saved model: ${outPath} (${body.length} bytes)`);
+
+        console.log(`[Save] Wrote model data to ${outPath}`);
+        res.writeHead(200);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Model save error:`, e);

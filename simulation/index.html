@@ -147,9 +147,12 @@
           <div class="sacn-stat-row" title="Total DMX frames sent since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-out-st-frames">0</span></div>
           <div class="sacn-stat-row" title="Number of active sACN universes being pushed"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-out-st-universe">—</span></div>
         </div>
-        <div class="sacn-log-title" style="display:flex; justify-content:space-between;">
+        <div class="sacn-log-title" style="display:flex; justify-content:space-between; align-items:center;  margin-bottom: 5px;">
           <span>Activity Log</span>
-          <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-out-log').innerHTML=''">Clear</span>
+          <div>
+            <button id="sacn-out-blackout-btn" class="pe-btn" onclick="if(window.triggerSacnBlackout) window.triggerSacnBlackout()" style="background:#800; color:#fff; border:1px solid #f00; padding: 2px 6px; margin-right: 5px;" title="Send 0 to all Universes and Disable Output">BLACKOUT</button>
+            <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-out-log').innerHTML=''">Clear</span>
+          </div>
         </div>
         <div class="sacn-log" id="sacn-out-log"></div>
       </div>

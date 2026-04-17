@@ -3,3 +3,5 @@
 http_port: 6969       # Static file server
 save_port: 6970       # Save server (http_port + 1)
 sacn_port: 6971       # sACN WebSocket bridge (http_port + 2)
+sacn_output_port: 6972 # sACN Outbound Bridge
+sacn_udp_port: 5568   # Physical E1.31 UDP protocol port

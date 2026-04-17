@@ -34,7 +34,7 @@ const __dirname = path.dirname(__filename);
  */
 export async function createWasmRuntime(pixelCount) {
   // ── Load Emscripten module ──────────────────────────────────────────
-  const wasmDir = path.join(__dirname, 'wasm');
+  const wasmDir = path.resolve(__dirname, '../../marsin_pb/wasm');
   const modulePath = path.join(wasmDir, 'marsin-engine.cjs');
 
   // Use createRequire for CJS Emscripten module (import() doesn't work

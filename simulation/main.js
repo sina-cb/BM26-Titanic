@@ -36,14 +36,16 @@ import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.
 
 // ─── Init ───────────────────────────────────────────────────────────────
 async function init() {
-  // Renderer — WebGPU (auto-fallback to WebGL 2 if unsupported)
+  
   const renderer = new THREE.WebGPURenderer({
-    antialias: true,
+    
     powerPreference: "high-performance",
   });
   await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  
+  const prCap = Math.min(window.devicePixelRatio, 2);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, prCap));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.55;
   document.body.appendChild(renderer.domElement);
@@ -87,7 +89,11 @@ async function init() {
   const bloomRadiusU = uniform(0.3);
   const bloomThresholdU = uniform(0.92);
   const bloomEffect = bloom(scenePassColor, bloomStrengthU, bloomRadiusU, bloomThresholdU);
-  postProcessing.outputNode = scenePassColor.add(bloomEffect);
+  if (window.initialParams?.bloomEnabled !== false) {
+    postProcessing.outputNode = scenePassColor.add(bloomEffect);
+  } else {
+    postProcessing.outputNode = scenePassColor;
+  }
 
   // Store bloom controls for GUI access
   window._bloomParams = {
@@ -173,30 +179,49 @@ async function init() {
 }
 
 // ─── Scene Selection ────────────────────────────────────────────────────
-// URL param ?scene=<name> loads from config/scenes/<name>/scene_config.yaml
+// URL param ?scene=<name> loads from scenes/<name>/scene_config.yaml
 // Default (no param) loads titanic scene
 const _urlParams = new URLSearchParams(window.location.search);
 const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
-const _sceneConfigPath = `config/scenes/${_activeScene}/scene_config.yaml`;
-const _camerasPath = `config/scenes/${_activeScene}/cameras.yaml`;
-const _patchesPath = `config/scenes/${_activeScene}/patches.yaml`;
+const _sceneConfigPath = `scenes/${_activeScene}/scene_config.yaml`;
+const _commonConfigPath = `scenes/common.yaml`;
+const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
+const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}`);
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
   fetch(_sceneConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_commonConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
 
   // Load scene config
   try {
-    if (sceneYaml) {
-      window.initialParams = yaml.load(sceneYaml);
+    if (sceneYaml || commonYaml) {
+      const sceneObj = sceneYaml ? yaml.load(sceneYaml) : {};
+      const commonObj = commonYaml ? yaml.load(commonYaml) : {};
+      
+      const rawParams = { ...commonObj, ...sceneObj };
+      const explicitOrder = [
+        "titanicEnd", "icebergs", "atmosphere", "modelTransform", 
+        "dmxLights", "parLights", "ledStrands", 
+        "options", "colorWave", "config", "_camera", "_patternEditor"
+      ];
+      window.initialParams = {};
+      
+      // Preserve intended GUI execution ordering natively
+      for (const k of explicitOrder) {
+        if (rawParams[k] !== undefined) window.initialParams[k] = rawParams[k];
+      }
+      for (const k in rawParams) {
+        if (!explicitOrder.includes(k)) window.initialParams[k] = rawParams[k];
+      }
       
       // Stitch decoupled patch data back into the fixture tree
       if (patchesYaml && window.initialParams.parLights?.fixtures) {
@@ -313,16 +338,16 @@ function setupSceneIndicator() {
   const select = document.getElementById('scene-select');
   if (!select) return;
 
-  const active = window.__activeScene || 'default';
+  const active = window.__activeScene || 'titanic';
 
   // Add the active scene implicitly first to avoid empty dropdown while loading
-  select.innerHTML = `<option value="${active}" selected>${active}${active === 'default' ? ' (fallback)' : ''}</option>`;
+  select.innerHTML = `<option value="${active}" selected>${active}</option>`;
 
   // Fetch true list
   fetch('http://localhost:6970/list-scenes')
     .then(r => r.json())
     .then(scenes => {
-      let html = `<option value="">default (old config)</option>`;
+      let html = '';
       scenes.forEach(s => {
         const isSelected = s === active;
         html += `<option value="${s}" ${isSelected ? 'selected' : ''}>${s}</option>`;

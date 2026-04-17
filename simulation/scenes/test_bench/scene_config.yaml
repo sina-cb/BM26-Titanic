@@ -1,0 +1,211 @@
+titanicEnd:
+  _section:
+    label: 🧊 Icebergs
+    type: icebergArray
+    collapsed: true
+  icebergsEnabled:
+    value: false
+    label: Master Enabled
+  focusOnSelect:
+    value: false
+    label: Focus on Select
+  masterFloodEnabled:
+    value: false
+    label: Master Flood Enabled
+  masterFloodColor:
+    value: '#ffffff'
+    label: Master Flood Color
+    type: color
+  masterFloodIntensity:
+    value: 0
+    label: Master Flood Intensity
+    min: 0
+    max: 500
+    step: 1
+  masterFloodAngle:
+    value: 51
+    label: Master Flood Angle °
+    min: 10
+    max: 90
+    step: 1
+  masterFloodDimmer:
+    value: 0
+    label: Master Flood Dimmer %
+    min: 0
+    max: 250
+    step: 1
+  icebergs: []
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: 0
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 0
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 0
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: 0
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+parLights:
+  _section:
+    label: 🔌 DMX Fixtures
+    type: fixtureArray
+    collapsed: false
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  conesEnabled:
+    value: false
+    label: Show Light Cones
+  generatorsVisible:
+    value: false
+    label: Show Generators
+  fixtures:
+    - group: ParLights
+      name: Par 1
+      fixtureType: UkingPar
+      color: '#ff8800'
+      intensity: 5
+      angle: 45
+      penumbra: 0.5
+      x: 1.2402849287900335
+      'y': 1.994224639997228
+      z: 0
+      rotX: -34.99999999999999
+      rotY: 180
+      rotZ: 180
+    - group: ParLights
+      name: Par 2
+      fixtureType: UkingPar
+      color: '#0088ff'
+      intensity: 5
+      angle: 45
+      penumbra: 0.5
+      x: 0.891867068997521
+      'y': 2
+      z: 0
+      rotX: -46.372989398756104
+      rotY: 180
+      rotZ: 180
+    - group: ParLights
+      name: Par 3
+      fixtureType: UkingPar
+      color: '#00ff44'
+      intensity: 5
+      angle: 45
+      penumbra: 0.5
+      x: 0.20042143867423856
+      'y': 2
+      z: 0
+      rotX: -35.00000000000001
+      rotY: 180
+      rotZ: 180
+    - group: ParLights
+      name: Par 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 45
+      penumbra: 0.5
+      x: -0.1273980207751736
+      'y': 1.9999999999999998
+      z: -4.849303195384386e-16
+      rotX: -40.00000000000001
+      rotY: 180
+      rotZ: 180
+    - group: VintageLights
+      name: Vintage Left
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 3
+      angle: 45
+      penumbra: 0.5
+      x: -1.264292127555557
+      'y': 6.5
+      z: 13
+      rotX: -55.49100667673063
+      rotY: -0.21235543704564325
+      rotZ: -89.59376711011713
+    - group: VintageLights
+      name: Vintage Right
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 3
+      angle: 45
+      penumbra: 0.5
+      x: 1.486378387947728
+      'y': 6.459954334092961
+      z: 13
+      rotX: -55.000000000000014
+      rotY: -1.1090255735390504e-14
+      rotZ: -93.34726508362832
+    - group: BarLights
+      name: Bar Left
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 0.07203133767327397
+      'y': 1.5
+      z: 1
+      rotX: -34.99999999999999
+      rotY: 180
+      rotZ: 180
+    - group: BarLights
+      name: Bar Right
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 1.147796471297927
+      'y': 1.5
+      z: 1
+      rotX: -35
+      rotY: 180
+      rotZ: 180
+ledStrands:
+  _section:
+    label: 💡 LED Strands
+    type: ledStrandArray
+    collapsed: true
+  strandsEnabled:
+    value: true
+    label: Master Enabled
+  strands: []

@@ -7,14 +7,15 @@ import { params } from "./state.js";
 /**
  * Walk the YAML config tree and extract all { value: ... } entries into flat params.
  */
-export function extractParams(node) {
+export function extractParams(node, parentKey = null) {
   if (!node || typeof node !== "object") return;
   for (const key of Object.keys(node)) {
     if (key === "_section") continue;
 
     // Explicit array handling for fixtures
     if (key === "fixtures" && Array.isArray(node[key])) {
-      params.parLights = node[key];
+      if (parentKey === "dmxLights") params.dmxFixtures = node[key];
+      else params.parLights = node[key];
       continue;
     }
     if (key === "dmxLights" && Array.isArray(node[key])) {
@@ -25,7 +26,7 @@ export function extractParams(node) {
       params.traces = node[key];
       // Restore _traceGenerated flag on fixtures belonging to trace groups
       const traceGroupNames = new Set(params.traces.filter(t => t.generated).map(t => t.groupName || t.name));
-      params.parLights.forEach(light => {
+      (params.dmxFixtures || params.parLights || []).forEach(light => {
         if (traceGroupNames.has(light.group)) light._traceGenerated = true;
       });
       continue;
@@ -50,7 +51,7 @@ export function extractParams(node) {
         params[key] = entry.value;
       } else {
         // Recurse into sub-section
-        extractParams(entry);
+        extractParams(entry, key);
       }
     }
   }

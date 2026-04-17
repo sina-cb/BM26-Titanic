@@ -110,6 +110,7 @@ export class SacnOutputClient {
 
   _connect() {
     if (!this._enabled) return;
+    if (!this.wsUrl) return; // Guard for async config injection
     this._cleanup();
 
     try {
@@ -180,10 +181,29 @@ let _instance = null;
  */
 export function getSacnOutput(wsUrl) {
   if (!_instance) {
-    const host = window.location.hostname || 'localhost';
-    const url = wsUrl || `ws://${host}:6972`;
-    _instance = new SacnOutputClient(url);
+    _instance = new SacnOutputClient(wsUrl || null);
     window.sacnOutput = _instance; // Expose for console debugging
+
+    if (!wsUrl) {
+      const host = window.location.hostname || 'localhost';
+      fetch('/simulation/config.yaml')
+        .then((r) => r.text())
+        .then((txt) => {
+          const match = txt.match(/sacn_output_port:\s*(\d+)/);
+          const port = match ? match[1] : '6972';
+          _instance.wsUrl = `ws://${host}:${port}`;
+
+          const el = document.querySelector('.sacn-title:contains("OUT")') || 
+                     [...document.querySelectorAll('.sacn-title')].find(e => e.innerText.includes('OUT'));
+          if (el) el.innerText = `📡 sACN OUT Monitor (${port})`;
+
+          if (_instance._enabled && !_instance._connected) _instance._connect();
+        })
+        .catch(() => {
+          _instance.wsUrl = `ws://${host}:6972`;
+          if (_instance._enabled && !_instance._connected) _instance._connect();
+        });
+    }
   }
   return _instance;
 }

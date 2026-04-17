@@ -160,7 +160,11 @@ export function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   const { renderer } = window._threeRefs || {};
-  if (renderer) renderer.setSize(window.innerWidth, window.innerHeight);
+  if (renderer) {
+    const prCap = window.initialParams?.pixelRatioCap !== undefined ? window.initialParams.pixelRatioCap : 1.25;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, prCap));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }
 }
 
 // Expose for external use

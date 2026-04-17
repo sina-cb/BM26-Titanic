@@ -80,6 +80,7 @@ export class SacnInputSource {
 
   _connect() {
     if (!this._enabled) return;
+    if (!this.wsUrl) return; // Guard for async config injection
     this._cleanup();
 
     try {
@@ -90,6 +91,13 @@ export class SacnInputSource {
         this._connected = true;
         this.stats.connected = true;
         if (window.sacnLog) window.sacnLog('Connected to bridge', 'source');
+
+        // Dynamically tell the server which scene config to route outbound IPs for
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const activeScene = params.get('scene') || 'titanic';
+          this._ws.send(JSON.stringify({ type: 'setScene', scene: activeScene }));
+        } catch(e) {}
       };
 
       this._ws.onmessage = (event) => {
@@ -215,10 +223,34 @@ let _instance = null;
  */
 export function getSacnInput(wsUrl) {
   if (!_instance) {
-    const host = window.location.hostname || 'localhost';
-    const url = wsUrl || `ws://${host}:6971`;
-    _instance = new SacnInputSource(url);
+    _instance = new SacnInputSource(wsUrl || null);
     window.sacnInput = _instance; // Expose for console debugging
+
+    if (!wsUrl) {
+      const host = window.location.hostname || 'localhost';
+      fetch('/simulation/config.yaml')
+        .then((r) => r.text())
+        .then((txt) => {
+          const match = txt.match(/sacn_port:\s*(\d+)/);
+          const port = match ? match[1] : '6971';
+          _instance.wsUrl = `ws://${host}:${port}`;
+          
+          // Also update the UI header dynamically if exists
+          const el = document.querySelector('.sacn-title');
+          if (el && el.innerText.includes('sACN IN')) {
+            el.innerText = `📡 sACN IN Monitor (${port})`;
+          }
+
+          if (_instance._enabled && !_instance._connected) {
+            _instance._connect();
+          }
+        })
+        .catch((e) => {
+          console.warn('[sACN Input] Could not fetch server_config.yaml, falling back to 6971');
+          _instance.wsUrl = `ws://${host}:6971`;
+          if (_instance._enabled && !_instance._connected) _instance._connect();
+        });
+    }
   }
   return _instance;
 }

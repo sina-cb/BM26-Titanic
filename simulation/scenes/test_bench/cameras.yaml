@@ -1,0 +1,51 @@
+presets:
+  - name: Front
+    key: front
+    position:
+      x: 0
+      'y': 5.5
+      z: 27.5
+    target:
+      x: 0
+      'y': 4
+      z: 0
+  - name: Side
+    key: side
+    position:
+      x: 27.5
+      'y': 5.5
+      z: 0
+    target:
+      x: 0
+      'y': 4
+      z: 0
+  - name: Aerial
+    key: aerial
+    position:
+      x: 8.25
+      'y': 22
+      z: 8.25
+    target:
+      x: 0
+      'y': 4
+      z: 0
+  - name: Dramatic
+    key: dramatic
+    position:
+      x: -12.914
+      'y': 6.514
+      z: 27.557
+    target:
+      x: 3.106
+      'y': 4.613
+      z: 1.925
+  - name: Night Walk
+    key: night-walk
+    position:
+      x: 4.125
+      'y': 1.1
+      z: 5.5
+    target:
+      x: 0
+      'y': 3.3
+      z: 0

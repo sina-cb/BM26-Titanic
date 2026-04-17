@@ -43,9 +43,9 @@ export async function loadPatternPresets() {
       const names = await resp.json();
       await Promise.all(names.map(async name => {
         try {
-          const r = await fetch(`patterns/${name}.js?t=${Date.now()}`);
+          const r = await fetch(`../marsin_engine/patterns/${name}.js?t=${Date.now()}`);
           if (r.ok) PATTERN_PRESETS[name] = await r.text();
-        } catch (e) { console.warn(`[PB] Failed to load patterns/${name}.js`); }
+        } catch (e) { console.warn(`[PB] Failed to load ../marsin_engine/patterns/${name}.js`); }
       }));
     }
   } catch (e) {
@@ -53,7 +53,7 @@ export async function loadPatternPresets() {
     const fallbackNames = ['rainbow', 'breathing', 'sparkle', 'fire', 'plasma', 'wipe'];
     await Promise.all(fallbackNames.map(async name => {
       try {
-        const r = await fetch(`patterns/${name}.js?t=${Date.now()}`);
+        const r = await fetch(`../marsin_engine/patterns/${name}.js?t=${Date.now()}`);
         if (r.ok) PATTERN_PRESETS[name] = await r.text();
       } catch (e) { /* skip */ }
     }));
@@ -70,7 +70,7 @@ export async function loadPatternPresets() {
 
 export async function initPatternEngine() {
   try {
-    await patternEngine.init('./lib/marsin-engine');
+    await patternEngine.init('../marsin_pb/wasm');
     if (patternEngine.ready) {
       engineReady = true;
       setEngineReady(true);

@@ -38,7 +38,7 @@ export class MarsinEngine {
    * Initialize the WASM engine.
    * @param {string} wasmDir - Path to directory containing marsin-engine.js + .wasm
    */
-  async init(wasmDir = './lib/marsin-engine') {
+  async init(wasmDir = '../marsin_pb/wasm') {
     try {
       const moduleUrl = `${wasmDir}/marsin-engine.js`;
       let factoryFn;

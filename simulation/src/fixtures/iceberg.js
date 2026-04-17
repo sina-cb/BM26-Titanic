@@ -182,7 +182,7 @@ export class Iceberg {
     const seed = cfg.seed || 12345;
     
     const filename = `iceberg_${seed}_r${radius}_h${height}_d${detail}_p${peakCount}.stl`;
-    const stlUrl = `models/${filename}`;
+    const stlUrl = `assets/${filename}`;
     
     let geo = null;
     let triangles = [];
@@ -551,5 +551,11 @@ export class Iceberg {
 
   setFixtureVisibility(visible) {
     if (this.fixtureGroup) this.fixtureGroup.visible = visible;
+  }
+
+  setColorRGB(r, g, b) {
+    if (this.ledLines && this.ledLines.material) {
+      this.ledLines.material.color.setRGB(r, g, b);
+    }
   }
 }
