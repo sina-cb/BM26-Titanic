@@ -877,7 +877,7 @@ function setupGUI() {
         if (window._setGuiRebuilding) window._setGuiRebuilding(true);
         renderParGUI();
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-        debounceAutoSave();
+        exportConfig();
       };
       // autoPatchBtn's onclick logic follows:
       autoPatchBtn.onclick = () => {
@@ -946,7 +946,7 @@ function setupGUI() {
         if (window._setGuiRebuilding) window._setGuiRebuilding(true);
         renderParGUI();
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-        debounceAutoSave();
+        exportConfig();
         console.log(`[Auto-Patch] Assigned ${patchedCount} fixtures across universes 1-${universe}`);
       };
       autoPatchWrap.appendChild(autoPatchBtn);
