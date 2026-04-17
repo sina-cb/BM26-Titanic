@@ -14,8 +14,22 @@ const HTTP_PORT = config.http_port || 6969;
 const SAVE_PORT = config.save_port || HTTP_PORT + 1;
 const SACN_PORT = config.sacn_port || HTTP_PORT + 2;
 
+// ── Scene selection via --scene <name> ──────────────────────────────────
+const sceneIdx = process.argv.indexOf('--scene');
+const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : null;
+const sceneConfigPath = sceneName
+  ? path.join(__dirname, 'config', 'scenes', sceneName, 'scene_config.yaml')
+  : path.join(__dirname, 'config', 'scene_config.yaml');
+
 console.log(`[start] HTTP: ${HTTP_PORT}  Save: ${SAVE_PORT}  sACN: ${SACN_PORT}`);
-console.log(`[start] Open: http://localhost:${HTTP_PORT}/simulation/`);
+if (sceneName) {
+  console.log(`[start] Scene: ${sceneName}`);
+  console.log(`[start] Config: ${sceneConfigPath}`);
+}
+const sceneUrl = sceneName
+  ? `http://localhost:${HTTP_PORT}/simulation/?scene=${sceneName}`
+  : `http://localhost:${HTTP_PORT}/simulation/`;
+console.log(`[start] Open: ${sceneUrl}`);
 
 const httpServer = spawn('npx', ['http-server', '../', '-p', String(HTTP_PORT), '-c-1', '--cors'], {
   stdio: 'inherit',
@@ -31,7 +45,7 @@ const saveServer = spawn('node', ['server/save-server.js'], {
 // sACN bridge — read scene config to check if enabled
 let sacnEnabled = false;
 try {
-  const sceneConfig = yaml.load(fs.readFileSync(path.join(__dirname, 'config', 'scene_config.yaml'), 'utf8'));
+  const sceneConfig = yaml.load(fs.readFileSync(sceneConfigPath, 'utf8'));
   const cw = sceneConfig && sceneConfig.colorWave;
   if (cw && cw.sacn_enabled) {
     sacnEnabled = typeof cw.sacn_enabled === 'object' ? cw.sacn_enabled.value : cw.sacn_enabled;
@@ -40,7 +54,9 @@ try {
 
 let sacnBridge = null;
 if (sacnEnabled) {
-  sacnBridge = spawn('node', ['server/sacn_bridge.js'], {
+  const bridgeArgs = ['server/sacn_bridge.js'];
+  if (sceneName) bridgeArgs.push('--scene', sceneName);
+  sacnBridge = spawn('node', bridgeArgs, {
     stdio: 'inherit',
     cwd: __dirname,
   });
@@ -48,7 +64,7 @@ if (sacnEnabled) {
     if (code !== null && code !== 0) console.log(`[start] sACN bridge exited with code ${code}`);
   });
 } else {
-  console.log(`[start] sACN bridge disabled (set colorWave.sacn_enabled: true in scene_config.yaml)`);
+  console.log(`[start] sACN bridge disabled (set colorWave.sacn_enabled: true in scene config)`);
 }
 
 // sACN output bridge — always starts (for sending DMX to real controllers)

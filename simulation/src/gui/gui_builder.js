@@ -103,12 +103,13 @@ function setupGUI() {
       .replace(/^options:/m, '\n# ─── Options ──────────────────────────────────────────────────────────────\noptions:')
       .replace(/^config:/m, '\n# ─── Configuration ────────────────────────────────────────────────────────\nconfig:');
 
-    fetch("http://localhost:6970/save", {
+    const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
+    fetch(`http://localhost:6970/save${sceneParam}`, {
       method: "POST",
       body: yamlStr,
     })
       .then(() => {
-        console.log("Config successfully written to scene_config.yaml");
+        console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
         showSaveToast();
       })
       .catch((err) => console.error("Failed to write config:", err));
@@ -253,7 +254,8 @@ function setupGUI() {
     lines.push('');
 
     const modelJS = lines.join('\n');
-    fetch('http://localhost:6970/save-model', {
+    const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
+    fetch(`http://localhost:6970/save-model${sceneParam}`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: modelJS,

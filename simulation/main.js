@@ -172,14 +172,33 @@ async function init() {
   animate();
 }
 
+// ─── Scene Selection ────────────────────────────────────────────────────
+// URL param ?scene=<name> loads from config/scenes/<name>/scene_config.yaml
+// Default (no param) loads config/scene_config.yaml for backward compat.
+const _urlParams = new URLSearchParams(window.location.search);
+const _activeScene = _urlParams.get('scene') || null;
+window.__activeScene = _activeScene; // Expose for save/bridge operations
+const _sceneConfigPath = _activeScene
+  ? `config/scenes/${_activeScene}/scene_config.yaml`
+  : 'config/scene_config.yaml';
+const _camerasPath = _activeScene
+  ? `config/scenes/${_activeScene}/cameras.yaml`
+  : 'config/scene_preset_cameras.yaml';
+console.log(`[Scene] Loading: ${_activeScene || 'default'} → ${_sceneConfigPath}`);
+
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
-  fetch("config/scene_config.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
+  fetch(_sceneConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  // Fallback: also try old cameras path if scene-specific one is empty
   fetch("config/scene_preset_cameras.yaml?t=" + Date.now()).then(r => r.text()).catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
+]).then(async ([sceneYaml, camerasYaml, fallbackCamerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
+  // Use fallback cameras if scene-specific cameras are empty
+  if (!camerasYaml && fallbackCamerasYaml) camerasYaml = fallbackCamerasYaml;
+
   // Load scene config
   try {
     const loaded = yaml.load(sceneYaml);
@@ -188,7 +207,7 @@ Promise.all([
       extractParams(loaded);
     }
   } catch (err) {
-    console.warn("Failed to parse scene_config.yaml:", err);
+    console.warn(`Failed to parse ${_sceneConfigPath}:`, err);
   }
 
   // Load camera presets
@@ -255,9 +274,10 @@ Promise.all([
     ctrls.update();
   }
 
-  // Initialize pattern editor + sACN monitor
+  // Initialize pattern editor + sACN monitor + Scene indicator
   setupPatternEditor();
   setupSacnMonitor();
+  setupSceneIndicator();
   loadPatternPresets().then(() => {
     initPatternEngine().then(() => {
       if (window.onLightingChange) window.onLightingChange();
@@ -281,6 +301,41 @@ Promise.all([
 }).catch(async () => {
   await init();
 });
+
+// ─── Scene Indicator ────────────────────────────────────────────────────
+function setupSceneIndicator() {
+  const select = document.getElementById('scene-select');
+  if (!select) return;
+
+  const active = window.__activeScene || 'default';
+
+  // Add the active scene implicitly first to avoid empty dropdown while loading
+  select.innerHTML = `<option value="${active}" selected>${active}${active === 'default' ? ' (fallback)' : ''}</option>`;
+
+  // Fetch true list
+  fetch('http://localhost:6970/list-scenes')
+    .then(r => r.json())
+    .then(scenes => {
+      let html = `<option value="">default (old config)</option>`;
+      scenes.forEach(s => {
+        const isSelected = s === active;
+        html += `<option value="${s}" ${isSelected ? 'selected' : ''}>${s}</option>`;
+      });
+      select.innerHTML = html;
+    })
+    .catch(err => console.warn('[Scene] Failed to load scenes list:', err));
+
+  select.addEventListener('change', (e) => {
+    const val = e.target.value;
+    const url = new URL(window.location.href);
+    if (val) {
+      url.searchParams.set('scene', val);
+    } else {
+      url.searchParams.delete('scene');
+    }
+    window.location.href = url.toString();
+  });
+}
 
 // --- TEMP RAYCAST HELPER ---
 window.modelMeshes = modelMeshes;

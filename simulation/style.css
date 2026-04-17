@@ -885,3 +885,50 @@ canvas {
 .sacn-log .sacn-entry.error {
   color: rgba(240, 96, 96, 0.8);
 }
+
+/* ─── Scene Indicator / Switcher ─── */
+#scene-indicator {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: rgba(10, 10, 26, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(96, 192, 240, 0.25);
+  border-radius: 8px;
+  font-family: inherit;
+  transition: border-color 0.3s ease;
+}
+
+#scene-indicator:hover {
+  border-color: rgba(96, 192, 240, 0.5);
+}
+
+#scene-label {
+  font-size: 0.7rem;
+  color: rgba(96, 192, 240, 0.7);
+  pointer-events: none;
+}
+
+#scene-select {
+  background: transparent;
+  border: none;
+  color: #ccc;
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  padding: 2px 4px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#scene-select option {
+  background: #1a1a2e;
+  color: #ccc;
+}

@@ -1,0 +1,313 @@
+# BM26 Test Bench — Scene Configuration
+# Minimal scene for test bench with a few fixtures.
+# Load via: http://localhost:6969/simulation/?scene=test_bench
+
+# ─── Atmosphere ───────────────────────────────────────────────────────────
+titanicEnd:
+  _section:
+    label: 🧊 Icebergs
+    type: icebergArray
+    collapsed: true
+  icebergsEnabled:
+    value: false
+    label: Master Enabled
+  focusOnSelect:
+    value: false
+    label: Focus on Select
+  masterFloodEnabled:
+    value: false
+    label: Master Flood Enabled
+  masterFloodColor:
+    value: '#ffffff'
+    label: Master Flood Color
+    type: color
+  masterFloodIntensity:
+    value: 0
+    label: Master Flood Intensity
+    min: 0
+    max: 500
+    step: 1
+  masterFloodAngle:
+    value: 51
+    label: Master Flood Angle °
+    min: 10
+    max: 90
+    step: 1
+  masterFloodDimmer:
+    value: 0
+    label: Master Flood Dimmer %
+    min: 0
+    max: 250
+    step: 1
+  icebergs: []
+atmosphere:
+  _section:
+    label: 🌌 Atmosphere
+    collapsed: true
+  ambientIntensity:
+    value: 0.8
+    label: Global Ambient
+    min: 0
+    max: 1
+    step: 0.01
+  exposure:
+    value: 1.1
+    label: Camera Exposure
+    min: 0.1
+    max: 3
+    step: 0.05
+  moonlight:
+    _section:
+      label: 🌙 Moonlight
+      collapsed: true
+    moonEnabled:
+      value: true
+      label: Enabled
+    moonIntensity:
+      value: 0.5
+      label: Intensity
+      min: 0
+      max: 3
+      step: 0.05
+    moonColor:
+      value: '#aabbdd'
+      label: Color
+      type: color
+    moonAngle:
+      value: 60
+      label: Elevation °
+      min: 0
+      max: 90
+      step: 1
+  bloom:
+    _section:
+      label: ✨ Bloom Glow
+      collapsed: true
+    bloomStrength:
+      value: 0.4
+      label: Strength
+      min: 0
+      max: 3
+      step: 0.05
+    bloomRadius:
+      value: 1
+      label: Radius
+      min: 0
+      max: 2
+      step: 0.05
+    bloomThreshold:
+      value: 0.92
+      label: Threshold
+      min: 0
+      max: 1
+      step: 0.01
+
+# ─── Model Transform ─────────────────────────────────────────────────────
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: 0
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 0
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 0
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: 0
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+
+# ─── Par Lights ───────────────────────────────────────────────────────────
+parLights:
+  _section:
+    label: 🔌 DMX Fixtures
+    type: fixtureArray
+    collapsed: false
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  conesEnabled:
+    value: true
+    label: Show Light Cones
+  generatorsVisible:
+    value: false
+    label: Show Generators
+  fixtures:
+    # ─── Test Bench Fixtures ───
+    # Add your actual test bench fixtures here.
+    # Each fixture needs: group, name, fixtureType, color, intensity,
+    # angle, penumbra, x/y/z, rotX/rotY/rotZ, controllerIp,
+    # dmxUniverse, dmxAddress, controllerId, sectionId, fixtureId, viewMask
+    - group: Test Bench
+      name: Test Par 1
+      fixtureType: UkingPar
+      color: '#ff8800'
+      intensity: 20
+      angle: 45
+      penumbra: 0.5
+      x: -3
+      y: 2
+      z: 0
+      rotX: -90
+      rotY: 0
+      rotZ: 0
+      controllerIp: ''
+      dmxUniverse: 1
+      dmxAddress: 1
+      controllerId: 0
+      sectionId: 0
+      fixtureId: 0
+      viewMask: 0
+    - group: Test Bench
+      name: Test Par 2
+      fixtureType: UkingPar
+      color: '#0088ff'
+      intensity: 20
+      angle: 45
+      penumbra: 0.5
+      x: 0
+      y: 2
+      z: 0
+      rotX: -90
+      rotY: 0
+      rotZ: 0
+      controllerIp: ''
+      dmxUniverse: 1
+      dmxAddress: 11
+      controllerId: 0
+      sectionId: 0
+      fixtureId: 0
+      viewMask: 0
+    - group: Test Bench
+      name: Test Par 3
+      fixtureType: UkingPar
+      color: '#00ff44'
+      intensity: 20
+      angle: 45
+      penumbra: 0.5
+      x: 3
+      y: 2
+      z: 0
+      rotX: -90
+      rotY: 0
+      rotZ: 0
+      controllerIp: ''
+      dmxUniverse: 1
+      dmxAddress: 21
+      controllerId: 0
+      sectionId: 0
+      fixtureId: 0
+      viewMask: 0
+
+# ─── LED Strands ──────────────────────────────────────────────────────────
+ledStrands:
+  _section:
+    label: 💡 LED Strands
+    type: ledStrandArray
+    collapsed: true
+  strandsEnabled:
+    value: true
+    label: Master Enabled
+  strands: []
+
+# ─── Lighting Engine ──────────────────────────────────────────────────────
+colorWave:
+  _section:
+    label: ⚡ Lighting Engine
+    collapsed: false
+  lightingEnabled:
+    value: true
+    label: ⚡ Enable
+    transient: true
+  lightingMode:
+    value: sacn_in
+    label: Mode
+    options:
+      - gradient
+      - pixelblaze
+      - sacn_in
+    transient: false
+  waveSpeed:
+    value: 0.1
+    label: Speed
+    min: 0.05
+    max: 2
+    step: 0.05
+  gradientStops:
+    - '#ff0000'
+    - '#ffffff'
+  sacn_enabled:
+    value: true
+    label: 📡 Bridge Enabled
+  sacn_universes:
+    value: '1'
+    label: 📡 Listen Universes
+  sacn_lockout_ms:
+    value: 10000
+    label: 📡 Source Lockout (ms)
+    min: 1000
+    max: 30000
+    step: 1000
+  sacn_high_priority:
+    value: 150
+    label: 📡 High Priority Threshold
+    min: 100
+    max: 200
+    step: 10
+  sacn_stale_ms:
+    value: 2000
+    label: 📡 Source Stale (ms)
+    min: 500
+    max: 10000
+    step: 500
+
+# ─── Configuration ────────────────────────────────────────────────────────
+config:
+  _section:
+    label: 💾 Configuration
+    collapsed: false
+  autoSave:
+    value: false
+    label: Auto-Save on Change
+_camera:
+  position:
+    x: 0
+    y: 8
+    z: 20
+  target:
+    x: 0
+    y: 1
+    z: 0

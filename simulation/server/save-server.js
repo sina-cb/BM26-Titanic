@@ -6,6 +6,27 @@ const yaml = require('js-yaml');
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
+const SCENES_ROOT = path.join(SIM_ROOT, 'config', 'scenes');
+
+/**
+ * Resolve scene-specific config path. If sceneName is provided,
+ * returns config/scenes/<name>/scene_config.yaml. Otherwise default.
+ */
+function resolveSceneConfigPath(sceneName) {
+  if (sceneName) {
+    const safeName = sceneName.replace(/[^a-z0-9_-]/gi, '_');
+    return path.join(SCENES_ROOT, safeName, 'scene_config.yaml');
+  }
+  return path.join(SIM_ROOT, 'config', 'scene_config.yaml');
+}
+
+function resolveSceneCamerasPath(sceneName) {
+  if (sceneName) {
+    const safeName = sceneName.replace(/[^a-z0-9_-]/gi, '_');
+    return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
+  }
+  return path.join(SIM_ROOT, 'config', 'scene_preset_cameras.yaml');
+}
 
 // Read port from server_config.yaml
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
@@ -13,19 +34,26 @@ const SAVE_PORT = serverConfig.save_port || 6970;
 
 http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.end(); return; }
+
+  // Parse URL + query params once
+  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = parsedUrl.pathname;
+  const sceneName = parsedUrl.searchParams.get('scene') || null;
   
-  if (req.method === 'POST' && req.url === '/save') {
+  if (req.method === 'POST' && pathname === '/save') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
-      console.log(`[SAVE SERVER] Received POST /save. Body length: ${body.length}`);
-      console.log(`[SAVE SERVER] Preview: ${body.substring(0, 100)}...`);
+      const outPath = resolveSceneConfigPath(sceneName);
+      console.log(`[SAVE SERVER] POST /save (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
-        fs.writeFileSync(path.join(SIM_ROOT, 'config', 'scene_config.yaml'), body);
-        console.log(`[SAVE SERVER] Successfully wrote to config/scene_config.yaml`);
+        // Ensure directory exists for scene-specific paths
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, body);
+        console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -33,14 +61,16 @@ http.createServer((req, res) => {
         res.end('Error');
       }
     });
-  } else if (req.method === 'POST' && req.url === '/save-cameras') {
+  } else if (req.method === 'POST' && pathname === '/save-cameras') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
-      console.log(`[SAVE SERVER] Received POST /save-cameras. Body length: ${body.length}`);
+      const outPath = resolveSceneCamerasPath(sceneName);
+      console.log(`[SAVE SERVER] POST /save-cameras (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
-        fs.writeFileSync(path.join(SIM_ROOT, 'config', 'scene_preset_cameras.yaml'), body);
-        console.log(`[SAVE SERVER] Successfully wrote to config/scene_preset_cameras.yaml`);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, body);
+        console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -120,14 +150,16 @@ http.createServer((req, res) => {
       res.statusCode = 500;
       res.end('Error');
     }
-  } else if (req.method === 'POST' && req.url === '/save-model') {
+  } else if (req.method === 'POST' && pathname === '/save-model') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
+        // Determine model filename based on active scene
+        const modelFilename = sceneName ? `${sceneName}.js` : 'model.js';
         const outDir = path.join(ENGINE_ROOT, 'models');
         fs.mkdirSync(outDir, { recursive: true });
-        const outPath = path.join(outDir, 'model.js');
+        const outPath = path.join(outDir, modelFilename);
         fs.writeFileSync(outPath, body);
         // Also keep a copy in simulation for backward compat
         const simModelDir = path.join(SIM_ROOT, 'patterns', 'model');
@@ -141,6 +173,25 @@ http.createServer((req, res) => {
         res.end('Error: ' + e.message);
       }
     });
+  } else if (req.method === 'GET' && pathname === '/list-scenes') {
+    try {
+      const scenes = [];
+      if (fs.existsSync(SCENES_ROOT)) {
+        for (const entry of fs.readdirSync(SCENES_ROOT, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            const cfgPath = path.join(SCENES_ROOT, entry.name, 'scene_config.yaml');
+            if (fs.existsSync(cfgPath)) {
+              scenes.push(entry.name);
+            }
+          }
+        }
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(scenes));
+    } catch (e) {
+      res.statusCode = 500;
+      res.end('Error');
+    }
   } else {
     res.statusCode = 404; res.end();
   }

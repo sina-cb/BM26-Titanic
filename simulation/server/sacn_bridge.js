@@ -20,13 +20,21 @@ const yaml = require('js-yaml');
 
 const SIM_ROOT = path.join(__dirname, '..');
 
+// ── Scene selection via --scene <name> ─────────────────────────────────
+const sceneIdx = process.argv.indexOf('--scene');
+const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : null;
+const sceneConfigPath = sceneName
+  ? path.join(SIM_ROOT, 'config', 'scenes', sceneName, 'scene_config.yaml')
+  : path.join(SIM_ROOT, 'config', 'scene_config.yaml');
+
 // ── Read config ────────────────────────────────────────────────────────
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'server_config.yaml'), 'utf8'));
 const SACN_PORT = serverConfig.sacn_port || 6971;
 
 let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
 try {
-  const sceneConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config', 'scene_config.yaml'), 'utf8'));
+  const sceneConfig = yaml.load(fs.readFileSync(sceneConfigPath, 'utf8'));
+  if (sceneName) console.log(`[sACN Bridge] Using scene config: ${sceneName}`);
   const s = sceneConfig && sceneConfig.colorWave;
   if (s) {
     const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
@@ -39,7 +47,7 @@ try {
     };
   }
 } catch (e) {
-  console.warn('[sACN Bridge] Could not read scene_config.yaml:', e.message);
+  console.warn('[sACN Bridge] Could not read scene config:', e.message);
 }
 
 // ── Dependencies ───────────────────────────────────────────────────────
