@@ -85,7 +85,7 @@ parLights:
   _section:
     label: 🔌 DMX Fixtures
     type: fixtureArray
-    collapsed: false
+    collapsed: true
   parsEnabled:
     value: true
     label: Master Enabled

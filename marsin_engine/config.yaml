@@ -1,15 +1,17 @@
 sacn:
   priority: 100
-  sourceName: 'MarsinEngine'
-  destination: '127.0.0.1'  # Set to actual IP or '127.0.0.1' for unicast
-  multicast: false          # Explicitly disable multicast to prevent flooding
+  sourceName: MarsinEngine
+  destination: 127.0.0.1
+  multicast: false
 engine:
   fps: 40
-
 server:
   port: 6968
-
 global_effects:
   fogger:
     universe: 1
     address: 512
+playlist:
+  active: true
+  delay_s: '10'
+  shuffle: true

@@ -133,7 +133,7 @@ export default function StudioScreen() {
       </View>
 
       {/* Fullscreen Editor Modal */}
-      <Modal visible={isEditing} animationType="slide" presentationStyle="formSheet">
+      <Modal visible={isEditing} animationType="slide" presentationStyle="pageSheet">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: '#0A0A0A' }}>
           <SafeAreaView style={{ flex: 1 }}>
             
@@ -158,7 +158,7 @@ export default function StudioScreen() {
             <View style={{ flex: 1, flexDirection: isPortrait ? 'column' : 'row', backgroundColor: '#000' }}>
               
               {/* Left/Top Column - Full Code IDE */}
-              <View style={{ flex: isPortrait ? 3 : 6, backgroundColor: '#1E1E1E', margin: 16, marginBottom: isPortrait ? 8 : 16, borderRadius: 12, overflow: 'hidden' }}>
+              <View style={{ flex: isPortrait ? 3 : 13, backgroundColor: '#1E1E1E', margin: 16, marginBottom: isPortrait ? 8 : 16, borderRadius: 12, overflow: 'hidden' }}>
                 <ScrollView showsVerticalScrollIndicator={true} style={{ flex: 1 }}>
                    <View style={{ position: 'relative' }}>
                       
@@ -211,8 +211,8 @@ export default function StudioScreen() {
                 </ScrollView>
               </View>
 
-              {/* Right/Bottom Column - Dedicated Compiler Window */}
-              <View style={{ flex: 1, backgroundColor: '#0D0D0D', marginVertical: isPortrait ? 8 : 16, marginBottom: isPortrait ? 16 : 16, marginRight: isPortrait ? 16 : 16, marginLeft: isPortrait ? 16 : 0, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#333' }}>
+              {/* Right/Bottom Column - Compiler Logs */}
+              <View style={{ flex: isPortrait ? 1 : 10, backgroundColor: '#111', margin: 16, marginTop: isPortrait ? 8 : 16, marginLeft: isPortrait ? 16 : 0, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#333', overflow: 'hidden' }}>
                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
                    <IconSymbol name="terminal" size={16} color={Colors.light.secondary} />
                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.secondary, fontSize: 13 }}>COMPILER LOGS</Text>
@@ -225,7 +225,7 @@ export default function StudioScreen() {
               </View>
 
             </View>
-
+            
           </SafeAreaView>
           
           {/* Editor Toast Notification Overlay */}

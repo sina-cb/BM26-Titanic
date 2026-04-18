@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { NauticalFader } from '@/components/NauticalFader';
-import { fetchPatterns, setActivePattern, sendControl, getApiBase, fetchExports, setGlobalEffect } from '@/utils/api';
+import { fetchPatterns, setActivePattern, sendControl, getApiBase, fetchExports, setGlobalEffect, getAutopilot, setAutopilot } from '@/utils/api';
 
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
   const [isOn, setIsOn] = useState(initialValue > 0.5);
@@ -76,6 +77,30 @@ export default function ControlDeckScreen() {
   const [exports, setExports] = useState<any[]>([]);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [isScrollEnabled, setScrollEnabled] = useState<boolean>(true);
+  
+  // Playlist Automator State
+  const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
+  const [playlistDelayStr, setPlaylistDelayStr] = useState<string>('30');
+  const [isShuffle, setIsShuffle] = useState<boolean>(false);
+
+  const scrollViewRef = useRef<ScrollView>(null);
+  const itemLayouts = useRef<{ [key: string]: number }>({});
+
+  useEffect(() => {
+    getAutopilot().then(st => {
+      if (st) {
+        setPlaylistActive(st.active);
+        setPlaylistDelayStr(st.delay_s);
+        setIsShuffle(st.shuffle);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (active !== '...' && itemLayouts.current[active] !== undefined) {
+      scrollViewRef.current?.scrollTo({ y: Math.max(0, itemLayouts.current[active] - 100), animated: true });
+    }
+  }, [active]);
 
   useEffect(() => {
     fetchPatterns().then(data => {
@@ -133,7 +158,7 @@ export default function ControlDeckScreen() {
           <IconSymbol name="slider.vertical.3" size={24} color={Colors.light.secondary} />
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 32, paddingBottom: 32 }} style={{ flex: 1 }}>
+        <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 32, paddingBottom: 32 }} style={{ flex: 1 }}>
           <View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {patterns.map((ptn) => {
@@ -142,6 +167,7 @@ export default function ControlDeckScreen() {
                   <TouchableOpacity 
                     key={ptn} 
                     onPress={() => handleSelectPattern(ptn)}
+                    onLayout={(e) => { itemLayouts.current[ptn] = e.nativeEvent.layout.y; }}
                     style={{ 
                        height: 48, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center', alignItems: 'center',
                        backgroundColor: isLive ? Colors.light.primary : Colors.light.surfaceContainerHigh,
@@ -167,6 +193,7 @@ export default function ControlDeckScreen() {
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 13 }}>REFRESH QUEUE</Text>
         </TouchableOpacity>
 
+
         <View style={{ paddingTop: 24, paddingBottom: 16, borderTopWidth: 1, borderTopColor: Colors.light.ghostBorder }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <Text style={globalStyles.headline}>Rig Globals</Text>
@@ -186,29 +213,54 @@ export default function ControlDeckScreen() {
       <View style={[globalStyles.rightPane, { padding: 0 }]}>
         <ScrollView scrollEnabled={isScrollEnabled} contentContainerStyle={{ padding: 48, paddingBottom: 96 }} showsVerticalScrollIndicator={false}>
         
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <Text style={globalStyles.headline}>Parameters</Text>
-          <TouchableOpacity 
-            onPress={async () => {
-              if (active !== '...') {
-                const res = await setActivePattern(active);
-                if (res && res.error) {
-                  setCompileError(res.error);
-                } else {
-                  setCompileError(null);
-                  const freshExports = await fetchExports();
-                  if (freshExports) setExports(freshExports);
-                }
-              }
-            }} 
-            style={{ padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-          >
-            <IconSymbol name="arrow.clockwise" size={20} color={Colors.light.primary} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 12 }}>REFRESH</Text>
-          </TouchableOpacity>
-        </View>
+          {/* Playlist Automator Row */}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 8 }}>AUTOPILOT TRANSITIONS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, padding: 12, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder }}>
+             <TouchableOpacity 
+               onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
+               style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
+             >
+               <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#000" : Colors.light.text} />
+               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#000" : Colors.light.text, fontSize: 12 }}>
+                 {isPlaylistActive ? 'PAUSE' : 'PLAY'}
+               </Text>
+             </TouchableOpacity>
 
-        {compileError && (
+             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginHorizontal: 16 }}>
+               <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.secondary, fontSize: 12 }}>TIMER</Text>
+               <View style={{ flex: 1, height: 48, justifyContent: 'center', overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, borderColor: Colors.light.ghostBorder, borderWidth: 1 }}>
+                 <Picker
+                   selectedValue={playlistDelayStr}
+                   onValueChange={(itemValue) => {
+                     setPlaylistDelayStr(itemValue);
+                     setAutopilot(isPlaylistActive, itemValue, isShuffle);
+                   }}
+                   style={{ width: '100%', height: 48, color: Colors.light.primary, justifyContent: 'center' }}
+                   itemStyle={{ color: Colors.light.primary, fontSize: 16, fontFamily: 'SpaceGrotesk_700Bold', height: 48 }}
+                 >
+                   {[...Array.from({length: 30}, (_, i) => i + 1), 45, 60, 90, 120, 180, 240, 300, 600, 1200].map(val => {
+                     const m = Math.floor(val / 60);
+                     const s = val % 60;
+                     const label = m > 0 ? (s > 0 ? `${m}m ${s}s` : `${m}m`) : `${s}s`;
+                     return <Picker.Item key={val} label={label} value={val.toString()} />
+                   })}
+                 </Picker>
+               </View>
+             </View>
+
+             <TouchableOpacity 
+               onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
+               style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8 }}
+             >
+               <IconSymbol name="shuffle" size={16} color={isShuffle ? Colors.light.primary : Colors.light.icon} />
+               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? Colors.light.primary : Colors.light.icon, fontSize: 12 }}>SHUFFLE</Text>
+             </TouchableOpacity>
+          </View>
+
+          {/* Parameters Title Block */}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS — <Text style={{ color: Colors.light.primary }}>{active}</Text></Text>
+
+          {compileError && (
           <View style={{ backgroundColor: 'rgba(255, 60, 60, 0.1)', borderColor: Colors.light.error, borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 16 }}>
              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                <IconSymbol name="exclamationmark.triangle.fill" size={20} color={Colors.light.error} />

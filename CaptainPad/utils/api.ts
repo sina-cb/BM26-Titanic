@@ -139,6 +139,35 @@ export async function fetchPatternCode(name: string) {
   }
 }
 
+export async function getAutopilot() {
+  try {
+    const res = await fetch(`${getApiBase()}/autopilot`);
+    return await res.json();
+  } catch (err) {
+    console.warn('Fetch autopilot failed:', err);
+    return null;
+  }
+}
+
+export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?: boolean) {
+  try {
+    const payload: any = {};
+    if (active !== undefined) payload.active = active;
+    if (delay_s !== undefined) payload.delay_s = delay_s;
+    if (shuffle !== undefined) payload.shuffle = shuffle;
+    
+    const res = await fetch(`${getApiBase()}/autopilot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch(err) {
+    console.warn('Set autopilot failed:', err);
+    return null;
+  }
+}
+
 export async function savePatternCode(name: string, code: string) {
   try {
     const res = await fetch(`${getApiBase()}/save-pattern`, {

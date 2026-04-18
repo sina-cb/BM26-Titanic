@@ -188,16 +188,14 @@ function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, 
     frameCount++;
     windowFrames++;
 
-    // Stats every 1 second
+    // Stats every 1 second (silently updating the UI without spamming standard output)
     if (now - lastStatsTime > 1000) {
       const windowSec = (now - lastStatsTime) / 1000;
       const windowFps = Math.round(windowFrames / windowSec);
-      const renderMs = (performance.now() - now).toFixed(1);
       
       let patchedCount = 0;
       for (const px of model.pixels) if (px.patch && px.patch.universe) patchedCount++;
 
-      process.stdout.write(`\r  ⚡ ${frameCount} frames, ${windowFps} fps, ${renderMs}ms/frame, ${patchedCount} pixels`);
       lastStatsTime = now;
       windowFrames = 0;
 

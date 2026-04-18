@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import { Autopilot } from './autopilot.js';
 
 // Local utility clones identical to engine.js requirements
 function listPatterns(patternsDir) {
@@ -53,6 +54,34 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
 
   // Restore state for initial pattern automatically
   applyPersistedState(opts.pattern);
+
+  // Initialize Autopilot Daemon
+  const autopilot = new Autopilot(
+    listPatterns, 
+    patternsDir, 
+    () => opts.pattern, 
+    (nextPattern) => {
+      // Simulate an internal HTTP pipeline hook to properly broadcast WS frames
+      try {
+        const src = loadPattern(patternsDir, nextPattern);
+        const comp = runtime.compile(src);
+        if (comp.ok) {
+           opts.pattern = nextPattern;
+           applyPersistedState(nextPattern);
+           
+           const broadcast = JSON.stringify({ type: 'pattern', name: nextPattern });
+           const exportsBroadcast = JSON.stringify({ type: 'exports', data: getExportsWithState(nextPattern) });
+           if (global.wss) {
+             global.wss.clients.forEach(c => {
+               if (c.readyState === 1) { c.send(broadcast); c.send(exportsBroadcast); }
+             });
+           }
+        }
+      } catch(e) {
+        console.warn('Autopilot swap failed:', e.message);
+      }
+    }
+  );
 
   function getExportsWithState(patternName) {
     const exports = runtime.getExports();
@@ -154,7 +183,6 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
           }
           opts.pattern = patternName;
           applyPersistedState(patternName);
-          console.log(`\n  ✅ Hot-swapped pattern to ${patternName}`);
           
           const broadcast = JSON.stringify({ type: 'pattern', name: patternName });
           const exportsBroadcast = JSON.stringify({ type: 'exports', data: getExportsWithState(patternName) });
@@ -245,12 +273,31 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    } else if (req.method === 'GET' && req.url === '/autopilot') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(autopilot.state));
+    } else if (req.method === 'POST' && req.url === '/autopilot') {
+      let body = '';
+      req.on('data', chunk => body += chunk.toString());
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          autopilot.updateState(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(autopilot.state));
+        } catch(e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else {
       res.writeHead(404); res.end('Not Found');
     }
   });
 
   const wss = new WebSocketServer({ server });
+  global.wss = wss; // Expose globally for Autopilot to reach clients securely
+  autopilot.start();
+
   wss.on('connection', ws => {
     ws.send(JSON.stringify({ type: 'pattern', name: opts.pattern }));
     ws.send(JSON.stringify({ type: 'exports', data: getExportsWithState(opts.pattern) }));
