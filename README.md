@@ -23,10 +23,15 @@ npm start
 # 3. Open in browser
 open http://localhost:6969/simulation/
 
-# 4. (Optional) Start the rendering engine in a second terminal
+# 4. Start the rendering engine in a second terminal
 cd marsin_engine
 npm install
-node engine.js --pattern bioluminescence
+node engine.js --model test_bench --pattern rainbow
+
+# 5. Start the CaptainPad Expo app in a third terminal
+cd CaptainPad
+npm install
+npm start -c # Clears cache and shows the QR code to scan on your iPad
 ```
 
 ---

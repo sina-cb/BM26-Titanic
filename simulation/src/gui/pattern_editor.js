@@ -8,6 +8,7 @@ import {
   lightingMode, lightingEnabled,
 } from "../core/state.js";
 import { MarsinEngine } from "../core/marsin_engine.js";
+import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
 const patternEngine = new MarsinEngine();
@@ -77,9 +78,107 @@ export async function initPatternEngine() {
       console.log('[PB] Pattern engine ready');
       compileEditorCode();
     }
-  } catch (err) {
+} catch (err) {
     console.warn('[PB] Pattern engine not available:', err.message);
   }
+}
+
+const ExportKind = {
+  SLIDER: 1,
+  TOGGLE: 2,
+  TRIGGER: 3,
+  VAR: 4,
+  GAUGE: 5,
+  HSV: 6,
+  RGB: 7,
+};
+
+let paramGuiInstance = null;
+let paramGuiTrackingInterval = null;
+
+function updateParameterUI(ok) {
+  if (paramGuiInstance) {
+    paramGuiInstance.destroy();
+    paramGuiInstance = null;
+    if (paramGuiTrackingInterval) {
+      clearInterval(paramGuiTrackingInterval);
+      paramGuiTrackingInterval = null;
+    }
+  }
+  if (!ok) return;
+
+  const exportsData = patternEngine.getExports();
+  if (!exportsData || exportsData.length === 0) return;
+
+  paramGuiInstance = new GUI({ title: '🎛️ Engine Parameters' });
+  const dom = paramGuiInstance.domElement;
+  dom.style.position = 'fixed';
+  dom.style.zIndex = '9999';
+
+  const editorPanel = document.getElementById('pattern-editor-panel');
+  function updatePosition() {
+    if (!editorPanel) return;
+    const isHidden = editorPanel.classList.contains('hidden') || editorPanel.style.display === 'none';
+    if (isHidden) {
+      dom.style.display = 'none';
+    } else {
+      dom.style.display = 'block';
+      const rect = editorPanel.getBoundingClientRect();
+      dom.style.top = rect.top + 'px';
+      dom.style.left = (rect.right + 10) + 'px';
+    }
+  }
+  updatePosition();
+  paramGuiTrackingInterval = setInterval(updatePosition, 50); // fast track for dragging
+
+  const paramState = {};
+
+  exportsData.forEach(exp => {
+    if (exp.kind === ExportKind.SLIDER) {
+      paramState[exp.name] = 0.5;
+      paramGuiInstance.add(paramState, exp.name, 0, 1)
+        .onChange(v => patternEngine.setControl(exp.id, v));
+    } else if (exp.kind === ExportKind.TOGGLE) {
+      paramState[exp.name] = false;
+      paramGuiInstance.add(paramState, exp.name)
+        .onChange(v => patternEngine.setControl(exp.id, v ? 1 : 0));
+    } else if (exp.kind === ExportKind.TRIGGER) {
+      paramState[exp.name] = () => {
+        patternEngine.setControl(exp.id, 1);
+        setTimeout(() => patternEngine.setControl(exp.id, 0), 100);
+      };
+      paramGuiInstance.add(paramState, exp.name);
+    } else if (exp.kind === ExportKind.VAR) {
+      paramState[exp.name] = 0;
+      paramGuiInstance.add(paramState, exp.name)
+        .onChange(v => patternEngine.setControl(exp.id, v));
+    } else if (exp.kind === ExportKind.GAUGE) {
+      paramState[exp.name] = 0;
+      paramGuiInstance.add(paramState, exp.name).disable();
+    } else if (exp.kind === ExportKind.HSV || exp.kind === ExportKind.RGB) {
+      paramState[exp.name] = '#ff0000';
+      paramGuiInstance.addColor(paramState, exp.name)
+        .onChange(hex => {
+          const rStr = hex.slice(1,3), gStr = hex.slice(3,5), bStr = hex.slice(5,7);
+          const r = parseInt(rStr, 16) / 255;
+          const g = parseInt(gStr, 16) / 255;
+          const b = parseInt(bStr, 16) / 255;
+          if (exp.kind === ExportKind.HSV) {
+            const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+            let h = 0, s = max === 0 ? 0 : d / max, v = max;
+            if (max !== min) {
+              if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+              else if (max === g) h = (b - r) / d + 2;
+              else h = (r - g) / d + 4;
+              h /= 6;
+            }
+            patternEngine.setControl(exp.id, h, s, v);
+          } else {
+            patternEngine.setControl(exp.id, r, g, b);
+          }
+        });
+    }
+  });
 }
 
 function compileEditorCode() {
@@ -101,6 +200,7 @@ function compileEditorCode() {
     statusEl.className = 'pe-status error';
     statusEl.innerHTML = '<span class="pe-status-icon">✗</span> ' + errMsg;
   }
+  updateParameterUI(ok);
 }
 
 export function setupPatternEditor() {

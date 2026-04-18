@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Control Deck - CaptainPad 6969</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary": "#ffffff",
+                        "surface": "#f8f9fa",
+                        "surface-bright": "#f8f9fa",
+                        "on-primary-fixed-variant": "#004f58",
+                        "secondary-container": "#c6e4f4",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed-variant": "#065043",
+                        "on-surface": "#191c1d",
+                        "surface-container-highest": "#e1e3e4",
+                        "on-error": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "on-tertiary-fixed": "#00201a",
+                        "on-tertiary-container": "#226355",
+                        "secondary-fixed-dim": "#adcbda",
+                        "on-primary": "#ffffff",
+                        "primary-container": "#00e5ff",
+                        "on-primary-fixed": "#001f24",
+                        "tertiary-fixed": "#afefdd",
+                        "surface-container": "#edeeef",
+                        "on-surface-variant": "#3b494c",
+                        "on-secondary-fixed-variant": "#2e4b57",
+                        "surface-dim": "#d9dadb",
+                        "on-secondary": "#ffffff",
+                        "tertiary": "#29695b",
+                        "surface-variant": "#e1e3e4",
+                        "on-background": "#191c1d",
+                        "on-secondary-container": "#4a6774",
+                        "outline-variant": "#bac9cc",
+                        "on-primary-container": "#00626e",
+                        "primary": "#006875",
+                        "inverse-on-surface": "#f0f1f2",
+                        "surface-tint": "#006875",
+                        "tertiary-fixed-dim": "#94d3c1",
+                        "outline": "#6b7a7d",
+                        "error-container": "#ffdad6",
+                        "on-secondary-fixed": "#001f2a",
+                        "surface-container-high": "#e7e8e9",
+                        "primary-fixed-dim": "#00daf3",
+                        "primary-fixed": "#9cf0ff",
+                        "surface-container-low": "#f3f4f5",
+                        "inverse-primary": "#00daf3",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed": "#c9e7f7",
+                        "background": "#f8f9fa",
+                        "tertiary-container": "#9dddcb",
+                        "secondary": "#466270",
+                        "inverse-surface": "#2e3132"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {},
+                    "fontFamily": {
+                        "headline": [
+                            "Space Grotesk"
+                        ],
+                        "body": [
+                            "Inter"
+                        ],
+                        "label": [
+                            "Space Grotesk"
+                        ]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .nautical-fader-track {
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .nautical-fader-handle {
+            box-shadow: 0 4px 12px rgba(25, 28, 29, 0.05), inset 0 2px 0 rgba(255,255,255,0.8);
+        }
+        .ghost-border {
+            box-shadow: 0 0 0 1px rgba(186, 201, 204, 0.15);
+        }
+        .ambient-shadow {
+            box-shadow: 0 8px 24px rgba(25, 28, 29, 0.05);
+        }
+    </style>
+</head>
+<body class="bg-surface font-body text-on-surface h-full overflow-hidden flex selection:bg-primary-container selection:text-on-primary-container">
+<!-- SideNavBar (Shared Component) -->
+<nav class="fixed left-0 top-0 h-full w-28 flex flex-col items-center border-r-0 bg-white/60 backdrop-blur-lg shadow-[10px_0_30px_rgba(0,0,0,0.03)] z-50 py-8 justify-between">
+<div class="flex flex-col items-center gap-12">
+<!-- Brand Logo -->
+<div class="flex flex-col items-center gap-2">
+<span class="material-symbols-outlined text-4xl text-slate-900" style="font-variation-settings: 'FILL' 1;">sailing</span>
+<div class="flex flex-col items-center">
+<span class="font-headline text-2xl font-black text-slate-900 tracking-tighter">6969</span>
+<span class="font-headline font-bold uppercase tracking-widest text-[10px] text-cyan-400">HELM</span>
+</div>
+</div>
+<!-- Navigation Tabs -->
+<div class="flex flex-col gap-6 w-full px-4">
+<!-- Control Deck (Active) -->
+<a class="flex flex-col items-center justify-center gap-2 bg-cyan-500/10 text-cyan-500 shadow-[0_0_12px_rgba(0,229,255,0.4)] rounded-2xl p-4 scale-105 transition-all ring-2 ring-cyan-400/50 scale-95 transition-transform group" href="#">
+<span class="material-symbols-outlined text-3xl" style="font-variation-settings: 'FILL' 1;">settings_input_component</span>
+<span class="font-headline font-bold uppercase tracking-widest text-[10px]">Control Deck</span>
+</a>
+<!-- Studio (Inactive) -->
+<a class="flex flex-col items-center justify-center gap-2 text-slate-400 p-4 hover:text-slate-600 hover:bg-slate-100/50 transition-all duration-300 rounded-2xl group" href="#">
+<span class="material-symbols-outlined text-3xl group-hover:scale-110 transition-transform">code</span>
+<span class="font-headline font-bold uppercase tracking-widest text-[10px]">Studio</span>
+</a>
+<!-- Monitor (Inactive) -->
+<a class="flex flex-col items-center justify-center gap-2 text-slate-400 p-4 hover:text-slate-600 hover:bg-slate-100/50 transition-all duration-300 rounded-2xl group" href="#">
+<span class="material-symbols-outlined text-3xl group-hover:scale-110 transition-transform">monitor_heart</span>
+<span class="font-headline font-bold uppercase tracking-widest text-[10px]">Monitor</span>
+</a>
+<!-- Diagnostics (Inactive) -->
+<a class="flex flex-col items-center justify-center gap-2 text-slate-400 p-4 hover:text-slate-600 hover:bg-slate-100/50 transition-all duration-300 rounded-2xl group" href="#">
+<span class="material-symbols-outlined text-3xl group-hover:scale-110 transition-transform">terminal</span>
+<span class="font-headline font-bold uppercase tracking-widest text-[10px]">Diagnostics</span>
+</a>
+</div>
+</div>
+<!-- User Avatar -->
+<div class="mt-auto">
+<img alt="Captain Avatar" class="w-12 h-12 rounded-full border-2 border-surface-container-high object-cover shadow-sm" data-alt="Close-up portrait of a serious male ship captain with a neat beard, dramatic studio lighting against a dark background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAAn6-4wSIiFPQV0ZVBX1n4MzeUl8kY6XlGvW3HDEU_NqwckZdUi5psYtScdZfWjSrsZd17zW69mKRRVQyOPEHDTdddTlEgBcpr40BAALDAwU54ueX1qYIUyineVYelLI__-72jzvWWO_czHtvqx0f014A7MbvcjYpEapQYUG6Mun_y0gWvpCrKIeGAlJlmDQ3BpRD4iytW4vIwRiwU9Jd_jT_2ie6DAdxQb18fUBuwx5JX6pUo92Gs0TNdXu6BRiUH6fFJzAQQuSY"/>
+</div>
+</nav>
+<!-- TopAppBar (Shared Component) -->
+<header class="fixed top-0 right-0 w-[calc(100%-7rem)] h-16 bg-white/40 backdrop-blur-md flat no-shadows border-b-0 flex justify-between items-center px-12 z-40">
+<div>
+<span class="font-headline font-black italic text-slate-900 tracking-tighter text-xl">CaptainPad 6969</span>
+</div>
+<div class="flex gap-4">
+<button class="p-2 text-cyan-500 hover:bg-slate-200/30 rounded-full scale-95 duration-150 ease-in-out transition-all">
+<span class="material-symbols-outlined">rss_feed</span>
+</button>
+<button class="p-2 text-cyan-500 hover:bg-slate-200/30 rounded-full scale-95 duration-150 ease-in-out transition-all">
+<span class="material-symbols-outlined">battery_charging_full</span>
+</button>
+<button class="p-2 text-cyan-500 hover:bg-slate-200/30 rounded-full scale-95 duration-150 ease-in-out transition-all">
+<span class="material-symbols-outlined">sailing</span>
+</button>
+</div>
+</header>
+<!-- Main Workspace -->
+<main class="ml-28 mt-16 flex w-[calc(100%-7rem)] h-[calc(100%-4rem)] p-8 gap-8">
+<!-- Left Pane: Pattern Queue (30%) -->
+<section class="w-[30%] flex flex-col bg-surface-container-low rounded-[2rem] p-6 ghost-border relative overflow-hidden">
+<div class="flex items-center justify-between mb-8">
+<h2 class="font-headline font-bold text-lg text-on-surface uppercase tracking-wider">Pattern Queue</h2>
+<span class="material-symbols-outlined text-secondary">format_list_bulleted</span>
+</div>
+<div class="flex-1 overflow-y-auto pr-2 space-y-4">
+<!-- Inactive Pattern -->
+<div class="bg-surface-container-lowest p-4 rounded-xl ghost-border flex items-center justify-between hover:bg-surface-dim transition-colors cursor-pointer group">
+<div class="flex items-center gap-4">
+<div class="w-2 h-2 rounded-full bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="font-body font-medium text-on-surface">Fire</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-primary transition-colors text-sm">play_arrow</span>
+</div>
+<!-- Active Pattern -->
+<div class="bg-surface-container-lowest p-4 rounded-xl ghost-border flex items-center justify-between relative overflow-hidden">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary-fixed-dim shadow-[0_0_8px_rgba(0,218,243,0.8)]"></div>
+<div class="flex items-center gap-4 pl-2">
+<div class="w-2 h-2 rounded-full bg-primary-fixed-dim animate-pulse"></div>
+<span class="font-body font-bold text-primary">Ocean Sweep</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-label text-xs font-bold text-primary-fixed-dim uppercase tracking-wider">Live</span>
+<span class="material-symbols-outlined text-primary-fixed-dim text-sm" style="font-variation-settings: 'FILL' 1;">graphic_eq</span>
+</div>
+</div>
+<!-- Inactive Pattern -->
+<div class="bg-surface-container-lowest p-4 rounded-xl ghost-border flex items-center justify-between hover:bg-surface-dim transition-colors cursor-pointer group">
+<div class="flex items-center gap-4">
+<div class="w-2 h-2 rounded-full bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="font-body font-medium text-on-surface">Strobe</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-primary transition-colors text-sm">play_arrow</span>
+</div>
+<!-- Inactive Pattern -->
+<div class="bg-surface-container-lowest p-4 rounded-xl ghost-border flex items-center justify-between hover:bg-surface-dim transition-colors cursor-pointer group">
+<div class="flex items-center gap-4">
+<div class="w-2 h-2 rounded-full bg-outline-variant group-hover:bg-primary transition-colors"></div>
+<span class="font-body font-medium text-on-surface">Aurora</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-primary transition-colors text-sm">play_arrow</span>
+</div>
+</div>
+<div class="mt-6">
+<button class="w-full bg-surface-container-lowest text-primary font-headline font-bold uppercase tracking-wider text-sm py-4 rounded-xl ghost-border ambient-shadow hover:bg-surface-dim active:scale-95 transition-all">
+                    Add Pattern
+                </button>
+</div>
+</section>
+<!-- Right Pane: Parameters (70%) -->
+<section class="w-[70%] flex flex-col gap-8">
+<!-- Top Section: Faders -->
+<div class="flex-1 bg-surface-container-low rounded-[2rem] p-8 ghost-border flex gap-12 justify-around items-end">
+<!-- Global Speed Fader -->
+<div class="flex flex-col items-center gap-6 h-full w-24">
+<div class="flex flex-col items-center gap-1">
+<span class="font-headline font-bold text-xs uppercase tracking-widest text-secondary">Speed</span>
+<span class="font-headline font-black text-2xl text-on-surface">120</span>
+</div>
+<div class="relative flex-1 w-8 bg-surface-container-high rounded-full nautical-fader-track flex justify-center py-4">
+<div class="absolute bottom-1/2 w-16 h-12 bg-surface-container-lowest rounded-xl nautical-fader-handle flex items-center justify-center cursor-ns-resize active:scale-95 transition-transform">
+<div class="w-8 h-1 bg-primary-fixed-dim rounded-full shadow-[0_0_4px_rgba(0,218,243,0.5)]"></div>
+</div>
+</div>
+</div>
+<!-- Hue Shift Fader -->
+<div class="flex flex-col items-center gap-6 h-full w-24">
+<div class="flex flex-col items-center gap-1">
+<span class="font-headline font-bold text-xs uppercase tracking-widest text-secondary">Hue</span>
+<span class="font-headline font-black text-2xl text-on-surface">45°</span>
+</div>
+<div class="relative flex-1 w-8 bg-surface-container-high rounded-full nautical-fader-track flex justify-center py-4">
+<div class="absolute bottom-[70%] w-16 h-12 bg-surface-container-lowest rounded-xl nautical-fader-handle flex items-center justify-center cursor-ns-resize active:scale-95 transition-transform">
+<div class="w-8 h-1 bg-primary-fixed-dim rounded-full shadow-[0_0_4px_rgba(0,218,243,0.5)]"></div>
+</div>
+</div>
+</div>
+<!-- Intensity Fader -->
+<div class="flex flex-col items-center gap-6 h-full w-24">
+<div class="flex flex-col items-center gap-1">
+<span class="font-headline font-bold text-xs uppercase tracking-widest text-secondary">Intensity</span>
+<span class="font-headline font-black text-2xl text-on-surface">85%</span>
+</div>
+<div class="relative flex-1 w-8 bg-surface-container-high rounded-full nautical-fader-track flex justify-center py-4">
+<!-- LED Meter Background -->
+<div class="absolute bottom-4 top-4 w-2 bg-gradient-to-t from-secondary-container to-primary-container rounded-full opacity-30"></div>
+<div class="absolute bottom-[85%] w-16 h-12 bg-surface-container-lowest rounded-xl nautical-fader-handle flex items-center justify-center cursor-ns-resize active:scale-95 transition-transform z-10">
+<div class="w-8 h-1 bg-primary-fixed-dim rounded-full shadow-[0_0_4px_rgba(0,218,243,0.5)]"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Middle Section: Macro Grid -->
+<div class="grid grid-cols-4 gap-6">
+<!-- Macro Button -->
+<button class="bg-surface-container-lowest h-24 rounded-2xl ghost-border ambient-shadow flex flex-col items-center justify-center gap-2 hover:bg-surface-dim active:bg-surface-container-high active:shadow-inner transition-all group">
+<span class="material-symbols-outlined text-3xl text-secondary group-active:text-primary transition-colors">flare</span>
+<span class="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">Trigger Burst</span>
+</button>
+<!-- Macro Button -->
+<button class="bg-surface-container-lowest h-24 rounded-2xl ghost-border ambient-shadow flex flex-col items-center justify-center gap-2 hover:bg-surface-dim active:bg-surface-container-high active:shadow-inner transition-all group">
+<span class="material-symbols-outlined text-3xl text-secondary group-active:text-primary transition-colors">bolt</span>
+<span class="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">Lightning</span>
+</button>
+<!-- Macro Button -->
+<button class="bg-surface-container-lowest h-24 rounded-2xl ghost-border ambient-shadow flex flex-col items-center justify-center gap-2 hover:bg-surface-dim active:bg-surface-container-high active:shadow-inner transition-all group">
+<span class="material-symbols-outlined text-3xl text-secondary group-active:text-primary transition-colors">blur_on</span>
+<span class="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">Fog On</span>
+</button>
+<!-- Macro Button -->
+<button class="bg-surface-container-lowest h-24 rounded-2xl ghost-border ambient-shadow flex flex-col items-center justify-center gap-2 hover:bg-surface-dim active:bg-surface-container-high active:shadow-inner transition-all group">
+<span class="material-symbols-outlined text-3xl text-secondary group-active:text-primary transition-colors">contrast</span>
+<span class="font-headline font-bold text-xs uppercase tracking-wider text-on-surface">Invert</span>
+</button>
+</div>
+<!-- Bottom Section: Blackout -->
+<div class="h-24">
+<button class="w-full h-full rounded-2xl bg-surface-container-lowest ghost-border ambient-shadow flex items-center justify-center gap-6 active:scale-[0.98] transition-transform overflow-hidden relative group">
+<!-- Hazard Striping Background -->
+<div class="absolute inset-0 opacity-10" style="background-image: repeating-linear-gradient(45deg, transparent, transparent 20px, #ba1a1a 20px, #ba1a1a 40px);"></div>
+<span class="material-symbols-outlined text-error text-4xl group-active:scale-110 transition-transform relative z-10" style="font-variation-settings: 'FILL' 1;">warning</span>
+<span class="font-headline font-black text-2xl tracking-widest text-error relative z-10">GLOBAL BLACKOUT</span>
+</button>
+</div>
+</section>
+</main>
+<!-- Group Brightness Modal Overlay -->
+<div class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
+<!-- Modal Content -->
+<div class="bg-white/80 backdrop-blur-2xl shadow-[0_8px_32px_rgba(25,28,29,0.1)] ghost-border rounded-3xl p-8 w-full max-w-md flex flex-col gap-8">
+<!-- Header -->
+<div class="flex justify-between items-center border-b border-surface-container-high pb-4">
+<h3 class="font-headline font-bold text-xl text-on-surface">Group Brightness</h3>
+<button class="p-2 text-secondary hover:text-on-surface hover:bg-surface-container-low rounded-full transition-colors active:scale-95">
+<span class="material-symbols-outlined">close</span>
+</button>
+</div>
+<!-- Sliders List -->
+<div class="flex flex-col gap-6">
+<!-- Group Item: Bow LED -->
+<div class="flex flex-col gap-3">
+<div class="flex justify-between items-center">
+<span class="font-body font-medium text-on-surface text-sm">Bow LED</span>
+<span class="font-headline font-bold text-sm text-primary">80%</span>
+</div>
+<input class="w-full h-2 bg-surface-container-high rounded-full appearance-none cursor-pointer accent-primary-fixed-dim" max="100" min="0" type="range" value="80"/>
+</div>
+<!-- Group Item: Stern LED -->
+<div class="flex flex-col gap-3">
+<div class="flex justify-between items-center">
+<span class="font-body font-medium text-on-surface text-sm">Stern LED</span>
+<span class="font-headline font-bold text-sm text-primary">45%</span>
+</div>
+<input class="w-full h-2 bg-surface-container-high rounded-full appearance-none cursor-pointer accent-primary-fixed-dim" max="100" min="0" type="range" value="45"/>
+</div>
+<!-- Group Item: Deck Rails -->
+<div class="flex flex-col gap-3">
+<div class="flex justify-between items-center">
+<span class="font-body font-medium text-on-surface text-sm">Deck Rails</span>
+<span class="font-headline font-bold text-sm text-primary">100%</span>
+</div>
+<input class="w-full h-2 bg-surface-container-high rounded-full appearance-none cursor-pointer accent-primary-fixed-dim" max="100" min="0" type="range" value="100"/>
+</div>
+<!-- Group Item: Mast Light -->
+<div class="flex flex-col gap-3">
+<div class="flex justify-between items-center">
+<span class="font-body font-medium text-on-surface text-sm">Mast Light</span>
+<span class="font-headline font-bold text-sm text-primary">20%</span>
+</div>
+<input class="w-full h-2 bg-surface-container-high rounded-full appearance-none cursor-pointer accent-primary-fixed-dim" max="100" min="0" type="range" value="20"/>
+</div>
+</div>
+</div>
+</div>
+</body></html>

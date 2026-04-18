@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AeroHelm - Monitor</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-primary": "#00daf3",
+                        "error-container": "#ffdad6",
+                        "surface-container-high": "#e7e8e9",
+                        "on-primary-container": "#00626e",
+                        "on-secondary-fixed-variant": "#2e4b57",
+                        "on-primary-fixed-variant": "#004f58",
+                        "secondary-fixed": "#c9e7f7",
+                        "outline-variant": "#bac9cc",
+                        "surface-container-low": "#f3f4f5",
+                        "secondary-fixed-dim": "#adcbda",
+                        "on-tertiary-fixed": "#00201a",
+                        "tertiary-container": "#9dddcb",
+                        "outline": "#6b7a7d",
+                        "primary": "#006875",
+                        "surface-container": "#edeeef",
+                        "on-secondary-container": "#4a6774",
+                        "tertiary-fixed": "#afefdd",
+                        "surface-bright": "#f8f9fa",
+                        "secondary": "#466270",
+                        "primary-fixed-dim": "#00daf3",
+                        "on-primary-fixed": "#001f24",
+                        "on-surface": "#191c1d",
+                        "primary-fixed": "#9cf0ff",
+                        "on-secondary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "background": "#f8f9fa",
+                        "primary-container": "#00e5ff",
+                        "on-surface-variant": "#3b494c",
+                        "on-error": "#ffffff",
+                        "inverse-surface": "#2e3132",
+                        "surface-variant": "#e1e3e4",
+                        "surface-container-highest": "#e1e3e4",
+                        "on-tertiary": "#ffffff",
+                        "secondary-container": "#c6e4f4",
+                        "surface-tint": "#006875",
+                        "error": "#ba1a1a",
+                        "surface-dim": "#d9dadb",
+                        "surface": "#f8f9fa",
+                        "on-tertiary-fixed-variant": "#065043",
+                        "on-background": "#191c1d",
+                        "on-tertiary-container": "#226355",
+                        "on-secondary-fixed": "#001f2a",
+                        "inverse-on-surface": "#f0f1f2",
+                        "tertiary-fixed-dim": "#94d3c1",
+                        "tertiary": "#29695b",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary": "#ffffff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Space Grotesk", "sans-serif"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, h4, h5, h6, .font-headline { font-family: 'Space Grotesk', sans-serif; }
+        
+        /* 3D Transform Utilities for the 'projected glass' look */
+        .perspective-container {
+            perspective: 1500px;
+        }
+        .panel-left {
+            transform: rotateY(15deg) translateZ(50px);
+            transform-style: preserve-3d;
+        }
+        .panel-right {
+            transform: rotateY(-15deg) translateZ(50px);
+            transform-style: preserve-3d;
+        }
+        .panel-glass {
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: -10px 20px 40px rgba(25, 28, 29, 0.05), inset 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: theme('colors.surface-variant'); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: theme('colors.outline-variant'); }
+    </style>
+</head>
+<body class="bg-surface text-on-surface antialiased overflow-hidden flex h-screen w-screen perspective-container">
+<!-- TopAppBar -->
+<header class="fixed top-0 flex items-center justify-between px-8 h-20 w-full z-50 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl bg-slate-100/50 dark:bg-slate-800/50 shadow-[0_8px_30px_rgb(0,0,0,0.04)] pl-32">
+<div class="flex items-center gap-4">
+<span class="text-2xl font-bold tracking-tighter text-slate-900 dark:text-white font-['Space_Grotesk'] tracking-tight">AeroHelm</span>
+</div>
+<div class="flex items-center gap-6">
+<!-- Search placeholder if on_left logic dictates it's here, but usually it's near logo. Placing on right for balance -->
+<div class="relative hidden md:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-sm">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-2 pl-10 pr-4 text-sm font-body text-on-surface focus:ring-1 focus:ring-primary-fixed-dim focus:outline-none w-64 shadow-inner" placeholder="Search..." type="text"/>
+</div>
+<div class="flex items-center gap-4 text-cyan-500 dark:text-cyan-400">
+<button class="p-2 rounded-full hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors active:scale-95 duration-200">
+<span class="material-symbols-outlined text-outline" data-weight="fill" style="font-variation-settings: 'FILL' 1;">settings</span>
+</button>
+<button class="p-2 rounded-full hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors active:scale-95 duration-200 relative">
+<span class="material-symbols-outlined text-outline" data-weight="fill" style="font-variation-settings: 'FILL' 1;">notifications</span>
+<span class="absolute top-1 right-2 w-2 h-2 bg-primary-fixed-dim rounded-full animate-pulse"></span>
+</button>
+<button class="p-2 rounded-full hover:bg-slate-50/80 dark:hover:bg-slate-800/80 transition-colors active:scale-95 duration-200">
+<span class="material-symbols-outlined text-outline" data-weight="fill" style="font-variation-settings: 'FILL' 1;">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-full flex flex-col items-center py-24 z-40 bg-slate-50/40 dark:bg-slate-950/40 backdrop-blur-2xl w-24 border-r border-slate-200/20 shadow-xl dark:shadow-2xl justify-between">
+<div class="flex flex-col items-center gap-8 w-full">
+<div class="w-12 h-12 rounded-full bg-surface-container-lowest shadow-sm flex items-center justify-center mb-4 overflow-hidden border border-outline-variant/30">
+<img alt="Vessel Profile" class="w-full h-full object-cover" data-alt="profile image of a sleek modern vessel in cool lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD-eZS_Akn0OtMladAr35jemiVHmrOGBv7jCWkVwbkHAmUOPTGgXSm7ArRJ1z1n3uFM1hb_YhhoOdr4jL4Z5IOyekMSZTYSDrytNa-pw9Nn0SkNm_ru-Ms5yzDxQrO4wjL2HH2S-zWXaQmUVgYjojWtkvKnfs5H8jDiXYufWozTNO1bbIfOmHb12FaL9mhHj9iSX1lk6pnTjKQSxSO-Qvt341tR9iiFAh7Xzn_5XjZugKTptiW3K4eGUrKR0Tl4mdWn78x8wygrZZ0"/>
+</div>
+<!-- Tabs -->
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300">
+<span class="material-symbols-outlined text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200 transition-all text-2xl">sailing</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200">Helm</span>
+</button>
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300 border-r-4 border-cyan-500 bg-surface-container-low/50">
+<span class="material-symbols-outlined text-cyan-500 dark:text-cyan-400 transition-all text-2xl" data-weight="fill" style="font-variation-settings: 'FILL' 1;">explore</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-cyan-500 dark:text-cyan-400 font-bold">Navigation</span>
+</button>
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300">
+<span class="material-symbols-outlined text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200 transition-all text-2xl">settings_input_component</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200">Engine</span>
+</button>
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300">
+<span class="material-symbols-outlined text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200 transition-all text-2xl">query_stats</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200">Telemetry</span>
+</button>
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300">
+<span class="material-symbols-outlined text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200 transition-all text-2xl">radar</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200">Radar</span>
+</button>
+</div>
+<div class="flex flex-col items-center gap-6 w-full">
+<button class="w-12 h-12 rounded-full bg-error/10 text-error flex items-center justify-center hover:bg-error/20 transition-colors shadow-sm" title="Emergency Stop">
+<span class="material-symbols-outlined font-bold">pan_tool</span>
+</button>
+<button class="flex flex-col items-center gap-1 w-full py-3 group hover:translate-x-1 duration-300">
+<span class="material-symbols-outlined text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200 transition-all text-xl">help_outline</span>
+<span class="font-['Space_Grotesk'] text-[10px] uppercase tracking-widest text-slate-400 dark:text-slate-600 group-hover:text-cyan-300 dark:group-hover:text-cyan-200">Support</span>
+</button>
+</div>
+</nav>
+<!-- Main Content Canvas (3D Cockpit) -->
+<main class="ml-24 mt-20 flex-1 relative bg-surface-bright flex items-center justify-center overflow-hidden">
+<!-- Central 3D Render Area (The 'Glass' Viewport) -->
+<div class="absolute inset-0 flex items-center justify-center z-0 opacity-80 pointer-events-none">
+<!-- Placeholder for 3D wireframe render -->
+<img alt="3D Wireframe of Ship" class="w-[80%] h-[80%] object-contain mix-blend-multiply opacity-40 filter grayscale contrast-150" data-alt="abstract tech wireframe graphic glowing faintly in white and cyan over a white background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB1wAF1R_kIX6rvYVTB3_viXKaqAA6GIsUp8uKL6U_hWnBkynBrbjlV-U4SUjQlOeEkWY9Hq3HGIbkWuNxJG5xpK4ZtsprSJ6x1N9fGzqN2w_rLsqwSZLqmodIz_OUUJEfBmHKpvGiqgP8CMrE27_OeSiXrwaWsUqDnt1SeHKzzS87R0cBCMzFazVJAqrzKST0TQ5Xf1vvA5m01Jwm7qEupx1czbnDjglu1Qq8s_pGUF6hFAnT8WNKTdcXe5Sd69yqitYZta5ZBAC0"/>
+<div class="absolute inset-0 bg-gradient-radial from-transparent to-surface pointer-events-none z-10"></div>
+<!-- Focal Point Text -->
+<div class="absolute top-[20%] text-center z-10">
+<h2 class="font-headline text-5xl font-bold tracking-tighter text-on-surface/80">BM26-TITANIC</h2>
+<p class="font-body text-sm tracking-[0.2em] text-primary font-medium mt-2">SIMULATION ENVIRONMENT ACTIVE</p>
+</div>
+</div>
+<!-- 3D UI Overlay Panels -->
+<div class="relative z-20 w-full h-full max-w-7xl mx-auto flex items-center justify-between px-12">
+<!-- Left Panel Group: Telemetry & Controls -->
+<div class="flex flex-col gap-8 w-80 panel-left">
+<!-- Telemetry Panel -->
+<div class="panel-glass rounded-xl p-6 relative overflow-hidden group">
+<div class="absolute top-0 left-0 w-1 h-full bg-primary-fixed-dim"></div>
+<div class="flex items-center justify-between mb-6">
+<h3 class="font-headline text-sm font-bold tracking-wider text-on-surface uppercase flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm">monitor_heart</span> Telemetry
+                        </h3>
+<span class="w-2 h-2 bg-primary-fixed-dim rounded-full shadow-[0_0_8px_theme('colors.primary-fixed-dim')] animate-pulse"></span>
+</div>
+<div class="space-y-4">
+<div class="bg-surface-container-high/50 rounded-lg p-3 inset-shadow-sm">
+<div class="flex justify-between text-xs text-secondary font-body mb-1">
+<span>PITCH</span>
+<span class="font-mono">+12.4°</span>
+</div>
+<div class="w-full h-1 bg-surface-variant rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[60%]"></div>
+</div>
+</div>
+<div class="bg-surface-container-high/50 rounded-lg p-3 inset-shadow-sm">
+<div class="flex justify-between text-xs text-secondary font-body mb-1">
+<span>YAW</span>
+<span class="font-mono">-04.1°</span>
+</div>
+<div class="w-full h-1 bg-surface-variant rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[40%]"></div>
+</div>
+</div>
+<div class="bg-surface-container-high/50 rounded-lg p-3 inset-shadow-sm">
+<div class="flex justify-between text-xs text-secondary font-body mb-1">
+<span>ROLL</span>
+<span class="font-mono">00.0°</span>
+</div>
+<div class="w-full h-1 bg-surface-variant rounded-full overflow-hidden">
+<div class="h-full bg-outline w-[50%]"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Camera Controls -->
+<div class="panel-glass rounded-xl p-6 relative">
+<div class="flex items-center justify-between mb-6">
+<h3 class="font-headline text-sm font-bold tracking-wider text-on-surface uppercase flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm">videocam</span> Camera
+                        </h3>
+</div>
+<div class="grid grid-cols-3 gap-2">
+<button class="bg-surface-container-lowest rounded-lg p-3 text-center shadow-sm border border-outline-variant/15 hover:bg-surface-container-low transition-colors active:shadow-none active:bg-surface-dim">
+<span class="material-symbols-outlined text-on-surface">zoom_in</span>
+</button>
+<button class="bg-surface-container-lowest rounded-lg p-3 text-center shadow-sm border border-outline-variant/15 hover:bg-surface-container-low transition-colors active:shadow-none active:bg-surface-dim">
+<span class="material-symbols-outlined text-on-surface">pan_tool</span>
+</button>
+<button class="bg-surface-container-lowest rounded-lg p-3 text-center shadow-sm border border-outline-variant/15 hover:bg-surface-container-low transition-colors active:shadow-none active:bg-surface-dim text-primary">
+<span class="material-symbols-outlined font-bold">view_in_ar</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Right Panel Group: Engine Params & Status -->
+<div class="flex flex-col gap-8 w-96 panel-right">
+<!-- Engine Parameters -->
+<div class="panel-glass rounded-xl p-6 relative">
+<div class="absolute top-0 right-0 w-1 h-full bg-secondary-fixed-dim"></div>
+<div class="flex items-center justify-between mb-6">
+<h3 class="font-headline text-sm font-bold tracking-wider text-on-surface uppercase flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm">settings_b_roll</span> Sim Params
+                        </h3>
+</div>
+<div class="space-y-6">
+<!-- Speed Slider -->
+<div class="bg-surface-container-low rounded-lg p-4 group">
+<div class="flex justify-between items-end mb-2">
+<span class="font-headline text-xs tracking-widest text-secondary uppercase">Speed</span>
+<span class="font-headline text-2xl font-bold text-on-surface">42.8<span class="text-sm text-outline font-normal">kts</span></span>
+</div>
+<div class="relative h-6 bg-surface-container-high rounded border border-outline-variant/20 shadow-inner flex items-center px-1">
+<div class="absolute left-1 h-4 bg-gradient-to-r from-primary to-primary-container rounded w-[75%] shadow-[0_0_10px_rgba(0,229,255,0.3)]"></div>
+<div class="absolute left-[75%] w-6 h-8 bg-surface-container-lowest rounded shadow-md border border-outline-variant/30 flex items-center justify-center -translate-x-1/2 cursor-grab">
+<div class="w-1 h-3 bg-outline rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Param Dials Grid -->
+<div class="grid grid-cols-3 gap-3">
+<div class="bg-surface-container-low rounded-lg p-3 flex flex-col items-center justify-center border border-outline-variant/10 shadow-sm">
+<span class="font-headline text-[10px] tracking-widest text-secondary uppercase mb-2">Hue</span>
+<div class="w-12 h-12 rounded-full border-4 border-surface-container-high relative flex items-center justify-center bg-surface">
+<svg class="absolute inset-0 w-full h-full -rotate-90" viewbox="0 0 36 36">
+<path class="text-primary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="75, 100" stroke-width="3"></path>
+</svg>
+<span class="font-mono text-xs font-bold text-on-surface">210</span>
+</div>
+</div>
+<div class="bg-surface-container-low rounded-lg p-3 flex flex-col items-center justify-center border border-outline-variant/10 shadow-sm">
+<span class="font-headline text-[10px] tracking-widest text-secondary uppercase mb-2">Sat</span>
+<div class="w-12 h-12 rounded-full border-4 border-surface-container-high relative flex items-center justify-center bg-surface">
+<svg class="absolute inset-0 w-full h-full -rotate-90" viewbox="0 0 36 36">
+<path class="text-secondary-fixed-dim" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="45, 100" stroke-width="3"></path>
+</svg>
+<span class="font-mono text-xs font-bold text-on-surface">45%</span>
+</div>
+</div>
+<div class="bg-surface-container-low rounded-lg p-3 flex flex-col items-center justify-center border border-outline-variant/10 shadow-sm">
+<span class="font-headline text-[10px] tracking-widest text-secondary uppercase mb-2">Val</span>
+<div class="w-12 h-12 rounded-full border-4 border-surface-container-high relative flex items-center justify-center bg-surface">
+<svg class="absolute inset-0 w-full h-full -rotate-90" viewbox="0 0 36 36">
+<path class="text-tertiary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="90, 100" stroke-width="3"></path>
+</svg>
+<span class="font-mono text-xs font-bold text-on-surface">90%</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Action Panel -->
+<div class="panel-glass rounded-xl p-4 flex gap-4">
+<button class="flex-1 bg-surface-container-lowest text-on-surface font-headline text-sm font-bold py-3 rounded-lg border border-outline-variant/20 shadow-sm hover:bg-surface-container-low active:shadow-none active:bg-surface-dim transition-all">
+                        Reset View
+                    </button>
+<button class="flex-1 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline text-sm font-bold py-3 rounded-lg shadow-[0_4px_15px_rgba(0,104,117,0.3)] hover:shadow-[0_6px_20px_rgba(0,229,255,0.4)] active:translate-y-1 transition-all">
+                        Commit
+                    </button>
+</div>
+</div>
+</div>
+</main>
+</body></html>

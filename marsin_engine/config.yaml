@@ -3,6 +3,8 @@ sacn:
   sourceName: 'MarsinEngine'
   destination: '127.0.0.1'  # Set to actual IP or '127.0.0.1' for unicast
   multicast: false          # Explicitly disable multicast to prevent flooding
-
 engine:
   fps: 40
+
+server:
+  port: 6968

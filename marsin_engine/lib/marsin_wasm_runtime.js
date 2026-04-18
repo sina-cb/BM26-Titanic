@@ -9,14 +9,6 @@
  *   const rt = await createWasmRuntime(pixelCount);
  *   rt.compile(patternCode);
  *   rt.beginFrame(elapsedSeconds);
- *   for (let i = 0; i < pixelCount; i++) {
- *     const { r, g, b } = rt.renderPixel(i, nx, ny, nz);
- *   }
- *
- * Batch rendering (preferred for performance):
- *   rt.setCoords(pixels);      // once at startup
- *   rt.setPixelMeta(metaArray); // optional, for v2 models
- *   rt.beginFrame(elapsed);
  *   const rgbBuffer = rt.renderAll();  // Uint8Array, 3 bytes per pixel
  */
 
@@ -37,8 +29,6 @@ export async function createWasmRuntime(pixelCount) {
   const wasmDir = path.resolve(__dirname, '../../marsin_pb/wasm');
   const modulePath = path.join(wasmDir, 'marsin-engine.cjs');
 
-  // Use createRequire for CJS Emscripten module (import() doesn't work
-  // because Emscripten's module.exports pattern isn't ESM-compatible)
   const require = createRequire(import.meta.url);
   const MarsinEngineModule = require(modulePath);
   const Module = await MarsinEngineModule({
@@ -51,56 +41,52 @@ export async function createWasmRuntime(pixelCount) {
   });
 
   // ── Bind C functions via cwrap ──────────────────────────────────────
-  const _compile = Module.cwrap('marsin_compile', 'number', ['string']);
-  const _getError = Module.cwrap('marsin_get_error', 'string', []);
-  const _destroyVm = Module.cwrap('marsin_destroy_vm', null, ['number']);
-  const _beginFrame = Module.cwrap('marsin_begin_frame', null, ['number', 'number']);
-  const _renderPixel = Module.cwrap('marsin_render_pixel', 'number',
-    ['number', 'number', 'number', 'number', 'number']);
-  const _renderAll = Module.cwrap('marsin_render_all', null,
-    ['number', 'number', 'number', 'number']);
+  const _compile       = Module.cwrap('marsin_compile',       'number', ['string']);
+  const _getError      = Module.cwrap('marsin_get_error',     'string', []);
+  const _destroyVm     = Module.cwrap('marsin_destroy_vm',    null,     ['number']);
+  const _beginFrame    = Module.cwrap('marsin_begin_frame',   null,     ['number', 'number']);
+  const _renderPixel   = Module.cwrap('marsin_render_pixel',  'number', ['number', 'number', 'number', 'number', 'number']);
+  const _renderAll     = Module.cwrap('marsin_render_all',    null,     ['number', 'number', 'number', 'number']);
   const _renderAllWithMeta = Module.cwrap('marsin_render_all_with_meta', null,
     ['number', 'number', 'number', 'number', 'number']);
   const _renderAllWithMeta6ch = Module.cwrap('marsin_render_all_with_meta_6ch', null,
     ['number', 'number', 'number', 'number', 'number']);
+  const _setControl    = Module.cwrap('marsin_set_control',   null,     ['number', 'number', 'number', 'number', 'number']);
+  const _getExportsJson = Module.cwrap('marsin_get_exports_json', 'string', ['number']);
 
   // ── State ───────────────────────────────────────────────────────────
   let handle = 0;
 
   // Pre-allocate WASM heap buffers
-  const coordBufSize = pixelCount * 3 * 4; // 3 floats per pixel
-  const outBufSize = pixelCount * 3;        // 3 bytes per pixel (RGB)
-  const metaBufSize = pixelCount * 4 * 4;   // 4 ints per pixel
-
-  const coordPtr = Module._malloc(coordBufSize);
-  const outPtr = Module._malloc(outBufSize);
+  const coordBufSize  = pixelCount * 3 * 4;  // 3 floats per pixel
+  const outBufSize    = pixelCount * 3;       // 3 bytes per pixel (RGB)
   const outBuf6chSize = pixelCount * 6;       // 6 bytes per pixel (RGBWAU)
+  const metaBufSize   = pixelCount * 4 * 4;   // 4 ints per pixel
+
+  const coordPtr  = Module._malloc(coordBufSize);
+  const outPtr    = Module._malloc(outBufSize);
   const outPtr6ch = Module._malloc(outBuf6chSize);
   let metaPtr = 0; // Allocated lazily
 
   // Typed views into WASM heap
   const coordView = new Float32Array(Module.HEAPF32.buffer, coordPtr, pixelCount * 3);
-  const outView = new Uint8Array(Module.HEAPU8.buffer, outPtr, outBufSize);
 
   // ── Public API ──────────────────────────────────────────────────────
 
   /**
    * Compile a MarsinScript pattern.
+   * The C++ MarsinCompiler natively understands `export function` for UI
+   * controls and `export var` for state variables — no JS-side stripping.
    * @param {string} code Pattern source code.
    * @returns {{ ok: boolean, error?: string }}
    */
   function compile(code) {
-    // Strip ES module syntax (same as the pure-JS runtime)
-    let src = code
-      .replace(/export\s+function\s+/g, 'function ')
-      .replace(/export\s+/g, '');
-
     if (handle) {
       _destroyVm(handle);
       handle = 0;
     }
 
-    handle = _compile(src);
+    handle = _compile(code);
     if (handle === 0) {
       return { ok: false, error: _getError() };
     }
@@ -109,7 +95,7 @@ export async function createWasmRuntime(pixelCount) {
 
   /**
    * Begin a new animation frame.
-   * @param {number} elapsedSeconds Time since start.
+   * @param {number} elapsedSeconds Elapsed time since start (seconds).
    */
   function beginFrame(elapsedSeconds) {
     if (handle) _beginFrame(handle, elapsedSeconds);
@@ -135,7 +121,7 @@ export async function createWasmRuntime(pixelCount) {
    */
   function setCoords(pixels) {
     for (let i = 0; i < pixelCount && i < pixels.length; i++) {
-      coordView[i * 3] = pixels[i].nx || 0;
+      coordView[i * 3]     = pixels[i].nx || 0;
       coordView[i * 3 + 1] = pixels[i].ny || 0;
       coordView[i * 3 + 2] = pixels[i].nz || 0;
     }
@@ -147,10 +133,7 @@ export async function createWasmRuntime(pixelCount) {
    */
   function setPixelMeta(metaArray) {
     if (!metaArray) {
-      if (metaPtr) {
-        Module._free(metaPtr);
-        metaPtr = 0;
-      }
+      if (metaPtr) { Module._free(metaPtr); metaPtr = 0; }
       return;
     }
 
@@ -161,7 +144,7 @@ export async function createWasmRuntime(pixelCount) {
     const metaView = new Int32Array(Module.HEAP32.buffer, metaPtr, pixelCount * 4);
     for (let i = 0; i < pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      metaView[i * 4] = m.controllerId || 0;
+      metaView[i * 4]     = m.controllerId || 0;
       metaView[i * 4 + 1] = m.sectionId || 0;
       metaView[i * 4 + 2] = m.fixtureId || 0;
       metaView[i * 4 + 3] = m.viewMask || 0;
@@ -169,8 +152,7 @@ export async function createWasmRuntime(pixelCount) {
   }
 
   /**
-   * Render all pixels in one WASM call. Much faster than per-pixel.
-   * Requires setCoords() to have been called first.
+   * Render all pixels in one WASM call (3-byte RGB).
    * @returns {Uint8Array} RGB buffer (3 bytes per pixel).
    */
   function renderAll() {
@@ -182,35 +164,51 @@ export async function createWasmRuntime(pixelCount) {
       _renderAll(handle, outPtr, pixelCount, coordPtr);
     }
 
-    // Return a copy (the heap view may be invalidated by memory growth)
     return new Uint8Array(Module.HEAPU8.buffer, outPtr, outBufSize).slice();
   }
 
   /**
-   * Render all pixels in one WASM call with 6-channel RGBWAU output.
-   * Uses metadata if setPixelMeta() has been called.
+   * Render all pixels in one WASM call (6-byte RGBWAU).
    * @returns {Uint8Array} RGBWAU buffer (6 bytes per pixel).
    */
   function renderAll6ch() {
     if (!handle) return new Uint8Array(outBuf6chSize);
-
     _renderAllWithMeta6ch(handle, outPtr6ch, pixelCount, coordPtr, metaPtr || 0);
-
     return new Uint8Array(Module.HEAPU8.buffer, outPtr6ch, outBuf6chSize).slice();
   }
 
   /**
-   * Clean up WASM resources.
+   * Get UI export controls from the compiled pattern.
+   * Uses the native C++ AST-to-JSON parser in the WASM binary.
+   * @returns {Array<{id: number, kind: number, name: string}>}
    */
-  function destroy() {
-    if (handle) {
-      _destroyVm(handle);
-      handle = 0;
+  function getExports() {
+    if (!handle) return [];
+    try {
+      return JSON.parse(_getExportsJson(handle) || '[]');
+    } catch (_) {
+      return [];
     }
-    if (coordPtr) Module._free(coordPtr);
-    if (outPtr) Module._free(outPtr);
+  }
+
+  /**
+   * Inject a parameter control value into the running pattern.
+   * @param {number} id   Control ID from getExports().
+   * @param {number} v0   Primary value (slider position, hue, etc.).
+   * @param {number} v1   Secondary value (saturation for HSV pickers).
+   * @param {number} v2   Tertiary value (value/brightness for HSV pickers).
+   */
+  function setControl(id, v0 = 0.0, v1 = 0.0, v2 = 0.0) {
+    if (handle) _setControl(handle, id, v0, v1, v2);
+  }
+
+  /** Free all WASM resources. */
+  function destroy() {
+    if (handle) { _destroyVm(handle); handle = 0; }
+    if (coordPtr)  Module._free(coordPtr);
+    if (outPtr)    Module._free(outPtr);
     if (outPtr6ch) Module._free(outPtr6ch);
-    if (metaPtr) Module._free(metaPtr);
+    if (metaPtr)   Module._free(metaPtr);
   }
 
   return {
@@ -221,6 +219,8 @@ export async function createWasmRuntime(pixelCount) {
     renderAll6ch,
     setCoords,
     setPixelMeta,
+    getExports,
+    setControl,
     destroy,
     pixelCount,
   };

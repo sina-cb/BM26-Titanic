@@ -66,3 +66,6 @@ coverage/
 # Global Logs
 *.log
 tmp/
+
+marsin_pb/wasm/*-Live-*.js
+marsin_pb/wasm/*-Live-*.wasm

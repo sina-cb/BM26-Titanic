@@ -236,7 +236,8 @@ export function animate() {
   }
 
   // ─── sACN Output: send DMX to real controllers via bridge ───
-  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && params.lightingProfile !== 'edit') {
+  // Completely disable sACN outbound transmission if in readonly observer mode (e.g. iPad WebView)
+  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && params.lightingProfile !== 'edit' && !window.__readonlyMode) {
     // Lazily enable output client
     if (!sacnOutputEnabled) {
       sacnOutputClient = getSacnOutput();

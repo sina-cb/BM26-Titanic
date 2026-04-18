@@ -1,13 +1,16 @@
-# 12 — MarsinEngine: Multichannel Rendering Pipeline
+# 12 — MarsinEngine: Headless API Output Server
 
 ## 1. Overview
 
-MarsinEngine is a standalone, headless rendering engine for the BM26 Titanic lighting system. It executes Pixelblaze-compatible patterns against a pixel model exported from the simulation, maps rendered RGB values to DMX channels via a patch table, and transmits the result over sACN (E1.31) to the simulation bridge for real-time 3D visualization.
+MarsinEngine is the core standalone WebAssembly-powered API server for the BM26 Titanic lighting system. Unlike the browser simulation, the Engine runs a headless HTTP/WebSocket daemon that executes Pixelblaze-compatible patterns at high speeds against the DMX pixel model, mapping RGBWA values to universes, and transmitting sACN (E1.31) dynamically.
+
+CaptainPad (iPad) binds strictly to the MarsinEngine to control live pattern states and inject dynamic UI parameter telemetry.
 
 **Design Philosophy:**
-- **Rendering efficiency first.** Pattern rendering runs on CPU (WASM primary, pure-JS fallback). GPU acceleration targets the mixing/compositing stage only.
+- **Persistent Server Architecture.** Booting the engine daemon spins up port 6968, allowing dynamic script recompilation and pattern swaps without process restarts.
+- **Rendering efficiency first.** Pattern rendering runs fully in the CPU.
 - **Deterministic patching.** The pixel model embeds auto-packed DMX patch info (universe/addr/footprint). Both the engine and the simulation consume the same patch layout.
-- **Pattern portability.** Patterns are Pixelblaze-compatible `.js` files that run identically in the simulation browser, the engine CLI, and the `pixelblaze_util` web editor.
+- **Pattern portability.** Patterns run identically in the simulation browser and the engine backend.
 
 ---
 
@@ -15,28 +18,9 @@ MarsinEngine is a standalone, headless rendering engine for the BM26 Titanic lig
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                       MarsinEngine CLI                        │
+│                    MarsinEngine API Server                    │
+│                        (Port 6968)                            │
 │                                                               │
-│  ┌───────────┐   ┌──────────────┐   ┌──────────────────────┐ │
-│  │  Pattern   │   │  Pixel Model │   │   Render Backend     │ │
-│  │  Loader    │──▶│(test_bench.js)│──▶│                      │ │
-│  │            │   │  323 pixels  │   │  ┌────────────────┐  │ │
-│  │ rainbow.js │   │  + patches   │   │  │ CPU (WASM)     │  │ │
-│  │ fire.js    │   │  + coords    │   │  │ primary (v2)   │  │ │
-│  │ custom.js  │   └──────────────┘   │  ├────────────────┤  │ │
-│  └───────────┘                       │  │ CPU (pure JS)  │  │ │
-│                                      │  │ active (v1) ✅ │  │ │
-│                                      │  └────────────────┘  │ │
-│                                      └──────────────────────┘ │
-│                           │                                    │
-│                    ┌──────▼──────┐                             │
-│                    │  DMX Mapper │                             │
-│                    │  pixel RGB  │                             │
-│                    │  → universe │                             │
-│                    │  → address  │                             │
-│                    └──────┬──────┘                             │
-│                           │                                    │
-│                    ┌──────▼──────┐                             │
 │                    │ sACN Sender │                             │
 │                    │  E1.31 UDP  │                             │
 │                    └─────────────┘                             │
@@ -227,30 +211,48 @@ Each frame:
 
 ---
 
-## 7. CLI Interface
+## 7. API Reference (Port 6968)
+
+### HTTP Endpoints
+
+- **`GET /patterns`**
+  - Returns a JSON array of all available `.js` patterns in the repository.
+- **`GET /exports`**
+  - Outputs the current WASM JSON ABI definitions mapping UI controls (ExportKinds like TOGGLE, HSV) directly back to the active pattern.
+- **`PUT /pattern`**
+  - **Body:** `{ "pattern": "name_without_js" }`
+  - Immediately signals the engine loop to switch, triggering a hot WASM recompilation of the newly requested file via the internal fileloader.
+
+### WebSocket Connections (`ws://localhost:6968/`)
+
+The core bidirectional event channel for controllers.
+
+**Events In (To Server):**
+- `{ "type": "setControl", "id": <num>, "v0": <float>, "v1": <float>, "v2": <float> }`
+  - Pushes a zero-latency memory alteration directly onto the active WASM parameter controls.
+
+**Events Out (To Client):**
+- `{ "type": "stats", "fps": 40, "patched": 323 }`
+  - Telemetry streamed regularly back to `CaptainPad` to indicate system network health.
+
+---
+
+## 8. Server Interface
 
 ```bash
-# Basic usage
-node engine.js --pattern rainbow
+# Basic usage (boots server on 6968 default)
+node engine.js --model titanic
 
-# With options
-node engine.js --pattern fire --fps 60 --priority 100
-
-# Dry run (no sACN, just verify pattern loads)
-node engine.js --pattern rainbow --dry-run
-
-# List available patterns
-node engine.js --list
+# With custom options
+node engine.js --model test_bench --fps 60 --priority 100
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--pattern` | (required) | Pattern name (without .js) |
+| `--model` | (required) | Model file to load and target for patched mapping |
 | `--fps` | 40 | Target render framerate |
 | `--priority` | 100 | sACN source priority |
-| `--dry-run` | false | Load & compile only, no sACN output |
-| `--list` | — | List available patterns and exit |
-| `--backend` | auto | Force: `js`, `wasm`, or `gpu` |
+| `--port` | 6968 | HTTP + WebSocket API access port |
 | `--dest` | 127.0.0.1 | sACN unicast destination IP |
 
 ---

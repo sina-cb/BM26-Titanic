@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Luminance Command - Diagnostics</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@400;500;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-container": "#00626e",
+                        "error-container": "#ffdad6",
+                        "primary-fixed-dim": "#00daf3",
+                        "on-secondary-fixed": "#001f2a",
+                        "primary-fixed": "#9cf0ff",
+                        "on-secondary": "#ffffff",
+                        "surface-container-highest": "#e1e3e4",
+                        "tertiary-fixed-dim": "#94d3c1",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed-dim": "#adcbda",
+                        "on-error-container": "#93000a",
+                        "on-secondary-container": "#4a6774",
+                        "on-tertiary": "#ffffff",
+                        "secondary-fixed": "#c9e7f7",
+                        "inverse-primary": "#00daf3",
+                        "on-error": "#ffffff",
+                        "tertiary-fixed": "#afefdd",
+                        "secondary-container": "#c6e4f4",
+                        "surface-container": "#edeeef",
+                        "on-surface-variant": "#3b494c",
+                        "tertiary": "#29695b",
+                        "surface-bright": "#f8f9fa",
+                        "primary": "#006875",
+                        "outline-variant": "#bac9cc",
+                        "surface-container-high": "#e7e8e9",
+                        "on-tertiary-fixed": "#00201a",
+                        "surface": "#f8f9fa",
+                        "on-tertiary-container": "#226355",
+                        "on-background": "#191c1d",
+                        "primary-container": "#00e5ff",
+                        "surface-container-low": "#f3f4f5",
+                        "secondary": "#466270",
+                        "surface-dim": "#d9dadb",
+                        "on-surface": "#191c1d",
+                        "on-secondary-fixed-variant": "#2e4b57",
+                        "surface-variant": "#e1e3e4",
+                        "on-primary-fixed-variant": "#004f58",
+                        "outline": "#6b7a7d",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "background": "#f8f9fa",
+                        "tertiary-container": "#9dddcb",
+                        "on-tertiary-fixed-variant": "#065043",
+                        "on-primary-fixed": "#001f24",
+                        "inverse-surface": "#2e3132",
+                        "surface-tint": "#006875",
+                        "inverse-on-surface": "#f0f1f2"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Space Grotesk", "sans-serif"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8f9fa; color: #191c1d; }
+        h1, h2, h3, h4, h5, h6, .font-headline, .font-label { font-family: 'Space Grotesk', sans-serif; }
+        
+        .ambient-shadow { box-shadow: 0 24px 40px -12px rgba(25, 28, 29, 0.05); }
+        .ghost-border { border: 1px solid rgba(186, 201, 204, 0.15); }
+        .glow-cyan { filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.6)); }
+        
+        /* Custom scrollbar for logs */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(186, 201, 204, 0.5); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(107, 122, 125, 0.8); }
+    </style>
+</head>
+<body class="bg-surface text-on-surface h-screen overflow-hidden flex font-body">
+<!-- TopAppBar JSON Data -->
+<header class="fixed top-0 left-0 w-full z-50 bg-white/60 dark:bg-slate-950/60 backdrop-blur-2xl bg-slate-100 dark:bg-slate-900 h-px shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex justify-between items-center px-8 h-16 md:pl-72">
+<div class="flex items-center gap-4">
+<span class="text-lg font-black tracking-widest text-slate-900 dark:text-white font-['Space_Grotesk'] tracking-tighter font-bold uppercase">LUMINANCE COMMAND</span>
+</div>
+<div class="flex items-center gap-6">
+<button class="text-slate-400 dark:text-slate-500 hover:text-cyan-500 dark:hover:text-cyan-400 transition-colors active:opacity-70 transition-opacity duration-200">
+<span class="material-symbols-outlined text-xl">settings_input_component</span>
+</button>
+<button class="text-slate-400 dark:text-slate-500 hover:text-cyan-500 dark:hover:text-cyan-400 transition-colors active:opacity-70 transition-opacity duration-200">
+<span class="material-symbols-outlined text-xl">sensors</span>
+</button>
+<button class="text-slate-400 dark:text-slate-500 hover:text-cyan-500 dark:hover:text-cyan-400 transition-colors active:opacity-70 transition-opacity duration-200">
+<span class="material-symbols-outlined text-xl">notifications_active</span>
+</button>
+<button class="text-slate-400 dark:text-slate-500 hover:text-cyan-500 dark:hover:text-cyan-400 transition-colors active:opacity-70 transition-opacity duration-200">
+<span class="material-symbols-outlined text-xl">account_circle</span>
+</button>
+</div>
+</header>
+<!-- SideNavBar JSON Data -->
+<nav class="fixed left-0 top-0 h-full w-64 hidden md:flex flex-col z-50 bg-slate-50 dark:bg-slate-950 bg-slate-200/50 dark:bg-slate-800/50 shadow-2xl flex flex-col h-full py-8 mt-16">
+<div class="px-6 mb-8 mt-4">
+<h2 class="text-cyan-500 font-black font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase">HELM v1.0</h2>
+<p class="text-[10px] text-slate-400 uppercase tracking-widest mt-1">SYSTEM ACTIVE</p>
+</div>
+<ul class="flex flex-col gap-1 mt-4 flex-1">
+<li>
+<a class="flex items-center gap-4 text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 px-6 py-3 font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase hover:bg-slate-100 dark:hover:bg-slate-900 transition-all duration-200 hover:translate-x-1 transition-transform duration-300" href="#">
+<span class="material-symbols-outlined text-lg">dashboard</span> Overview
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-4 text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 px-6 py-3 font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase hover:bg-slate-100 dark:hover:bg-slate-900 transition-all duration-200 hover:translate-x-1 transition-transform duration-300" href="#">
+<span class="material-symbols-outlined text-lg">memory</span> Hardware
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-4 bg-white dark:bg-slate-900 text-cyan-600 dark:text-cyan-400 shadow-sm rounded-r-full mr-4 px-6 py-3 font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase" href="#">
+<span class="material-symbols-outlined text-lg glow-cyan">analytics</span> Telemetry
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-4 text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 px-6 py-3 font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase hover:bg-slate-100 dark:hover:bg-slate-900 transition-all duration-200 hover:translate-x-1 transition-transform duration-300" href="#">
+<span class="material-symbols-outlined text-lg">list_alt</span> Logs
+                </a>
+</li>
+<li>
+<a class="flex items-center gap-4 text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 px-6 py-3 font-['Space_Grotesk'] text-[11px] font-medium tracking-[0.1em] uppercase hover:bg-slate-100 dark:hover:bg-slate-900 transition-all duration-200 hover:translate-x-1 transition-transform duration-300" href="#">
+<span class="material-symbols-outlined text-lg">terminal</span> Terminal
+                </a>
+</li>
+</ul>
+<div class="px-6 mt-auto">
+<button class="w-full py-4 bg-gradient-to-r from-primary to-primary-container text-white font-headline text-[11px] tracking-[0.1em] font-bold rounded-xl shadow-[0_8px_16px_-4px_rgba(0,229,255,0.3)] hover:opacity-90 transition-opacity active:scale-[0.98]">
+                DEPLOY UPDATE
+            </button>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-0 md:ml-64 mt-16 p-8 overflow-y-auto h-[calc(100vh-4rem)]">
+<header class="mb-8 flex justify-between items-end">
+<div>
+<h1 class="font-headline text-3xl font-bold tracking-tighter text-on-background">Diagnostics</h1>
+<p class="font-body text-sm text-secondary mt-1">System performance and swarm telemetry</p>
+</div>
+<div class="flex items-center gap-3 bg-surface-container-low px-4 py-2 rounded-lg ghost-border">
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim glow-cyan"></span>
+<span class="font-headline text-xs font-bold tracking-widest text-primary">SYSTEM NORMAL</span>
+</div>
+</header>
+<!-- Fluid Grid Layout -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 auto-rows-min">
+<!-- Metrics Panel -->
+<section class="lg:col-span-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+<!-- FPS Gauge -->
+<div class="bg-surface-container-lowest rounded-xl p-6 ambient-shadow ghost-border relative overflow-hidden group">
+<h3 class="font-headline text-xs tracking-widest text-secondary mb-4 uppercase">MarsinEngine FPS</h3>
+<div class="flex items-baseline gap-2">
+<span class="font-headline text-5xl font-black text-on-surface tracking-tighter">60.2</span>
+<span class="font-body text-xs text-outline font-medium">fps</span>
+</div>
+<!-- Mock Sparkline -->
+<div class="mt-6 h-12 flex items-end gap-1 opacity-60">
+<div class="w-full bg-surface-container-high rounded-full h-1 relative overflow-hidden">
+<div class="absolute top-0 left-0 h-full bg-primary-container w-[95%]"></div>
+</div>
+</div>
+</div>
+<!-- Memory Usage -->
+<div class="bg-surface-container-lowest rounded-xl p-6 ambient-shadow ghost-border relative overflow-hidden">
+<h3 class="font-headline text-xs tracking-widest text-secondary mb-4 uppercase">Memory Load</h3>
+<div class="flex items-baseline gap-2">
+<span class="font-headline text-5xl font-black text-on-surface tracking-tighter">1.2</span>
+<span class="font-body text-xs text-outline font-medium">/ 4.0 GB</span>
+</div>
+<div class="mt-6 h-12 flex flex-col justify-end">
+<div class="w-full bg-surface-container-high rounded-full h-2 relative shadow-inner">
+<div class="absolute top-0 left-0 h-full bg-gradient-to-r from-primary to-primary-container rounded-full w-[30%] glow-cyan"></div>
+</div>
+<div class="flex justify-between mt-2 font-headline text-[10px] text-outline tracking-wider">
+<span>30%</span>
+<span>100%</span>
+</div>
+</div>
+</div>
+<!-- CPU Load -->
+<div class="bg-surface-container-lowest rounded-xl p-6 ambient-shadow ghost-border relative overflow-hidden">
+<h3 class="font-headline text-xs tracking-widest text-secondary mb-4 uppercase">CPU Load</h3>
+<div class="flex items-baseline gap-2">
+<span class="font-headline text-5xl font-black text-on-surface tracking-tighter">42</span>
+<span class="font-body text-xs text-outline font-medium">%</span>
+</div>
+<!-- Radial Gauge Mockup -->
+<div class="mt-4 flex justify-center items-center h-16">
+<div class="relative w-16 h-16 rounded-full border-4 border-surface-container-high flex items-center justify-center">
+<svg class="absolute inset-0 w-full h-full transform -rotate-90" viewbox="0 0 100 100">
+<circle class="text-primary-container drop-shadow-[0_0_4px_rgba(0,229,255,0.5)]" cx="50" cy="50" fill="none" r="46" stroke="currentColor" stroke-dasharray="289" stroke-dashoffset="167" stroke-width="8"></circle>
+</svg>
+</div>
+</div>
+</div>
+</section>
+<!-- Network Telemetry -->
+<section class="lg:col-span-4 bg-surface-container-lowest rounded-xl p-6 ambient-shadow ghost-border flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-headline text-xs tracking-widest text-secondary uppercase">Network Telemetry</h3>
+<span class="material-symbols-outlined text-outline text-sm">wifi_tethering</span>
+</div>
+<div class="flex-1 flex flex-col justify-center">
+<div class="flex items-baseline gap-2 mb-2">
+<span class="font-headline text-4xl font-bold text-primary-fixed-dim drop-shadow-[0_0_8px_rgba(0,218,243,0.3)] tracking-tighter">142.5</span>
+<span class="font-body text-xs text-secondary font-medium">Mbps</span>
+</div>
+<div class="text-[10px] font-headline tracking-wider text-outline mb-4">THROUGHPUT AVERAGE</div>
+<!-- Graph Mockup -->
+<div class="h-24 bg-surface-container-low rounded-lg inner-shadow relative overflow-hidden border-b-2 border-primary/20">
+<!-- Simulated wave shape -->
+<div class="absolute bottom-0 left-0 w-full h-full bg-gradient-to-t from-primary/10 to-transparent"></div>
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 100">
+<path class="opacity-80 drop-shadow-[0_2px_4px_rgba(0,218,243,0.5)]" d="M0 100 Q 10 50 20 80 T 40 40 T 60 70 T 80 30 T 100 60 L 100 100 Z" fill="none" stroke="#00daf3" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+</svg>
+</div>
+</div>
+</section>
+<!-- Swarm Hardware Status -->
+<section class="lg:col-span-5 bg-surface-container-low rounded-xl p-1 lg:p-2 ghost-border">
+<div class="bg-surface-container-lowest rounded-lg h-full p-6 flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-headline text-xs tracking-widest text-secondary uppercase">Swarm Nodes (ESP32)</h3>
+<span class="text-[10px] font-headline bg-surface-container-high px-2 py-1 rounded text-outline tracking-wider">8 ACTIVE</span>
+</div>
+<div class="flex-1 overflow-y-auto pr-2 space-y-3">
+<!-- Node Item -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface hover:bg-surface-bright transition-colors group cursor-default">
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim glow-cyan"></span>
+<span class="font-headline text-sm font-bold text-on-surface">NODE-001</span>
+</div>
+<div class="flex items-center gap-4">
+<span class="font-body text-xs text-outline">12ms</span>
+<span class="material-symbols-outlined text-outline text-[16px] group-hover:text-primary transition-colors">memory</span>
+</div>
+</div>
+<!-- Node Item -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface hover:bg-surface-bright transition-colors group cursor-default">
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim glow-cyan"></span>
+<span class="font-headline text-sm font-bold text-on-surface">NODE-002</span>
+</div>
+<div class="flex items-center gap-4">
+<span class="font-body text-xs text-outline">14ms</span>
+<span class="material-symbols-outlined text-outline text-[16px] group-hover:text-primary transition-colors">memory</span>
+</div>
+</div>
+<!-- Node Item Offline -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface hover:bg-surface-bright transition-colors group cursor-default">
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-error-container drop-shadow-[0_0_4px_rgba(255,218,214,0.8)]"></span>
+<span class="font-headline text-sm font-bold text-outline">NODE-003</span>
+</div>
+<div class="flex items-center gap-4">
+<span class="font-body text-xs text-error font-medium">OFFLINE</span>
+<span class="material-symbols-outlined text-outline text-[16px] opacity-50">memory</span>
+</div>
+</div>
+<!-- Node Item -->
+<div class="flex items-center justify-between p-3 rounded-lg bg-surface hover:bg-surface-bright transition-colors group cursor-default">
+<div class="flex items-center gap-3">
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim glow-cyan"></span>
+<span class="font-headline text-sm font-bold text-on-surface">NODE-004</span>
+</div>
+<div class="flex items-center gap-4">
+<span class="font-body text-xs text-outline">11ms</span>
+<span class="material-symbols-outlined text-outline text-[16px] group-hover:text-primary transition-colors">memory</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- System Event Log -->
+<section class="lg:col-span-7 bg-surface-container-highest rounded-xl p-1 inner-shadow overflow-hidden flex flex-col min-h-[300px]">
+<div class="bg-[#111415] rounded-lg h-full flex flex-col p-4 font-mono text-xs shadow-inner relative">
+<div class="flex justify-between items-center mb-4 pb-2 border-b border-white/10">
+<h3 class="font-headline text-[10px] tracking-[0.2em] text-white/50 uppercase">Terminal Log</h3>
+<div class="flex gap-2">
+<span class="w-2 h-2 rounded-full bg-error/80"></span>
+<span class="w-2 h-2 rounded-full bg-primary/80"></span>
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim glow-cyan"></span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto text-primary-fixed/80 space-y-1 font-['Space_Grotesk'] tracking-tight">
+<div class="flex gap-3">
+<span class="text-white/30">[14:19:58]</span>
+<span>System boot sequence initiated. Modules loaded: 42/42</span>
+</div>
+<div class="flex gap-3">
+<span class="text-white/30">[14:20:01]</span>
+<span>Establishing link with Swarm Controller...</span>
+</div>
+<div class="flex gap-3">
+<span class="text-white/30">[14:20:02]</span>
+<span class="text-tertiary-fixed-dim">Link established. Node count: 8</span>
+</div>
+<div class="flex gap-3">
+<span class="text-white/30">[14:20:05]</span>
+<span class="text-primary-container">Pattern 'Ocean Sweep' compiled successfully.</span>
+</div>
+<div class="flex gap-3">
+<span class="text-white/30">[14:20:08]</span>
+<span class="text-error-container">WARNING: NODE-003 timeout detected (1500ms). Attempting reconnect...</span>
+</div>
+<div class="flex gap-3">
+<span class="text-white/30">[14:20:15]</span>
+<span>Telemetry sync rate stable at 60Hz.</span>
+</div>
+<div class="flex gap-3 opacity-70 animate-pulse">
+<span class="text-white/30">[14:20:18]</span>
+<span>Awaiting input_</span>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+</body></html>

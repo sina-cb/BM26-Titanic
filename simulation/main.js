@@ -184,11 +184,12 @@ async function init() {
 const _urlParams = new URLSearchParams(window.location.search);
 const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
+window.__readonlyMode = _urlParams.get('readonly') === '1'; // iPad observer mode
 const _sceneConfigPath = `scenes/${_activeScene}/scene_config.yaml`;
 const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
-console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}`);
+console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
@@ -305,15 +306,22 @@ Promise.all([
   }
 
   // Initialize pattern editor + sACN monitor + Scene indicator
-  setupPatternEditor();
-  setupSacnInMonitor();
-  setupSacnOutMonitor();
-  setupSceneIndicator();
-  loadPatternPresets().then(() => {
-    initPatternEngine().then(() => {
-      if (window.onLightingChange) window.onLightingChange();
+  // In readonly mode (e.g. iPad Monitor), skip all write-capable subsystems
+  const _isReadonly = _urlParams.get('readonly') === '1';
+  if (!_isReadonly) {
+    setupPatternEditor();
+    setupSacnInMonitor();
+    setupSacnOutMonitor();
+    setupSceneIndicator();
+    loadPatternPresets().then(() => {
+      initPatternEngine().then(() => {
+        if (window.onLightingChange) window.onLightingChange();
+      });
     });
-  });
+  } else {
+    console.log('[Readonly] Observer mode — editor, sACN bridge, and pattern engine disabled.');
+    setupSceneIndicator();
+  }
 
   // Restore pattern editor window state
   if (ct && ct._patternEditor) {

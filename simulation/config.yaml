@@ -1,7 +1,10 @@
 # Server configuration for the BM26 Titanic simulation
 
-http_port: 6969       # Static file server
-save_port: 6970       # Save server (http_port + 1)
-sacn_port: 6971       # sACN WebSocket bridge (http_port + 2)
+http_port: 6969 # Static file server
+save_port: 6970 # Save server (http_port + 1)
+sacn_port: 6971 # sACN WebSocket bridge (http_port + 2)
 sacn_output_port: 6972 # sACN Outbound Bridge
-sacn_udp_port: 5568   # Physical E1.31 UDP protocol port
+sacn_udp_port: 5568 # Physical E1.31 UDP protocol port
+
+# Not actively read by simulation, reserved here strictly to prevent port collisions
+marsin_engine_port: 6968 # Engine API Server (http_port - 1)

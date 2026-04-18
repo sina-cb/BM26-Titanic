@@ -30,6 +30,8 @@ export class MarsinEngine {
     this._renderAll6ch = null;
     this._destroyVm = null;
     this._getError = null;
+    this._getExportsJson = null;
+    this._setControl = null;
     
     this._pixelBufPtr = 0;
   }
@@ -128,11 +130,15 @@ export class MarsinEngine {
         ['number', 'number', 'number', 'number']);
       this._destroyVm = this._module.cwrap('marsin_destroy_vm', null, ['number']);
       this._getError = this._module.cwrap('marsin_get_error', 'string', []);
+      this._getExportsJson = this._module.cwrap('marsin_get_exports_json', 'string', ['number']);
+      this._setControl = this._module.cwrap('marsin_set_control', null, ['number', 'number', 'number', 'number', 'number']);
 
       // Validate critical exports are real functions
       const requiredExports = {
         renderAllWithMeta: this._renderAllWithMeta,
         renderAllWithMeta6ch: this._renderAllWithMeta6ch,
+        getExportsJson: this._getExportsJson,
+        setControl: this._setControl,
       };
       for (const [name, fn] of Object.entries(requiredExports)) {
         if (typeof fn !== 'function') {
@@ -180,6 +186,32 @@ export class MarsinEngine {
    */
   getError() {
     return this._ready ? this._getError() : 'Engine not initialized';
+  }
+
+  /**
+   * Get active exported controls in JSON format.
+   * @returns {Array} Array of exported parameter definitions
+   */
+  getExports() {
+    if (!this._handle || !this._getExportsJson) return [];
+    try {
+      return JSON.parse(this._getExportsJson(this._handle));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Update a parameter control variable in the VM's memory.
+   * @param {number} controlId 
+   * @param {number} v0 
+   * @param {number} v1 
+   * @param {number} v2 
+   */
+  setControl(controlId, v0 = 0.0, v1 = 0.0, v2 = 0.0) {
+    if (this._handle && this._setControl) {
+      this._setControl(this._handle, controlId, v0, v1, v2);
+    }
   }
 
   /**

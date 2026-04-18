@@ -1,6 +1,6 @@
-# MarsinEngine — Multichannel Pixelblaze Rendering Engine
+# MarsinEngine — API Output Server & Multichannel Rendering Engine
 
-Node.js CLI that renders **Pixelblaze-compatible patterns** against the simulation's 3D pixel model and outputs DMX data via **sACN (E1.31)** in real-time.
+Node.js daemon that renders **Pixelblaze-compatible patterns** via a high-performance **WASM VM** against the simulation's 3D pixel model. It exposes a **REST/WebSocket API** on port `6968` for live control, and outputs DMX data via **sACN (E1.31)** in real-time.
 
 > **Design Doc:** [MarsinEngine Architecture](../docs/12_marsin_engine.md)
 >
@@ -13,14 +13,15 @@ Node.js CLI that renders **Pixelblaze-compatible patterns** against the simulati
 ```bash
 cd marsin_engine
 npm install
-node engine.js --pattern bioluminescence --model test_bench
+node engine.js --pattern rainbow --model test_bench
 ```
 
 The engine will:
-1. Load the pixel model from `models/test_bench.js` (or `titanic.js`, exported from the simulation)
-2. Compile the pattern
-3. Map rendered pixels to DMX universes
-4. Send sACN packets to `127.0.0.1` (simulation bridge by default)
+1. Boot up an HTTP/WebSocket **Output Server** on `http://localhost:6968`.
+2. Load the pixel model from `models/test_bench.js`.
+3. Compile the starting pattern into WASM bytecode.
+4. Map rendered pixels to DMX universes and send sACN packets to `127.0.0.1` (simulation bridge).
+5. Await live pattern swaps or parameter injections from CaptainPad via the API.
 
 ---
 
@@ -50,15 +51,37 @@ node engine.js --help
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--pattern, -p` | *(required)* | Pattern name to render |
+| `--pattern, -p` | *(required)* | Initial pattern name to boot the engine with |
 | `--model, -m` | *(required)* | Model name to load (`test_bench`, `titanic`, etc.) |
 | `--fps` | `40` | Target framerate |
+| `--port` | `6968` | HTTP/WS API listening port for control |
 | `--priority` | `100` | sACN source priority (0–200) |
 | `--dest` | `127.0.0.1` | sACN unicast destination IP |
-| `--backend` | `auto` | Force backend: `js`, `wasm`, `gpu` |
 | `--dry-run` | `false` | Load + compile only, no sACN output |
 | `--list, -l` | — | List available patterns |
 | `--help, -h` | — | Show help |
+
+---
+
+## 🔌 Live API Control (Port 6968)
+
+The engine can be controlled completely live over its REST API and WebSocket layer without restarting the server. CaptainPad makes extensive use of this.
+
+### HTTP Endpoints
+- **`GET http://localhost:6968/patterns`**: Get JSON list of all available script names.
+- **`GET http://localhost:6968/exports`**: Get the current UI parameter mappings defined inside the currently running script (like Color Pickers, Sliders).
+- **`PUT http://localhost:6968/pattern`**: Hot-swap the running pattern. Example body: `{ "pattern": "fire" }`.
+- **`POST http://localhost:6968/control`**: Push a parameter alteration manually via REST (Alternative to WebSocket). Example `{ "id": 1, "v0": 1.0 }`.
+
+### WebSockets (`ws://localhost:6968/`)
+Connect a WebSocket to stream parameter alterations live to the engine's memory:
+```json
+{ "type": "setControl", "id": 1, "v0": 1.0, "v1": 0.5, "v2": 1.0 }
+```
+The server also automatically drops a telemetry packet describing output health 1x per second:
+```json
+{ "type": "stats", "fps": 40, "patched": 323 }
+```
 
 ### NPM Scripts
 

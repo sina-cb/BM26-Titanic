@@ -12,13 +12,17 @@
  */
 
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import yaml from 'js-yaml';
+
 import { createWasmRuntime } from './lib/marsin_wasm_runtime.js';
+import { startApiServer } from './lib/api_server.js';
 import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import yaml from 'js-yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +45,7 @@ function parseArgs() {
   const config = loadConfig();
   const cSacn = config.sacn || {};
   const cEngine = config.engine || {};
+  const cServer = config.server || {};
 
   const opts = {
     pattern: null,
@@ -51,6 +56,7 @@ function parseArgs() {
     list: false,
     destination: cSacn.destination || '127.0.0.1',
     sourceName: cSacn.sourceName || 'MarsinEngine',
+    port: cServer.port || 6968,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -59,6 +65,7 @@ function parseArgs() {
       case '--model': case '-m':    opts.modelName = args[++i]; break;
       case '--fps':                 opts.fps = parseInt(args[++i], 10) || 40; break;
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
+      case '--port':                opts.port = parseInt(args[++i], 10) || 6968; break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
       case '--dest':                opts.destination = args[++i]; break;
@@ -115,7 +122,7 @@ async function loadModel(modelName) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps) {
+function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, statsCallback) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -169,8 +176,8 @@ function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps) 
     frameCount++;
     windowFrames++;
 
-    // Stats every 5 seconds
-    if (now - lastStatsTime > 5000) {
+    // Stats every 1 second
+    if (now - lastStatsTime > 1000) {
       const windowSec = (now - lastStatsTime) / 1000;
       const windowFps = Math.round(windowFrames / windowSec);
       const renderMs = (performance.now() - now).toFixed(1);
@@ -181,6 +188,10 @@ function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps) 
       process.stdout.write(`\r  ⚡ ${frameCount} frames, ${windowFps} fps, ${renderMs}ms/frame, ${patchedCount} pixels`);
       lastStatsTime = now;
       windowFrames = 0;
+
+      if (statsCallback) {
+        statsCallback({ fps: windowFps, patched: patchedCount });
+      }
     }
   }
 
@@ -334,9 +345,14 @@ async function main() {
   });
   sacnOut.start();
 
-  // 7. Start render loop
-  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps);
-  console.log(`\n  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
+  // 7. Start API Server & Render Loop
+  const broadcastStatsRef = { publish: () => {} };
+  const apiServer = startApiServer(opts, runtime, './patterns', broadcastStatsRef);
+
+  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps, (stats) => {
+    broadcastStatsRef.publish(stats);
+  });
+  console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
   loop.start();
 
   // 8. Graceful shutdown
