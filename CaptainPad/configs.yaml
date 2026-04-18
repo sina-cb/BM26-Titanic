@@ -1,0 +1,2 @@
+# CaptainPad Dynamic App Configuration Defaults
+api_base: "http://10.1.1.172:6968"

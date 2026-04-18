@@ -15,6 +15,8 @@ import fs from 'fs';
 
 import { createWasmRuntime } from './lib/marsin_wasm_runtime.js';
 import { startApiServer } from './lib/api_server.js';
+import { IntensityController } from './lib/intensity_controller.js';
+import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
@@ -122,7 +124,7 @@ async function loadModel(modelName) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, statsCallback) {
+function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, statsCallback) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -161,16 +163,26 @@ function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, 
       model.pixels[i].u = outBuf[off + 5] / 255;
     }
 
+    // Apply global DMX-override level effects (Vintage .w boost, UV boost)
+    if (globalEffectsController) globalEffectsController.applyPixels(model.pixels);
+
+    // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
+    if (intensityController) intensityController.apply(model.pixels);
+
     // Map to DMX (writes directly into dmxRouter's _read buffer via getFullFrame)
     mapPixelsToSacn(model.pixels, dmxRouter);
 
-    // Send sACN using the _read buffer
+    // Collect sACN outbound buffer
     const dmxBuffers = {};
     for (const u of universeIds) {
       const frame = dmxRouter.getFullFrame(u);
       if (frame) dmxBuffers[u] = frame;
     }
 
+    // Apply explicit raw-hardware bypasses directly onto the payload arrays (like Fogger)
+    if (globalEffectsController) globalEffectsController.applyDmx(dmxBuffers);
+
+    // Send sACN using the _read buffers
     sacnOut.sendFrame(dmxBuffers);
 
     frameCount++;
@@ -347,9 +359,11 @@ async function main() {
 
   // 7. Start API Server & Render Loop
   const broadcastStatsRef = { publish: () => {} };
-  const apiServer = startApiServer(opts, runtime, './patterns', broadcastStatsRef);
+  const intensityController = new IntensityController();
+  const globalEffectsController = new GlobalEffectsController(loadConfig());
+  const apiServer = startApiServer(opts, runtime, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
-  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps, (stats) => {
+  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, (stats) => {
     broadcastStatsRef.publish(stats);
   });
   console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);

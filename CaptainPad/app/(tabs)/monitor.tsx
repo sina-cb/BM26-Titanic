@@ -3,14 +3,15 @@ import { View, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
-import { API_BASE } from '@/utils/api';
+import { getApiBase } from '@/utils/api';
 
 export default function MonitorScreen() {
   const [activePattern, setActivePattern] = useState<string>('...');
 
   // The simulation server runs on port 6969 on the same host as the engine API.
   // Extract the host from API_BASE so we only configure it in one place.
-  const engineHost = API_BASE.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+  const apiBaseStr = getApiBase();
+  const engineHost = apiBaseStr.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
   const SIMULATION_PORT = 6969;
 
   // The engine CLI uses --model <name> which maps 1:1 to scenes/<name> in the simulation.
@@ -24,7 +25,7 @@ export default function MonitorScreen() {
   useEffect(() => {
     let ws: WebSocket | null = null;
     try {
-      ws = new WebSocket(`ws://${engineHost}:${API_BASE.split(':').pop()}`);
+      ws = new WebSocket(`ws://${engineHost}:${getApiBase().split(':').pop()}`);
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);

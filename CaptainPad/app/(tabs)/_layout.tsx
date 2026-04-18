@@ -1,6 +1,7 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
 import { View, TouchableOpacity, Text } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
@@ -28,7 +29,7 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
         <IconSymbol name="house.fill" size={36} color="#191c1d" /> 
         {/* Used house.fill since sailing isn't mapped, user can map later */}
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, marginTop: 8 }}>6969</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: '#00daf3' }}>HELM</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: '#00daf3', textAlign: 'center', marginTop: 2 }}>CAPTAIN{'\n'}PAD</Text>
       </View>
 
       <View style={{ flex: 1, width: '100%', paddingHorizontal: 16 }}>
@@ -77,41 +78,50 @@ export default function TabLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <Tabs
-      tabBar={(props) => <CustomSideBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-        sceneStyle: { marginLeft: 112 }, // Shifts the screens to the right of the sidebar
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Deck',
-          // Custom prop for our sidebar to read:
-          tabBarIconName: 'slider.vertical.3',
-        } as any}
-      />
-      <Tabs.Screen
-        name="studio"
-        options={{
-          title: 'Studio',
-          tabBarIconName: 'curlybraces',
-        } as any}
-      />
-      <Tabs.Screen
-        name="monitor"
-        options={{
-          title: 'Monitor',
-          tabBarIconName: 'desktopcomputer',
-        } as any}
-      />
-      <Tabs.Screen
-        name="shipment"
-        options={{
-          title: 'Shipment',
-          tabBarIconName: 'shippingbox.fill',
-        } as any}
-      />
-    </Tabs>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+      <Tabs
+        tabBar={(props) => <CustomSideBar {...props} />}
+        screenOptions={{
+          headerShown: false,
+          sceneStyle: { marginLeft: 112 }, // Shifts the screens to the right of the sidebar
+        }}>
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Deck',
+            // Custom prop for our sidebar to read:
+            tabBarIconName: 'slider.vertical.3',
+          } as any}
+        />
+        <Tabs.Screen
+          name="studio"
+          options={{
+            title: 'Studio',
+            tabBarIconName: 'curlybraces',
+          } as any}
+        />
+        <Tabs.Screen
+          name="monitor"
+          options={{
+            title: 'Monitor',
+            tabBarIconName: 'desktopcomputer',
+          } as any}
+        />
+        <Tabs.Screen
+          name="dimmer_rack"
+          options={{
+            title: 'Dimmer Rack',
+            tabBarIconName: 'lightbulb.fill',
+          } as any}
+        />
+        <Tabs.Screen
+          name="config"
+          options={{
+            title: 'Config',
+            tabBarIconName: 'gear',
+          } as any}
+        />
+      </Tabs>
+    </SafeAreaView>
   );
 }

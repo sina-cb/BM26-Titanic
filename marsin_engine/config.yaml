@@ -8,3 +8,8 @@ engine:
 
 server:
   port: 6968
+
+global_effects:
+  fogger:
+    universe: 1
+    address: 512

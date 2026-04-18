@@ -22,6 +22,10 @@ const MAPPING = {
   'desktopcomputer': 'monitor',
   'shippingbox.fill': 'local-shipping',
   'curlybraces': 'code',
+  'gear': 'settings',
+  'lightbulb.fill': 'lightbulb',
+  'arrow.clockwise': 'refresh',
+  'exclamationmark.triangle.fill': 'warning',
 } as IconMapping;
 
 /**

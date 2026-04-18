@@ -35,31 +35,31 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
     dmxAddress: 176
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    controllerId: 1
+    sectionId: 2
+    fixtureId: 5
     viewMask: 0
   Vintage Right:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
     dmxAddress: 209
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    controllerId: 1
+    sectionId: 2
+    fixtureId: 6
     viewMask: 0
   Bar Left:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
     dmxAddress: 242
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    controllerId: 1
+    sectionId: 3
+    fixtureId: 7
     viewMask: 0
   Bar Right:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
     dmxAddress: 362
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    controllerId: 1
+    sectionId: 3
+    fixtureId: 8
     viewMask: 0

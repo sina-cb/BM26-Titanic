@@ -11,11 +11,19 @@ interface Props {
   max?: number;
   suffix?: string;
   isColor?: boolean;
+  isColor?: boolean;
   onChange: (id: number, val: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
-export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, suffix = '', isColor = false, onChange }: Props) {
+export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, suffix = '', isColor = false, onChange, onDragStart, onDragEnd }: Props) {
   const [value, setValue] = useState(initialValue);
+
+  // Sync state if backend feeds new loaded boundaries
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue]);
   
   // Strict physical tracking bounds
   const trackHeight = 160; 
@@ -41,8 +49,13 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
       onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
       onPanResponderGrant: () => {
+        if (onDragStart) onDragStart();
         panY.extractOffset();
       },
       onPanResponderMove: (evt, gestureState) => {
@@ -72,12 +85,13 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
         const engineValue = min + ratio * (max - min);
         setValue(engineValue);
         updateEngine(engineValue, true);
+        if (onDragEnd) onDragEnd();
       },
     })
   ).current;
 
   return (
-    <View style={{ alignItems: 'center', gap: 24, height: '100%', width: 80 }}>
+    <View style={{ alignItems: 'center', gap: 24, width: 80 }}>
       <View style={{ alignItems: 'center' }}>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary }}>{label}</Text>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, color: Colors.light.text }}>
