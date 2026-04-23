@@ -11,6 +11,7 @@ import {
 } from "./state.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
+import { FogMachine } from "../fixtures/fog_machine.js";
 import { getDefinition } from "../dmx/fixture_definition_registry.js";
 
 export function rebuildParLights(force = false) {
@@ -29,60 +30,103 @@ export function rebuildParLights(force = false) {
     if (f) f.destroy();
   }
 
-  console.log(`[fixtures] rebuildParLights: ${params.parLights.length} fixtures, scene=${!!scene}, liteMode=${!!params.liteMode}`);
+  const total = params.parLights.length;
+  console.log(`[fixtures] rebuildParLights: ${total} fixtures, scene=${!!scene}, liteMode=${!!params.liteMode}`);
 
-  params.parLights.forEach((config, index) => {
-    let fixture = window.parFixtures[index];
+  // Async chunked mode is only used for profile switches (heavy SpotLight construction).
+  // All other rebuilds (regenerate, delete, add) run synchronously for instant visual feedback.
+  window._missingFixtureWarnCount = 0;
+  const CHUNK = 25;
+  const needsAsync = force && total > CHUNK && !window._isAppBooting && window._asyncProfileRebuild;
 
-    // Detect fixture type change — must destroy and recreate
-    if (fixture) {
-      const currentType = fixture.fixtureDef?.fixtureType || 'UkingPar';
-      const newType = config.type || config.fixtureType || 'UkingPar';
-      if (currentType !== newType) {
-        fixture.destroy();
-        fixture = null;
-        window.parFixtures[index] = null;
-      }
+  if (needsAsync) {
+    window._isRebuildingFixtures = true;
+    window._fixtureRebuildGeneration = (window._fixtureRebuildGeneration || 0) + 1;
+    // Async chunked rebuild — yields to browser between batches
+    _rebuildParLightsAsync(0, total, CHUNK, window._fixtureRebuildGeneration);
+  } else {
+    // Synchronous rebuild
+    for (let i = 0; i < total; i++) {
+      _buildFixtureAt(i);
     }
+    _finishRebuild();
+  }
+}
 
-    if (!fixture) {
-      // Resolve fixture type — check config, fall back to UkingPar
-      const fixtureType = config.type || config.fixtureType || 'UkingPar';
-      const fixtureDef = getDefinition(fixtureType);
+function _buildFixtureAt(index) {
+  const config = params.parLights[index];
+  if (!config) return;
+  let fixture = window.parFixtures[index];
 
-      try {
-        const patchDef = (config.dmxUniverse && config.dmxAddress) ? {
-          universe: config.dmxUniverse,
-          addr: config.dmxAddress
-        } : null;
+  // Detect fixture type change — must destroy and recreate
+  if (fixture) {
+    const currentType = fixture.fixtureDef?.fixtureType || 'UkingPar';
+    const newType = config.type || config.fixtureType || 'UkingPar';
+    if (currentType !== newType) {
+      fixture.destroy();
+      fixture = null;
+      window.parFixtures[index] = null;
+    }
+  }
 
-        fixture = new DmxFixtureRuntime(
-          config,
-          index,
-          scene,
-          interactiveObjects,
-          modelRadius,
-          fixtureDef,
-          patchDef,
-        );
-        window.parFixtures[index] = fixture;
-      } catch (err) {
-        console.error(`[fixtures] Failed to create fixture ${index} (${fixtureType}):`, err);
-        return;
-      }
-    } else {
-      fixture.config = config;
-      fixture.index = index;
-      fixture.patchDef = (config.dmxUniverse && config.dmxAddress) ? {
+  if (!fixture) {
+    const fixtureType = config.type || config.fixtureType || 'UkingPar';
+    const fixtureDef = getDefinition(fixtureType);
+
+    try {
+      const patchDef = (config.dmxUniverse && config.dmxAddress) ? {
         universe: config.dmxUniverse,
         addr: config.dmxAddress
       } : null;
-      fixture.syncFromConfig();
-    }
-    
-    fixture.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
-  });
 
+      if (fixtureType === 'FogMachine') {
+        fixture = new FogMachine(
+          config, index, scene, interactiveObjects, modelRadius
+        );
+      } else {
+        fixture = new DmxFixtureRuntime(
+          config, index, scene, interactiveObjects, modelRadius, fixtureDef, patchDef
+        );
+      }
+      window.parFixtures[index] = fixture;
+    } catch (err) {
+      console.error(`[fixtures] Failed to create fixture ${index} (${fixtureType}):`, err);
+      return;
+    }
+  } else {
+    fixture.config = config;
+    fixture.index = index;
+    fixture.patchDef = (config.dmxUniverse && config.dmxAddress) ? {
+      universe: config.dmxUniverse,
+      addr: config.dmxAddress
+    } : null;
+    fixture.syncFromConfig();
+  }
+
+  fixture.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
+}
+
+function _rebuildParLightsAsync(start, total, chunk, generationId) {
+  if (generationId && generationId !== window._fixtureRebuildGeneration) {
+    console.warn(`[fixtures] Async rebuild cancelled (generation ${generationId} superceded)`);
+    return;
+  }
+
+  const end = Math.min(start + chunk, total);
+  for (let i = start; i < end; i++) {
+    _buildFixtureAt(i);
+  }
+
+  if (end < total) {
+    // Yield to browser — keeps UI responsive
+    requestAnimationFrame(() => _rebuildParLightsAsync(end, total, chunk, generationId));
+  } else {
+    _finishRebuild();
+    console.log(`[fixtures] Async rebuild complete: ${total} fixtures`);
+  }
+}
+
+function _finishRebuild() {
   const invalidSelections = [];
   for (const idx of selectedFixtureIndices) {
     if (idx >= window.parFixtures.length) invalidSelections.push(idx);
@@ -90,6 +134,14 @@ export function rebuildParLights(force = false) {
   invalidSelections.forEach(idx => selectedFixtureIndices.delete(idx));
 
   if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('fixtures rebuilt');
+
+  // Async rebuild complete -- allow saves again and queue one
+  if (window._isRebuildingFixtures) {
+    window._isRebuildingFixtures = false;
+    if (window.debounceAutoSave && !window._isAppBooting) {
+      window.debounceAutoSave();
+    }
+  }
 }
 
 export function rebuildDmxFixtures(force = false) {
@@ -122,7 +174,16 @@ export function rebuildDmxFixtures(force = false) {
       const fixtureType = config.type; 
       const fixtureModel = fixtureType && window.fixtureModels && window.fixtureModels[fixtureType];
 
-      if (fixtureModel) {
+      if (fixtureType === 'FogMachine') {
+        fixture = new FogMachine(
+          config,
+          index,
+          scene,
+          interactiveObjects,
+          modelRadius
+        );
+        window.dmxSceneFixtures[index] = fixture;
+      } else if (fixtureModel) {
         fixture = new ModelFixture(
           config,
           index,
@@ -131,6 +192,7 @@ export function rebuildDmxFixtures(force = false) {
           modelRadius,
           fixtureModel,
         );
+        window.dmxSceneFixtures[index] = fixture;
       } else {
         const fixtureDef = getDefinition(fixtureType);
         fixture = new DmxFixtureRuntime(
@@ -142,8 +204,8 @@ export function rebuildDmxFixtures(force = false) {
           fixtureDef,
           null,
         );
+        window.dmxSceneFixtures[index] = fixture;
       }
-      window.dmxSceneFixtures[index] = fixture;
     } else {
       fixture.config = config;
       fixture.index = index;

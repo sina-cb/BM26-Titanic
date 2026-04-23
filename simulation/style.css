@@ -432,7 +432,7 @@ canvas {
 /* ─── Pattern Editor Panel ─── */
 #pattern-editor-panel {
   position: fixed;
-  top: 60px;
+  top: 65px;
   left: 14px;
   width: 400px;
   height: 520px;
@@ -750,7 +750,7 @@ canvas {
 }
 
 #sacn-out-monitor-panel {
-  top: 460px; /* position it lower so it doesn't strictly overlap the IN monitor */
+  top: 600px; /* positioned perfectly under the pattern editor (65px + 520px + 15px pad) */
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {

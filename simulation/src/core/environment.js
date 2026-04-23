@@ -11,6 +11,7 @@ import {
   setGround, setStarField,
 } from "./state.js";
 import { Iceberg } from "../fixtures/iceberg.js";
+import { getProfileDef } from "../core/profile_registry.js";
 
 let ground, starField;
 let model, modelCenter, modelSize, modelRadius;
@@ -120,10 +121,10 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   });
   setStructureMaterial(structureMaterial);
 
-  // Flat bright material for editing
+  // Flat bright material for editing (Optimized to NOT trigger bloom and cut draw geometry in half)
   editMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    side: THREE.DoubleSide,
+    color: 0xaaaaaa, // Safe against bloom processing
+    side: THREE.FrontSide, // Safe against massive geometry backface overdraw
     wireframe: false,
   });
   setEditMaterial(editMaterial);
@@ -188,6 +189,9 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
 
   updateLoading(85, "Setting up lights…");
 
+  // ── Boot-Cycle Debounce: suppress cascading rebuild calls during init ──
+  window._isAppBooting = true;
+
   // Setup lighting
   setupLighting(rebuildParLights, rebuildDmxFixtures);
 
@@ -218,6 +222,15 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
 
   // Setup GUI
   setupGUI();
+
+  // ── End boot debounce ──
+  window._isAppBooting = false;
+  if (typeof rebuildParLights === 'function') rebuildParLights(true);
+
+  // Seed the profile category tracker for smart profile switching
+  const profileDef = getProfileDef(params.lightingProfile || 'edit');
+  window._lastProfileCategory = profileDef.category;
+  console.log(`[boot] Boot complete (profile: ${params.lightingProfile}, category: ${window._lastProfileCategory})`);
 
   updateLoading(100, "Ready");
   setTimeout(() => loadingOverlay.classList.add("hidden"), 400);
@@ -251,7 +264,7 @@ export function setupLighting(rebuildParLights, rebuildDmxFixtures) {
   scene.add(hemi);
   lights.ambient = hemi;
 
-  // 3. Par Lights (ground-level uplights)
+  // 3. Par Lights (ground-level uplights) — builds once during boot
   rebuildParLights();
   if (typeof rebuildDmxFixtures === 'function') rebuildDmxFixtures();
 }

@@ -105,8 +105,8 @@ async function init() {
 
   setComposer(postProcessing);
 
-  // Store refs for resize handler
-  window._threeRefs = { renderer };
+  // Store refs for resize handler and dynamic pipeline manipulation
+  window._threeRefs = { renderer, postProcessing, scenePassColor, bloomEffect };
 
   // Ground & Grid
   createGround();
@@ -329,7 +329,7 @@ Promise.all([
     const pePanel = document.getElementById('pattern-editor-panel');
     if (pePanel) {
       if (pe.x !== undefined) pePanel.style.left = pe.x + 'px';
-      if (pe.y !== undefined) pePanel.style.top = pe.y + 'px';
+      if (pe.y !== undefined) pePanel.style.top = Math.max(42, pe.y) + 'px';
       if (pe.width) pePanel.style.width = pe.width + 'px';
       if (pe.height) pePanel.style.height = pe.height + 'px';
       if (pe.collapsed) pePanel.classList.add('collapsed');

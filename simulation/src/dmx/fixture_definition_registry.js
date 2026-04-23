@@ -61,6 +61,23 @@ export function initRegistry(fixtureModelsMap) {
     };
   }
 
+  // Inject FogMachine as a registered fixture type so the UI can spawn it
+  _definitions['FogMachine'] = {
+    id: 'generic_fog_machine',
+    name: 'Generic Fog Machine',
+    fixtureType: 'FogMachine',
+    channelMode: 1,
+    footprint: 1,
+    dimensions: { width: 500, height: 500, depth: 500 },
+    shell: null,
+    pixels: [],
+    controls: [{ channel: 1, name: 'Fog Output', type: 'dimmer' }],
+    defaultColor: '#ffffff',
+    defaultAngle: 20,
+    defaultIntensity: 5,
+    defaultPenumbra: 0.5,
+  };
+
   console.log(`[FixtureRegistry] Loaded ${Object.keys(_definitions).length} fixture type(s):`,
     Object.keys(_definitions).join(', '));
 }

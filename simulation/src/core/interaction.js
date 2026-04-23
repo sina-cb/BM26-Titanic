@@ -237,6 +237,13 @@ export function onTransformChange() {
 
   if (window.debounceAutoSave) window.debounceAutoSave();
   if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('transform');
+
+  // Natively force the GUI sliders to refresh ONLY when we actively transform something
+  if (window.guiInstance) {
+    window.guiInstance.controllersRecursive().forEach(c => {
+      try { c.updateDisplay(); } catch (_) {}
+    });
+  }
 }
 
 // ─── Pointer Down ────────────────────────────────────────────────────────

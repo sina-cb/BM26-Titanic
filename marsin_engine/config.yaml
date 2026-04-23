@@ -1,7 +1,8 @@
 sacn:
   priority: 100
   sourceName: MarsinEngine
-  destination: 127.0.0.1
+  destinations:
+    - 127.0.0.1
   multicast: false
 engine:
   fps: 40

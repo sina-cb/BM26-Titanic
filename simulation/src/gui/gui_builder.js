@@ -19,10 +19,11 @@ import {
 import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
 import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
+import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
+import { getProfileDef } from "../core/profile_registry.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
@@ -61,6 +62,8 @@ function setupGUI() {
 
   // ─── Save / Auto-Save ───
   function exportConfig() {
+    if (window._isAppBooting || window._isRebuildingFixtures) return;
+
     reconstructYAML(configTree);
     syncCollapseState(configTree);
 
@@ -261,18 +264,53 @@ function setupGUI() {
       if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
     },
     lightingProfile: (profile) => {
-      const isEditMode = profile === 'edit';
-      if (window.rebuildParLights) window.rebuildParLights(true);
-      if (window.rebuildDmxFixtures) window.rebuildDmxFixtures(true);
+      const profileDef = getProfileDef(profile);
+      const isEditMode = profileDef.isEditMode;
+
+      // Smart rebuild: only destroy/recreate when the light category changes.
+      // Same category (e.g. full ↔ full_optimized) just needs a visibility toggle.
+      const prevCategory = window._lastProfileCategory || 'edit';
+      const newCategory = profileDef.category;
+      window._lastProfileCategory = newCategory;
+
+      const hasHoles = window.parFixtures && window.parFixtures.some(f => !f);
+
+      if (!window._isAppBooting && (prevCategory !== newCategory || hasHoles)) {
+        // Light types differ or missing fixtures — must rebuild (async to avoid UI freeze)
+        window._asyncProfileRebuild = true;
+        if (window.rebuildParLights) window.rebuildParLights(true);
+        if (window.rebuildDmxFixtures) window.rebuildDmxFixtures(true);
+        window._asyncProfileRebuild = false;
+      } else if (!window._isAppBooting && window.parFixtures) {
+        // Same category — just toggle visibility (instant)
+        window.parFixtures.forEach(f => {
+          if (f) f.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
+        });
+      }
       if (model) {
         model.traverse((child) => {
           if (child.isMesh)
             child.material = isEditMode ? editMaterial : structureMaterial;
         });
       }
-      if (lights.moon) lights.moon.castShadow = !isEditMode;
-      lights.towers.forEach((t) => { t.castShadow = !isEditMode; });
-      if (_bp.strength) _bp.strength.value = isEditMode ? 0 : (params.bloomStrength || 0.35);
+      const effectsEnabled = profileDef.render.effects !== false;
+
+      if (lights.moon) lights.moon.castShadow = effectsEnabled && !isEditMode;
+      lights.towers.forEach((t) => { t.castShadow = effectsEnabled && !isEditMode; });
+      if (_bp.strength) _bp.strength.value = (effectsEnabled && !isEditMode) ? (params.bloomStrength || 0.35) : 0;
+      
+      // Option B: Completely sever the heavy bloom node graph in edit mode or when effects disabled
+      if (window._threeRefs && window._threeRefs.postProcessing) {
+        const { postProcessing, scenePassColor, bloomEffect } = window._threeRefs;
+        if (!effectsEnabled || isEditMode) {
+          postProcessing.outputNode = scenePassColor;
+        } else if (params.bloomEnabled !== false) {
+          postProcessing.outputNode = scenePassColor.add(bloomEffect);
+        }
+        // Force the WebGPU node compositor to recompile the pipeline
+        postProcessing.needsUpdate = true;
+      }
+
       scene.background = new THREE.Color(isEditMode ? 0xaaaaaa : 0x030310);
       scene.fog.density = isEditMode ? 0 : 0.0004;
       gridHelper.visible = isEditMode;
@@ -348,7 +386,7 @@ function setupGUI() {
     }
 
     if (handlers[key]) ctrl.onChange(handlers[key]);
-    if (meta.listen) ctrl.listen();
+    if (meta.listen) ctrl;
     return ctrl;
   }
 
@@ -1191,6 +1229,13 @@ function setupGUI() {
           if (config.rotX === undefined) config.rotX = 0;
           if (config.rotY === undefined) config.rotY = 0;
           if (config.rotZ === undefined) config.rotZ = 0;
+          
+          // Ensure non-light fixtures like FogMachine don't crash lil-gui
+          if (config.color === undefined) config.color = '#ffffff';
+          if (config.intensity === undefined) config.intensity = 5;
+          if (config.angle === undefined) config.angle = 20;
+          if (config.penumbra === undefined) config.penumbra = 0.5;
+
           // V2 metadata defaults
           if (config.controllerId === undefined) config.controllerId = 0;
           if (config.sectionId === undefined) config.sectionId = 0;
@@ -1201,6 +1246,21 @@ function setupGUI() {
           idxFolder.domElement.classList.add('gui-card');
           idxFolder.close();
           window.parGuiFolders[index] = idxFolder;
+
+          if (config.fixtureType === 'FogMachine') {
+            const holdBtn = document.createElement('button');
+            holdBtn.textContent = '💨 Hold to Fog';
+            holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-weight:bold;';
+            const startFog = () => { if (window.parFixtures[index]) window.parFixtures[index]._uiFogOverride = true; };
+            const stopFog = () => { if (window.parFixtures[index]) window.parFixtures[index]._uiFogOverride = false; };
+            holdBtn.addEventListener('mousedown', startFog);
+            holdBtn.addEventListener('touchstart', startFog);
+            holdBtn.addEventListener('mouseup', stopFog);
+            holdBtn.addEventListener('mouseleave', stopFog);
+            holdBtn.addEventListener('touchend', stopFog);
+            const childContainer = idxFolder.domElement.querySelector('.children');
+            if (childContainer) childContainer.appendChild(holdBtn);
+          }
 
           function selectThisLight() {
             const fixture = window.parFixtures[index];
@@ -1232,7 +1292,7 @@ function setupGUI() {
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'intensity', v);
           });
-          idxFolder.add(config, "angle", 5, 90, 1).listen().onChange((v) => {
+          idxFolder.add(config, "angle", 5, 90, 1).onChange((v) => {
             selectThisLight();
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'angle', v);
@@ -1246,13 +1306,13 @@ function setupGUI() {
           // Position
           const posFolder = idxFolder.addFolder("Position");
           posFolder.close();
-          posFolder.add(config, "x", -200, 200, 0.01).listen().onChange((v) => {
+          posFolder.add(config, "x", -200, 200, 0.01).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'x', v);
           });
-          posFolder.add(config, "y", 0, 100, 0.01).listen().onChange((v) => {
+          posFolder.add(config, "y", 0, 100, 0.01).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'y', v);
           });
-          posFolder.add(config, "z", -200, 200, 0.01).listen().onChange((v) => {
+          posFolder.add(config, "z", -200, 200, 0.01).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'z', v);
           });
 
@@ -1260,13 +1320,13 @@ function setupGUI() {
           const rotFolder = idxFolder.addFolder("Rotation");
           rotFolder.close();
           const step = params.snapAngle || 5;
-          rotFolder.add(config, "rotX", -180, 180, step).listen().onChange((v) => {
+          rotFolder.add(config, "rotX", -180, 180, step).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotX', v);
           });
-          rotFolder.add(config, "rotY", -180, 180, step).listen().onChange((v) => {
+          rotFolder.add(config, "rotY", -180, 180, step).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotY', v);
           });
-          rotFolder.add(config, "rotZ", -180, 180, step).listen().onChange((v) => {
+          rotFolder.add(config, "rotZ", -180, 180, step).onChange((v) => {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
           });
 
@@ -2006,7 +2066,7 @@ function setupGUI() {
       trace.generated = true;
 
       if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-      rebuildParLights(true);
+      if (!window._isAppBooting) rebuildParLights(true);
       renderParGUI();
       if (window._setGuiRebuilding) window._setGuiRebuilding(false);
       debounceAutoSave();
@@ -2091,7 +2151,7 @@ function setupGUI() {
       if (params.focusOnSelect === undefined) params.focusOnSelect = true;
       const existingFocusCtrl = genFolder.controllers.find(c => c.property === 'focusOnSelect');
       if (!existingFocusCtrl) {
-        genFolder.add(params, 'focusOnSelect').name('Focus on Select').listen().onChange(() => { debounceAutoSave(); });
+        genFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
       }
 
       window.traceGuiFolders = [];
@@ -2172,6 +2232,9 @@ function setupGUI() {
         });
 
         if (trace.shape === 'circle') {
+          if (trace.radius === undefined) trace.radius = 5.0;
+          if (trace.arc === undefined) trace.arc = 360;
+          
           tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius').onChange(() => {
             updateTracePreview(i);
             debounceAutoSave();
@@ -2182,16 +2245,23 @@ function setupGUI() {
           });
         } else {
           // Line: Start/End XYZ
+          if (trace.startX === undefined) trace.startX = -10;
+          if (trace.startY === undefined) trace.startY = 0;
+          if (trace.startZ === undefined) trace.startZ = 0;
+          if (trace.endX === undefined) trace.endX = 10;
+          if (trace.endY === undefined) trace.endY = 0;
+          if (trace.endZ === undefined) trace.endZ = 0;
+
           const startF = tFolder.addFolder('Start Point (green)');
           startF.close();
-          startF.add(trace, 'startX', -100, 100, 0.5).name('X').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
           const endF = tFolder.addFolder('End Point (red)');
           endF.close();
-          endF.add(trace, 'endX', -100, 100, 0.5).name('X').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').listen().onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
         }
 
         // Show computed light count
@@ -2199,6 +2269,7 @@ function setupGUI() {
         const countInfo = { count: `${lightPts.length} lights` };
         const countCtrl = tFolder.add(countInfo, 'count').name('Preview').disable();
 
+        if (trace.spacing === undefined) trace.spacing = 1.0;
         tFolder.add(trace, 'spacing', 0.5, 10, 0.25).name('Spacing (m)').onChange(() => {
           const pts = computeTracePoints(trace);
           countInfo.count = `${pts.length} lights`;
@@ -2208,6 +2279,7 @@ function setupGUI() {
         });
 
         // Aim mode
+        if (trace.aimMode === undefined) trace.aimMode = 'lookAt';
         tFolder.add(trace, 'aimMode', ['lookAt', 'direction']).name('Aim Mode').onChange(() => {
           renderGeneratorGUI();
           debounceAutoSave();
@@ -2234,6 +2306,10 @@ function setupGUI() {
         if (aimChildren) aimChildren.appendChild(aimBtnDiv);
 
         // Light defaults
+        if (trace.lightColor === undefined) trace.lightColor = '#ffffff';
+        if (trace.lightIntensity === undefined) trace.lightIntensity = 100;
+        if (trace.lightAngle === undefined) trace.lightAngle = 45;
+
         const lightFolder = tFolder.addFolder('Light Defaults');
         lightFolder.close();
         lightFolder.addColor(trace, 'lightColor').name('Color');
@@ -2317,7 +2393,7 @@ function setupGUI() {
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-          rebuildParLights(true);
+          if (!window._isAppBooting) rebuildParLights(true);
           rebuildTraceObjects();
           renderGeneratorGUI();
           renderParGUI();
@@ -2477,7 +2553,7 @@ function setupGUI() {
           idxFolder.add(config, "intensity", 0, 200, 0.5).onChange((v) => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
-          idxFolder.add(config, "angle", 5, 90, 1).listen().onChange((v) => {
+          idxFolder.add(config, "angle", 5, 90, 1).onChange((v) => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
           idxFolder.add(config, "penumbra", 0, 1, 0.05).onChange((v) => {
@@ -2486,26 +2562,26 @@ function setupGUI() {
 
           const posFolder = idxFolder.addFolder("Position");
           posFolder.close();
-          posFolder.add(config, "x", -200, 200, 0.01).listen().onChange(() => {
+          posFolder.add(config, "x", -200, 200, 0.01).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
-          posFolder.add(config, "y", 0, 100, 0.01).listen().onChange(() => {
+          posFolder.add(config, "y", 0, 100, 0.01).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
-          posFolder.add(config, "z", -200, 200, 0.01).listen().onChange(() => {
+          posFolder.add(config, "z", -200, 200, 0.01).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
 
           const rotFolder = idxFolder.addFolder("Rotation");
           rotFolder.close();
           const step = params.snapAngle || 5;
-          rotFolder.add(config, "rotX", -180, 180, step).listen().onChange(() => {
+          rotFolder.add(config, "rotX", -180, 180, step).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
-          rotFolder.add(config, "rotY", -180, 180, step).listen().onChange(() => {
+          rotFolder.add(config, "rotY", -180, 180, step).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
-          rotFolder.add(config, "rotZ", -180, 180, step).listen().onChange(() => {
+          rotFolder.add(config, "rotZ", -180, 180, step).onChange(() => {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
 
@@ -2666,14 +2742,14 @@ function setupGUI() {
         // Start/End position folders
         const startF = sFolder.addFolder('Start Point (green)');
         startF.close();
-        startF.add(strand, 'startX', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        startF.add(strand, 'startY', -100, 100, 0.5).name('Y').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        startF.add(strand, 'startZ', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        startF.add(strand, 'startX', -100, 100, 0.5).name('X').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        startF.add(strand, 'startY', -100, 100, 0.5).name('Y').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        startF.add(strand, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
         const endF = sFolder.addFolder('End Point (red)');
         endF.close();
-        endF.add(strand, 'endX', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        endF.add(strand, 'endY', -100, 100, 0.5).name('Y').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        endF.add(strand, 'endX', -100, 100, 0.5).name('X').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        endF.add(strand, 'endY', -100, 100, 0.5).name('Y').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
+        endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
 
         // V2 Metadata
         if (strand.controllerId === undefined) strand.controllerId = 0;
@@ -2742,7 +2818,7 @@ function setupGUI() {
     if (sectionConfig && !sectionConfig.focusOnSelect) {
       sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
     }
-    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').listen().onChange(() => { debounceAutoSave(); });
+    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
 
     // ─── Load Iceberg Geometry checkbox ───
     if (params.loadIcebergGeometry === undefined) params.loadIcebergGeometry = false;
@@ -2926,9 +3002,9 @@ function setupGUI() {
         // Position
         const posF = bFolder.addFolder('Position');
         posF.close();
-        posF.add(berg, 'x', -100, 100, 0.5).name('X').listen().onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'y', -20, 20, 0.5).name('Y').listen().onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'z', -100, 100, 0.5).name('Z').listen().onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        posF.add(berg, 'x', -100, 100, 0.5).name('X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        posF.add(berg, 'y', -20, 20, 0.5).name('Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+        posF.add(berg, 'z', -100, 100, 0.5).name('Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
 
         // Shape
         const shapeF = bFolder.addFolder('Shape');
@@ -2998,13 +3074,33 @@ function setupGUI() {
     }
     window.renderIcebergGUI = renderIcebergGUI;
 
-    renderIcebergGUI();
+    const urlParams = new URLSearchParams(window.location.search);
+    const icebergsEnabled = urlParams.get('enable_iceberg') === '1';
+
+    if (icebergsEnabled) {
+      renderIcebergGUI();
+    } else {
+      console.log("[GUI] Individual Iceberg UI disabled to improve load speed. Run 'npm start enable_iceberg' to enable.");
+      // Render simple empty placeholder or nothing
+    }
     rebuildIcebergs();
   }
 
   // ─── Build the entire GUI from the config tree ───
   if (configTree) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const profileOverride = urlParams.get('profile');
+    if (profileOverride && configTree.options && configTree.options.lightingProfile) {
+      configTree.options.lightingProfile.value = profileOverride;
+      params.lightingProfile = profileOverride;
+    }
+    
     buildGUI(configTree, gui);
+  }
+
+  // Apply initial handlers so visual states immediately map on load
+  if (window.applyAllHandlers) {
+    window.applyAllHandlers();
   }
 
   // ─── Premium Save Button ───

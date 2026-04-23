@@ -1,8 +1,10 @@
 import * as THREE from "three";
 import { params } from "../core/state.js";
+import { getProfileDef } from "../core/profile_registry.js";
 
 export function generatePixelMap() {
   const pixels = [];
+  if (window._isRebuildingFixtures) return pixels;
 
   function standardizeChannels(ch) {
     if (!ch) return null;
@@ -19,10 +21,18 @@ export function generatePixelMap() {
     return Object.keys(std).length > 0 ? std : null;
   }
 
+  let autoUniverse = 1;
+  let autoAddress = 1;
+
   // Par Lights & DMX Fixtures (Unified)
   const dmxList = (params.dmxFixtures && params.dmxFixtures.length > 0) ? params.dmxFixtures : params.parLights;
   if (dmxList) {
-    dmxList.forEach((light, i) => {
+    // Skip pixel map generation entirely if fixtures are still being built
+    const fixturesReady = window.parFixtures && window.parFixtures.length >= dmxList.length && !window._isRebuildingFixtures;
+    if (!fixturesReady) {
+      console.log(`[pixelblaze] Skipping pixel map: fixtures not ready (${window.parFixtures?.length || 0}/${dmxList.length}, rebuilding=${!!window._isRebuildingFixtures})`);
+    }
+    if (fixturesReady) dmxList.forEach((light, i) => {
       const fixture = (window.dmxSceneFixtures && window.dmxSceneFixtures[i]) || (window.parFixtures && window.parFixtures[i]) || null;
       if (fixture && fixture.pixels && fixture.pixels.length > 0) {
         if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
@@ -34,33 +44,53 @@ export function generatePixelMap() {
           } else {
             worldPos.set(light.x || 0, light.y || 0, light.z || 0);
           }
-          pixels.push({
-            type: 'dmx',
-            fixtureType: light.type || light.fixtureType || 'UkingPar',
-            name: (light.name || `Fixture ${i + 1}`) + (px.model ? ` - ${px.model.id}` : ` (Ch ${j + 1})`),
-            group: light.group || '',
-            x: +(worldPos.x).toFixed(3),
-            y: +(worldPos.y).toFixed(3),
-            z: +(worldPos.z).toFixed(3),
-            nx: 0, ny: 0, nz: 0,
-            cId: light.controllerId || 0,
-            sId: light.sectionId || 0,
-            fId: light.fixtureId || 0,
-            vMask: light.viewMask || 0,
-            _prePatched: (light.dmxUniverse > 0 && light.dmxAddress > 0),
-            patch: (light.dmxUniverse > 0 && light.dmxAddress > 0) ? {
-               universe: light.dmxUniverse,
-               addr: light.dmxAddress,
-               footprint: fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10
-            } : null,
+            // Auto-patch sequentially if missing config
+            let u = light.dmxUniverse;
+            let addr = light.dmxAddress;
+            const fp = fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
+            if (!u || !addr) {
+                u = autoUniverse;
+                addr = autoAddress;
+            }
+
+            pixels.push({
+              type: 'dmx',
+              fixtureType: light.type || light.fixtureType || 'UkingPar',
+              name: (light.name || `Fixture ${i + 1}`) + (px.model ? ` - ${px.model.id}` : ` (Ch ${j + 1})`),
+              group: light.group || '',
+              x: +(worldPos.x).toFixed(3),
+              y: +(worldPos.y).toFixed(3),
+              z: +(worldPos.z).toFixed(3),
+              nx: 0, ny: 0, nz: 0,
+              cId: light.controllerId || 0,
+              sId: light.sectionId || 0,
+              fId: light.fixtureId || 0,
+              vMask: light.viewMask || 0,
+              _prePatched: true,
+              patch: {
+                 universe: u,
+                 addr: addr,
+                 footprint: fp
+              },
             channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
             // Bind the apply callback natively for the simulator
             apply: (r, g, b) => {
-              if (params.lightingProfile === 'edit') return;
+              if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
               fixture.setPixelColorRGB(j, r, g, b);
             },
           });
         });
+        
+        // After iterating all pixels in this multi-pixel fixture, increment autoAddress for the NEXT fixture
+        if (!light.dmxUniverse || !light.dmxAddress) {
+            const fp = fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
+            autoAddress += fp;
+            if (autoAddress > 512) {
+                autoUniverse++;
+                autoAddress = 1;
+            }
+        }
+
       } else if (fixture && fixture.light) {
         // Simple fixture
         const worldPos = new THREE.Vector3();
@@ -71,6 +101,22 @@ export function generatePixelMap() {
         } else {
            worldPos.set(light.x || 0, light.y || 0, light.z || 0);
         }
+        const chFallback = fixture.fixtureDef ? fixture.fixtureDef.footprint : 3;
+
+        // Auto-patch sequentially if missing config
+        let u = light.dmxUniverse;
+        let addr = light.dmxAddress;
+        const fp = fixture.fixtureDef ? (fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
+        if (!u || !addr) {
+            u = autoUniverse;
+            addr = autoAddress;
+            autoAddress += fp;
+            if (autoAddress > 512) {
+                autoUniverse++;
+                autoAddress = 1;
+            }
+        }
+
         pixels.push({
             type: 'dmx',
             fixtureType: light.type || light.fixtureType || 'Generic',
@@ -84,23 +130,27 @@ export function generatePixelMap() {
             sId: light.sectionId || 0,
             fId: light.fixtureId || 0,
             vMask: light.viewMask || 0,
-            _prePatched: (light.dmxUniverse > 0 && light.dmxAddress > 0),
-            patch: (light.dmxUniverse > 0 && light.dmxAddress > 0) ? {
-               universe: light.dmxUniverse,
-               addr: light.dmxAddress,
-               footprint: fixture.fixtureDef ? (fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10
-            } : null,
-            channels: standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null),
+            _prePatched: true, // We polyfill dynamically, so they are practically patched
+            patch: {
+               universe: u,
+               addr: addr,
+               footprint: fp
+            },
+            channels: standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback,
             apply: (r, g, b) => {
-               if (params.lightingProfile === 'edit') return;
-               fixture.light.color.setRGB(r, g, b);
-               if (fixture.beam && fixture.beam.material) fixture.beam.material.color.setRGB(r, g, b);
-               if (fixture.setBulbColor) fixture.setBulbColor(r, g, b);
+               if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
+               if (fixture.setPixelColorRGB) {
+                   fixture.setPixelColorRGB(0, r, g, b); // Emulate single-pixel structure
+               }
             }
         });
       } else {
         const errorMsg = `[MarsinEngine Export] Warning: Unsupported or missing fixture definition! Par light at index ${i} (Type: ${light.fixtureType || 'Unknown'}) could not be resolved against supported fixtures. Skipping.`;
-        console.warn(errorMsg, { config: light, fixture: fixture, paramsDmx: params.dmxFixtures?.length, paramsPar: params.parLights?.length, winDmx: window.dmxSceneFixtures?.length, winPar: window.parFixtures?.length });
+        if (window._missingFixtureWarnCount === undefined) window._missingFixtureWarnCount = 0;
+        if (window._missingFixtureWarnCount < 20) {
+          console.warn(errorMsg, { config: light, fixture: fixture });
+          window._missingFixtureWarnCount++;
+        }
       }
     });
   }
@@ -129,7 +179,7 @@ export function generatePixelMap() {
           patch: null,
           channels: null,
           apply: fixture ? ((r, g, b) => {
-            if (params.lightingProfile === 'edit') return;
+            if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
             fixture.setLedColorRGB(j, r, g, b);
           }) : (() => {})
         });
@@ -156,7 +206,7 @@ export function generatePixelMap() {
         patch: null,
         channels: null,
         apply: fixture ? ((r, g, b) => {
-          if (params.lightingProfile === 'edit') return;
+          if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
           fixture.setColorRGB(r, g, b);
         }) : (() => {})
       });

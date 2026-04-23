@@ -11,18 +11,26 @@
  */
 import * as THREE from 'three';
 import { params } from "../core/state.js";
+import { getProfileDef } from "../core/profile_registry.js";
 
 // ── Shared geometries ────────────────────────────────────────────────────
 const defaultShellMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.5 });
 const defaultDotMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
-const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 32, 1, true);
+const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 4, 1, true); // Extremely low-poly 4-sided pyramid
 baseBeamGeo.translate(0, -0.5, 0);
 baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards -Z
 
-const bulbGeo = new THREE.SphereGeometry(0.25, 12, 8);
-const haloGeo = new THREE.SphereGeometry(0.6, 12, 8);
+const bulbGeo = new THREE.SphereGeometry(0.5, 8, 8);
+const haloGeo = new THREE.SphereGeometry(0.8, 8, 8);
+
+const _sphereCache = {};
+function getCachedSphere(size) {
+  const key = size.toFixed(5);
+  if (!_sphereCache[key]) _sphereCache[key] = new THREE.SphereGeometry(size, 8, 8);
+  return _sphereCache[key];
+}
 
 // WebGPU has no shader uniform limit — no SpotLight cap needed.
 
@@ -38,8 +46,10 @@ export class DmxFixtureRuntime {
      */
   constructor(config, index, scene, interactiveObjects, modelRadius, fixtureDef, patchDef) {
     // Lighting profile: full | unified | full_lite | unified_lite | super_lite | edit
-    const profile = params.lightingProfile || 'full_lite';
+    const profile = params.lightingProfile || 'edit';
+    const profileDef = getProfileDef(profile);
     this.profile = profile;
+    this.profileDef = profileDef;
     this.config = config;
     this.index = index;
     this.scene = scene;
@@ -119,7 +129,7 @@ export class DmxFixtureRuntime {
     this.fixtureSpotLight = null;
     this.litePointLight = null;
 
-    if (profile === 'unified') {
+    if (this.profileDef.render.spotLights === 'unified') {
       // Single SpotLight per fixture
       this.fixtureSpotLight = new THREE.SpotLight(
         color, intensity, Math.min(modelRadius * 2, 80),
@@ -128,9 +138,10 @@ export class DmxFixtureRuntime {
       this.fixtureSpotLight.castShadow = false;
       this.scene.add(this.fixtureSpotLight);
       this.scene.add(this.fixtureSpotLight.target);
-    } else if (profile === 'full_lite' || profile === 'unified_lite') {
-      // Single cheap PointLight per fixture
-      this.litePointLight = new THREE.PointLight(color, intensity * 0.5, 40);
+    } else if (this.profileDef.render.pointLights) {
+      // Single cheap PointLight per fixture (boosted heavily to reach the hull)
+      // Capped directly to 60 units so the GPU fragment shader can quickly cull them 
+      this.litePointLight = new THREE.PointLight(color, intensity * 20, 60);
       this.scene.add(this.litePointLight);
     }
 
@@ -144,9 +155,12 @@ export class DmxFixtureRuntime {
             const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
             avgX += pos.x; avgY += pos.y; avgZ += pos.z;
             const dotSize = typeof pixelModel.size === 'number' ? pixelModel.size * 0.001 : 0.012;
-            const dotGeo = new THREE.SphereGeometry(dotSize, 8, 8);
-            const dotMesh = new THREE.Mesh(dotGeo, defaultDotMat.clone());
+            const dotGeo = getCachedSphere(dotSize);
+            // Will set material down below once bulbMat is created
+            const dotMesh = new THREE.Mesh(dotGeo, null);
             dotMesh.position.copy(pos);
+            dotMesh.matrixAutoUpdate = false; // Fixes GPU bottleneck! Static subset objects do not need individual 18k transform calculations every frame!
+            dotMesh.updateMatrix(); // bake once initially
             this.group.add(dotMesh);
             dots.push({ pos, mesh: dotMesh });
           });
@@ -157,9 +171,15 @@ export class DmxFixtureRuntime {
 
         const localPos = new THREE.Vector3(avgX, avgY, avgZ);
 
-        const bulbMat = new THREE.MeshBasicMaterial({ color: color });
-        const bulbSize = typeof pixelModel.size === 'number' ? pixelModel.size * 0.001 * 2 : 0.08;
-        const bulb = new THREE.Mesh(new THREE.SphereGeometry(bulbSize, 8, 6), bulbMat);
+        // depthTest: false allows pixels to be seen THROUGH the fixture boxes as requested!
+        const bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
+        
+        // Link dots to bulbMat to share color perfectly (saves 16,000+ material instances and loops!)
+        if (dots) dots.forEach(d => { d.mesh.material = bulbMat; });
+
+        // Vastly enlargen pixel sizes as requested (previously 0.08 max, now 0.12)
+        const bulbSize = typeof pixelModel.size === 'number' ? Math.max(pixelModel.size * 0.002, 0.12) : 0.12;
+        const bulb = new THREE.Mesh(getCachedSphere(bulbSize), bulbMat);
         bulb.position.copy(localPos);
         this.group.add(bulb);
 
@@ -167,21 +187,28 @@ export class DmxFixtureRuntime {
           color, transparent: true, opacity: 0.2,
           blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
         });
-        const halo = new THREE.Mesh(new THREE.SphereGeometry(bulbSize * 2.5, 8, 6), haloMat);
+        const halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
         halo.position.copy(localPos);
         this.group.add(halo);
 
-        // SpotLight — 1:1 per pixel (no cap with WebGPU)
+        // SpotLight / PointLight — 1:1 per pixel
         let spotLight = null;
-        if (profile === 'full') {
-          spotLight = new THREE.SpotLight(
-            color, intensity, modelRadius * 3,
-            THREE.MathUtils.degToRad(angle), penumbra, 1.5
-          );
-          spotLight.position.set(avgX, avgY, avgZ);
-          spotLight.castShadow = false;
-          this.scene.add(spotLight);
-          this.scene.add(spotLight.target);
+        if (this.profileDef.render.spotLights === true) {
+          const isMultiPixel = fixtureDef && fixtureDef.pixels && fixtureDef.pixels.length > 1;
+          if (isMultiPixel) {
+            spotLight = new THREE.PointLight(color, intensity, modelRadius * 1.5, 1.5);
+            spotLight.position.set(avgX, avgY, avgZ);
+            this.scene.add(spotLight);
+          } else {
+            spotLight = new THREE.SpotLight(
+              color, intensity, modelRadius * 3,
+              THREE.MathUtils.degToRad(angle), penumbra, 1.5
+            );
+            spotLight.position.set(avgX, avgY, avgZ);
+            spotLight.castShadow = false;
+            this.scene.add(spotLight);
+            this.scene.add(spotLight.target);
+          }
         }
 
         const coneMat = new THREE.MeshBasicMaterial({
@@ -198,7 +225,7 @@ export class DmxFixtureRuntime {
       });
     } else {
       // No pixel definition — single bulb (simple par light fallback)
-      const bulbMat = new THREE.MeshBasicMaterial({ color: color });
+      const bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
       const bulb = new THREE.Mesh(bulbGeo, bulbMat);
       this.group.add(bulb);
 
@@ -214,7 +241,7 @@ export class DmxFixtureRuntime {
       this.group.add(halo);
 
       let spotLight = null;
-      if (profile === 'full') {
+      if (this.profileDef.render.spotLights === true) {
         spotLight = new THREE.SpotLight(
           color, intensity, modelRadius * 3,
           THREE.MathUtils.degToRad(angle), penumbra, 1.5
@@ -282,7 +309,7 @@ export class DmxFixtureRuntime {
     if (this.litePointLight) {
       const worldPos = new THREE.Vector3().setFromMatrixPosition(this.group.matrixWorld);
       this.litePointLight.position.copy(worldPos);
-      this.litePointLight.intensity = intensity * 0.5;
+      this.litePointLight.intensity = intensity * 20;
       this.litePointLight.color.set(color);
     }
 
@@ -292,13 +319,15 @@ export class DmxFixtureRuntime {
         const worldPos = p.localPos.clone().applyMatrix4(this.group.matrixWorld);
         p.spotLight.position.copy(worldPos);
         p.spotLight.intensity = intensity;
-        p.spotLight.angle = THREE.MathUtils.degToRad(angle);
-        p.spotLight.penumbra = penumbra;
         p.spotLight.color.set(color);
 
-        const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
-        p.spotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
-        p.spotLight.target.updateMatrixWorld();
+        if (p.spotLight.isSpotLight) {
+          p.spotLight.angle = THREE.MathUtils.degToRad(angle);
+          p.spotLight.penumbra = penumbra;
+          const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
+          p.spotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
+          p.spotLight.target.updateMatrixWorld();
+        }
       }
 
       // Beam scale
@@ -345,10 +374,14 @@ export class DmxFixtureRuntime {
 
   setBulbColor(r, g, b) {
     this.pixels.forEach(p => {
-      p.bulbMat.color.setRGB(r, g, b);
-      p.haloMat.color.setRGB(r, g, b);
+      if (p.bulbMat.color.r !== r || p.bulbMat.color.g !== g || p.bulbMat.color.b !== b) {
+        p.bulbMat.color.setRGB(r, g, b);
+        p.haloMat.color.setRGB(r, g, b);
+      }
       p.dots.forEach(d => {
-        if (d.mesh) d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
+        if (d.mesh && (d.mesh.material.color.r !== r + 0.3 || d.mesh.material.color.g !== g + 0.3 || d.mesh.material.color.b !== b + 0.3)) {
+          d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
+        }
       });
     });
   }
@@ -361,13 +394,15 @@ export class DmxFixtureRuntime {
     }
     if (pIndex >= 0 && pIndex < this.pixels.length) {
       const p = this.pixels[pIndex];
-      if (p.spotLight) p.spotLight.color.setRGB(r, g, b);
-      p.beam.material.color.setRGB(r, g, b);
-      p.bulbMat.color.setRGB(r, g, b);
-      p.haloMat.color.setRGB(r, g, b);
-      p.dots.forEach(d => {
-        if (d.mesh) d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
-      });
+      if (p.spotLight) {
+        if (p.spotLight.color.r !== r || p.spotLight.color.g !== g || p.spotLight.color.b !== b) p.spotLight.color.setRGB(r, g, b);
+      }
+      if (Math.abs(p.beam.material.color.r - r) > 0.005 || Math.abs(p.beam.material.color.g - g) > 0.005 || Math.abs(p.beam.material.color.b - b) > 0.005) {
+        p.beam.material.color.setRGB(r, g, b);
+        p.bulbMat.color.setRGB(r, g, b);
+        p.haloMat.color.setRGB(r, g, b);
+      }
+      // Removed p.dots loop, as dots now share p.bulbMat!
     }
   }
 
@@ -416,26 +451,20 @@ export class DmxFixtureRuntime {
   // ── Visibility ───────────────────────────────────────────────────────
 
   setVisibility(visible, conesVisible = true) {
-    const profile = params.lightingProfile || 'full_lite';
+    const profile = params.lightingProfile || 'edit';
+    const profileDef = getProfileDef(profile);
     this.hitbox.visible = visible;
     this.group.visible = visible;
 
-    if (profile === 'edit') {
-      if (this.fixtureSpotLight) this.fixtureSpotLight.visible = false;
-      if (this.litePointLight) this.litePointLight.visible = false;
-      this.pixels.forEach(p => {
-        if (p.spotLight) p.spotLight.visible = false;
-        if (p.beam) p.beam.visible = false;
-      });
-      return;
-    }
+    if (this.fixtureSpotLight) this.fixtureSpotLight.visible = visible && (profileDef.render.spotLights === 'unified');
+    if (this.litePointLight) this.litePointLight.visible = visible && profileDef.render.pointLights;
 
-    if (this.fixtureSpotLight) this.fixtureSpotLight.visible = visible && (profile === 'unified');
-    if (this.litePointLight) this.litePointLight.visible = visible && (profile === 'full_lite' || profile === 'unified_lite');
-
-    this.pixels.forEach(p => {
-      if (p.spotLight) p.spotLight.visible = visible && (profile === 'full');
-      if (p.beam) p.beam.visible = visible && conesVisible;
+    this.pixels.forEach((p, j) => {
+      if (p.spotLight) p.spotLight.visible = visible && (profileDef.render.spotLights === true);
+      if (p.beam) p.beam.visible = visible && conesVisible && profileDef.render.beams && (profileDef.render.beams === 'unified' ? j === 0 : true);
+      if (p.halo) p.halo.visible = visible && profileDef.render.halos;
+      if (p.bulb) p.bulb.visible = visible && profileDef.render.bulbs;
+      if (p.dots) p.dots.forEach(d => d.mesh.visible = visible && profileDef.render.dots);
     });
   }
 

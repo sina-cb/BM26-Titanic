@@ -85,7 +85,7 @@ parLights:
   _section:
     label: 🔌 DMX Fixtures
     type: fixtureArray
-    collapsed: true
+    collapsed: false
   parsEnabled:
     value: true
     label: Master Enabled
@@ -198,6 +198,33 @@ parLights:
       'y': 1.5
       z: 1
       rotX: -35
+      rotY: 180
+      rotZ: 180
+    - group: SpecialEffects
+      name: FogMachine Left
+      fixtureType: FogMachine
+      type: FogMachine
+      x: -0.5
+      'y': 0
+      z: 0
+      rotX: 0
+      rotY: 180
+      rotZ: 180
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+    - group: SpecialEffects
+      name: FogMachine Right
+      fixtureType: FogMachine
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 2
+      'y': 0
+      z: 0
+      rotX: 0
       rotY: 180
       rotZ: 180
 ledStrands:
