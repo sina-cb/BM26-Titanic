@@ -1,0 +1,909 @@
+{
+  "fixtures": [
+    {
+      "name": "Par 1",
+      "type": "UkingPar",
+      "position": [
+        1.2402849287900335,
+        1.994224639997228,
+        0
+      ],
+      "rotation": [
+        -34.99999999999999,
+        180,
+        180
+      ],
+      "color": "#ff8800",
+      "intensity": 5,
+      "angle": 45,
+      "pixelCount": 1,
+      "pixels": [
+        {
+          "id": "rgbwau_1",
+          "type": "rgbwau",
+          "offset": 1,
+          "position": [
+            4.440892098500626e-16,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 150,
+        "height": 150,
+        "depth": 120
+      },
+      "universe": 1,
+      "address": 136,
+      "channelMode": 10
+    },
+    {
+      "name": "Par 2",
+      "type": "UkingPar",
+      "position": [
+        0.891867068997521,
+        2,
+        0
+      ],
+      "rotation": [
+        -46.372989398756104,
+        180,
+        180
+      ],
+      "color": "#0088ff",
+      "intensity": 5,
+      "angle": 45,
+      "pixelCount": 1,
+      "pixels": [
+        {
+          "id": "rgbwau_1",
+          "type": "rgbwau",
+          "offset": 1,
+          "position": [
+            4.440892098500626e-16,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 150,
+        "height": 150,
+        "depth": 120
+      },
+      "universe": 1,
+      "address": 146,
+      "channelMode": 10
+    },
+    {
+      "name": "Par 3",
+      "type": "UkingPar",
+      "position": [
+        0.20042143867423856,
+        2,
+        0
+      ],
+      "rotation": [
+        -35.00000000000001,
+        180,
+        180
+      ],
+      "color": "#00ff44",
+      "intensity": 5,
+      "angle": 45,
+      "pixelCount": 1,
+      "pixels": [
+        {
+          "id": "rgbwau_1",
+          "type": "rgbwau",
+          "offset": 1,
+          "position": [
+            4.440892098500626e-16,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 150,
+        "height": 150,
+        "depth": 120
+      },
+      "universe": 1,
+      "address": 156,
+      "channelMode": 10
+    },
+    {
+      "name": "Par 4",
+      "type": "UkingPar",
+      "position": [
+        -0.1273980207751736,
+        1.9999999999999998,
+        -4.849303195384386e-16
+      ],
+      "rotation": [
+        -40.00000000000001,
+        180,
+        180
+      ],
+      "color": "#ffaa44",
+      "intensity": 5,
+      "angle": 45,
+      "pixelCount": 1,
+      "pixels": [
+        {
+          "id": "rgbwau_1",
+          "type": "rgbwau",
+          "offset": 1,
+          "position": [
+            4.440892098500626e-16,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 150,
+        "height": 150,
+        "depth": 120
+      },
+      "universe": 1,
+      "address": 166,
+      "channelMode": 10
+    },
+    {
+      "name": "Vintage Left",
+      "type": "VintageLed",
+      "position": [
+        -1.264292127555557,
+        6.5,
+        13
+      ],
+      "rotation": [
+        -55.49100667673063,
+        -0.21235543704564325,
+        -89.59376711011713
+      ],
+      "color": "#ffaa44",
+      "intensity": 3,
+      "angle": 45,
+      "pixelCount": 12,
+      "pixels": [
+        {
+          "id": "head_1_warm",
+          "type": "warm",
+          "offset": 2,
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "head_1_aux",
+          "type": "rgb",
+          "offset": 15,
+          "position": [
+            0,
+            5.551115123125783e-17,
+            -5
+          ]
+        },
+        {
+          "id": "head_2_warm",
+          "type": "warm",
+          "offset": 3,
+          "position": [
+            0,
+            75,
+            0
+          ]
+        },
+        {
+          "id": "head_2_aux",
+          "type": "rgb",
+          "offset": 18,
+          "position": [
+            0,
+            75,
+            -5
+          ]
+        },
+        {
+          "id": "head_3_warm",
+          "type": "warm",
+          "offset": 4,
+          "position": [
+            0,
+            150,
+            0
+          ]
+        },
+        {
+          "id": "head_3_aux",
+          "type": "rgb",
+          "offset": 21,
+          "position": [
+            0,
+            150,
+            -5
+          ]
+        },
+        {
+          "id": "head_4_warm",
+          "type": "warm",
+          "offset": 5,
+          "position": [
+            0,
+            225,
+            0
+          ]
+        },
+        {
+          "id": "head_4_aux",
+          "type": "rgb",
+          "offset": 24,
+          "position": [
+            0,
+            225,
+            -5
+          ]
+        },
+        {
+          "id": "head_5_warm",
+          "type": "warm",
+          "offset": 6,
+          "position": [
+            0,
+            300,
+            0
+          ]
+        },
+        {
+          "id": "head_5_aux",
+          "type": "rgb",
+          "offset": 27,
+          "position": [
+            0,
+            300,
+            -5
+          ]
+        },
+        {
+          "id": "head_6_warm",
+          "type": "warm",
+          "offset": 7,
+          "position": [
+            0,
+            375,
+            0
+          ]
+        },
+        {
+          "id": "head_6_aux",
+          "type": "rgb",
+          "offset": 30,
+          "position": [
+            0,
+            375,
+            -5
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 80,
+        "height": 430,
+        "depth": 60
+      },
+      "universe": 1,
+      "address": 176,
+      "channelMode": 33
+    },
+    {
+      "name": "Vintage Right",
+      "type": "VintageLed",
+      "position": [
+        1.486378387947728,
+        6.459954334092961,
+        13
+      ],
+      "rotation": [
+        -55.000000000000014,
+        -1.1090255735390504e-14,
+        -93.34726508362832
+      ],
+      "color": "#ffaa44",
+      "intensity": 3,
+      "angle": 45,
+      "pixelCount": 12,
+      "pixels": [
+        {
+          "id": "head_1_warm",
+          "type": "warm",
+          "offset": 2,
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "head_1_aux",
+          "type": "rgb",
+          "offset": 15,
+          "position": [
+            0,
+            5.551115123125783e-17,
+            -5
+          ]
+        },
+        {
+          "id": "head_2_warm",
+          "type": "warm",
+          "offset": 3,
+          "position": [
+            0,
+            75,
+            0
+          ]
+        },
+        {
+          "id": "head_2_aux",
+          "type": "rgb",
+          "offset": 18,
+          "position": [
+            0,
+            75,
+            -5
+          ]
+        },
+        {
+          "id": "head_3_warm",
+          "type": "warm",
+          "offset": 4,
+          "position": [
+            0,
+            150,
+            0
+          ]
+        },
+        {
+          "id": "head_3_aux",
+          "type": "rgb",
+          "offset": 21,
+          "position": [
+            0,
+            150,
+            -5
+          ]
+        },
+        {
+          "id": "head_4_warm",
+          "type": "warm",
+          "offset": 5,
+          "position": [
+            0,
+            225,
+            0
+          ]
+        },
+        {
+          "id": "head_4_aux",
+          "type": "rgb",
+          "offset": 24,
+          "position": [
+            0,
+            225,
+            -5
+          ]
+        },
+        {
+          "id": "head_5_warm",
+          "type": "warm",
+          "offset": 6,
+          "position": [
+            0,
+            300,
+            0
+          ]
+        },
+        {
+          "id": "head_5_aux",
+          "type": "rgb",
+          "offset": 27,
+          "position": [
+            0,
+            300,
+            -5
+          ]
+        },
+        {
+          "id": "head_6_warm",
+          "type": "warm",
+          "offset": 7,
+          "position": [
+            0,
+            375,
+            0
+          ]
+        },
+        {
+          "id": "head_6_aux",
+          "type": "rgb",
+          "offset": 30,
+          "position": [
+            0,
+            375,
+            -5
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 80,
+        "height": 430,
+        "depth": 60
+      },
+      "universe": 1,
+      "address": 209,
+      "channelMode": 33
+    },
+    {
+      "name": "Bar Left",
+      "type": "ShehdsBar",
+      "position": [
+        0.07203133767327397,
+        1.5,
+        1
+      ],
+      "rotation": [
+        -34.99999999999999,
+        180,
+        180
+      ],
+      "color": "#ffaa44",
+      "intensity": 5,
+      "angle": 20,
+      "pixelCount": 18,
+      "pixels": [
+        {
+          "id": "pixel_1",
+          "type": "rgbwav",
+          "offset": 11,
+          "position": [
+            -472,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_2",
+          "type": "rgbwav",
+          "offset": 17,
+          "position": [
+            -416,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_3",
+          "type": "rgbwav",
+          "offset": 23,
+          "position": [
+            -361,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_4",
+          "type": "rgbwav",
+          "offset": 29,
+          "position": [
+            -305,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_5",
+          "type": "rgbwav",
+          "offset": 35,
+          "position": [
+            -250,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_6",
+          "type": "rgbwav",
+          "offset": 41,
+          "position": [
+            -194,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_7",
+          "type": "rgbwav",
+          "offset": 47,
+          "position": [
+            -139,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_8",
+          "type": "rgbwav",
+          "offset": 53,
+          "position": [
+            -83,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_9",
+          "type": "rgbwav",
+          "offset": 59,
+          "position": [
+            -28,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_10",
+          "type": "rgbwav",
+          "offset": 65,
+          "position": [
+            28,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_11",
+          "type": "rgbwav",
+          "offset": 71,
+          "position": [
+            83,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_12",
+          "type": "rgbwav",
+          "offset": 77,
+          "position": [
+            139,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_13",
+          "type": "rgbwav",
+          "offset": 83,
+          "position": [
+            194,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_14",
+          "type": "rgbwav",
+          "offset": 89,
+          "position": [
+            250,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_15",
+          "type": "rgbwav",
+          "offset": 95,
+          "position": [
+            305,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_16",
+          "type": "rgbwav",
+          "offset": 101,
+          "position": [
+            361,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_17",
+          "type": "rgbwav",
+          "offset": 107,
+          "position": [
+            416,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_18",
+          "type": "rgbwav",
+          "offset": 113,
+          "position": [
+            472,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 1000,
+        "height": 90,
+        "depth": 110
+      },
+      "universe": 1,
+      "address": 242,
+      "channelMode": 119
+    },
+    {
+      "name": "Bar Right",
+      "type": "ShehdsBar",
+      "position": [
+        1.147796471297927,
+        1.5,
+        1
+      ],
+      "rotation": [
+        -35,
+        180,
+        180
+      ],
+      "color": "#ffaa44",
+      "intensity": 5,
+      "angle": 20,
+      "pixelCount": 18,
+      "pixels": [
+        {
+          "id": "pixel_1",
+          "type": "rgbwav",
+          "offset": 11,
+          "position": [
+            -472,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_2",
+          "type": "rgbwav",
+          "offset": 17,
+          "position": [
+            -416,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_3",
+          "type": "rgbwav",
+          "offset": 23,
+          "position": [
+            -361,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_4",
+          "type": "rgbwav",
+          "offset": 29,
+          "position": [
+            -305,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_5",
+          "type": "rgbwav",
+          "offset": 35,
+          "position": [
+            -250,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_6",
+          "type": "rgbwav",
+          "offset": 41,
+          "position": [
+            -194,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_7",
+          "type": "rgbwav",
+          "offset": 47,
+          "position": [
+            -139,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_8",
+          "type": "rgbwav",
+          "offset": 53,
+          "position": [
+            -83,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_9",
+          "type": "rgbwav",
+          "offset": 59,
+          "position": [
+            -28,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_10",
+          "type": "rgbwav",
+          "offset": 65,
+          "position": [
+            28,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_11",
+          "type": "rgbwav",
+          "offset": 71,
+          "position": [
+            83,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_12",
+          "type": "rgbwav",
+          "offset": 77,
+          "position": [
+            139,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_13",
+          "type": "rgbwav",
+          "offset": 83,
+          "position": [
+            194,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_14",
+          "type": "rgbwav",
+          "offset": 89,
+          "position": [
+            250,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_15",
+          "type": "rgbwav",
+          "offset": 95,
+          "position": [
+            305,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_16",
+          "type": "rgbwav",
+          "offset": 101,
+          "position": [
+            361,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_17",
+          "type": "rgbwav",
+          "offset": 107,
+          "position": [
+            416,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "pixel_18",
+          "type": "rgbwav",
+          "offset": 113,
+          "position": [
+            472,
+            0,
+            0
+          ]
+        }
+      ],
+      "dimensions": {
+        "width": 1000,
+        "height": 90,
+        "depth": 110
+      },
+      "universe": 1,
+      "address": 362,
+      "channelMode": 119
+    },
+    {
+      "name": "FogMachine Left",
+      "type": "FogMachine",
+      "position": [
+        -0.5,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        180,
+        180
+      ],
+      "color": "#ffffff",
+      "intensity": 5,
+      "angle": 20,
+      "universe": 1,
+      "address": 512,
+      "channelMode": 0
+    },
+    {
+      "name": "FogMachine Right",
+      "type": "FogMachine",
+      "position": [
+        2,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        180,
+        180
+      ],
+      "color": "#ffffff",
+      "intensity": 5,
+      "angle": 20,
+      "universe": 1,
+      "address": 512,
+      "channelMode": 0
+    }
+  ],
+  "staticGeometry": []
+}
