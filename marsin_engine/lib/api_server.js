@@ -111,6 +111,14 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
     if (req.method === 'GET' && (req.url === '/patterns' || req.url === '/list-patterns')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(listPatterns(patternsDir)));
+    } else if (req.method === 'GET' && req.url === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        activeScene: opts.modelName || 'unknown', 
+        activeModel: opts.modelName || 'unknown', 
+        activePattern: opts.pattern || 'unknown', 
+        unrealState: 'streaming' 
+      }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(getExportsWithState(opts.pattern)));

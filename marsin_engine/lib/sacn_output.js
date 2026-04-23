@@ -20,21 +20,25 @@ export function createSacnOutput({
   universes,
   priority = 100,
   sourceName = 'MarsinEngine',
-  destination = '127.0.0.1',
+  destinations = ['127.0.0.1'],
 } = {}) {
-  // Create one sender per universe (sacn library requires single universe per Sender)
+  const destArray = Array.isArray(destinations) ? destinations : [destinations];
+  // Create one sender per universe/destination pairing
   const senders = {};
   for (const uid of universes) {
-    senders[uid] = new Sender({
-      universe: uid,
-      port: 5568,
-      reuseAddr: true,
-      useUnicastDestination: destination,
-      defaultPacketOptions: {
-        sourceName,
-        priority,
-      },
-    });
+    senders[uid] = [];
+    for (const dest of destArray) {
+      senders[uid].push(new Sender({
+        universe: uid,
+        port: 5568,
+        reuseAddr: true,
+        useUnicastDestination: dest,
+        defaultPacketOptions: {
+          sourceName,
+          priority,
+        },
+      }));
+    }
   }
 
   let _started = false;
@@ -49,8 +53,8 @@ export function createSacnOutput({
 
     const promises = [];
     for (const [uid, data] of Object.entries(buffers)) {
-      const sender = senders[parseInt(uid, 10)];
-      if (!sender) continue;
+      const uSenders = senders[parseInt(uid, 10)];
+      if (!uSenders || uSenders.length === 0) continue;
 
       const payload = {};
       for (let ch = 0; ch < 512; ch++) {
@@ -59,15 +63,17 @@ export function createSacnOutput({
         }
       }
 
-      promises.push(
-        sender.send({
-          payload,
-          sourceName,
-          priority,
-        }).catch(err => {
-          if (_started) console.error(`[sACN Out] Send error (U${uid}):`, err.message);
-        })
-      );
+      for (const sender of uSenders) {
+        promises.push(
+          sender.send({
+            payload,
+            sourceName,
+            priority,
+          }).catch(err => {
+            if (_started) console.error(`[sACN Out] Send error (U${uid}):`, err.message);
+          })
+        );
+      }
     }
     await Promise.all(promises);
     _frameCount++;
@@ -76,13 +82,15 @@ export function createSacnOutput({
   function start() {
     _started = true;
     _frameCount = 0;
-    console.log(`[sACN Out] Sender started — ${universes.length} universe(s), priority ${priority}, dest ${destination}`);
+    console.log(`[sACN Out] Sender started — ${universes.length} universe(s), priority ${priority}, destinations [${destArray.join(', ')}]`);
   }
 
   function stop() {
     _started = false;
-    for (const sender of Object.values(senders)) {
-      try { sender.close(); } catch (_) {}
+    for (const uSenders of Object.values(senders)) {
+      for (const sender of uSenders) {
+        try { sender.close(); } catch (_) {}
+      }
     }
     console.log(`[sACN Out] Sender stopped after ${_frameCount} frames`);
   }

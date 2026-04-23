@@ -22,7 +22,8 @@ Open [http://localhost:6969/simulation/](http://localhost:6969/simulation/) in y
 
 ## 🏗️ What `npm start` Launches
 
-`npm start` runs `start.js`, which spawns all required background services:
+`npm start` runs `start.js`, which spawns all required background services.
+*Note: To improve initial load times, individual Iceberg UI folders are disabled by default. If you need to edit iceberg positions or geometry, launch the simulation with `npm start enable_iceberg`.*
 
 | Service | Port | Purpose |
 |---------|------|---------|

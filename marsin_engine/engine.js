@@ -56,7 +56,7 @@ function parseArgs() {
     priority: cSacn.priority || 100,
     dryRun: false,
     list: false,
-    destination: cSacn.destination || '127.0.0.1',
+    destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
     port: cServer.port || 6968,
   };
@@ -70,7 +70,7 @@ function parseArgs() {
       case '--port':                opts.port = parseInt(args[++i], 10) || 6968; break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
-      case '--dest':                opts.destination = args[++i]; break;
+      case '--dest':                opts.destinations = [args[++i]]; break;
       case '--help': case '-h':
         console.log(`
   MarsinEngine — Multichannel Pixelblaze Rendering Engine
@@ -310,6 +310,17 @@ async function main() {
   // 4. Create global DMX mapper (reusing simulation architecture!)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
   const universeIds = [];
+  
+  // Force include global effect universes so hardware triggers work even if no pixels are mapped
+  const engConfig = loadConfig();
+  if (engConfig.global_effects && engConfig.global_effects.fogger) {
+    const fogU = engConfig.global_effects.fogger.universe;
+    if (fogU && !universeIds.includes(fogU)) {
+      universeIds.push(fogU);
+      dmxRouter.addUniverse(fogU);
+    }
+  }
+
   let patchedPixelCount = 0;
   for (const px of model.pixels) {
     if (px.patch && px.patch.universe) {
@@ -350,7 +361,7 @@ async function main() {
   const sacnOut = createSacnOutput({
     universes: universeIds,
     priority: opts.priority,
-    destination: opts.destination,
+    destinations: opts.destinations,
     sourceName: opts.sourceName,
   });
   sacnOut.start();

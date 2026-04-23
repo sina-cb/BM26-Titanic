@@ -7,22 +7,26 @@ import { getApiBase } from '@/utils/api';
 
 export default function MonitorScreen() {
   const [activePattern, setActivePattern] = useState<string>('...');
+  const [sceneName, setSceneName] = useState<string>('Loading...');
+  const [unrealState, setUnrealState] = useState<string>('offline');
 
-  // The simulation server runs on port 6969 on the same host as the engine API.
-  // Extract the host from API_BASE so we only configure it in one place.
   const apiBaseStr = getApiBase();
   const engineHost = apiBaseStr.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
   const SIMULATION_PORT = 6969;
+  const PIXEL_STREAM_PORT = 80;
 
-  // The engine CLI uses --model <name> which maps 1:1 to scenes/<name> in the simulation.
-  // Since the engine is running with '--model test_bench', we match that scene.
-  // TODO: Query a /status endpoint on the engine to get this dynamically when available.
-  const SCENE_NAME = 'test_bench';
-
-  const SIMULATION_URL = `http://${engineHost}:${SIMULATION_PORT}/simulation/?scene=${SCENE_NAME}&readonly=1`;
-
-  // Connect to the engine WebSocket to get live pattern info
   useEffect(() => {
+    // Poll status initially
+    fetch(`${getApiBase()}/status`)
+      .then(res => res.json())
+      .then(data => {
+        setSceneName(data.activeScene);
+        setActivePattern(data.activePattern);
+        setUnrealState(data.unrealState);
+      })
+      .catch(() => {});
+
+    // WebSockets
     let ws: WebSocket | null = null;
     try {
       ws = new WebSocket(`ws://${engineHost}:${getApiBase().split(':').pop()}`);
@@ -39,6 +43,10 @@ export default function MonitorScreen() {
     return () => { if (ws) ws.close(); };
   }, []);
 
+  const STREAM_URL = unrealState === 'streaming' 
+    ? `http://${engineHost}:${PIXEL_STREAM_PORT}/`
+    : `http://${engineHost}:${SIMULATION_PORT}/simulation/?scene=${sceneName}&readonly=1`;
+
   return (
     <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
       {/* HUD Overlay */}
@@ -53,21 +61,28 @@ export default function MonitorScreen() {
         ...globalStyles.ambientShadow,
         ...globalStyles.ghostBorder
       }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text, fontSize: 16 }}>SIMULATION MONITOR</Text>
-        <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, fontSize: 12, marginTop: 4 }}>Scene: {SCENE_NAME}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text, fontSize: 16 }}>
+           {unrealState === 'streaming' ? 'UNREAL MONITOR' : 'SIMULATION MONITOR'}
+        </Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, fontSize: 12, marginTop: 4 }}>Scene: {sceneName}</Text>
         <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.primaryFixedDim, fontSize: 12, marginTop: 2 }}>Pattern: {activePattern}</Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: unrealState === 'streaming' ? 'green' : 'orange', fontSize: 12, marginTop: 2 }}>
+            Engine: {unrealState.toUpperCase()}
+        </Text>
       </View>
 
       <WebView 
-        source={{ uri: SIMULATION_URL }} 
+        source={{ uri: STREAM_URL }} 
         style={{ flex: 1, backgroundColor: Colors.light.surface }}
         javaScriptEnabled={true}
         domStorageEnabled={true}
+        mediaPlaybackRequiresUserAction={false}
+        allowsInlineMediaPlayback={true}
         renderError={() => (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.light.surface }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 24 }}>SIMULATION OFFLINE</Text>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 24 }}>STREAM OFFLINE</Text>
             <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, marginTop: 8 }}>
-              Ensure simulation is running at {SIMULATION_URL}
+              Ensure {unrealState === 'streaming' ? 'Pixel Streaming' : 'WebGL Simulation'} is running.
             </Text>
           </View>
         )}

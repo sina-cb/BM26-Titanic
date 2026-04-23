@@ -18,7 +18,22 @@ export function demapSacnToPixels(list, dmxRouter) {
     if (!frame) continue;
     
     const addr = entry.patch.addr - 1; // 0-indexed
-    const ch = entry.channels;
+    let ch = entry.channels;
+    
+    // Polyfill if the model serialized channels as a flat number (e.g., 10 for UkingPar fallback)
+    if (typeof ch === 'number') {
+      const isPar = entry.type === 'par' || entry.fixtureType === 'UkingPar' || entry.fixtureType === 'VintageLed';
+      const fp = entry.patch.footprint;
+      if (isPar && fp >= 10) {
+        ch = { r: 3, g: 4, b: 5, w: 6, a: 7, u: 8 };
+      } else if (fp === 6) {
+        ch = { r: 1, g: 2, b: 3, w: 4, a: 5, u: 6 };
+      } else {
+        ch = { r: 1, g: 2, b: 3 }; 
+        if (typeof entry.channels === 'number' && entry.channels >= 4) ch.w = 4;
+      }
+    }
+
     let r = 0, g = 0, b = 0;
     
     if (ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {

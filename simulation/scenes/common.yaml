@@ -64,15 +64,11 @@ options:
     label: ⚙️ Options
     collapsed: false
   lightingProfile:
-    value: full
+    value: pixel_mapping
     label: 💡 Lighting Profile
     options:
-      - full
-      - unified
-      - full_lite
-      - unified_lite
-      - super_lite
       - edit
+      - pixel_mapping
   conesEnabled:
     value: false
     label: Show Light Cones
@@ -141,16 +137,16 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -24.3214
-    'y': 14.8162
-    z: -7.6913
+    x: -50.2215
+    'y': 15.4642
+    z: 39.7156
   target:
-    x: -3.6488
-    'y': 5.9481
-    z: 6.0925
+    x: -2
+    'y': 8
+    z: -5.3414
 _patternEditor:
   x: 0
-  'y': 0
+  'y': 42
   width: 400
   height: 520
   collapsed: false

@@ -17,7 +17,11 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.titanicrig.captainpad",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "Required to physically communicate with the MarsinEngine local node server."
       }
     },
     "android": {

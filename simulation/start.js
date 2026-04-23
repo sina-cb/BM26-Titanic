@@ -24,7 +24,8 @@ console.log(`[start] HTTP: ${HTTP_PORT}  Save: ${SAVE_PORT}  sACN Bridge: ${SACN
 console.log(`[start] Scene: ${sceneName}`);
 console.log(`[start] Config: ${sceneConfigPath}`);
 
-const sceneUrl = `http://localhost:${HTTP_PORT}/simulation/?scene=${sceneName}`;
+const enableIceberg = process.argv.includes('enable_iceberg');
+const sceneUrl = `http://localhost:${HTTP_PORT}/simulation/?scene=${sceneName}${enableIceberg ? '&enable_iceberg=1' : ''}`;
 console.log(`[start] Open: ${sceneUrl}`);
 
 const httpServer = spawn('npx', ['http-server', '../', '-p', String(HTTP_PORT), '-c-1', '--cors'], {

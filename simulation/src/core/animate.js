@@ -10,7 +10,7 @@ import {
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
-
+import { getProfileDef } from "./profile_registry.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -117,7 +117,7 @@ export function animate() {
   }
 
   // ─── Gradient Mode (chroma.js LAB interpolation) ───
-  if (lightingEnabled && lightingMode === 'gradient' && params.lightingProfile !== 'edit') {
+  if (lightingEnabled && lightingMode === 'gradient' && getProfileDef(params.lightingProfile).mappingEnabled) {
     const scale = getChromaScale();
     const speed = (params.waveSpeed || 0.3) * 0.001;
     const t = now * speed;
@@ -139,7 +139,7 @@ export function animate() {
   }
 
   // ─── Pixelblaze Pattern Engine (Metadata-Aware Batch Pipeline) ───
-  if (engineReady && engineEnabled && params.lightingProfile !== 'edit') {
+  if (engineReady && engineEnabled && getProfileDef(params.lightingProfile).mappingEnabled) {
     const elapsed = now * 0.001;
     const patternEngine = window.patternEngine;
     patternEngine.beginFrame(elapsed);
@@ -178,7 +178,7 @@ export function animate() {
   }
 
   // ─── DMX Router: merge sources and apply to fixtures ───
-  if (window.dmxRouter && params.lightingProfile !== 'edit') {
+  if (window.dmxRouter && getProfileDef(params.lightingProfile).mappingEnabled) {
     if (_batchCacheVersion !== _batchLastBuiltVersion) {
       _rebuildBatchCache();
     }
@@ -191,7 +191,34 @@ export function animate() {
        // Map 3D Pixelblaze patterns into outgoing DMX frame chunks 
        mapPixelsToSacn(_batchRenderList, window.dmxRouter);
     }
+
+    const applyDmx = (fixtureList) => {
+      if (!fixtureList) return;
+      for (const fixture of fixtureList) {
+        if (!fixture) continue;
+        if (fixture.applyDmxFrame) {
+          const u = fixture.config.dmxUniverse || 1;
+          const addr = fixture.config.dmxAddress || 512;
+          const dmxFrame = window.dmxRouter.getFullFrame(u);
+          if (dmxFrame) {
+            fixture.applyDmxFrame(dmxFrame.subarray(addr - 1));
+          }
+        }
+      }
+    };
+    applyDmx(window.dmxSceneFixtures);
+    applyDmx(window.parFixtures);
   }
+
+  // Always run visual animations of fixtures regardless of DMX mode
+  const updateVisuals = (fixtureList) => {
+    if (!fixtureList) return;
+    for (const fixture of fixtureList) {
+      if (fixture && fixture.update) fixture.update();
+    }
+  };
+  updateVisuals(window.dmxSceneFixtures);
+  updateVisuals(window.parFixtures);
 
   // ─── sACN Blackout Trigger ───
   if (!window.triggerSacnBlackout) {
@@ -237,7 +264,7 @@ export function animate() {
 
   // ─── sACN Output: send DMX to real controllers via bridge ───
   // Completely disable sACN outbound transmission if in readonly observer mode (e.g. iPad WebView)
-  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && params.lightingProfile !== 'edit' && !window.__readonlyMode) {
+  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && getProfileDef(params.lightingProfile).mappingEnabled && !window.__readonlyMode) {
     // Lazily enable output client
     if (!sacnOutputEnabled) {
       sacnOutputClient = getSacnOutput();
