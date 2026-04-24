@@ -64,7 +64,7 @@ options:
     label: ⚙️ Options
     collapsed: true
   rendererMode:
-    value: webgpu
+    value: webgl
     label: 🚀 Graphics Engine
     options:
       - webgpu

@@ -44,7 +44,7 @@ function getRequestedRendererMode() {
   const savedRendererMode = params.rendererMode;
   if (VALID_RENDERER_MODES.has(savedRendererMode)) return savedRendererMode;
 
-  return "webgpu";
+  return "webgl";
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────
