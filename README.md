@@ -23,6 +23,9 @@ npm start
 # 3. Open in browser
 open http://localhost:6969/simulation/
 
+# Recommended simulation URL
+open "http://127.0.0.1:6969/simulation/?scene=titanic&profile=edit&spotlights=100&renderer=webgpu"
+
 # 4. Start the rendering engine (WASM MarsinVM) in a second terminal
 cd marsin_engine
 npm install

@@ -2,9 +2,9 @@ presets:
   - name: Front
     key: front
     position:
-      x: 0
-      'y': 5.5
-      z: 27.5
+      x: 49.303
+      'y': 13.842
+      z: 118.053
     target:
       x: 0
       'y': 4
@@ -12,9 +12,9 @@ presets:
   - name: Side
     key: side
     position:
-      x: 27.5
-      'y': 5.5
-      z: 0
+      x: 72.445
+      'y': 9.384
+      z: -7.028
     target:
       x: 0
       'y': 4
@@ -22,30 +22,30 @@ presets:
   - name: Aerial
     key: aerial
     position:
-      x: 8.25
-      'y': 22
-      z: 8.25
+      x: 12.251
+      'y': 160.894
+      z: 90.627
     target:
-      x: 0
-      'y': 4
-      z: 0
+      x: -13.73
+      'y': 8.045
+      z: 7.969
   - name: Dramatic
     key: dramatic
     position:
-      x: -12.914
-      'y': 6.514
-      z: 27.557
+      x: -11.015
+      'y': 6.512
+      z: 28.639
     target:
-      x: 3.106
-      'y': 4.613
-      z: 1.925
+      x: 3.125
+      'y': 4.611
+      z: 1.923
   - name: Night Walk
     key: night-walk
     position:
-      x: 4.125
-      'y': 1.1
-      z: 5.5
+      x: -30.881
+      'y': 4.67
+      z: 22.304
     target:
-      x: 0
-      'y': 3.3
-      z: 0
+      x: -1.748
+      'y': 2.414
+      z: 1.38

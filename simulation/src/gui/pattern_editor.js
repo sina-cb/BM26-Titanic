@@ -334,6 +334,30 @@ export function setupPatternEditor() {
     }
   });
 
+  // ─── Small Screen: Selector-Only Mode ───
+  // On phones/tablets, strip the editor down to just a pattern picker.
+  // Hide code editor, status, docs, save/run/auto controls, and pattern management toolbar.
+  const _isSmallScreen = window.innerWidth <= 768;
+  if (_isSmallScreen) {
+    panel.classList.add('pe-selector-only');
+    // Hide editor-only elements
+    const codeWrap = panel.querySelector('.pe-code-wrap');
+    const statusBar = panel.querySelector('.pe-status');
+    const docsBar = panel.querySelector('.pe-docs');
+    const autoLabel = header.querySelector('label');       // Auto checkbox + label
+    const saveHeaderBtn = document.getElementById('pe-save-btn');
+    const runHeaderBtn = document.getElementById('pe-compile-btn');
+    const toolbar = panel.querySelector('.pe-preset-toolbar');
+
+    if (codeWrap) codeWrap.style.display = 'none';
+    if (statusBar) statusBar.style.display = 'none';
+    if (docsBar) docsBar.style.display = 'none';
+    if (autoLabel) autoLabel.style.display = 'none';
+    if (saveHeaderBtn) saveHeaderBtn.style.display = 'none';
+    if (runHeaderBtn) runHeaderBtn.style.display = 'none';
+    if (toolbar) toolbar.style.display = 'none';
+  }
+
   // Collapse / expand
   let isCollapsed = false;
   let _savedHeight = '';

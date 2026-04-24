@@ -12,6 +12,8 @@ import {
 } from "./state.js";
 import { Iceberg } from "../fixtures/iceberg.js";
 import { getProfileDef } from "../core/profile_registry.js";
+import { initLightPool } from "./light_pool.js";
+import { applySimulationSurfaceReflectanceToMaterial } from "./sim_preview.js";
 
 let ground, starField;
 let model, modelCenter, modelSize, modelRadius;
@@ -35,6 +37,7 @@ export function createGround() {
     roughness: 0.95,
     metalness: 0.05,
   });
+  applySimulationSurfaceReflectanceToMaterial(groundMat);
   ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.1;
@@ -240,6 +243,7 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
 export function setupLighting(rebuildParLights, rebuildDmxFixtures) {
   const h = modelSize.y;
   const r = modelRadius;
+  console.log(`[Lighting] setupLighting: modelSize.y=${h}, modelRadius=${r}`);
 
   // 1. Moonlight (DirectionalLight)
   const moon = new THREE.DirectionalLight(0x8899cc, 0.5);
@@ -258,13 +262,23 @@ export function setupLighting(rebuildParLights, rebuildDmxFixtures) {
   scene.add(moon.target);
   moon.target.position.copy(modelCenter);
   lights.moon = moon;
+  console.log(`[Lighting] ✅ Moonlight added (intensity=0.5)`);
 
   // 2. Hemisphere ambient
   const hemi = new THREE.HemisphereLight(0x223344, 0x887755, 0.3);
   scene.add(hemi);
   lights.ambient = hemi;
+  console.log(`[Lighting] ✅ Hemisphere added (intensity=0.3)`);
 
   // 3. Par Lights (ground-level uplights) — builds once during boot
+  console.log(`[Lighting] Rebuilding par lights...`);
   rebuildParLights();
   if (typeof rebuildDmxFixtures === 'function') rebuildDmxFixtures();
+  console.log(`[Lighting] ✅ Par lights rebuilt`);
+
+  // 4. SpotLight Pool — pre-allocate AFTER all other lights are in scene
+  // This ensures the WebGPU shader compiles once with the final light count
+  console.log(`[Lighting] Initializing SpotLight pool...`);
+  initLightPool();
+  console.log(`[Lighting] ✅ setupLighting complete`);
 }

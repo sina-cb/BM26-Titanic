@@ -18,6 +18,9 @@ npm start
 
 Open [http://localhost:6969/simulation/](http://localhost:6969/simulation/) in your browser.
 
+Recommended simulation URL:
+[http://127.0.0.1:6969/simulation/?scene=titanic&profile=edit&spotlights=100&renderer=webgpu](http://127.0.0.1:6969/simulation/?scene=titanic&profile=edit&spotlights=100&renderer=webgpu)
+
 ---
 
 ## 🏗️ What `npm start` Launches
@@ -154,6 +157,12 @@ Single source of truth for all scene state:
 - Generator traces (circle/line shapes, spacing, aim)
 - DMX patches (universe, address, controller IP)
 - Camera presets and render settings
+
+### Spotlight Preview Pool Note
+- `src/core/light_pool.js` exports `MAX_SPOTLIGHT_POOL_SIZE` (default `200`). Change that constant if you want a different global cap for pooled analytic spotlights.
+- `?spotlights=N` is the boot-time URL override for the spotlight preview pool. Example: [http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80](http://localhost:6969/simulation/?scene=titanic&profile=full&renderer=webgl&spotlights=80)
+- If `N` is above `MAX_SPOTLIGHT_POOL_SIZE`, the sim clamps to the cap and shows a toast warning.
+- The GUI `Max Spotlights` slider uses `1..MAX_SPOTLIGHT_POOL_SIZE`. `?spotlights=0` still disables the pooled spotlight preview from the URL.
 
 ### `config/server_config.yaml`
 Server port assignments:

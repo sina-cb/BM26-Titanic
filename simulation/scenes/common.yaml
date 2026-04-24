@@ -63,15 +63,47 @@ options:
   _section:
     label: ⚙️ Options
     collapsed: false
+  rendererMode:
+    value: webgpu
+    label: 🚀 Graphics Engine
+    options:
+      - webgpu
+      - webgl
   lightingProfile:
-    value: pixel_mapping
+    value: full
     label: 💡 Lighting Profile
     options:
       - edit
       - pixel_mapping
+      - emissive
+      - full
+  spotlightSamplingMode:
+    value: closest
+    label: Sim Spotlight Sampling
+    options:
+      - closest
+      - closest_bucket
+  spotlightSamplingBucketDistance:
+    value: 10
+    label: Sim Sampling Bucket (m)
+    min: 2
+    max: 20
+    step: 1
   conesEnabled:
     value: false
     label: Show Light Cones
+  conesTransparent:
+    value: enabled
+    label: Transparent Cones
+    options:
+      - none
+      - enabled
+  coneOpacity:
+    value: 0.35
+    label: Cone Opacity
+    min: 0
+    max: 1
+    step: 0.05
   generatorsVisible:
     value: false
     label: Show Generators
@@ -137,9 +169,9 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -50.2215
-    'y': 15.4642
-    z: 39.7156
+    x: 5.4317
+    'y': 13.3896
+    z: 80.0001
   target:
     x: -2
     'y': 8

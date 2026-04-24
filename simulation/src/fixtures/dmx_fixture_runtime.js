@@ -12,13 +12,14 @@
 import * as THREE from 'three';
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
+import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
 
 // ── Shared geometries ────────────────────────────────────────────────────
-const defaultShellMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.5 });
+const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
 const defaultDotMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
-const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 4, 1, true); // Extremely low-poly 4-sided pyramid
+const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 16, 1, true);
 baseBeamGeo.translate(0, -0.5, 0);
 baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards -Z
 
@@ -32,7 +33,23 @@ function getCachedSphere(size) {
   return _sphereCache[key];
 }
 
-// WebGPU has no shader uniform limit — no SpotLight cap needed.
+function clampUnit(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return THREE.MathUtils.clamp(numeric, 0, 1);
+}
+
+function sanitizeRgb(r, g, b) {
+  return [clampUnit(r), clampUnit(g), clampUnit(b)];
+}
+
+function readDmxChannelNormalized(dmxSlice, channelIndex) {
+  if (!dmxSlice || !channelIndex || channelIndex < 1) return 0;
+  const raw = dmxSlice[channelIndex - 1];
+  return Number.isFinite(raw) ? THREE.MathUtils.clamp(raw / 255, 0, 1) : 0;
+}
+
+// SpotLight allocation is handled by light_pool.js — fixtures do NOT create lights.
 
 export class DmxFixtureRuntime {
   /**
@@ -120,143 +137,138 @@ export class DmxFixtureRuntime {
       this.group.add(this.shell);
     }
 
-    // ─── Build Pixels (dots + lights) ────────────────────────────────
-    // WebGPU: every pixel gets its own SpotLight (no uniform limit).
+    // ─── Build Pixels (dots + visual geometry only) ──────────────────
+    // SpotLights are managed by the global LightPool (see light_pool.js).
+    // Fixtures only store their desired lighting state for the pool orchestrator.
     this.pixels = [];
     const hasPixelDef = fixtureDef && fixtureDef.pixels && fixtureDef.pixels.length > 0;
 
-    // Object-level global lights (mode-dependent)
+    // Legacy references — no longer instantiated, but kept for API compat
     this.fixtureSpotLight = null;
     this.litePointLight = null;
 
-    if (this.profileDef.render.spotLights === 'unified') {
-      // Single SpotLight per fixture
-      this.fixtureSpotLight = new THREE.SpotLight(
-        color, intensity, Math.min(modelRadius * 2, 80),
-        THREE.MathUtils.degToRad(angle), penumbra, 1.5
-      );
-      this.fixtureSpotLight.castShadow = false;
-      this.scene.add(this.fixtureSpotLight);
-      this.scene.add(this.fixtureSpotLight.target);
-    } else if (this.profileDef.render.pointLights) {
-      // Single cheap PointLight per fixture (boosted heavily to reach the hull)
-      // Capped directly to 60 units so the GPU fragment shader can quickly cull them 
-      this.litePointLight = new THREE.PointLight(color, intensity * 20, 60);
-      this.scene.add(this.litePointLight);
-    }
-
     if (hasPixelDef) {
       fixtureDef.pixels.forEach((pixelModel, pIndex) => {
-        const dots = [];
+        // ─── Setup Emitters & Glow ───
+        const shouldBuildEmitter = this.profileDef.render.emitterMode === 'pixel' || 
+                                   (this.profileDef.render.emitterMode === 'fixture_representative' && pIndex === 0);
+
+        let dots = [];
         let avgX = 0, avgY = 0, avgZ = 0;
+        let bulb = null;
+        let halo = null;
+        let bulbMat = null;
+        let haloMat = null;
+        let dotMeshList = [];
 
-        if (pixelModel.dots && pixelModel.dots.length > 0) {
-          pixelModel.dots.forEach(d => {
-            const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
-            avgX += pos.x; avgY += pos.y; avgZ += pos.z;
-            const dotSize = typeof pixelModel.size === 'number' ? pixelModel.size * 0.001 : 0.012;
-            const dotGeo = getCachedSphere(dotSize);
-            // Will set material down below once bulbMat is created
-            const dotMesh = new THREE.Mesh(dotGeo, null);
-            dotMesh.position.copy(pos);
-            dotMesh.matrixAutoUpdate = false; // Fixes GPU bottleneck! Static subset objects do not need individual 18k transform calculations every frame!
-            dotMesh.updateMatrix(); // bake once initially
-            this.group.add(dotMesh);
-            dots.push({ pos, mesh: dotMesh });
-          });
-          avgX /= pixelModel.dots.length;
-          avgY /= pixelModel.dots.length;
-          avgZ /= pixelModel.dots.length;
+        // Always calculate local coordinates as SpotLights and Beams rely on them
+        const hasDots = pixelModel.dots && pixelModel.dots.length > 0;
+        if (hasDots) {
+           pixelModel.dots.forEach(d => {
+             const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
+             avgX += pos.x; avgY += pos.y; avgZ += pos.z;
+           });
+           avgX /= pixelModel.dots.length;
+           avgY /= pixelModel.dots.length;
+           avgZ /= pixelModel.dots.length;
         }
-
+        
         const localPos = new THREE.Vector3(avgX, avgY, avgZ);
 
-        // depthTest: false allows pixels to be seen THROUGH the fixture boxes as requested!
-        const bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
-        
-        // Link dots to bulbMat to share color perfectly (saves 16,000+ material instances and loops!)
-        if (dots) dots.forEach(d => { d.mesh.material = bulbMat; });
+        if (shouldBuildEmitter) {
+            if (hasDots) {
+              pixelModel.dots.forEach(d => {
+                const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
+                let rawSize = 0;
+                if (typeof pixelModel.size === 'number') rawSize = pixelModel.size;
+                else if (Array.isArray(pixelModel.size)) rawSize = Math.max(...pixelModel.size);
+                const dotSize = Math.max(rawSize * 0.001, 0.012);
+                const dotGeo = getCachedSphere(dotSize);
+                const dotMesh = new THREE.Mesh(dotGeo, null);
+                dotMesh.position.copy(pos);
+                dotMesh.matrixAutoUpdate = false; 
+                dotMesh.updateMatrix();
+                this.group.add(dotMesh);
+                dotMeshList.push({ pos, mesh: dotMesh });
+              });
+              dots = dotMeshList; // ASSIGN DOTS HERE
+            }
 
-        // Vastly enlargen pixel sizes as requested (previously 0.08 max, now 0.12)
-        const bulbSize = typeof pixelModel.size === 'number' ? Math.max(pixelModel.size * 0.002, 0.12) : 0.12;
-        const bulb = new THREE.Mesh(getCachedSphere(bulbSize), bulbMat);
-        bulb.position.copy(localPos);
-        this.group.add(bulb);
+            bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, side: THREE.DoubleSide });
+            
+            if (dotMeshList.length > 0) dotMeshList.forEach(d => { d.mesh.material = bulbMat; });
 
-        const haloMat = new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.2,
-          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-        });
-        const halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
-        halo.position.copy(localPos);
-        this.group.add(halo);
+            let pixelSize = 0;
+            if (typeof pixelModel.size === 'number') pixelSize = pixelModel.size;
+            else if (Array.isArray(pixelModel.size)) pixelSize = Math.max(...pixelModel.size);
+            const baseSize = Math.max(pixelSize * 0.002, 0.12);
+            const repScale = this.profileDef.render.emitterMode === 'fixture_representative' ? 6.0 : 1.0;
+            const bulbSize = baseSize * repScale;
+            
+            bulb = new THREE.Mesh(getCachedSphere(bulbSize), bulbMat);
+            bulb.position.copy(localPos);
+            if (this.profileDef.render.emitterMode === 'fixture_representative') {
+               bulb.position.set(0, 0, 0); // Force to origin centroid for grouped representation!
+            }
+            this.group.add(bulb);
 
-        // SpotLight / PointLight — 1:1 per pixel
-        let spotLight = null;
-        if (this.profileDef.render.spotLights === true) {
-          const isMultiPixel = fixtureDef && fixtureDef.pixels && fixtureDef.pixels.length > 1;
-          if (isMultiPixel) {
-            spotLight = new THREE.PointLight(color, intensity, modelRadius * 1.5, 1.5);
-            spotLight.position.set(avgX, avgY, avgZ);
-            this.scene.add(spotLight);
-          } else {
-            spotLight = new THREE.SpotLight(
-              color, intensity, modelRadius * 3,
-              THREE.MathUtils.degToRad(angle), penumbra, 1.5
-            );
-            spotLight.position.set(avgX, avgY, avgZ);
-            spotLight.castShadow = false;
-            this.scene.add(spotLight);
-            this.scene.add(spotLight.target);
-          }
+            haloMat = new THREE.MeshBasicMaterial({
+              color, transparent: true, opacity: 0.2,
+              blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+            });
+            halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
+            halo.position.copy(bulb.position);
+            this.group.add(halo);
         }
 
-        const coneMat = new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.12,
-          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-        });
-        const beam = new THREE.Mesh(baseBeamGeo, coneMat);
-        beam.position.set(avgX, avgY, avgZ);
-        this.group.add(beam);
+        // SpotLight managed by LightPool — no per-pixel instantiation
+        let spotLight = null;
+
+        const shouldBuildCone = this.profileDef.render.coneMode === 'pixel' || 
+                                (this.profileDef.render.coneMode === 'fixture' && pIndex === 0);
+        let beam = null;
+        let coneMat = null;
+
+        if (shouldBuildCone) {
+          coneMat = new THREE.MeshBasicMaterial({
+            color, depthWrite: true, side: THREE.DoubleSide,
+          });
+          beam = new THREE.Mesh(baseBeamGeo, coneMat);
+          beam.position.set(avgX, avgY, avgZ);
+          this.group.add(beam);
+        }
 
         this.pixels.push({
-          model: pixelModel, spotLight, beam, bulb, bulbMat, halo, haloMat, dots, localPos,
+          model: pixelModel, spotLight: null, beam, bulb, bulbMat, halo, haloMat, dots, localPos,
         });
       });
     } else {
       // No pixel definition — single bulb (simple par light fallback)
-      const bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
-      const bulb = new THREE.Mesh(bulbGeo, bulbMat);
-      this.group.add(bulb);
+      let bulb = null, bulbMat = null, halo = null, haloMat = null;
+      
+      if (this.profileDef.render.emitterMode !== 'none') {
+        bulbMat = new THREE.MeshBasicMaterial({ color: color });
+        bulb = new THREE.Mesh(bulbGeo, bulbMat);
+        this.group.add(bulb);
 
-      const haloMat = new THREE.MeshBasicMaterial({
-        color: color,
-        transparent: true,
-        opacity: 0.25,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.BackSide,
-      });
-      const halo = new THREE.Mesh(haloGeo, haloMat);
-      this.group.add(halo);
-
-      let spotLight = null;
-      if (this.profileDef.render.spotLights === true) {
-        spotLight = new THREE.SpotLight(
-          color, intensity, modelRadius * 3,
-          THREE.MathUtils.degToRad(angle), penumbra, 1.5
-        );
-        spotLight.castShadow = false;
-        this.scene.add(spotLight);
-        this.scene.add(spotLight.target);
+        haloMat = new THREE.MeshBasicMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.25,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.BackSide,
+        });
+        halo = new THREE.Mesh(haloGeo, haloMat);
+        this.group.add(halo);
       }
+
+      // SpotLight managed by LightPool — no per-fixture instantiation
+      let spotLight = null;
 
       const coneMat = new THREE.MeshBasicMaterial({
         color: color,
-        transparent: true,
-        opacity: 0.15,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
+        depthWrite: true,
         side: THREE.DoubleSide,
       });
       const beam = new THREE.Mesh(baseBeamGeo, coneMat);
@@ -294,52 +306,23 @@ export class DmxFixtureRuntime {
     const angle = this.config.angle || 20;
     const penumbra = this.config.penumbra || 0.5;
 
-    // Sync fixture-level global lights
-    if (this.fixtureSpotLight) {
-      const worldPos = new THREE.Vector3().setFromMatrixPosition(this.group.matrixWorld);
-      this.fixtureSpotLight.position.copy(worldPos);
-      this.fixtureSpotLight.intensity = intensity;
-      this.fixtureSpotLight.angle = Math.min(THREE.MathUtils.degToRad(angle), Math.PI / 2 - 0.1);
-      this.fixtureSpotLight.penumbra = penumbra;
-      this.fixtureSpotLight.color.set(color);
-      const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
-      this.fixtureSpotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
-      this.fixtureSpotLight.target.updateMatrixWorld();
-    }
-    if (this.litePointLight) {
-      const worldPos = new THREE.Vector3().setFromMatrixPosition(this.group.matrixWorld);
-      this.litePointLight.position.copy(worldPos);
-      this.litePointLight.intensity = intensity * 20;
-      this.litePointLight.color.set(color);
-    }
+    // SpotLights are managed by the global LightPool — no per-fixture sync needed.
+    // Only sync visual geometry (beams, bulbs, halos).
 
     this.pixels.forEach(p => {
-      // Update SpotLight world position (SpotLights are scene children, not group children)
-      if (p.spotLight) {
-        const worldPos = p.localPos.clone().applyMatrix4(this.group.matrixWorld);
-        p.spotLight.position.copy(worldPos);
-        p.spotLight.intensity = intensity;
-        p.spotLight.color.set(color);
-
-        if (p.spotLight.isSpotLight) {
-          p.spotLight.angle = THREE.MathUtils.degToRad(angle);
-          p.spotLight.penumbra = penumbra;
-          const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
-          p.spotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
-          p.spotLight.target.updateMatrixWorld();
-        }
-      }
 
       // Beam scale
-      const coneLen = 3.0;
-      const angleRad = THREE.MathUtils.degToRad(angle);
-      const radius = Math.tan(angleRad) * coneLen;
-      p.beam.scale.set(radius, radius, coneLen);
-      p.beam.material.color.set(color);
+      if (p.beam) {
+        const coneLen = 1.5;
+        const angleRad = THREE.MathUtils.degToRad(angle);
+        const radius = Math.tan(angleRad) * coneLen;
+        p.beam.scale.set(radius, radius, coneLen);
+        p.beam.material.color.set(color);
+      }
 
       // Bulb + halo color
-      p.bulbMat.color.set(color);
-      p.haloMat.color.set(color);
+      if (p.bulbMat) p.bulbMat.color.set(color);
+      if (p.haloMat) p.haloMat.color.set(color);
     });
   }
 
@@ -359,28 +342,38 @@ export class DmxFixtureRuntime {
   // ── Color control (used by lighting engines) ─────────────────────────
 
   setColor(r, g, b) {
-    if (this.fixtureSpotLight) this.fixtureSpotLight.color.setRGB(r, g, b);
-    if (this.litePointLight) this.litePointLight.color.setRGB(r, g, b);
+    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
     this.pixels.forEach(p => {
-      if (p.spotLight) p.spotLight.color.setRGB(r, g, b);
-      p.beam.material.color.setRGB(r, g, b);
-      p.bulbMat.color.setRGB(r, g, b);
-      p.haloMat.color.setRGB(r, g, b);
-      p.dots.forEach(d => {
-        if (d.mesh) d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
+      if (p.beam) p.beam.material.color.setRGB(rn, gn, bn);
+      if (p.bulbMat) p.bulbMat.color.setRGB(rn, gn, bn);
+      if (p.haloMat) p.haloMat.color.setRGB(rn, gn, bn);
+      if (p.dots) p.dots.forEach(d => {
+        if (d.mesh && d.mesh.material) d.mesh.material.color.setRGB(
+          Math.min(1, rn + 0.3),
+          Math.min(1, gn + 0.3),
+          Math.min(1, bn + 0.3)
+        );
       });
     });
   }
 
   setBulbColor(r, g, b) {
+    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
     this.pixels.forEach(p => {
-      if (p.bulbMat.color.r !== r || p.bulbMat.color.g !== g || p.bulbMat.color.b !== b) {
-        p.bulbMat.color.setRGB(r, g, b);
-        p.haloMat.color.setRGB(r, g, b);
+      if (p.bulbMat) {
+        if (p.bulbMat.color.r !== rn || p.bulbMat.color.g !== gn || p.bulbMat.color.b !== bn) {
+          p.bulbMat.color.setRGB(rn, gn, bn);
+          if (p.haloMat) p.haloMat.color.setRGB(rn, gn, bn);
+        }
       }
-      p.dots.forEach(d => {
-        if (d.mesh && (d.mesh.material.color.r !== r + 0.3 || d.mesh.material.color.g !== g + 0.3 || d.mesh.material.color.b !== b + 0.3)) {
-          d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
+      if (p.dots) p.dots.forEach(d => {
+        if (d.mesh && d.mesh.material) {
+          const dotR = Math.min(1, rn + 0.3);
+          const dotG = Math.min(1, gn + 0.3);
+          const dotB = Math.min(1, bn + 0.3);
+          if (d.mesh.material.color.r !== dotR || d.mesh.material.color.g !== dotG || d.mesh.material.color.b !== dotB) {
+            d.mesh.material.color.setRGB(dotR, dotG, dotB);
+          }
         }
       });
     });
@@ -389,20 +382,32 @@ export class DmxFixtureRuntime {
   setPixelColorRGB(pIndex, r, g, b) {
     // Drive fixture-level lights from the first pixel's color
     if (pIndex === 0) {
-      if (this.fixtureSpotLight) this.fixtureSpotLight.color.setRGB(r, g, b);
-      if (this.litePointLight) this.litePointLight.color.setRGB(r, g, b);
+
+      // Unified mode: pixel 0's color drives ALL pixels
+      if (this.profileDef.unifiedColor) {
+        this._unifiedR = r; this._unifiedG = g; this._unifiedB = b;
+        for (let i = 0; i < this.pixels.length; i++) {
+          this._applyPixelColor(i, r, g, b);
+        }
+        return;
+      }
     }
+
+    // Unified mode: skip individual pixel updates (pixel 0 already handled all)
+    if (this.profileDef.unifiedColor) return;
+
+    this._applyPixelColor(pIndex, r, g, b);
+  }
+
+  _applyPixelColor(pIndex, r, g, b) {
     if (pIndex >= 0 && pIndex < this.pixels.length) {
+      const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
       const p = this.pixels[pIndex];
-      if (p.spotLight) {
-        if (p.spotLight.color.r !== r || p.spotLight.color.g !== g || p.spotLight.color.b !== b) p.spotLight.color.setRGB(r, g, b);
+      if (p.beam && (Math.abs(p.beam.material.color.r - rn) > 0.005 || Math.abs(p.beam.material.color.g - gn) > 0.005 || Math.abs(p.beam.material.color.b - bn) > 0.005)) {
+        p.beam.material.color.setRGB(rn, gn, bn);
       }
-      if (Math.abs(p.beam.material.color.r - r) > 0.005 || Math.abs(p.beam.material.color.g - g) > 0.005 || Math.abs(p.beam.material.color.b - b) > 0.005) {
-        p.beam.material.color.setRGB(r, g, b);
-        p.bulbMat.color.setRGB(r, g, b);
-        p.haloMat.color.setRGB(r, g, b);
-      }
-      // Removed p.dots loop, as dots now share p.bulbMat!
+      if (p.bulbMat) p.bulbMat.color.setRGB(rn, gn, bn);
+      if (p.haloMat) p.haloMat.color.setRGB(rn, gn, bn);
     }
   }
 
@@ -414,13 +419,13 @@ export class DmxFixtureRuntime {
       if (!pixelModel.channels) return;
       const ch = pixelModel.channels;
       if (ch.red !== undefined && ch.green !== undefined && ch.blue !== undefined) {
-        const dimmer = ch.dimmer ? (dmxSlice[ch.dimmer - 1] / 255) : 1;
-        const r = (dmxSlice[ch.red - 1] / 255) * dimmer;
-        const g = (dmxSlice[ch.green - 1] / 255) * dimmer;
-        const b = (dmxSlice[ch.blue - 1] / 255) * dimmer;
+        const dimmer = ch.dimmer ? readDmxChannelNormalized(dmxSlice, ch.dimmer) : 1;
+        const r = readDmxChannelNormalized(dmxSlice, ch.red) * dimmer;
+        const g = readDmxChannelNormalized(dmxSlice, ch.green) * dimmer;
+        const b = readDmxChannelNormalized(dmxSlice, ch.blue) * dimmer;
         this.setPixelColorRGB(pIndex, r, g, b);
       } else if (ch.value !== undefined) {
-        const v = dmxSlice[ch.value - 1] / 255;
+        const v = readDmxChannelNormalized(dmxSlice, ch.value);
         this.setPixelColorRGB(pIndex, v * 1.0, v * 0.85, v * 0.6); // warm white
       }
     });
@@ -456,22 +461,24 @@ export class DmxFixtureRuntime {
     this.hitbox.visible = visible;
     this.group.visible = visible;
 
-    if (this.fixtureSpotLight) this.fixtureSpotLight.visible = visible && (profileDef.render.spotLights === 'unified');
-    if (this.litePointLight) this.litePointLight.visible = visible && profileDef.render.pointLights;
+    // SpotLights are managed by the global LightPool — no per-fixture visibility
 
     this.pixels.forEach((p, j) => {
-      if (p.spotLight) p.spotLight.visible = visible && (profileDef.render.spotLights === true);
-      if (p.beam) p.beam.visible = visible && conesVisible && profileDef.render.beams && (profileDef.render.beams === 'unified' ? j === 0 : true);
-      if (p.halo) p.halo.visible = visible && profileDef.render.halos;
-      if (p.bulb) p.bulb.visible = visible && profileDef.render.bulbs;
-      if (p.dots) p.dots.forEach(d => d.mesh.visible = visible && profileDef.render.dots);
+      if (p.beam) {
+         const shouldCone = (profileDef.render.coneMode === 'pixel') || (profileDef.render.coneMode === 'fixture' && j === 0);
+         p.beam.visible = visible && conesVisible && shouldCone;
+      }
+      
+      const shouldEmitter = (profileDef.render.emitterMode === 'pixel') || (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
+      if (p.halo) p.halo.visible = visible && shouldEmitter;
+      if (p.bulb) p.bulb.visible = visible && shouldEmitter;
+      if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
   }
 
   setSelected(selected) {
     if (this.shellMat) {
-      this.shellMat.emissive.setHex(selected ? 0x2288ff : 0x000000);
-      this.shellMat.emissiveIntensity = selected ? 1.0 : 0;
+      this.shellMat.color.setHex(selected ? 0x2288ff : 0x333333);
     }
   }
 
@@ -480,26 +487,34 @@ export class DmxFixtureRuntime {
   destroy() {
     this.scene.remove(this.group);
     this.scene.remove(this.hitbox);
-    if (this.fixtureSpotLight) {
-      this.scene.remove(this.fixtureSpotLight);
-      this.scene.remove(this.fixtureSpotLight.target);
-    }
-    if (this.litePointLight) {
-      this.scene.remove(this.litePointLight);
-    }
-    this.pixels.forEach(p => {
-      if (p.spotLight) {
-        this.scene.remove(p.spotLight);
-        this.scene.remove(p.spotLight.target);
+    
+    // Rigorous cleanup pattern to prevent GC GPU fragmentation during rapid profile swapping
+    const disposeNode = (node) => {
+      if (node.geometry) node.geometry.dispose();
+      if (node.material) {
+        if (Array.isArray(node.material)) node.material.forEach(m => m.dispose());
+        else node.material.dispose();
       }
-      p.beam.material.dispose();
-      p.bulbMat.dispose();
-      p.haloMat.dispose();
-      p.dots.forEach(d => {
-        if (d.mesh && d.mesh.material) d.mesh.material.dispose();
+    };
+
+    // SpotLights are managed by the global LightPool — nothing to remove here
+    
+    this.pixels.forEach(p => {
+      if (p.beam) disposeNode(p.beam);
+      if (p.bulb) disposeNode(p.bulb);
+      if (p.halo) disposeNode(p.halo);
+      
+      // dots share bulb material, so disposing geometry is sufficient
+      if (p.dots) p.dots.forEach(d => {
+        if (d.mesh && d.mesh.geometry) d.mesh.geometry.dispose();
       });
     });
-    if (this.shellMat) this.shellMat.dispose();
+
+    if (this.shell) {
+       this.shell.traverse((child) => {
+          if (child.isMesh) disposeNode(child);
+       });
+    }
 
     const ioIndex = this.interactiveObjects.indexOf(this.hitbox);
     if (ioIndex > -1) this.interactiveObjects.splice(ioIndex, 1);
@@ -521,5 +536,5 @@ export class DmxFixtureRuntime {
     return (fixtureDef.dimensions.height || 100) * 0.001;
   }
 
-  // No spotlight cap with WebGPU — resetSpotlightCount() removed.
+  // SpotLight management delegated to light_pool.js
 }

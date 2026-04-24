@@ -23,7 +23,9 @@ import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
-import { getProfileDef } from "../core/profile_registry.js";
+import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
+import { MAX_SPOTLIGHT_POOL_SIZE } from "../core/light_pool.js";
+import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
@@ -31,6 +33,7 @@ import { Iceberg } from "../fixtures/iceberg.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
+const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simBrightness", "simSurfaceReflectance"];
 
 export
 function setupGUI() {
@@ -179,6 +182,27 @@ function setupGUI() {
   // Maps flat param key → onChange callback. Only keys with side-effects need entries.
   // Bloom controls via WebGPU node-based PostProcessing uniforms
   const _bp = window._bloomParams || {};
+  function _applyConeMaterialSettings() {
+    const isTransparent = params.conesTransparent === 'enabled';
+    const opacity = params.coneOpacity !== undefined ? params.coneOpacity : 0.5;
+    
+    if (window.parFixtures) {
+      window.parFixtures.forEach(f => {
+        if (f && f.pixels) {
+          f.pixels.forEach(p => {
+            if (p.beam && p.beam.material) {
+              p.beam.material.transparent = isTransparent;
+              p.beam.material.opacity = isTransparent ? opacity : 1.0;
+              p.beam.material.depthWrite = !isTransparent;
+              p.beam.material.blending = isTransparent ? THREE.AdditiveBlending : THREE.NormalBlending;
+              p.beam.material.needsUpdate = true;
+            }
+          });
+        }
+      });
+    }
+  }
+
   const handlers = {
     ambientIntensity: (v) => {
       lights.ambient.intensity = v;
@@ -259,32 +283,121 @@ function setupGUI() {
       window.parFixtures.forEach((f) => {
         f.setVisibility(params.parsEnabled !== false, v);
       });
+      // Apply current transparency settings when cones are turned on
+      if (v) _applyConeMaterialSettings();
+      
+      // Update DOM visibility of transparency controls
+      if (window._guiControllers) {
+        if (window._guiControllers.conesTransparent) {
+          window._guiControllers.conesTransparent.domElement.closest('.controller').style.display = v ? '' : 'none';
+        }
+        if (window._guiControllers.coneOpacity) {
+          window._guiControllers.coneOpacity.domElement.closest('.controller').style.display = (v && params.conesTransparent === 'enabled') ? '' : 'none';
+        }
+      }
+    },
+    conesTransparent: (v) => { 
+      _applyConeMaterialSettings();
+      if (window._guiControllers && window._guiControllers.coneOpacity) {
+        window._guiControllers.coneOpacity.domElement.closest('.controller').style.display = (params.conesEnabled !== false && v === 'enabled') ? '' : 'none';
+      }
+    },
+    coneOpacity: () => { _applyConeMaterialSettings(); },
+    simSurfaceReflectance: () => {
+      applySimulationSurfaceReflectanceToMaterial(ground?.material);
+    },
+    spotlightSamplingMode: (v) => {
+      if (window._guiControllers && window._guiControllers.spotlightSamplingBucketDistance) {
+        window._guiControllers.spotlightSamplingBucketDistance.domElement.closest('.controller').style.display = v === 'closest_bucket' ? '' : 'none';
+      }
     },
     generatorsVisible: (v) => {
       if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
+    },
+    rendererMode: (v) => {
+      if (!window._isAppBooting) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const activeRendererMode = window.__rendererMode || 'webgpu';
+        const isWebGLActive = activeRendererMode === 'webgl';
+        
+        let needsReload = false;
+        if (v === 'webgl' && !isWebGLActive) {
+          needsReload = true;
+          urlParams.set('renderer', 'webgl');
+        } else if (v === 'webgpu' && isWebGLActive) {
+          needsReload = true;
+          urlParams.set('renderer', 'webgpu');
+        }
+
+        if (needsReload) {
+          const ok = confirm(
+            `⚠️ Graphics Engine Switch Required\n\n` +
+            `You are switching the graphics backend to ${v === 'webgl' ? 'WebGL' : 'WebGPU'}.\n` +
+            `The application will fully reset and every unsaved change will be lost.\n\n` +
+            `Do you want to proceed and restart the engine?`
+          );
+          if (ok) {
+            window.location.search = "?" + urlParams.toString();
+            return;
+          } else {
+            // Revert dropdown
+            params.rendererMode = activeRendererMode;
+            if (window._guiControllers && window._guiControllers.rendererMode) {
+              window._guiControllers.rendererMode.updateDisplay();
+            }
+            return;
+          }
+        }
+      }
     },
     lightingProfile: (profile) => {
       const profileDef = getProfileDef(profile);
       const isEditMode = profileDef.isEditMode;
 
-      // Smart rebuild: only destroy/recreate when the light category changes.
-      // Same category (e.g. full ↔ full_optimized) just needs a visibility toggle.
-      const prevCategory = window._lastProfileCategory || 'edit';
-      const newCategory = profileDef.category;
-      window._lastProfileCategory = newCategory;
+      if (!window._isAppBooting) {
+        // Warn if switching to full (per-pixel SpotLights — GPU heavy)
+        if (profile === 'full') {
+          const totalPixels = window.parFixtures ? window.parFixtures.reduce((sum, f) => sum + (f && f.pixels ? f.pixels.length : 0), 0) : 0;
+          if (totalPixels > 100) {
+            const ok = confirm(
+              `⚠️ GPU Warning\n\nThis scene has ${totalPixels} pixels. ` +
+              `"Full Analytic" creates a SpotLight per pixel which may crash the WebGPU renderer.\n\n` +
+              `Recommended: Use "Emissive" for scene lighting without GPU risk.\n\nSwitch anyway?`
+            );
+            if (!ok) {
+              // Revert the dropdown to the previous value
+              params.lightingProfile = window._lastLightingProfile || 'pixel_mapping';
+              // Force lil-gui to update its display
+              if (window._guiControllers && window._guiControllers.lightingProfile) {
+                window._guiControllers.lightingProfile.updateDisplay();
+              }
+              return;
+            }
+          }
+        }
+      }
+      window._lastLightingProfile = profile;
+
+      // Smart rebuild: only destroy/recreate when the light render topology changes.
+      const prevKey = window._lastProfileKey || 'unknown';
+      const newKey = getProfileRebuildKey(profile);
+      window._lastProfileKey = newKey;
 
       const hasHoles = window.parFixtures && window.parFixtures.some(f => !f);
 
-      if (!window._isAppBooting && (prevCategory !== newCategory || hasHoles)) {
-        // Light types differ or missing fixtures — must rebuild (async to avoid UI freeze)
-        window._asyncProfileRebuild = true;
+      if (!window._isAppBooting && (prevKey !== newKey || hasHoles)) {
+        // Light topology differ or missing fixtures — must rebuild (async to avoid UI freeze)
+        // Build synchronously so WebGPU compiles the pipeline exactly ONCE for all lights.
+        window._asyncProfileRebuild = false;
         if (window.rebuildParLights) window.rebuildParLights(true);
         if (window.rebuildDmxFixtures) window.rebuildDmxFixtures(true);
-        window._asyncProfileRebuild = false;
+        
+        // Ensure InstancedMesh arrays know we broke the topology constraints
+        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('profile_rebuild');
       } else if (!window._isAppBooting && window.parFixtures) {
-        // Same category — just toggle visibility (instant)
+        // Same topology — just toggle simple visibility flags (instant)
         window.parFixtures.forEach(f => {
-          if (f) f.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
+          if (f && f.setVisibility) f.setVisibility(params.parsEnabled !== false, params.conesEnabled !== false);
         });
       }
       if (model) {
@@ -293,7 +406,7 @@ function setupGUI() {
             child.material = isEditMode ? editMaterial : structureMaterial;
         });
       }
-      const effectsEnabled = profileDef.render.effects !== false;
+      const effectsEnabled = profileDef.render.effectsMode !== 'off';
 
       if (lights.moon) lights.moon.castShadow = effectsEnabled && !isEditMode;
       lights.towers.forEach((t) => { t.castShadow = effectsEnabled && !isEditMode; });
@@ -365,6 +478,15 @@ function setupGUI() {
 
   // ─── Generic Control Builder ───
   function addControl(folder, key, meta) {
+    const isSpotlightLimitControl = key === "maxSpotlights";
+    const controlMin = isSpotlightLimitControl ? 1 : meta.min;
+    const controlMax = isSpotlightLimitControl ? MAX_SPOTLIGHT_POOL_SIZE : meta.max;
+    if (isSpotlightLimitControl) {
+      meta.max = MAX_SPOTLIGHT_POOL_SIZE;
+      if (Number.isFinite(params[key])) {
+        params[key] = Math.min(params[key], MAX_SPOTLIGHT_POOL_SIZE);
+      }
+    }
     const isColor =
       meta.type === "color" ||
       (typeof meta.value === "string" && String(meta.value).startsWith("#"));
@@ -377,15 +499,18 @@ function setupGUI() {
       ctrl = folder.add(params, key).name(meta.label || key);
     } else if (meta.options) {
       ctrl = folder.add(params, key, meta.options).name(meta.label || key);
-    } else if (typeof params[key] === "number" && meta.min !== undefined) {
+    } else if (typeof params[key] === "number" && controlMin !== undefined) {
       ctrl = folder
-        .add(params, key, meta.min, meta.max, meta.step)
+        .add(params, key, controlMin, controlMax, meta.step)
         .name(meta.label || key);
     } else {
       ctrl = folder.add(params, key).name(meta.label || key);
     }
 
     if (handlers[key]) ctrl.onChange(handlers[key]);
+    // Store controller reference for programmatic updates (e.g. profile warning revert)
+    if (!window._guiControllers) window._guiControllers = {};
+    window._guiControllers[key] = ctrl;
     if (meta.listen) ctrl;
     return ctrl;
   }
@@ -549,6 +674,44 @@ function setupGUI() {
     updateModeVisibility();
   }
 
+  function addSpotlightPreviewOptionControls(folder) {
+    const parLightsNode = configTree?.parLights;
+    if (!parLightsNode) return;
+
+    for (const key of OPTIONS_SPOTLIGHT_PREVIEW_KEYS) {
+      const entry = parLightsNode[key];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) || entry.value === undefined) continue;
+      if (params[key] === undefined) params[key] = entry.value;
+      addControl(folder, key, entry);
+    }
+  }
+
+  function buildOptionsSection(parentFolder, sectionNode) {
+    const optionsFolder = parentFolder.addFolder(sectionNode._section.label);
+    if (sectionNode._section.collapsed) optionsFolder.close();
+    _sectionFolderMap.set(sectionNode._section, optionsFolder);
+
+    let insertedPreviewControls = false;
+
+    for (const key of Object.keys(sectionNode)) {
+      if (key === "_section") continue;
+      const entry = sectionNode[key];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) || entry.value === undefined) continue;
+
+      if (params[key] === undefined) params[key] = entry.value;
+      addControl(optionsFolder, key, entry);
+
+      if (key === "lightingProfile") {
+        addSpotlightPreviewOptionControls(optionsFolder);
+        insertedPreviewControls = true;
+      }
+    }
+
+    if (!insertedPreviewControls) {
+      addSpotlightPreviewOptionControls(optionsFolder);
+    }
+  }
+
   // ─── Recursive GUI Builder ───
   function buildGUI(node, parentFolder) {
     for (const key of Object.keys(node)) {
@@ -564,6 +727,10 @@ function setupGUI() {
       ) {
         const sectionMeta = entry._section;
 
+        if (key === "options") {
+          buildOptionsSection(parentFolder, entry);
+          continue;
+        }
         // Special: fixtureArray → build Par Lights UI
         if (sectionMeta.type === "fixtureArray") {
           buildParLightsSection(parentFolder, entry);
@@ -680,13 +847,17 @@ function setupGUI() {
 
     // Add non-fixture controls (parsEnabled, etc.)
     for (const key of Object.keys(sectionNode)) {
-      if (key === "_section" || key === "fixtures") continue;
+      if (key === "_section" || key === "fixtures" || OPTIONS_SPOTLIGHT_PREVIEW_KEYS.includes(key)) continue;
       const entry = sectionNode[key];
       if (entry && typeof entry === "object" && entry.value !== undefined) {
         if (params[key] === undefined) params[key] = entry.value;
         addControl(parFolder, key, entry);
       }
     }
+
+    // Set initial visibility for cone transparency controls
+    if (handlers.conesEnabled) handlers.conesEnabled(params.conesEnabled);
+    if (handlers.conesTransparent) handlers.conesTransparent(params.conesTransparent);
 
     const parListFolder = parFolder.addFolder("Light Instances");
 
@@ -895,7 +1066,7 @@ function setupGUI() {
         const groupFolder = parListFolder.addFolder(`${groupName} (${items.length})`);
 
         // Check if this is a trace-generated group (read-only)
-        const isTraceGroup = items.some(({ config }) => config._traceGenerated);
+        const isTraceGroup = items.some(({ config }) => config.traceGenerated);
         // Restore open state or default closed
         if (openGroups.has(`${groupName} (${items.length - 1})`) ||
             openGroups.has(`${groupName} (${items.length})`) ||
@@ -1986,7 +2157,7 @@ function setupGUI() {
 
       // Remove existing lights from this trace's group name
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
-      params.parLights = params.parLights.filter(l => l.group !== groupName || !l._traceGenerated);
+      params.parLights = params.parLights.filter(l => l.group !== groupName || !l.traceGenerated);
 
       // Compute points
       const pts = computeTracePoints(trace);
@@ -2058,7 +2229,7 @@ function setupGUI() {
           rotX: rotX + (trace.fixtureRotOffX || 0),
           rotY: rotY + (trace.fixtureRotOffY || 0),
           rotZ: rotZ + (trace.fixtureRotOffZ || 0),
-          _traceGenerated: true,
+          traceGenerated: true,
           controllerIp: trace.controllerIp || '',
         });
       });
@@ -2360,7 +2531,7 @@ function setupGUI() {
           if (trace.generated) {
             const groupName = trace.groupName || trace.name;
             const patchedFixtures = params.parLights.filter(l =>
-              l.group === groupName && l._traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
+              l.group === groupName && l.traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
             );
             if (patchedFixtures.length > 0) {
               const names = patchedFixtures.slice(0, 5).map(l =>
@@ -2389,7 +2560,7 @@ function setupGUI() {
           // Remove generated lights from this trace's group
           if (trace) {
             const groupName = trace.groupName || trace.name;
-            params.parLights = params.parLights.filter(l => !(l.group === groupName && l._traceGenerated));
+            params.parLights = params.parLights.filter(l => !(l.group === groupName && l.traceGenerated));
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -3094,6 +3265,12 @@ function setupGUI() {
       configTree.options.lightingProfile.value = profileOverride;
       params.lightingProfile = profileOverride;
     }
+
+    const rendererOverride = urlParams.get('renderer');
+    if ((rendererOverride === 'webgpu' || rendererOverride === 'webgl') && configTree.options && configTree.options.rendererMode) {
+      configTree.options.rendererMode.value = rendererOverride;
+      params.rendererMode = rendererOverride;
+    }
     
     buildGUI(configTree, gui);
   }
@@ -3115,4 +3292,11 @@ function setupGUI() {
   saveDiv.appendChild(saveBtn);
   const guiChildren = gui.domElement.querySelector('.children');
   if (guiChildren) guiChildren.appendChild(saveDiv);
+
+  // ─── Small Screen Auto-Collapse ───
+  // On phones/tablets, close the GUI panel so it doesn't obscure the 3D viewport.
+  // The user can still tap the title bar to expand it.
+  if (window.innerWidth <= 768) {
+    gui.close();
+  }
 }

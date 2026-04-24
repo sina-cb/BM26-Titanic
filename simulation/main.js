@@ -34,12 +34,28 @@ import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js"
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 
+const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
+
+function getRequestedRendererMode() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlRendererMode = urlParams.get("renderer");
+  if (VALID_RENDERER_MODES.has(urlRendererMode)) return urlRendererMode;
+
+  const savedRendererMode = params.rendererMode;
+  if (VALID_RENDERER_MODES.has(savedRendererMode)) return savedRendererMode;
+
+  return "webgpu";
+}
+
 // ─── Init ───────────────────────────────────────────────────────────────
 async function init() {
-  
+  const requestedRendererMode = getRequestedRendererMode();
+  const forceWebGL = requestedRendererMode === "webgl";
+  window.__rendererMode = requestedRendererMode;
+
   const renderer = new THREE.WebGPURenderer({
-    
     powerPreference: "high-performance",
+    forceWebGL: forceWebGL,
   });
   await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);

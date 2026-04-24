@@ -146,16 +146,19 @@ Cycles through all 5 preset views and captures each one. Takes ~25 seconds total
 6. Depending on mode: captures current view, navigates to one view, or cycles all 5
 7. Closes browser (or keeps alive with `--keep-alive`)
 
-### Key Chrome Flags (Windows GPU)
+### Key Chrome Flags
 
 ```javascript
 '--ignore-gpu-blocklist',  // Force GPU even if blocklisted
 '--enable-gpu',            // Explicitly enable GPU
-'--use-gl=angle',          // Use ANGLE GL backend
-'--use-angle=d3d11',       // Use Direct3D 11 (Windows)
+'--enable-webgl',          // Ensure WebGL is available
+'--enable-webgl2',         // Ensure WebGL2 is available
+'--enable-unsafe-webgpu',  // Allow WebGPU in Chromium
+'--enable-features=Vulkan',// Enable Vulkan backend
+'--use-gl=swiftshader',    // Use SwiftShader (CPU-based GL)
 ```
 
-> **IMPORTANT:** These flags are critical. Without `--ignore-gpu-blocklist`, Chrome will disable WebGL and the simulation will fail to render (blank black screen with no 3D content).
+> **IMPORTANT:** `--use-gl=swiftshader` forces CPU-based rendering via Google's SwiftShader. This ensures agent renders succeed on headless machines and CI servers without a real GPU. The tradeoff is that screenshots are **software-rendered** — bloom, tonemapping, and shader behavior may differ slightly from what you see on a real GPU at publish time. This is intentional and acceptable for layout/regression checks, but do not treat SwiftShader output as pixel-accurate to the live show.
 
 ### Script Constants
 

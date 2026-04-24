@@ -1,7 +1,8 @@
 # 14 - Lighting Optimization Brainstorm
 
 **Date:** 2026-04-17  
-**Status:** Brainstorming / options catalog  
+**Last Updated:** 2026-04-24  
+**Status:** Brainstorming / options catalog with partial implementation landed  
 **Priority:** Not prioritized yet  
 **Scope:** BM26 Titanic browser/Electron simulation lighting performance, WebGPU renderer stability, and long-term paths for realistic fixture visualization at high FPS.
 
@@ -13,10 +14,15 @@ This document collects long-term lighting optimization ideas for the Titanic sim
 
 It is intentionally **not a prioritized roadmap yet**. The goal is to capture the best architectural options and tradeoffs before choosing an implementation sequence.
 
+Historical note:
+
+- Older sections in this document say **Lite Mode**. The current runtime no longer exposes that as a single mode; the closest shipped profiles are `pixel_mapping`, `emissive`, and `full`.
+
 The immediate problem that motivated this document:
 
-- Lite Mode on: fixtures are mostly visual/emissive and the simulation is more stable.
-- Lite Mode off: every DMX fixture creates a real `THREE.SpotLight`, and WebGPU can eventually lose the device in Electron.
+- `edit` and `pixel_mapping` are relatively cheap because they skip analytic fixture lighting.
+- `emissive` keeps the visual fixture hardware, beams, and glow without analytic `SpotLight` evaluation.
+- `full` now uses a global pooled spotlight system instead of per-fixture lights, but large pools in WebGL can still exceed practical uniform budgets and make the preview unstable.
 - The target visual design wants many visible light sources, realistic glow, beams, fixture color, and convincing illumination without a large FPS drop.
 
 The important distinction:
@@ -30,25 +36,29 @@ The important distinction:
 
 Current renderer setup:
 
-- `simulation/main.js` uses `THREE.WebGPURenderer`.
-- WebGPU postprocessing bloom is enabled through TSL/node postprocessing.
-- Renderer uses ACES tone mapping.
-- Renderer currently uses MSAA if `antialias: true`.
-- Renderer currently caps DPR at `Math.min(window.devicePixelRatio, 2)`, which can mean 4x pixel count on high-DPI displays.
+- `simulation/main.js` uses `THREE.WebGPURenderer` and can force the WebGL backend with `?renderer=webgl`.
+- Bloom is wired through TSL/node postprocessing and controlled through `window._bloomParams`.
+- Renderer uses ACES tone mapping with initial exposure `0.55`.
+- Renderer currently caps DPR at `Math.min(window.devicePixelRatio, 2)`, which can still mean 4x pixel count on high-DPI displays.
 
 Current fixture lighting behavior:
 
-- `simulation/src/fixtures/dmx_fixture_runtime.js` creates one fixture-level `THREE.SpotLight` when Lite Mode is disabled.
-- Lite Mode skips those `SpotLight` objects and keeps visual fixture meshes, bulbs, halos, and additive beam cones.
-- The current Titanic scene has 87 DMX fixtures.
-- Those fixtures expand to hundreds of logical pixels and thousands of small visual dot meshes.
-- The visual LED count and mesh count are not the same thing as real scene lights.
+- The current shipped profiles are `edit`, `pixel_mapping`, `emissive`, and `full`.
+- `simulation/src/fixtures/dmx_fixture_runtime.js` no longer owns fixture-level `THREE.SpotLight` objects. Analytic light allocation is centralized in `simulation/src/core/light_pool.js`.
+- `light_pool.js` preallocates a fixed global spotlight pool at boot. The current manual cap is `MAX_SPOTLIGHT_POOL_SIZE = 200`.
+- `?spotlights=N` is the boot-time override for pool allocation. Values above the cap clamp to the cap and show a toast in the simulation UI.
+- The in-app `Max Spotlights` control is now a preview-only budget control under `⚙️ Options`, adjacent to `Lighting Profile`.
+- `Sim Exposure (Preview Only)` and `Sim Brightness (Preview Only)` are preview-only controls; they do not affect `sACN in` or `sACN out`.
+- The pooled spotlights are currently `castShadow = false`. The moon directional light is the main light still flagged `castShadow = true`.
+- Recent Titanic boots reported about 61 DMX fixtures, about 540 analytic light requests in `full`, and up to 200 pooled `SpotLight` objects when explicitly requested.
+- The visual LED count and mesh count are still not the same thing as real scene lights.
 
 Current likely bottlenecks:
 
-- Too many real `SpotLight` evaluations against the ship, ground, icebergs, and standard materials.
+- In `full`, per-pixel analytic light requests are still gathered, frustum-culled, distance-sorted, and copied into the light pool every frame.
+- The current manual pool cap can exceed the estimated WebGL-safe uniform budget on some machines. Recent WebGL logs on the current machine estimated about 60 safe spotlight slots even though the manual cap is 200.
 - High render resolution from DPR.
-- MSAA plus bloom/postprocessing bandwidth.
+- Bloom/postprocessing bandwidth.
 - Many separate mesh/material objects for dots, bulbs, halos, and cones.
 - Fixture rebuilds may leave GPU resources alive unless every geometry/material in the fixture group is disposed.
 - Electron flags can push the GPU harder than needed, especially uncapped frame rate.
@@ -106,7 +116,7 @@ The main optimization principle:
 
 ## 5. Option A - Hybrid Hero Lights
 
-Use Lite Mode style rendering for all fixtures, but allow a limited number of real lights at once.
+Use `emissive`/mapping-first style rendering for all fixtures, but allow a limited number of real lights at once.
 
 ### Concept
 
@@ -139,14 +149,19 @@ Suggested budgets to test:
 | High | 32-48 | 1-2 key shadows |
 | Screenshot | 64+ | optional, not for live FPS |
 
+Current implementation note:
+
+- The simulation already has a pooled spotlight allocator and exposes a manual preview cap up to 200, but that is an experimental ceiling for preview/testing, not a recommended live operating budget.
+- On the current test machine, the WebGL uniform estimate reported about 60 safe spotlight slots even though the manual cap is higher.
+
 ### Required Systems
 
 - `LightBudgetManager`
 - Stable fixture scoring function
 - Hysteresis to prevent popping
 - Real light object pool
-- GUI controls for budget and mode
-- Debug overlay showing active real lights
+- GUI/URL controls for preview budget and mode
+- Debug overlay showing active real lights and safe-budget estimates
 
 ### Pros
 
@@ -238,9 +253,15 @@ Maintain a fixed pool of `SpotLight` objects:
 
 This avoids repeated allocation, shader/material churn, and possible GPU resource fragmentation.
 
+Current implementation note:
+
+- This is partially landed today in `simulation/src/core/light_pool.js`.
+- The current pool already creates N lights once, reassigns them each frame, hides unused lights, and keeps pooled fixture spotlights non-shadow-casting.
+- What is still missing is smarter scoring/hysteresis, explicit quality tiers, and broader renderer integration around the pool budget.
+
 ### Pros
 
-- Stabilizes Lite Off style experiments.
+- Stabilizes current `full` profile experiments.
 - Reduces rebuild cost.
 - Pairs naturally with hybrid hero lights.
 - Helps avoid device loss from repeated heavy rebuilds.
@@ -529,13 +550,38 @@ Define explicit lighting profiles instead of one global Lite Mode.
 
 ### Possible Profiles
 
-**Editor**
+Current shipped profiles:
+
+**Edit Layout (`edit`)**
 
 - DPR 1.0
 - no real fixture lights
 - no heavy bloom
 - flat/edit material optional
 - helpers visible
+
+**Pixel Mapping (`pixel_mapping`)**
+
+- mapping focused
+- no analytic `SpotLight` evaluation
+- cones allowed for preview
+- effects off
+
+**Emissive (`emissive`)**
+
+- visual fixture emitters visible
+- no analytic `SpotLight` evaluation
+- bloom/effects on
+- good default for stable preview
+
+**Full Analytic (`full`)**
+
+- visual fixture emitters visible
+- pooled analytic `SpotLight` evaluation enabled
+- current preview-only controls for exposure/brightness/spotlight budget
+- no pooled spotlight shadows
+
+Possible future operator-facing profiles:
 
 **Live Performance**
 
@@ -783,17 +829,24 @@ This separates show operation from pretty still/video capture.
 
 ## 21. Non-Prioritized Next Experiments
 
-These are experiment ideas only, not priority order.
+Already landed in current code:
+
+- Global pooled spotlight allocator in `simulation/src/core/light_pool.js`
+- Manual preview pool cap constant (`MAX_SPOTLIGHT_POOL_SIZE`, currently `200`)
+- URL override `?spotlights=N` with clamp + toast on overflow
+- Preview-only `Sim Exposure`, `Sim Brightness`, and `Max Spotlights` controls
+- `⚙️ Options` adjacency for spotlight preview controls
+
+Still-open experiment ideas only, not priority order:
 
 - Add a renderer quality config object.
 - Add a debug overlay for DPR, bloom, real light count, and backend.
-- Add a real-light budget cap and manually assign first N fixtures to real lights.
-- Replace per-fixture real lights with a global light pool.
+- Add smarter hero-light scoring and hysteresis on top of the current global light pool.
 - Add group proxy lights for wall/deck/chimney groups.
 - Prototype instanced beam cones for all fixtures.
 - Prototype instanced LED dots for UkingPar and ShehdsBar.
 - Add proper full recursive disposal for fixture rebuilds.
-- Add a benchmark scene with 0, 16, 32, 64, 128 real lights.
+- Add a benchmark scene with 0, 16, 32, 64, 128, and 200 real lights.
 - Add a "bloom sanity" test pattern with known bright emitters.
 - Add WebGPU device lost handling and a user-visible error state.
 - Test Electron with frame cap on versus off.
@@ -801,7 +854,32 @@ These are experiment ideas only, not priority order.
 
 ---
 
-## 22. Working Recommendation
+## 22. V2 Pixel Mapping Architecture (InstancedMesh)
+
+*Added: 2026-04-23*
+
+Based on live testing, traversing thousands of `THREE.Mesh` nodes inside nested `THREE.Group` fixtures purely to update DMX RGB states causes severe frame drops, capping rendering around 6 FPS due to recursive `updateMatrixWorld()` processing on 18,000+ deep nodes.
+
+High-performance pixel mapping softwares (like **Chromatik** or **LX Studio**) bypass Scene Graph physics entirely when writing color data to massive LED maps by treating them as 1D arrays mapped straight to VBOs (Vertex Buffer Objects). 
+
+To achieve 100k+ pixel fluidity within the BM26-Titanic web environment, we will transition pixel rendering to a **`THREE.InstancedMesh`** architecture.
+
+### Conceptual Architecture
+1. **The V2 Pipeline Catch**: We are already flattening our universe layout using the **V2 Metadata-Aware Pipeline** into a unified `_batchRenderList` (size ~1,000 to 18,000 depending on dot footprints).
+2. **Buffer Allocation (`animate.js`)**: Instead of calling `entry.apply(...)` traversing into OOP fixture instances, `_rebuildBatchCache()` will build exactly ONE `THREE.InstancedMesh` attached directly to the global `scene`. It pre-calculates the absolute physical world `Matrix4` limits for every pixel and bakes them into an `instanceMatrix` Float32Buffer.
+3. **Data Streaming**: During `requestAnimationFrame`, the DMX un-mapper (`sacn_in`) and the Pixelblaze engine (`pattern`) write simple float arrays representing R/G/B directly into the native `instanceColor` buffer. A single `instanceColor.needsUpdate = true` commits 100k instances to the GPU in 1 draw call. 
+
+### Compatibility with Lighting Profiles
+
+The design perfectly layers onto the existing Profile Registry:
+
+- **`pixel_mapping` Profile**: This profile is built for pure visualization (no analytical `SpotLight` evaluation, bloom, or effects). In this mode, the heavy root DMX bulbs from `dmx_fixture_runtime.js` can be fully suppressed (set `visible = false`). The `InstancedMesh` takes 100% control, unlocking massive FPS.
+- **`full` / `emissive` Profiles**: The global `InstancedMesh` gracefully supports overlay rendering. Normal fixture geometry remains visible and continues dropping analytic cones, while the `InstancedMesh` renders over the top (using `depthTest: false`) guaranteeing physical UI visibility of the hardware matrix pixels while mapping the true DMX values.
+- **Cache Invalidation**: Because `InstancedMesh` strips coordinate data out of the `THREE.Group` physics, moving a fixture via the transform GUI will temporarily de-sync the visual mapping. To fix this, we wire `window.invalidateMarsinBatchCache('transform')` to instantly rebuild the VBO Matrix cache upon releasing the transform cursor.
+
+---
+
+## 23. Working Recommendation
 
 The likely best long-term direction is:
 

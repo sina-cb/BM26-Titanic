@@ -14,6 +14,16 @@ import { ModelFixture } from "../fixtures/model_fixture.js";
 import { FogMachine } from "../fixtures/fog_machine.js";
 import { getDefinition } from "../dmx/fixture_definition_registry.js";
 
+function getFixturePatchDef(config) {
+  const universe = Math.floor(Number(config?.dmxUniverse));
+  const addr = Math.floor(Number(config?.dmxAddress));
+
+  if (!Number.isFinite(universe) || universe < 1) return null;
+  if (!Number.isFinite(addr) || addr < 1) return null;
+
+  return { universe, addr };
+}
+
 export function rebuildParLights(force = false) {
   if (!window.parFixtures) {
     window.parFixtures = [];
@@ -72,13 +82,9 @@ function _buildFixtureAt(index) {
   if (!fixture) {
     const fixtureType = config.type || config.fixtureType || 'UkingPar';
     const fixtureDef = getDefinition(fixtureType);
+    const patchDef = getFixturePatchDef(config);
 
     try {
-      const patchDef = (config.dmxUniverse && config.dmxAddress) ? {
-        universe: config.dmxUniverse,
-        addr: config.dmxAddress
-      } : null;
-
       if (fixtureType === 'FogMachine') {
         fixture = new FogMachine(
           config, index, scene, interactiveObjects, modelRadius
@@ -90,16 +96,13 @@ function _buildFixtureAt(index) {
       }
       window.parFixtures[index] = fixture;
     } catch (err) {
-      console.error(`[fixtures] Failed to create fixture ${index} (${fixtureType}):`, err);
+      console.error(`[fixtures] Failed to create fixture ${index} (${fixtureType}):\n${err.message}\n${err.stack}`);
       return;
     }
   } else {
     fixture.config = config;
     fixture.index = index;
-    fixture.patchDef = (config.dmxUniverse && config.dmxAddress) ? {
-      universe: config.dmxUniverse,
-      addr: config.dmxAddress
-    } : null;
+    fixture.patchDef = getFixturePatchDef(config);
     fixture.syncFromConfig();
   }
 
@@ -142,6 +145,51 @@ function _finishRebuild() {
       window.debounceAutoSave();
     }
   }
+
+  // ── Overlap detection ──────────────────────────────────────────────────
+  _checkFixtureOverlaps();
+}
+
+function _checkFixtureOverlaps() {
+  const lights = params.parLights;
+  if (!lights || lights.length < 2) return;
+
+  const EPSILON = 0.05; // 5cm threshold
+  const overlaps = [];
+
+  for (let i = 0; i < lights.length; i++) {
+    for (let j = i + 1; j < lights.length; j++) {
+      const a = lights[i], b = lights[j];
+      const dx = (a.x || 0) - (b.x || 0);
+      const dy = (a.y || 0) - (b.y || 0);
+      const dz = (a.z || 0) - (b.z || 0);
+      if (dx * dx + dy * dy + dz * dz < EPSILON * EPSILON) {
+        overlaps.push(`"${a.name || i}" & "${b.name || j}"`);
+        if (overlaps.length >= 5) break; // Cap at 5 to avoid spam
+      }
+    }
+    if (overlaps.length >= 5) break;
+  }
+
+  if (overlaps.length > 0) {
+    const msg = `⚠️ ${overlaps.length}+ fixture overlap(s) detected:\n${overlaps.join('\n')}`;
+    console.warn('[fixtures]', msg);
+    _showOverlapToast(msg);
+  }
+}
+
+function _showOverlapToast(msg) {
+  let toast = document.getElementById('overlap-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'overlap-toast';
+    toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#3a2a1a;border:1px solid #f80;color:#fa0;padding:10px 24px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;white-space:pre-line;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;max-width:500px;';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 8000);
 }
 
 export function rebuildDmxFixtures(force = false) {
@@ -160,6 +208,7 @@ export function rebuildDmxFixtures(force = false) {
 
   params.dmxFixtures.forEach((config, index) => {
     let fixture = window.dmxSceneFixtures[index];
+    const patchDef = getFixturePatchDef(config);
     
     if (fixture) {
       const currentType = fixture.config.type || 'None';
@@ -191,6 +240,7 @@ export function rebuildDmxFixtures(force = false) {
           interactiveObjects,
           modelRadius,
           fixtureModel,
+          patchDef,
         );
         window.dmxSceneFixtures[index] = fixture;
       } else {
@@ -202,13 +252,14 @@ export function rebuildDmxFixtures(force = false) {
           interactiveObjects,
           modelRadius,
           fixtureDef,
-          null,
+          patchDef,
         );
         window.dmxSceneFixtures[index] = fixture;
       }
     } else {
       fixture.config = config;
       fixture.index = index;
+      fixture.patchDef = patchDef;
       fixture.syncFromConfig();
     }
     

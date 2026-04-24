@@ -24,10 +24,10 @@ export function extractParams(node, parentKey = null) {
     }
     if (key === "traces" && Array.isArray(node[key])) {
       params.traces = node[key];
-      // Restore _traceGenerated flag on fixtures belonging to trace groups
+      // Restore traceGenerated flag on fixtures belonging to trace groups
       const traceGroupNames = new Set(params.traces.filter(t => t.generated).map(t => t.groupName || t.name));
       (params.dmxFixtures || params.parLights || []).forEach(light => {
-        if (traceGroupNames.has(light.group)) light._traceGenerated = true;
+        if (traceGroupNames.has(light.group)) light.traceGenerated = true;
       });
       continue;
     }

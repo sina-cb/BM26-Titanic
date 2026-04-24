@@ -6,11 +6,14 @@ import {
   controls, composer, params,
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
   lightingEnabled, lightingMode, engineReady, engineEnabled,
+  scene
 } from "./state.js";
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
+import { updateLightPool } from "./light_pool.js";
+import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -37,6 +40,12 @@ let _batchMeta = null;          // Int32Array (4 ints per pixel: c,s,f,v)
 let _batchCacheVersion = 0;
 let _batchLastBuiltVersion = -1;
 
+// ─── Native Hardware Mapping Pipeline (V2 InstancedMesh) ───
+let _pixelInstancedMesh = null;
+const _pixelMatrixCache = new THREE.Matrix4();
+const _pixelColorCache = new THREE.Color();
+const _pixelTransformObj = new THREE.Object3D(); // For easy local-to-world extraction
+
 /** Increment cache version — call when topology, position, or metadata changes. */
 window.invalidateMarsinBatchCache = function(reason) {
   _batchCacheVersion++;
@@ -59,6 +68,15 @@ function _rebuildBatchCache() {
 
   // ─── Normalize coordinates to [0,1] ────────────────────────
   const n = list.length;
+  
+  // Clean up old instanced mesh
+  if (_pixelInstancedMesh) {
+     scene.remove(_pixelInstancedMesh);
+     if (_pixelInstancedMesh.geometry) _pixelInstancedMesh.geometry.dispose();
+     if (_pixelInstancedMesh.material) _pixelInstancedMesh.material.dispose();
+     _pixelInstancedMesh = null;
+  }
+
   if (n === 0) {
     _batchRenderList = null;
     _batchCoords = null;
@@ -92,6 +110,24 @@ function _rebuildBatchCache() {
     _batchMeta[i * 4 + 2]   = e.fId;
     _batchMeta[i * 4 + 3]   = e.vMask;
   }
+
+  // ─── Build V2 InstancedMesh ─────────────────────────────────
+  const dotGeo = new THREE.SphereGeometry(0.12, 8, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // Draws normally with depth test
+  _pixelInstancedMesh = new THREE.InstancedMesh(dotGeo, dotMat, n);
+  
+  for (let i = 0; i < n; i++) {
+     const e = list[i];
+     _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
+     _pixelTransformObj.updateMatrix();
+     _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+     _pixelColorCache.setRGB(0, 0, 0); // start black
+     _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
+  }
+  _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
+  if (_pixelInstancedMesh.instanceColor) _pixelInstancedMesh.instanceColor.needsUpdate = true;
+  _pixelInstancedMesh.visible = true; // Visibility dynamically managed in animate()
+  scene.add(_pixelInstancedMesh);
 
   _batchRenderList = list;
   _batchLastBuiltVersion = _batchCacheVersion;
@@ -171,7 +207,6 @@ export function animate() {
         const gn = Math.min(1, entry.g + entry.w * 0.8 + entry.a * 0.6);
         const bn = Math.min(1, entry.b + entry.w * 0.8 + entry.u * 0.7);
 
-
         if (entry.apply) entry.apply(rn, gn, bn);
       }
     }
@@ -197,8 +232,12 @@ export function animate() {
       for (const fixture of fixtureList) {
         if (!fixture) continue;
         if (fixture.applyDmxFrame) {
-          const u = fixture.config.dmxUniverse || 1;
-          const addr = fixture.config.dmxAddress || 512;
+          const patchUniverse = Math.floor(Number(fixture.patchDef?.universe ?? fixture.config?.dmxUniverse));
+          const patchAddr = Math.floor(Number(fixture.patchDef?.addr ?? fixture.config?.dmxAddress));
+          if (!Number.isFinite(patchUniverse) || patchUniverse < 1) continue;
+          if (!Number.isFinite(patchAddr) || patchAddr < 1) continue;
+          const u = patchUniverse;
+          const addr = patchAddr;
           const dmxFrame = window.dmxRouter.getFullFrame(u);
           if (dmxFrame) {
             fixture.applyDmxFrame(dmxFrame.subarray(addr - 1));
@@ -208,6 +247,30 @@ export function animate() {
     };
     applyDmx(window.dmxSceneFixtures);
     applyDmx(window.parFixtures);
+  }
+
+  // ─── V2 InstancedMesh Raw Flush ─────────────────────────
+  // Streams all colors computed in the current frame straight to GPU
+  if (_pixelInstancedMesh && getProfileDef(params.lightingProfile).mappingEnabled) {
+     const count = _batchRenderList.length;
+     for (let i = 0; i < count; i++) {
+        const entry = _batchRenderList[i];
+        
+        // Standardize RGB representations
+        const rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+        const gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+        const bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+        const [previewR, previewG, previewB] = scaleSimulationPreviewRgb(rn, gn, bn);
+        _pixelColorCache.setRGB(previewR, previewG, previewB);
+        _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
+     }
+     
+     if (_pixelInstancedMesh.instanceColor) {
+         _pixelInstancedMesh.instanceColor.needsUpdate = true;
+     }
+     _pixelInstancedMesh.visible = true;
+  } else if (_pixelInstancedMesh) {
+     _pixelInstancedMesh.visible = false;
   }
 
   // Always run visual animations of fixtures regardless of DMX mode
@@ -300,6 +363,10 @@ export function animate() {
       }
     }
   }
+
+  // ─── SpotLight Pool Orchestrator ───
+  // Assigns the 10 closest-to-camera pixels to the pre-allocated SpotLight pool
+  updateLightPool();
 
   composer.render();
 }

@@ -7,133 +7,56 @@
  */
 
 export const LIGHTING_PROFILES = {
-  /*
-  full: {
-    label: "Full (Heavy)",
-    category: "full",
-    isEditMode: false,
-    mappingEnabled: true,
-    render: {
-      spotLights: true,
-      pointLights: false,
-      halos: true,
-      beams: true,
-      bulbs: true,
-      dots: true
-    }
-  },
-  full_optimized: {
-    label: "Full Optimized",
-    category: "full",
-    isEditMode: false,
-    mappingEnabled: true,
-    render: {
-      spotLights: true,
-      pointLights: false,
-      halos: false,
-      beams: true,
-      bulbs: true,
-      dots: true
-    }
-  },
-  unified: {
-    label: "Unified",
-    category: "unified",
-    isEditMode: false,
-    mappingEnabled: true,
-    render: {
-      spotLights: "unified", // Special flag: handled by logic to only spawn on primary pixel
-      pointLights: false,
-      halos: false,
-      beams: true,
-      bulbs: true,
-      dots: true
-    }
-  },
-  unified_lite: {
-    label: "Unified Lite",
-    category: "lite",
-    isEditMode: false,
-    mappingEnabled: true,
-    render: {
-      spotLights: false,
-      pointLights: true,
-      halos: false,
-      beams: false,
-      bulbs: true,  
-      dots: true
-    }
-  },
-  full_lite: {
-    label: "Full Lite",
-    category: "lite",
-    isEditMode: false,
-    mappingEnabled: true,
-    render: {
-      spotLights: false,
-      pointLights: true,
-      halos: false,
-      beams: false,
-      bulbs: true,
-      dots: true
-    }
-  },
-  super_lite: {
-    label: "Super Lite",
-    category: "edit",
-    isEditMode: true,
-    mappingEnabled: true,
-    render: {
-      spotLights: false,
-      pointLights: false,
-      halos: false,
-      beams: false,
-      bulbs: false,
-      dots: false
-    }
-  },
-  simple_mapping: {
-    label: "Simple Mapping",
-    category: "edit",
-    isEditMode: true,
-    mappingEnabled: true,
-    render: {
-      spotLights: false,
-      pointLights: false,
-      halos: false,
-      beams: false,
-      bulbs: true,
-      dots: false
-    }
-  },
-  */
   edit: {
     label: "Edit Layout",
     category: "edit",
     isEditMode: true,
     mappingEnabled: false,
+    allowConesUi: false,
     render: {
-      spotLights: false,
-      pointLights: false,
-      halos: false,
-      beams: false,
-      bulbs: false,  // Hitboxes shown instead
-      dots: false
+      emitterMode: 'none',
+      analyticLightMode: 'none',
+      coneMode: 'none',
+      effectsMode: 'off'
     }
   },
   pixel_mapping: {
-    label: "Pixel Shading",
+    label: "Pixel Mapping",
     category: "mapping_only",
     isEditMode: false,
     mappingEnabled: true,
+    allowConesUi: false,
     render: {
-      effects: false,
-      spotLights: false,
-      pointLights: false,
-      halos: false,
-      beams: 'unified',
-      bulbs: true,
-      dots: false
+      emitterMode: 'none',
+      analyticLightMode: 'none',
+      coneMode: 'pixel',
+      effectsMode: 'off'
+    }
+  },
+  emissive: {
+    label: "Emissive",
+    category: "lite",
+    isEditMode: false,
+    mappingEnabled: true,
+    allowConesUi: true,
+    render: {
+      emitterMode: 'pixel', 
+      analyticLightMode: 'none',
+      coneMode: 'pixel',
+      effectsMode: 'on'
+    }
+  },
+  full: {
+    label: "Full Analytic (Heavy)",
+    category: "full",
+    isEditMode: false,
+    mappingEnabled: true,
+    allowConesUi: true,
+    render: {
+      emitterMode: 'pixel',
+      analyticLightMode: 'pixel',
+      coneMode: 'pixel',
+      effectsMode: 'on'
     }
   }
 };
@@ -148,4 +71,14 @@ export function getProfileDef(profileId) {
     return LIGHTING_PROFILES['edit'];
   }
   return LIGHTING_PROFILES[profileId];
+}
+
+/**
+ * Returns a deterministic key representing the structural requirements of a profile.
+ * If this key changes, existing fixture groups must be destroyed and rebuilt.
+ * @param {string} profileId 
+ */
+export function getProfileRebuildKey(profileId) {
+  const p = getProfileDef(profileId);
+  return JSON.stringify(p.render);
 }

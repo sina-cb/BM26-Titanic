@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
 
 // ─── Simple seedable PRNG (matches Echoes Iceberg Generator V1) ───
 class RNG {
@@ -555,7 +556,8 @@ export class Iceberg {
 
   setColorRGB(r, g, b) {
     if (this.ledLines && this.ledLines.material) {
-      this.ledLines.material.color.setRGB(r, g, b);
+      const [rn, gn, bn] = scaleSimulationPreviewRgb(r, g, b);
+      this.ledLines.material.color.setRGB(rn, gn, bn);
     }
   }
 }

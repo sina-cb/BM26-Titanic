@@ -1,22 +1,36 @@
 import * as THREE from 'three';
+import { getProfileDef } from "../core/profile_registry.js";
+import { params } from "../core/state.js";
+import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
 
 // Shared materials
-const defaultShellMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.5 });
+const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
 const defaultDotMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
-const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 32, 1, true);
+const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 16, 1, true);
 baseBeamGeo.translate(0, -0.5, 0); // Tip at origin
 baseBeamGeo.rotateX(-Math.PI / 2); // Point wide end towards +Z
 
+function readDmxChannelNormalized(dmxSlice, channelIndex) {
+  if (!dmxSlice || !channelIndex || channelIndex < 1) return 0;
+  const raw = dmxSlice[channelIndex - 1];
+  if (!Number.isFinite(raw)) return 0;
+  return THREE.MathUtils.clamp(raw / 255, 0, 1);
+}
+
 export class ModelFixture {
-  constructor(config, index, scene, interactiveObjects, modelRadius, fixtureModel) {
+  constructor(config, index, scene, interactiveObjects, modelRadius, fixtureModel, patchDef = null) {
     this.config = config;
     this.index = index;
     this.scene = scene;
     this.interactiveObjects = interactiveObjects;
     this.modelRadius = modelRadius;
     this.fixtureModel = fixtureModel; // Extracted YAML object
+    this.patchDef = patchDef;
+
+    const profile = params.lightingProfile || 'edit';
+    this.profileDef = getProfileDef(profile);
 
     // Create a parent group to hold all the fixture's visual objects, which allows TransformControls to rotate everything together.
     this.group = new THREE.Group();
@@ -68,64 +82,71 @@ export class ModelFixture {
     if (this.fixtureModel && this.fixtureModel.pixels) {
       this.fixtureModel.pixels.forEach((pixelModel, pIndex) => {
          // Gather all dots, compute center for the SpotLight emission point
-         const dots = [];
-         let avgX = 0, avgY = 0, avgZ = 0;
-         if (pixelModel.dots && pixelModel.dots.length > 0) {
-            pixelModel.dots.forEach(d => {
-               const pos = new THREE.Vector3(d[0]*0.001, d[1]*0.001, d[2]*0.001);
-               avgX += pos.x; avgY += pos.y; avgZ += pos.z;
-               // Create tiny visual sphere for the dot
-               const dotGeo = new THREE.SphereGeometry(0.012, 8, 8);
-               const dotMesh = new THREE.Mesh(dotGeo, defaultDotMat.clone());
-               dotMesh.position.copy(pos);
-               this.group.add(dotMesh);
-               dots.push({ pos, mesh: dotMesh });
+          const dots = [];
+          let avgX = 0, avgY = 0, avgZ = 0;
+          
+          if (pixelModel.dots && pixelModel.dots.length > 0) {
+             pixelModel.dots.forEach(d => {
+                const pos = new THREE.Vector3(d[0]*0.001, d[1]*0.001, d[2]*0.001);
+                avgX += pos.x; avgY += pos.y; avgZ += pos.z;
+             });
+             avgX /= pixelModel.dots.length;
+             avgY /= pixelModel.dots.length;
+             avgZ /= pixelModel.dots.length;
+             
+             const shouldBuildEmitter = this.profileDef.render.emitterMode === 'pixel' || 
+                                        (this.profileDef.render.emitterMode === 'fixture_representative' && pIndex === 0);
+             if (shouldBuildEmitter) {
+               pixelModel.dots.forEach(d => {
+                  const pos = new THREE.Vector3(d[0]*0.001, d[1]*0.001, d[2]*0.001);
+                  const dotGeo = new THREE.SphereGeometry(0.012, 8, 8);
+                  const dotMesh = new THREE.Mesh(dotGeo, defaultDotMat.clone());
+                  dotMesh.position.copy(pos);
+                  this.group.add(dotMesh);
+                  dots.push({ pos, mesh: dotMesh });
+               });
+             }
+          }
+
+          let spotLight = null;
+          if (this.profileDef.render.analyticLightMode === 'pixel') {
+            spotLight = new THREE.SpotLight(
+              config.color,
+              config.intensity,
+              modelRadius * 3, // Distance bounds
+              THREE.MathUtils.degToRad(config.angle || 25), // Use 25 degree if specified or user default
+              config.penumbra || 0.5,
+              1.5
+            );
+            spotLight.position.set(avgX, avgY, avgZ);
+            spotLight.castShadow = false;
+
+            this.scene.add(spotLight.target);
+            this.scene.add(spotLight);
+          }
+
+          let beam = null;
+          const shouldBuildCone = this.profileDef.render.coneMode === 'pixel' || 
+                                  (this.profileDef.render.coneMode === 'fixture' && pIndex === 0);
+          if (shouldBuildCone) {
+            const coneMat = new THREE.MeshBasicMaterial({
+              color: config.color,
+              depthWrite: true,
+              side: THREE.DoubleSide
             });
-            avgX /= pixelModel.dots.length;
-            avgY /= pixelModel.dots.length;
-            avgZ /= pixelModel.dots.length;
-         } else {
-           // Default fallback center
-           avgX = 0; avgY = 0; avgZ = 0;
-         }
+            beam = new THREE.Mesh(baseBeamGeo, coneMat);
+            beam.position.set(avgX, avgY, avgZ);
+            this.group.add(beam);
+          }
 
-         // Construct the physical SpotLight
-         const spotLight = new THREE.SpotLight(
-           config.color,
-           config.intensity,
-           modelRadius * 3, // Distance bounds
-           THREE.MathUtils.degToRad(config.angle || 25), // Use 25 degree if specified or user default
-           config.penumbra || 0.5,
-           1.5
-         );
-         spotLight.position.set(avgX, avgY, avgZ);
-         spotLight.castShadow = false;
-
-         this.scene.add(spotLight.target);
-         this.scene.add(spotLight);
-
-         // Beam Cone
-         const coneMat = new THREE.MeshBasicMaterial({
-           color: config.color,
-           transparent: true,
-           opacity: 0.15,
-           blending: THREE.AdditiveBlending,
-           depthWrite: false,
-           side: THREE.DoubleSide
-         });
-         const beam = new THREE.Mesh(baseBeamGeo, coneMat);
-         // Set beam position locally within the group
-         beam.position.set(avgX, avgY, avgZ);
-         this.group.add(beam);
-
-         this.pixels.push({
-           model: pixelModel, // Reference to YAML pixel
-           spotLight,
-           beam,
-           dots,
-           localPos: new THREE.Vector3(avgX, avgY, avgZ)
-         });
-      });
+          this.pixels.push({
+            model: pixelModel, // Reference to YAML pixel
+            spotLight,
+            beam,
+            dots,
+            localPos: new THREE.Vector3(avgX, avgY, avgZ)
+          });
+       });
     }
 
     // Initial position
@@ -150,24 +171,26 @@ export class ModelFixture {
     const dirLocal = new THREE.Vector3(0, 0, 1);
     
     this.pixels.forEach(p => {
-       // SpotLight settings
-       p.spotLight.intensity = this.config.intensity;
-       p.spotLight.angle = THREE.MathUtils.degToRad(this.config.angle || 25);
-       p.spotLight.penumbra = this.config.penumbra || 0.5;
+       if (p.spotLight) {
+          p.spotLight.intensity = this.config.intensity;
+          p.spotLight.angle = THREE.MathUtils.degToRad(this.config.angle || 25);
+          p.spotLight.penumbra = this.config.penumbra || 0.5;
 
-       // Get world position of the average origin point
-       const worldPos = p.localPos.clone().applyMatrix4(this.group.matrixWorld);
-       p.spotLight.position.copy(worldPos);
+          const worldPos = p.localPos.clone().applyMatrix4(this.group.matrixWorld);
+          p.spotLight.position.copy(worldPos);
 
-       // Target world position (100 units forward in local -Z space)
-       const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
-       p.spotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
-       p.spotLight.target.updateMatrixWorld();
+          const worldDir = dirLocal.clone().transformDirection(this.group.matrixWorld).normalize();
+          p.spotLight.target.position.copy(worldPos).add(worldDir.multiplyScalar(100));
+          p.spotLight.target.updateMatrixWorld();
+       }
 
-       // Update Beam Scale
-       const coneLen = 3.0; // Short representation cone
-       const radius = Math.tan(p.spotLight.angle) * coneLen;
-       p.beam.scale.set(radius, radius, coneLen);
+       if (p.beam) {
+          const coneLen = 1.5;
+          // Provide fallback angle for cone even if spotLight lacks
+          const angleRad = p.spotLight ? p.spotLight.angle : THREE.MathUtils.degToRad(this.config.angle || 25);
+          const radius = Math.tan(angleRad) * coneLen;
+          p.beam.scale.set(radius, radius, coneLen);
+       }
     });
   }
 
@@ -206,11 +229,14 @@ export class ModelFixture {
     this.scene.remove(this.group); // removes shell, dots, beams
     this.scene.remove(this.hitbox); // hitbox is in scene directly
     this.pixels.forEach(p => {
-       this.scene.remove(p.spotLight);
-       this.scene.remove(p.spotLight.target);
-       p.beam.material.dispose();
-       p.dots.forEach(d => {
+       if (p.spotLight) {
+          this.scene.remove(p.spotLight);
+          this.scene.remove(p.spotLight.target);
+       }
+       if (p.beam && p.beam.material) p.beam.material.dispose();
+       if (p.dots) p.dots.forEach(d => {
          if (d.mesh && d.mesh.material) d.mesh.material.dispose();
+         if (d.mesh && d.mesh.geometry) d.mesh.geometry.dispose();
        });
     });
 
@@ -222,17 +248,26 @@ export class ModelFixture {
 
   setSelected(selected) {
     if (this.shellMat) {
-       this.shellMat.emissive.setHex(selected ? 0x2288ff : 0x000000);
-       this.shellMat.emissiveIntensity = selected ? 1.0 : 0;
+       this.shellMat.color.setHex(selected ? 0x2288ff : 0x333333);
     }
   }
 
   setVisibility(visible, conesVisible) {
+    const profile = params.lightingProfile || 'edit';
+    const profileDef = getProfileDef(profile);
+
     this.hitbox.visible = visible;
     this.group.visible = visible;
-    this.pixels.forEach(p => {
-       p.spotLight.visible = visible;
-       p.beam.visible = visible && conesVisible;
+    this.pixels.forEach((p, j) => {
+       if (p.spotLight) p.spotLight.visible = visible && (profileDef.render.analyticLightMode === 'pixel');
+       if (p.beam) {
+           const shouldCone = (profileDef.render.coneMode === 'pixel') || (profileDef.render.coneMode === 'fixture' && j === 0);
+           p.beam.visible = visible && conesVisible && shouldCone;
+       }
+       if (p.dots) {
+           const shouldEmitter = (profileDef.render.emitterMode === 'pixel') || (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
+           p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
+       }
     });
   }
 
@@ -241,16 +276,41 @@ export class ModelFixture {
    */
   setPixelColorRGB(pIndex, r, g, b) {
     if (pIndex >= 0 && pIndex < this.pixels.length) {
+       const [rn, gn, bn] = scaleSimulationPreviewRgb(r, g, b);
        const p = this.pixels[pIndex];
-       p.spotLight.color.setRGB(r, g, b);
-       p.beam.material.color.setRGB(r, g, b);
+       if (p.spotLight) p.spotLight.color.setRGB(rn, gn, bn);
+       if (p.beam) p.beam.material.color.setRGB(rn, gn, bn);
        
        // Brighter dots
-       p.dots.forEach(d => {
+       if (p.dots) p.dots.forEach(d => {
          if (d.mesh) {
-           d.mesh.material.color.setRGB(r + 0.3, g + 0.3, b + 0.3);
+           d.mesh.material.color.setRGB(
+             Math.min(1, rn + 0.3),
+             Math.min(1, gn + 0.3),
+             Math.min(1, bn + 0.3)
+           );
          }
-       });
-    }
+        });
+     }
+  }
+
+  applyDmxFrame(dmxSlice) {
+    if (!dmxSlice || !this.fixtureModel?.pixels) return;
+
+    this.fixtureModel.pixels.forEach((pixelModel, pIndex) => {
+      const channels = pixelModel.channels;
+      if (!channels) return;
+
+      if (channels.red !== undefined && channels.green !== undefined && channels.blue !== undefined) {
+        const dimmer = channels.dimmer ? readDmxChannelNormalized(dmxSlice, channels.dimmer) : 1;
+        const r = readDmxChannelNormalized(dmxSlice, channels.red) * dimmer;
+        const g = readDmxChannelNormalized(dmxSlice, channels.green) * dimmer;
+        const b = readDmxChannelNormalized(dmxSlice, channels.blue) * dimmer;
+        this.setPixelColorRGB(pIndex, r, g, b);
+      } else if (channels.value !== undefined) {
+        const v = readDmxChannelNormalized(dmxSlice, channels.value);
+        this.setPixelColorRGB(pIndex, v, v * 0.85, v * 0.6);
+      }
+    });
   }
 }

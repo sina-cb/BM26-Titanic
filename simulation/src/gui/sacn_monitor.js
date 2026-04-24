@@ -17,7 +17,11 @@ export function setupSacnInMonitor() {
   const collapseBtn = document.getElementById('sacn-in-collapse-btn');
   if (!panel || !header) return;
 
-  let isCollapsed = false;
+  let isCollapsed = window.innerWidth <= 768; // Start collapsed on small screens
+  if (isCollapsed) {
+    panel.classList.add('collapsed');
+    collapseBtn.textContent = '□';
+  }
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     isCollapsed = !isCollapsed;
@@ -110,7 +114,11 @@ export function setupSacnOutMonitor() {
   const collapseBtn = document.getElementById('sacn-out-collapse-btn');
   if (!panel || !header) return;
 
-  let isCollapsed = false;
+  let isCollapsed = window.innerWidth <= 768; // Start collapsed on small screens
+  if (isCollapsed) {
+    panel.classList.add('collapsed');
+    collapseBtn.textContent = '□';
+  }
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     isCollapsed = !isCollapsed;

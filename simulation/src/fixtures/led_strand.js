@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
 
 // Shared geometry for endpoint handles
 const handleGeo = new THREE.SphereGeometry(0.3, 12, 12);
@@ -214,6 +215,7 @@ export class LedStrand {
    * @param {number} b - Blue (0-1)
    */
   setLedColorRGB(index, r, g, b) {
+    const [rn, gn, bn] = scaleSimulationPreviewRgb(r, g, b);
     const ledStartIdx = 2; // skip wire + tube
     const baseIdx = ledStartIdx + index * 3;
     const children = this.group.children;
@@ -221,10 +223,10 @@ export class LedStrand {
     const bulb = children[baseIdx + 1];
     const halo = children[baseIdx + 2];
     if (bulb && bulb.material) {
-      bulb.material.color.setRGB(r, g, b);
+      bulb.material.color.setRGB(rn, gn, bn);
     }
     if (halo && halo.material) {
-      halo.material.color.setRGB(r, g, b);
+      halo.material.color.setRGB(rn, gn, bn);
     }
   }
 

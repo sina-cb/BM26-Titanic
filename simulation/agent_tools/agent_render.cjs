@@ -33,7 +33,7 @@ function loadPresetKeys() {
   }
 }
 const ALL_VIEWS = loadPresetKeys();
-const SIM_URL = 'http://localhost:6969/simulation/';
+const SIM_URL = 'http://127.0.0.1:6969/simulation/?scene=titanic&profile=full';
 const OUTPUT_DIR = path.join(__dirname, '..', '..', '.agent_renders');
 const VIEWPORT = { width: 1920, height: 1080 };
 const WINDOW_SIZE = { width: 2112, height: 1188 };
@@ -81,8 +81,7 @@ async function launchBrowser() {
       '--enable-webgl2',
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan',
-      '--use-gl=angle',
-      '--use-angle=d3d11',
+      '--use-gl=swiftshader',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',

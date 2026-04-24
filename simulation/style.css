@@ -918,3 +918,81 @@ canvas {
   background: #111;
   color: rgba(240, 192, 96, 0.9);
 }
+
+/* ─── Small Screen / Mobile Responsive ─── */
+@media (max-width: 768px) {
+  /* Hide the info/shortcuts panel — too much text for small screens */
+  #info-panel {
+    display: none;
+  }
+
+  /* Shrink the lil-gui panel so it doesn't cover the whole viewport */
+  .lil-gui.root {
+    width: 260px !important;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  /* Pattern editor: compact selector-only on small screens */
+  #pattern-editor-panel:not(.hidden) {
+    width: 200px;
+    min-width: 140px;
+  }
+
+  /* sACN monitors: narrower on small screens */
+  #sacn-in-monitor-panel, #sacn-out-monitor-panel {
+    width: 240px;
+    min-width: 180px;
+  }
+
+  /* View presets: wrap to fewer buttons per row */
+  #view-presets {
+    bottom: 10px;
+    right: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 50vw;
+  }
+
+  /* HUD top bar: smaller text */
+  .hud-title {
+    font-size: 0.5rem;
+    letter-spacing: 0.1em;
+  }
+}
+
+/* ─── Pattern Editor: Selector-Only Mode ─── */
+/* Compact pattern picker — no code editor, just header + preset buttons */
+#pattern-editor-panel.pe-selector-only {
+  height: auto !important;
+  min-height: unset !important;
+  max-height: unset !important;
+  resize: none;
+  width: 180px;
+  min-width: 120px;
+}
+
+#pattern-editor-panel.pe-selector-only .pe-header {
+  padding: 4px 8px;
+  gap: 4px;
+}
+
+#pattern-editor-panel.pe-selector-only .pe-title {
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+}
+
+#pattern-editor-panel.pe-selector-only .pe-presets {
+  padding: 4px 6px;
+  gap: 2px;
+}
+
+#pattern-editor-panel.pe-selector-only .pe-preset-buttons {
+  gap: 2px;
+}
+
+#pattern-editor-panel.pe-selector-only .pe-preset-buttons button {
+  padding: 2px 5px;
+  font-size: 0.5rem;
+  border-radius: 2px;
+}
