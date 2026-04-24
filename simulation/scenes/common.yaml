@@ -62,7 +62,7 @@ atmosphere:
 options:
   _section:
     label: ⚙️ Options
-    collapsed: false
+    collapsed: true
   rendererMode:
     value: webgpu
     label: 🚀 Graphics Engine
@@ -70,7 +70,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: pixel_mapping
     label: 💡 Lighting Profile
     options:
       - edit
@@ -169,9 +169,9 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 5.4317
-    'y': 13.3896
-    z: 80.0001
+    x: -8.9897
+    'y': 38.6496
+    z: 107.1134
   target:
     x: -2
     'y': 8
