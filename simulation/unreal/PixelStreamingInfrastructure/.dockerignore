@@ -1,0 +1,9 @@
+.git/
+**/build/
+**/dist/
+**/node_modules/
+SignallingWebServer/platform_scripts/cmd/coturn/
+SignallingWebServer/platform_scripts/cmd/node/
+SignallingWebServer/platform_scripts/bash/node/
+SignallingWebServer/logs/
+SignallingWebServer/www/

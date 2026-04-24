@@ -1,0 +1,50 @@
+{
+    "name": "@epicgames-ps/js-streamer",
+    "version": "0.0.5",
+    "description": "A Node JS implementation of a webrtc streamer for testing.",
+    "main": "dist/cjs/pixelstreamingjsstreamer.js",
+    "types": "dist/types/pixelstreamingjsstreamer.d.ts",
+    "module": "dist/esm/pixelstreamingjsstreamer.js",
+    "private": true,
+    "scripts": {
+        "clean": "rimraf ./dist",
+        "develop": "webpack-dev-server --mode development",
+        "build:cjs": "tsc --project tsconfig.cjs.json",
+        "build:esm": "tsc --project tsconfig.esm.json",
+        "build": "npm run build:cjs && npm run build:esm && webpack --mode development",
+        "rebuild": "npm run clean && npm run build",
+        "lint": "eslint src",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Epic Games",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^22.14.0",
+        "copy-webpack-plugin": "^12.0.2",
+        "eslint": "^9.39.0",
+        "eslint-config-prettier": "^10.0.1",
+        "eslint-plugin-prettier": "^5.2.3",
+        "eslint-plugin-tsdoc": "^0.4.0",
+        "html-webpack-plugin": "^5.6.3",
+        "mini-css-extract-plugin": "^2.9.2",
+        "rimraf": "^6.0.1",
+        "ts-loader": "^9.5.2",
+        "typescript": "^5.7.3",
+        "typescript-eslint": "^8.26.1",
+        "webpack": "^5.97.1",
+        "webpack-cli": "^6.0.1",
+        "webpack-dev-server": "^5.2.3",
+        "webpack-node-externals": "^3.0.0"
+    },
+    "dependencies": {
+        "@epicgames-ps/lib-pixelstreamingcommon-ue5.7": "*",
+        "body-parser": "^1.20.4"
+    },
+    "overrides": {
+        "http-proxy-middleware": "2.0.8"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/EpicGames/PixelStreamingInfrastructure.git"
+    }
+}

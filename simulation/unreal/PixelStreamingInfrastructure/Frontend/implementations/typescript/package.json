@@ -1,0 +1,34 @@
+{
+    "name": "@epicgames-ps/reference-pixelstreamingfrontend-ue5.7",
+    "version": "0.1.0",
+    "description": "",
+    "main": "./src/player.ts",
+    "private": true,
+    "scripts": {
+        "clean": "rimraf ./dist",
+        "build": "npx webpack --config webpack.prod.js",
+        "build:dev": "npx webpack --config webpack.dev.js",
+        "build:esm": "npx webpack --config webpack.esmodule.js",
+        "build:prod": "npx webpack --config webpack.prod.js",
+        "rebuild": "npm run clean && npm run build",
+        "watch": "webpack --watch --config webpack.dev.js",
+        "serve": "webpack serve --config webpack.dev.js",
+        "serve-prod": "webpack serve --config webpack.prod.js",
+        "lint": ""
+    },
+    "devDependencies": {
+        "html-loader": "^5.1.0",
+        "html-webpack-plugin": "^5.6.3",
+        "ts-loader": "^9.5.2",
+        "webpack": "^5.97.1",
+        "webpack-cli": "^6.0.1"
+    },
+    "dependencies": {
+        "@epicgames-ps/lib-pixelstreamingfrontend-ue5.7": "*",
+        "@epicgames-ps/lib-pixelstreamingfrontend-ui-ue5.7": "*"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/EpicGamesExt/PixelStreamingInfrastructure"
+    }
+}

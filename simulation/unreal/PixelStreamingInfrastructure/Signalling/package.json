@@ -1,0 +1,56 @@
+{
+    "name": "@epicgames-ps/lib-pixelstreamingsignalling-ue5.7",
+    "version": "0.2.1",
+    "description": "Basic signalling library for developers wishing to build applications that signal a Pixel Streaming application.",
+    "main": "dist/cjs/pixelstreamingsignalling.js",
+    "module": "dist/esm/pixelstreamingsignalling.js",
+    "types": "dist/types/pixelstreamingsignalling.d.ts",
+    "scripts": {
+        "clean": "rimraf ./dist",
+        "build:docs": "echo \"Make sure you're passing the right --gitRemote so the source links are correct!\" && typedoc --tsconfig tsconfig.cjs.json",
+        "build:cjs": "tsc --project tsconfig.cjs.json",
+        "build:esm": "tsc --project tsconfig.esm.json",
+        "build": "npm run build:cjs && npm run build:esm",
+        "rebuild": "npm run clean && npm run build",
+        "watch": "nodemon -V -d 3 --watch src --watch ../Common/dist -e \"ts,js,mjs,cjs,json\" --exec \"npm run build:cjs\"",
+        "lint": "eslint src",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Epic Games",
+    "license": "MIT",
+    "devDependencies": {
+        "@eslint/js": "^9.20.0",
+        "@types/express": "^5.0.0",
+        "@types/node": "^22.14.0",
+        "@types/ws": "^8.5.14",
+        "eslint": "^9.39.0",
+        "eslint-config-prettier": "^10.0.1",
+        "eslint-plugin-prettier": "^5.2.3",
+        "eslint-plugin-tsdoc": "^0.4.0",
+        "nodemon": "^3.1.9",
+        "rimraf": "^6.0.1",
+        "typedoc": "^0.28.0",
+        "typedoc-plugin-markdown": "^4.4.2",
+        "typescript": "^5.7.3",
+        "typescript-eslint": "^8.26.1"
+    },
+    "dependencies": {
+        "body-parser": "^1.20.4",
+        "express": "^4.22.1",
+        "express-rate-limit": "^8.2.1",
+        "helmet": "^8.0.0",
+        "hsts": "^2.2.0",
+        "jsonc": "^2.0.0",
+        "logform": "^2.7.0",
+        "winston": "^3.17.0",
+        "winston-daily-rotate-file": "^5.0.0",
+        "ws": "^8.18.0"
+    },
+    "peerDependencies": {
+        "@epicgames-ps/lib-pixelstreamingcommon-ue5.7": "^0.1.4"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/EpicGamesExt/PixelStreamingInfrastructure"
+    }
+}

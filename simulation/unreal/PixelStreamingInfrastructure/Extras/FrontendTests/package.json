@@ -1,0 +1,28 @@
+{
+    "name": "frontend-tests",
+    "version": "1.0.1",
+    "description": "",
+    "main": "index.js",
+    "private": true,
+    "scripts": {
+        "test": "npx playwright test",
+        "build": "",
+        "clean": "",
+        "lint": ""
+    },
+    "keywords": [],
+    "author": "Epic Games",
+    "license": "MIT",
+    "devDependencies": {
+        "@playwright/test": "^1.49.1",
+        "@types/node": "^22.14.0",
+        "@types/uuid": "^9.0.8"
+    },
+    "dependencies": {
+        "@epicgames-ps/js-streamer": "^0.0.5",
+        "@epicgames-ps/lib-pixelstreamingfrontend-ue5.7": "*",
+        "dotenv": "^16.4.5",
+        "node-fetch": "^2.7.0",
+        "uuid": "^14.0.0"
+    }
+}

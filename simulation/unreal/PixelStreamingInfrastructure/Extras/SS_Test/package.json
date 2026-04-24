@@ -1,0 +1,29 @@
+{
+    "name": "SS_Test",
+    "version": "1.0.4",
+    "description": "",
+    "main": "dist/index.js",
+    "private": true,
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "clean": "rimraf ./dist",
+        "build": "tsc",
+        "rebuild": "npm run clean && npm run build",
+        "start": "npm run build && node ./dist/index.js",
+        "lint": ""
+    },
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "@epicgames-ps/lib-pixelstreamingcommon-ue5.7": "*",
+        "@protobuf-ts/plugin": "^2.9.3",
+        "ws": "^8.17.1"
+    },
+    "devDependencies": {
+        "@types/assert": "^1.5.10",
+        "@types/node": "^22.14.0",
+        "@types/ws": "^8.5.10",
+        "rimraf": "^6.0.0",
+        "typescript": "^5.7.3"
+    }
+}

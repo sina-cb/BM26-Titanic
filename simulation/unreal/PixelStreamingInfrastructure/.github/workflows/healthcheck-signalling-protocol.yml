@@ -1,0 +1,29 @@
+name: Check health of signalling protocol
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/healthcheck-signalling-protocol.yml"
+      - "Common/**"
+      - "Signalling/**"
+      - "SignallingWebServer/**"
+      - "Extras/SS_Test/**"
+
+permissions:
+  contents: read
+
+jobs:
+  signalling-protocol-test:
+    if: github.repository == 'EpicGamesExt/PixelStreamingInfrastructure'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+        
+    - name: Launch signalling tests in docker containers
+      uses: isbang/compose-action@v1.5.1
+      with:
+        compose-file: "Extras/SS_Test/docker-compose.yml"
+        up-flags: "--build --abort-on-container-exit --exit-code-from tester"
+

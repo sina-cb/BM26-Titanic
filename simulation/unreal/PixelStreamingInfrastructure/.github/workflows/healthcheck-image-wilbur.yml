@@ -1,0 +1,27 @@
+name: Check health of wilbur docker image
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/healthcheck-image-wilbur.yml"
+      - "SignallingWebServer/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-docker-image:
+    if: github.repository == 'EpicGamesExt/PixelStreamingInfrastructure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the wilbur container image
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: false
+          file: SignallingWebServer/Dockerfile
+

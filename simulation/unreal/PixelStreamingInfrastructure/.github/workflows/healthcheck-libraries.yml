@@ -1,0 +1,65 @@
+name: Check health of libraries
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/healthcheck-libraries.yml"
+      - "Common/**"
+      - "Signalling/**"
+      - "SignallingWebServer/**"
+      - "Frontend/library/**"
+      - "Frontend/ui-library/**"
+      - "Frontend/implementations/typescript/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-using-local-deps:
+    if: github.repository == 'EpicGamesExt/PixelStreamingInfrastructure'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+
+    - name: Get node version
+      id: get_node_version
+      run: echo "node_version=$(cat NODE_VERSION)" >> $GITHUB_OUTPUT
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "${{ steps.get_node_version.outputs.node_version }}"
+        registry-url: 'https://registry.npmjs.org'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Build and lint checks on common library
+      working-directory: Common
+      run: npm run build && npm run lint
+
+    - name: Build and lint checks on signalling library
+      working-directory: Signalling
+      run: npm run build && npm run lint
+
+    - name: Build and lint checks on wilbur
+      working-directory: SignallingWebServer
+      run: npm run build && npm run lint
+
+    - name: Build, lint and unit tests on frontend library
+      working-directory: Frontend/library
+      run: npm run build && npm run lint && npm run test
+
+    - name: Build and lint checks on frontend ui library
+      working-directory: Frontend/ui-library
+      run: npm run build && npm run lint
+
+    - name: Build of frontend implementation
+      working-directory: Frontend/implementations/typescript
+      run: npm run build
+
+    - name: Build of frontend implementation as ES6
+      working-directory: Frontend/implementations/typescript
+      run: npm run build:esm
