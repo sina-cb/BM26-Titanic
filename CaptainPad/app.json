@@ -3,7 +3,7 @@
     "name": "CaptainPad",
     "slug": "CaptainPad",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "captainpad",
     "splash": {
@@ -19,9 +19,22 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsArbitraryLoadsInWebContent": true,
+          "NSExceptionDomains": {
+            "0.0.0.0/0": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "::/0": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
         },
-        "NSLocalNetworkUsageDescription": "Required to physically communicate with the MarsinEngine local node server."
+        "NSLocalNetworkUsageDescription": "CaptainPad needs local network access to communicate with the MarsinEngine lighting controller on your LAN.",
+        "NSBonjourServices": [
+          "_marsinengine._tcp"
+        ]
       }
     },
     "android": {

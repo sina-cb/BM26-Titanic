@@ -58,3 +58,81 @@ To follow best practices for iOS/iPadOS "Pro" applications (such as Logic Pro, L
 2. **WebSocket / Socket.io (To be built into `marsin_engine`):**
    * Emits live FPS telemetry and logs to Tab 4.
    * Receives real-time JSON packets from the parameter sliders in Tab 1 without HTTP overhead.
+
+---
+
+## 4. Server Discovery & Connection Health
+
+The CaptainPad must operate on unpredictable local networks (Burning Man, different WiFi setups, DHCP) where the MarsinEngine's IP address is not known in advance.
+
+### 4.1 Server Identity Contract
+
+MarsinEngine's `GET /status` endpoint returns a service identity marker:
+
+```json
+{
+  "service": "marsin-engine",
+  "name": "MarsinEngine",
+  "version": "2.0",
+  "port": 6968,
+  "activeModel": "titanic",
+  "activePattern": "rainbow",
+  "activeScene": "titanic",
+  "unrealState": "offline"
+}
+```
+
+The `service` field prevents CaptainPad from accepting any random HTTP server on port 6968 during network scanning.
+
+### 4.2 HTTP Subnet Scan (Primary Discovery)
+
+CaptainPad discovers MarsinEngine instances via HTTP subnet scanning:
+
+1. **Get device IP** via `expo-network` → `getIpAddressAsync()`
+2. **Derive `/24` subnet** (e.g., `10.1.1.42` → `10.1.1.1..254`)
+3. **Batch probe** each candidate IP on port 6968 with `GET /status` (400–800ms timeout, 24–40 concurrent)
+4. **Filter** responses: only accept `service === "marsin-engine"`
+5. **Display** discovered servers as tappable cards in Config tab
+
+This approach requires no native mDNS dependencies, works on any network topology, and is compatible with Expo's managed workflow.
+
+### 4.3 Connection Health
+
+A shared connection-status context polls `/status` every 5 seconds and exposes:
+- `isConnected` (boolean) — drives green/red sidebar indicator
+- `latencyMs` — displayed in Config tab
+- `serverInfo` — active pattern, model, scene
+- `error` — surfaced in OFFLINE banners across all tabs
+
+### 4.4 Manual Fallback
+
+The Config tab retains a manual URL text input as a fallback for non-standard networks or when subnet scanning is impractical.
+
+---
+
+## 5. Standalone Deployment (iPadOS 17+)
+
+### 5.1 Build Pipeline
+
+CaptainPad is deployed as a standalone `.ipa` via EAS Build (`preview` profile). No Expo Go or development server required.
+
+```bash
+eas build --platform ios --profile preview --clear-cache
+```
+
+### 5.2 iOS ATS Configuration
+
+iPadOS 17+ no longer allows ATS connections to IP addresses by default. The app requires:
+
+- `NSAllowsLocalNetworking: true` — enables local network IP access
+- `NSAllowsArbitraryLoads: true` — backward compat for older iOS
+- `NSAllowsArbitraryLoadsInWebContent: true` — WebView HTTP for Monitor tab
+- `NSExceptionDomains` with universal CIDR ranges (`0.0.0.0/0`, `::/0`)
+- `NSLocalNetworkUsageDescription` — user-facing permission prompt string
+- `NSBonjourServices: ["_marsinengine._tcp"]` — future-proofs local network prompt
+
+### 5.3 Local Network Permission
+
+On first launch, iOS shows a Local Network permission dialog. If denied, all local network traffic fails silently. The Config tab includes user guidance and a deep-link to iPad Settings.
+
+See full implementation details: `.agent/02_reports/202605/20260502_1_standalone_ipad.md`

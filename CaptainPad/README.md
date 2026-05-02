@@ -45,14 +45,14 @@ EAS offers two radically different ways to compile your app depending on your cu
 **A. Development Profile (Hot-Reloading Vessel)**
 If you want to rapidly test code changes but need native modules (like Bluetooth or Native Pickers), compile a development build:
 ```bash
-eas build --platform ios --profile development
+eas build --platform ios --profile development --clear-cache
 ```
 *Note: A development build generates an "empty" shell! When you launch it on your iPad, it will scream "No development server found." You MUST start your local Windows server (`npm start`) and scan that terminal's QR code using your iPad's camera to bridge the connection and pull the Javascript payload over WiFi.*
 
 **B. Preview / Production Profile (Standalone)**
 If you want the app permanently installed and capable of running securely without your laptop entirely:
 ```bash
-eas build --platform ios --profile preview
+eas build --platform ios --profile preview --clear-cache
 ```
 *Note: This aggressively bundles all Javascript directly into the `.ipa`. It will open and run permanently disconnected from any development server.*
 

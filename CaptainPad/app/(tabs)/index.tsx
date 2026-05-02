@@ -1,11 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, TextInput } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, TextInput, AppState } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { NauticalFader } from '@/components/NauticalFader';
-import { fetchPatterns, setActivePattern, sendControl, getApiBase, fetchExports, setGlobalEffect, getAutopilot, setAutopilot } from '@/utils/api';
+import { 
+  fetchPatterns, setActivePattern, sendControl, getApiBase, getApiBaseAsync,
+  fetchExports, setGlobalEffect, getAutopilot, setAutopilot, testConnection
+} from '@/utils/api';
 
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
   const [isOn, setIsOn] = useState(initialValue > 0.5);
@@ -71,12 +74,39 @@ const GlobalEffectButton = ({ effectId, label, activeDefault = false, disabled =
   );
 };
 
+// ── Connection Status Banner ────────────────────────────────────────────
+const OfflineBanner = ({ error }: { error: string }) => (
+  <View style={{ 
+    backgroundColor: 'rgba(186, 26, 26, 0.12)', 
+    borderColor: Colors.light.error, 
+    borderWidth: 1, 
+    borderRadius: 12, 
+    padding: 16, 
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  }}>
+    <IconSymbol name="wifi.slash" size={24} color={Colors.light.error} />
+    <View style={{ flex: 1 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 14 }}>
+        ENGINE OFFLINE
+      </Text>
+      <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.error, fontSize: 12, marginTop: 4 }}>
+        {error || 'Cannot reach MarsinEngine. Check Config tab for IP settings.'}
+      </Text>
+    </View>
+  </View>
+);
+
 export default function ControlDeckScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
   const [active, setActive] = useState<string>('...');
   const [exports, setExports] = useState<any[]>([]);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [isScrollEnabled, setScrollEnabled] = useState<boolean>(true);
+  const [isConnected, setIsConnected] = useState<boolean | null>(null); // null = checking
+  const [connectionError, setConnectionError] = useState<string>('');
   
   // Playlist Automator State
   const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
@@ -85,34 +115,56 @@ export default function ControlDeckScreen() {
 
   const scrollViewRef = useRef<ScrollView>(null);
   const itemLayouts = useRef<{ [key: string]: number }>({});
+  const wsRef = useRef<WebSocket | null>(null);
+  const apiBaseRef = useRef<string>('');
 
-  useEffect(() => {
-    getAutopilot().then(st => {
-      if (st) {
-        setPlaylistActive(st.active);
-        setPlaylistDelayStr(st.delay_s);
-        setIsShuffle(st.shuffle);
-      }
-    });
+  // ── Boot: wait for resolved API base, then connect ──────────────────
+  const connectToEngine = useCallback(async () => {
+    const base = await getApiBaseAsync();
+    apiBaseRef.current = base;
+
+    // 1. Test connection first
+    const conn = await testConnection(base);
+    setIsConnected(conn.ok);
+    setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
+
+    if (!conn.ok) return;
+
+    // 2. Load patterns
+    const pResult = await fetchPatterns();
+    if (pResult.ok && pResult.data) {
+      setPatterns(pResult.data);
+    }
+
+    // 3. Load autopilot state
+    const apResult = await getAutopilot();
+    if (apResult.ok && apResult.data) {
+      setPlaylistActive(apResult.data.active);
+      setPlaylistDelayStr(apResult.data.delay_s);
+      setIsShuffle(apResult.data.shuffle);
+    }
+
+    // 4. Connect WebSocket
+    connectWebSocket(base);
   }, []);
 
-  useEffect(() => {
-    if (active !== '...' && itemLayouts.current[active] !== undefined) {
-      scrollViewRef.current?.scrollTo({ y: Math.max(0, itemLayouts.current[active] - 100), animated: true });
+  const connectWebSocket = useCallback((base: string) => {
+    // Close existing
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
-  }, [active]);
 
-  useEffect(() => {
-    fetchPatterns().then(data => {
-      if (Array.isArray(data)) setPatterns(data);
-    });
+    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+    const wsPort = base.split(':').pop();
+    const wsUrl = `ws://${engineHost}:${wsPort}`;
 
-    const apiBaseStr = getApiBase();
-    const engineHost = apiBaseStr.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-    const wsUrl = `ws://${engineHost}:${apiBaseStr.split(':').pop()}`;
-    let ws: WebSocket | null = null;
     try {
-      ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        setIsConnected(true);
+        setConnectionError('');
+      };
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
@@ -123,20 +175,56 @@ export default function ControlDeckScreen() {
           }
         } catch {}
       };
+      ws.onerror = () => {
+        setIsConnected(false);
+        setConnectionError('WebSocket connection failed');
+      };
+      ws.onclose = () => {
+        // Auto-reconnect after 5 seconds
+        setTimeout(() => {
+          if (apiBaseRef.current) {
+            connectWebSocket(apiBaseRef.current);
+          }
+        }, 5000);
+      };
+      wsRef.current = ws;
     } catch {}
-
-    return () => { if (ws) ws.close(); };
   }, []);
+
+  useEffect(() => {
+    connectToEngine();
+
+    // Reconnect when app comes to foreground
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        connectToEngine();
+      }
+    });
+
+    return () => {
+      sub.remove();
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [connectToEngine]);
+
+  // Auto-scroll to active pattern
+  useEffect(() => {
+    if (active !== '...' && itemLayouts.current[active] !== undefined) {
+      scrollViewRef.current?.scrollTo({ y: Math.max(0, itemLayouts.current[active] - 100), animated: true });
+    }
+  }, [active]);
 
   const handleSelectPattern = async (pattern: string) => {
     setActive(pattern);
     const res = await setActivePattern(pattern); 
-    if (res && res.error) {
-      setCompileError(res.error);
+    if (res.ok && res.data && res.data.error) {
+      setCompileError(res.data.error);
+    } else if (!res.ok) {
+      setCompileError(res.error || 'Network error');
     } else {
       setCompileError(null);
       const freshExports = await fetchExports();
-      if (freshExports) setExports(freshExports);
+      if (freshExports.ok && freshExports.data) setExports(freshExports.data);
     }
   };
 
@@ -182,14 +270,17 @@ export default function ControlDeckScreen() {
                   </TouchableOpacity>
                 )
               })}
-              {patterns.length === 0 && (
+              {patterns.length === 0 && isConnected === false && (
+                <OfflineBanner error={connectionError} />
+              )}
+              {patterns.length === 0 && isConnected !== false && (
                 <Text style={{color: Colors.light.secondary, fontStyle: 'italic'}}>No patterns loaded...</Text>
               )}
             </View>
           </View>
         </ScrollView>
 
-        <TouchableOpacity onPress={() => fetchPatterns().then(setPatterns)} style={{ marginVertical: 16, padding: 12, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
+        <TouchableOpacity onPress={() => fetchPatterns().then(r => { if (r.ok && r.data) setPatterns(r.data); })} style={{ marginVertical: 16, padding: 12, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 13 }}>REFRESH QUEUE</Text>
         </TouchableOpacity>
 
@@ -213,6 +304,11 @@ export default function ControlDeckScreen() {
       <View style={[globalStyles.rightPane, { padding: 0 }]}>
         <ScrollView scrollEnabled={isScrollEnabled} contentContainerStyle={{ padding: 48, paddingBottom: 96 }} showsVerticalScrollIndicator={false}>
         
+          {/* Offline Banner (right pane) */}
+          {isConnected === false && (
+            <OfflineBanner error={connectionError} />
+          )}
+
           {/* Playlist Automator Row */}
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 8 }}>AUTOPILOT TRANSITIONS</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, padding: 12, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder }}>

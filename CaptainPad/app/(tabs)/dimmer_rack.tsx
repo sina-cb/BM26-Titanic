@@ -11,8 +11,10 @@ export default function DimmerRackScreen() {
   const [dimmerStates, setDimmerStates] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    fetchDimmers().then(states => {
-      setDimmerStates(states || {});
+    fetchDimmers().then(result => {
+      if (result.ok && result.data) {
+        setDimmerStates(result.data);
+      }
     });
   }, []);
   

@@ -11,7 +11,6 @@ interface Props {
   max?: number;
   suffix?: string;
   isColor?: boolean;
-  isColor?: boolean;
   onChange: (id: number, val: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;

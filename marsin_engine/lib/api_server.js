@@ -114,6 +114,10 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
     } else if (req.method === 'GET' && req.url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ 
+        service: 'marsin-engine',
+        name: 'MarsinEngine',
+        version: '2.0',
+        port: opts.port || 6968,
         activeScene: opts.modelName || 'unknown', 
         activeModel: opts.modelName || 'unknown', 
         activePattern: opts.pattern || 'unknown', 

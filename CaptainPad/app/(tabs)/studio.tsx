@@ -26,11 +26,11 @@ export default function StudioScreen() {
   }, []);
 
   const loadPatterns = async () => {
-    const data = await fetchPatterns();
-    if (Array.isArray(data)) {
-      setPatterns(data);
-      if (data.length > 0 && !activeFile) {
-        handleSelectFile(data[0]);
+    const result = await fetchPatterns();
+    if (result.ok && result.data && Array.isArray(result.data)) {
+      setPatterns(result.data);
+      if (result.data.length > 0 && !activeFile) {
+        handleSelectFile(result.data[0]);
       }
     }
   };
@@ -38,12 +38,12 @@ export default function StudioScreen() {
   const handleSelectFile = async (name: string) => {
     setActiveFile(name);
     setLogs(`> Fetching ${name}...`);
-    const fetchedCode = await fetchPatternCode(name);
-    if (fetchedCode) {
-      setCode(fetchedCode);
-      setLogs(`> Loaded ${name} (${fetchedCode.length} bytes)\n> Awaiting compilation...`);
+    const result = await fetchPatternCode(name);
+    if (result.ok && result.data) {
+      setCode(result.data);
+      setLogs(`> Loaded ${name} (${result.data.length} bytes)\n> Awaiting compilation...`);
     } else {
-      setLogs(`> Error: Failed to load ${name}`);
+      setLogs(`> Error: ${result.error || 'Failed to load ' + name}`);
     }
   };
 
@@ -51,12 +51,13 @@ export default function StudioScreen() {
     if (!activeFile) return;
     setLogs(`> Compiling via WASM VM...\n> Saving to ${activeFile}...`);
     const result = await savePatternCode(activeFile, code);
-    if (result && !result.error) {
+    if (result.ok && result.data && !result.data.error) {
       setLogs(prev => prev + `\n> SUCCESS. Broadcasted state to swarm.`);
       showToast('COMPILED SUCCESSFULLY', `Loaded ${activeFile} into VM engine`, 'success');
     } else {
-      setLogs(prev => prev + `\n> ERROR: ${result?.error || 'Unknown error during save'}`);
-      showToast('COMPILATION ERROR', result?.error || 'Unknown error during compilation', 'error');
+      const errMsg = result.data?.error || result.error || 'Unknown error during save';
+      setLogs(prev => prev + `\n> ERROR: ${errMsg}`);
+      showToast('COMPILATION ERROR', errMsg, 'error');
     }
   };
 
