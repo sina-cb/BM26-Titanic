@@ -781,9 +781,10 @@ WebSocket equivalent:
 
 ### 8.10 State Persistence
 
-Persist mixer state separately from legacy `pattern_state.yaml`:
+Persist mixer and dimmer state in a per-scene directory structure, completely deprecating legacy global pattern state:
 
 ```yaml
+# marsin_engine/states/<scene_name>/mixer_state.yaml
 mixer:
   master: 0.85
   shared:
@@ -802,15 +803,15 @@ mixer:
         "12345": { v0: 0.5, v1: 0, v2: 0 }
 ```
 
-Keep legacy `pattern_state.yaml` readable for backwards compatibility, but the mixer should use channel-scoped state going forward. Legacy pattern state cannot represent two instances of the same pattern with different values.
+Legacy `pattern_state.yaml` has been completely removed. State is now strictly channel-scoped and saved per scene, allowing multiple instances of the same pattern to retain independent values.
 
-Recommended files:
+Recommended per-scene files (`marsin_engine/states/<scene_name>/`):
 
 | File | Purpose |
 |------|---------|
 | `mixer_state.yaml` | channels, faders, modes, local controls, shared bindings |
-| `param_center_state.yaml` | CPC global shared defaults, if CPC remains separately persisted |
-| `pattern_state.yaml` | legacy single-runtime fallback only |
+| `dimmer_state.yaml` | per-section brightness tracking |
+| `param_center_state.yaml` | CPC global shared defaults (if CPC remains separately persisted) |
 
 On restore:
 

@@ -26,6 +26,7 @@ const MAPPING = {
   'lightbulb.fill': 'lightbulb',
   'arrow.clockwise': 'refresh',
   'exclamationmark.triangle.fill': 'warning',
+  'slider.horizontal.3': 'tune',
 } as IconMapping;
 
 /**

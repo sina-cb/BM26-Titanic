@@ -938,7 +938,120 @@ If a v2 model is malformed (bad schema, missing fields), the parser **hard-fails
 
 ---
 
-## 13. Final Language Contract
+## 13. Blending and Transition Scripts
+
+MarsinScript features a double-buffered execution environment. During a transition between two patterns, the engine evaluates the outgoing pattern, the incoming pattern, and an optional **transition script** to determine how they blend.
+
+### 13.1 Authoring Pattern Scripts (Transparency)
+
+Crossfading is completely transparent to standard pattern scripts. If you are writing a standard pattern, you do not need to write any custom fade-in logic. Write your pattern as if it is the only one running. 
+
+To ensure your pattern transitions smoothly:
+- **Initialize state safely:** Ensure all persistent arrays and accumulators are initialized in the top-level init block. The engine will run this block once when your script is loaded into the background buffer.
+- **Never rely on exact frame counts:** Your `beforeRender` may execute invisibly in the background buffer. Always use `time()` or the `delta` parameter to drive animations, rather than incrementing a fixed counter per frame.
+
+### 13.2 Authoring Transition Scripts
+
+Transition scripts are special MarsinScripts placed in the `/transitions/*.js` directory. They are executed per-pixel during a pattern change.
+
+In a transition script, you have access to standard geometry (`x`, `y`, `z`, `index`) plus special **Transition Built-ins**:
+
+| Variable | Meaning |
+|---|---|
+| `progress` | A normalized float `0.0` to `1.0` representing the transition time |
+| `fromR`, `fromG`, `fromB`, `fromW`, `fromA`, `fromU` | The outgoing pattern's pixel color (normalized `0..1`) |
+| `toR`, `toG`, `toB`, `toW`, `toA`, `toU` | The incoming pattern's pixel color (normalized `0..1`) |
+
+A transition script's job is to read these built-ins, calculate the mix, and output the final pixel color via `rgbwau()`.
+
+#### Example: Spatial X-Wipe
+
+You can use the spatial coordinates to create geometric transitions. Here is a wipe that sweeps across the `x` axis with a feathered edge:
+
+```javascript
+// /transitions/wipe_x.js
+export var feather = 0.08;
+
+export function render(index, x, y, z) {
+  // Use progress to move the wipe threshold across X
+  var edge = smoothstep(progress - feather, progress + feather, x);
+
+  rgbwau(
+    mix(fromR, toR, edge),
+    mix(fromG, toG, edge),
+    mix(fromB, toB, edge),
+    mix(fromW, toW, edge),
+    mix(fromA, toA, edge),
+    mix(fromU, toU, edge)
+  );
+}
+```
+
+#### Example: Screen Blend Mode
+
+You can implement compositor-style blend modes (Add, Multiply, Screen, Difference). Here is a "Screen" transition that prevents hard clipping for luminous patterns:
+
+```javascript
+// /transitions/screen_fade.js
+
+// Screen function: 1 - (1 - base) * (1 - top)
+function screen(base, top) {
+  return 1 - (1 - base) * (1 - top);
+}
+
+// Blend standard progress between outgoing and the screen-blended result
+function apply(base, top) {
+  return mix(base, screen(base, top), progress);
+}
+
+export function render(index, x, y, z) {
+  rgbwau(
+    apply(fromR, toR),
+    apply(fromG, toG),
+    apply(fromB, toB),
+    apply(fromW, toW),
+    apply(fromA, toA),
+    apply(fromU, toU)
+  );
+}
+```
+
+### 13.3 Performance Implications
+
+During a scripted transition, the engine evaluates three scripts per-pixel: the outgoing pattern, the incoming pattern, and the transition script. 
+
+This effectively divides your instruction budget. Keep transition scripts heavily optimized. Avoid allocating arrays inside the transition `render()` loop. If the engine detects a heap constraint or execution overrun, it will fall back to a highly-optimized native C++ crossfade or an immediate hard cut.
+
+### 13.4 Channel Blend Context (Mixer)
+
+The same blend scripts are reused in the **channel mixer**. In a mixer, multiple pattern channels play simultaneously and are composited in stack order. Each channel has a **fader** (0.0–1.0) and a **blend mode** (e.g., `blend_screen`, `blend_add`).
+
+In this context, the transition built-ins are bound differently:
+
+| Variable | Transition Context | Channel Blend Context |
+|---|---|---|
+| `progress` | Elapsed time / duration (0→1 automatically) | Channel **fader** value (user-controlled) |
+| `fromR/G/B/W/A/U` | Outgoing pattern's pixel output | Accumulated mix-so-far (previous channels) |
+| `toR/G/B/W/A/U` | Incoming pattern's pixel output | This channel's rendered pixel output |
+
+This means `blend_crossfade.js` with `progress = fader` performs a standard opacity fade. `blend_screen.js` with `progress = fader` blends the channel's output using screen compositing at the fader's intensity. The scripts are identical — only the engine's binding of `progress` changes.
+
+Channel blend scripts are stored in `/patterns/channel_blends/*.js`. The mixer references them by filename (e.g., `blend_screen`). Available blends:
+
+| Script | Behavior |
+|---|---|
+| `blend_crossfade` | Linear interpolation (equivalent to `normal` in traditional compositors) |
+| `blend_screen` | `1 - (1-from)(1-to)` — additive without clipping |
+| `blend_add` | `from + to * progress` — pure additive (can clip) |
+| `blend_over` | Alpha-over compositing using `progress` as opacity |
+| `blend_wipe_left` | Spatial left-to-right wipe with feathered edge |
+| `blend_dissolve` | Per-pixel random dissolve |
+| `blend_iris` | Radial center-outward iris wipe |
+| `blend_flash` | White flash burst at midpoint |
+
+---
+
+## 14. Final Language Contract
 
 MarsinScript, as implemented today, is:
 
@@ -946,6 +1059,7 @@ MarsinScript, as implemented today, is:
 - Pixelblaze-compatible at the core color-language level through `rgb()` and `hsv()`
 - Marsin-extended through `rgbwau()` and the internal `MarsinPixel` RGBWAU model
 - Marsin-extended through `controllerId`, `sectionId`, `fixtureId`, `viewMask` metadata variables
+- Marsin-extended through transition built-ins (`progress`, `fromR/G/B/W/A/U`, `toR/G/B/W/A/U`)
 - intentionally separated from hardware transport details
 
 If a script needs to stay Pixelblaze-like, keep to:
@@ -964,4 +1078,10 @@ If a script needs Marsin-specific per-controller or per-section behavior, use:
 - `controllerId`, `sectionId`, `fixtureId`, `viewMask`
 - Always include a `== 0` fallback for v1 model compatibility
 
+If a script is a transition/blend script, use:
+
+- `progress`, `fromR/G/B/W/A/U`, `toR/G/B/W/A/U`
+- Output via `rgbwau()` for full channel support
+
 Both Marsin extensions are Marsin-only, not cross-compatible with Pixelblaze proper.
+

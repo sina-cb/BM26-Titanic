@@ -29,75 +29,76 @@ The implementation must also account for the code-review findings:
 
 ## Phase 1 — Engine Core TODOs
 
-- [ ] Create `marsin_engine/lib/wasm_host.js`.
-- [ ] Load the Emscripten module once inside `WasmHost`.
-- [ ] Expose handle-based methods: `compile(source) -> { ok, handle, error? }`, `destroy(handle)`, `beginFrame(handle, elapsed)`, `renderAll6ch(handle, outBuffer?)`, `setControl(handle, id, v0, v1, v2)`, `getExports(handle)`, `setCoords(pixels)`, and `setPixelMeta(metaArray)`.
-- [ ] Ensure `WasmHost.compile()` never destroys existing handles.
-- [ ] Add a separate validation compile path for `/save-pattern` so inactive pattern saves cannot replace or destroy live output.
-- [ ] Create `marsin_engine/lib/pattern_channel.js`.
-- [ ] Include channel fields: `id`, `name`, `pattern`, `handle`, `mode`, `fader`, `enabled`, `localExports`, `localControls`, and `sharedBindings`.
-- [ ] Create `marsin_engine/lib/pattern_mixer.js`.
-- [ ] Enforce max 3 channels.
-- [ ] Track `baseChannelId`.
-- [ ] Render enabled channels in fixed UI order.
-- [ ] Composite integer RGBWAU buffers with `normal`, `over`, `add`, and `screen`.
-- [ ] Apply master fader after compositing.
-- [ ] Destroy old WASM handles only after transition or channel removal completion.
-- [ ] Start the render loop only after at least one valid channel has compiled.
-- [ ] Modify `marsin_engine/engine.js` to use `WasmHost`, `PatternMixer`, and `ChannelParamRouter` instead of the single `MarsinWasmRuntime`.
-- [ ] Preserve current single-pattern startup behavior by creating one default base channel from `--pattern`.
+- [x] Create `marsin_engine/lib/wasm_host.js`.
+- [x] Load the Emscripten module once inside `WasmHost`.
+- [x] Expose handle-based methods: `compile(source) -> { ok, handle, error? }`, `destroy(handle)`, `beginFrame(handle, elapsed)`, `renderAll6ch(handle, outBuffer?)`, `setControl(handle, id, v0, v1, v2)`, `getExports(handle)`, `setCoords(pixels)`, and `setPixelMeta(metaArray)`.
+- [x] Ensure `WasmHost.compile()` never destroys existing handles.
+- [x] Add a separate validation compile path for `/save-pattern` so inactive pattern saves cannot replace or destroy live output.
+- [x] Create `marsin_engine/lib/pattern_channel.js`.
+- [x] Include channel fields: `id`, `name`, `pattern`, `handle`, `mode`, `fader`, `enabled`, `localExports`, `localControls`, and `sharedBindings`.
+- [x] Create `marsin_engine/lib/pattern_mixer.js`.
+- [x] Enforce max 3 channels.
+- [x] Track `baseChannelId`.
+- [x] Render enabled channels in fixed UI order.
+- [x] Composite integer RGBWAU buffers with `normal`, `over`, `add`, and `screen`.
+- [x] Apply master fader after compositing.
+- [x] Destroy old WASM handles only after transition or channel removal completion.
+- [x] Start the render loop only after at least one valid channel has compiled.
+- [x] Modify `marsin_engine/engine.js` to use `WasmHost`, `PatternMixer`, and `ChannelParamRouter` instead of the single `MarsinWasmRuntime`.
+- [x] Preserve current single-pattern startup behavior by creating one default base channel from `--pattern`.
 
 ## Phase 2 — Parameters, Lifecycle, API TODOs
 
-- [ ] Create `marsin_engine/lib/channel_param_router.js`.
-- [ ] Require `channelId` for all new pattern parameter writes.
-- [ ] Implement channel-local control state keyed by `(channelId, controlId)`.
-- [ ] On channel compile, read exports from that channel handle.
-- [ ] Split exports into `localExports` and `shared*` exports.
-- [ ] Restore local controls and apply shared bindings to that channel only.
-- [ ] Block local writes to shared-owned control IDs with `{ status: "ignored", reason: "shared_ownership" }`.
-- [ ] Persist mixer state to `marsin_engine/mixer_state.yaml`.
-- [ ] Persist master, channel order, base channel, pattern, name, enabled state, fader, mode, local controls, and shared bindings.
-- [ ] Keep `pattern_state.yaml` readable only for legacy fallback; do not use it to represent mixer state.
-- [ ] Centralize pattern/channel lifecycle for initial boot, `/set-pattern`, `/mixer/base`, channel pattern changes, autopilot transitions, and save validation.
+- [x] Create `marsin_engine/lib/channel_param_router.js`.
+- [x] Require `channelId` for all new pattern parameter writes.
+- [x] Implement channel-local control state keyed by `(channelId, controlId)`.
+- [x] On channel compile, read exports from that channel handle.
+- [x] Split exports into `localExports` and `shared*` exports.
+- [x] Restore local controls and apply shared bindings to that channel only.
+- [x] Block local writes to shared-owned control IDs with `{ status: "ignored", reason: "shared_ownership" }`.
+- [x] Persist mixer state to `marsin_engine/states/<scene>/mixer_state.yaml`.
+- [x] Persist dimmer state to `marsin_engine/states/<scene>/dimmer_state.yaml`.
+- [x] Persist master, channel order, base channel, pattern, name, enabled state, fader, mode, local controls, and shared bindings in the per-scene mixer state.
+- [x] Completely remove legacy `pattern_state.yaml` since parameter states are now channel-scoped.
+- [x] Centralize pattern/channel lifecycle for initial boot, `/set-pattern`, `/mixer/base`, channel pattern changes, autopilot transitions, and save validation.
 - [ ] Implement `transitionBaseTo(pattern, { durationMs })` so overlays continue while old base fades out and new base fades in.
 - [ ] Remove/destroy the old base handle only after the transition completes.
 - [ ] Route autopilot through `transitionBaseTo()` so it changes only the base channel.
-- [ ] Add REST endpoints:
-  - [ ] `GET /mixer`
-  - [ ] `PATCH /mixer`
-  - [ ] `POST /mixer/channels`
-  - [ ] `PATCH /mixer/channels/:id`
-  - [ ] `DELETE /mixer/channels/:id`
-  - [ ] `POST /mixer/channels/:id/pattern`
-  - [ ] `POST /mixer/channels/:id/control`
+- [x] Add REST endpoints:
+  - [x] `GET /mixer`
+  - [x] `PATCH /mixer`
+  - [x] `POST /mixer/channels`
+  - [x] `PATCH /mixer/channels/:id`
+  - [x] `DELETE /mixer/channels/:id`
+  - [x] `POST /mixer/channels/:id/pattern`
+  - [x] `POST /mixer/channels/:id/control`
   - [ ] `POST /mixer/base`
   - [ ] `POST /mixer/shared`
   - [ ] `PATCH /mixer/channels/:id/shared/:key`
-- [ ] Broadcast full mixer state on WebSocket connect.
-- [ ] Broadcast mixer state after any state change.
+- [x] Broadcast full mixer state on WebSocket connect.
+- [x] Broadcast mixer state after any state change (e.g. fader updates).
 - [ ] Broadcast transition progress during base transitions.
-- [ ] Add WS client message `setChannelControl` requiring `channelId`.
+- [x] Add WS client message `setChannelControl` requiring `channelId`.
 - [ ] Keep legacy `/control` and WS `setControl` base-channel-only and clearly mark them legacy.
 - [ ] Keep `/set-pattern` as CaptainPad compatibility by routing it through base transition.
 
 ## Phase 3 — CaptainPad Mixer UI TODOs
 
-- [ ] Make the mixer the default live Control Deck surface.
-- [ ] Implement the UI in `CaptainPad/app/(tabs)/index.tsx` or a new mixer route. **Reference the UI prototype in `tmp/mixer_ui` (e.g. layout and components) for the mixer, but ensure the styling strictly follows the current CaptainPad iPad design system (color and theme-wise).**
+- [x] Make the mixer the default live Control Deck surface.
+- [x] Implement the UI in `CaptainPad/app/(tabs)/index.tsx` or a new mixer route. **Reference the UI prototype in `tmp/mixer_ui` (e.g. layout and components) for the mixer, but ensure the styling strictly follows the current CaptainPad iPad design system (color and theme-wise).**
 - [ ] Create reusable components:
-  - [ ] `MixerColumn`
+  - [x] `MixerColumn`
   - [ ] `PatternPicker`
-  - [ ] `ChannelControls`
+  - [x] `ChannelControls`
   - [ ] `BlendModePicker`
   - [ ] `MasterStrip`
-- [ ] Support 1 to 3 channel columns.
+- [x] Support 1 to 3 channel columns.
 - [ ] Add channel create/remove controls; disable or hide add at 3 channels.
 - [ ] Add channel name editing.
-- [ ] Add channel enable/mute and solo controls.
+- [x] Add channel enable/mute and solo controls.
 - [ ] Add compact pattern picker from existing pattern list.
 - [ ] Show compile errors inline inside the affected channel.
-- [ ] Render channel-local sliders, toggles, triggers, and color controls inside the channel column.
+- [x] Render channel-local sliders, toggles, triggers, and color controls inside the channel column.
 - [ ] Render shared parameter binding controls with modes `linked`, `local`, and `off`.
 - [ ] Add channel fader and blend mode controls at the bottom of each column.
 - [ ] Add always-visible global strip with connection state, FPS, model, master fader, blackout, dimmers, and global effects.
@@ -136,3 +137,14 @@ The implementation must also account for the code-review findings:
 - Do not interrupt overlay channels when base pattern changes.
 - Do not start with a web-only UI; CaptainPad iPad remains the primary live surface, and Expo Web should reuse it.
 - Keep changes scoped to mixer/runtime/API/CaptainPad unless a dependency issue blocks verification.
+
+---
+
+## Next Todos
+
+1. **Fix patterns**: Go through the remaining patterns (04-25) and update their parameters to use the new CPC standard (e.g., replace `sliderSpeed` with `speed`), fixing any kinks and color usage.
+2. **Color palette presets**: Add a meta parameter for beautiful color pairs that will automatically set `colorPalette1` and `colorPalette2` to curated, harmonious combinations.
+3. **Autopilot transitions**: Support smooth transitions for the autopilot queue in the deck tab so automatic pattern changes crossfade gracefully.
+4. **Color picker UI**: Update the color picker in CaptainPad to be a proper, intuitive, rich color picker rather than standard sliders.
+5. **Deck lists categorization**: Brainstorm and categorize the deck lists into "fast", "slow", and "drop" lists for better live performance ergonomics.
+6. **Pattern Queue**: Add a pattern queue feature (like a Spotify playlist queue) to allow stacking upcoming patterns dynamically.

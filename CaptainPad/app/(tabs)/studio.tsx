@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvo
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { fetchPatterns, fetchPatternCode, savePatternCode } from '@/utils/api';
+import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern } from '@/utils/api';
 
 export default function StudioScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
@@ -54,6 +54,14 @@ export default function StudioScreen() {
     if (result.ok && result.data && !result.data.error) {
       setLogs(prev => prev + `\n> SUCCESS. Broadcasted state to swarm.`);
       showToast('COMPILED SUCCESSFULLY', `Loaded ${activeFile} into VM engine`, 'success');
+      
+      const ptnName = activeFile.replace(/\.js$/, '');
+      const setRes = await setActivePattern(ptnName);
+      if (setRes.ok) {
+        setLogs(prev => prev + `\n> Switched deck channel to ${ptnName}`);
+      } else {
+        setLogs(prev => prev + `\n> ERROR: Failed to switch pattern on deck`);
+      }
     } else {
       const errMsg = result.data?.error || result.error || 'Unknown error during save';
       setLogs(prev => prev + `\n> ERROR: ${errMsg}`);

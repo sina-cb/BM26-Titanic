@@ -1,0 +1,71 @@
+channel:
+  id: ch_base_1777943238410
+  name: Base
+  pattern: 02_phase_cathedral
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  localControls: {}
+  patternCache:
+    02_phase_cathedral: {}
+    12_breathing:
+      '1115050250':
+        v0: 0.29
+        v1: 0
+        v2: 0
+    22_abyssal_sway_garden:
+      '1115050250':
+        v0: 0.3
+        v1: 0
+        v2: 0
+    09_cyclone:
+      '3680310977':
+        v0: 0.63
+        v1: 0
+        v2: 0
+    18_deep_space_lattice:
+      '667518146':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1115050250':
+        v0: 0.62
+        v1: 0
+        v2: 0
+    00_golden_hour_wash: {}
+    05_orbital_attractor_field:
+      '1115050250':
+        v0: 0.23
+        v1: 0
+        v2: 0
+    04_beat_folded_helix:
+      '1115050250':
+        v0: 0.87
+        v1: 0
+        v2: 0
+      '2065987366':
+        v0: 0.54
+        v1: 0
+        v2: 0
+    23_prismatic_strange_attractors:
+      '1381268306':
+        v0: 0.21
+        v1: 0
+        v2: 0
+    24_chromatic_murmuration:
+      '532406411':
+        v0: 0.32
+        v1: 0
+        v2: 0
+      '803978575':
+        v0: 0.89
+        v1: 0
+        v2: 0
+      '1115050250':
+        v0: 0.05
+        v1: 0
+        v2: 0
+      '2986872652':
+        v0: 0.86
+        v1: 0
+        v2: 0

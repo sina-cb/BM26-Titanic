@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { RigProvider } from '@/components/RigGlobals';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   return (
@@ -78,50 +79,59 @@ export default function TabLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
-      <Tabs
-        tabBar={(props) => <CustomSideBar {...props} />}
-        screenOptions={{
-          headerShown: false,
-          sceneStyle: { marginLeft: 112 }, // Shifts the screens to the right of the sidebar
-        }}>
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: 'Deck',
-            // Custom prop for our sidebar to read:
-            tabBarIconName: 'slider.vertical.3',
-          } as any}
-        />
-        <Tabs.Screen
-          name="studio"
-          options={{
-            title: 'Studio',
-            tabBarIconName: 'curlybraces',
-          } as any}
-        />
-        <Tabs.Screen
-          name="monitor"
-          options={{
-            title: 'Monitor',
-            tabBarIconName: 'desktopcomputer',
-          } as any}
-        />
-        <Tabs.Screen
-          name="dimmer_rack"
-          options={{
-            title: 'Dimmer Rack',
-            tabBarIconName: 'lightbulb.fill',
-          } as any}
-        />
-        <Tabs.Screen
-          name="config"
-          options={{
-            title: 'Config',
-            tabBarIconName: 'gear',
-          } as any}
-        />
-      </Tabs>
-    </SafeAreaView>
+    <RigProvider>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+        <Tabs
+          tabBar={(props) => <CustomSideBar {...props} />}
+          screenOptions={{
+            headerShown: false,
+            sceneStyle: { marginLeft: 112 }, // Shifts the screens to the right of the sidebar
+          }}>
+          <Tabs.Screen
+            name="mixer"
+            options={{
+              title: 'Mixer',
+              tabBarIconName: 'slider.horizontal.3',
+            } as any}
+          />
+          <Tabs.Screen
+            name="index"
+            options={{
+              title: 'Deck',
+              // Custom prop for our sidebar to read:
+              tabBarIconName: 'slider.vertical.3',
+            } as any}
+          />
+          <Tabs.Screen
+            name="studio"
+            options={{
+              title: 'Studio',
+              tabBarIconName: 'curlybraces',
+            } as any}
+          />
+          <Tabs.Screen
+            name="monitor"
+            options={{
+              title: 'Monitor',
+              tabBarIconName: 'desktopcomputer',
+            } as any}
+          />
+          <Tabs.Screen
+            name="dimmer_rack"
+            options={{
+              title: 'Dimmer Rack',
+              tabBarIconName: 'lightbulb.fill',
+            } as any}
+          />
+          <Tabs.Screen
+            name="config"
+            options={{
+              title: 'Config',
+              tabBarIconName: 'gear',
+            } as any}
+          />
+        </Tabs>
+      </SafeAreaView>
+    </RigProvider>
   );
 }

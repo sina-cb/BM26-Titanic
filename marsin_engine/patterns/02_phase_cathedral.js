@@ -4,25 +4,30 @@
   It reads like a living architectural waveform. Big, classy, intelligent, ravey.
 */
 
-export var speed = 0.02;
+export var animSpeed = 0.02;
 export var radialDensity = 15.0;
 export var ratioA = 1.618;
 export var ratioB = 0.618;
 export var sharpness = 4.0;
 export var hueA = 0.6; // Deep Blue
 export var hueB = 0.8; // Pink/Magenta
+export var globalDir = 1.0;
 
-export function sliderSpeed(v) { speed = 0.005 + v * 0.05; }
-export function sliderRadialDensity(v) { radialDensity = 2 + v * 20; }
-export function sliderSharpness(v) { sharpness = 1 + v * 9; }
-export function hsvPickerHueA(h, s, v) { hueA = h; }
-export function hsvPickerHueB(h, s, v) { hueB = h; }
+export function speed(v) { animSpeed = 0.005 + v * 0.05; }
+export function count(v) { radialDensity = 2 + v * 20; }
+export function size(v) { sharpness = 1 + v * 9; }
+export function colorPalette1(h, s, v) { hueA = h; }
+export function colorPalette2(h, s, v) { hueB = h; }
+export function direction(v) { globalDir = (v * 2.0) - 1.0; }
 
-var beatPhase;
+var beatPhase = 0.0;
 
 export function beforeRender(delta) {
-  // beatPhase orbits 0 to 2*PI smoothly 
-  beatPhase = time(speed) * 6.2831853;
+  // Manually accumulate time phase so changing the speed slider doesn't cause glitches/jumps
+  // Base time loop is 65.536 seconds. delta is in milliseconds.
+  var phaseIncrement = (delta / 65536.0) / animSpeed;
+  beatPhase = (beatPhase + phaseIncrement * globalDir * 6.2831853) % 6.2831853;
+  if (beatPhase < 0) beatPhase += 6.2831853;
 }
 
 export function render3D(index, x, y, z) {

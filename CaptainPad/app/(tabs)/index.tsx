@@ -1,18 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, TextInput, AppState } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, TextInput, AppState, PanResponder, StyleSheet } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { NauticalFader } from '@/components/NauticalFader';
+import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { RigGlobals } from '@/components/RigGlobals';
+import { GlobalParams } from '@/components/GlobalParams';
+import { CPCControls } from '@/components/CPCControls';
+import { useFocusEffect } from 'expo-router';
 import { 
   fetchPatterns, setActivePattern, sendControl, getApiBase, getApiBaseAsync,
-  fetchExports, setGlobalEffect, getAutopilot, setAutopilot, testConnection
+  fetchExports, setGlobalEffect, getAutopilot, setAutopilot, testConnection,
+  fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
+  setMixerView
 } from '@/utils/api';
 
+// ── Global Effect Button moved to RigGlobals ────────────────────────────
+
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
-  const [isOn, setIsOn] = useState(initialValue > 0.5);
-  useEffect(() => { setIsOn(initialValue > 0.5) }, [initialValue]);
+  const [isOn, setIsOn] = React.useState(initialValue > 0.5);
+  React.useEffect(() => { setIsOn(initialValue > 0.5) }, [initialValue]);
   return (
     <TouchableOpacity 
       onPress={() => { const next = !isOn; setIsOn(next); onChange(id, next ? 1.0 : 0.0); }}
@@ -30,7 +38,7 @@ const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, na
 };
 
 const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onChange: Function }) => {
-  const [isPressed, setIsPressed] = useState(false);
+  const [isPressed, setIsPressed] = React.useState(false);
   return (
     <TouchableOpacity 
       onPressIn={() => { setIsPressed(true); onChange(id, 1.0); }}
@@ -44,31 +52,6 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : Colors.light.text, textAlign: 'center' }}>
         {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-const GlobalEffectButton = ({ effectId, label, activeDefault = false, disabled = false }: { effectId: string, label: string, activeDefault?: boolean, disabled?: boolean }) => {
-  const [isOn, setIsOn] = useState(activeDefault);
-  return (
-    <TouchableOpacity 
-      onPress={() => { 
-        if (disabled) return;
-        const next = !isOn; 
-        setIsOn(next); 
-        setGlobalEffect(effectId, next); 
-      }}
-      activeOpacity={disabled ? 1.0 : 0.7}
-      style={{
-        flexBasis: '30%', flexGrow: 1, height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', 
-        backgroundColor: disabled ? 'transparent' : (isOn ? Colors.light.primary : Colors.light.surfaceContainerHigh),
-        borderWidth: 1, borderColor: disabled ? Colors.light.ghostBorder : (isOn ? 'transparent' : Colors.light.ghostBorder),
-        ...(!disabled && globalStyles.ambientShadow)
-      }}
-    >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: disabled ? Colors.light.ghostBorder : (isOn ? '#FFF' : Colors.light.text), fontSize: 13, textAlign: 'center' }}>
-        {label}
       </Text>
     </TouchableOpacity>
   );
@@ -101,8 +84,8 @@ const OfflineBanner = ({ error }: { error: string }) => (
 
 export default function ControlDeckScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
-  const [active, setActive] = useState<string>('...');
-  const [exports, setExports] = useState<any[]>([]);
+  const [mixerChannels, setMixerChannels] = useState<any[]>([]);
+  const [mixerMaster, setMixerMaster] = useState<number>(1.0);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [isScrollEnabled, setScrollEnabled] = useState<boolean>(true);
   const [isConnected, setIsConnected] = useState<boolean | null>(null); // null = checking
@@ -118,6 +101,12 @@ export default function ControlDeckScreen() {
   const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef<string>('');
 
+  useFocusEffect(
+    useCallback(() => {
+      setMixerView('deck');
+    }, [])
+  );
+
   // ── Boot: wait for resolved API base, then connect ──────────────────
   const connectToEngine = useCallback(async () => {
     const base = await getApiBaseAsync();
@@ -127,6 +116,9 @@ export default function ControlDeckScreen() {
     const conn = await testConnection(base);
     setIsConnected(conn.ok);
     setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
+
+    // Always start WebSocket so the 5s auto-reconnect loop can run
+    connectWebSocket(base);
 
     if (!conn.ok) return;
 
@@ -144,9 +136,13 @@ export default function ControlDeckScreen() {
       setIsShuffle(apResult.data.shuffle);
     }
 
-    // 4. Connect WebSocket
-    connectWebSocket(base);
-  }, []);
+    // Load initial mixer state
+    const mixerRes = await fetchMixerState();
+    if (mixerRes.ok && mixerRes.data) {
+      setMixerChannels(mixerRes.data.channels || []);
+      setMixerMaster(mixerRes.data.master || 1.0);
+    }
+  }, [connectWebSocket]);
 
   const connectWebSocket = useCallback((base: string) => {
     // Close existing
@@ -168,10 +164,11 @@ export default function ControlDeckScreen() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'pattern') {
-            setActive(msg.name);
-          } else if (msg.type === 'exports') {
-            setExports(msg.data || []);
+          if (msg.type === 'mixer') {
+            setMixerChannels(msg.channels || []);
+            setMixerMaster(msg.master || 1.0);
+          } else if (msg.type === 'pattern') {
+            // legacy, ignore if we are using mixer
           }
         } catch {}
       };
@@ -207,15 +204,11 @@ export default function ControlDeckScreen() {
     };
   }, [connectToEngine]);
 
-  // Auto-scroll to active pattern
-  useEffect(() => {
-    if (active !== '...' && itemLayouts.current[active] !== undefined) {
-      scrollViewRef.current?.scrollTo({ y: Math.max(0, itemLayouts.current[active] - 100), animated: true });
-    }
-  }, [active]);
+  // Auto-scroll logic removed, since we have multiple channels.
 
   const handleSelectPattern = async (pattern: string) => {
-    setActive(pattern);
+    // For now, selecting a pattern will just set the base pattern 
+    // to maintain compatibility.
     const res = await setActivePattern(pattern); 
     if (res.ok && res.data && res.data.error) {
       setCompileError(res.data.error);
@@ -223,24 +216,19 @@ export default function ControlDeckScreen() {
       setCompileError(res.error || 'Network error');
     } else {
       setCompileError(null);
-      const freshExports = await fetchExports();
-      if (freshExports.ok && freshExports.data) setExports(freshExports.data);
     }
   };
 
-  const triggerControl = (id: number, v0: number, v1?: number, v2?: number) => {
-    sendControl(id, v0, v1, v2);
+  const triggerChannelControl = (channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
+    setMixerChannelControl(channelId, id, v0, v1, v2);
   };
 
-  const sliders = exports.filter(e => e.kind === 1);
-  const toggles = exports.filter(e => e.kind === 2);
-  const triggers = exports.filter(e => e.kind === 3);
-  const colorPickers = exports.filter(e => e.kind === 6);
-
   return (
-    <View style={globalStyles.container}>
-      {/* Left Pane - Pattern Queue */}
-      <View style={globalStyles.leftPane}>
+    <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+      <CPCControls wsRef={wsRef} />
+      <View style={globalStyles.container}>
+        {/* Left Pane - Pattern Queue */}
+        <View style={globalStyles.leftPane}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 }}>
           <Text style={globalStyles.headline}>Pattern Queue</Text>
           <IconSymbol name="slider.vertical.3" size={24} color={Colors.light.secondary} />
@@ -250,7 +238,9 @@ export default function ControlDeckScreen() {
           <View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {patterns.map((ptn) => {
-                const isLive = ptn === active;
+                // If there's a base channel, highlight it
+                const baseChannel = mixerChannels[0];
+                const isLive = baseChannel && baseChannel.pattern === ptn;
                 return (
                   <TouchableOpacity 
                     key={ptn} 
@@ -280,24 +270,12 @@ export default function ControlDeckScreen() {
           </View>
         </ScrollView>
 
-        <TouchableOpacity onPress={() => fetchPatterns().then(r => { if (r.ok && r.data) setPatterns(r.data); })} style={{ marginVertical: 16, padding: 12, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 13 }}>REFRESH QUEUE</Text>
+        <TouchableOpacity onPress={connectToEngine} style={{ marginVertical: 16, padding: 12, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 13 }}>REFRESH / RECONNECT</Text>
         </TouchableOpacity>
 
 
-        <View style={{ paddingTop: 24, paddingBottom: 16, borderTopWidth: 1, borderTopColor: Colors.light.ghostBorder }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={globalStyles.headline}>Rig Globals</Text>
-          </View>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            <GlobalEffectButton effectId="vintageWhite" label="VINTAGE WHT" />
-            <GlobalEffectButton effectId="fogger" label="FOGGER" />
-            <GlobalEffectButton effectId="uvBlast" label="UV BLAST" />
-            <GlobalEffectButton effectId="placeholder1" label="---" disabled={true} />
-            <GlobalEffectButton effectId="placeholder2" label="---" disabled={true} />
-            <GlobalEffectButton effectId="placeholder3" label="---" disabled={true} />
-          </View>
-        </View>
+        <RigGlobals />
       </View>
 
       {/* Right Pane - Parameters & Macros */}
@@ -353,67 +331,48 @@ export default function ControlDeckScreen() {
              </TouchableOpacity>
           </View>
 
-          {/* Parameters Title Block */}
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS — <Text style={{ color: Colors.light.primary }}>{active}</Text></Text>
+          {/* Channels Row */}
+          <View style={{ gap: 24, paddingRight: 24 }}>
+            {mixerChannels.slice(0, 1).map((channel, idx) => {
+              const exports = channel.exports || [];
+              const sliders = exports.filter((e: any) => e.kind === 1);
+              const toggles = exports.filter((e: any) => e.kind === 2);
+              const triggers = exports.filter((e: any) => e.kind === 3);
+              const colorPickers = exports.filter((e: any) => e.kind === 6);
 
-          {compileError && (
-          <View style={{ backgroundColor: 'rgba(255, 60, 60, 0.1)', borderColor: Colors.light.error, borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-               <IconSymbol name="exclamationmark.triangle.fill" size={20} color={Colors.light.error} />
-               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error }}>COMPILATION ERROR</Text>
-             </View>
-             <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.error, fontSize: 14 }}>
-               {compileError}
-             </Text>
+              return (
+                <View key={channel.id} style={{ width: '100%', backgroundColor: Colors.light.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: Colors.light.primary, marginBottom: 8, textTransform: 'uppercase' }}>CH {idx + 1}: {channel.name || channel.pattern}</Text>
+                  
+                  {/* Channel Controls (Fader, Mode, Enabled) */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: Colors.light.ghostBorder }}>
+                    <TouchableOpacity onPress={() => updateMixerChannel(channel.id, { enabled: !channel.enabled })} style={{ padding: 8, backgroundColor: channel.enabled ? Colors.light.primary : Colors.light.surfaceContainerHigh, borderRadius: 4 }}>
+                      <Text style={{ color: channel.enabled ? '#000' : '#fff', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12 }}>{channel.enabled ? 'ON' : 'OFF'}</Text>
+                    </TouchableOpacity>
+                    <Text style={{ color: Colors.light.text, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12 }}>MODE: {channel.mode.toUpperCase()}</Text>
+                  </View>
+
+                  <View style={{ marginBottom: 16 }}>
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
+                    <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
+                  </View>
+
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
+                    {toggles.map((e: any) => (
+                      <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                    ))}
+                    {triggers.map((e: any) => (
+                      <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
           </View>
-        )}
-
-        {/* Top Section - Dynamic Faders */}
-        <View style={[globalStyles.surfaceLow, globalStyles.ghostBorder, { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', alignItems: 'flex-start', padding: 32, gap: 48 }]}>
-          {sliders.map((e) => (
-             <NauticalFader 
-               key={`slider-${e.id}`} 
-               id={e.id} 
-               label={e.name.replace('slider', '').toUpperCase().substring(0, 8)} 
-               initialValue={e.v0 ?? 0.5} 
-               min={0} 
-               max={1.0} 
-               onChange={(id, val) => triggerControl(id, val)}
-               onDragStart={() => setScrollEnabled(false)}
-               onDragEnd={() => setScrollEnabled(true)}
-             />
-          ))}
-          {colorPickers.map((e) => (
-             <NauticalFader 
-               key={`color-${e.id}`} 
-               id={e.id} 
-               label="HUE" 
-               initialValue={e.v0 ?? 0.0} 
-               min={0} 
-               max={1.0} 
-               isColor={true}
-               onChange={(id, val) => triggerControl(id, val, 1.0, 1.0)}
-               onDragStart={() => setScrollEnabled(false)}
-               onDragEnd={() => setScrollEnabled(true)}
-             />
-          ))}
-          {sliders.length === 0 && colorPickers.length === 0 && (
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.secondary, alignSelf: 'center' }}>NO SLIDERS EXPORTED</Text>
-          )}
-        </View>
-
-        {/* Dynamic Macro Grid */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 32, gap: 16 }}>
-          {toggles.map((e) => (
-            <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={triggerControl} />
-          ))}
-          {triggers.map((e) => (
-            <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={triggerControl} />
-          ))}
-        </View>
 
         </ScrollView>
       </View>
+    </View>
     </View>
   );
 }

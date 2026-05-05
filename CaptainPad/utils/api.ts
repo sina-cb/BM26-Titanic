@@ -126,6 +126,17 @@ export async function fetchPatterns(): Promise<ApiResult<string[]>> {
   }
 }
 
+export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
+  try {
+    const res = await fetch(`${api_base}/channel-blends`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    console.warn('Fetch channel blends failed:', err);
+    return { ok: false, error: err.message, data: [] };
+  }
+}
+
 export async function setActivePattern(pattern: string): Promise<ApiResult<any>> {
   try {
     const res = await fetch(`${api_base}/set-pattern`, {
@@ -193,6 +204,17 @@ export async function setGlobalBlackout(state: boolean): Promise<ApiResult<any>>
   }
 }
 
+export async function fetchGlobals(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/globals`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    console.warn('Fetch globals failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function setGlobalEffect(effect: string, state: boolean): Promise<ApiResult<any>> {
   try {
     const res = await fetch(`${api_base}/global-effect`, {
@@ -208,6 +230,21 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
     return { ok: true, data };
   } catch(err: any) {
     console.warn(`Failed to set global effect ${effect}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/view`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ view }),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch(err: any) {
+    console.warn(`Failed to set mixer view to ${view}:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -265,6 +302,109 @@ export async function savePatternCode(name: string, code: string): Promise<ApiRe
     return { ok: true, data };
   } catch (err: any) {
     console.warn('Save pattern failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchParamCenter(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/param-center`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch(err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateParamCenter(params: Record<string, any>): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/param-center`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch(err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchMixerState(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function addMixerChannel(pattern: string, name?: string, mode?: string, fader?: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pattern, name, mode, fader }),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateMixerChannel(id: string, updates: any): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function updateMixerMaster(master: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ master }),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function removeMixerChannel(id: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setMixerChannelControl(channelId: string, id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
+  try {
+    const payload: any = { id, v0 };
+    if (v1 !== undefined) payload.v1 = v1;
+    if (v2 !== undefined) payload.v2 = v2;
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
     return { ok: false, error: err.message };
   }
 }

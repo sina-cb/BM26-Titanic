@@ -4,8 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
+import { StateManager } from './state_manager.js';
 
-// Local utility clones identical to engine.js requirements
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
   return fs.readdirSync(patternsDir)
@@ -21,61 +21,262 @@ function loadPattern(patternsDir, name) {
   return fs.readFileSync(filePath, 'utf8');
 }
 
-export function startApiServer(opts, runtime, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
-  const STATE_FILE = path.join(patternsDir, '..', 'pattern_state.yaml');
-  let patternState = {};
+export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
+  const { mixer, wasmHost, paramRouter, paramCenter } = engineCore;
+  const localControlKinds = new Set([1, 2, 3, 6]);
+
+  function onChannelCompiled(channel) {
+    if (paramCenter) {
+      paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
+      // Force the VM to execute its top-level scope (export var defaults) so that
+      // applySnapshot values don't get clobbered by the first real beginFrame.
+      wasmHost.beginFrame(channel.handle, 0);
+      paramCenter.applySnapshot(wasmHost);
+      // We also broadcast so clients know the new schema bindings
+      broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
+  }
+
+  function broadcastWs(msgObj) {
+    if (!global.wss) return;
+    const msg = JSON.stringify(msgObj);
+    global.wss.clients.forEach(c => {
+      if (c.readyState === 1) c.send(msg);
+    });
+  }
+
+  const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
+  const stateManager = new StateManager(stateDir);
+
+  let mixerState = stateManager.loadMixerState();
+  let deckState = stateManager.loadDeckState();
+  let dimmerState = stateManager.loadDimmerState();
+  let globalsState = stateManager.loadGlobalsState();
+
+  if (paramCenter) {
+    paramCenter.saveHook = () => stateManager.saveGlobalsState(globalsState, paramCenter);
+  }
+
   try {
-    if (fs.existsSync(STATE_FILE)) patternState = yaml.load(fs.readFileSync(STATE_FILE, 'utf8')) || {};
-    
-    // Auto-restore dimmers into hardware
-    if (patternState._dimmers && intensityController) {
-      for (const [sId, bright] of Object.entries(patternState._dimmers)) {
-        intensityController.setSectionBrightness(parseInt(sId, 10), bright);
-      }
-    }
+    stateManager.applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController);
+    stateManager.applyDimmerState(dimmerState, intensityController);
   } catch (err) {
-    console.warn('Failed to load pattern state:', err);
+    console.warn('Failed to apply loaded state:', err);
   }
 
-  function saveState() {
-    try {
-      fs.writeFileSync(STATE_FILE, yaml.dump(patternState));
-    } catch(e) {}
+  // After loading saved CPC values, push them to all boot-created channels.
+  // This must happen after the channels have been primed with beginFrame(0)
+  // (which onChannelCompiled already does).
+  if (paramCenter) paramCenter.applySnapshot(wasmHost);
+
+  function saveAllState() {
+    stateManager.saveMixerState(mixer);
+    stateManager.saveDeckState(mixer);
   }
 
-  function applyPersistedState(patternName) {
-    if (patternState[patternName]) {
-      for (const id in patternState[patternName]) {
-        const c = patternState[patternName][id];
-        runtime.setControl(parseInt(id), c.v0 || 0, c.v1 || 0, c.v2 || 0);
+  function getReplayableLocalExport(channel, controlId) {
+    if (paramCenter && paramCenter.isSharedControlId(channel.id, controlId)) return null;
+    const exp = wasmHost.getExports(channel.handle).find(e => e.id === controlId);
+    if (!exp || !localControlKinds.has(exp.kind)) return null;
+    return exp;
+  }
+
+  function applyPatternCache(channel) {
+    if (!channel.patternCache) channel.patternCache = {};
+    const cached = channel.patternCache[channel.pattern];
+    if (!cached) return;
+
+    const exports = wasmHost.getExports(channel.handle);
+    const exportIds = new Set(exports.map(e => e.id));
+    const exportById = {};
+    for (const e of exports) exportById[e.id] = e;
+
+    let applied = 0, stale = 0, cpcBlocked = 0;
+    for (const [idStr, v] of Object.entries(cached)) {
+      const controlId = parseInt(idStr, 10);
+
+      // Check: does this ID even exist in the current pattern?
+      if (!exportIds.has(controlId)) {
+        const expName = v._name || idStr;
+        console.warn(`[Cache] ⚠ Stale cache entry on ${channel.id}/${channel.pattern}: ID ${expName} (${controlId}) not found in pattern exports — purging`);
+        delete cached[idStr];
+        stale++;
+        continue;
       }
+
+      // Check: is this a CPC-owned control?
+      if (!getReplayableLocalExport(channel, controlId)) {
+        const exp = exportById[controlId];
+        console.warn(`[Cache] ⚠ CPC-owned '${exp?.name || controlId}' found in cache for ${channel.id}/${channel.pattern} — skipping`);
+        delete cached[idStr];
+        cpcBlocked++;
+        continue;
+      }
+
+      paramRouter.setChannelControl(channel.id, controlId, v.v0, v.v1, v.v2);
+      applied++;
+    }
+
+    if (stale > 0 || cpcBlocked > 0) {
+      console.warn(`[Cache] ${channel.id}/${channel.pattern}: applied=${applied}, stale=${stale} (purged), cpcBlocked=${cpcBlocked} (skipped)`);
     }
   }
 
-  // Restore state for initial pattern automatically
-  applyPersistedState(opts.pattern);
+  function updatePatternCache(channel, controlId, v0, v1, v2) {
+    if (!channel) return;
+    if (!channel.patternCache) channel.patternCache = {};
+    if (!channel.patternCache[channel.pattern]) channel.patternCache[channel.pattern] = {};
+    channel.patternCache[channel.pattern][controlId] = { v0, v1, v2 };
+  }
+
+  function restoreChannel(saved) {
+    try {
+      const src = loadPattern(patternsDir, saved.pattern);
+      const comp = wasmHost.compile(src);
+      if (comp.ok) {
+        const ch = mixer.addChannel({
+          id: saved.id,
+          name: saved.name,
+          pattern: saved.pattern,
+          handle: comp.handle,
+          mode: saved.mode,
+          fader: saved.fader,
+          enabled: saved.enabled
+        });
+        if (saved.patternCache) ch.patternCache = saved.patternCache;
+        onChannelCompiled(ch);
+        if (saved.localControls) {
+          for (const [idStr, cv] of Object.entries(saved.localControls)) {
+            const controlId = parseInt(idStr, 10);
+            if (!getReplayableLocalExport(ch, controlId)) continue;
+            paramRouter.setChannelControl(ch.id, controlId, cv.v0, cv.v1, cv.v2);
+          }
+        }
+        applyPatternCache(ch);
+      } else {
+        console.warn(`Failed to compile saved channel ${saved.pattern}:`, comp.error);
+      }
+    } catch (e) {
+      console.warn(`Failed to restore channel ${saved.pattern}:`, e.message);
+    }
+  }
+
+  const hasDeck = deckState.channel != null;
+  const hasMixer = mixerState.channels && mixerState.channels.length > 0;
+
+  if (hasDeck || hasMixer) {
+    const existingIds = mixer.channels.map(c => c.id);
+    for (const id of existingIds) {
+      const ch = mixer.getChannel(id);
+      if (ch) ch.destroy(wasmHost);
+      mixer.removeChannel(id);
+    }
+    
+    if (hasDeck) {
+      restoreChannel(deckState.channel);
+    } else {
+      restoreChannel({
+        id: 'ch_base',
+        name: 'Base',
+        pattern: opts.pattern,
+        mode: 'blend_screen',
+        fader: 1.0,
+        enabled: true
+      });
+    }
+
+    if (hasMixer) {
+      for (const saved of mixerState.channels) {
+        if (!saved.id.startsWith('ch_base_')) {
+          restoreChannel(saved);
+        }
+      }
+    }
+    
+    if (mixerState.master !== undefined) {
+      mixer.setMaster(mixerState.master);
+    }
+    
+    const base = mixer.getChannel(mixer.baseChannelId);
+    if (base) opts.pattern = base.pattern;
+  } else {
+    mixer.channels.forEach(applyPatternCache);
+  }
+
+  // Single source of truth for serializing mixer state — used by
+  // GET /mixer, broadcastMixerState(), and WS connect.
+  function serializeMixerState() {
+    return {
+      type: 'mixer',
+      master: mixer.master,
+      maxChannels: mixer.maxChannels,
+      channels: mixer.channels.map(c => ({
+        id: c.id,
+        name: c.name,
+        pattern: c.pattern,
+        mode: c.mode,
+        fader: c.fader,
+        enabled: c.enabled,
+        exports: wasmHost.getExports(c.handle)
+          .filter(e => !(paramCenter && paramCenter.isSharedExport(c.id, e.name)))
+          .filter(e => localControlKinds.has(e.kind))
+          .map(e => {
+            const cv = c.localControls[e.id];
+            if (cv) { e.v0 = cv.v0; e.v1 = cv.v1; e.v2 = cv.v2; }
+            return e;
+          })
+      }))
+    };
+  }
+
+  function broadcastMixerState() {
+    broadcastWs(serializeMixerState());
+  }
 
   // Initialize Autopilot Daemon
   const autopilot = new Autopilot(
     listPatterns, 
     patternsDir, 
     () => opts.pattern, 
-    (nextPattern) => {
-      // Simulate an internal HTTP pipeline hook to properly broadcast WS frames
+    async (nextPattern) => {
       try {
         const src = loadPattern(patternsDir, nextPattern);
-        const comp = runtime.compile(src);
+        const comp = wasmHost.compile(src);
         if (comp.ok) {
            opts.pattern = nextPattern;
-           applyPersistedState(nextPattern);
+           
+           // Legacy replacement: swap out the base channel
+           const oldBase = mixer.getChannel(mixer.baseChannelId);
+           const oldCache = oldBase ? oldBase.patternCache : {};
+           if (oldBase) oldBase.destroy(wasmHost);
+           mixer.removeChannel(mixer.baseChannelId);
+           
+           const newChannel = mixer.addChannel({
+             id: 'ch_base_' + Date.now(),
+             name: 'Base',
+             pattern: nextPattern,
+             handle: comp.handle,
+             mode: 'blend_screen',
+             fader: 1.0,
+             enabled: true
+           });
+           
+           mixer.channels.pop();
+           mixer.channels.unshift(newChannel);
+           mixer.baseChannelId = newChannel.id;
+           newChannel.patternCache = oldCache;
+
+           onChannelCompiled(newChannel);
+           applyPatternCache(newChannel);
+           saveAllState();
            
            const broadcast = JSON.stringify({ type: 'pattern', name: nextPattern });
-           const exportsBroadcast = JSON.stringify({ type: 'exports', data: getExportsWithState(nextPattern) });
            if (global.wss) {
              global.wss.clients.forEach(c => {
-               if (c.readyState === 1) { c.send(broadcast); c.send(exportsBroadcast); }
+               if (c.readyState === 1) c.send(broadcast);
              });
            }
+           broadcastMixerState();
         }
       } catch(e) {
         console.warn('Autopilot swap failed:', e.message);
@@ -83,24 +284,9 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
     }
   );
 
-  function getExportsWithState(patternName) {
-    const exports = runtime.getExports();
-    if (patternState[patternName]) {
-      const pState = patternState[patternName];
-      for (const e of exports) {
-        if (pState[e.id]) {
-          e.v0 = pState[e.id].v0;
-          e.v1 = pState[e.id].v1;
-          e.v2 = pState[e.id].v2;
-        }
-      }
-    }
-    return exports;
-  }
-
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST');
+    res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -108,9 +294,31 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
       return res.end();
     }
 
+    // Body parsing helper
+    const readBody = (callback) => {
+      let body = '';
+      req.on('data', chunk => body += chunk.toString());
+      req.on('end', () => {
+        try {
+          callback(JSON.parse(body || '{}'));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        }
+      });
+    };
+
     if (req.method === 'GET' && (req.url === '/patterns' || req.url === '/list-patterns')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(listPatterns(patternsDir)));
+    } else if (req.method === 'GET' && req.url === '/channel-blends') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const blendsDir = path.join(patternsDir, 'channel_blends');
+      try {
+        const files = fs.readdirSync(blendsDir).filter(f => f.endsWith('.js')).map(f => f.replace('.js', ''));
+        res.end(JSON.stringify(files));
+      } catch (e) {
+        res.end(JSON.stringify([]));
+      }
     } else if (req.method === 'GET' && req.url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ 
@@ -124,182 +332,299 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
         unrealState: 'streaming' 
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
+      // Legacy endpoint, return exports of base channel
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(getExportsWithState(opts.pattern)));
-    } else if (req.method === 'GET' && req.url === '/dimmers') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(patternState._dimmers || {}));
+      const baseChannel = mixer.getChannel(mixer.baseChannelId);
+      if (!baseChannel) {
+        res.end('[]'); return;
+      }
+      const exports = wasmHost.getExports(baseChannel.handle);
+      const filtered = exports.filter(e => !(paramCenter && paramCenter.isSharedExport(baseChannel.id, e.name)));
+      res.end(JSON.stringify(filtered));
     } else if (req.method === 'GET' && req.url.startsWith('/pattern-code')) {
-      const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      const name = urlObj.searchParams.get('name');
-      if (!name) {
-        res.writeHead(400); return res.end(JSON.stringify({ error: 'name required' }));
-      }
-      const safeName = path.basename(name).endsWith('.js') ? path.basename(name) : path.basename(name) + '.js';
+      const name = req.url.split('?name=')[1];
+      if (!name) { res.writeHead(400); return res.end(JSON.stringify({ error: 'name required' })); }
+      let safeName = path.basename(name);
+      if (!safeName.endsWith('.js')) safeName += '.js';
       const filePath = path.join(patternsDir, safeName);
-      if (!fs.existsSync(filePath)) {
-        res.writeHead(404); return res.end(JSON.stringify({ error: 'pattern not found' }));
+      if (fs.existsSync(filePath)) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end(fs.readFileSync(filePath, 'utf8'));
+      } else {
+        res.writeHead(404); res.end('Not Found');
       }
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(fs.readFileSync(filePath, 'utf8'));
     } else if (req.method === 'POST' && req.url === '/save-pattern') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (!data.name || !data.code) {
-            res.writeHead(400); return res.end(JSON.stringify({ error: 'name and code required' }));
-          }
-          let safeName = path.basename(data.name);
-          if (!safeName.endsWith('.js')) safeName += '.js';
-          const filePath = path.join(patternsDir, safeName);
-          
-          const comp = runtime.compile(data.code);
-          if (!comp.ok) {
-            res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
-          }
-          
-          fs.writeFileSync(filePath, data.code, 'utf8');
-          
-          // Re-broadcast exports if active pattern was overwritten
-          if (opts.pattern === safeName.replace('.js', '')) {
-            const exportsBroadcast = JSON.stringify({ type: 'exports', data: getExportsWithState(opts.pattern) });
-            wss.clients.forEach(c => {
-              if (c.readyState === 1) c.send(exportsBroadcast);
-            });
-          }
-          
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok' }));
-        } catch(e) {
-           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (!data.name || !data.code) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name and code required' }));
         }
+        let safeName = path.basename(data.name);
+        if (!safeName.endsWith('.js')) safeName += '.js';
+        const filePath = path.join(patternsDir, safeName);
+        
+        // Compile check (does not destroy existing running patterns because of WasmHost!)
+        const comp = wasmHost.compile(data.code);
+        if (!comp.ok) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
+        }
+        wasmHost.destroy(comp.handle); // Clean up validation handle
+        
+        fs.writeFileSync(filePath, data.code, 'utf8');
+        
+        const patternName = safeName.replace('.js', '');
+        mixer.channels.forEach(ch => {
+          if (ch.pattern === patternName) {
+            const compNew = wasmHost.compile(data.code);
+            if (compNew.ok) {
+              if (ch.handle) wasmHost.destroy(ch.handle);
+              ch.handle = compNew.handle;
+              onChannelCompiled(ch);
+              applyPatternCache(ch);
+            }
+          }
+        });
+        
+        stateManager.saveMixerState(mixer);
+        stateManager.saveDeckState(mixer);
+        broadcastMixerState();
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if ((req.method === 'PUT' || req.method === 'POST') && (req.url === '/pattern' || req.url === '/set-pattern')) {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (!data.pattern) {
-            res.writeHead(400); return res.end(JSON.stringify({ error: 'pattern required' }));
-          }
-          // The iPad app might send 'test_params.js', so strip the extension
-          const patternName = path.basename(data.pattern, '.js');
-          
-          const src = loadPattern(patternsDir, patternName);
-          const comp = runtime.compile(src);
-          if (!comp.ok) {
-            res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
-          }
-          opts.pattern = patternName;
-          applyPersistedState(patternName);
-          
-          const broadcast = JSON.stringify({ type: 'pattern', name: patternName });
-          const exportsBroadcast = JSON.stringify({ type: 'exports', data: getExportsWithState(patternName) });
-          wss.clients.forEach(c => {
-            if (c.readyState === 1) {
-              c.send(broadcast);
-              c.send(exportsBroadcast);
-            }
-          });
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', pattern: opts.pattern }));
-        } catch(e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (!data.pattern) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'pattern required' }));
         }
+        const patternName = path.basename(data.pattern, '.js');
+        const src = loadPattern(patternsDir, patternName);
+        const comp = wasmHost.compile(src);
+        if (!comp.ok) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
+        }
+        
+        // Legacy set-pattern replaces the base channel
+        const oldBase = mixer.getChannel(mixer.baseChannelId);
+        const oldCache = oldBase ? oldBase.patternCache : {};
+        if (oldBase) oldBase.destroy(wasmHost);
+        mixer.removeChannel(mixer.baseChannelId);
+        
+        const newChannel = mixer.addChannel({
+          id: 'ch_base_' + Date.now(),
+          name: 'Base',
+          pattern: patternName,
+          handle: comp.handle,
+          mode: 'blend_screen',
+          fader: 1.0,
+          enabled: true
+        });
+
+        // Ensure the deck channel is at the bottom of the stack and tracked correctly
+        mixer.channels.pop();
+        mixer.channels.unshift(newChannel);
+        mixer.baseChannelId = newChannel.id;
+        newChannel.patternCache = oldCache;
+
+        opts.pattern = patternName;
+        onChannelCompiled(newChannel);
+        applyPatternCache(newChannel);
+        saveAllState();
+        
+        const broadcast = JSON.stringify({ type: 'pattern', name: patternName });
+        if (global.wss) {
+          global.wss.clients.forEach(c => {
+            if (c.readyState === 1) c.send(broadcast);
+          });
+        }
+        broadcastMixerState();
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', pattern: opts.pattern }));
       });
     } else if (req.method === 'POST' && req.url === '/control') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (data.id === undefined) {
-             res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
-          }
-          runtime.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-          
-          if (!patternState[opts.pattern]) patternState[opts.pattern] = {};
-          patternState[opts.pattern][data.id] = { v0: data.v0 || 0, v1: data.v1 || 0, v2: data.v2 || 0 };
-          saveState();
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', id: data.id }));
-        } catch(e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (data.id === undefined) {
+           res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
+        const result = paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        
+        if (result.status === 'ok') {
+          const baseChannel = mixer.getChannel(mixer.baseChannelId);
+          if (baseChannel) updatePatternCache(baseChannel, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        }
+
+        saveAllState();
+        broadcastMixerState();
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', id: data.id }));
       });
+    } else if (req.method === 'GET' && req.url === '/dimmers') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(dimmerState || {}));
     } else if (req.method === 'POST' && req.url === '/section-brightness') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (data.sectionId === undefined || data.brightness === undefined) {
-             res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
-          }
-          if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
-          
-          if (!patternState._dimmers) patternState._dimmers = {};
-          patternState._dimmers[data.sectionId] = data.brightness;
-          saveState();
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId }));
-        } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (data.sectionId === undefined || data.brightness === undefined) {
+           res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
         }
+        if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
+        dimmerState[data.sectionId] = data.brightness;
+        stateManager.saveDimmerState(dimmerState);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
       });
     } else if (req.method === 'POST' && req.url === '/global-blackout') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (data.state === undefined) {
-             res.writeHead(400); return res.end(JSON.stringify({ error: 'state boolean required' }));
-          }
-          if (intensityController) intensityController.setBlackout(data.state);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
-        } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (data.state === undefined) {
+           res.writeHead(400); return res.end(JSON.stringify({ error: 'state boolean required' }));
         }
+        if (intensityController) intensityController.setBlackout(data.state);
+        globalsState.blackout = data.state;
+        stateManager.saveGlobalsState(globalsState);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
       });
     } else if (req.method === 'POST' && req.url === '/global-effect') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (data.effect === undefined || data.state === undefined) {
-             res.writeHead(400); return res.end(JSON.stringify({ error: 'effect string and state boolean required' }));
-          }
-          if (globalEffectsController) globalEffectsController.setEffect(data.effect, data.state);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
-        } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        if (data.effect === undefined || data.state === undefined) {
+           res.writeHead(400); return res.end(JSON.stringify({ error: 'effect string and state boolean required' }));
         }
+        if (globalEffectsController) globalEffectsController.setEffect(data.effect, data.state);
+        if (!globalsState.effects) globalsState.effects = {};
+        globalsState.effects[data.effect] = data.state;
+        stateManager.saveGlobalsState(globalsState);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
       });
+    } else if (req.method === 'GET' && req.url === '/globals') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(globalsState));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(autopilot.state));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          autopilot.updateState(data);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(autopilot.state));
-        } catch(e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      readBody(data => {
+        autopilot.updateState(data);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(autopilot.state));
+      });
+    } 
+    // ---- MIXER API ----
+    else if (req.method === 'GET' && req.url === '/mixer') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(serializeMixerState()));
+    } else if (req.method === 'PATCH' && req.url === '/mixer') {
+      readBody(data => {
+        if (data.master !== undefined) mixer.setMaster(data.master);
+        stateManager.saveMixerState(mixer);
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/channels') {
+      readBody(data => {
+        const patternName = path.basename(data.pattern, '.js');
+        const src = loadPattern(patternsDir, patternName);
+        const comp = wasmHost.compile(src);
+        if (!comp.ok) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
         }
+        const channel = mixer.addChannel({
+          id: 'ch_' + Date.now(),
+          name: data.name || 'New Layer',
+          pattern: patternName,
+          handle: comp.handle,
+          mode: data.mode || 'blend_screen',
+          fader: data.fader !== undefined ? data.fader : 1.0,
+          enabled: true
+        });
+        onChannelCompiled(channel);
+        applyPatternCache(channel);
+        stateManager.saveMixerState(mixer);
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: channel.id }));
+      });
+    } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
+      const id = req.url.split('/')[3];
+      readBody(data => {
+        const channel = mixer.getChannel(id);
+        if (!channel) { res.writeHead(404); return res.end(); }
+        if (data.name !== undefined) channel.name = data.name;
+        if (data.mode !== undefined) channel.mode = data.mode;
+        if (data.fader !== undefined) channel.fader = data.fader;
+        if (data.enabled !== undefined) channel.enabled = data.enabled;
+        // Pattern swap: recompile WASM, swap handle, preserve channel ID
+        if (data.pattern !== undefined && data.pattern !== channel.pattern) {
+          const patternName = path.basename(data.pattern, '.js');
+          const src = loadPattern(patternsDir, patternName);
+          const comp = wasmHost.compile(src);
+          if (comp.ok) {
+            // Destroy old handle
+            if (channel.handle) wasmHost.destroy(channel.handle);
+            channel.handle = comp.handle;
+            channel.pattern = patternName;
+            channel.localControls = {};
+            onChannelCompiled(channel);
+            applyPatternCache(channel);
+          }
+        }
+        stateManager.saveMixerState(mixer);
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
+      const id = req.url.split('/')[3];
+      if (paramCenter) paramCenter.unregisterChannel(id);
+      mixer.removeChannel(id);
+      stateManager.saveMixerState(mixer);
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/control$/)) {
+      const id = req.url.split('/')[3];
+      readBody(data => {
+        if (data.id === undefined) {
+           res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
+        }
+        const result = paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        if (result.status === 'ok') {
+          const channel = mixer.getChannel(id);
+          if (channel) updatePatternCache(channel, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'POST' && req.url.match(/\/mixer\/view/)) {
+      readBody(data => {
+        if (data.view === 'deck') mixer.targetViewFader = 0.0;
+        else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'GET' && req.url === '/param-center/schema') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(paramCenter ? paramCenter.getSchema() : []));
+    } else if (req.method === 'GET' && req.url === '/param-center') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(paramCenter ? paramCenter.getCanonicalState() : {}));
+    } else if (req.method === 'POST' && req.url === '/param-center') {
+      readBody(data => {
+        if (!paramCenter) return res.end('{}');
+        let rev = 0;
+        for (const k in data) {
+          const r = paramCenter.set(k, data[k], 'api');
+          if (r.status === 'ok') rev = r.revision;
+        }
+        paramCenter.applySnapshot(wasmHost);
+        paramCenter.save();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', revision: rev }));
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      });
+    } else if (req.method === 'POST' && req.url === '/param-center/source-lock') {
+      readBody(data => {
+        if (paramCenter) paramCenter.setSourceLock(data);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter ? paramCenter.getSourceLock() : null }));
+        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
       });
     } else {
       res.writeHead(404); res.end('Not Found');
@@ -307,21 +632,60 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
   });
 
   const wss = new WebSocketServer({ server });
-  global.wss = wss; // Expose globally for Autopilot to reach clients securely
+  
+  wss.on('error', (e) => {
+    // catch wss errors to prevent crash
+    console.warn('WebSocketServer error:', e.message);
+  });
+  
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n  ❌ Port ${opts.port} is already in use by another process.`);
+      process.exit(1);
+    } else {
+      console.error('Server error:', e);
+    }
+  });
+  global.wss = wss; 
   autopilot.start();
 
   wss.on('connection', ws => {
-    ws.send(JSON.stringify({ type: 'pattern', name: opts.pattern }));
-    ws.send(JSON.stringify({ type: 'exports', data: getExportsWithState(opts.pattern) }));
+    // Send full state on connect — uses shared serializer
+    ws.send(JSON.stringify(serializeMixerState()));
+
+    if (paramCenter) {
+      ws.send(JSON.stringify({ type: 'sharedParams', ...paramCenter.getCanonicalState() }));
+    }
 
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
         if (d.type === 'setControl' && d.id !== undefined) {
-          runtime.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          if (!patternState[opts.pattern]) patternState[opts.pattern] = {};
-          patternState[opts.pattern][d.id] = { v0: d.v0 || 0, v1: d.v1 || 0, v2: d.v2 || 0 };
-          saveState();
+          const result = paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (result.status === 'ok') {
+            const baseChannel = mixer.getChannel(mixer.baseChannelId);
+            if (baseChannel) updatePatternCache(baseChannel, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          }
+          stateManager.saveMixerState(mixer);
+          broadcastMixerState();
+        } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
+          const result = paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (result.status === 'ok') {
+            const channel = mixer.getChannel(d.channelId);
+            if (channel) updatePatternCache(channel, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          }
+          stateManager.saveMixerState(mixer);
+          broadcastMixerState();
+        } else if (d.type === 'setSharedParam') {
+          if (!paramCenter) return;
+          const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
+          if (res.status === 'ignored') {
+            ws.send(JSON.stringify({ type: 'paramRejected', key: d.key, reason: res.reason, lockedTo: res.lockedTo }));
+          } else {
+            paramCenter.applySnapshot(wasmHost);
+            paramCenter.save();
+            broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+          }
         }
       } catch(e) {}
     });
@@ -331,7 +695,6 @@ export function startApiServer(opts, runtime, patternsDir, publishStatsRef, inte
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
   });
 
-  // Assign the callback for engine.js to push stats to
   publishStatsRef.publish = (stats) => {
     const statsMsg = JSON.stringify({ type: 'stats', ...stats });
     wss.clients.forEach(c => {

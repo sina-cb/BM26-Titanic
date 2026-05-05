@@ -92,20 +92,20 @@ parLights:
   masterExposure:
     value: 0.2
     label: Sim Exposure (Preview Only)
-    min: 0.0
-    max: 2.0
+    min: 0
+    max: 2
     step: 0.05
   simBrightness:
-    value: 1.0
+    value: 1
     label: Sim Brightness (Preview Only)
-    min: 0.0
-    max: 2.0
+    min: 0
+    max: 2
     step: 0.05
   simSurfaceReflectance:
     value: 0.3
     label: Sim Ground Reflectance (Preview Only)
     min: 0.1
-    max: 1.0
+    max: 1
     step: 0.05
   maxSpotlights:
     value: 150
@@ -124,7 +124,7 @@ parLights:
       name: Par 1
       fixtureType: UkingPar
       color: '#ff8800'
-      intensity: 5
+      intensity: 20
       angle: 45
       penumbra: 0.5
       x: 1.2402849287900335
@@ -137,7 +137,7 @@ parLights:
       name: Par 2
       fixtureType: UkingPar
       color: '#0088ff'
-      intensity: 5
+      intensity: 20
       angle: 45
       penumbra: 0.5
       x: 0.891867068997521
@@ -150,7 +150,7 @@ parLights:
       name: Par 3
       fixtureType: UkingPar
       color: '#00ff44'
-      intensity: 5
+      intensity: 20
       angle: 45
       penumbra: 0.5
       x: 0.20042143867423856
@@ -163,7 +163,7 @@ parLights:
       name: Par 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 5
+      intensity: 20
       angle: 45
       penumbra: 0.5
       x: -0.1273980207751736

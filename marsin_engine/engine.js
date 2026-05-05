@@ -13,10 +13,13 @@
 
 import fs from 'fs';
 
-import { createWasmRuntime } from './lib/marsin_wasm_runtime.js';
+import { WasmHost } from './lib/wasm_host.js';
+import { PatternMixer } from './lib/pattern_mixer.js';
+import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
 import { IntensityController } from './lib/intensity_controller.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
+import { ParamCenter } from './lib/param_center.js';
 import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
@@ -124,7 +127,7 @@ async function loadModel(modelName) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, statsCallback) {
+function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, paramCenter, statsCallback) {
   let running = false;
   let timer = null;
   let frameCount = 0;
@@ -145,12 +148,12 @@ function createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, fps, 
     const elapsed = (now - startTime) / 1000; // seconds
 
     // Render all pixels in one WASM call (batch)
-    runtime.beginFrame(elapsed);
+    mixer.beginFrame(elapsed);
 
     // Call 6-channel function. 
     // Wait, the runtime needs metaPtr? We can just pass 0 if none.
     // In marsin_wasm_runtime.js, renderAll6ch() allocates internally if coords are set!
-    const outBuf = runtime.renderAll6ch();
+    const outBuf = mixer.renderAll6ch();
 
     // Reattach results directly onto model pixels so they have `.r`, `.g`, etc for sacn_mapper
     for (let i = 0; i < pixelCount; i++) {
@@ -277,26 +280,49 @@ async function main() {
   }
 
   // 3. Create WASM runtime and compile
-  console.log(`  Initializing WASM runtime...`);
-  let runtime;
+  console.log(`  Initializing WASM host...`);
+  let wasmHost;
   try {
-    runtime = await createWasmRuntime(model.pixelCount);
+    wasmHost = new WasmHost();
+    await wasmHost.init(model.pixelCount);
     console.log(`  ✅ WASM MarsinVM loaded (real compiler + VM)`);
   } catch (err) {
-    console.error(`  ❌ Failed to load WASM runtime: ${err.message}`);
+    console.error(`  ❌ Failed to load WASM host: ${err.message}`);
     process.exit(1);
   }
 
   console.log(`  Compiling pattern...`);
-  const result = runtime.compile(patternCode);
+  const result = wasmHost.compile(patternCode);
   if (!result.ok) {
     console.error(`  ❌ Compile error: ${result.error}`);
     process.exit(1);
   }
   console.log('  ✅ Pattern compiled via MarsinCompiler (bytecode)');
 
+  // 3a. Instantiate CPC
+  const paramCenter = new ParamCenter(null);
+
+  const mixer = new PatternMixer({ wasmHost, pixelCount: model.pixelCount });
+  mixer.patternsDir = path.join(__dirname, 'patterns');
+  mixer.onChannelRemoved = (channelId) => paramCenter.unregisterChannel(channelId);
+  const paramRouter = new ChannelParamRouter(mixer, paramCenter);
+  
+  paramCenter.registerChannel('ch_base', result.handle, wasmHost.getExports(result.handle));
+  wasmHost.beginFrame(result.handle, 0);
+  paramCenter.applySnapshot(wasmHost);
+  
+  mixer.addChannel({
+    id: 'ch_base',
+    name: 'Base',
+    pattern: opts.pattern,
+    handle: result.handle,
+    mode: 'blend_crossfade',
+    fader: 1.0,
+    enabled: true
+  });
+
   // Set pixel coordinates for batch rendering
-  runtime.setCoords(model.pixels);
+  wasmHost.setCoords(model.pixels);
 
   // Set V2 metadata for batch rendering, mapping abbreviation keys
   const metaArray = model.pixels.map(px => ({
@@ -305,7 +331,7 @@ async function main() {
     fixtureId: px.fId || 0,
     viewMask: px.vMask || 0
   }));
-  runtime.setPixelMeta(metaArray);
+  wasmHost.setPixelMeta(metaArray);
 
   // 4. Create global DMX mapper (reusing simulation architecture!)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
@@ -341,8 +367,8 @@ async function main() {
   // 5. Dry run check
   if (opts.dryRun) {
     console.log('\n  🏁 Dry run complete. Pattern loads and compiles OK.\n');
-    runtime.beginFrame(0);
-    const rgbBuf = runtime.renderAll6ch();
+    mixer.beginFrame(0);
+    const rgbBuf = mixer.renderAll6ch();
     console.log(`  Test render pixel 0: RGBWAU(${rgbBuf[0]}, ${rgbBuf[1]}, ${rgbBuf[2]}, ${rgbBuf[3]}, ${rgbBuf[4]}, ${rgbBuf[5]})`);
     for (let i = 0; i < model.pixels.length; i++) {
         const off = i * 6;
@@ -370,9 +396,11 @@ async function main() {
   const broadcastStatsRef = { publish: () => {} };
   const intensityController = new IntensityController();
   const globalEffectsController = new GlobalEffectsController(loadConfig());
-  const apiServer = startApiServer(opts, runtime, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
+  
+  const engineCore = { mixer, wasmHost, paramRouter, paramCenter };
+  const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
-  const loop = createRenderLoop(runtime, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, (stats) => {
+  const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   });
   console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
@@ -399,9 +427,10 @@ async function main() {
       blackBuffers[u] = dmxRouter.getFullFrame(u);
     }
 
-    sacnOut.sendFrame(blackBuffers).then(() => {
+      sacnOut.sendFrame(blackBuffers).then(() => {
       sacnOut.stop();
-      runtime.destroy();
+      mixer.destroy();
+      wasmHost.shutdown();
       console.log(`  ✅ Shutdown complete (${loop.frameCount} frames rendered)\n`);
       process.exit(0);
     });

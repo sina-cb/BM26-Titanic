@@ -5,26 +5,30 @@
   -- Refactored for Continuous Modulo Trailing --
 */
 
-export var speed = 0.05;
+export var animSpeed = 0.05;
 export var swipeLength = 0.8; // Distance between continuous waves
 export var beamWidth = 0.5; // Thicker default to show off the neon trail
 export var hue = 0.55; 
 export var sat = 1.0;
 export var hueSpread = 0.5; // Allows the user to shift colors down the trail
+export var globalDir = 1.0;
 
-export function sliderSpeed(v) { speed = 0.01 + v * 0.1; }
-export function sliderSwipeLength(v) { swipeLength = 0.2 + v * 1.5; }
-export function sliderBeamWidth(v) { beamWidth = 0.1 + v * 0.8; }
-export function hsvPickerColor(h, s, v) { hue = h; sat = s; }
+export function speed(v) { animSpeed = 0.01 + v * 0.1; }
+export function count(v) { swipeLength = 0.2 + v * 1.5; }
+export function size(v) { beamWidth = 0.1 + v * 0.8; }
+export function colorPalette1(h, s, v) { hue = h; sat = s; }
 export function sliderHueSpread(v) { hueSpread = v * 2.0; }
+export function direction(v) { globalDir = (v * 2.0) - 1.0; }
 
-var attackPos = 0;
+var attackPos = 0.0;
 var flashIntensity = 0;
 var invBeamWidth = 1.0; 
 
 export function beforeRender(delta) {
-  // Drives the animation forward infinitely
-  attackPos = time(speed); 
+  // Manually accumulate time phase so changing the speed slider doesn't cause glitches/jumps
+  var phaseIncrement = (delta / 65536.0) / animSpeed;
+  attackPos = (attackPos + phaseIncrement * globalDir) % 1.0; 
+  if (attackPos < 0) attackPos += 1.0;
   
   // Pre-calculate multiplication inverse
   invBeamWidth = 1.0 / beamWidth;

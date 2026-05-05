@@ -1,0 +1,13 @@
+speed: 0.33
+direction: -1
+count: 0.5
+size: 0.72
+rotate: 0
+colorPalette1:
+  h: 0.64
+  s: 1
+  v: 1
+colorPalette2:
+  h: 0.23
+  s: 1
+  v: 1

@@ -1,0 +1,18 @@
+master: 1
+channels:
+  - id: ch_1777942275319
+    name: New Layer
+    pattern: 08_ocean_liner
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    localControls: {}
+    patternCache: {}
+  - id: ch_1777942302690
+    name: New Layer
+    pattern: 08_ocean_liner
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    localControls: {}
+    patternCache: {}

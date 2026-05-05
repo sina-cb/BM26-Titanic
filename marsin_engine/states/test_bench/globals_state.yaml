@@ -1,0 +1,50 @@
+blackout: false
+effects:
+  fogger: false
+  uvBlast: false
+  vintageWhite: false
+params:
+  revision: 10
+  sourceLock: null
+  params:
+    speed:
+      value: 0.88
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 1
+    direction:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 2
+    count:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 3
+    size:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
+    rotate:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
+    colorPalette1:
+      value:
+        h: 0.65
+        s: 1
+        v: 1
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 10
+    colorPalette2:
+      value:
+        h: 1
+        s: 1
+        v: 1
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 9

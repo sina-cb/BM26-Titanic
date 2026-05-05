@@ -13,6 +13,6 @@ global_effects:
     universe: 1
     address: 512
 playlist:
-  active: false
-  delay_s: '10'
+  active: true
+  delay_s: '2'
   shuffle: true

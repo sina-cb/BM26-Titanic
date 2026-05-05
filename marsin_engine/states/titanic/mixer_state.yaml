@@ -1,0 +1,10 @@
+master: 1
+channels:
+  - id: ch_base
+    name: Base
+    pattern: 08_ocean_liner
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    localControls: {}
+patternControls: {}
