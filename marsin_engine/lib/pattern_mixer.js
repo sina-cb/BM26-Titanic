@@ -9,6 +9,7 @@ export class PatternMixer {
     this.channels = [];
     this.master = 1.0;
     this.baseChannelId = null;
+    this.deckFocusChannelId = null; // When set, deck view renders this channel instead of baseChannelId
     this.maxChannels = 6;
 
     // View crossfade state (0.0 = deck exclusively, 1.0 = mixer exclusively)
@@ -111,7 +112,8 @@ export class PatternMixer {
   beginFrame(elapsedSeconds) {
     this.updateTransitions(performance.now());
     for (const channel of this.channels) {
-      channel.beginFrame(this.wasmHost, elapsedSeconds);
+      // Always tick all channels so muted patterns keep animating (for vis)
+      channel.beginFrame(this.wasmHost, elapsedSeconds, true);
     }
   }
 
@@ -131,52 +133,78 @@ export class PatternMixer {
     this.mixerBuffer.fill(0);
     this.outputBuffer.fill(0);
 
-    // simple 1-second crossfade at 40fps (0.025 increment per frame)
+    // Per-channel vis data (RGBWAU, 6 bytes per pixel)
+    this._visData = {};
+
+    // Smooth view crossfade (0 = deck, 1 = mixer)
     if (this.viewFader < this.targetViewFader) {
       this.viewFader = Math.min(this.targetViewFader, this.viewFader + 0.05);
     } else if (this.viewFader > this.targetViewFader) {
       this.viewFader = Math.max(this.targetViewFader, this.viewFader - 0.05);
     }
 
-    // 1. Render Deck
-    const deck = this.getChannel(this.baseChannelId);
-    if (deck && deck.enabled && deck.fader > 0) {
-      deck.renderInto(this.wasmHost, this.deckBuffer);
-      if (deck.fader < 1.0) this.applyMaster(this.deckBuffer, deck.fader);
+    // 1. Render ALL channels for vis data (every channel always gets fresh vis)
+    for (const channel of this.channels) {
+      this.channelBuffer.fill(0);
+      channel.renderInto(this.wasmHost, this.channelBuffer, true);
+      this._visData[channel.id] = this._extractVis(this.channelBuffer);
     }
 
-    // 2. Render Mixer layers
+    // 2. Render Deck (focused channel or base channel → deckBuffer)
+    const deckChannelId = this.deckFocusChannelId || this.baseChannelId;
+    const deck = this.getChannel(deckChannelId);
+    if (deck) {
+      this.channelBuffer.fill(0);
+      // Deck preview acts like a PFL (Pre-Fade Listen) — always output at 100%
+      // ignoring the channel's live mixer mute or fader state.
+      deck.renderInto(this.wasmHost, this.deckBuffer, true);
+    }
+
+    // 3. Render Mixer layers (overlay channels only, composited on black → mixerBuffer)
+    let firstLayer = true;
     for (const channel of this.channels) {
       if (channel.id === this.baseChannelId) continue;
-      if (!channel.enabled || channel.fader <= 0.01) continue;
+      if (!channel.enabled || channel.fader <= 0.001) continue;
 
-      channel.renderInto(this.wasmHost, this.channelBuffer);
+      // Re-render into channelBuffer for blend compositing
+      this.channelBuffer.fill(0);
+      channel.renderInto(this.wasmHost, this.channelBuffer, true);
 
-      const blendHandle = this.getBlendHandle(channel.mode);
-      if (blendHandle) {
-        const result = this.wasmHost.renderBlend6ch(
-          blendHandle, this.pixelCount,
-          this.mixerBuffer, this.channelBuffer, channel.fader
-        );
-        this.mixerBuffer.set(result);
+      if (firstLayer) {
+        const blendHandle = this.getBlendHandle(channel.mode);
+        if (blendHandle) {
+          const result = this.wasmHost.renderBlend6ch(
+            blendHandle, this.pixelCount,
+            this.mixerBuffer, this.channelBuffer, channel.fader
+          );
+          this.mixerBuffer.set(result);
+        } else {
+          this.mixerBuffer.set(this.channelBuffer);
+          if (channel.fader < 1.0) this.applyMaster(this.mixerBuffer, channel.fader);
+        }
+        firstLayer = false;
+      } else {
+        const blendHandle = this.getBlendHandle(channel.mode);
+        if (blendHandle) {
+          const result = this.wasmHost.renderBlend6ch(
+            blendHandle, this.pixelCount,
+            this.mixerBuffer, this.channelBuffer, channel.fader
+          );
+          this.mixerBuffer.set(result);
+        }
       }
     }
 
-    // 3. Transition between Deck and Mixer
+    // 3. Output: crossfade between deck and mixer based on viewFader
     if (this.viewFader <= 0.001) {
       this.outputBuffer.set(this.deckBuffer);
     } else if (this.viewFader >= 0.999) {
       this.outputBuffer.set(this.mixerBuffer);
     } else {
-      const transitionHandle = this.getBlendHandle('blend_crossfade'); // or blend_wipe_left
-      if (transitionHandle) {
-        const result = this.wasmHost.renderBlend6ch(
-          transitionHandle, this.pixelCount,
-          this.deckBuffer, this.mixerBuffer, this.viewFader
-        );
-        this.outputBuffer.set(result);
-      } else {
-        this.outputBuffer.set(this.mixerBuffer);
+      const v = this.viewFader;
+      const iv = 1 - v;
+      for (let i = 0; i < this.outputBuffer.length; i++) {
+        this.outputBuffer[i] = Math.round(this.deckBuffer[i] * iv + this.mixerBuffer[i] * v);
       }
     }
 
@@ -184,7 +212,26 @@ export class PatternMixer {
       this.applyMaster(this.outputBuffer, this.master);
     }
 
+    // Capture master vis (final output)
+    this._visData['master'] = this._extractVis(this.outputBuffer);
+
     return this.outputBuffer;
+  }
+
+  /**
+   * Extract vis data from a 6ch buffer (full RGBWAU, 6 bytes per pixel).
+   * Returns a copy of the buffer as Uint8Array.
+   */
+  _extractVis(buf6ch) {
+    return new Uint8Array(buf6ch);
+  }
+
+  /**
+   * Get per-channel and master vis data for streaming to clients.
+   * Returns { channels: [{id, rgb: Uint8Array|null}, ...], master: Uint8Array }
+   */
+  getVisData() {
+    return this._visData || {};
   }
 
   destroy() {
@@ -210,7 +257,10 @@ export class PatternMixer {
   _compileBlend(blendName) {
     if (!this.patternsDir) return null;
     try {
-      const blendPath = path.join(this.patternsDir, 'channel_blends', `${blendName}.js`);
+      let blendPath = path.join(this.patternsDir, 'channel_blends', `${blendName}.js`);
+      if (!fs.existsSync(blendPath)) {
+        blendPath = path.join(this.patternsDir, 'transitions', `${blendName}.js`);
+      }
       const code = fs.readFileSync(blendPath, 'utf8');
       const result = this.wasmHost.compile(code);
       if (result.ok) {

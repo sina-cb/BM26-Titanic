@@ -8,6 +8,7 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
+import { PixelStrip } from '@/components/ui/PixelStrip';
 import { useFocusEffect } from 'expo-router';
 import { 
   fetchPatterns, setActivePattern, sendControl, getApiBase, getApiBaseAsync,
@@ -85,6 +86,7 @@ const OfflineBanner = ({ error }: { error: string }) => (
 export default function ControlDeckScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
   const [mixerChannels, setMixerChannels] = useState<any[]>([]);
+  const [selectedDeckChannel, setSelectedDeckChannel] = useState<string | null>(null);
   const [mixerMaster, setMixerMaster] = useState<number>(1.0);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [isScrollEnabled, setScrollEnabled] = useState<boolean>(true);
@@ -100,12 +102,68 @@ export default function ControlDeckScreen() {
   const itemLayouts = useRef<{ [key: string]: number }>({});
   const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef<string>('');
+  const visDataRef = useRef<{[key: string]: string | null}>({});
+  const [visVersion, setVisVersion] = useState(0);
+  const lastVisUpdateRef = useRef(0);
 
   useFocusEffect(
     useCallback(() => {
-      setMixerView('deck');
-    }, [])
+      // Tell engine we're in deck mode, and which channel to preview
+      setMixerView('deck', selectedDeckChannel || undefined);
+    }, [selectedDeckChannel])
   );
+
+  const connectWebSocket = useCallback((base: string) => {
+    // Close existing
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+    const wsPort = base.split(':').pop();
+    const wsUrl = `ws://${engineHost}:${wsPort}`;
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        setIsConnected(true);
+        setConnectionError('');
+      };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'mixer') {
+            setMixerChannels(msg.channels || []);
+            setMixerMaster(msg.master || 1.0);
+          } else if (msg.type === 'pattern') {
+            // legacy, ignore if we are using mixer
+          } else if (msg.type === 'vis') {
+            visDataRef.current = msg.vis || {};
+            // Throttle UI updates to ~5fps (200ms)
+            const now = Date.now();
+            if (now - lastVisUpdateRef.current > 200) {
+              lastVisUpdateRef.current = now;
+              setVisVersion(v => v + 1);
+            }
+          }
+        } catch {}
+      };
+      ws.onerror = () => {
+        setIsConnected(false);
+        setConnectionError('WebSocket connection failed');
+      };
+      ws.onclose = () => {
+        // Auto-reconnect after 5 seconds
+        setTimeout(() => {
+          if (apiBaseRef.current) {
+            connectWebSocket(apiBaseRef.current);
+          }
+        }, 5000);
+      };
+      wsRef.current = ws;
+    } catch {}
+  }, []);
 
   // ── Boot: wait for resolved API base, then connect ──────────────────
   const connectToEngine = useCallback(async () => {
@@ -144,50 +202,6 @@ export default function ControlDeckScreen() {
     }
   }, [connectWebSocket]);
 
-  const connectWebSocket = useCallback((base: string) => {
-    // Close existing
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-    const wsPort = base.split(':').pop();
-    const wsUrl = `ws://${engineHost}:${wsPort}`;
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      ws.onopen = () => {
-        setIsConnected(true);
-        setConnectionError('');
-      };
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'mixer') {
-            setMixerChannels(msg.channels || []);
-            setMixerMaster(msg.master || 1.0);
-          } else if (msg.type === 'pattern') {
-            // legacy, ignore if we are using mixer
-          }
-        } catch {}
-      };
-      ws.onerror = () => {
-        setIsConnected(false);
-        setConnectionError('WebSocket connection failed');
-      };
-      ws.onclose = () => {
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => {
-          if (apiBaseRef.current) {
-            connectWebSocket(apiBaseRef.current);
-          }
-        }, 5000);
-      };
-      wsRef.current = ws;
-    } catch {}
-  }, []);
-
   useEffect(() => {
     connectToEngine();
 
@@ -207,15 +221,14 @@ export default function ControlDeckScreen() {
   // Auto-scroll logic removed, since we have multiple channels.
 
   const handleSelectPattern = async (pattern: string) => {
-    // For now, selecting a pattern will just set the base pattern 
-    // to maintain compatibility.
-    const res = await setActivePattern(pattern); 
-    if (res.ok && res.data && res.data.error) {
-      setCompileError(res.data.error);
-    } else if (!res.ok) {
-      setCompileError(res.error || 'Network error');
-    } else {
+    const targetId = selectedDeckChannel || (mixerChannels[0]?.id);
+    if (!targetId) return;
+
+    try {
+      await updateMixerChannel(targetId, { pattern });
       setCompileError(null);
+    } catch (err: any) {
+      setCompileError(err.message || 'Network error');
     }
   };
 
@@ -226,10 +239,50 @@ export default function ControlDeckScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
       <CPCControls wsRef={wsRef} />
+      {/* ── Channel Preview Visualization ───────────────────────────── */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.light.icon }}>
+            {selectedDeckChannel && mixerChannels[0] && selectedDeckChannel !== mixerChannels[0].id ? 'CHANNEL PREVIEW' : 'MASTER OUTPUT'}
+          </Text>
+        </View>
+        <PixelStrip base64Data={visDataRef.current[selectedDeckChannel || (mixerChannels[0]?.id || 'master')]} height={18} style={{ borderRadius: 6 }} />
+      </View>
       <View style={globalStyles.container}>
         {/* Left Pane - Pattern Queue */}
         <View style={globalStyles.leftPane}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 }}>
+        {/* Channel Selection Buttons */}
+        <View style={{ marginBottom: 20 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 8 }}>TARGET CHANNEL</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {mixerChannels.map((c, idx) => {
+              const isSelected = (selectedDeckChannel || mixerChannels[0]?.id) === c.id;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  onPress={() => {
+                    setSelectedDeckChannel(c.id);
+                    setMixerView('deck', c.id);
+                  }}
+                  style={{
+                    flex: 1, paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center', borderRadius: 8,
+                    backgroundColor: isSelected ? Colors.light.primary : Colors.light.surfaceContainerHigh,
+                    borderWidth: 1, borderColor: isSelected ? 'transparent' : Colors.light.ghostBorder,
+                  }}
+                >
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: isSelected ? '#000' : Colors.light.text }}>
+                    {idx === 0 ? 'DECK MAIN' : `MIXER CH ${idx}`}
+                  </Text>
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9, color: isSelected ? 'rgba(0,0,0,0.6)' : Colors.light.icon, marginTop: 2 }} numberOfLines={1}>
+                    {c.pattern || c.name || '—'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <Text style={globalStyles.headline}>Pattern Queue</Text>
           <IconSymbol name="slider.vertical.3" size={24} color={Colors.light.secondary} />
         </View>
@@ -238,9 +291,10 @@ export default function ControlDeckScreen() {
           <View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {patterns.map((ptn) => {
-                // If there's a base channel, highlight it
-                const baseChannel = mixerChannels[0];
-                const isLive = baseChannel && baseChannel.pattern === ptn;
+                // Highlight the active pattern for the SELECTED channel
+                const targetChannelId = selectedDeckChannel || (mixerChannels[0]?.id);
+                const targetChannel = mixerChannels.find(c => c.id === targetChannelId);
+                const isLive = targetChannel && targetChannel.pattern === ptn;
                 return (
                   <TouchableOpacity 
                     key={ptn} 
@@ -331,9 +385,13 @@ export default function ControlDeckScreen() {
              </TouchableOpacity>
           </View>
 
+
           {/* Channels Row */}
           <View style={{ gap: 24, paddingRight: 24 }}>
-            {mixerChannels.slice(0, 1).map((channel, idx) => {
+            {mixerChannels.filter(c => c.id === (selectedDeckChannel || mixerChannels[0]?.id)).map((channel, idx) => {
+              const actualIdx = mixerChannels.findIndex(c => c.id === channel.id);
+              const channelTitle = actualIdx === 0 ? "DECK MAIN" : `MIXER CH ${actualIdx}`;
+              
               const exports = channel.exports || [];
               const sliders = exports.filter((e: any) => e.kind === 1);
               const toggles = exports.filter((e: any) => e.kind === 2);
@@ -342,15 +400,9 @@ export default function ControlDeckScreen() {
 
               return (
                 <View key={channel.id} style={{ width: '100%', backgroundColor: Colors.light.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: Colors.light.primary, marginBottom: 8, textTransform: 'uppercase' }}>CH {idx + 1}: {channel.name || channel.pattern}</Text>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: Colors.light.primary, marginBottom: 8, textTransform: 'uppercase' }}>{channelTitle}: {channel.name || channel.pattern}</Text>
                   
-                  {/* Channel Controls (Fader, Mode, Enabled) */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: Colors.light.ghostBorder }}>
-                    <TouchableOpacity onPress={() => updateMixerChannel(channel.id, { enabled: !channel.enabled })} style={{ padding: 8, backgroundColor: channel.enabled ? Colors.light.primary : Colors.light.surfaceContainerHigh, borderRadius: 4 }}>
-                      <Text style={{ color: channel.enabled ? '#000' : '#fff', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12 }}>{channel.enabled ? 'ON' : 'OFF'}</Text>
-                    </TouchableOpacity>
-                    <Text style={{ color: Colors.light.text, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12 }}>MODE: {channel.mode.toUpperCase()}</Text>
-                  </View>
+                  {/* Channel Controls Removed from Deck View */}
 
                   <View style={{ marginBottom: 16 }}>
                     <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>

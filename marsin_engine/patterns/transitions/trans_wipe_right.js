@@ -1,14 +1,13 @@
 /*
-  blend_wipe_left.js — Horizontal Wipe (Left to Right)
+  trans_wipe_right.js — Horizontal Wipe (Right to Left)
   Spatial wipe across x axis with feathered edge.
-  Uses transition built-ins: progress, fromR/G/B/W/A/U, toR/G/B/W/A/U
 */
 
 export var feather = 0.08;
 export function sliderFeather(v) { feather = 0.02 + v * 0.3; }
 
 export function render(index, x, y, z) {
-  var edge = smoothstep(progress - feather, progress + feather, x);
+  var edge = 1.0 - smoothstep(progress - feather, progress + feather, x);
   rgbwau(
     mix(fromR, toR, edge),
     mix(fromG, toG, edge),

@@ -5,14 +5,12 @@ CaptainPad is the native remote-control surface for the MarsinEngine environment
 ## 1. Local Development
 Because of the React Native / Expo architecture, you can run this locally and connect to your engine instantly:
 ```bash
-# Navigate to the dashboard UI
 cd CaptainPad
+npm install          # Only required once
 
-# Install dependencies (only required once)
-npm install
-
-# Start Local Server (will generate a QR code)
-npm start -c
+npm start            # Start Expo dev server
+npm run start:k      # Kill port before starting (if port is stuck)
+npm run start:kc     # Kill port + clear Metro cache
 ```
 - **iPad / iPhone**: Download the **Expo Go** application from the App Store and aggressively scan the QR code via your generic camera app.
 - **Android**: Download **Expo Go** from the Play Store and scan within the app.

@@ -296,21 +296,35 @@ export class ParamCenter {
 
   applySnapshot(wasmHost) {
     for (const chId in this._channels) {
-      const ch = this._channels[chId];
-      if (!ch.handle) continue;
-      for (const key in ch.controlMap) {
-        const mapping = ch.controlMap[key];
-        const slot = this._store[key];
-        const entry = this._registryByKey[key];
-        if (entry.type === 'hsv') {
-          wasmHost.setControl(ch.handle, mapping.id, slot.value.h, slot.value.s, slot.value.v);
-        } else {
-          wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
-        }
-      }
+      this._applyToHandle(wasmHost, this._channels[chId]);
     }
     for (const key in this._store) {
       this._store[key].dirty = false;
+    }
+  }
+
+  /**
+   * Push current CPC values to a SINGLE channel only.
+   * Use this after compiling a new pattern on one channel so that
+   * other already-running channels are not disturbed.
+   */
+  applyToChannel(wasmHost, channelId) {
+    const ch = this._channels?.[channelId];
+    if (ch) this._applyToHandle(wasmHost, ch);
+  }
+
+  /** @private shared helper */
+  _applyToHandle(wasmHost, ch) {
+    if (!ch.handle) return;
+    for (const key in ch.controlMap) {
+      const mapping = ch.controlMap[key];
+      const slot = this._store[key];
+      const entry = this._registryByKey[key];
+      if (entry.type === 'hsv') {
+        wasmHost.setControl(ch.handle, mapping.id, slot.value.h, slot.value.s, slot.value.v);
+      } else {
+        wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
+      }
     }
   }
 

@@ -28,6 +28,7 @@ import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -134,6 +135,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let windowFrames = 0;
   let startTime = 0;
   let lastStatsTime = 0;
+  let lastVisTime = 0;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
 
@@ -146,6 +148,9 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     const now = performance.now();
     const elapsed = (now - startTime) / 1000; // seconds
+
+    // Flush pending shared parameters (CPC) to all active VMs before frame compute
+    if (paramCenter) paramCenter.flushDirty(mixer.wasmHost);
 
     // Render all pixels in one WASM call (batch)
     mixer.beginFrame(elapsed);
@@ -206,6 +211,19 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         statsCallback({ fps: windowFps, patched: patchedCount });
       }
     }
+
+    // Vis data broadcast at ~10fps (every 100ms)
+    if (now - lastVisTime > 100) {
+      lastVisTime = now;
+      if (statsCallback) {
+        const visData = mixer.getVisData();
+        const visPayload = {};
+        for (const [key, rgb] of Object.entries(visData)) {
+          visPayload[key] = rgb ? Buffer.from(rgb).toString('base64') : null;
+        }
+        statsCallback({ type: 'vis', vis: visPayload, pixelCount });
+      }
+    }
   }
 
   function start() {
@@ -237,6 +255,20 @@ async function main() {
   ║    Multichannel Rendering Pipeline       ║
   ╚══════════════════════════════════════════╝
 `);
+
+  // Kill existing ports
+  const engineConfig = loadConfig();
+  const portsToKill = [];
+  if (engineConfig.server && engineConfig.server.port) portsToKill.push(engineConfig.server.port);
+  if (engineConfig.client && engineConfig.client.web && engineConfig.client.web.port) portsToKill.push(engineConfig.client.web.port);
+  
+  if (portsToKill.length > 0) {
+    try {
+      execSync(`npx -y kill-port ${portsToKill.join(' ')}`, { stdio: 'ignore', shell: process.platform === 'win32' });
+    } catch (e) {
+      // Ignore errors if ports are already free
+    }
+  }
 
   // List patterns
   if (opts.list) {
@@ -404,6 +436,7 @@ async function main() {
     broadcastStatsRef.publish(stats);
   });
   console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
+
   loop.start();
 
   // 8. Graceful shutdown

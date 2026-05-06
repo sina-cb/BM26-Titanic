@@ -11,6 +11,10 @@ export class ChannelParamRouter {
     if (this.paramCenter?.isSharedControlId(channelId, controlId)) {
       return { status: 'ignored', reason: 'shared_ownership' };
     }
+    // Reject writes to CPC-blocked controls (e.g. sliderSpeed when CPC owns speed)
+    if (this.paramCenter?.getBlockedIds(channelId).has(controlId)) {
+      return { status: 'ignored', reason: 'blocked_by_shared' };
+    }
 
     const channel = this.mixer.getChannel(channelId);
     if (!channel) return { status: 'ignored', reason: 'channel_not_found' };

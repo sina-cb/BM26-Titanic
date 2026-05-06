@@ -8,3 +8,4 @@ sacn_udp_port: 5568 # Physical E1.31 UDP protocol port
 
 # Not actively read by simulation, reserved here strictly to prevent port collisions
 marsin_engine_port: 6968 # Engine API Server (http_port - 1)
+captainpad_web_port: 6967 # CaptainPad Web UI (http_port - 2)

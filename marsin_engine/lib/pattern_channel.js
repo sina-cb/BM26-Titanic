@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0 }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -7,6 +7,9 @@ export class PatternChannel {
     this.mode = mode; // 'blend_screen', 'blend_crossfade', 'blend_add', 'blend_over'
     this.fader = fader;
     this.enabled = enabled;
+    this.locked = locked;
+    this.transitionMode = transitionMode;
+    this.transitionTime = transitionTime;
     
     // Exports from WASM
     this.localExports = [];
@@ -19,14 +22,14 @@ export class PatternChannel {
     this.sharedBindings = {}; 
   }
 
-  beginFrame(wasmHost, elapsedSeconds) {
-    if (this.enabled && this.handle) {
+  beginFrame(wasmHost, elapsedSeconds, forceRender = false) {
+    if ((this.enabled || forceRender) && this.handle) {
       wasmHost.beginFrame(this.handle, elapsedSeconds);
     }
   }
 
-  renderInto(wasmHost, buffer) {
-    if (this.enabled && this.handle) {
+  renderInto(wasmHost, buffer, forceRender = false) {
+    if ((this.enabled || forceRender) && this.handle) {
       wasmHost.renderAll6ch(this.handle, buffer);
     }
   }

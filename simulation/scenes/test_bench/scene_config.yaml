@@ -130,7 +130,7 @@ parLights:
       x: 1.2402849287900335
       'y': 1.994224639997228
       z: 0
-      rotX: -34.99999999999999
+      rotX: -39.99999999999999
       rotY: 180
       rotZ: 180
     - group: ParLights
@@ -169,7 +169,7 @@ parLights:
       x: -0.1273980207751736
       'y': 1.9999999999999998
       z: -4.849303195384386e-16
-      rotX: -40.00000000000001
+      rotX: -40.00000000000002
       rotY: 180
       rotZ: 180
     - group: VintageLights
@@ -179,12 +179,12 @@ parLights:
       intensity: 3
       angle: 45
       penumbra: 0.5
-      x: -1.264292127555557
-      'y': 6.5
-      z: 13
-      rotX: -55.49100667673063
-      rotY: -0.21235543704564325
-      rotZ: -89.59376711011713
+      x: -1.5
+      'y': 0.5
+      z: 1
+      rotX: -0.1418652807780255
+      rotY: 145
+      rotZ: 0.5791656256353859
     - group: VintageLights
       name: Vintage Right
       fixtureType: VintageLed
@@ -192,12 +192,12 @@ parLights:
       intensity: 3
       angle: 45
       penumbra: 0.5
-      x: 1.486378387947728
-      'y': 6.459954334092961
-      z: 13
-      rotX: -55.000000000000014
-      rotY: -1.1090255735390504e-14
-      rotZ: -93.34726508362832
+      x: 2.5
+      'y': 0.5
+      z: 1
+      rotX: -0.010242002552789991
+      rotY: -134.79537699350138
+      rotZ: 2.3836015206376797
     - group: BarLights
       name: Bar Left
       fixtureType: ShehdsBar

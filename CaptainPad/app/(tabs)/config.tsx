@@ -8,7 +8,7 @@ import { getApiBase, getApiBaseAsync, setApiBase, testConnection, ConnectionResu
 import { useServerDiscovery, DiscoveredServer } from '@/hooks/useServerDiscovery';
 
 // Native yaml parsing from our metro injection!
-import defaultConfigs from '@/configs.yaml';
+import defaultConfigs from '@/config.yaml';
 
 export default function ConfigScreen() {
   const [ip, setIp] = useState('');

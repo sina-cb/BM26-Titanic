@@ -1,18 +1,24 @@
 master: 1
 channels:
-  - id: ch_1777942275319
+  - id: ch_1778033642571
     name: New Layer
-    pattern: 08_ocean_liner
+    pattern: 13_sparkle
     mode: blend_screen
     fader: 1
     enabled: true
+    locked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
     localControls: {}
     patternCache: {}
-  - id: ch_1777942302690
+  - id: ch_1778033643249
     name: New Layer
-    pattern: 08_ocean_liner
+    pattern: 07_shimmer
     mode: blend_screen
     fader: 0
     enabled: true
+    locked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
     localControls: {}
     patternCache: {}

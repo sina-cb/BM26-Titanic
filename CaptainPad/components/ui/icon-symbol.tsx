@@ -27,6 +27,8 @@ const MAPPING = {
   'arrow.clockwise': 'refresh',
   'exclamationmark.triangle.fill': 'warning',
   'slider.horizontal.3': 'tune',
+  'lock.fill': 'lock',
+  'lock.open.fill': 'lock-open',
 } as IconMapping;
 
 /**

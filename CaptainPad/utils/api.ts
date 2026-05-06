@@ -1,19 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-const defaultConfigsRaw: any = require('@/configs.yaml');
+import { Platform } from 'react-native';
+
+const defaultConfigsRaw: any = require('@/config.yaml');
 const defaultConfigs = defaultConfigsRaw?.default || defaultConfigsRaw || {};
 
-let api_base = defaultConfigs.api_base || 'http://10.1.1.172:6968';
+var api_base = defaultConfigs.api_base || 'http://10.1.1.172:6968';
 
 // ── Async-safe API base resolution ────────────────────────────────────────
 // Screens must await getApiBaseAsync() before their first network call
 // to avoid racing AsyncStorage on cold start.
-let _resolved = false;
-let _resolvePromise: Promise<string> | null = null;
+var _resolved = false;
+var _resolvePromise: Promise<string> | null = null;
 
-AsyncStorage.getItem('API_BASE').then(val => {
-  if (val) api_base = val;
-  _resolved = true;
-});
+
 
 export function getApiBase(): string {
   return api_base;
@@ -137,6 +136,17 @@ export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
   }
 }
 
+export async function fetchTransitions(): Promise<ApiResult<string[]>> {
+  try {
+    const res = await fetch(`${api_base}/transitions`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    console.warn('Fetch transitions failed:', err);
+    return { ok: false, error: err.message, data: [] };
+  }
+}
+
 export async function setActivePattern(pattern: string): Promise<ApiResult<any>> {
   try {
     const res = await fetch(`${api_base}/set-pattern`, {
@@ -234,12 +244,14 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
   }
 }
 
-export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<any>> {
+export async function setMixerView(view: 'deck' | 'mixer', deckChannel?: string | null): Promise<ApiResult<any>> {
   try {
+    const body: any = { view };
+    if (deckChannel !== undefined) body.deckChannel = deckChannel;
     const res = await fetch(`${api_base}/mixer/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ view }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     return { ok: true, data };

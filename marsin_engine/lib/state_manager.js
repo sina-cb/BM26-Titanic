@@ -83,9 +83,12 @@ export class StateManager {
         id: c.id,
         name: c.name,
         pattern: c.pattern,
-        mode: c.mode,
+        mode: c.mode.startsWith('trans_') ? 'blend_screen' : c.mode,
         fader: c.fader,
         enabled: c.enabled,
+        locked: !!c.locked,
+        transitionMode: c.transitionMode || 'trans_crossfade',
+        transitionTime: c.transitionTime || 1.0,
         localControls: c.localControls,
         patternCache: c.patternCache || {}
       }))

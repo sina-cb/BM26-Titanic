@@ -3,11 +3,16 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "start": "expo start",
+    "start": "node ./scripts/start.mjs",
+    "start:k": "node ./scripts/start.mjs -k",
+    "start:kc": "node ./scripts/start.mjs -k -c",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "web:build": "npx expo export --platform web -c",
+    "web:serve": "npx serve dist -p 6967 -s",
+    "web:watch": "node scripts/web-watch.mjs",
     "lint": "expo lint"
   },
   "dependencies": {

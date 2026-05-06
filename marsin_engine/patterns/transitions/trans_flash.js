@@ -17,27 +17,27 @@ export function render(index, x, y, z) {
 
   if (progress < 0.5) {
     // First half: from pattern → flash white
-    var t = progress * 2;
-    t = pow(t, 0.5);
+    var amt = progress * 2;
+    amt = pow(amt, 0.5);
     rgbwau(
-      mix(fromR, fR, t),
-      mix(fromG, fG, t),
-      mix(fromB, fB, t),
-      mix(fromW, 1, t),
-      fromA * (1 - t),
-      fromU * (1 - t)
+      mix(fromR, fR, amt),
+      mix(fromG, fG, amt),
+      mix(fromB, fB, amt),
+      mix(fromW, 1, amt),
+      fromA * (1 - amt),
+      fromU * (1 - amt)
     );
   } else {
     // Second half: flash white → to pattern
-    var t = (progress - 0.5) * 2;
-    t = pow(t, 2);
+    var amt = (progress - 0.5) * 2;
+    amt = pow(amt, 2);
     rgbwau(
-      mix(fR, toR, t),
-      mix(fG, toG, t),
-      mix(fB, toB, t),
-      mix(1, toW, t),
-      toA * t,
-      toU * t
+      mix(fR, toR, amt),
+      mix(fG, toG, amt),
+      mix(fB, toB, amt),
+      mix(1, toW, amt),
+      toA * amt,
+      toU * amt
     );
   }
 }

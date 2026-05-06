@@ -1,0 +1,3 @@
+# CaptainPad Configuration
+# Default engine address (fallback — network discovery overrides this at runtime)
+api_base: "http://10.1.1.172:6968"

@@ -4,26 +4,26 @@ effects:
   uvBlast: false
   vintageWhite: false
 params:
-  revision: 10
+  revision: 18
   sourceLock: null
   params:
     speed:
-      value: 0.88
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 1
+      value: 0.17
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 18
     direction:
       value: 1
       lastSource: init
       lastOrigin: init
       lastRevision: 2
     count:
-      value: 0.5
+      value: 0.7
       lastSource: init
       lastOrigin: init
       lastRevision: 3
     size:
-      value: 0.5
+      value: 0.89
       lastSource: init
       lastOrigin: init
       lastRevision: 4
@@ -34,17 +34,17 @@ params:
       lastRevision: 5
     colorPalette1:
       value:
-        h: 0.65
+        h: 0.85
         s: 1
         v: 1
-      lastSource: ws
-      lastOrigin: ws
-      lastRevision: 10
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 6
     colorPalette2:
       value:
-        h: 1
+        h: 0.68
         s: 1
         v: 1
-      lastSource: ws
-      lastOrigin: ws
-      lastRevision: 9
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 7

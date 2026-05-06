@@ -29,11 +29,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (paramCenter) {
       paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
       // Force the VM to execute its top-level scope (export var defaults) so that
-      // applySnapshot values don't get clobbered by the first real beginFrame.
+      // CPC values don't get clobbered by the first real beginFrame.
       wasmHost.beginFrame(channel.handle, 0);
-      paramCenter.applySnapshot(wasmHost);
       // We also broadcast so clients know the new schema bindings
       broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    }
+  }
+
+  /**
+   * Push current CPC (global) values to a channel as the FINAL step after
+   * onChannelCompiled + applyPatternCache + localControls restore.
+   * This ensures the latest system color palette, speed, etc. always wins
+   * over any saved/cached per-pattern state.
+   */
+  function finalizeCpcValues(channel) {
+    if (paramCenter) {
+      paramCenter.applyToChannel(wasmHost, channel.id);
     }
   }
 
@@ -153,6 +164,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
         applyPatternCache(ch);
+        // CPC gets the last word — latest color palette, speed, etc. always win
+        finalizeCpcValues(ch);
       } else {
         console.warn(`Failed to compile saved channel ${saved.pattern}:`, comp.error);
       }
@@ -200,7 +213,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const base = mixer.getChannel(mixer.baseChannelId);
     if (base) opts.pattern = base.pattern;
   } else {
-    mixer.channels.forEach(applyPatternCache);
+    mixer.channels.forEach(ch => { applyPatternCache(ch); finalizeCpcValues(ch); });
   }
 
   // Single source of truth for serializing mixer state — used by
@@ -214,11 +227,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         id: c.id,
         name: c.name,
         pattern: c.pattern,
-        mode: c.mode,
+        mode: c.mode.startsWith('trans_') ? 'blend_screen' : c.mode,
         fader: c.fader,
         enabled: c.enabled,
+        locked: !!c.locked,
+        transitionMode: c.transitionMode || 'trans_crossfade',
+        transitionTime: c.transitionTime || 1.0,
         exports: wasmHost.getExports(c.handle)
           .filter(e => !(paramCenter && paramCenter.isSharedExport(c.id, e.name)))
+          .filter(e => !(paramCenter && paramCenter.getBlockedIds(c.id).has(e.id)))
           .filter(e => localControlKinds.has(e.kind))
           .map(e => {
             const cv = c.localControls[e.id];
@@ -268,6 +285,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
            onChannelCompiled(newChannel);
            applyPatternCache(newChannel);
+           finalizeCpcValues(newChannel);
            saveAllState();
            
            const broadcast = JSON.stringify({ type: 'pattern', name: nextPattern });
@@ -315,6 +333,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const blendsDir = path.join(patternsDir, 'channel_blends');
       try {
         const files = fs.readdirSync(blendsDir).filter(f => f.endsWith('.js')).map(f => f.replace('.js', ''));
+        res.end(JSON.stringify(files));
+      } catch (e) {
+        res.end(JSON.stringify([]));
+      }
+    } else if (req.method === 'GET' && req.url === '/transitions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const transitionsDir = path.join(patternsDir, 'transitions');
+      try {
+        const files = fs.readdirSync(transitionsDir).filter(f => f.endsWith('.js')).map(f => f.replace('.js', ''));
         res.end(JSON.stringify(files));
       } catch (e) {
         res.end(JSON.stringify([]));
@@ -380,6 +407,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               ch.handle = compNew.handle;
               onChannelCompiled(ch);
               applyPatternCache(ch);
+              finalizeCpcValues(ch);
             }
           }
         });
@@ -428,6 +456,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         opts.pattern = patternName;
         onChannelCompiled(newChannel);
         applyPatternCache(newChannel);
+        finalizeCpcValues(newChannel);
         saveAllState();
         
         const broadcast = JSON.stringify({ type: 'pattern', name: patternName });
@@ -539,6 +568,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         });
         onChannelCompiled(channel);
         applyPatternCache(channel);
+        finalizeCpcValues(channel);
         stateManager.saveMixerState(mixer);
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: channel.id }));
@@ -552,6 +582,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.mode !== undefined) channel.mode = data.mode;
         if (data.fader !== undefined) channel.fader = data.fader;
         if (data.enabled !== undefined) channel.enabled = data.enabled;
+        if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
+        if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
+        if (data.locked !== undefined) channel.locked = !!data.locked;
         // Pattern swap: recompile WASM, swap handle, preserve channel ID
         if (data.pattern !== undefined && data.pattern !== channel.pattern) {
           const patternName = path.basename(data.pattern, '.js');
@@ -565,6 +598,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             channel.localControls = {};
             onChannelCompiled(channel);
             applyPatternCache(channel);
+            finalizeCpcValues(channel);
+          } else {
+            console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
         }
         stateManager.saveMixerState(mixer);
@@ -597,6 +633,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         if (data.view === 'deck') mixer.targetViewFader = 0.0;
         else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
+        // Allow the deck to focus on a specific channel for preview
+        if (data.deckChannel !== undefined) {
+          mixer.deckFocusChannelId = data.deckChannel || null;
+        }
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'GET' && req.url === '/param-center/schema') {
@@ -676,6 +716,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           stateManager.saveMixerState(mixer);
           broadcastMixerState();
+        } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
+          const channel = mixer.getChannel(d.channelId);
+          if (channel) {
+            channel.fader = d.fader;
+            // No broadcast — fader-only updates during transitions are high-frequency.
+            // The engine applies the value immediately; full state syncs on completion.
+          }
+        } else if (d.type === 'setChannelMode' && d.channelId && d.mode) {
+          const channel = mixer.getChannel(d.channelId);
+          if (channel) {
+            channel.mode = d.mode;
+            // Pre-compile the blend handle so first frame isn't skipped
+            mixer.getBlendHandle(d.mode);
+            // No save/broadcast — mode changes during transitions are transient.
+            // State is persisted explicitly via 'saveMixerState' at transition end.
+          }
+        } else if (d.type === 'setChannelEnabled' && d.channelId !== undefined) {
+          const channel = mixer.getChannel(d.channelId);
+          if (channel) {
+            channel.enabled = !!d.enabled;
+            // No broadcast — enabled toggles during transition setup are batched.
+          }
+        } else if (d.type === 'saveMixerState') {
+          // Explicit save + broadcast — called once at transition completion
+          stateManager.saveMixerState(mixer);
+          broadcastMixerState();
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
@@ -695,10 +761,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
   });
 
-  publishStatsRef.publish = (stats) => {
-    const statsMsg = JSON.stringify({ type: 'stats', ...stats });
+  publishStatsRef.publish = (data) => {
+    // Vis data has its own type
+    const msg = data.type === 'vis'
+      ? JSON.stringify(data)
+      : JSON.stringify({ type: 'stats', ...data });
     wss.clients.forEach(c => {
-      if (c.readyState === 1) c.send(statsMsg);
+      if (c.readyState === 1) c.send(msg);
     });
   };
 

@@ -234,3 +234,38 @@ node engine.js --pattern bioluminescence --model titanic --dest 10.1.1.102
 | Chromatik (LX Studio) | `200` | Highest, always wins |
 
 When multiple sources send to the same universe, the simulation's `UniverseRouter` resolves conflicts using the configured merge mode (`highest_priority_source_lock` or `highest_priority_per_patch`).
+
+---
+
+## 🌐 Web Client Hosting
+
+The CaptainPad web UI can be served as a static build from the engine. This is separate from the Expo dev server (which handles iOS/Android).
+
+### Setup
+
+1. **Build the web export** from CaptainPad:
+   ```bash
+   cd ../CaptainPad
+   npx expo export --platform web
+   ```
+   This produces a static site in `CaptainPad/dist/`.
+
+2. **Enable in `config.yaml`:**
+   ```yaml
+   web_client:
+     enabled: true
+     port: 6967
+     build_dir: ../CaptainPad/dist
+   ```
+
+3. **Start the engine** — it will serve the web UI on `http://localhost:6967` alongside the API on port `6968`.
+
+### Architecture
+
+| Component | Port | Purpose |
+|-----------|------|---------|
+| **Engine API** | `6968` | REST + WebSocket for pattern/mixer control |
+| **Web Client** | `6967` | Static file server for CaptainPad web build |
+| **Expo Dev** | `6967` | iOS/Android development (shares same port, run one at a time) |
+
+> **Note:** The web client connects to the engine API at the address configured in `CaptainPad/config.yaml` (`api_base`). For production, both run on the same host, so the web UI can reach the API at `http://localhost:6968`.
