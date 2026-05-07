@@ -8,19 +8,19 @@ effects:
   vintageWhiteBypassDimmer: true
   uvBlastBypassDimmer: true
 params:
-  revision: 1141
+  revision: 8
   sourceLock: null
   params:
     speed:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 648
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 1
     direction:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 676
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 2
     count:
       value: 0.187
       lastSource: init
@@ -38,21 +38,21 @@ params:
       lastRevision: 5
     colorPalette1:
       value:
-        h: 1
+        h: 0.44
         s: 1
         v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 1141
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 8
     colorPalette2:
       value:
         h: 0.799
         s: 1
         v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 821
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 7
 dimmers:
-  '1': 0.3392857142857143
-  '2': 0.28125
-  '3': 0.2946428571428571
+  '1': 0.09375
+  '2': 0.1651785714285714
+  '3': 0.1205357142857143

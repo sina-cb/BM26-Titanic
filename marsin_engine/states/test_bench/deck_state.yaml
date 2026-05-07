@@ -1,7 +1,7 @@
 channel:
-  id: ch_base_1778192923978
+  id: ch_base_1778193839075
   name: Base
-  pattern: 13_sparkle
+  pattern: 19_swaying_lattice_ballet
   mode: blend_screen
   fader: 1
   enabled: true
