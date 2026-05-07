@@ -643,8 +643,9 @@ export function onLightingChange() {
   // Show pattern editor only in pixelblaze mode
   if (window.showPatternEditor) window.showPatternEditor(newMode === 'pixelblaze' && isEnabled);
 
-  // Show sACN monitor only in sacn_in mode
-  if (window.showSacnMonitor) window.showSacnMonitor(newMode === 'sacn_in' && isEnabled);
+  // Show sACN monitors only in sacn_in mode
+  if (window.showSacnInMonitor) window.showSacnInMonitor(newMode === 'sacn_in' && isEnabled);
+  if (window.showSacnOutMonitor) window.showSacnOutMonitor(false); // Out monitor only shown when explicitly needed or in sacn_out mode (if it existed)
 
   // Pixelblaze engine
   const pbEnabled = newMode === 'pixelblaze' && isEnabled;
