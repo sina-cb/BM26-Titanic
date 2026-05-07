@@ -87,7 +87,6 @@ export class GlobalEffectsController {
       const isChauvet = fogger.type === 'ChauvetHaze4D';
 
       if (this.effects.fogger) {
-        console.log(`[GlobalEffectsController] Applying fog to address ${fogger.address}`);
         if (isChauvet) {
           // Chauvet Haze 4D: Ch1 = Fan (255), Ch2 = Haze Volume (255)
           frame[fogger.address - 1] = 255;
