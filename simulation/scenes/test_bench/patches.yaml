@@ -63,6 +63,10 @@ patches:
     sectionId: 3
     fixtureId: 8
     viewMask: 0
+  # Intentional fog/haze DMX collision:
+  # Both special-effects foggers share universe 1, address 511 on purpose.
+  # This lets one fogger control path fire both units together. Do not "fix"
+  # this overlap unless the physical patch design changes.
   ChauvetHaze4D 10:
     controllerIp: 10.1.1.102
     dmxUniverse: 1

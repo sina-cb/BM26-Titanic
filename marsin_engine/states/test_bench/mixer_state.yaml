@@ -2,7 +2,7 @@ master: 1
 channels:
   - id: ch_1778034065224
     name: Ch1
-    pattern: 13_sparkle
+    pattern: 09_cyclone
     mode: blend_screen
     fader: 1
     enabled: true
@@ -27,14 +27,26 @@ channels:
           v2: 0
   - id: ch_1778034067491
     name: Ch2
-    pattern: 02_phase_cathedral
-    mode: blend_over
-    fader: 1
-    enabled: false
+    pattern: 16_ghost_tide_uv
+    mode: blend_screen
+    fader: 0.08115625000000004
+    enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls: {}
+    localControls:
+      '2945952533':
+        v0: 0.31
+        v1: 0
+        v2: 0
+      '3334264878':
+        v0: 0.2
+        v1: 0
+        v2: 0
+      '3799696190':
+        v0: 0.74
+        v1: 0
+        v2: 0
     patternCache:
       07_shimmer:
         '323270901':
@@ -43,5 +55,18 @@ channels:
           v2: 0
         '3518326632':
           v0: 0.69
+          v1: 0
+          v2: 0
+      16_ghost_tide_uv:
+        '2945952533':
+          v0: 0.31
+          v1: 0
+          v2: 0
+        '3334264878':
+          v0: 0.2
+          v1: 0
+          v2: 0
+        '3799696190':
+          v0: 0.74
           v1: 0
           v2: 0

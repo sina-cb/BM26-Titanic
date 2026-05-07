@@ -66,7 +66,7 @@ export class GlobalEffectsController {
       const px = pixels[i];
 
       if (this.effects.vintageWhite) {
-        if (px.fixtureType === 'VintageLed' && px.name.includes('_warm') && px.w !== undefined) {
+        if (px.fixtureType === 'VintageLed' && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
           px.w = 1.0;
         }
       }

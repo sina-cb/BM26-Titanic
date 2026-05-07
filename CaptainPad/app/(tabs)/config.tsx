@@ -380,12 +380,12 @@ export default function ConfigScreen() {
             </Text>
           </View>
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, lineHeight: 20, marginBottom: 16 }}>
-            If you see "UNREACHABLE" but the server is running, your iPad may have denied Local Network access. 
+            If you see &quot;UNREACHABLE&quot; but the server is running, your iPad may have denied Local Network access. 
             Go to <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.text }}>Settings → Privacy & Security → Local Network</Text> and 
             ensure <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.primary }}>CaptainPad</Text> is toggled ON.
           </Text>
           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, lineHeight: 20 }}>
-            On first launch after a fresh install, iOS will show a permission dialog — tap "Allow" to enable local network communication.
+            On first launch after a fresh install, iOS will show a permission dialog — tap &quot;Allow&quot; to enable local network communication.
             If you previously denied it, delete and reinstall the app to reset the permission, or enable it manually in Settings.
           </Text>
           <TouchableOpacity 

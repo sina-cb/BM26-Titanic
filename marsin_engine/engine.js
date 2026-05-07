@@ -376,7 +376,7 @@ async function main() {
     name: 'Base',
     pattern: opts.pattern,
     handle: result.handle,
-    mode: 'blend_crossfade',
+    mode: 'blend_screen',
     fader: 1.0,
     enabled: true
   });

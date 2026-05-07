@@ -176,7 +176,7 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
               <Text style={[styles.valueReadout, {color: C.primary, fontSize: 11}]}>{transMode.replace('trans_','').toUpperCase()} ▾</Text>
             </TouchableOpacity>
             <TextInput 
-              style={[styles.displayMono, { width: 40, textAlign: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, borderRadius: 4, height: 32, fontSize: 13 }]}
+              style={[styles.displayMono, { width: 40, textAlign: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, height: 32, fontSize: 13 }]}
               value={transTime}
               onChangeText={setTransTime}
               onEndEditing={() => onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionTime: parseFloat(transTime) || 2.0 })}
@@ -190,6 +190,7 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
     </View>
   );
 });
+ChannelStrip.displayName = 'ChannelStrip';
 
 // ── Main Mixer Screen ──────────────────────────────────────────────────
 export default function MixerScreen() {
@@ -618,7 +619,7 @@ export default function MixerScreen() {
         })}
         {channels.length === 0 && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={[styles.labelCaps, {fontSize: 14}]}>NO CHANNELS — TAP "+ ADD CHANNEL"</Text>
+            <Text style={[styles.labelCaps, {fontSize: 14}]}>NO CHANNELS — TAP &quot;+ ADD CHANNEL&quot;</Text>
           </View>
         )}
       </ScrollView>

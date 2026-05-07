@@ -146,7 +146,7 @@ export const CPCControls = ({ wsRef }: { wsRef?: any }) => {
                </View>
                <HorizontalFader 
                  value={pickerModal.h} 
-                 onChange={(v) => setPickerModal(p => ({ ...p, h: v }))}
+                 onChange={(v: number) => setPickerModal(p => ({ ...p, h: v }))}
                  trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: hsvToRgbString(pickerModal.h, 1, 1), borderRadius: 12 }} 
                />
@@ -159,7 +159,7 @@ export const CPCControls = ({ wsRef }: { wsRef?: any }) => {
                </View>
                <HorizontalFader 
                  value={pickerModal.s} 
-                 onChange={(v) => setPickerModal(p => ({ ...p, s: v }))}
+                 onChange={(v: number) => setPickerModal(p => ({ ...p, s: v }))}
                  trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 12 }} 
                />
@@ -172,7 +172,7 @@ export const CPCControls = ({ wsRef }: { wsRef?: any }) => {
                </View>
                <HorizontalFader 
                  value={pickerModal.v} 
-                 onChange={(v) => setPickerModal(p => ({ ...p, v: v }))}
+                 onChange={(v: number) => setPickerModal(p => ({ ...p, v: v }))}
                  trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 12 }} 
                />

@@ -1,5 +1,5 @@
 /*
-  blend_crossfade.js — Linear Crossfade Transition
+  trans_crossfade.js — Linear Crossfade Transition
   Simple linear interpolation between outgoing and incoming patterns.
   Uses transition built-ins: progress, fromR/G/B/W/A/U, toR/G/B/W/A/U
 */

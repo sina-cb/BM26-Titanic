@@ -7,7 +7,7 @@
  * engine's REST + WebSocket API to capture actual pixel output.
  *
  * ── Prerequisites ─────────────────────────────────────────────────────
- *   - Engine must be running with `test_bench` model (64 pixels)
+ *   - Engine must be running with `test_bench` model (52 pixels)
  *   - Any base pattern works (the test creates its own overlay channels)
  *   - `ws` npm package must be installed (already in engine deps)
  *
@@ -41,7 +41,8 @@ import WebSocket from 'ws';
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 const SETTLE_MS = 200;   // ms to wait after a fader change before sampling
-const PIXEL_COUNT = 64;  // test_bench model
+
+let testErrors = 0;
 
 // ── HTTP helpers ──────────────────────────────────────────────────────
 function httpJson(method, path, body = null) {
@@ -134,10 +135,13 @@ async function main() {
     process.exit(1);
   }
 
-  // 1. Remove all non-base overlay channels
-  for (const ch of mixer.channels.slice(1)) {
-    console.log(`  🗑️  Removing existing overlay: ${ch.id} (${ch.pattern})`);
-    await httpJson('DELETE', `/mixer/channels/${ch.id}`);
+  // 1. Mute all existing non-base overlay channels instead of deleting
+  const originalChannels = mixer.channels.slice(1);
+  for (const ch of originalChannels) {
+    if (ch.enabled) {
+      console.log(`  🔇  Muting existing overlay: ${ch.id} (${ch.pattern})`);
+      await httpJson('PATCH', `/mixer/channels/${ch.id}`, { enabled: false });
+    }
   }
 
   // 2. Set mixer view to 'mixer' (so output comes from mixerBuffer)
@@ -227,7 +231,8 @@ async function main() {
     console.log('  Pixel  | Forward (R,G,B) | Reverse (R,G,B) | Δ');
     console.log('  ──────────────────────────────────────────────────');
     const diffs = [];
-    for (let i = 0; i < Math.min(20, PIXEL_COUNT); i++) {
+    const actualPixelCount = fwdHalf.px.length;
+    for (let i = 0; i < actualPixelCount; i++) {
       const fp = fwdHalf.px[i];
       const rp = revHalf.px[i];
       if (!fp || !rp) continue;
@@ -239,6 +244,12 @@ async function main() {
     const maxDiff = Math.max(...diffs);
     const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
     console.log(`\n  Max per-pixel Δ: ${maxDiff}, Avg Δ: ${avgDiff.toFixed(1)}`);
+    
+    // Safety Net Assertion
+    if (maxDiff > 45 || avgDiff > 15) {
+      console.error(`\n❌ ASSERTION FAILED: Visual thresholds exceeded (Max Δ=${maxDiff}, Avg Δ=${avgDiff.toFixed(1)})`);
+      testErrors++;
+    }
   }
 
   // ── Test 4: Test with blend_over mode ───────────────────────────────
@@ -304,8 +315,21 @@ async function main() {
   await httpJson('DELETE', `/mixer/channels/${ch2Id}`);
   console.log('  🗑️  Removed test channels');
 
-  console.log('\n✅ Test complete.\n');
-  process.exit(0);
+  // Restore muted channels
+  for (const ch of originalChannels) {
+    if (ch.enabled) {
+      console.log(`  🔊  Restoring existing overlay: ${ch.id} (${ch.pattern})`);
+      await httpJson('PATCH', `/mixer/channels/${ch.id}`, { enabled: true });
+    }
+  }
+
+  if (testErrors > 0) {
+    console.log(`\n❌ Test completed with ${testErrors} assertion failure(s).\n`);
+    process.exit(1);
+  } else {
+    console.log('\n✅ Test complete. All thresholds passed.\n');
+    process.exit(0);
+  }
 }
 
 main().catch(e => {

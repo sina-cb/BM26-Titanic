@@ -4,13 +4,13 @@ import { Platform } from 'react-native';
 const defaultConfigsRaw: any = require('@/config.yaml');
 const defaultConfigs = defaultConfigsRaw?.default || defaultConfigsRaw || {};
 
-var api_base = defaultConfigs.api_base || 'http://10.1.1.172:6968';
+let api_base = defaultConfigs.api_base || 'http://10.1.1.172:6968';
 
 // ── Async-safe API base resolution ────────────────────────────────────────
 // Screens must await getApiBaseAsync() before their first network call
 // to avoid racing AsyncStorage on cold start.
-var _resolved = false;
-var _resolvePromise: Promise<string> | null = null;
+let _resolved = false;
+let _resolvePromise: Promise<string> | null = null;
 
 
 

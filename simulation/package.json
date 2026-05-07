@@ -1,7 +1,9 @@
 {
   "scripts": {
     "prestart": "node tools/kill-ports.js",
-    "start": "node start.js"
+    "start": "node start.js",
+    "test": "node tests/fog_machine_regression_test.js",
+    "check": "npm run test"
   },
   "dependencies": {
     "acorn": "^8.16.0",
@@ -11,6 +13,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "puppeteer": "^24.37.5"
+    "puppeteer": "^24.37.5",
+    "three": "^0.184.0"
   }
 }

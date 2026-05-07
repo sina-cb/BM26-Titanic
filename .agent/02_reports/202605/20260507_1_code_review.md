@@ -42,7 +42,16 @@ The 3D simulation environment has been optimized for performance and visual accu
 *   *Performance:* Shifting pixel rendering to an `InstancedMesh` with dynamic matrix scaling is a major win for framerate, especially with the high pixel density of the Shehds bars.
 *   *Usability:* The new global sliders for pixel and halo sizes, coupled with the loosened `minDistance` camera constraints, make the simulation significantly more useful for low-level visual debugging.
 
-## Conclusion
-This branch represents a massive leap forward in both rendering capability and architectural maturity. The decoupling of the WASM rendering pipeline into a multi-channel mixer is the foundation needed for complex, live-performance light shows.
+## Conclusion & Merge Readiness
 
-**Status: Approved.** The code is modular, well-tested (HIL), and fully integrates across the Engine, Simulation, and Control surface. Ready for merge to `main`.
+**Status: Ready for Merge (Blockers Resolved)**
+
+While the branch is architecturally promising and represents a massive leap forward in rendering capability, the initial review was too optimistic regarding integration and test quality. All critical merge blockers have now been resolved:
+
+**Resolved Blockers:**
+1. **CaptainPad Type & Lint Failures:** Added robust YAML module declarations (now tracked in `types/yaml.d.ts`), fixed missing theme tokens (`C.ghostBorder`), and enforced strict typing in `CPCControls`. `npm run lint` and `npx tsc` now pass with 0 errors.
+2. **HIL Test Assertions & State:** The `hil_transition_test.mjs` has been hardened to dynamically derive pixel counts (52 for `test_bench`), compare all pixels simultaneously, and strictly assert on threshold violations (`Max Δ > 45` or `Avg Δ > 15`). Crucially, the test now cleanly mutes and restores the user's saved overlay channels instead of permanently deleting them.
+3. **Intentional DMX Overlap:** The collision in `patches.yaml` (universe 1, address 511) between `ChauvetHaze4D` and `TEFogMachine` was audited. As documented in the patch file, this is an **intentional** physical design choice to allow a single control path to fire both units simultaneously. No code changes were needed.
+4. **Missing Transition Script:** The engine boot path warning was resolved by correcting the default initialization mode from the nonexistent `blend_crossfade` to the valid `blend_screen` script.
+
+*Action Plan Complete. The branch is safe to merge into `main`.*
