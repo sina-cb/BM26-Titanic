@@ -45,12 +45,14 @@ export class IntensityController {
         const scale = this.sectionBrightness[sId];
         // Only trigger float multiplication if scale isn't native 100%
         if (scale < 1.0) {
-          px.r *= scale;
-          px.g *= scale;
-          px.b *= scale;
-          px.w *= scale;
-          px.a *= scale;
-          px.u *= scale;
+          if (!px.ignoreDimmerForRGB) {
+            px.r *= scale;
+            px.g *= scale;
+            px.b *= scale;
+          }
+          if (!px.ignoreDimmerForW) px.w *= scale;
+          if (!px.ignoreDimmerForA) px.a *= scale;
+          if (!px.ignoreDimmerForU) px.u *= scale;
         }
       }
     }

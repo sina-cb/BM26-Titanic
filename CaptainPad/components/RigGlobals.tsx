@@ -140,8 +140,9 @@ export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' })
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginRight: 16 }}>RIG CONTROLS</Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <GlobalEffectButton variant="mixer" effectId="vintageWhite" label="VINTAGE WHT" />
-          <GlobalEffectButton variant="mixer" effectId="fogger" label="FOGGER" />
+          <GlobalEffectButton variant="mixer" effectId="blastWhite" label="BLAST WHT" />
           <GlobalEffectButton variant="mixer" effectId="uvBlast" label="UV BLAST" />
+          <GlobalEffectButton variant="mixer" effectId="fogger" label="FOGGER" />
           <BlackoutButton variant="mixer" />
         </View>
       </View>
@@ -155,10 +156,10 @@ export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' })
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         <GlobalEffectButton variant="deck" effectId="vintageWhite" label="VINTAGE WHT" />
-        <GlobalEffectButton variant="deck" effectId="fogger" label="FOGGER" />
+        <GlobalEffectButton variant="deck" effectId="blastWhite" label="BLAST WHT" />
         <GlobalEffectButton variant="deck" effectId="uvBlast" label="UV BLAST" />
+        <GlobalEffectButton variant="deck" effectId="fogger" label="FOGGER" />
         <BlackoutButton variant="deck" />
-        <GlobalEffectButton variant="deck" effectId="placeholder1" label="---" disabled={true} />
         <GlobalEffectButton variant="deck" effectId="placeholder2" label="---" disabled={true} />
       </View>
     </View>

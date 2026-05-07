@@ -2,9 +2,9 @@ master: 1
 channels:
   - id: ch_1778034065224
     name: Ch1
-    pattern: 09_cyclone
+    pattern: 00_golden_hour_wash
     mode: blend_screen
-    fader: 1
+    fader: 0.35
     enabled: true
     locked: false
     transitionMode: trans_crossfade
@@ -27,24 +27,20 @@ channels:
           v2: 0
   - id: ch_1778034067491
     name: Ch2
-    pattern: 16_ghost_tide_uv
+    pattern: 07_shimmer
     mode: blend_screen
-    fader: 0.08115625000000004
+    fader: 0.39
     enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '2945952533':
-        v0: 0.31
+      '323270901':
+        v0: 0.26
         v1: 0
         v2: 0
-      '3334264878':
-        v0: 0.2
-        v1: 0
-        v2: 0
-      '3799696190':
-        v0: 0.74
+      '3518326632':
+        v0: 0.69
         v1: 0
         v2: 0
     patternCache:

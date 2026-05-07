@@ -61,7 +61,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   let mixerState = stateManager.loadMixerState();
   let deckState = stateManager.loadDeckState();
-  let dimmerState = stateManager.loadDimmerState();
   let globalsState = stateManager.loadGlobalsState();
 
   if (paramCenter) {
@@ -70,7 +69,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   try {
     stateManager.applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController);
-    stateManager.applyDimmerState(dimmerState, intensityController);
   } catch (err) {
     console.warn('Failed to apply loaded state:', err);
   }
@@ -491,15 +489,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'GET' && req.url === '/dimmers') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(dimmerState || {}));
+      res.end(JSON.stringify(globalsState.dimmers || {}));
     } else if (req.method === 'POST' && req.url === '/section-brightness') {
       readBody(data => {
         if (data.sectionId === undefined || data.brightness === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
         }
         if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
-        dimmerState[data.sectionId] = data.brightness;
-        stateManager.saveDimmerState(dimmerState);
+        if (!globalsState.dimmers) globalsState.dimmers = {};
+        globalsState.dimmers[data.sectionId] = data.brightness;
+        stateManager.saveGlobalsState(globalsState);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
       });

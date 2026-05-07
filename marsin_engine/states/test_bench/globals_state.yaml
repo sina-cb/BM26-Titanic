@@ -3,6 +3,10 @@ effects:
   fogger: false
   uvBlast: false
   vintageWhite: false
+  blastWhite: false
+  blastWhiteBypassDimmer: true
+  vintageWhiteBypassDimmer: false
+  uvBlastBypassDimmer: false
 params:
   revision: 1141
   sourceLock: null
@@ -48,3 +52,7 @@ params:
       lastSource: api
       lastOrigin: api
       lastRevision: 821
+dimmers:
+  '1': 0.15625
+  '2': 0.1696428571428571
+  '3': 0.1607142857142857

@@ -11,9 +11,12 @@ export class GlobalEffectsController {
       vintageWhite: false,
       fogger: false,
       uvBlast: false,
+      blastWhite: false,
       horn: false,
       fire: false,
-      placeholder3: false
+      vintageWhiteBypassDimmer: false,
+      uvBlastBypassDimmer: false,
+      blastWhiteBypassDimmer: false
     };
     
     this.foggers = []; // Dynamically populated from the model
@@ -22,7 +25,7 @@ export class GlobalEffectsController {
   }
 
   setEffect(effectName, state) {
-    if (this.effects.hasOwnProperty(effectName)) {
+    if (this.effects.hasOwnProperty(effectName) || effectName.includes('Bypass')) {
       if (this.effects[effectName] !== !!state) {
         console.log(`[GlobalEffectsController] ${effectName} changed: ${this.effects[effectName]} -> ${!!state}`);
       }
@@ -64,15 +67,37 @@ export class GlobalEffectsController {
   applyPixels(pixels) {
     for (let i = 0; i < pixels.length; i++) {
       const px = pixels[i];
+      px.ignoreDimmerForRGB = false;
+      px.ignoreDimmerForW = false;
+      px.ignoreDimmerForA = false;
+      px.ignoreDimmerForU = false;
 
       if (this.effects.vintageWhite) {
         if (px.fixtureType === 'VintageLed' && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
           px.w = 1.0;
+          if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
         }
       }
 
       if (this.effects.uvBlast && px.channels && px.channels.u !== undefined) {
         px.u = 1.0;
+        if (this.effects.uvBlastBypassDimmer) px.ignoreDimmerForU = true;
+      }
+
+      if (this.effects.blastWhite) {
+        if (px.channels) {
+          px.r = 1.0;
+          px.g = 1.0;
+          px.b = 1.0;
+          if (px.channels.w !== undefined) px.w = 1.0;
+          if (px.channels.a !== undefined) px.a = 1.0;
+          
+          if (this.effects.blastWhiteBypassDimmer) {
+            px.ignoreDimmerForRGB = true;
+            px.ignoreDimmerForW = true;
+            px.ignoreDimmerForA = true;
+          }
+        }
       }
     }
   }

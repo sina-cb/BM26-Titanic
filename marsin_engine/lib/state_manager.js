@@ -40,11 +40,7 @@ export class StateManager {
   }
 
   loadGlobalsState() {
-    return this.load('globals_state.yaml', { blackout: false, effects: {}, params: {} });
-  }
-
-  loadDimmerState() {
-    return this.load('dimmer_state.yaml', {});
+    return this.load('globals_state.yaml', { blackout: false, effects: {}, params: {}, dimmers: {} });
   }
 
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
@@ -66,11 +62,8 @@ export class StateManager {
         globalEffectsController.setEffect(effect, state);
       }
     }
-  }
-
-  applyDimmerState(dimmerState, intensityController) {
-    if (dimmerState && intensityController) {
-      for (const [sId, bright] of Object.entries(dimmerState)) {
+    if (intensityController && globalsState.dimmers) {
+      for (const [sId, bright] of Object.entries(globalsState.dimmers)) {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
@@ -117,9 +110,5 @@ export class StateManager {
   saveGlobalsState(globalsState, paramCenter) {
     if (paramCenter) globalsState.params = paramCenter.getCanonicalState();
     this.save('globals_state.yaml', globalsState);
-  }
-
-  saveDimmerState(dimmerState) {
-    this.save('dimmer_state.yaml', dimmerState);
   }
 }
