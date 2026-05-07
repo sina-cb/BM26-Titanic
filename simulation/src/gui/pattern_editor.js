@@ -645,7 +645,7 @@ export function onLightingChange() {
 
   // Show sACN monitors only in sacn_in mode
   if (window.showSacnInMonitor) window.showSacnInMonitor(newMode === 'sacn_in' && isEnabled);
-  if (window.showSacnOutMonitor) window.showSacnOutMonitor(false); // Out monitor only shown when explicitly needed or in sacn_out mode (if it existed)
+  // (sACN Out monitor remains persistently visible)
 
   // Pixelblaze engine
   const pbEnabled = newMode === 'pixelblaze' && isEnabled;

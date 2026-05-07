@@ -114,7 +114,7 @@ export function setupSacnOutMonitor() {
   const collapseBtn = document.getElementById('sacn-out-collapse-btn');
   if (!panel || !header) return;
 
-  let isCollapsed = window.innerWidth <= 768; // Start collapsed on small screens
+  let isCollapsed = true; // Always start collapsed by default
   if (isCollapsed) {
     panel.classList.add('collapsed');
     collapseBtn.textContent = '□';
@@ -155,6 +155,9 @@ export function setupSacnOutMonitor() {
     panel.classList.toggle('hidden', !show);
     if (show) startUpdatingOut(); else stopUpdatingOut();
   };
+
+  // Ensure it displays immediately
+  window.showSacnOutMonitor(true);
 }
 
 export function sacnOutLog(msg, type = 'info') {
