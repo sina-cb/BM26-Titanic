@@ -179,9 +179,28 @@ export class DmxFixtureRuntime {
             
             if (dotMeshList.length > 0) dotMeshList.forEach(d => { d.mesh.material = bulbMat; });
 
-            // User explicitly requested to completely remove the bulb and halo meshes.
+            let pixelSize = 0;
+            if (typeof pixelModel.size === 'number') pixelSize = pixelModel.size;
+            else if (Array.isArray(pixelModel.size)) pixelSize = Math.max(...pixelModel.size);
+            const baseSize = Math.max(pixelSize * 0.002, 0.12);
+            const repScale = this.profileDef.render.emitterMode === 'fixture_representative' ? 6.0 : 1.0;
+            const bulbSize = baseSize * repScale;
+
+            haloMat = new THREE.MeshBasicMaterial({
+              color, transparent: true, opacity: 0.2,
+              blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+            });
+            halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
+            
+            const haloPos = localPos.clone();
+            if (this.profileDef.render.emitterMode === 'fixture_representative') {
+               haloPos.set(0, 0, 0); // Force to origin centroid for grouped representation
+            }
+            halo.position.copy(haloPos);
+            this.group.add(halo);
+
+            // User explicitly requested to completely remove the bulb meshes.
             bulb = null;
-            halo = null;
         }
 
         // SpotLight managed by LightPool — no per-pixel instantiation

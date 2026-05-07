@@ -646,8 +646,16 @@ function setupGUI() {
         if (!v && window.parFixtures) {
           window.parFixtures.forEach(f => {
             if (f && f.config) {
-              f.light.color.set(f.config.color);
-              if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
+              if (f.setPixelColorRGB) {
+                // New DmxFixtureRuntime format: Reset all pixels to base config color
+                const c = new THREE.Color(f.config.color || '#ffaa44');
+                for(let p = 0; p < (f.pixels?.length || 1); p++) {
+                  f.setPixelColorRGB(p, c.r, c.g, c.b);
+                }
+              } else if (f.light) {
+                f.light.color.set(f.config.color);
+                if (f.beam && f.beam.material) f.beam.material.color.set(f.config.color);
+              }
             }
           });
         }
