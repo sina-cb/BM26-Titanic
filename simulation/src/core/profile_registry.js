@@ -29,7 +29,7 @@ export const LIGHTING_PROFILES = {
     render: {
       emitterMode: 'none',
       analyticLightMode: 'none',
-      coneMode: 'none',
+      coneMode: 'pixel',
       effectsMode: 'off'
     }
   },

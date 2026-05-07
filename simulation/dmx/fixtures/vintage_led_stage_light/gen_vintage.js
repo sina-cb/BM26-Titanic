@@ -9,9 +9,9 @@ const model = {
   dimensions: { width: 80, height: 430, depth: 60 },
   shell: {
     type: "box",
-    dimensions: [80, 420, 60],
+    dimensions: [90, 460, 60],
     color: "#111111",
-    offset: [0, 175, -40] // Pushed back so it doesn't cover pixels
+    offset: [0, 187.5, -40] // Centered behind the 6 heads (0 to 375) and pushed back
   },
   pixels: [],
   controls: [
@@ -31,42 +31,60 @@ const NUM_HEADS = 6;
 const DOTS_PER_RING = 24;
 const RING_RADIUS = 36; // 7.2cm diameter circle
 
+// Run with `node gen_vintage.js --detailed` to generate the complex physical layout
+const useDetailedMode = process.argv.includes('--detailed');
+
 for (let i = 0; i < NUM_HEADS; i++) {
   const headNum = i + 1;
   const yOffset = i * 75; // 75mm spacing to fit the 72mm rings
 
-  // The center "amber" (warm) light - tall rectangle
-  model.pixels.push({
-    id: `head_${headNum}_warm`,
-    type: "warm",
-    size: [15, 60, 10], // Very tall bright light in center
-    channels: { value: 2 + headNum }, // CH3 to CH8
-    dots: [[0, yOffset, 0]]
-  });
+  if (useDetailedMode) {
+    // The center "amber" (warm) light - tall rectangle
+    model.pixels.push({
+      id: `head_${headNum}_warm`,
+      type: "warm",
+      size: [15, 60, 10], // Very tall bright light in center
+      channels: { value: 2 + headNum }, // CH3 to CH8
+      dots: [[0, yOffset, 0]]
+    });
 
-  // The RGB ring
-  const rgbDots = [];
-  for (let d = 0; d < DOTS_PER_RING; d++) {
-    const angle = (d / DOTS_PER_RING) * Math.PI * 2;
-    // push z back slightly so amber stands out in front
-    rgbDots.push([
-      Number((Math.cos(angle) * RING_RADIUS).toFixed(2)),
-      Number((yOffset + Math.sin(angle) * RING_RADIUS).toFixed(2)),
-      -5
-    ]);
+    // The RGB ring
+    const rgbDots = [];
+    for (let d = 0; d < DOTS_PER_RING; d++) {
+      const angle = (d / DOTS_PER_RING) * Math.PI * 2;
+      rgbDots.push([
+        Number((Math.cos(angle) * RING_RADIUS).toFixed(2)),
+        Number((yOffset + Math.sin(angle) * RING_RADIUS).toFixed(2)),
+        -5
+      ]);
+    }
+
+    model.pixels.push({
+      id: `head_${headNum}_aux`,
+      type: "rgb",
+      size: 4, // 4mm radius for each little RGB dot making the circle
+      channels: {
+        red: 16 + i*3,
+        green: 17 + i*3,
+        blue: 18 + i*3
+      },
+      dots: rgbDots
+    });
+  } else {
+    // Combined warm + RGB aux pixel (simplified)
+    model.pixels.push({
+      id: `head_${headNum}`,
+      type: "rgbw",
+      size: 18,
+      channels: {
+        value: 2 + headNum, // CH3 to CH8 (warm)
+        red: 16 + i*3,      // RGB aux
+        green: 17 + i*3,
+        blue: 18 + i*3
+      },
+      dots: [[0, yOffset, -5]]
+    });
   }
-
-  model.pixels.push({
-    id: `head_${headNum}_aux`,
-    type: "rgb",
-    size: 4, // 4mm radius for each little RGB dot making the circle
-    channels: {
-      red: 16 + i*3,
-      green: 17 + i*3,
-      blue: 18 + i*3
-    },
-    dots: rgbDots
-  });
 }
 
 const yamlStr = yaml.dump({ model }, { condenseFlow: true });

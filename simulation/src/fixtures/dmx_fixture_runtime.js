@@ -108,7 +108,35 @@ export class DmxFixtureRuntime {
 
     // ─── Build Shell (fixture body) ──────────────────────────────────
     this.shellMat = null;
-    this.shell = null; // User explicitly requested to completely hide/remove the fixture model shells
+    if (fixtureDef && fixtureDef.shell) {
+      this.shellMat = defaultShellMat.clone();
+      this.shellMat.color.set(fixtureDef.shell.color || '#111111');
+      let shellGeo;
+      if (fixtureDef.shell.type === 'cylinder') {
+        const d = fixtureDef.shell.dimensions;
+        const r = (d[0] / 2) * 0.001;
+        const h = d[2] * 0.001;
+        shellGeo = new THREE.CylinderGeometry(r, r, h, 16);
+        shellGeo.rotateX(Math.PI / 2);
+      } else {
+        const d = fixtureDef.shell.dimensions;
+        shellGeo = new THREE.BoxGeometry(d[0] * 0.001, d[1] * 0.001, d[2] * 0.001);
+      }
+      this.shell = new THREE.Mesh(shellGeo, this.shellMat);
+      if (fixtureDef.shell.offset) {
+        const o = fixtureDef.shell.offset;
+        // Negate Z to match the dot coordinate convention (-Z = forward/emitting direction)
+        this.shell.position.set(o[0] * 0.001, o[1] * 0.001, -o[2] * 0.001);
+      }
+      this.group.add(this.shell);
+    } else {
+      // No shell definition — create a simple can geometry (like old ParLight)
+      const canGeo = new THREE.CylinderGeometry(0.08, 0.06, 0.2, 12);
+      canGeo.rotateX(Math.PI / 2);
+      this.shellMat = defaultShellMat.clone();
+      this.shell = new THREE.Mesh(canGeo, this.shellMat);
+      this.group.add(this.shell);
+    }
 
     // ─── Build Pixels (dots + visual geometry only) ──────────────────
     // SpotLights are managed by the global LightPool (see light_pool.js).
@@ -152,22 +180,15 @@ export class DmxFixtureRuntime {
             if (hasDots) {
               pixelModel.dots.forEach(d => {
                 const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
-                let dotGeo;
-                if (Array.isArray(pixelModel.size) && pixelModel.size.length === 3) {
-                  const w = pixelModel.size[0] * 0.001;
-                  const h = pixelModel.size[1] * 0.001;
-                  const d = pixelModel.size[2] * 0.001;
-                  dotGeo = new THREE.BoxGeometry(Math.max(w, 0.01), Math.max(h, 0.01), Math.max(d, 0.01));
-                } else {
-                  let rawSize = 0;
-                  if (typeof pixelModel.size === 'number') rawSize = pixelModel.size;
-                  else if (Array.isArray(pixelModel.size)) rawSize = Math.max(...pixelModel.size);
-                  const dotSize = Math.max(rawSize * 0.001, 0.012);
-                  dotGeo = getCachedSphere(dotSize);
-                }
+                let rawSize = 0;
+                if (typeof pixelModel.size === 'number') rawSize = pixelModel.size;
+                else if (Array.isArray(pixelModel.size)) rawSize = Math.max(...pixelModel.size);
+                const dotSize = Math.max(rawSize * 0.001, 0.012);
+                const dotGeo = getCachedSphere(dotSize);
                 const dotMesh = new THREE.Mesh(dotGeo, null);
                 dotMesh.position.copy(pos);
                 dotMesh.matrixAutoUpdate = false; 
+                dotMesh.scale.setScalar(params.globalPixelScale || 1.0);
                 dotMesh.updateMatrix();
                 this.group.add(dotMesh);
                 dotMeshList.push({ pos, mesh: dotMesh });
@@ -182,25 +203,26 @@ export class DmxFixtureRuntime {
             let pixelSize = 0;
             if (typeof pixelModel.size === 'number') pixelSize = pixelModel.size;
             else if (Array.isArray(pixelModel.size)) pixelSize = Math.max(...pixelModel.size);
-            const baseSize = Math.max(pixelSize * 0.002, 0.12);
+            const baseSize = Math.max(pixelSize * 0.001, 0.02);
             const repScale = this.profileDef.render.emitterMode === 'fixture_representative' ? 6.0 : 1.0;
             const bulbSize = baseSize * repScale;
+            
+            bulb = new THREE.Mesh(getCachedSphere(bulbSize), bulbMat);
+            bulb.scale.setScalar(params.globalPixelScale || 1.0);
+            bulb.position.copy(localPos);
+            if (this.profileDef.render.emitterMode === 'fixture_representative') {
+               bulb.position.set(0, 0, 0); // Force to origin centroid for grouped representation!
+            }
+            this.group.add(bulb);
 
             haloMat = new THREE.MeshBasicMaterial({
               color, transparent: true, opacity: 0.2,
               blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
             });
-            halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
-            
-            const haloPos = localPos.clone();
-            if (this.profileDef.render.emitterMode === 'fixture_representative') {
-               haloPos.set(0, 0, 0); // Force to origin centroid for grouped representation
-            }
-            halo.position.copy(haloPos);
+            halo = new THREE.Mesh(getCachedSphere(bulbSize * 1.8), haloMat);
+            halo.scale.setScalar(params.globalHaloScale || 1.0);
+            halo.position.copy(bulb.position);
             this.group.add(halo);
-
-            // User explicitly requested to completely remove the bulb meshes.
-            bulb = null;
         }
 
         // SpotLight managed by LightPool — no per-pixel instantiation
@@ -400,15 +422,29 @@ export class DmxFixtureRuntime {
     this.fixtureDef.pixels.forEach((pixelModel, pIndex) => {
       if (!pixelModel.channels) return;
       const ch = pixelModel.channels;
+      
+      const dimmer = ch.dimmer ? readDmxChannelNormalized(dmxSlice, ch.dimmer) : 1;
+      
+      let r = 0, g = 0, b = 0;
+      let hasColor = false;
+
       if (ch.red !== undefined && ch.green !== undefined && ch.blue !== undefined) {
-        const dimmer = ch.dimmer ? readDmxChannelNormalized(dmxSlice, ch.dimmer) : 1;
-        const r = readDmxChannelNormalized(dmxSlice, ch.red) * dimmer;
-        const g = readDmxChannelNormalized(dmxSlice, ch.green) * dimmer;
-        const b = readDmxChannelNormalized(dmxSlice, ch.blue) * dimmer;
-        this.setPixelColorRGB(pIndex, r, g, b);
-      } else if (ch.value !== undefined) {
-        const v = readDmxChannelNormalized(dmxSlice, ch.value);
-        this.setPixelColorRGB(pIndex, v * 1.0, v * 0.85, v * 0.6); // warm white
+        r = readDmxChannelNormalized(dmxSlice, ch.red) * dimmer;
+        g = readDmxChannelNormalized(dmxSlice, ch.green) * dimmer;
+        b = readDmxChannelNormalized(dmxSlice, ch.blue) * dimmer;
+        hasColor = true;
+      }
+
+      if (ch.value !== undefined) {
+        const warm = readDmxChannelNormalized(dmxSlice, ch.value) * dimmer;
+        r += warm * 1.0;
+        g += warm * 0.75;
+        b += warm * 0.45;
+        hasColor = true;
+      }
+
+      if (hasColor) {
+        this.setPixelColorRGB(pIndex, Math.min(1, r), Math.min(1, g), Math.min(1, b));
       }
     });
   }
@@ -435,17 +471,35 @@ export class DmxFixtureRuntime {
     this.config.rotZ = THREE.MathUtils.radToDeg(euler.z);
   }
 
-  // ── Visibility ───────────────────────────────────────────────────────
+  // ── Visibility & Scaling ─────────────────────────────────────────────
+
+  updateScales(pixelScale, haloScale) {
+    console.log(`[DmxFixtureRuntime] updateScales pixel=${pixelScale} halo=${haloScale} pixels=${this.pixels.length}`);
+    this.pixels.forEach(p => {
+      if (p.dots) {
+         p.dots.forEach(d => { 
+           if (d.mesh) {
+             d.mesh.scale.setScalar(pixelScale || 1.0); 
+             d.mesh.updateMatrix();
+           }
+         });
+      }
+      if (p.bulb) {
+        p.bulb.scale.setScalar(pixelScale || 1.0);
+        p.bulb.matrixWorldNeedsUpdate = true;
+      }
+      if (p.halo) {
+        p.halo.scale.setScalar(haloScale || 1.0);
+        p.halo.matrixWorldNeedsUpdate = true;
+      }
+    });
+  }
 
   setVisibility(visible, conesVisible = true) {
     const profile = params.lightingProfile || 'edit';
     const profileDef = getProfileDef(profile);
     this.hitbox.visible = visible;
     this.group.visible = visible;
-
-    if (this.shell) {
-      this.shell.visible = false; // User requested shell to be invisible all the time
-    }
 
     // SpotLights are managed by the global LightPool — no per-fixture visibility
 
@@ -457,7 +511,7 @@ export class DmxFixtureRuntime {
       
       const shouldEmitter = (profileDef.render.emitterMode === 'pixel') || (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
       if (p.halo) p.halo.visible = visible && shouldEmitter;
-      if (p.bulb) p.bulb.visible = false;
+      if (p.bulb) p.bulb.visible = visible && shouldEmitter;
       if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
   }

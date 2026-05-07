@@ -77,6 +77,8 @@ export function generatePixelMap() {
                  footprint: fp
               },
             channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
+            // Per-pixel size from fixture model definition (in mm)
+            pixelSize: px.model && typeof px.model.size === 'number' ? px.model.size : 14,
             // Bind the apply callback natively for the simulator
             apply: (r, g, b) => {
               if (!getProfileDef(params.lightingProfile).mappingEnabled) return;

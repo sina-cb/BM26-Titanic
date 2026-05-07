@@ -13,7 +13,7 @@ titanicEnd:
     value: false
     label: Master Flood Enabled
   masterFloodColor:
-    value: "#ffffff"
+    value: '#ffffff'
     label: Master Flood Color
     type: color
   masterFloodIntensity:
@@ -123,12 +123,12 @@ parLights:
     - group: ParLights
       name: Par 1
       fixtureType: UkingPar
-      color: "#ff8800"
+      color: '#ff8800'
       intensity: 20
       angle: 45
       penumbra: 0.5
       x: 1.2402849287900335
-      "y": 1.994224639997228
+      'y': 1.994224639997228
       z: 0
       rotX: -39.99999999999999
       rotY: 180
@@ -136,12 +136,12 @@ parLights:
     - group: ParLights
       name: Par 2
       fixtureType: UkingPar
-      color: "#0088ff"
+      color: '#0088ff'
       intensity: 20
       angle: 45
       penumbra: 0.5
       x: 0.891867068997521
-      "y": 2
+      'y': 2
       z: 0
       rotX: -46.372989398756104
       rotY: 180
@@ -149,12 +149,12 @@ parLights:
     - group: ParLights
       name: Par 3
       fixtureType: UkingPar
-      color: "#00ff44"
+      color: '#00ff44'
       intensity: 20
       angle: 45
       penumbra: 0.5
       x: 0.20042143867423856
-      "y": 2
+      'y': 2
       z: 0
       rotX: -35.00000000000001
       rotY: 180
@@ -162,12 +162,12 @@ parLights:
     - group: ParLights
       name: Par 4
       fixtureType: UkingPar
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 20
       angle: 45
       penumbra: 0.5
       x: -0.1273980207751736
-      "y": 1.9999999999999998
+      'y': 1.9999999999999998
       z: -4.849303195384386e-16
       rotX: -40.00000000000002
       rotY: 180
@@ -175,12 +175,12 @@ parLights:
     - group: VintageLights
       name: Vintage Left
       fixtureType: VintageLed
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 3
       angle: 45
       penumbra: 0.5
       x: -1.5
-      "y": 0.5
+      'y': 0.5
       z: 1
       rotX: -0.1418652807780255
       rotY: 145
@@ -188,12 +188,12 @@ parLights:
     - group: VintageLights
       name: Vintage Right
       fixtureType: VintageLed
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 3
       angle: 45
       penumbra: 0.5
       x: 2.5
-      "y": 0.5
+      'y': 0.5
       z: 1
       rotX: -0.010242002552789991
       rotY: -134.79537699350138
@@ -201,12 +201,12 @@ parLights:
     - group: BarLights
       name: Bar Left
       fixtureType: ShehdsBar
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
       x: 0.07203133767327397
-      "y": 1.5
+      'y': 1.5
       z: 1
       rotX: -34.99999999999999
       rotY: 180
@@ -214,12 +214,12 @@ parLights:
     - group: BarLights
       name: Bar Right
       fixtureType: ShehdsBar
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
       x: 1.147796471297927
-      "y": 1.5
+      'y': 1.5
       z: 1
       rotX: -35
       rotY: 180
@@ -227,12 +227,12 @@ parLights:
     - group: SpecialEffects
       name: ChauvetHaze4D 10
       fixtureType: ChauvetHaze4D
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
       x: -2
-      "y": 0
+      'y': 0
       z: 1
       rotX: 0
       rotY: -175
@@ -240,12 +240,12 @@ parLights:
     - group: SpecialEffects
       name: TEFogMachine 10
       fixtureType: TEFogMachine
-      color: "#ffaa44"
+      color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
       x: 3.5
-      "y": 0
+      'y': 0
       z: 1
       rotX: 0
       rotY: 180

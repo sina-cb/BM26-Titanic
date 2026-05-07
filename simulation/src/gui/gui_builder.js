@@ -252,6 +252,23 @@ function setupGUI() {
         t.angle = (v * Math.PI) / 180;
       });
     },
+    globalPixelScale: (v) => {
+      console.log('[GUI] globalPixelScale changed:', v);
+      // Rescale the V2 InstancedMesh (the actual visible pixel rendering layer)
+      if (window.updatePixelInstancedScale) window.updatePixelInstancedScale(v);
+      // Also update per-fixture meshes (bulb/halo/dots) for non-instanced profiles
+      const allFixtures = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
+      allFixtures.forEach(f => {
+        if (f && f.updateScales) f.updateScales(v, params.globalHaloScale || 1.0);
+      });
+    },
+    globalHaloScale: (v) => {
+      console.log('[GUI] globalHaloScale changed:', v);
+      const allFixtures = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
+      allFixtures.forEach(f => {
+        if (f && f.updateScales) f.updateScales(params.globalPixelScale || 1.0, v);
+      });
+    },
     modelX: (v) => {
       if (model) model.position.x = v;
     },

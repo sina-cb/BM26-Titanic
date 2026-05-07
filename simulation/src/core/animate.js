@@ -52,6 +52,23 @@ window.invalidateMarsinBatchCache = function(reason) {
   // console.log(`[BatchCache] Invalidated: ${reason} (v${_batchCacheVersion})`);
 };
 
+/** Rescale the V2 InstancedMesh dots when the global pixel scale slider changes. */
+window.updatePixelInstancedScale = function(newScale) {
+  if (!_pixelInstancedMesh || !_batchRenderList) return;
+  const n = _batchRenderList.length;
+  for (let i = 0; i < n; i++) {
+    const e = _batchRenderList[i];
+    const sizeMm = e.pixelSize || 14;
+    const worldRadius = sizeMm * 0.001 * newScale;
+    _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
+    _pixelTransformObj.scale.setScalar(worldRadius);
+    _pixelTransformObj.updateMatrix();
+    _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+  }
+  _pixelTransformObj.scale.setScalar(1); // reset for future use
+  _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
+};
+
 import * as THREE from "three";
 
 /** Rebuild the ordered render list, coordinate buffer, and metadata buffer. */
@@ -112,18 +129,26 @@ function _rebuildBatchCache() {
   }
 
   // ─── Build V2 InstancedMesh ─────────────────────────────────
-  const dotGeo = new THREE.SphereGeometry(0.12, 8, 8);
+  // Unit sphere — all sizing is done via per-instance scale matrices
+  // using each pixel's own size from the fixture model YAML.
+  const dotGeo = new THREE.SphereGeometry(1.0, 8, 8);
   const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // Draws normally with depth test
   _pixelInstancedMesh = new THREE.InstancedMesh(dotGeo, dotMat, n);
   
+  const globalScale = params.globalPixelScale || 1.0;
   for (let i = 0; i < n; i++) {
      const e = list[i];
+     // Convert pixelSize (mm) to world units, apply global scale
+     const sizeMm = e.pixelSize || 14; // default 14mm if missing
+     const worldRadius = sizeMm * 0.001 * globalScale;
      _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
+     _pixelTransformObj.scale.setScalar(worldRadius);
      _pixelTransformObj.updateMatrix();
      _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
      _pixelColorCache.setRGB(0, 0, 0); // start black
      _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
   }
+  _pixelTransformObj.scale.setScalar(1); // reset for future use
   _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
   if (_pixelInstancedMesh.instanceColor) _pixelInstancedMesh.instanceColor.needsUpdate = true;
   _pixelInstancedMesh.visible = true; // Visibility dynamically managed in animate()

@@ -202,7 +202,7 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   const dist = modelRadius * 2.5;
   camera.position.set(dist * 0.7, modelSize.y * 1.2, dist * 0.7);
   controls.target.copy(modelCenter);
-  controls.minDistance = modelRadius * 0.3;
+  controls.minDistance = 0.1;
   controls.maxDistance = modelRadius * 8;
   controls.update();
 
