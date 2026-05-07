@@ -152,11 +152,19 @@ export class DmxFixtureRuntime {
             if (hasDots) {
               pixelModel.dots.forEach(d => {
                 const pos = new THREE.Vector3(d[0] * 0.001, d[1] * 0.001, -d[2] * 0.001);
-                let rawSize = 0;
-                if (typeof pixelModel.size === 'number') rawSize = pixelModel.size;
-                else if (Array.isArray(pixelModel.size)) rawSize = Math.max(...pixelModel.size);
-                const dotSize = Math.max(rawSize * 0.001, 0.012);
-                const dotGeo = getCachedSphere(dotSize);
+                let dotGeo;
+                if (Array.isArray(pixelModel.size) && pixelModel.size.length === 3) {
+                  const w = pixelModel.size[0] * 0.001;
+                  const h = pixelModel.size[1] * 0.001;
+                  const d = pixelModel.size[2] * 0.001;
+                  dotGeo = new THREE.BoxGeometry(Math.max(w, 0.01), Math.max(h, 0.01), Math.max(d, 0.01));
+                } else {
+                  let rawSize = 0;
+                  if (typeof pixelModel.size === 'number') rawSize = pixelModel.size;
+                  else if (Array.isArray(pixelModel.size)) rawSize = Math.max(...pixelModel.size);
+                  const dotSize = Math.max(rawSize * 0.001, 0.012);
+                  dotGeo = getCachedSphere(dotSize);
+                }
                 const dotMesh = new THREE.Mesh(dotGeo, null);
                 dotMesh.position.copy(pos);
                 dotMesh.matrixAutoUpdate = false; 
@@ -429,7 +437,7 @@ export class DmxFixtureRuntime {
       }
       
       const shouldEmitter = (profileDef.render.emitterMode === 'pixel') || (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
-      if (p.halo) p.halo.visible = false;
+      if (p.halo) p.halo.visible = visible && shouldEmitter;
       if (p.bulb) p.bulb.visible = false;
       if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
