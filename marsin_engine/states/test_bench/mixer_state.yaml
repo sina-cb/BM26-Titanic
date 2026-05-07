@@ -1,7 +1,7 @@
 master: 1
 channels:
-  - id: ch_1778033642571
-    name: New Layer
+  - id: ch_1778034065224
+    name: Ch1
     pattern: 13_sparkle
     mode: blend_screen
     fader: 1
@@ -10,15 +10,38 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls: {}
-    patternCache: {}
-  - id: ch_1778033643249
-    name: New Layer
-    pattern: 07_shimmer
-    mode: blend_screen
-    fader: 0
-    enabled: true
+    patternCache:
+      08_ocean_liner:
+        '1115050250':
+          v0: 0.84
+          v1: 0
+          v2: 0
+      14_lunar_current:
+        '243367341':
+          v0: 0.65
+          v1: 0
+          v2: 0
+        '4210909725':
+          v0: 0.69
+          v1: 0
+          v2: 0
+  - id: ch_1778034067491
+    name: Ch2
+    pattern: 02_phase_cathedral
+    mode: blend_over
+    fader: 1
+    enabled: false
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls: {}
-    patternCache: {}
+    patternCache:
+      07_shimmer:
+        '323270901':
+          v0: 0.26
+          v1: 0
+          v2: 0
+        '3518326632':
+          v0: 0.69
+          v1: 0
+          v2: 0

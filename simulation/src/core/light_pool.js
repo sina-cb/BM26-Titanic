@@ -309,7 +309,7 @@ function _collectLightRequests() {
   // Only collect if analytic lighting is enabled
   if (profileDef.render.analyticLightMode === 'none') return requests;
 
-  const fixtureList = window.parFixtures || [];
+  const fixtureList = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
   for (const fixture of fixtureList) {
     if (!fixture || !fixture.group || !fixture.group.visible) continue;
     if (!fixture.pixels || !Array.isArray(fixture.pixels)) continue;

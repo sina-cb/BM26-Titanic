@@ -1,0 +1,18 @@
+model:
+  id: "fog_te_machine_1"
+  name: "TE Fog Machine (1ch)"
+  fixture_type: "TEFogMachine"
+  channel_mode: 1
+
+  dimensions:
+    width: 300
+    height: 150
+    depth: 400
+
+  shell:
+    type: "box"
+    dimensions: [300, 150, 400]
+    color: "#000000"
+    offset: [0, -75, 0]
+
+  pixels: []

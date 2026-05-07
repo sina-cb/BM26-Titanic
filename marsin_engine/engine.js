@@ -124,7 +124,20 @@ async function loadModel(modelName) {
   // Dynamic ESM import
   const modelUrl = 'file://' + modelPath;
   const mod = await import(modelUrl);
-  return { pixelCount: mod.pixelCount, pixels: mod.pixels };
+
+  const effectsPath = path.join(__dirname, 'models', `${modelName}.effects.js`);
+  let specialEffects = [];
+  try {
+    if (fs.existsSync(effectsPath)) {
+      const effectsUrl = 'file://' + effectsPath;
+      const effectsMod = await import(effectsUrl);
+      specialEffects = effectsMod.specialEffects || [];
+    }
+  } catch (err) {
+    console.warn(`[Model] Could not load companion effects model: ${err.message}`);
+  }
+
+  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects };
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
@@ -219,8 +232,23 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         const visData = mixer.getVisData();
         const visPayload = {};
         for (const [key, rgb] of Object.entries(visData)) {
+          if (key === 'master') continue; // Will be overwritten with true master
           visPayload[key] = rgb ? Buffer.from(rgb).toString('base64') : null;
         }
+
+        // True Master Vis: Capture post-processed pixels (after blackout, intensity, global FX)
+        const trueMasterBuffer = new Uint8Array(pixelCount * 6);
+        for (let i = 0; i < pixelCount; i++) {
+          const off = i * 6;
+          const px = model.pixels[i];
+          trueMasterBuffer[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
+          trueMasterBuffer[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
+          trueMasterBuffer[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
+          trueMasterBuffer[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
+          trueMasterBuffer[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
+          trueMasterBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
+        }
+        visPayload['master'] = Buffer.from(trueMasterBuffer).toString('base64');
         statsCallback({ type: 'vis', vis: visPayload, pixelCount });
       }
     }
@@ -294,7 +322,7 @@ async function main() {
   let model;
   try {
     model = await loadModel(opts.modelName);
-    console.log(`  ✅ Model loaded: ${model.pixelCount} pixels`);
+    console.log(`  ✅ Model loaded: ${model.pixelCount} pixels` + (model.specialEffects?.length ? ` (${model.specialEffects.length} special effects)` : ''));
   } catch (err) {
     console.error(`  ❌ ${err.message}`);
     process.exit(1);
@@ -370,23 +398,27 @@ async function main() {
   const universeIds = [];
   
   // Force include global effect universes so hardware triggers work even if no pixels are mapped
-  const engConfig = loadConfig();
-  if (engConfig.global_effects && engConfig.global_effects.fogger) {
-    const fogU = engConfig.global_effects.fogger.universe;
-    if (fogU && !universeIds.includes(fogU)) {
-      universeIds.push(fogU);
-      dmxRouter.addUniverse(fogU);
+  let patchedPixelCount = 0;
+  
+  const registerUniverse = (patch) => {
+    if (patch && patch.universe) {
+      if (!universeIds.includes(patch.universe)) {
+        universeIds.push(patch.universe);
+        dmxRouter.addUniverse(patch.universe);
+      }
+    }
+  };
+
+  for (const px of model.pixels) {
+    if (px.patch) {
+      registerUniverse(px.patch);
+      patchedPixelCount++;
     }
   }
-
-  let patchedPixelCount = 0;
-  for (const px of model.pixels) {
-    if (px.patch && px.patch.universe) {
-      if (!universeIds.includes(px.patch.universe)) {
-        universeIds.push(px.patch.universe);
-        dmxRouter.addUniverse(px.patch.universe);
-      }
-      patchedPixelCount++;
+  
+  for (const fx of (model.specialEffects || [])) {
+    if (fx.patch) {
+      registerUniverse(fx.patch);
     }
   }
   console.log(`  ✅ Shared DMX mapper: ${patchedPixelCount}/${model.pixelCount} pixels patched across ${universeIds.length} universe(s) [${universeIds.join(', ')}]`);
@@ -428,6 +460,7 @@ async function main() {
   const broadcastStatsRef = { publish: () => {} };
   const intensityController = new IntensityController();
   const globalEffectsController = new GlobalEffectsController(loadConfig());
+  globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   
   const engineCore = { mixer, wasmHost, paramRouter, paramCenter };
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);

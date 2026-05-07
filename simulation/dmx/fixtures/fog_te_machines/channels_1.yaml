@@ -1,0 +1,10 @@
+fixture:
+  name: "TE Fog Machine"
+  mode: "1-channel"
+  mode_id: "1ch"
+  total_channels: 1
+
+channels:
+  - channel: 1
+    function: "Fog"
+    description: "0-255: Fog output intensity/switch"

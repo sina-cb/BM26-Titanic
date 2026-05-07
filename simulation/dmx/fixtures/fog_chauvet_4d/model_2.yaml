@@ -1,0 +1,20 @@
+# Chauvet Hurricane Haze 4D — Fixture Model (2-channel mode)
+# DMX Manual: Ch1=Fan Speed (0-255), Ch2=Haze Volume (0-255)
+model:
+  id: "fog_chauvet_4d_2"
+  name: "Chauvet Hurricane Haze 4D (2ch)"
+  fixture_type: "ChauvetHaze4D"
+  channel_mode: 2
+
+  dimensions:
+    width: 277
+    height: 150
+    depth: 396
+
+  shell:
+    type: "box"
+    dimensions: [277, 150, 396]
+    color: "#000000"
+    offset: [0, -88.5, 0]
+
+  pixels: []

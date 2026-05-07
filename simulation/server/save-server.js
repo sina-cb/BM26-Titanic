@@ -208,7 +208,8 @@ http.createServer((req, res) => {
           return;
         }
         // Determine model filename based on active scene
-        const modelFilename = `${sceneName}.js`;
+        const isEffects = parsedUrl.searchParams.get('type') === 'effects';
+        const modelFilename = isEffects ? `${sceneName}.effects.js` : `${sceneName}.js`;
         const outDir = path.join(ENGINE_ROOT, 'models');
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);

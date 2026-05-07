@@ -1,19 +1,35 @@
 import * as THREE from 'three';
 
 export class FogMachine {
-  constructor(config, index, scene, interactiveObjects, modelRadius) {
+  constructor(config, index, scene, interactiveObjects, modelRadius, fixtureDef = null) {
     this.config = config;
     this.index = index;
     this.scene = scene;
     this.interactiveObjects = interactiveObjects;
+    this.fixtureDefRef = fixtureDef;
     
     this.group = new THREE.Group();
     this.scene.add(this.group);
     
-    // Base visual box
-    this.boxGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    // Base visual box (dynamically sized based on YAML definition if provided)
+    let w = 0.5, h = 0.5, d = 0.5;
+    let ox = 0, oy = 0, oz = 0;
+    
+    if (fixtureDef && fixtureDef.shell && fixtureDef.shell.dimensions) {
+      w = fixtureDef.shell.dimensions[0] * 0.001;
+      h = fixtureDef.shell.dimensions[1] * 0.001;
+      d = fixtureDef.shell.dimensions[2] * 0.001;
+      if (fixtureDef.shell.offset) {
+        ox = fixtureDef.shell.offset[0] * 0.001;
+        oy = fixtureDef.shell.offset[1] * 0.001;
+        oz = fixtureDef.shell.offset[2] * 0.001;
+      }
+    }
+    
+    this.boxGeo = new THREE.BoxGeometry(w, h, d);
     this.boxMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
     this.box = new THREE.Mesh(this.boxGeo, this.boxMat);
+    this.box.position.set(ox, oy, oz);
     this.group.add(this.box);
 
     // Fog visual: CylinderGeometry(radiusTop, radiusBottom, height, radialSegments)
@@ -43,7 +59,7 @@ export class FogMachine {
     }
     this.scene.add(this.hitbox);
     
-    this.fixtureDef = { fixtureType: 'FogMachine' };
+    this.fixtureDef = { fixtureType: config.type || config.fixtureType || 'TEFogMachine' };
     
     this.syncFromConfig();
 
@@ -71,18 +87,49 @@ export class FogMachine {
   
   applyDmxFrame(dmxSlice) {
     if (!dmxSlice) return;
-    const val = dmxSlice[0] / 255.0;
+    let val = dmxSlice[0] / 255.0;
+    
+    // Chauvet 4D uses Channel 2 for Haze output (Channel 1 is Fan speed)
+    const fType = this.config.type || this.config.fixtureType;
+    if (fType === 'ChauvetHaze4D' && dmxSlice.length > 1) {
+      val = dmxSlice[1] / 255.0;
+    }
+    
     this.fogLevel = val;
+    this.lastDmxUpdate = performance.now();
   }
   
   update() {
+    // When UI fog override is active, push max DMX values into the router
+    // so the real fixture fires (both fan + haze for Chauvet 4D)
+    if (this._uiFogOverride && window.dmxRouter) {
+      const u = this.config.dmxUniverse;
+      const addr = this.config.dmxAddress;
+      if (u && u > 0 && addr && addr > 0) {
+        const fType = this.config.type || this.config.fixtureType;
+        if (fType === 'ChauvetHaze4D') {
+          // Ch1: Fan=255, Ch2: Haze=255
+          window.dmxRouter.submitFrame('fog_ui', 250, u, new Uint8Array([255, 255]), addr);
+        } else {
+          // TEFogMachine: Ch1: Fog=255
+          window.dmxRouter.submitFrame('fog_ui', 250, u, new Uint8Array([255]), addr);
+        }
+      }
+    }
+
+    if (this.lastDmxUpdate && (performance.now() - this.lastDmxUpdate > 2000)) {
+        this.fogLevel = 0;
+    }
+
     const level = this._uiFogOverride ? 1.0 : this.fogLevel;
     if (level > 0.05) {
       this.fogMat.opacity = (level * 0.4) + (Math.random() * 0.1);
       this.fogMesh.scale.x = 1.0 + Math.random() * 0.05;
       this.fogMesh.scale.y = 1.0 + Math.random() * 0.05;
+      this.fogMesh.visible = true;
     } else {
       this.fogMat.opacity = 0;
+      this.fogMesh.visible = false;
     }
   }
 

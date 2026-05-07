@@ -11,7 +11,7 @@ interface RigState {
   toggleBlackout: () => void;
 }
 
-const RigContext = createContext<RigState>({
+export const RigContext = createContext<RigState>({
   effects: {},
   blackout: false,
   toggleEffect: () => {},
@@ -29,6 +29,26 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
         if (res.data.blackout !== undefined) setBlackout(res.data.blackout);
       }
     });
+
+    let ws: WebSocket;
+    import('@/utils/api').then(({ getApiBaseAsync }) => {
+      getApiBaseAsync().then(apiBase => {
+        const wsUrl = apiBase.replace(/^http/, 'ws');
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'mixer' && data.blackout !== undefined) {
+              setBlackout(data.blackout);
+            }
+          } catch (e) {}
+        };
+      });
+    });
+
+    return () => {
+      if (ws) ws.close();
+    };
   }, []);
   
   const toggleEffect = (id: string, def: boolean) => {

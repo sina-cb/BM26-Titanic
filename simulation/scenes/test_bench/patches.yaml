@@ -63,18 +63,18 @@ patches:
     sectionId: 3
     fixtureId: 8
     viewMask: 0
-  FogMachine Left:
+  ChauvetHaze4D 10:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
-    dmxAddress: 512
-    controllerId: 1
-    sectionId: 4
-    fixtureId: 9
+    dmxAddress: 511
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
     viewMask: 0
-  FogMachine Right:
-    controllerIp: ''
+  TEFogMachine 10:
+    controllerIp: 10.1.1.102
     dmxUniverse: 1
-    dmxAddress: 512
+    dmxAddress: 511
     controllerId: 0
     sectionId: 0
     fixtureId: 0

@@ -1,0 +1,20 @@
+# Chauvet Hurricane Haze 4D — DMX Channel Map (2-channel mode)
+# Source: DMX Manual
+fixture:
+  name: "Chauvet Hurricane Haze 4D"
+  mode: "2-channel"
+  mode_id: "2ch"
+  total_channels: 2
+
+channels:
+  - channel: 1
+    function: "Fan Speed"
+    range: "0-255"
+    description: "Fan speed control — 0=off, 255=full speed"
+    ui_override_value: 255
+
+  - channel: 2
+    function: "Haze Volume"
+    range: "0-255"
+    description: "Haze output volume — 0=off, 255=max haze"
+    ui_override_value: 255

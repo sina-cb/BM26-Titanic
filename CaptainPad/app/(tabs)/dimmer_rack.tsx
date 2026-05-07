@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { NauticalFader } from '@/components/NauticalFader';
 import { setSectionBrightness, setGlobalBlackout, fetchDimmers } from '@/utils/api';
+import { RigContext } from '@/components/RigGlobals';
 
 export default function DimmerRackScreen() {
-  const [isBlackout, setIsBlackout] = useState(false);
+  const { blackout: isBlackout, toggleBlackout } = useContext(RigContext);
   const [dimmerStates, setDimmerStates] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -40,11 +41,7 @@ export default function DimmerRackScreen() {
         </View>
 
         <TouchableOpacity 
-           onPress={() => {
-             const next = !isBlackout;
-             setIsBlackout(next);
-             setGlobalBlackout(next);
-           }} 
+           onPress={toggleBlackout} 
            style={{ 
              alignSelf: 'stretch', 
              marginBottom: 24, 

@@ -78,9 +78,10 @@ export async function initPatternEngine() {
       console.log('[PB] Pattern engine ready');
       compileEditorCode();
     }
-} catch (err) {
+  } catch (err) {
     console.warn('[PB] Pattern engine not available:', err.message);
   }
+
 }
 
 const ExportKind = {
@@ -95,20 +96,155 @@ const ExportKind = {
 
 let paramGuiInstance = null;
 let paramGuiTrackingInterval = null;
+let localFolder = null;
 
-function updateParameterUI(ok) {
-  if (paramGuiInstance) {
-    paramGuiInstance.destroy();
-    paramGuiInstance = null;
-    if (paramGuiTrackingInterval) {
-      clearInterval(paramGuiTrackingInterval);
-      paramGuiTrackingInterval = null;
-    }
+// CPC default values — used when engine is offline
+const CPC_DEFAULTS = {
+  speed: 0.5,
+  direction: 1.0,
+  count: 0.5,
+  size: 0.5,
+  rotate: 0.0,
+  colorPalette1: { h: 0.0, s: 1.0, v: 1.0 },
+  colorPalette2: { h: 0.5, s: 1.0, v: 1.0 },
+};
+const CPC_KEYS = new Set(Object.keys(CPC_DEFAULTS));
+
+// Live binding: maps CPC key → { id, kind } for current pattern
+let globalExportMap = {};
+// ─── Hue Slider Color System ──────────────────────────────────────────────
+//
+// ARCHITECTURE:
+//   The hue slider maps a 0-1 float to a color. There are two independent
+//   concerns that must stay in sync:
+//
+//   1. GRADIENT (visual) — the CSS background on the slider track that shows
+//      the user a rainbow preview of what each position means.
+//
+//   2. DATA PATH (functional) — the actual value sent to the pattern engine
+//      when the user drags the slider. This goes through setControl().
+//
+// HOW IT WORKS:
+//   All CPC color params (colorPalette1, colorPalette2) are typed as 'hsv'
+//   in the ParamCenter registry. The Pixelblaze WASM engine's built-in
+//   hsv(h, s, v) function uses standard HSV-to-RGB conversion — the same
+//   algorithm used by CSS hsl(). Therefore:
+//
+//   • The slider gradient uses native CSS hsl() stops, which produces the
+//     standard color wheel: Red → Yellow → Green → Cyan → Blue → Magenta → Red.
+//
+//   • HSV exports (ExportKind.HSV): we send raw (h, s, v) to setControl().
+//     The WASM engine's hsv() converts internally.
+//
+//   • RGB exports (ExportKind.RGB): we convert h → RGB ourselves using
+//     hsvToRgb() before sending, since the pattern expects raw (r, g, b).
+//
+// IMPORTANT — KNOWN LIMITATION:
+//   Some patterns (e.g., 08_ocean_liner.js) use manual wave()-based color
+//   conversion internally:
+//     r = wave(hue); g = wave(hue + 0.333); b = wave(hue + 0.666);
+//   where wave() is a sine function. This produces a DIFFERENT color wheel
+//   than standard HSV. For these patterns, the slider gradient won't be an
+//   exact visual match — the hue value IS passed correctly, but the pattern
+//   interprets it through its own color math. The slider shows the HSV
+//   interpretation, while the pattern renders the wave() interpretation.
+//   This is acceptable because:
+//     a) The CPC schema defines these params as 'hsv' type
+//     b) The iPad CaptainPad uses the same standard HSV representation
+//     c) A single slider can't represent two different color wheels
+//
+// ──────────────────────────────────────────────────────────────────────────
+
+// Standard HSV to RGB conversion (h, s, v all 0-1)
+function hsvToRgb(h, s, v) {
+  h = h - Math.floor(h); // wrap
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    case 5: r = v; g = p; b = q; break;
   }
-  if (!ok) return;
+  return { r, g, b };
+}
 
-  const exportsData = patternEngine.getExports();
-  if (!exportsData || exportsData.length === 0) return;
+// Style a slider as a hue rainbow picker using the standard HSV color wheel
+function styleAsHueSlider(controller) {
+  if (!controller || !controller.domElement) return;
+  const slider = controller.domElement.querySelector('.slider');
+  const fill = controller.domElement.querySelector('.fill');
+  if (slider) {
+    // Standard HSV hue wheel: 0=Red, 0.17=Yellow, 0.33=Green, 0.5=Cyan, 0.67=Blue, 0.83=Magenta
+    slider.style.background = 'linear-gradient(to right, ' +
+      'hsl(0,100%,50%), hsl(60,100%,50%), hsl(120,100%,50%), ' +
+      'hsl(180,100%,50%), hsl(240,100%,50%), hsl(300,100%,50%), hsl(360,100%,50%))';
+    slider.style.borderRadius = '3px';
+  }
+  if (fill) {
+    fill.style.backgroundColor = 'transparent';
+    fill.style.borderRight = '2px solid white';
+    fill.style.boxShadow = '1px 0 3px rgba(0,0,0,0.6)';
+  }
+}
+
+// Post global parameter updates to the engine API
+function postGlobal(key, value) {
+  fetch(`http://${window.location.hostname}:6968/param-center`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [key]: value })
+  }).catch(() => {});
+}
+
+// Push a CPC global value into the local pattern engine (if export exists).
+// CPC color params are always type 'hsv' in the ParamCenter registry,
+// so we always send raw (h, s, v) — regardless of what ExportKind the
+// Pixelblaze compiler assigned (it may classify `colorPalette1(h,s,v)`
+// as a generic function rather than ExportKind.HSV because it lacks
+// the `hsvPicker` prefix).
+function pushGlobalToPattern(key, value) {
+  const mapping = globalExportMap[key];
+  if (!mapping) return;
+  if (typeof value === 'object' && value !== null && 'h' in value) {
+    // Always send as HSV — the pattern function expects (h, s, v) args
+    patternEngine.setControl(mapping.id, value.h, value.s ?? 1, value.v ?? 1);
+  } else if (typeof value === 'number') {
+    patternEngine.setControl(mapping.id, value);
+  }
+}
+
+// ─── Persistent Global Params GUI ─────────────────────────────────────────
+// Created once when pixelblaze mode activates. Never destroyed between
+// pattern switches — only destroyed when leaving pixelblaze mode.
+
+async function ensureGlobalParamsGui() {
+  // Already exists — don't recreate
+  if (paramGuiInstance) return;
+
+  let globalParams = {};
+  try {
+    const res = await fetch(`http://${window.location.hostname}:6968/param-center`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.params) {
+        for (const k in data.params) {
+          globalParams[k] = data.params[k].value;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[CPC] Engine offline — using default global params");
+  }
+  for (const k in CPC_DEFAULTS) {
+    if (!(k in globalParams)) globalParams[k] = CPC_DEFAULTS[k];
+  }
 
   paramGuiInstance = new GUI({ title: '🎛️ Engine Parameters' });
   const dom = paramGuiInstance.domElement;
@@ -129,54 +265,133 @@ function updateParameterUI(ok) {
     }
   }
   updatePosition();
-  paramGuiTrackingInterval = setInterval(updatePosition, 50); // fast track for dragging
+  paramGuiTrackingInterval = setInterval(updatePosition, 50);
 
+  const globalFolder = paramGuiInstance.addFolder('🌐 Global Parameters');
+  const paramState = {};
+  // Store paramState on the GUI so we can read current values later
+  paramGuiInstance._globalParamState = paramState;
+
+  const globalKeys = Object.keys(globalParams);
+  globalKeys.forEach(key => {
+    const val = globalParams[key];
+    if (typeof val === 'number') {
+      paramState[key] = val;
+      globalFolder.add(paramState, key, 0, 1)
+        .onChange(v => {
+          postGlobal(key, v);
+          pushGlobalToPattern(key, v);
+        });
+    } else if (typeof val === 'object' && val !== null && 'h' in val) {
+      paramState[key] = val.h;
+      const ctrl = globalFolder.add(paramState, key, 0, 1).name(key + ' (Hue)');
+      ctrl.onChange(h => {
+        const s = val.s !== undefined ? val.s : 1;
+        const v = val.v !== undefined ? val.v : 1;
+        postGlobal(key, { h, s, v });
+        pushGlobalToPattern(key, { h, s, v });
+      });
+      styleAsHueSlider(ctrl);
+    }
+  });
+}
+
+function destroyParamGui() {
+  if (paramGuiInstance) {
+    paramGuiInstance.destroy();
+    paramGuiInstance = null;
+    localFolder = null;
+    if (paramGuiTrackingInterval) {
+      clearInterval(paramGuiTrackingInterval);
+      paramGuiTrackingInterval = null;
+    }
+  }
+  globalExportMap = {};
+}
+
+// ─── Local Pattern Parameters (rebuilt on each compile) ───────────────────
+async function updateParameterUI(ok) {
+  // Ensure the persistent global GUI exists
+  await ensureGlobalParamsGui();
+
+  // Destroy previous local folder (but keep the global folder!)
+  if (localFolder) {
+    try { localFolder.destroy(); } catch (e) {}
+    localFolder = null;
+  }
+
+  // Clear previous export mappings
+  globalExportMap = {};
+
+  if (!ok) return;
+
+  const exportsData = patternEngine.getExports();
+  if (!exportsData || exportsData.length === 0) return;
+
+  // Build global→pattern export binding map
+  for (const exp of exportsData) {
+    if (CPC_KEYS.has(exp.name)) {
+      globalExportMap[exp.name] = { id: exp.id, kind: exp.kind };
+    }
+  }
+
+  // Apply current global values to the pattern immediately
+  if (paramGuiInstance && paramGuiInstance._globalParamState) {
+    const ps = paramGuiInstance._globalParamState;
+    for (const key in globalExportMap) {
+      const val = CPC_DEFAULTS[key];
+      if (typeof val === 'object' && 'h' in val) {
+        // Use the current slider hue value
+        const h = ps[key] !== undefined ? ps[key] : val.h;
+        pushGlobalToPattern(key, { h, s: val.s ?? 1, v: val.v ?? 1 });
+      } else {
+        const v = ps[key] !== undefined ? ps[key] : val;
+        pushGlobalToPattern(key, v);
+      }
+    }
+  }
+
+  // Build local params folder — skip any exports matching CPC keys
+  const localExports = exportsData.filter(exp => !CPC_KEYS.has(exp.name));
+  if (localExports.length === 0) return;
+
+  localFolder = paramGuiInstance.addFolder('Pattern Parameters');
   const paramState = {};
 
-  exportsData.forEach(exp => {
+  localExports.forEach(exp => {
     if (exp.kind === ExportKind.SLIDER) {
       paramState[exp.name] = 0.5;
-      paramGuiInstance.add(paramState, exp.name, 0, 1)
+      localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.TOGGLE) {
       paramState[exp.name] = false;
-      paramGuiInstance.add(paramState, exp.name)
+      localFolder.add(paramState, exp.name)
         .onChange(v => patternEngine.setControl(exp.id, v ? 1 : 0));
     } else if (exp.kind === ExportKind.TRIGGER) {
       paramState[exp.name] = () => {
         patternEngine.setControl(exp.id, 1);
         setTimeout(() => patternEngine.setControl(exp.id, 0), 100);
       };
-      paramGuiInstance.add(paramState, exp.name);
+      localFolder.add(paramState, exp.name);
     } else if (exp.kind === ExportKind.VAR) {
       paramState[exp.name] = 0;
-      paramGuiInstance.add(paramState, exp.name)
+      localFolder.add(paramState, exp.name)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.GAUGE) {
       paramState[exp.name] = 0;
-      paramGuiInstance.add(paramState, exp.name).disable();
+      localFolder.add(paramState, exp.name).disable();
     } else if (exp.kind === ExportKind.HSV || exp.kind === ExportKind.RGB) {
-      paramState[exp.name] = '#ff0000';
-      paramGuiInstance.addColor(paramState, exp.name)
-        .onChange(hex => {
-          const rStr = hex.slice(1,3), gStr = hex.slice(3,5), bStr = hex.slice(5,7);
-          const r = parseInt(rStr, 16) / 255;
-          const g = parseInt(gStr, 16) / 255;
-          const b = parseInt(bStr, 16) / 255;
-          if (exp.kind === ExportKind.HSV) {
-            const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
-            let h = 0, s = max === 0 ? 0 : d / max, v = max;
-            if (max !== min) {
-              if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
-              else if (max === g) h = (b - r) / d + 2;
-              else h = (r - g) / d + 4;
-              h /= 6;
-            }
-            patternEngine.setControl(exp.id, h, s, v);
-          } else {
-            patternEngine.setControl(exp.id, r, g, b);
-          }
-        });
+      paramState[exp.name] = 0;
+      const ctrl = localFolder.add(paramState, exp.name, 0, 1).name(exp.name + ' (Hue)');
+      ctrl.onChange(h => {
+        if (exp.kind === ExportKind.HSV) {
+          patternEngine.setControl(exp.id, h, 1, 1);
+        } else {
+          const rgb = hsvToRgb(h, 1, 1);
+          patternEngine.setControl(exp.id, rgb.r, rgb.g, rgb.b);
+        }
+      });
+      styleAsHueSlider(ctrl);
     }
   });
 }
@@ -419,6 +634,11 @@ export function onLightingChange() {
   setLightingMode(newMode);
 
   const isEnabled = !!params.lightingEnabled;
+
+  // Destroy param GUI when leaving pixelblaze mode
+  if (!(newMode === 'pixelblaze' && isEnabled)) {
+    destroyParamGui();
+  }
 
   // Show pattern editor only in pixelblaze mode
   if (window.showPatternEditor) window.showPatternEditor(newMode === 'pixelblaze' && isEnabled);

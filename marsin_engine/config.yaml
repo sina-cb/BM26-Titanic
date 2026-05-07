@@ -8,12 +8,8 @@ engine:
   fps: 40
 server:
   port: 6968
-global_effects:
-  fogger:
-    universe: 1
-    address: 512
 playlist:
-  active: true
+  active: false
   delay_s: '5'
   shuffle: true
 web_client:

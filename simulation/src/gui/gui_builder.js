@@ -1422,8 +1422,17 @@ function setupGUI() {
             const holdBtn = document.createElement('button');
             holdBtn.textContent = '💨 Hold to Fog';
             holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-weight:bold;';
-            const startFog = () => { window.parFixtures.forEach(f => { if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D')) f._uiFogOverride = true; }); };
-            const stopFog = () => { window.parFixtures.forEach(f => { if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D')) f._uiFogOverride = false; }); };
+            const toggleFog = (state) => {
+              console.log(`[GUI] toggleFog(${state}) called. active sources:`, window.dmxRouter ? window.dmxRouter.getSourceInfo() : 'no router');
+              [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
+                if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D' || f.config.type === 'TEFogMachine' || f.config.type === 'ChauvetHaze4D')) {
+                  f._uiFogOverride = state;
+                }
+              });
+              if (!state && window.dmxRouter) window.dmxRouter.removeSource('fog_ui');
+            };
+            const startFog = () => toggleFog(true);
+            const stopFog = () => toggleFog(false);
             holdBtn.addEventListener('mousedown', startFog);
             holdBtn.addEventListener('touchstart', startFog);
             holdBtn.addEventListener('mouseup', stopFog);

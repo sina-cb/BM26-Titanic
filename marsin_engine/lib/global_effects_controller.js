@@ -11,17 +11,51 @@ export class GlobalEffectsController {
       vintageWhite: false,
       fogger: false,
       uvBlast: false,
-      placeholder1: false,
-      placeholder2: false,
+      horn: false,
+      fire: false,
       placeholder3: false
     };
-
-    this.config = config.global_effects || { fogger: { universe: 1, address: 512 } };
+    
+    this.foggers = []; // Dynamically populated from the model
+    this.horns = [];
+    this.fires = [];
   }
 
   setEffect(effectName, state) {
     if (this.effects.hasOwnProperty(effectName)) {
+      if (this.effects[effectName] !== !!state) {
+        console.log(`[GlobalEffectsController] ${effectName} changed: ${this.effects[effectName]} -> ${!!state}`);
+      }
       this.effects[effectName] = !!state;
+    }
+  }
+
+  // Scan the model pixels to find exported Global Effect fixtures.
+  // These fixtures are exported from the simulation with `channels: null` to bypass the WASM pattern mapper,
+  // but they carry full DMX patch info so this controller can inject raw DMX overrides below.
+  initFromModel(effectsArray) {
+    this.foggers = [];
+    this.horns = [];
+    this.fires = [];
+    if (!effectsArray) return;
+    for (let i = 0; i < effectsArray.length; i++) {
+      const fx = effectsArray[i];
+      if (!fx.patch || !fx.patch.universe || !fx.patch.addr) continue;
+
+      const patchInfo = {
+        type: fx.fixtureType,
+        universe: fx.patch.universe,
+        address: fx.patch.addr,
+        kind: fx.kind || ''
+      };
+
+      if (patchInfo.kind === 'fog' || patchInfo.kind === 'haze' || (fx.fixtureType && (fx.fixtureType.includes('Fog') || fx.fixtureType === 'ChauvetHaze4D'))) {
+        this.foggers.push(patchInfo);
+      } else if (patchInfo.kind === 'horn' || (fx.fixtureType && fx.fixtureType.includes('Horn'))) {
+        this.horns.push(patchInfo);
+      } else if (patchInfo.kind === 'fire' || (fx.fixtureType && fx.fixtureType.includes('Fire'))) {
+        this.fires.push(patchInfo);
+      }
     }
   }
 
@@ -46,16 +80,42 @@ export class GlobalEffectsController {
   // Intended to bypass pixel structures entirely, directly injecting raw DMX channels
   // Operates *after* mapPixelsToSacn builds the outgoing frame!
   applyDmx(dmxBuffers) {
-    if (!this.config.fogger) return;
-    
-    // dmxBuffers is an object mapping universe -> Uint8Array
-    const frame = dmxBuffers[this.config.fogger.universe];
-    if (!frame) return; // Universe not initialized
+    for (const fogger of this.foggers) {
+      const frame = dmxBuffers[fogger.universe];
+      if (!frame) continue; // Universe not initialized
 
-    if (this.effects.fogger) {
-      frame[this.config.fogger.address - 1] = 255;
-    } else {
-      frame[this.config.fogger.address - 1] = 0;
+      const isChauvet = fogger.type === 'ChauvetHaze4D';
+
+      if (this.effects.fogger) {
+        console.log(`[GlobalEffectsController] Applying fog to address ${fogger.address}`);
+        if (isChauvet) {
+          // Chauvet Haze 4D: Ch1 = Fan (255), Ch2 = Haze Volume (255)
+          frame[fogger.address - 1] = 255;
+          frame[fogger.address] = 255;
+        } else {
+          // TE Fog Machine: Ch1 = Fog Output (255)
+          frame[fogger.address - 1] = 255;
+        }
+      } else {
+        if (isChauvet) {
+          frame[fogger.address - 1] = 0;
+          frame[fogger.address] = 0;
+        } else {
+          frame[fogger.address - 1] = 0;
+        }
+      }
+    }
+
+    for (const horn of this.horns) {
+      const frame = dmxBuffers[horn.universe];
+      if (!frame) continue;
+      frame[horn.address - 1] = this.effects.horn ? 255 : 0;
+    }
+
+    for (const fire of this.fires) {
+      const frame = dmxBuffers[fire.universe];
+      if (!frame) continue;
+      frame[fire.address - 1] = this.effects.fire ? 255 : 0;
     }
   }
 }

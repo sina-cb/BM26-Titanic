@@ -221,6 +221,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   function serializeMixerState() {
     return {
       type: 'mixer',
+      blackout: globalsState.blackout,
       master: mixer.master,
       maxChannels: mixer.maxChannels,
       channels: mixer.channels.map(c => ({
@@ -510,6 +511,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (intensityController) intensityController.setBlackout(data.state);
         globalsState.blackout = data.state;
         stateManager.saveGlobalsState(globalsState);
+        broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
       });

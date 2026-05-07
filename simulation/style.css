@@ -110,6 +110,67 @@ canvas {
   font-family: "Courier New", monospace;
   pointer-events: none;
 }
+
+#engine-blackout-warning {
+  position: fixed;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  width: min(920px, calc(100vw - 28px));
+  padding: 14px 18px 15px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(136, 0, 0, 0.95);
+  color: #ffffff;
+  border: 2px solid #ff0000;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  pointer-events: auto;
+}
+
+#engine-blackout-warning.hidden {
+  display: none;
+}
+
+.engine-blackout-title {
+  flex: 0 0 auto;
+  font-size: clamp(1rem, 2.6vw, 1.8rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffaaaa;
+  text-shadow: 0 0 4px rgba(255, 0, 0, 0.5);
+}
+
+.engine-blackout-message {
+  flex: 1 1 auto;
+  min-width: 180px;
+  font-size: clamp(0.78rem, 1.6vw, 1rem);
+  font-weight: 600;
+  line-height: 1.25;
+  color: #ffffff;
+}
+
+.engine-blackout-clear {
+  display: none; /* Removed as requested */
+}
+
+@media (max-width: 720px) {
+  #engine-blackout-warning {
+    top: 42px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    text-align: center;
+    padding: 12px;
+  }
+
+  .engine-blackout-clear {
+    width: 100%;
+  }
+}
 /* ─── HUD Frame Overlay ─── */
 #hud-frame {
   position: fixed;

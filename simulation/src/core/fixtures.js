@@ -85,10 +85,11 @@ function _buildFixtureAt(index) {
     const patchDef = getFixturePatchDef(config);
 
     try {
-      if (fixtureType === 'FogMachine') {
+      if (fixtureType === 'TEFogMachine' || fixtureType === 'ChauvetHaze4D') {
         fixture = new FogMachine(
-          config, index, scene, interactiveObjects, modelRadius
+          config, index, scene, interactiveObjects, modelRadius, fixtureDef
         );
+        fixture.patchDef = patchDef;
       } else {
         fixture = new DmxFixtureRuntime(
           config, index, scene, interactiveObjects, modelRadius, fixtureDef, patchDef
@@ -223,14 +224,16 @@ export function rebuildDmxFixtures(force = false) {
       const fixtureType = config.type; 
       const fixtureModel = fixtureType && window.fixtureModels && window.fixtureModels[fixtureType];
 
-      if (fixtureType === 'FogMachine') {
+      if (fixtureType === 'TEFogMachine' || fixtureType === 'ChauvetHaze4D') {
         fixture = new FogMachine(
           config,
           index,
           scene,
           interactiveObjects,
-          modelRadius
+          modelRadius,
+          fixtureModel || getDefinition(fixtureType)
         );
+        fixture.patchDef = patchDef;
         window.dmxSceneFixtures[index] = fixture;
       } else if (fixtureModel) {
         fixture = new ModelFixture(

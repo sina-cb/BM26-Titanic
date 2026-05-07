@@ -4,7 +4,8 @@ import { getProfileDef } from "../core/profile_registry.js";
 
 export function generatePixelMap() {
   const pixels = [];
-  if (window._isRebuildingFixtures) return pixels;
+  const specialEffects = [];
+  if (window._isRebuildingFixtures) return { pixels, specialEffects };
 
   function standardizeChannels(ch) {
     if (!ch) return null;
@@ -33,6 +34,9 @@ export function generatePixelMap() {
       console.log(`[pixelblaze] Skipping pixel map: fixtures not ready (${window.parFixtures?.length || 0}/${dmxList.length}, rebuilding=${!!window._isRebuildingFixtures})`);
     }
     if (fixturesReady) dmxList.forEach((light, i) => {
+      const fType = light.type || light.fixtureType || 'Generic';
+
+
       const fixture = (window.dmxSceneFixtures && window.dmxSceneFixtures[i]) || (window.parFixtures && window.parFixtures[i]) || null;
       if (fixture && fixture.pixels && fixture.pixels.length > 0) {
         if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
@@ -136,7 +140,7 @@ export function generatePixelMap() {
                addr: addr,
                footprint: fp
             },
-            channels: standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback,
+            channels: (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) ? null : (standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback),
             apply: (r, g, b) => {
                if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
                if (fixture.setPixelColorRGB) {
@@ -144,6 +148,59 @@ export function generatePixelMap() {
                }
             }
         });
+      } else if (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) {
+        // [GLOBAL EFFECTS EXPORT PIPELINE]
+        // We export non-lighting global fixtures (Foggers, Hazers, Horns, Fire) into a separate specialEffects model.
+        let u = light.dmxUniverse || autoUniverse;
+        let addr = light.dmxAddress || autoAddress;
+        
+        const isChauvet = fType === 'ChauvetHaze4D';
+        const fp = fixture && fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || (isChauvet ? 2 : 1)) : (isChauvet ? 2 : 1);
+        
+        let channelsObj = null;
+        let controlGroup = 'none';
+        let kind = 'other';
+        if (isChauvet) {
+            channelsObj = { fan: 1, haze: 2 };
+            controlGroup = 'fogger';
+            kind = 'haze';
+        } else if (fType.includes('Fog')) {
+            channelsObj = { fog: 1 };
+            controlGroup = 'fogger';
+            kind = 'fog';
+        } else if (fType.includes('Horn')) {
+            channelsObj = { horn: 1 };
+            controlGroup = 'horn';
+            kind = 'horn';
+        } else if (fType.includes('Fire')) {
+            channelsObj = { fire: 1 };
+            controlGroup = 'fire';
+            kind = 'fire';
+        }
+
+        specialEffects.push({
+          id: (light.name || fType).toLowerCase().replace(/[^a-z0-9]/g, '_'),
+          kind: kind,
+          fixtureType: light.fixtureType || fType,
+          name: light.name || fType,
+          group: light.group || 'GlobalEffects',
+          patch: {
+             universe: u,
+             addr: addr,
+             footprint: fp
+          },
+          channels: channelsObj,
+          controlGroup: controlGroup
+        });
+        
+        // Ensure autoAddress increments for next fixture if auto-patching
+        if (!light.dmxUniverse || !light.dmxAddress) {
+            autoAddress += fp;
+            if (autoAddress > 512) {
+                autoUniverse++;
+                autoAddress = 1;
+            }
+        }
       } else {
         const errorMsg = `[MarsinEngine Export] Warning: Unsupported or missing fixture definition! Par light at index ${i} (Type: ${light.fixtureType || 'Unknown'}) could not be resolved against supported fixtures. Skipping.`;
         if (window._missingFixtureWarnCount === undefined) window._missingFixtureWarnCount = 0;
@@ -231,15 +288,18 @@ export function generatePixelMap() {
     p.nz = +((p.z - minZ) / rangeZ).toFixed(4);
   });
 
-  return pixels;
+  return { pixels, specialEffects };
 }
 
 export function saveModelJS() {
-  const pixels = generatePixelMap();
+  const { pixels, specialEffects } = generatePixelMap();
 
   const lines = [
     '// Auto-generated Pixelblaze model — do not edit manually',
     '// Updated: ' + new Date().toISOString(),
+    '//',
+    '// Note: Non-light simulation fixtures (Horn, Fire, Foggers) are exported to',
+    '// the companion .effects.js model.',
     '//',
     '// Each pixel has: index, type, name, group, world coords (x,y,z),',
     '// normalized coords (nx,ny,nz) in [0..1], and optional V2 metadata maps',
@@ -265,4 +325,28 @@ export function saveModelJS() {
     headers: { 'Content-Type': 'text/plain' },
     body: modelJS,
   }).catch(err => console.warn('[PB] Failed to save model:', err));
+
+  // Build and save effects model
+  const effectsLines = [
+    '// Auto-generated Companion Special Effects model — do not edit manually',
+    '// Updated: ' + new Date().toISOString(),
+    '',
+    'export const specialEffects = [',
+  ];
+  
+  specialEffects.forEach(fx => {
+    const patchStr = fx.patch ? `{ universe: ${fx.patch.universe}, addr: ${fx.patch.addr}, footprint: ${fx.patch.footprint} }` : 'null';
+    const chStr = fx.channels ? JSON.stringify(fx.channels) : 'null';
+    effectsLines.push(`  { id: '${fx.id}', kind: '${fx.kind}', fixtureType: '${fx.fixtureType}', name: '${fx.name}', group: '${fx.group}', patch: ${patchStr}, channels: ${chStr}, controlGroup: '${fx.controlGroup}' },`);
+  });
+  
+  effectsLines.push('];');
+  effectsLines.push('');
+  
+  const effectsJS = effectsLines.join('\n');
+  fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: effectsJS,
+  }).catch(err => console.warn('[PB] Failed to save effects model:', err));
 }

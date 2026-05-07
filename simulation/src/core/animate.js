@@ -57,7 +57,7 @@ import * as THREE from "three";
 /** Rebuild the ordered render list, coordinate buffer, and metadata buffer. */
 function _rebuildBatchCache() {
   try {
-    const pixels = generatePixelMap();
+    const { pixels } = generatePixelMap();
     const list = [];
     pixels.forEach(px => {
        list.push({
@@ -213,18 +213,22 @@ export function animate() {
   }
 
   // ─── DMX Router: merge sources and apply to fixtures ───
-  if (window.dmxRouter && getProfileDef(params.lightingProfile).mappingEnabled) {
-    if (_batchCacheVersion !== _batchLastBuiltVersion) {
-      _rebuildBatchCache();
-    }
-    
-    if (lightingMode === 'sacn_in') {
-       // Demap incoming DMX payload to 3D pixels natively
-       window.dmxRouter.processFrame(); // ensures unhandled receivers flush
-       demapSacnToPixels(_batchRenderList, window.dmxRouter);
-    } else {
-       // Map 3D Pixelblaze patterns into outgoing DMX frame chunks 
-       mapPixelsToSacn(_batchRenderList, window.dmxRouter);
+  if (window.dmxRouter) {
+    // Always process frame so sources stay fresh
+    window.dmxRouter.processFrame();
+
+    const mappingEnabled = getProfileDef(params.lightingProfile).mappingEnabled;
+
+    if (mappingEnabled) {
+      if (_batchCacheVersion !== _batchLastBuiltVersion) {
+        _rebuildBatchCache();
+      }
+      
+      if (lightingMode === 'sacn_in') {
+         demapSacnToPixels(_batchRenderList, window.dmxRouter);
+      } else {
+         mapPixelsToSacn(_batchRenderList, window.dmxRouter);
+      }
     }
 
     const applyDmx = (fixtureList) => {
@@ -232,15 +236,19 @@ export function animate() {
       for (const fixture of fixtureList) {
         if (!fixture) continue;
         if (fixture.applyDmxFrame) {
+          const fType = fixture.fixtureDef?.fixtureType || fixture.config?.type || fixture.config?.fixtureType || '';
+          const isGlobalEffect = fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire');
+          
+          if (!mappingEnabled && !isGlobalEffect) continue;
+
           const patchUniverse = Math.floor(Number(fixture.patchDef?.universe ?? fixture.config?.dmxUniverse));
           const patchAddr = Math.floor(Number(fixture.patchDef?.addr ?? fixture.config?.dmxAddress));
           if (!Number.isFinite(patchUniverse) || patchUniverse < 1) continue;
           if (!Number.isFinite(patchAddr) || patchAddr < 1) continue;
-          const u = patchUniverse;
-          const addr = patchAddr;
-          const dmxFrame = window.dmxRouter.getFullFrame(u);
+          
+          const dmxFrame = window.dmxRouter.getFullFrame(patchUniverse);
           if (dmxFrame) {
-            fixture.applyDmxFrame(dmxFrame.subarray(addr - 1));
+            fixture.applyDmxFrame(dmxFrame.subarray(patchAddr - 1));
           }
         }
       }
@@ -285,42 +293,25 @@ export function animate() {
 
   // ─── sACN Blackout Trigger ───
   if (!window.triggerSacnBlackout) {
-    window.triggerSacnBlackout = () => {
+    window.triggerSacnBlackout = async () => {
       const btn = document.getElementById('sacn-out-blackout-btn');
-      if (window._sacnBlackoutActivated) {
-        console.log("[sACN] Resuming Output...");
-        window._sacnBlackoutActivated = false;
-        if (btn) {
-          btn.textContent = "BLACKOUT";
-          btn.style.background = "#800";
-          btn.style.color = "#fff";
+      const nextState = !window._sacnBlackoutActivated;
+      
+      try {
+        if (btn) btn.style.opacity = '0.5';
+        const response = await fetch(`http://${window.location.hostname}:6968/global-blackout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: nextState }),
+        });
+        if (response.ok) {
+          // The WebSocket in engine_blackout_warning.js will receive the update
+          // and we can optionally update local state here as a fallback
         }
-        // Let the animation loop re-enable it naturally
-      } else {
-        console.log("[sACN] Blackout Triggered!");
-        window._sacnBlackoutActivated = true;
-        if (btn) {
-          btn.textContent = "RESUME";
-          btn.style.background = "#080";
-          btn.style.color = "#fff";
-        }
-        if (sacnOutputClient && sacnOutputClient.connected) {
-          const outputGroups = new Map();
-          for (const config of params.parLights || []) {
-            if (!config) continue;
-            const u = config.dmxUniverse;
-            const ip = config.controllerIp;
-            if (u && ip && ip !== '0.0.0.0') {
-              outputGroups.set(`${u}:${ip}`, { universe: u, ip, priority: 100 });
-            }
-          }
-          const zeroBuffer = new Uint8Array(512);
-          for (const [, group] of outputGroups) {
-            sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, zeroBuffer);
-          }
-        }
-        sacnOutputEnabled = false;
-        if (sacnOutputClient) sacnOutputClient.disable();
+      } catch (err) {
+        console.error("Failed to toggle engine blackout:", err);
+      } finally {
+        if (btn) btn.style.opacity = '1';
       }
     };
   }
@@ -350,7 +341,7 @@ export function animate() {
 
         const key = `${u}:${ip}`;
         if (!outputGroups.has(key)) {
-          outputGroups.set(key, { universe: u, ip, priority: 100 });
+          outputGroups.set(key, { universe: u, ip, priority: 150 });
         }
       }
 
