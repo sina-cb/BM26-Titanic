@@ -9,7 +9,6 @@ import { getApiBaseAsync, testConnection } from '@/utils/api';
 export default function MonitorScreen() {
   const [activePattern, setActivePattern] = useState<string>('...');
   const [sceneName, setSceneName] = useState<string>('Loading...');
-  const [unrealState, setUnrealState] = useState<string>('offline');
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
   const [apiBase, setApiBase] = useState<string>('');
@@ -38,18 +37,13 @@ export default function MonitorScreen() {
       if (conn.data) {
         setSceneName(conn.data.activeScene || 'unknown');
         setActivePattern(conn.data.activePattern || 'unknown');
-        setUnrealState(conn.data.unrealState || 'offline');
 
         // 4. Compute stream URL after we have status data
         const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
         const SIMULATION_PORT = 6969;
-        const PIXEL_STREAM_PORT = 80;
-        const resolvedUnreal = conn.data.unrealState || 'offline';
         const resolvedScene = conn.data.activeScene || 'unknown';
 
-        const url = resolvedUnreal === 'streaming'
-          ? `http://${engineHost}:${PIXEL_STREAM_PORT}/`
-          : `http://${engineHost}:${SIMULATION_PORT}/simulation/?scene=${resolvedScene}&readonly=1`;
+        const url = `http://${engineHost}:${SIMULATION_PORT}/simulation/?scene=${resolvedScene}&profile=edit&renderer=webgl&readonly=1`;
         setStreamUrl(url);
       }
 
@@ -88,7 +82,7 @@ export default function MonitorScreen() {
         ...globalStyles.ghostBorder
       }}>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text, fontSize: 16 }}>
-           {unrealState === 'streaming' ? 'UNREAL MONITOR' : 'SIMULATION MONITOR'}
+           SIMULATION MONITOR
         </Text>
         <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, fontSize: 12, marginTop: 4 }}>Scene: {sceneName}</Text>
         <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.primaryFixedDim, fontSize: 12, marginTop: 2 }}>Pattern: {activePattern}</Text>
@@ -126,7 +120,7 @@ export default function MonitorScreen() {
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.light.surface }}>
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 24 }}>STREAM OFFLINE</Text>
               <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, marginTop: 8 }}>
-                Ensure {unrealState === 'streaming' ? 'Pixel Streaming' : 'WebGL Simulation'} is running.
+                Ensure WebGL Simulation is running.
               </Text>
             </View>
           )}

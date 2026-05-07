@@ -1,23 +1,11 @@
 channel:
-  id: ch_base_1778100796581
+  id: ch_base_1778192923978
   name: Base
-  pattern: 09_cyclone
+  pattern: 13_sparkle
   mode: blend_screen
   fader: 1
   enabled: true
-  localControls:
-    '1364490687':
-      v0: 0.58
-      v1: 0
-      v2: 0
-    '1381268306':
-      v0: 0.32
-      v1: 0
-      v2: 0
-    '3680310977':
-      v0: 0.63
-      v1: 0
-      v2: 0
+  localControls: {}
   patternCache:
     02_phase_cathedral: {}
     12_breathing:

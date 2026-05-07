@@ -204,6 +204,18 @@ const _urlParams = new URLSearchParams(window.location.search);
 const _activeScene = _urlParams.get('scene') || 'titanic';
 window.__activeScene = _activeScene; // Expose for save/bridge operations
 window.__readonlyMode = _urlParams.get('readonly') === '1'; // iPad observer mode
+if (window.__readonlyMode) {
+  const style = document.createElement('style');
+  style.innerHTML = `
+    #pattern-editor-panel,
+    #sacn-in-monitor-panel,
+    #sacn-out-monitor-panel,
+    #info-panel {
+      display: none !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
 const _sceneConfigPath = `scenes/${_activeScene}/scene_config.yaml`;
 const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;

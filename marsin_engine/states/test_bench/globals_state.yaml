@@ -4,9 +4,9 @@ effects:
   uvBlast: false
   vintageWhite: false
   blastWhite: false
-  blastWhiteBypassDimmer: true
-  vintageWhiteBypassDimmer: false
-  uvBlastBypassDimmer: false
+  blastWhiteBypassDimmer: false
+  vintageWhiteBypassDimmer: true
+  uvBlastBypassDimmer: true
 params:
   revision: 1141
   sourceLock: null
@@ -53,6 +53,6 @@ params:
       lastOrigin: api
       lastRevision: 821
 dimmers:
-  '1': 0.15625
-  '2': 0.1696428571428571
-  '3': 0.1607142857142857
+  '1': 0.3392857142857143
+  '2': 0.28125
+  '3': 0.2946428571428571

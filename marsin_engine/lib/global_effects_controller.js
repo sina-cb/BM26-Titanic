@@ -26,9 +26,6 @@ export class GlobalEffectsController {
 
   setEffect(effectName, state) {
     if (this.effects.hasOwnProperty(effectName) || effectName.includes('Bypass')) {
-      if (this.effects[effectName] !== !!state) {
-        console.log(`[GlobalEffectsController] ${effectName} changed: ${this.effects[effectName]} -> ${!!state}`);
-      }
       this.effects[effectName] = !!state;
     }
   }

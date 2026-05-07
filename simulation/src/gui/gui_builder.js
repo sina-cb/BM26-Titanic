@@ -38,6 +38,9 @@ const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simB
 export
 function setupGUI() {
   const gui = new GUI({ title: "🔦 Lighting Controls", width: 300 });
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('readonly') === '1') gui.hide();
+  
   window.guiInstance = gui;
   gui.domElement.style.position = "fixed";
   gui.domElement.style.top = "10px";

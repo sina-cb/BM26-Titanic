@@ -1,5 +1,5 @@
 // Auto-generated Pixelblaze model — do not edit manually
-// Updated: 2026-05-07T21:47:30.901Z
+// Updated: 2026-05-07T22:27:34.113Z
 //
 // Note: Non-light simulation fixtures (Horn, Fire, Foggers) are exported to
 // the companion .effects.js model.

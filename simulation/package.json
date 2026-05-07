@@ -2,7 +2,7 @@
   "scripts": {
     "prestart": "node tools/kill-ports.js",
     "start": "node start.js",
-    "test": "node tests/fog_machine_regression_test.js",
+    "test": "node --test tests/fog_regression.test.js",
     "check": "npm run test"
   },
   "dependencies": {

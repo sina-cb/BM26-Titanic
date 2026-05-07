@@ -43,6 +43,13 @@ const WS_URL = 'ws://127.0.0.1:6968';
 const SETTLE_MS = 200;   // ms to wait after a fader change before sampling
 
 let testErrors = 0;
+const cleanupState = {
+  started: false,
+  done: false,
+  originalChannels: [],
+  testChannelIds: [],
+};
+let signalCleanupInstalled = false;
 
 // ── HTTP helpers ──────────────────────────────────────────────────────
 function httpJson(method, path, body = null) {
@@ -70,6 +77,52 @@ function httpJson(method, path, body = null) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function cleanupMixerState() {
+  if (!cleanupState.started || cleanupState.done) return;
+  cleanupState.done = true;
+
+  console.log('\n── Cleanup ──────────────────────────────────────────────────');
+
+  for (const channelId of cleanupState.testChannelIds) {
+    if (!channelId) continue;
+    try {
+      await httpJson('DELETE', `/mixer/channels/${channelId}`);
+      console.log(`  🗑️  Removed test channel: ${channelId}`);
+    } catch (e) {
+      console.warn(`  ⚠️  Could not remove test channel ${channelId}: ${e.message}`);
+    }
+  }
+
+  for (const ch of cleanupState.originalChannels) {
+    if (!ch.enabled) continue;
+    try {
+      console.log(`  🔊  Restoring existing overlay: ${ch.id} (${ch.pattern})`);
+      await httpJson('PATCH', `/mixer/channels/${ch.id}`, { enabled: true });
+    } catch (e) {
+      console.warn(`  ⚠️  Could not restore overlay ${ch.id}: ${e.message}`);
+    }
+  }
+}
+
+function installSignalCleanup() {
+  if (signalCleanupInstalled) return;
+  signalCleanupInstalled = true;
+
+  const handleSignal = signal => {
+    process.once(signal, async () => {
+      console.error(`\nReceived ${signal}; cleaning up HIL mixer state...`);
+      try {
+        await cleanupMixerState();
+      } finally {
+        process.exit(signal === 'SIGINT' ? 130 : 143);
+      }
+    });
+  };
+
+  handleSignal('SIGINT');
+  handleSignal('SIGTERM');
+}
 
 // ── Capture vis data via WebSocket ────────────────────────────────────
 function captureVis() {
@@ -135,8 +188,13 @@ async function main() {
     process.exit(1);
   }
 
+  cleanupState.started = true;
+  cleanupState.originalChannels = mixer.channels.slice(1);
+  installSignalCleanup();
+
+  try {
   // 1. Mute all existing non-base overlay channels instead of deleting
-  const originalChannels = mixer.channels.slice(1);
+  const originalChannels = cleanupState.originalChannels;
   for (const ch of originalChannels) {
     if (ch.enabled) {
       console.log(`  🔇  Muting existing overlay: ${ch.id} (${ch.pattern})`);
@@ -154,6 +212,7 @@ async function main() {
     pattern: 'test_const', name: 'CH1 Const', mode: 'blend_screen', fader: 1.0
   });
   const ch1Id = ch1Res.channelId;
+  cleanupState.testChannelIds.push(ch1Id);
 
   // 4. Add CH2: test_dualband (alternating red/cyan bands)
   console.log('  📦 Adding CH2: test_dualband (blend_screen, fader=0.0)');
@@ -161,6 +220,7 @@ async function main() {
     pattern: 'test_dualband', name: 'CH2 Dualband', mode: 'blend_screen', fader: 0.0
   });
   const ch2Id = ch2Res.channelId;
+  cleanupState.testChannelIds.push(ch2Id);
 
   console.log(`  CH1=${ch1Id}, CH2=${ch2Id}`);
   await sleep(500);
@@ -309,30 +369,23 @@ async function main() {
     console.log(`  ${t.toFixed(1).padStart(4)} |  ${(1-t).toFixed(1).padStart(8)} |  ${t.toFixed(1).padStart(8)} | ${bright.toFixed(1).padStart(6)} ${bar}`);
   }
 
-  // ── Cleanup ─────────────────────────────────────────────────────────
-  console.log('\n── Cleanup ──────────────────────────────────────────────────');
-  await httpJson('DELETE', `/mixer/channels/${ch1Id}`);
-  await httpJson('DELETE', `/mixer/channels/${ch2Id}`);
-  console.log('  🗑️  Removed test channels');
-
-  // Restore muted channels
-  for (const ch of originalChannels) {
-    if (ch.enabled) {
-      console.log(`  🔊  Restoring existing overlay: ${ch.id} (${ch.pattern})`);
-      await httpJson('PATCH', `/mixer/channels/${ch.id}`, { enabled: true });
-    }
+  } finally {
+    await cleanupMixerState();
   }
 
   if (testErrors > 0) {
     console.log(`\n❌ Test completed with ${testErrors} assertion failure(s).\n`);
-    process.exit(1);
+    return 1;
   } else {
     console.log('\n✅ Test complete. All thresholds passed.\n');
-    process.exit(0);
+    return 0;
   }
 }
 
-main().catch(e => {
+main().then(code => {
+  process.exit(code);
+}).catch(async e => {
   console.error('Test failed:', e);
+  await cleanupMixerState();
   process.exit(1);
 });

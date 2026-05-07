@@ -9,7 +9,7 @@ engine:
 server:
   port: 6968
 playlist:
-  active: false
+  active: true
   delay_s: '5'
   shuffle: true
 web_client:
