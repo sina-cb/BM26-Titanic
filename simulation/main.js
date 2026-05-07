@@ -327,6 +327,20 @@ Promise.all([
 
   await init();
 
+  // Check engine health, fallback to pixelblaze if unavailable
+  fetch(`http://${window.location.hostname}:6968/status`)
+    .then(r => r.json())
+    .catch(async () => {
+      const { params, setLightingMode } = await import("./src/core/state.js");
+      if (params.lightingMode === 'sacn_in') {
+        console.warn("[Sim] Engine offline or mixed-content blocked. Falling back to native Pixelblaze mode.");
+        params.lightingMode = 'pixelblaze';
+        setLightingMode('pixelblaze');
+        if (window.guiInstance) window.guiInstance.controllersRecursive().forEach(c => c.updateDisplay());
+        if (window.onLightingChange) window.onLightingChange();
+      }
+    });
+
   // Generate initial model file for Pixelblaze patterns
   if (window.saveModelJS) window.saveModelJS();
 

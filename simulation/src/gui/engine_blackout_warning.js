@@ -56,7 +56,17 @@ function connectEngineWebSocket() {
     ws.close();
   }
 
-  ws = new WebSocket(ENGINE_WS);
+  if (window.location.protocol === 'https:') {
+    console.warn('[Engine] WebSocket disabled due to HTTPS mixed content restrictions.');
+    return;
+  }
+
+  try {
+    ws = new WebSocket(ENGINE_WS);
+  } catch (err) {
+    console.warn('Failed to construct WebSocket:', err);
+    return;
+  }
 
   ws.onopen = () => {
     // Engine automatically sends the mixer state on connection
