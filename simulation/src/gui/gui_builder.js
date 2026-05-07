@@ -1418,12 +1418,12 @@ function setupGUI() {
           idxFolder.close();
           window.parGuiFolders[index] = idxFolder;
 
-          if (config.fixtureType === 'FogMachine') {
+          if (config.fixtureType === 'TEFogMachine' || config.fixtureType === 'ChauvetHaze4D') {
             const holdBtn = document.createElement('button');
             holdBtn.textContent = '💨 Hold to Fog';
             holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-weight:bold;';
-            const startFog = () => { if (window.parFixtures[index]) window.parFixtures[index]._uiFogOverride = true; };
-            const stopFog = () => { if (window.parFixtures[index]) window.parFixtures[index]._uiFogOverride = false; };
+            const startFog = () => { window.parFixtures.forEach(f => { if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D')) f._uiFogOverride = true; }); };
+            const stopFog = () => { window.parFixtures.forEach(f => { if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D')) f._uiFogOverride = false; }); };
             holdBtn.addEventListener('mousedown', startFog);
             holdBtn.addEventListener('touchstart', startFog);
             holdBtn.addEventListener('mouseup', stopFog);

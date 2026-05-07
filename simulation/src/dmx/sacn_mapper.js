@@ -35,37 +35,36 @@ export function demapSacnToPixels(list, dmxRouter) {
     }
 
     let r = 0, g = 0, b = 0;
+    let w = 0, a = 0, uv = 0;
     
     if (ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {
       r = frame[addr + ch.r - 1] / 255;
       g = frame[addr + ch.g - 1] / 255;
       b = frame[addr + ch.b - 1] / 255;
       
-      // If the fixture also has WAU channels driven by sACN, we could theoretically mix them in for simulation preview!
-      // Here we simulate the hardware fallback directly in the simulation
-      if (ch.w !== undefined) {
-        const w = frame[addr + ch.w - 1] / 255;
-        r = Math.min(1, r + w);
-        g = Math.min(1, g + w);
-        b = Math.min(1, b + w);
-      }
-      if (ch.a !== undefined) {
-        const a = frame[addr + ch.a - 1] / 255;
-        r = Math.min(1, r + a * 0.8);
-        g = Math.min(1, g + a * 0.4);
-      }
-      if (ch.u !== undefined) {
-        const u = frame[addr + ch.u - 1] / 255;
-        r = Math.min(1, r + u * 0.1);
-        b = Math.min(1, b + u * 0.5);
-      }
+      // Extract WAU raw values for downstream consumers (SpotLight pool, sACN out, etc.)
+      if (ch.w !== undefined) w = frame[addr + ch.w - 1] / 255;
+      if (ch.a !== undefined) a = frame[addr + ch.a - 1] / 255;
+      if (ch.u !== undefined) uv = frame[addr + ch.u - 1] / 255;
     } else if (ch.w !== undefined) {
       // Monochromatic fixture preview
-      const w = frame[addr + ch.w - 1] / 255;
+      w = frame[addr + ch.w - 1] / 255;
       r = w; g = w; b = w;
     }
+
+    // ── Write raw channel values back to the batch entry ──
+    // This is CRITICAL: the V2 InstancedMesh flush (animate.js) and
+    // SpotLight pool read entry.r/g/b/w/a/u to produce the final visual.
+    // Without this, those consumers see 0 → black pixels.
+    entry.r = r; entry.g = g; entry.b = b;
+    entry.w = w; entry.a = a; entry.u = uv;
+
+    // RGBWAU → RGB blend for 3D visual preview (same formula as Pixelblaze path)
+    const rn = Math.min(1, r + w * 0.8 + a * 0.9 + uv * 0.4);
+    const gn = Math.min(1, g + w * 0.8 + a * 0.6);
+    const bn = Math.min(1, b + w * 0.8 + uv * 0.7);
     
-    if (entry.apply) entry.apply(r, g, b);
+    if (entry.apply) entry.apply(rn, gn, bn);
   }
 }
 

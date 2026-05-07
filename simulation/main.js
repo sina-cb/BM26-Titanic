@@ -33,6 +33,7 @@ import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
+import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
 
@@ -49,6 +50,8 @@ function getRequestedRendererMode() {
 
 // ─── Init ───────────────────────────────────────────────────────────────
 async function init() {
+  setupEngineBlackoutWarning({ readonly: window.__readonlyMode });
+
   const requestedRendererMode = getRequestedRendererMode();
   const forceWebGL = requestedRendererMode === "webgl";
   window.__rendererMode = requestedRendererMode;
@@ -216,7 +219,9 @@ Promise.all([
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml]) => {
+  fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml]) => {
 
   // Load scene config
   try {
@@ -272,7 +277,9 @@ Promise.all([
   [
     { raw: ukingModelYaml, file: 'model_10.yaml' },
     { raw: shehdsModelYaml, file: 'model_119.yaml' },
-    { raw: vintageModelYaml, file: 'model_33.yaml' }
+    { raw: vintageModelYaml, file: 'model_33.yaml' },
+    { raw: teFogModelYaml, file: 'fog_te_machines/model_1.yaml' },
+    { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' }
   ].forEach(({ raw, file }) => {
     try {
       if (raw) {
