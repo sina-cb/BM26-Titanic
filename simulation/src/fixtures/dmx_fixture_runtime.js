@@ -462,7 +462,7 @@ export class DmxFixtureRuntime {
     this.group.visible = visible;
 
     if (this.shell) {
-      this.shell.visible = visible && (profileDef.render.emitterMode !== 'none');
+      this.shell.visible = false; // User requested shell to be invisible all the time
     }
 
     // SpotLights are managed by the global LightPool — no per-fixture visibility
