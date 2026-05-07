@@ -461,6 +461,10 @@ export class DmxFixtureRuntime {
     this.hitbox.visible = visible;
     this.group.visible = visible;
 
+    if (this.shell) {
+      this.shell.visible = visible && (profileDef.render.emitterMode !== 'none');
+    }
+
     // SpotLights are managed by the global LightPool — no per-fixture visibility
 
     this.pixels.forEach((p, j) => {
