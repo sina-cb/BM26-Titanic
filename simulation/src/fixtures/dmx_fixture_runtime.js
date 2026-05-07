@@ -174,6 +174,7 @@ export class DmxFixtureRuntime {
             // User explicitly requested to completely remove the bulb and halo meshes.
             bulb = null;
             halo = null;
+        }
 
         // SpotLight managed by LightPool — no per-pixel instantiation
         let spotLight = null;
