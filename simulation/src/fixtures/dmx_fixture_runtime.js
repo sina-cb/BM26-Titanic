@@ -474,8 +474,8 @@ export class DmxFixtureRuntime {
       }
       
       const shouldEmitter = (profileDef.render.emitterMode === 'pixel') || (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
-      if (p.halo) p.halo.visible = visible && shouldEmitter;
-      if (p.bulb) p.bulb.visible = visible && shouldEmitter;
+      if (p.halo) p.halo.visible = false;
+      if (p.bulb) p.bulb.visible = false;
       if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
   }
