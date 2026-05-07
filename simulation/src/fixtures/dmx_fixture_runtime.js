@@ -108,34 +108,7 @@ export class DmxFixtureRuntime {
 
     // ─── Build Shell (fixture body) ──────────────────────────────────
     this.shellMat = null;
-    if (fixtureDef && fixtureDef.shell) {
-      this.shellMat = defaultShellMat.clone();
-      this.shellMat.color.set(fixtureDef.shell.color || '#111111');
-      let shellGeo;
-      if (fixtureDef.shell.type === 'cylinder') {
-        const d = fixtureDef.shell.dimensions;
-        const r = (d[0] / 2) * 0.001;
-        const h = d[2] * 0.001;
-        shellGeo = new THREE.CylinderGeometry(r, r, h, 16);
-        shellGeo.rotateX(Math.PI / 2);
-      } else {
-        const d = fixtureDef.shell.dimensions;
-        shellGeo = new THREE.BoxGeometry(d[0] * 0.001, d[1] * 0.001, d[2] * 0.001);
-      }
-      this.shell = new THREE.Mesh(shellGeo, this.shellMat);
-      if (fixtureDef.shell.offset) {
-        const o = fixtureDef.shell.offset;
-        this.shell.position.set(o[0] * 0.001, o[1] * 0.001, -o[2] * 0.001);
-      }
-      this.group.add(this.shell);
-    } else {
-      // No shell definition — create a simple can geometry (like old ParLight)
-      const canGeo = new THREE.CylinderGeometry(0.08, 0.06, 0.2, 12);
-      canGeo.rotateX(Math.PI / 2);
-      this.shellMat = defaultShellMat.clone();
-      this.shell = new THREE.Mesh(canGeo, this.shellMat);
-      this.group.add(this.shell);
-    }
+    this.shell = null; // User explicitly requested to completely hide/remove the fixture model shells
 
     // ─── Build Pixels (dots + visual geometry only) ──────────────────
     // SpotLights are managed by the global LightPool (see light_pool.js).
@@ -198,28 +171,9 @@ export class DmxFixtureRuntime {
             
             if (dotMeshList.length > 0) dotMeshList.forEach(d => { d.mesh.material = bulbMat; });
 
-            let pixelSize = 0;
-            if (typeof pixelModel.size === 'number') pixelSize = pixelModel.size;
-            else if (Array.isArray(pixelModel.size)) pixelSize = Math.max(...pixelModel.size);
-            const baseSize = Math.max(pixelSize * 0.002, 0.12);
-            const repScale = this.profileDef.render.emitterMode === 'fixture_representative' ? 6.0 : 1.0;
-            const bulbSize = baseSize * repScale;
-            
-            bulb = new THREE.Mesh(getCachedSphere(bulbSize), bulbMat);
-            bulb.position.copy(localPos);
-            if (this.profileDef.render.emitterMode === 'fixture_representative') {
-               bulb.position.set(0, 0, 0); // Force to origin centroid for grouped representation!
-            }
-            this.group.add(bulb);
-
-            haloMat = new THREE.MeshBasicMaterial({
-              color, transparent: true, opacity: 0.2,
-              blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-            });
-            halo = new THREE.Mesh(getCachedSphere(bulbSize * 2.5), haloMat);
-            halo.position.copy(bulb.position);
-            this.group.add(halo);
-        }
+            // User explicitly requested to completely remove the bulb and halo meshes.
+            bulb = null;
+            halo = null;
 
         // SpotLight managed by LightPool — no per-pixel instantiation
         let spotLight = null;
