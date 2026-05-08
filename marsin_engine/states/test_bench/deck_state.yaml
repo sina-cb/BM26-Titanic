@@ -1,15 +1,11 @@
 channel:
-  id: ch_base_1778206215708
+  id: ch_base_1778209259268
   name: Base
-  pattern: 18_deep_space_lattice
+  pattern: 01_cylon_sweep
   mode: blend_screen
   fader: 1
   enabled: true
-  localControls:
-    '667518146':
-      v0: 0.5
-      v1: 0
-      v2: 0
+  localControls: {}
   patternCache:
     02_phase_cathedral: {}
     12_breathing:
@@ -83,15 +79,27 @@ channel:
         v2: 0
     07_shimmer:
       '323270901':
-        v0: 0.6
-        v1: 0
-        v2: 0
-      '3317771752':
         v0: 0.75
         v1: 0
         v2: 0
+      '1997822791':
+        v0: 0.75
+        v1: 0
+        v2: 0
+      '2077173573':
+        v0: 0.79
+        v1: 0
+        v2: 0
+      '3317771752':
+        v0: 0.45
+        v1: 0
+        v2: 0
       '3518326632':
-        v0: 0.22
+        v0: 0.39
+        v1: 0
+        v2: 0
+      '3680310977':
+        v0: 0.81
         v1: 0
         v2: 0
     08_ocean_liner:

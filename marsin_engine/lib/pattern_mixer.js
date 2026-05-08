@@ -163,6 +163,8 @@ export class PatternMixer {
     // 3. Render Mixer layers (all enabled channels, composited bottom-to-top → mixerBuffer)
     let firstLayer = true;
     for (const channel of this.channels) {
+      // Deck channel (baseChannelId) is isolated — only rendered into deckBuffer
+      if (channel.id === this.baseChannelId) continue;
       if (!channel.enabled || channel.fader <= 0.001) continue;
 
       // Re-render into channelBuffer for blend compositing

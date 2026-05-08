@@ -1,4 +1,4 @@
-# MarsinEngine — API Output Server & Multichannel Rendering Engine
+# MarsinEngine - API Output Server & Multichannel Rendering Engine
 
 Node.js daemon that renders **Pixelblaze-compatible patterns** via a high-performance **WASM VM** against the simulation's 3D pixel model. It exposes a **REST/WebSocket API** on port `6968` for live control, and outputs DMX data via **sACN (E1.31)** in real-time.
 
@@ -88,8 +88,10 @@ The server also automatically drops a telemetry packet describing output health 
 ```bash
 npm start                    # Starts with no pattern (shows help)
 npm run rainbow              # Shortcut: --pattern rainbow --model test_bench
-npm run breathing            # Shortcut: --pattern breathing --model test_bench
-npm run fire                 # Shortcut: --pattern fire --model test_bench
+npm run breathing            # Shortcut: --pattern test/breathing --model test_bench
+npm run fire                 # Shortcut: --pattern test/fire --model test_bench
+npm run bio                  # Shortcut: --pattern 11_bioluminescence --model test_bench
+npm run golden               # Shortcut: --pattern 00_golden_hour_wash --model test_bench
 ```
 
 ---
@@ -98,8 +100,8 @@ npm run fire                 # Shortcut: --pattern fire --model test_bench
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Pattern (.js)│ ──► │MarsinRuntime │ ──► │  DMX Mapper  │
-│ Pixelblaze   │     │ (compile +   │     │ (pixel → DMX │
+│ Pattern (.js)│ ──► │  WasmHost    │ ──► │ sACN Mapper  │
+│ Pixelblaze   │     │ (compile +   │     │ (pixel -> DMX│
 │ compatible   │     │  render loop)│     │  channel map)│
 └──────────────┘     └──────────────┘     └──────┬───────┘
                                                   │
@@ -122,8 +124,9 @@ npm run fire                 # Shortcut: --pattern fire --model test_bench
 
 | Module | File | Purpose |
 |--------|------|---------|
-| **MarsinRuntime** | `lib/marsin_runtime.js` | Compiles Pixelblaze pattern code, provides `beginFrame()` / `renderPixel()` API. Implements PB globals (`time`, `wave`, `sin`, etc.) |
-| **DMX Mapper** | `lib/dmx_mapper.js` | Maps pixel indices to DMX universe/channel based on model patch data. Builds 512-byte buffers per universe |
+| **WasmHost** | `lib/wasm_host.js` | Loads the bundled MarsinVM WASM runtime, compiles Pixelblaze pattern code, and exposes frame/render APIs. |
+| **WASM Runtime Wrapper** | `lib/marsin_wasm_runtime.js` | Lower-level wrapper around `marsin_pb/wasm/marsin-engine.*`. |
+| **sACN Mapper** | `../simulation/src/dmx/sacn_mapper.js` | Maps pixel indices to DMX universe/channel based on model patch data. Builds 512-byte buffers per universe |
 | **sACN Output** | `lib/sacn_output.js` | Creates one `sacn` Sender per universe, sends DMX frames as E1.31 UDP packets |
 | **Engine CLI** | `engine.js` | CLI entry point — argument parsing, model loading, render loop orchestration |
 

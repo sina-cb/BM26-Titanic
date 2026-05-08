@@ -35,7 +35,7 @@ Recommended simulation URL:
 | **sACN Input Bridge** | `6971` | Receives sACN from MarsinEngine/Chromatik → WebSocket to browser |
 | **sACN Output Bridge** | `6972` | Receives DMX from browser → sACN unicast to real controllers |
 
-Ports are configured in `config/server_config.yaml`.
+Ports are configured in `config.yaml`.
 
 ---
 
@@ -45,7 +45,7 @@ Ports are configured in `config/server_config.yaml`.
 
 | Technology | Version | Role |
 |---|---|---|
-| **Three.js** | `0.160.0` | 3D rendering — scene graph, lights, meshes, shadows |
+| **Three.js** | `0.177.0` in the browser import map; `0.184.x` in local dev dependencies | 3D rendering — scene graph, lights, meshes, shadows |
 | **lil-gui** | (bundled) | Lightweight GUI control panel |
 | **js-yaml** | `4.1.x` | YAML parsing for config persistence |
 | **chroma-js** | `3.1.2` | LAB-space color interpolation for gradients |
@@ -65,9 +65,9 @@ Ports are configured in `config/server_config.yaml`.
 
 | Layer | Tech | Details |
 |---|---|---|
-| **Frontend** | Vanilla JS (ES Modules via `importmap`) | `main.js` + modular components |
-| **Styling** | Vanilla CSS + Google Fonts (Inter) | Dark theme with glassmorphism |
-| **State** | `config/scene_config.yaml` | Single source of truth — auto-saved |
+| **Frontend** | Vanilla JS (ES Modules via `importmap`) | `main.js` + modular components. Current import map uses CDN URLs; vendor these before claiming offline readiness. |
+| **Styling** | Vanilla CSS + Google Fonts (Inter) | Dark theme with glassmorphism. Current font import is external. |
+| **State** | `scenes/<scene>/scene_config.yaml` | Single source of truth — auto-saved |
 | **DMX Pipeline** | `UniverseRouter` → `SacnOutputClient` | Multi-source merge with priority routing |
 
 ---
@@ -105,9 +105,9 @@ Ports are configured in `config/server_config.yaml`.
 
 ```
 simulation/
-├── config/
-│   ├── scene_config.yaml       # Scene state (fixtures, generators, camera)
-│   └── server_config.yaml      # Port configuration
+├── config.yaml                 # Port configuration
+├── scenes/
+│   └── <scene>/scene_config.yaml # Scene state (fixtures, generators, camera)
 ├── server/
 │   ├── save-server.js          # Config persistence API
 │   ├── sacn_bridge.js          # sACN input bridge (sACN → WS)
@@ -134,24 +134,19 @@ simulation/
 
 ---
 
-## 📸 Agent Render (`agent_render.js`)
+## 📸 Agent Render
 
-GPU-accelerated Puppeteer script for automated screenshot capture.
+No `simulation/agent_render.js` script exists in the current tree. Do not use
+older docs that reference it until a replacement renderer is added.
 
-```bash
-node agent_render.js --open           # Interactive window
-node agent_render.js --current        # Screenshot current camera
-node agent_render.js --view dramatic  # Capture a specific preset
-node agent_render.js                  # Capture all 5 presets
-```
-
-Screenshots saved to `../.agent_renders/` (gitignored).
+Screenshots and generated visual artifacts should still be written under
+`../.agent_renders/` or another gitignored scratch location.
 
 ---
 
 ## 🔧 Configuration
 
-### `config/scene_config.yaml`
+### `scenes/<scene>/scene_config.yaml`
 Single source of truth for all scene state:
 - Fixture positions, rotations, colors, intensities
 - Generator traces (circle/line shapes, spacing, aim)
@@ -164,10 +159,12 @@ Single source of truth for all scene state:
 - If `N` is above `MAX_SPOTLIGHT_POOL_SIZE`, the sim clamps to the cap and shows a toast warning.
 - The GUI `Max Spotlights` slider uses `1..MAX_SPOTLIGHT_POOL_SIZE`. `?spotlights=0` still disables the pooled spotlight preview from the URL.
 
-### `config/server_config.yaml`
+### `config.yaml`
 Server port assignments:
 ```yaml
 http_port: 6969       # Static file server
 save_port: 6970       # Save server
 sacn_port: 6971       # sACN input bridge
+sacn_output_port: 6972 # sACN output bridge
+sacn_udp_port: 5568   # Physical E1.31 UDP protocol port
 ```

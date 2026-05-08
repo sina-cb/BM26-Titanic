@@ -1,4 +1,4 @@
-blackout: false
+blackout: true
 effects:
   fogger: false
   uvBlast: false
@@ -8,29 +8,29 @@ effects:
   vintageWhiteBypassDimmer: true
   uvBlastBypassDimmer: true
 params:
-  revision: 9
+  revision: 157
   sourceLock: null
   params:
     speed:
       value: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 1
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 155
     direction:
       value: 1
       lastSource: init
       lastOrigin: init
       lastRevision: 2
     count:
-      value: 0.187
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 3
+      value: 0.94
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 49
     size:
-      value: 0.117
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 4
+      value: 0.29
+      lastSource: ws
+      lastOrigin: ws
+      lastRevision: 22
     rotate:
       value: 0
       lastSource: init
@@ -38,20 +38,20 @@ params:
       lastRevision: 5
     colorPalette1:
       value:
-        h: 0.93
+        h: 0.31
         s: 1
         v: 1
       lastSource: ws
       lastOrigin: ws
-      lastRevision: 8
+      lastRevision: 156
     colorPalette2:
       value:
-        h: 0.2
+        h: 1
         s: 1
         v: 1
       lastSource: ws
       lastOrigin: ws
-      lastRevision: 9
+      lastRevision: 157
 dimmers:
   '1': 1
   '2': 1

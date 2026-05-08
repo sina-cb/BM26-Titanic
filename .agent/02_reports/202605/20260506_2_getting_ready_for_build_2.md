@@ -444,3 +444,27 @@ Secondary possible causes:
    - Ensure `applyDmxFrame` runs on foggers even if `mappingEnabled: false`.
    - Add a stale timeout to `FogMachine` to decay output if engine drops DMX.
    - Fix missing `patchDef` in `rebuildDmxFixtures()`.
+
+
+# 2026-05-07 — Getting Ready for Build (Part 2)
+
+## 🐛 BUG: Deck Preview Channel Overrides Mixer Output During Transitions
+
+### Status: OPEN
+
+### Summary
+When performing a channel transition or manually fading out `ch1` from the CaptainPad Deck tab, the master lighting output fails to reflect the fader changes. Even if `ch1`'s fader is set to 0% and `ch2`'s fader is at 100%, the physical lights continue to show `ch1` at full brightness. If the user switches to the "Mixer" tab (or triggers a Solo), the output suddenly corrects itself and shows `ch2`. Switching back to the Deck tab brings the stuck `ch1` back.
+
+### Root Cause
+1. **Shared Output Path (`viewFader`)**: The `PatternMixer` (`marsin_engine/lib/pattern_mixer.js`) uses a single `outputBuffer` to drive the master lighting output. It crossfades between the `deckBuffer` (PFL preview) and the `mixerBuffer` (live composited mixer) using a variable called `viewFader` (0.0 = Deck, 1.0 = Mixer).
+2. **UI Tab Locking**: When the user is looking at the "Deck" tab, the CaptainPad UI sends a `POST /mixer/view` command with `{view: 'deck'}`, locking the engine's `viewFader` to `0.0`. When they look at the "Mixer" tab, it sends `{view: 'mixer'}`, moving it to `1.0`.
+3. **PFL (Pre-Fade Listen) Behavior**: By design, the `deckBuffer` takes a single focused channel (usually `ch1`, the `baseChannelId`) and renders it at **100% intensity**, completely ignoring live mixer faders, mutes, or blend modes.
+4. **The Disconnect**: Because the Deck tab locks the engine output to the `deckBuffer`, pulling `ch1`'s fader down does absolutely nothing to the master lights. The `deckBuffer` ignores the fader and pushes `ch1` to the output buffer at 100%. The `mixerBuffer` correctly composites `ch2` taking over, but because `viewFader` is `0.0`, the engine completely ignores the `mixerBuffer` until the user navigates to the Mixer tab.
+
+### Required Architecture Fix
+The user expects the engine's Master Output (sACN) to **always** be the live, fader-composited `mixerBuffer`. The `deckBuffer` should be a strictly isolated secondary data stream sent *only* over websockets for the CaptainPad UI's preview window. 
+
+**Implementation Plan for Next Agent:**
+1. **Decouple Buffers**: Remove the `viewFader` crossfade logic from `PatternMixer.renderAll6ch()`. The master output (sACN/DMX) must **always** be driven exclusively by the `mixerBuffer` (composited channels respecting faders and mutes).
+2. **Isolate the Deck**: The `deckBuffer` should still render the `deckFocusChannelId` at 100% (PFL), but its result should only be written to `_visData` so the CaptainPad UI can show it in the preview window. It should never mix into the master `outputBuffer`.
+3. **API Cleanup**: Ensure the `POST /mixer/view` API endpoint only updates the `deckFocusChannelId` for visualizer targeting, and no longer crossfades the master engine output.

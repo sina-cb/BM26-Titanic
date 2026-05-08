@@ -201,6 +201,75 @@ return output
 
 Render order matters for `normal`, `over`, `screen`, and `multiply`. The UI should make channel order visible and eventually draggable. Phase 1 can use fixed columns: left channel renders first, right channel renders last.
 
+### 4.4 Two-Mode Output Architecture (Deck vs Mixer)
+
+The engine has **two output modes** that drive the physical lights. The CaptainPad UI selects the active mode by switching tabs, which sets the `viewFader` to crossfade between the two buffers:
+
+```
+  ┌──────────────────────── CaptainPad ─────────────────────────┐
+  │                                                             │
+  │   ┌─────────┐                          ┌─────────┐         │
+  │   │  DECK   │  ◄── Tab Switch ──►      │  MIXER  │         │
+  │   │  Tab    │                          │  Tab    │         │
+  │   └────┬────┘                          └────┬────┘         │
+  └────────┼────────────────────────────────────┼──────────────┘
+           │                                    │
+           ▼                                    ▼
+  POST /mixer/view                    POST /mixer/view
+  { view: 'deck' }                    { view: 'mixer' }
+  viewFader → 0.0                     viewFader → 1.0
+           │                                    │
+           ▼                                    ▼
+  ┌──────────────────┐               ┌──────────────────┐
+  │   deckBuffer     │               │   mixerBuffer    │
+  │  (PFL: 1 channel │               │  (composited     │
+  │   at 100%)       │               │   mixer channels)│
+  └────────┬─────────┘               └────────┬─────────┘
+           │                                    │
+           └──────────┐    ┌────────────────────┘
+                      ▼    ▼
+              ┌────────────────────┐
+              │  viewFader         │
+              │  crossfade         │
+              │  0.0=deck 1.0=mix  │
+              └────────┬───────────┘
+                       │
+                       ▼
+              ┌────────────────────┐
+              │   outputBuffer     │──────▶ sACN / DMX
+              │                    │        Physical Lights
+              └────────────────────┘
+```
+
+#### Channel Ownership
+
+| Channel | Belongs to | Renders into |
+|---------|-----------|-------------|
+| `ch_base` (index 0) | **Deck** | `deckBuffer` only — PFL at 100% |
+| `ch_1`, `ch_2`, ... | **Mixer** | `mixerBuffer` — composited with faders/blends |
+
+The deck channel (`ch_base`) must **never** be included in the mixer composite loop. The mixer composite iterates only non-deck channels:
+
+```js
+// Mixer composite — skip the deck channel
+for (const channel of this.channels) {
+  if (channel.id === this.baseChannelId) continue;   // deck isolation
+  if (!channel.enabled || channel.fader <= 0.001) continue;
+  // ... blend into mixerBuffer
+}
+```
+
+#### Deck Channel Selection
+
+The Deck tab provides selection buttons for PFL preview. Two types:
+
+| Button | Behavior |
+|--------|----------|
+| **DECK MAIN** | PFL the deck-specific channel (`ch_base`) at 100% |
+| **MIXER CH N** | PFL one of the mixer channels at 100% (ignoring its live fader/mute) |
+
+This is controlled by `deckFocusChannelId`. When set to a mixer channel ID, the deck buffer renders that channel's pattern at full intensity. The mixer composite is unaffected.
+
 ---
 
 ## 5. Blend Modes
