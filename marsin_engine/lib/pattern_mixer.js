@@ -13,8 +13,10 @@ export class PatternMixer {
     this.maxChannels = 6;
 
     // View crossfade state (0.0 = deck exclusively, 1.0 = mixer exclusively)
-    this.viewFader = 0.0;
-    this.targetViewFader = 0.0;
+    // Default to mixer view — engine output should always be the composited mixer.
+    // Deck view (0.0) is a PFL preview concept for the CaptainPad UI only.
+    this.viewFader = 1.0;
+    this.targetViewFader = 1.0;
 
     // Buffer for compositing output
     this.outputBuffer = new Uint8Array(this.pixelCount * 6);

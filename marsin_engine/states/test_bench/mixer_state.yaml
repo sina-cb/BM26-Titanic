@@ -1,33 +1,8 @@
 master: 1
 channels:
-  - id: ch_1778034065224
-    name: Ch1
-    pattern: 00_golden_hour_wash
-    mode: blend_screen
-    fader: 1
-    enabled: false
-    locked: false
-    transitionMode: trans_crossfade
-    transitionTime: 1
-    localControls: {}
-    patternCache:
-      08_ocean_liner:
-        '1115050250':
-          v0: 0.84
-          v1: 0
-          v2: 0
-      14_lunar_current:
-        '243367341':
-          v0: 0.65
-          v1: 0
-          v2: 0
-        '4210909725':
-          v0: 0.69
-          v1: 0
-          v2: 0
-  - id: ch_1778034067491
-    name: Ch2
-    pattern: 09_cyclone
+  - id: ch_1778205858556
+    name: New Layer
+    pattern: 07_shimmer
     mode: blend_screen
     fader: 1
     enabled: true
@@ -35,35 +10,53 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
+      '323270901':
+        v0: 0.21
+        v1: 0
+        v2: 0
+      '1997822791':
+        v0: 0.28
+        v1: 0
+        v2: 0
+      '2077173573':
+        v0: 0.3
+        v1: 0
+        v2: 0
+      '3317771752':
+        v0: 0.65
+        v1: 0
+        v2: 0
+      '3518326632':
+        v0: 0.31
+        v1: 0
+        v2: 0
       '3680310977':
-        v0: 0.37
+        v0: 0.66
         v1: 0
         v2: 0
     patternCache:
       07_shimmer:
         '323270901':
-          v0: 0.26
+          v0: 0.21
+          v1: 0
+          v2: 0
+        '1997822791':
+          v0: 0.28
+          v1: 0
+          v2: 0
+        '2077173573':
+          v0: 0.3
+          v1: 0
+          v2: 0
+        '3317771752':
+          v0: 0.65
           v1: 0
           v2: 0
         '3518326632':
-          v0: 0.69
-          v1: 0
-          v2: 0
-      16_ghost_tide_uv:
-        '2945952533':
           v0: 0.31
           v1: 0
           v2: 0
-        '3334264878':
-          v0: 0.2
-          v1: 0
-          v2: 0
-        '3799696190':
-          v0: 0.74
-          v1: 0
-          v2: 0
-      09_cyclone:
         '3680310977':
-          v0: 0.37
+          v0: 0.66
           v1: 0
           v2: 0

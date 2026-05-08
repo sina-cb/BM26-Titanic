@@ -1,7 +1,7 @@
 channel:
-  id: ch_base_1778193839075
+  id: ch_base_1778206093507
   name: Base
-  pattern: 19_swaying_lattice_ballet
+  pattern: 16_ghost_tide_uv
   mode: blend_screen
   fader: 1
   enabled: true
