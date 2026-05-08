@@ -1,11 +1,15 @@
 channel:
-  id: ch_base_1778206093507
+  id: ch_base_1778206215708
   name: Base
-  pattern: 16_ghost_tide_uv
+  pattern: 18_deep_space_lattice
   mode: blend_screen
   fader: 1
   enabled: true
-  localControls: {}
+  localControls:
+    '667518146':
+      v0: 0.5
+      v1: 0
+      v2: 0
   patternCache:
     02_phase_cathedral: {}
     12_breathing:

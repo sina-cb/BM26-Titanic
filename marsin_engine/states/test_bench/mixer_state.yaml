@@ -2,38 +2,14 @@ master: 1
 channels:
   - id: ch_1778205858556
     name: New Layer
-    pattern: 07_shimmer
+    pattern: 00_golden_hour_wash
     mode: blend_screen
     fader: 1
     enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls:
-      '323270901':
-        v0: 0.21
-        v1: 0
-        v2: 0
-      '1997822791':
-        v0: 0.28
-        v1: 0
-        v2: 0
-      '2077173573':
-        v0: 0.3
-        v1: 0
-        v2: 0
-      '3317771752':
-        v0: 0.65
-        v1: 0
-        v2: 0
-      '3518326632':
-        v0: 0.31
-        v1: 0
-        v2: 0
-      '3680310977':
-        v0: 0.66
-        v1: 0
-        v2: 0
+    localControls: {}
     patternCache:
       07_shimmer:
         '323270901':
