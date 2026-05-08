@@ -19,6 +19,13 @@ npm run bio
 npm run golden
 ```
 
+For compile-only validation without opening the API port or sending sACN:
+```bash
+npm run check:fire
+npm run check:breathing
+npm run check:rainbow
+```
+
 ## Core Infrastructure
 
 - **API Server:** Binds to port `6968` (REST/WebSocket) to accept live CaptainPad control inputs and pattern swaps.

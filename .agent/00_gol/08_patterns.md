@@ -38,5 +38,14 @@ export function render(index, x, y, z) {
 Test your pattern locally against the test bench model to ensure compilation succeeds and framerates are stable before deploying:
 
 ```bash
+cd marsin_engine
 node engine.js --pattern my_pattern --model test_bench --dry-run
+```
+
+For existing smoke checks, use:
+
+```bash
+npm run check:rainbow
+npm run check:breathing
+npm run check:fire
 ```
