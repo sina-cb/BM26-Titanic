@@ -5,7 +5,7 @@ channels:
     pattern: 00_golden_hour_wash
     mode: blend_screen
     fader: 1
-    enabled: true
+    enabled: false
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
@@ -27,14 +27,18 @@ channels:
           v2: 0
   - id: ch_1778034067491
     name: Ch2
-    pattern: 02_phase_cathedral
+    pattern: 09_cyclone
     mode: blend_screen
     fader: 1
-    enabled: false
+    enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls: {}
+    localControls:
+      '3680310977':
+        v0: 0.37
+        v1: 0
+        v2: 0
     patternCache:
       07_shimmer:
         '323270901':
@@ -56,5 +60,10 @@ channels:
           v2: 0
         '3799696190':
           v0: 0.74
+          v1: 0
+          v2: 0
+      09_cyclone:
+        '3680310977':
+          v0: 0.37
           v1: 0
           v2: 0

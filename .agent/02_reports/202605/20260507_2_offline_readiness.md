@@ -42,7 +42,34 @@ The import map resolves runtime modules to external URLs:
 
 This is the most direct internet dependency. Without internet or browser cache, ES module resolution fails and the simulation app will not start. The Google Font request to `fonts.googleapis.com` is also remote, but that is only visual degradation; the CDN import map is functional.
 
-Important detail: `simulation/package.json` does declare local `three`, `js-yaml`, and `chroma-js`, and `simulation/node_modules` exists, but `index.html` does not point to those local copies.
+Important detail: `simulation/node_modules` currently contains local `three` and `js-yaml` packages that could be vendored or served locally, but `index.html` does not point to them. `chroma-js` is declared in `simulation/package.json`, but in this workspace I did not find it in `simulation/node_modules` or `simulation/package-lock.json`, so the lockfile/install state also needs to be corrected before offline packaging.
+
+Suggested local-cache fix:
+
+1. Create a checked-in browser dependency cache such as `simulation/vendor/`.
+2. Copy the exact browser ESM files used by the import map into that cache:
+   - `simulation/node_modules/three/build/three.webgpu.min.js`
+   - `simulation/node_modules/three/build/three.tsl.min.js`
+   - `simulation/node_modules/three/examples/jsm/**`
+   - `simulation/node_modules/js-yaml/dist/js-yaml.mjs`
+   - the installed ESM/browser entry for `chroma-js` after `chroma-js` is actually present in the lockfile/install.
+3. Change the import map to local URLs, for example:
+
+```json
+{
+  "imports": {
+    "three": "./vendor/three/build/three.webgpu.min.js",
+    "three/webgpu": "./vendor/three/build/three.webgpu.min.js",
+    "three/tsl": "./vendor/three/build/three.tsl.min.js",
+    "three/addons/": "./vendor/three/examples/jsm/",
+    "js-yaml": "./vendor/js-yaml/js-yaml.mjs",
+    "chroma-js": "./vendor/chroma-js/<verified-browser-entry>.js"
+  }
+}
+```
+
+4. Remove or locally host the Google Font. This is not a startup blocker, but it avoids an external request and prevents font fallback changes in kiosk/offline use.
+5. Add a simple request audit to the offline smoke test: open the simulation with the network disabled and fail if any requested URL starts with `http://` or `https://` and does not target `localhost`, `127.0.0.1`, or the local rig subnet.
 
 ### 2. Simulation startup uses `npx http-server` without a local dependency
 
@@ -57,6 +84,12 @@ npx http-server ../ -p <port> -c-1 --cors
 But `simulation/package.json` does not include `http-server`, `simulation/package-lock.json` has no `http-server` entry, and `simulation/node_modules/.bin/http-server.cmd` is absent.
 
 On an offline machine where `http-server` is not globally installed or cached by npm, `npm start` can fail before the browser app is served.
+
+Suggested fix:
+
+- Best option: replace `npx http-server` with a tiny first-party Node static server checked into `simulation/server/static-server.js`. It only needs to serve the repo root, set CORS headers if still required, disable cache for dev, and return `index.html`/static files. That removes both the npm-download risk and the undeclared dependency.
+- Acceptable option: add `http-server` as an explicit dependency in `simulation/package.json` and `package-lock.json`, then invoke it via the local binary path instead of relying on `npx` to discover or download it. This is less clean than a first-party server but is still offline-capable after install.
+- Move port cleanup out of npm `prestart`. `prestart` always runs before `npm start`, so a future `npm start -- --prod` would still hit `kill-ports.js` unless cleanup is gated inside `start.js` or split into a separate `start:dev` script.
 
 ### 3. Port cleanup uses `npx -y kill-port` without a local dependency
 
@@ -79,6 +112,37 @@ npx -y kill-port <configured ports>
 ```
 
 `kill-port` is not declared or locally installed in either `simulation` or `marsin_engine`. `Get-Command kill-port` also found no global command on this machine. Because errors are swallowed, this may not always block startup, but it is still an internet/cold-cache dependency and can delay or fail cleanup.
+
+Suggested MarsinEngine production behavior:
+
+- Add a `--prod` flag, or a more explicit `--no-kill-ports` flag, to `marsin_engine/engine.js`.
+- In dev/default mode, either keep cleanup but make it local-only, or remove cleanup entirely.
+- In `--prod` mode, never call `npx -y kill-port` and never kill an existing process automatically.
+- If the API port is busy, fail fast with a clear error and non-zero exit:
+
+```text
+Port 6968 is already in use. MarsinEngine --prod will not kill existing processes.
+Stop the existing engine or choose --port <other-port>.
+```
+
+`marsin_engine/lib/api_server.js` already has an `EADDRINUSE` error path for the API server. The main gap is that `engine.js` kills ports before it ever reaches that safer error behavior.
+
+Suggested simulation behavior:
+
+- Apply the same mode split to `simulation/start.js`: dev can attempt cleanup if implemented locally, production/offline should fail if ports are busy.
+- Remove the unconditional npm `prestart` cleanup or convert scripts to something like:
+
+```json
+{
+  "scripts": {
+    "start": "node start.js",
+    "start:dev": "node start.js --kill-ports",
+    "start:prod": "node start.js --prod"
+  }
+}
+```
+
+That gives production startup deterministic behavior: no internet, no surprise process kills, and a clear port-busy error.
 
 ### 4. MarsinEngine runtime itself is local-first
 
@@ -246,11 +310,14 @@ Once all dependencies are installed and if the browser modules are served locall
 No changes were made, but these are the practical hardening steps:
 
 1. Replace the `simulation/index.html` CDN import map with locally served module paths from `simulation/node_modules`, or switch the simulation to a bundled Vite/build artifact that vendors those modules.
-2. Add `http-server` and `kill-port` as explicit dependencies or replace them with first-party Node/PowerShell cleanup/static-serving code.
-3. Avoid `npx` in startup scripts for playa/offline use; `npx` is fine for dev convenience but is a weak contract offline.
-4. Add an offline smoke test that runs with network disabled and checks:
+2. Prefer a checked-in local vendor cache under `simulation/vendor/` for browser ESM dependencies, and verify that `chroma-js` is actually installed and locked before packaging.
+3. Replace `npx http-server` with a first-party static server, or add `http-server` explicitly and invoke only the local binary.
+4. Add a MarsinEngine `--prod` mode that disables all automatic port killing and exits clearly on `EADDRINUSE`.
+5. Apply the same production mode idea to simulation startup: no process killing in prod/offline mode, just a clear port-busy error.
+6. Avoid `npx` in startup scripts for playa/offline use; `npx` is fine for dev convenience but is a weak contract offline.
+7. Add an offline smoke test that runs with network disabled and checks:
    - `node engine.js --pattern <known> --model <known> --dry-run`
    - simulation static server starts without npm downloads
    - browser loads without external requests
    - local WebSocket ports `6968`, `6971`, `6972` come up as expected
-5. For Unreal, keep using `run_streaming.ps1` rather than Epic's platform helper scripts unless STUN/TURN/public internet streaming is intentionally needed.
+8. For Unreal, keep using `run_streaming.ps1` rather than Epic's platform helper scripts unless STUN/TURN/public internet streaming is intentionally needed.
