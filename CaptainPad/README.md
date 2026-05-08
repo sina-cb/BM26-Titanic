@@ -20,6 +20,8 @@ npm run start:kc     # Kill port + clear Metro cache
 ## 2. Permanent iOS Installation (Production)
 Because the primary deployment target is an iPad operating on a Windows-based engineering network, standard Xcode compilation is strictly impossible natively. We bind the deployment vector to the **EAS (Expo Application Services)** Cloud.
 
+For the canonical iPad build runbook, including EAS log reading and known Metro pitfalls, see `../.agent/00_gol/09_build_ipad_release.md`.
+
 To permanently install the `.ipa` onto your iPad bypassing Expo Go entirely, follow this cloud-compile workflow:
 
 ### Prerequisite 

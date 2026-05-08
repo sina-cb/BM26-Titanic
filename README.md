@@ -11,27 +11,33 @@ Lighting design, pattern engineering, and simulation toolkit for the **Titanic**
 ## ⚡ Quick Start
 
 ```bash
-# 1. Clone and install
+# 1. Clone and enter the repo
 git clone git@github.com:sina-cb/BM26-Titanic.git
 cd BM26-Titanic
+```
 
-# 2. Start the simulation (includes all 3D environment servers)
+```bash
+# Terminal 1: start the simulation
 cd simulation
 npm install
 npm start
+```
 
-# 3. Open in browser
+```bash
+# Then open in a browser
 open http://localhost:6969/simulation/
-
-# Recommended simulation URL
 open "http://127.0.0.1:6969/simulation/?scene=titanic&profile=edit&spotlights=100&renderer=webgpu"
+```
 
-# 4. Start the rendering engine (WASM MarsinVM) in a second terminal
+```bash
+# Terminal 2: start the rendering engine (WASM MarsinVM)
 cd marsin_engine
 npm install
 node engine.js --model test_bench --pattern 00_golden_hour_wash
+```
 
-# 5. Start the CaptainPad iPad UI in a third terminal
+```bash
+# Terminal 3: start the CaptainPad iPad UI
 cd CaptainPad
 npm install
 npm start -c # Clears cache and shows the QR code to scan on your iPad
@@ -119,17 +125,11 @@ An iPad-optimized React Native application allowing the crew to dynamically cont
 
 ---
 
-## 📸 Agent Render (`agent_render.js`)
+## 📸 Agent Render
 
-GPU-accelerated Puppeteer script for automated screenshot capture.
-
-```bash
-cd simulation
-node agent_render.js --open           # Interactive window (no captures)
-node agent_render.js --current        # Screenshot current camera view
-node agent_render.js --view dramatic  # Capture a specific preset view
-node agent_render.js                  # Capture all 5 preset views
-```
+There is no current `simulation/agent_render.js` script in the tree. Keep
+generated screenshots and visual artifacts under `.agent_renders/` or another
+gitignored scratch location until a replacement renderer is added.
 
 ---
 

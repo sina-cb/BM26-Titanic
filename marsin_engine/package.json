@@ -10,7 +10,10 @@
     "breathing": "node engine.js --pattern test/breathing --model test_bench",
     "fire": "node engine.js --pattern test/fire --model test_bench",
     "bio": "node engine.js --pattern 11_bioluminescence --model test_bench",
-    "golden": "node engine.js --pattern 00_golden_hour_wash --model test_bench"
+    "golden": "node engine.js --pattern 00_golden_hour_wash --model test_bench",
+    "check:rainbow": "node engine.js --pattern rainbow --model test_bench --dry-run",
+    "check:breathing": "node engine.js --pattern test/breathing --model test_bench --dry-run",
+    "check:fire": "node engine.js --pattern test/fire --model test_bench --dry-run"
   },
   "dependencies": {
     "js-yaml": "^4.1.1",

@@ -35,7 +35,7 @@ node engine.js --pattern rainbow --model test_bench
 node engine.js --list
 
 # Custom FPS and priority
-node engine.js --pattern fire --model titanic --fps 60 --priority 150
+node engine.js --pattern test/fire --model titanic --fps 60 --priority 150
 
 # Send directly to a physical controller
 node engine.js --pattern bioluminescence --model test_bench --dest 10.1.1.102
@@ -92,6 +92,8 @@ npm run breathing            # Shortcut: --pattern test/breathing --model test_b
 npm run fire                 # Shortcut: --pattern test/fire --model test_bench
 npm run bio                  # Shortcut: --pattern 11_bioluminescence --model test_bench
 npm run golden               # Shortcut: --pattern 00_golden_hour_wash --model test_bench
+npm run check:fire           # Compile-only dry run for test/fire
+npm run check:breathing      # Compile-only dry run for test/breathing
 ```
 
 ---
@@ -140,15 +142,12 @@ Patterns are Pixelblaze-compatible JavaScript files in `patterns/`. They export 
 
 | Pattern | Description |
 |---------|-------------|
-| `rainbow` | Classic HSV rainbow sweep |
-| `breathing` | Gentle sine-wave pulse |
-| `fire` | Warm flickering fire effect |
-| `bioluminescence` | Deep-sea organic glow animation |
-| `occeanliner` | Ocean-themed multi-effect pattern |
-| `plasma` | Classic plasma fractal |
-| `sparkle` | Random twinkling sparkle |
-| `wipe` | Linear color wipe |
-| `test_6ch_pixel` | 6-channel RGBWAU test pattern |
+| `00_golden_hour_wash` | Warm production wash |
+| `01_cylon_sweep` through `25_heartbeat` | Numbered production pattern set |
+| `rainbow` | Minimal classic HSV rainbow test pattern |
+| `test/fire` | Test fire pattern, used by `npm run fire` |
+| `test/breathing` | Test breathing pattern, used by `npm run breathing` |
+| `test/test_6ch_pixel` | 6-channel RGBWAU test pattern |
 
 ### Writing Patterns
 
@@ -182,15 +181,15 @@ The engine requires a pixel model exported from the simulation. Located at `mode
 ```javascript
 export const pixelCount = 323;
 export const pixels = [
-  { idx: 0, nx: 0.123, ny: 0.456, nz: 0.789, universe: 1, addr: 1, footprint: 10 },
+  { i: 0, nx: 0.123, ny: 0.456, nz: 0.789, patch: { universe: 1, addr: 1, footprint: 10 } },
   // ... one entry per pixel
 ];
 ```
 
 Each pixel has:
 - **`nx, ny, nz`** — Normalized 3D position (0→1) used as pattern coordinates
-- **`universe, addr`** — DMX patch (which universe and start address)
-- **`footprint`** — Channel count (e.g. 10 for UkingPar)
+- **`patch.universe, patch.addr`** — DMX patch (which universe and start address)
+- **`patch.footprint`** — Channel count (e.g. 10 for UkingPar)
 
 The model is exported from the simulation via the GUI's export function.
 
@@ -202,17 +201,19 @@ The model is exported from the simulation via the GUI's export function.
 marsin_engine/
 ├── engine.js               # CLI entry point & render loop
 ├── lib/
-│   ├── marsin_runtime.js   # Pixelblaze runtime (compile + render)
-│   ├── dmx_mapper.js       # Pixel → DMX universe/channel mapping
+│   ├── wasm_host.js        # High-level MarsinVM WASM host
+│   ├── marsin_wasm_runtime.js # Low-level WASM runtime wrapper
 │   └── sacn_output.js      # sACN (E1.31) sender
 ├── models/
 │   ├── test_bench.js       # Test bench model
 │   └── titanic.js          # Full Titanic model
 ├── patterns/
-│   ├── bioluminescence.js
+│   ├── 00_golden_hour_wash.js
+│   ├── 11_bioluminescence.js
 │   ├── rainbow.js
-│   ├── fire.js
-│   └── ...                 # 9 patterns total
+│   ├── test/
+│   │   └── fire.js
+│   └── ...                 # Numbered production patterns plus test patterns
 └── package.json
 ```
 
@@ -242,18 +243,18 @@ When multiple sources send to the same universe, the simulation's `UniverseRoute
 
 ## 🌐 Web Client Hosting
 
-The CaptainPad web UI can be served as a static build from the engine. This is separate from the Expo dev server (which handles iOS/Android).
+`config.yaml` contains a reserved `web_client` block, but the current engine API server does not serve static files from `CaptainPad/dist`. Use the CaptainPad web scripts below until engine-side static hosting is implemented.
 
 ### Setup
 
 1. **Build the web export** from CaptainPad:
    ```bash
    cd ../CaptainPad
-   npx expo export --platform web
+   npm run web:build
    ```
    This produces a static site in `CaptainPad/dist/`.
 
-2. **Enable in `config.yaml`:**
+2. **Leave the reserved `web_client` block documented, but do not rely on it yet:**
    ```yaml
    web_client:
      enabled: true
@@ -261,14 +262,20 @@ The CaptainPad web UI can be served as a static build from the engine. This is s
      build_dir: ../CaptainPad/dist
    ```
 
-3. **Start the engine** — it will serve the web UI on `http://localhost:6967` alongside the API on port `6968`.
+3. **Serve the web build** from `CaptainPad`:
+   ```bash
+   cd ../CaptainPad
+   npm run web:serve
+   ```
+
+The web UI is then available on `http://localhost:6967`; the engine API remains on `http://localhost:6968`.
 
 ### Architecture
 
 | Component | Port | Purpose |
 |-----------|------|---------|
 | **Engine API** | `6968` | REST + WebSocket for pattern/mixer control |
-| **Web Client** | `6967` | Static file server for CaptainPad web build |
+| **Web Client** | `6967` | CaptainPad static server from `npm run web:serve` |
 | **Expo Dev** | `6967` | iOS/Android development (shares same port, run one at a time) |
 
 > **Note:** The web client connects to the engine API at the address configured in `CaptainPad/config.yaml` (`api_base`). For production, both run on the same host, so the web UI can reach the API at `http://localhost:6968`.
