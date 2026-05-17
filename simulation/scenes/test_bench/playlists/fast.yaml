@@ -1,0 +1,27 @@
+schemaVersion: 1
+name: fast
+entries:
+  - id: e_1779009951223_7771
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderNoiseScale: 0.06
+      sliderFadeSpeed: 0.44
+    notes: null
+  - id: e_1779009995419_8369
+    pattern: 01_cylon_sweep
+    label: null
+    defaults:
+      sliderBackgroundGlow: 0.36
+    notes: null
+  - id: e_1779010030885_9389
+    pattern: 02_phase_cathedral
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_1779010041098_9422
+    pattern: 03_dual_axis_crush
+    label: null
+    defaults:
+      sliderHueSpread: 0.44
+    notes: null

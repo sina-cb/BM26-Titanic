@@ -77,7 +77,9 @@ export function mapPixelsToSacn(list, dmxRouter) {
   if (!list || !dmxRouter) return;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
-    if (!entry.patch || !entry.channels) continue;
+    if (!entry.patch) continue;
+    // Fallback to standard RGB if channels definition is missing
+    if (!entry.channels) entry.channels = { r: 1, g: 2, b: 3, w: 4, a: 5, u: 6 };
     
     // Auto-create missing universe buffers dynamically in the router if they exist in the model
     let buf = dmxRouter.getFullFrame(entry.patch.universe);

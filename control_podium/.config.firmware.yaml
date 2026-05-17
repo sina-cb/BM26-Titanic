@@ -1,0 +1,184 @@
+# TITANIC Control Podium — Firmware behavior config (committed).
+# ----------------------------------------------------------------
+# Single source of truth for everything that *can* be re-tuned in the
+# field without rewriting C. Anything here is baked into the binary at
+# build time as a `-D…` compiler flag by firmware/deploy.py and the
+# firmware reads it via `#ifndef KEY / #define KEY VALUE` blocks (see
+# titanic_common.h and titanic_ble.h).
+#
+# Why YAML and not just leave the constants in the headers?
+#   * Power-mode timings, BLE PIN rotation, OLED screen blanking, and
+#     LoRa TX power are the kind of "I want to tweak this for one
+#     party and put it back tomorrow" values that get forgotten about
+#     when they're in C. Surfacing them here makes the contract
+#     explicit and version-controlled in the same place as the bridge,
+#     command, and node configs.
+#   * It also lets us ship per-role overrides cleanly (server gets
+#     pinned to HIGH so it never throttles; clients get a real
+#     fast/slow profile to save battery).
+#   * Every config block below has units in its key name so nobody
+#     ever has to wonder if `lease_low_water` is ms or sec.
+#
+# Out of scope (intentionally NOT here):
+#   * NODE_ID and BLE_NODE_NAME — those live in .config.nodes.yaml
+#     and are derived per-flash from --node / --role selection.
+#   * AES-128 key (secret.yaml; baked separately for security).
+#   * Bridge / engine behavior (.config.bridge.yaml,
+#     .config.commands.yaml). Those don't ship to the controller.
+#
+# Editing workflow:
+#   1. Edit the value here.
+#   2. Reflash with `firmware/deploy.py --node 0xNN` (or --all).
+#   3. Confirm on the OLED's RADIO page that the new TX power /
+#      timeouts are live.
+#
+# Adding a new tunable:
+#   1. Add it to the appropriate section below with a comment that
+#      explains the *units* and the *failure mode* of getting it wrong.
+#   2. Wire it through firmware/deploy.py::_build_firmware_flags()
+#      using the existing `_flag(name, key, *, fmt="int")` helper.
+#   3. Add the matching `#ifndef KEY / #define KEY default / #endif`
+#      block in the consuming firmware header so the build still
+#      passes if someone deletes the YAML entry. The default in C
+#      MUST match the default here.
+# ----------------------------------------------------------------
+
+# ── Radio (LoRa SX1262) ─────────────────────────────────────────
+# Compile-time defaults applied to BOTH roles. The power-profile
+# section below can later raise/lower the live TX power at runtime
+# (clients only — server is pinned to `tx_power_high_dbm`).
+radio:
+  # ISM-band center frequency (MHz). 915 in US (FCC unlicensed). Pick
+  # 868 in EU, 433 in Asia — chip supports all three with different
+  # antennas. Misconfiguring this is a hardware-violation issue, not
+  # just a "won't connect" issue, so keep it explicit per region.
+  frequency_mhz: 915.0
+  # Bandwidth (kHz). 500 ~doubles the symbol rate vs 250 (so we get
+  # ~10.9 kbps at SF7/CR4-5 instead of ~5.5 kbps), which directly
+  # halves the per-page airtime for the bridge's `rep` paging on
+  # the playlist library + pattern picker. Range trade-off is mild
+  # at the deck-to-stage distances we care about (LoRa link budget
+  # at +22 dBm still covers ~300 m line-of-sight at 500 kHz / SF7).
+  # Drop to 250 in a .config.firmware.local.yaml if you need the
+  # extra sensitivity for a particularly hostile range walk.
+  bandwidth_khz: 500.0
+  # Spreading factor (7..12). Lower = faster, less range. 7 at 250 kHz
+  # gives ~6 kbps and ~600 m line-of-sight on a +22 dBm radio — that's
+  # our deck-to-stage budget. Bumping to SF9 doubles range at quarter
+  # data rate; see power_profile.lora_slow_sf for the battery-saver
+  # variant.
+  spreading_factor: 7
+  # Coding rate (4/5 .. 4/8). 5 = 4/5, the lightest FEC. Heavier
+  # codes (4/7, 4/8) help in noisy environments at the cost of more
+  # airtime per byte.
+  coding_rate: 5
+
+# ── BLE peripheral (NimBLE) ─────────────────────────────────────
+ble:
+  # Passkey-display pairing PIN max age (ms). The firmware rotates the
+  # 6-digit pairing PIN under three triggers: at boot, immediately
+  # after a successful pair, and after this many ms of idle. 10
+  # minutes is short enough that a casually-glanced PIN is useless
+  # within a single rehearsal, long enough that a real pair attempt
+  # has time to complete. Idle rotation is suppressed while a central
+  # is mid-pair (see titanic_ble.h::update).
+  passkey_max_age_ms: 600000        # 10 minutes
+  # Long-press threshold (ms) for the "clear all BLE bonds" recovery
+  # gesture on the PRG button. Hold for ≥ this and the OLED counts
+  # down then nukes every stored bond, forcing every paired phone to
+  # re-pair. 5s is long enough that nobody trips it cycling pages,
+  # short enough that a stuck operator discovers it from frustration.
+  # See titanic_common.h::titanicDisplayUpdate for the countdown UI.
+  bond_clear_hold_ms: 5000
+
+# ── OLED auto-sleep schedule (3 stages) ─────────────────────────
+# ACTIVE  → first oled_full_sec seconds after activity: full
+#           brightness, multi-page UI.
+# DIM     → next oled_dim_sec seconds: contrast dropped to
+#           oled_contrast_dim, simplified "heartbeat" page (name +
+#           uptime + battery). ~10× lower average current than ACTIVE.
+# OFF     → after both intervals: panel blanked. Any PRG press
+#           jumps straight back to ACTIVE.
+# Set either timeout to 0 to disable that transition (and the next
+# one). A debug build that wants the screen lit forever sets
+# `full_sec: 0`.
+oled:
+  full_sec: 20
+  dim_sec: 30
+  contrast_full: 255              # 0..255 — full SSD1306 contrast
+  contrast_dim: 30                # ~12% — readable across a dark room
+
+# ── Battery sampling ────────────────────────────────────────────
+battery:
+  # Sample cadence (ms). The ADC read briefly drives VBAT_CTRL so we
+  # don't want to thrash it every loop. 5s gives a snappy enough
+  # battery % update for the OLED without measurable current cost.
+  sample_ms: 5000
+  # LiPo cell voltages where we warn / shut down. Picked safely above
+  # the ESP32-S3 brown-out (~2.93V) and the SX1262 LDO dropout
+  # (~3.0V), but low enough that the cell is genuinely empty by the
+  # time we shut down (preserves bond store too — corruption on
+  # brown-out is the most common cause of stuck-pairing reports).
+  warn_volts: 3.40
+  shutdown_volts: 3.10
+
+# ── Power profile (client controllers only — server is pinned) ──
+# Battery-powered Heltec V4 clients waste a noticeable amount of mA
+# running BLE at +9 dBm and LoRa at +22 dBm when nobody is talking
+# to them. We default them to LOW and bump to HIGH on any of:
+#   * BLE central connect      — operator just paired their phone
+#   * BLE characteristic write — phone is actively sending commands
+#   * PRG button press         — operator is at the box, expects fast
+# LoRa RX is deliberately NOT a wake trigger: a packet from another
+# client should not light up the whole mesh. After `fast_idle_ms` of
+# no triggers we drop back to LOW.
+#
+# The server controller (role=server) is ALWAYS pinned to HIGH at
+# build time because it's USB-powered and we never want it to add
+# latency to a critical relay. The deploy script enforces this by
+# emitting `-DPOWER_PROFILE_PIN_HIGH=1` when role==server.
+#
+# Power level cross-reference (ESP32-S3 / SX1262):
+#   BLE TX dBm    → NimBLE: ESP_PWR_LVL_P3=+3, P6=+6, P9=+9, P12=+12, P15=+15, P18=+18
+#                   (per esp_bt.h on ESP32-S3; subset on older chips)
+#   LoRa TX dBm   → SX1262: -9..+22 (radio.setOutputPower)
+power_profile:
+  # Time without ANY activity (BLE write / connect / button) before
+  # dropping a client from HIGH back to LOW. 60s is the sweet spot:
+  # long enough to keep an active operator on HIGH between two
+  # back-to-back commands, short enough that an idle controller in
+  # the rack drops to LOW within a minute of being put down.
+  fast_idle_ms: 60000
+
+  # BLE TX power steps (ESP_PWR_LVL_*). HIGH = max-range advertise and
+  # link layer; LOW = enough for a phone within 1–2 m of the box.
+  # +9 dBm is a good compromise — +18 saturates iPhones at close range
+  # and is barely faster than +9 in practice.
+  ble_tx_dbm_high: 9
+  ble_tx_dbm_low: 3
+
+  # LoRa TX power (dBm). Server is pinned to HIGH; clients ramp on
+  # the same triggers as BLE. We keep them within FCC EIRP after the
+  # antenna gain — see your antenna's datasheet before raising.
+  lora_tx_dbm_high: 22
+  lora_tx_dbm_low: 14
+
+  # LoRa "slow" mode (LOW) trades data rate for sensitivity. Higher
+  # SF (e.g. 9 vs the radio.spreading_factor of 7) doubles range at
+  # roughly quarter the data rate — fine when nobody is actively
+  # poking the box. We DON'T switch BW because the bridge expects a
+  # fixed BW for syncword math.
+  lora_slow_sf: 7        # set to 9 to favor range over data rate in LOW
+
+# ── Diagnostic / development overrides ──────────────────────────
+# Set these via a per-developer .config.firmware.local.yaml override
+# (NOT committed) when bench testing — they expose features that
+# bake in extra serial output or pin the device into one power state.
+debug:
+  # Force the controller to behave as if it just had a BLE write —
+  # never drops out of HIGH. Useful for measuring max-range throughput
+  # without a phone in the loop.
+  pin_high_forever: false
+  # Emit a `POWERMODE:HIGH/LOW` serial line on every transition. Cheap
+  # but noisy — leave off for production builds.
+  log_mode_transitions: false

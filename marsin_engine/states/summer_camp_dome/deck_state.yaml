@@ -1,0 +1,16 @@
+channel:
+  id: ch_base_1778880115081
+  name: Base
+  pattern: 00_golden_hour_wash
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  localControls: {}
+  playlist:
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 0
+    autopilot:
+      active: false
+      delay_s: 30
+      shuffle: false

@@ -4,11 +4,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getApiBase, getApiBaseAsync, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
+import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
 import { useServerDiscovery, DiscoveredServer } from '@/hooks/useServerDiscovery';
 
-// Native yaml parsing from our metro injection!
-import defaultConfigs from '@/config.yaml';
 
 export default function ConfigScreen() {
   const [ip, setIp] = useState('');
@@ -40,11 +38,12 @@ export default function ConfigScreen() {
   };
 
   const handleReset = async () => {
-    setIp(defaultConfigs.api_base);
-    await setApiBase(defaultConfigs.api_base);
+    const def = getDefaultApiBase();
+    setIp(def);
+    await setApiBase(def);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-    const result = await testConnection(defaultConfigs.api_base);
+    const result = await testConnection(def);
     setConnResult(result);
   };
 
@@ -333,7 +332,7 @@ export default function ConfigScreen() {
              onChangeText={setIp}
              autoCapitalize="none"
              autoCorrect={false}
-             placeholder="http://10.1.1.172:6968"
+             placeholder={getDefaultApiBase()}
              placeholderTextColor={Colors.light.icon}
            />
 

@@ -1,0 +1,191 @@
+# PortWatch — Behavior config (committed).
+# -------------------------------------------------------------
+# Single source of truth for every PortWatch timing / size / retry
+# knob. The Metro bundler can't read YAML at runtime, so the
+# `scripts/sync-config.mjs` script (run automatically by the Expo
+# prebuild / EAS hooks, and manually via `npm run sync-config`)
+# generates `src/config/generated.ts` from this file. UI code
+# imports the constants from `src/config` and NEVER inlines numbers.
+#
+# Why YAML and not put it in JSON/TS directly?
+#   * Matches the .config.{nodes,bridge,commands,firmware}.yaml
+#     convention used across this project — one Pull-Request review
+#     pattern, one tool to scrape with `yq`.
+#   * YAML supports comments. The most-important property of these
+#     knobs is *why* the value was picked, not the value itself.
+#   * Generated TS is .gitignored so we never argue about its
+#     diff in code review.
+#
+# Editing workflow:
+#   1. Tweak a value here.
+#   2. `npm run sync-config` (or `cd control_podium/PortWatch &&
+#      node scripts/sync-config.mjs`). Regenerates
+#      src/config/generated.ts.
+#   3. Reload the app (Metro fast-refreshes).
+#
+# Adding a new tunable:
+#   1. Add it under the appropriate section below WITH a comment
+#      naming the failure mode.
+#   2. Add a typed entry in scripts/sync-config.mjs's `bindings`
+#      list — the mapping from YAML dotted path → TS export name.
+#   3. Import the constant in the consuming TS file (e.g.
+#      `import { CFG } from "@/config"`).
+
+# ── Control lock lease ───────────────────────────────────────
+# PortWatch holds a renewable lease on the engine's `controlLock`
+# (see docs/15_central_param_center_cpc.md §15.3 and
+# docs/21_portwatch_monitor.md §10). The engine auto-expires the
+# lock after 30s of no renewals to protect against a phone walking
+# off with the lock forever. PortWatch renews on a faster cadence
+# than the engine expires, AND defensively re-renews if the
+# remaining time drops below the low-water mark — covers the case
+# where a flaky LoRa link drops a renew packet entirely.
+lease:
+  # Periodic renew cadence (ms). MUST be less than the engine's
+  # CONTROL_LOCK_LEASE_MS (currently 30s) by enough to absorb one
+  # full re-transmission + LoRa round-trip. 20s gives us ~10s of
+  # headroom which is comfortable across our worst-case LoRa
+  # retransmission window.
+  renew_interval_ms: 20000
+  # Low-water mark (seconds). If the lease drops below this, fire
+  # an extra renew immediately rather than waiting for the next
+  # periodic tick. 12s = renew_interval_ms / 2 - 4s of margin.
+  low_water_sec: 12
+
+# ── Pattern catalogue paging (deck card pattern picker) ──────
+# The engine returns the active deck's pattern list in compact
+# multi-frame `rep` packets (LoRa MTU caps each frame at ~200
+# bytes). PortWatch chains page fetches until the engine reports
+# the end, with retries on per-page timeout.
+patterns:
+  # Hard cap on the number of pages we'll chain before giving up.
+  # The engine sets `end:1` on the last page so we normally stop
+  # before this; the cap protects against an engine bug or
+  # malformed reply that would loop forever. 16 pages × ~12
+  # patterns/page = ~192 patterns; well above the largest real
+  # playlist we've ever shipped.
+  max_pages: 16
+  # Per-page retry budget. Tested to roughly cover "two transient
+  # LoRa drops in a row" without inflating the operator-visible
+  # wait time. After max_retries we fail the whole picker (better
+  # than showing half a list).
+  max_page_retries: 3
+  # Per-page timeout (ms). Tuned to the LoRa long-frame round-trip
+  # at our default SF/BW (≈3–4s in the field) + headroom for one
+  # collision + retransmit. Too low = false-fails on a busy mesh;
+  # too high = sluggish picker on real failures.
+  page_timeout_ms: 12000
+  # Linear back-off between retries (ms). Short on purpose —
+  # we're not trying to be polite to the engine, we're trying to
+  # ride out a single dropped frame. Larger back-offs hurt UX more
+  # than they help reliability.
+  retry_backoff_ms: 500
+
+# ── Per-pattern exports paging (params card) ─────────────────
+# Similar split-paging dance as `patterns`, but for the live
+# `exports` list (per-pattern WASM-exposed knobs). Tuned slightly
+# tighter because exports are smaller per row → fewer pages → we
+# can afford shorter timeouts.
+exports:
+  max_pages: 8
+  max_page_retries: 3
+  page_timeout_ms: 4000
+  retry_backoff_ms: 500
+
+# ── Log retention (LOGS tab) ─────────────────────────────────
+# We ring-buffer the most recent UI log lines in zustand so the
+# LOGS tab doesn't have to re-fetch anything. Larger buffer =
+# longer history visible, but every entry costs a few hundred
+# bytes of RN heap. 1000 ≈ ~250 KB and 30 minutes of normal
+# operator activity.
+logs:
+  max_entries: 1000
+
+# ── BLE / connection ─────────────────────────────────────────
+ble:
+  # MTU we request on every new connection. The Heltec firmware
+  # happily negotiates this; bigger = fewer fragments per LoRa
+  # `rep` page. 247 is the iOS-side max for a single PDU.
+  request_mtu: 247
+  # Connection-attempt timeout (ms). iOS gives up on its own
+  # eventually but the default is over a minute; surfacing a real
+  # error in 8s is much friendlier UX.
+  connect_timeout_ms: 8000
+  # RSSI polling cadence (ms). iOS only reports RSSI on demand,
+  # so we poll on a fixed timer for the status bar / range
+  # tester. 3s is the sweet spot — faster jitters the value on
+  # iOS's smoothing window; slower feels stale during a range
+  # walk.
+  rssi_poll_ms: 3000
+  # Bluetooth-on/off probe timeout (ms). When the user opens
+  # PortWatch with Bluetooth disabled we wait up to this long
+  # for state changes before falling back to "BLE OFF" UI.
+  state_probe_timeout_ms: 10000
+
+# ── Engine-status polling (PRIMARY sync path) ────────────────
+# The bridge fires periodic `pub` broadcasts of compact_status,
+# but those are best-effort over a half-duplex LoRa link and any
+# single drop loses one tick. PortWatch ALSO polls `qry
+# engine/status` on a fixed cadence so every field
+# (activePattern, deckPlaylistName, viewMode, viewOverride,
+# controlLock, autopilot, blackout, brightness…) reaches
+# eventual consistency even when broadcast drops. See docs/21
+# §10.12 for the full rationale.
+#
+# How the two paths interact:
+#   * PUB (event-driven, bridge → broadcast)
+#       Fast path. Bridge wakes its publisher on WS events
+#       (mixer / pattern / playlistLibrary / …) so a CaptainPad
+#       swap surfaces in ~hundreds of ms when nothing drops.
+#   * POLL (cadence-driven, PortWatch → unicast `qry` → `rep`)
+#       Reliable path. Even if every PUB in a 4s window dropped,
+#       the next poll's REP rebuilds engineStatus end-to-end.
+#       This is what makes the LIVE chip / pattern highlight /
+#       TargetChannelPicker eventually match the engine no
+#       matter what.
+#
+# Cadence trade-off:
+#   * Lower interval ⇒ snappier feel, more LoRa airtime spent
+#     on metadata (steals from operator commands & pattern
+#     pages).
+#   * Higher interval ⇒ quieter wire, longer worst-case
+#     mismatch window after a PUB miss.
+#   * 5s was picked as the sweet spot for a single-operator rig:
+#     fast enough that a "did my change land?" double-check
+#     resolves before the operator looks back at the deck,
+#     slow enough not to compete with the ~280 ms per-page
+#     pattern fetches.
+polling:
+  status_interval_ms: 5000
+  # Per-poll timeout. Generous because LoRa can be congested
+  # under heavy CaptainPad activity; a stale poll just means the
+  # next one runs ~5s later. Tested across SF7/SF9 fields.
+  status_timeout_ms: 6000
+  # Local-exports polling cadence (ms). The exports list is
+  # pattern-scoped; we already refetch on every pattern change
+  # (LocalParamsCard auto-hydrates off `engineStatus.activePattern`),
+  # so this poller catches the remaining case: CaptainPad nudges
+  # a slider WITHOUT swapping pattern (so activePattern doesn't
+  # change, and PortWatch would otherwise show a stale v0 until
+  # the operator hit REFRESH).
+  #
+  # Cadence matches the status / globals pollers (5 s) so a
+  # CaptainPad slider nudge surfaces within ~one tick instead of
+  # the previous ~10 s. Per-tick cost is bounded by the exports
+  # list paginating, but most patterns ship ≤ 4 sliders → 1 frame
+  # per tick in the common case. Operators specifically reported
+  # the previous 10 s cadence as "I had to press refresh to see
+  # CaptainPad changes" — bringing it in line with the other
+  # pollers closes the gap.
+  #
+  # Set to 0 to disable polling entirely (rely on pattern-change
+  # refresh + manual REFRESH only).
+  local_exports_interval_ms: 5000
+  local_exports_timeout_ms: 6000
+
+# ── Layout ───────────────────────────────────────────────────
+layout:
+  # Max content width (px) for tablet/landscape — bigger than
+  # this and the cards look stretched. Driven from layout.ts;
+  # surfaced here so it's tweakable without touching code.
+  max_content_width: 1100

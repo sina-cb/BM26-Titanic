@@ -7,6 +7,8 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { RigProvider } from '@/components/RigGlobals';
+import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
+import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   return (
@@ -131,6 +133,13 @@ export default function TabLayout() {
             } as any}
           />
         </Tabs>
+        {/* Sticky overlay; lives outside the Tabs so it survives tab
+            switches and renders on top of every screen. The lockout
+            overlay sits BELOW the banner (banner zIndex 1000, overlay
+            zIndex 900) so the banner's "VIEW DECK" shortcut button
+            stays tappable while everything else is curtained off. */}
+        <EngineLockoutOverlay />
+        <ViewOverrideBanner />
       </SafeAreaView>
     </RigProvider>
   );

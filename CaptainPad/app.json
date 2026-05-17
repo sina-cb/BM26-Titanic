@@ -19,17 +19,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true,
-          "NSAllowsArbitraryLoads": true,
-          "NSAllowsArbitraryLoadsInWebContent": true,
-          "NSExceptionDomains": {
-            "0.0.0.0/0": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "::/0": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            }
-          }
+          "NSAllowsLocalNetworking": true
         },
         "NSLocalNetworkUsageDescription": "CaptainPad needs local network access to communicate with the MarsinEngine lighting controller on your LAN.",
         "NSBonjourServices": [

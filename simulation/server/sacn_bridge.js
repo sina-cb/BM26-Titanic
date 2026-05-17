@@ -30,7 +30,38 @@ const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'
 const SACN_PORT = serverConfig.sacn_port || 6971;
 const SACN_UDP_PORT = serverConfig.sacn_udp_port || 5568;
 
-let sacnOpts = { universes: [1, 2, 3, 4], lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
+// ── Derive universes from ALL scene patches.yaml files ─────────────────
+function getAllPatchUniverses() {
+  const universes = new Set([1, 2]); // always include 1+2 as baseline
+  const scenesDir = path.join(SIM_ROOT, 'scenes');
+  try {
+    const entries = fs.readdirSync(scenesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const patchesPath = path.join(scenesDir, entry.name, 'patches.yaml');
+      if (!fs.existsSync(patchesPath)) continue;
+      try {
+        const pConf = yaml.load(fs.readFileSync(patchesPath, 'utf8'));
+        if (pConf && pConf.patches) {
+          for (const patch of Object.values(pConf.patches)) {
+            const u = parseInt(patch.dmxUniverse, 10);
+            if (u > 0) universes.add(u);
+          }
+        }
+      } catch (e) {
+        console.warn(`[sACN Bridge] Could not read ${entry.name}/patches.yaml:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.warn('[sACN Bridge] Could not scan scenes directory:', e.message);
+  }
+  const sorted = [...universes].sort((a, b) => a - b);
+  console.log(`[sACN Bridge] Subscribing to ${sorted.length} universe(s) from patches: [${sorted.join(', ')}]`);
+  return sorted;
+}
+
+const patchUniverses = getAllPatchUniverses();
+let sacnOpts = { universes: patchUniverses, lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
 try {
   const commonPath = path.join(SIM_ROOT, 'scenes', 'common.yaml');
   let s = null;
@@ -45,9 +76,13 @@ try {
 
   if (s) {
     const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
-    const univStr = String(val(s.sacn_universes) || '1,2,3,4');
+    const univOverride = val(s.sacn_universes);
+    // Only override if explicitly set in config; otherwise use patch-derived list
+    const universes = univOverride
+      ? String(univOverride).split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u))
+      : patchUniverses;
     sacnOpts = {
-      universes: univStr.split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u)),
+      universes,
       lockoutMs: val(s.sacn_lockout_ms) || 10000,
       highPriorityThreshold: val(s.sacn_high_priority) || 150,
       sourceStaleMs: val(s.sacn_stale_ms) || 2000,
@@ -148,11 +183,20 @@ let highPriorityActive = false;
 let highPriorityTimer = null;
 let packetCount = 0;
 let lastLogTime = 0;
+const MAX_UNIVERSE = sacnOpts.universes[sacnOpts.universes.length - 1] || 256;
+const _warnedUniverses = new Set();
 
 receiver.on('packet', (packet) => {
   const priority = packet.priority || 100;
   const sourceKey = packet.sourceName || 'Unknown';
   const universe = packet.universe || 1;
+
+  if (universe > MAX_UNIVERSE && !_warnedUniverses.has(universe)) {
+    _warnedUniverses.add(universe);
+    console.warn(`[sACN Bridge] ⚠ Received data for Universe ${universe} from '${sourceKey}' — exceeds subscription range (1–${MAX_UNIVERSE}). Packet dropped.`);
+    broadcastLog(`⚠ Universe ${universe} exceeds subscription range (1–${MAX_UNIVERSE})`, 'warn');
+    return;
+  }
 
   if (priority >= HIGH_PRIORITY) {
     if (!highPriorityActive || activeSource !== sourceKey) {

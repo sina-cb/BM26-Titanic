@@ -43,17 +43,17 @@ export class GlobalEffectsController {
       if (!fx.patch || !fx.patch.universe || !fx.patch.addr) continue;
 
       const patchInfo = {
-        type: fx.fixtureType,
+        fixtureType: fx.fixtureType || fx.type,
         universe: fx.patch.universe,
         address: fx.patch.addr,
         kind: fx.kind || ''
       };
 
-      if (patchInfo.kind === 'fog' || patchInfo.kind === 'haze' || (fx.fixtureType && (fx.fixtureType.includes('Fog') || fx.fixtureType === 'ChauvetHaze4D'))) {
+      if (patchInfo.kind === 'fog' || patchInfo.kind === 'haze' || (patchInfo.fixtureType && (patchInfo.fixtureType.includes('Fog') || patchInfo.fixtureType === 'ChauvetHaze4D'))) {
         this.foggers.push(patchInfo);
-      } else if (patchInfo.kind === 'horn' || (fx.fixtureType && fx.fixtureType.includes('Horn'))) {
+      } else if (patchInfo.kind === 'horn' || (patchInfo.fixtureType && patchInfo.fixtureType.includes('Horn'))) {
         this.horns.push(patchInfo);
-      } else if (patchInfo.kind === 'fire' || (fx.fixtureType && fx.fixtureType.includes('Fire'))) {
+      } else if (patchInfo.kind === 'fire' || (patchInfo.fixtureType && patchInfo.fixtureType.includes('Fire'))) {
         this.fires.push(patchInfo);
       }
     }
@@ -106,7 +106,7 @@ export class GlobalEffectsController {
       const frame = dmxBuffers[fogger.universe];
       if (!frame) continue; // Universe not initialized
 
-      const isChauvet = fogger.type === 'ChauvetHaze4D';
+      const isChauvet = fogger.fixtureType === 'ChauvetHaze4D';
 
       if (this.effects.fogger) {
         if (isChauvet) {

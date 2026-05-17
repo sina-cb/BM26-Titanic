@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { NauticalFader } from '@/components/NauticalFader';
-import { setSectionBrightness, setGlobalBlackout, fetchDimmers } from '@/utils/api';
+import { setSectionBrightness, setGlobalBlackout, fetchDimmers, fetchDimmerGroups } from '@/utils/api';
 import { RigContext } from '@/components/RigGlobals';
 
 const BypassCheckbox = ({ effectId, label }: { effectId: string, label: string }) => {
@@ -20,106 +20,131 @@ const BypassCheckbox = ({ effectId, label }: { effectId: string, label: string }
   );
 };
 
+/** Convert group name to a human-readable label */
+function groupLabel(name: string): string {
+  return name
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toUpperCase();
+}
+
 export default function DimmerRackScreen() {
   const { blackout: isBlackout, toggleBlackout } = useContext(RigContext);
   const [dimmerStates, setDimmerStates] = useState<Record<string, number>>({});
+  const [groups, setGroups] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    fetchDimmers().then(result => {
-      if (result.ok && result.data) {
-        setDimmerStates(result.data);
-      }
-      setLoaded(true);
-    });
+
+  const refreshGroups = useCallback(async () => {
+    const [groupsResult, dimmersResult] = await Promise.all([
+      fetchDimmerGroups(),
+      fetchDimmers(),
+    ]);
+    if (groupsResult.ok && groupsResult.data) setGroups(groupsResult.data);
+    if (dimmersResult.ok && dimmersResult.data) setDimmerStates(dimmersResult.data);
+    setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    refreshGroups();
+
+    // Refresh when app/tab comes to foreground
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshGroups();
+    });
+
+    return () => sub.remove();
+  }, [refreshGroups]);
   
   const handleDimmerChange = (id: number, val: number) => {
     setSectionBrightness(id, val);
   };
 
+  const groupEntries = Object.entries(groups);
+
   return (
-    <View style={globalStyles.container}>
-      <View style={{ padding: 48, flex: 1, alignItems: 'center' }}>
+    <View style={[globalStyles.container, { padding: 32, flexDirection: 'column' }]}>
         
-        <View style={{ alignItems: 'center', marginBottom: 48, gap: 16 }}>
-           <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
-             <IconSymbol name="lightbulb.fill" size={32} color={Colors.light.primary} />
-             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 32, color: Colors.light.text, letterSpacing: 2 }}>
-               DIMMER RACK
-             </Text>
-           </View>
-           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 16, color: Colors.light.secondary, textAlign: 'center' }}>
-             GLOBAL SECTION CONTROL AND PATTERN INTENSITY SCALING
+      {/* Header */}
+      <View style={{ alignItems: 'center', marginBottom: 24, gap: 8 }}>
+         <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
+           <IconSymbol name="lightbulb.fill" size={36} color={Colors.light.primary} />
+           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 32, color: Colors.light.text, letterSpacing: 2 }}>
+             DIMMER RACK
            </Text>
-        </View>
+         </View>
+         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 14, color: Colors.light.secondary, textAlign: 'center' }}>
+           GLOBAL SECTION CONTROL AND PATTERN SCALING
+         </Text>
+      </View>
+         
+      {/* Global Blackout */}
+      <TouchableOpacity 
+         onPress={toggleBlackout} 
+         style={{ 
+           alignSelf: 'stretch',
+           backgroundColor: isBlackout ? Colors.light.surfaceContainerHigh : Colors.light.error, 
+           height: 64, 
+           borderRadius: 16, 
+           justifyContent: 'center', 
+           alignItems: 'center', 
+           marginBottom: 24,
+           borderWidth: isBlackout ? 1 : 0,
+           borderColor: isBlackout ? Colors.light.ghostBorder : 'transparent',
+           ...globalStyles.ambientShadow 
+         }}
+      >
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, color: isBlackout ? Colors.light.text : '#FFF', letterSpacing: 2 }}>
+          {isBlackout ? 'RESTORE RIG' : 'GLOBAL BLACKOUT'}
+        </Text>
+      </TouchableOpacity>
 
-        <TouchableOpacity 
-           onPress={toggleBlackout} 
-           style={{ 
-             alignSelf: 'stretch', 
-             marginBottom: 24, 
-             backgroundColor: isBlackout ? Colors.light.surfaceContainerHigh : Colors.light.error, 
-             height: 96, 
-             borderRadius: 16, 
-             justifyContent: 'center', 
-             alignItems: 'center', 
-             borderWidth: isBlackout ? 1 : 0,
-             borderColor: isBlackout ? Colors.light.ghostBorder : 'transparent',
-             ...globalStyles.ambientShadow 
-           }}
-        >
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: isBlackout ? Colors.light.text : '#FFF', letterSpacing: 2 }}>
-            {isBlackout ? 'RESTORE RIG' : 'GLOBAL BLACKOUT'}
-          </Text>
-        </TouchableOpacity>
+      {/* Bypass Toggles */}
+      <View style={{ flexDirection: 'row', gap: 32, marginBottom: 24, paddingHorizontal: 16 }}>
+        <BypassCheckbox effectId="uvBlastBypassDimmer" label="UV BLAST BYPASS" />
+        <BypassCheckbox effectId="vintageWhiteBypassDimmer" label="VINTAGE WHT BYPASS" />
+        <BypassCheckbox effectId="blastWhiteBypassDimmer" label="BLAST WHT BYPASS" />
+      </View>
 
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 24, marginBottom: 32, justifyContent: 'center' }}>
-          <BypassCheckbox effectId="uvBlastBypassDimmer" label="UV BLAST DIMMER BYPASS" />
-          <BypassCheckbox effectId="vintageWhiteBypassDimmer" label="VINTAGE WHT DIMMER BYPASS" />
-          <BypassCheckbox effectId="blastWhiteBypassDimmer" label="BLAST WHT DIMMER BYPASS" />
-        </View>
-
-        {loaded && (
-          <View style={[globalStyles.card, { alignSelf: 'stretch', flex: 1, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingBottom: 64, paddingTop: 32 }]}>
-            
-            <View style={{ alignItems: 'center' }}>
-              <NauticalFader 
-                id={1} 
-                label="PAR WASH" 
-                initialValue={dimmerStates['1'] ?? 1.0} 
-                min={0} 
-                max={1.0} 
-                onChange={handleDimmerChange} 
-              />
-            </View>
-            
-            <View style={{ alignItems: 'center' }}>
-              <NauticalFader 
-                id={2} 
-                label="VINTAGE" 
-                initialValue={dimmerStates['2'] ?? 1.0} 
-                min={0} 
-                max={1.0} 
-                onChange={handleDimmerChange} 
-              />
-            </View>
-            
-            <View style={{ alignItems: 'center' }}>
-              <NauticalFader 
-                id={3} 
-                label="SHEDH BARS" 
-                initialValue={dimmerStates['3'] ?? 1.0} 
-                min={0} 
-                max={1.0} 
-                onChange={handleDimmerChange} 
-              />
-            </View>
-            
+      {/* Main Fader Area (Takes remaining space) */}
+      <View style={[globalStyles.card, { flex: 1, padding: 32, justifyContent: 'center' }]}>
+        {!loaded && (
+          <View style={{ alignItems: 'center', gap: 16 }}>
+            <ActivityIndicator size="large" color={Colors.light.primary} />
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 16, color: Colors.light.secondary }}>
+              Loading dimmer groups...
+            </Text>
           </View>
         )}
 
+        {loaded && groupEntries.length === 0 && (
+          <View style={{ alignItems: 'center', gap: 16 }}>
+            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 20, color: Colors.light.secondary }}>
+              No Dimmer Groups Found
+            </Text>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 14, color: Colors.light.secondary, textAlign: 'center', opacity: 0.7, maxWidth: 400 }}>
+              Auto-patch your fixtures in the simulation to generate section groups, then re-export the model.
+            </Text>
+          </View>
+        )}
+
+        {loaded && groupEntries.length > 0 && (
+          <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 32 }}>
+            {groupEntries.map(([name, sectionId]) => (
+              <View key={sectionId} style={{ alignItems: 'center' }}>
+                <NauticalFader 
+                  id={sectionId} 
+                  label={groupLabel(name)} 
+                  initialValue={dimmerStates[String(sectionId)] ?? 1.0} 
+                  min={0} 
+                  max={1.0} 
+                  onChange={handleDimmerChange} 
+                />
+              </View>
+            ))}
+          </View>
+        )}
       </View>
+
     </View>
   );
 }

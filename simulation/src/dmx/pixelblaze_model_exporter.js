@@ -22,8 +22,6 @@ export function generatePixelMap() {
     return Object.keys(std).length > 0 ? std : null;
   }
 
-  let autoUniverse = 1;
-  let autoAddress = 1;
 
   // Par Lights & DMX Fixtures (Unified)
   const dmxList = (params.dmxFixtures && params.dmxFixtures.length > 0) ? params.dmxFixtures : params.parLights;
@@ -48,14 +46,12 @@ export function generatePixelMap() {
           } else {
             worldPos.set(light.x || 0, light.y || 0, light.z || 0);
           }
-            // Auto-patch sequentially if missing config
             let u = light.dmxUniverse;
             let addr = light.dmxAddress;
             const fp = fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
-            if (!u || !addr) {
-                u = autoUniverse;
-                addr = autoAddress;
-            }
+            
+            // Only create a valid patch if actually patched (no silent auto-assign)
+            const patchObj = (u && u > 0 && addr && addr > 0) ? { universe: u, addr: addr, footprint: fp } : null;
 
             pixels.push({
               type: 'dmx',
@@ -71,31 +67,19 @@ export function generatePixelMap() {
               fId: light.fixtureId || 0,
               vMask: light.viewMask || 0,
               _prePatched: true,
-              patch: {
-                 universe: u,
-                 addr: addr,
-                 footprint: fp
+              patch: patchObj,
+              channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
+              // Per-pixel size from fixture model definition (in mm)
+              pixelSize: px.model && typeof px.model.size === 'number' ? px.model.size : 14,
+              // Bind the apply callback natively for the simulator
+              apply: (r, g, b) => {
+                if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
+                fixture.setPixelColorRGB(j, r, g, b);
               },
-            channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
-            // Per-pixel size from fixture model definition (in mm)
-            pixelSize: px.model && typeof px.model.size === 'number' ? px.model.size : 14,
-            // Bind the apply callback natively for the simulator
-            apply: (r, g, b) => {
-              if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-              fixture.setPixelColorRGB(j, r, g, b);
-            },
-          });
+           });
         });
         
-        // After iterating all pixels in this multi-pixel fixture, increment autoAddress for the NEXT fixture
-        if (!light.dmxUniverse || !light.dmxAddress) {
-            const fp = fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
-            autoAddress += fp;
-            if (autoAddress > 512) {
-                autoUniverse++;
-                autoAddress = 1;
-            }
-        }
+
 
       } else if (fixture && fixture.light) {
         // Simple fixture
@@ -109,19 +93,15 @@ export function generatePixelMap() {
         }
         const chFallback = fixture.fixtureDef ? fixture.fixtureDef.footprint : 3;
 
-        // Auto-patch sequentially if missing config
         let u = light.dmxUniverse;
         let addr = light.dmxAddress;
         const fp = fixture.fixtureDef ? (fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || 10) : 10;
-        if (!u || !addr) {
-            u = autoUniverse;
-            addr = autoAddress;
-            autoAddress += fp;
-            if (autoAddress > 512) {
-                autoUniverse++;
-                autoAddress = 1;
-            }
-        }
+        
+        const patchObj = (u && u > 0 && addr && addr > 0) ? {
+            universe: u,
+            addr: addr,
+            footprint: fp
+        } : null;
 
         pixels.push({
             type: 'dmx',
@@ -133,15 +113,11 @@ export function generatePixelMap() {
             z: +(worldPos.z).toFixed(3),
             nx: 0, ny: 0, nz: 0,
             cId: light.controllerId || 0,
-            sId: light.sectionId || 0,
+            sId: resolveSectionId(light),
             fId: light.fixtureId || 0,
             vMask: light.viewMask || 0,
             _prePatched: true, // We polyfill dynamically, so they are practically patched
-            patch: {
-               universe: u,
-               addr: addr,
-               footprint: fp
-            },
+            patch: patchObj,
             channels: (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) ? null : (standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback),
             apply: (r, g, b) => {
                if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
@@ -153,8 +129,8 @@ export function generatePixelMap() {
       } else if (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) {
         // [GLOBAL EFFECTS EXPORT PIPELINE]
         // We export non-lighting global fixtures (Foggers, Hazers, Horns, Fire) into a separate specialEffects model.
-        let u = light.dmxUniverse || autoUniverse;
-        let addr = light.dmxAddress || autoAddress;
+        let u = light.dmxUniverse || 0;
+        let addr = light.dmxAddress || 0;
         
         const isChauvet = fType === 'ChauvetHaze4D';
         const fp = fixture && fixture.fixtureDef ? (fixture.fixtureDef.footprint || fixture.fixtureDef.channelMode || fixture.fixtureDef.channel_mode || fixture.fixtureDef.totalChannels || (isChauvet ? 2 : 1)) : (isChauvet ? 2 : 1);
@@ -186,23 +162,14 @@ export function generatePixelMap() {
           fixtureType: light.fixtureType || fType,
           name: light.name || fType,
           group: light.group || 'GlobalEffects',
-          patch: {
+          patch: (u && u > 0 && addr && addr > 0) ? {
              universe: u,
              addr: addr,
              footprint: fp
-          },
+          } : null,
           channels: channelsObj,
           controlGroup: controlGroup
         });
-        
-        // Ensure autoAddress increments for next fixture if auto-patching
-        if (!light.dmxUniverse || !light.dmxAddress) {
-            autoAddress += fp;
-            if (autoAddress > 512) {
-                autoUniverse++;
-                autoAddress = 1;
-            }
-        }
       } else {
         const errorMsg = `[MarsinEngine Export] Warning: Unsupported or missing fixture definition! Par light at index ${i} (Type: ${light.fixtureType || 'Unknown'}) could not be resolved against supported fixtures. Skipping.`;
         if (window._missingFixtureWarnCount === undefined) window._missingFixtureWarnCount = 0;

@@ -62,7 +62,7 @@ atmosphere:
 options:
   _section:
     label: ⚙️ Options
-    collapsed: false
+    collapsed: true
   rendererMode:
     value: webgl
     label: 🚀 Graphics Engine
@@ -108,13 +108,13 @@ options:
     value: false
     label: Show Generators
   globalPixelScale:
-    value: 2.5
+    value: 2.6
     label: Global Pixel Size
     min: 0.1
     max: 5
     step: 0.1
   globalHaloScale:
-    value: 4.4
+    value: 4.7
     label: Global Halo Size
     min: 0.1
     max: 5
@@ -128,7 +128,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -152,8 +152,8 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: '1'
-    label: 📡 Listen Universes
+    value: 1, 2, 3, 4, 5, 6
+    label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 10000
     label: 📡 Source Lockout (ms)
@@ -175,23 +175,23 @@ colorWave:
 config:
   _section:
     label: 💾 Configuration
-    collapsed: false
+    collapsed: true
   autoSave:
     value: false
     label: Auto-Save on Change
 _camera:
   position:
-    x: -11.7433
-    'y': 3.7179
-    z: 8.0259
+    x: 25.3111
+    'y': 14.8848
+    z: -43.7979
   target:
-    x: 1.4111
-    'y': 2.776
-    z: 0.8792
+    x: 1.3023
+    'y': 3.4634
+    z: 6.5578
 _patternEditor:
   x: 0
-  'y': 0
-  width: 0
-  height: 0
+  'y': 42
+  width: 606
+  height: 794
   collapsed: false
   autoRun: true

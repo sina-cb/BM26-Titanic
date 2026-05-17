@@ -45,6 +45,11 @@ function getRequestedRendererMode() {
   const savedRendererMode = params.rendererMode;
   if (VALID_RENDERER_MODES.has(savedRendererMode)) return savedRendererMode;
 
+  // Prefer native WebGPU when the browser exposes the API. Apple Silicon Macs in
+  // particular pay a steep cost going through ANGLE→Metal in WebGL — native
+  // WebGPU avoids the fragment-uniform spill that crushes FPS in the `full`
+  // profile with hundreds of SpotLights.
+  if (typeof navigator !== "undefined" && navigator.gpu) return "webgpu";
   return "webgl";
 }
 
@@ -62,8 +67,13 @@ async function init() {
   });
   await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  
-  const prCap = Math.min(window.devicePixelRatio, 2);
+
+  // Keep this in sync with onResize() in view_presets.js. Retina displays at
+  // dpr=2 cost ~2.56× the fragment work of dpr=1.25 for a 0–5% visual quality
+  // gain on this scene, so default-cap at 1.25 unless the scene overrides it.
+  const prCap = window.initialParams?.pixelRatioCap !== undefined
+    ? window.initialParams.pixelRatioCap
+    : 1.25;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, prCap));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.55;
@@ -233,7 +243,17 @@ Promise.all([
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml]) => {
+  fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+
+  // Load root config
+  if (rootConfigYaml) {
+    try {
+      window.serverConfig = yaml.load(rootConfigYaml);
+    } catch (e) {
+      console.warn("Failed to parse config.yaml:", e);
+    }
+  }
 
   // Load scene config
   try {
@@ -258,15 +278,26 @@ Promise.all([
       }
       
       // Stitch decoupled patch data back into the fixture tree
-      if (patchesYaml && window.initialParams.parLights?.fixtures) {
+      if (patchesYaml) {
         const patchTree = yaml.load(patchesYaml);
-        const patches = patchTree?.patches || {};
-        window.initialParams.parLights.fixtures.forEach(fixture => {
-          if (fixture.name && patches[fixture.name]) {
-            Object.assign(fixture, patches[fixture.name]);
-          }
-        });
+        window.__globalPatchTree = patchTree?.patches || {};
+        
+        window.applyPatches = function(fixturesArray) {
+          if (!fixturesArray) return;
+          fixturesArray.forEach(fixture => {
+            if (fixture.name && window.__globalPatchTree[fixture.name]) {
+              Object.assign(fixture, window.__globalPatchTree[fixture.name]);
+            }
+          });
+        };
+
+        if (window.initialParams.parLights?.fixtures) {
+          window.applyPatches(window.initialParams.parLights.fixtures);
+        }
       }
+
+      // Notify PatchManager after patches are applied so boot state is correct
+      if (window.recomputePatchesActive) window.recomputePatchesActive();
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
     }
@@ -434,3 +465,33 @@ window.getHullPort = function(x, y) {
   const intersects = ray.intersectObjects(modelMeshes, true);
   return intersects.map(i => Number(i.point.z.toFixed(3)));
 };
+
+// ─── Background Throttling Prevention ───────────────────────────────────
+// Chrome aggressively throttles requestAnimationFrame to 1fps or 0fps when 
+// the tab is in the background or computer is locked. Since our sACN output 
+// relies on the render loop, we play a silent looping audio file on first 
+// interaction to trick Chrome into treating this tab as an active media player.
+// TODO: This reduces but does not fully eliminate short pauses when the tab
+//       loses focus. A proper fix would decouple the sACN output relay from
+//       the browser render loop entirely (e.g. run it server-side in
+//       sacn_bridge.js or use a dedicated Web Worker with its own WebSocket).
+function enableBackgroundRunHack() {
+  const audio = document.createElement('audio');
+  audio.loop = true;
+  // A tiny silent wav file in base64
+  audio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+  
+  const playAudio = () => {
+    audio.play().then(() => {
+      console.log("[KeepAlive] Silent audio loop started to prevent background throttling.");
+      window.removeEventListener('pointerdown', playAudio);
+      window.removeEventListener('keydown', playAudio);
+    }).catch(e => {
+      // Ignore autoplay errors if they occur
+    });
+  };
+  
+  window.addEventListener('pointerdown', playAudio);
+  window.addEventListener('keydown', playAudio);
+}
+enableBackgroundRunHack();

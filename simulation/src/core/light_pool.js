@@ -24,6 +24,13 @@ const GPU_SAFE_FRAGMENT_VECTOR_RESERVE = 64;
 const GPU_SAFE_VECTORS_PER_SPOTLIGHT = 16;
 const SPOTLIGHT_INTENSITY_SCALE_PER_RADIUS = 0.04;
 const MIN_SPOTLIGHT_INTENSITY_SCALE = 0.75;
+
+// User-visible thresholds for the spotlight count warning banner.
+//   CAUTION: above this, frame rate often drops materially on consumer GPUs.
+//   CRITICAL: above this, WebGPU shaders can break and render scenes entirely
+//             white or black on some drivers (especially Mac Metal/WebGPU).
+const SPOTLIGHT_WARN_CAUTION_COUNT = 100;
+const SPOTLIGHT_WARN_CRITICAL_COUNT = 160;
 const _requestedPoolSizeRaw = Number.parseInt(_urlParams.get('spotlights') || `${DEFAULT_POOL_SIZE}`, 10);
 const REQUESTED_POOL_SIZE = Number.isFinite(_requestedPoolSizeRaw)
   ? Math.max(0, _requestedPoolSizeRaw)
@@ -58,6 +65,100 @@ function showSpotlightCapToast(requestedSize, cappedSize) {
   }
 
   window.addEventListener('DOMContentLoaded', renderToast, { once: true });
+}
+
+// Internal state for the warning banner's auto-hide timer.
+const SPOTLIGHT_WARN_AUTO_HIDE_MS = 30_000;
+let _spotlightWarnHideTimer = null;
+
+function _hideSpotlightWarning() {
+  if (_spotlightWarnHideTimer !== null) {
+    clearTimeout(_spotlightWarnHideTimer);
+    _spotlightWarnHideTimer = null;
+  }
+  const el = document.getElementById('spotlight-warning');
+  if (!el) return;
+  el.classList.add('hidden');
+  el.removeAttribute('data-severity');
+  el.innerHTML = '';
+}
+
+/**
+ * Show / update / hide the persistent bottom-center banner that warns users
+ * when the SpotLight count crosses performance- and stability-critical
+ * thresholds. Safe to call repeatedly (e.g. on every slider tick).
+ *
+ *   • count > 160 → "critical" red banner: warns about all-white or all-black
+ *     scenes from GPU shader limits (notably Mac WebGPU above ~160 lights).
+ *   • count > 100 → "caution" amber banner: warns that high SpotLight counts
+ *     reduce FPS and suggests lowering the slider.
+ *   • count ≤ 100 → banner is hidden.
+ *
+ * The banner auto-dismisses after SPOTLIGHT_WARN_AUTO_HIDE_MS (30 s) and
+ * carries an inline close button so the user can dismiss it sooner. Each
+ * call resets the auto-hide timer so updates from slider drags keep the
+ * latest state visible for a full 30 seconds.
+ *
+ * Renders into a lazily-created `#spotlight-warning` div so callers don't
+ * need to mutate index.html. Styled in style.css.
+ */
+export function showSpotlightCountWarning(count) {
+  const render = () => {
+    const safe = Number.isFinite(count) ? Math.floor(count) : 0;
+    let el = document.getElementById('spotlight-warning');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'spotlight-warning';
+      el.className = 'hidden';
+      document.body.appendChild(el);
+    }
+
+    let bodyHtml = null;
+    let severity = null;
+    if (safe > SPOTLIGHT_WARN_CRITICAL_COUNT) {
+      severity = 'critical';
+      bodyHtml =
+        '<div class="sw-title">Critical · GPU light limit</div>' +
+        `With <span class="sw-count">${safe}</span> SpotLights, the scene may render entirely ` +
+        `<strong>white</strong> or <strong>black</strong> on some GPUs — Mac WebGPU ` +
+        `in particular tends to break above ~${SPOTLIGHT_WARN_CRITICAL_COUNT} lights. ` +
+        'Lower the <code>Max Spotlights</code> slider in the Lighting panel to recover.';
+    } else if (safe > SPOTLIGHT_WARN_CAUTION_COUNT) {
+      severity = 'caution';
+      bodyHtml =
+        '<div class="sw-title">Performance · High SpotLight count</div>' +
+        `Using <span class="sw-count">${safe}</span> SpotLights. If FPS feels low, ` +
+        'lower the <code>Max Spotlights</code> slider in the Lighting panel, or switch ' +
+        'to a lighter profile (e.g. <code>?profile=emissive</code> in the URL).';
+    }
+
+    if (severity === null) {
+      _hideSpotlightWarning();
+      return;
+    }
+
+    el.setAttribute('data-severity', severity);
+    el.innerHTML =
+      '<span class="sw-icon" aria-hidden="true">⚠</span>' +
+      `<div class="sw-body">${bodyHtml}</div>` +
+      '<button class="sw-close" type="button" title="Dismiss" aria-label="Dismiss warning">✕</button>';
+    el.classList.remove('hidden');
+
+    const closeBtn = el.querySelector('.sw-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', _hideSpotlightWarning);
+    }
+
+    if (_spotlightWarnHideTimer !== null) clearTimeout(_spotlightWarnHideTimer);
+    _spotlightWarnHideTimer = setTimeout(_hideSpotlightWarning, SPOTLIGHT_WARN_AUTO_HIDE_MS);
+  };
+
+  if (typeof document === 'undefined') return;
+  if (document.body) {
+    render();
+  } else {
+    window.addEventListener('DOMContentLoaded', render, { once: true });
+  }
 }
 
 function resolveEffectivePoolSize() {
@@ -97,6 +198,11 @@ function resolveEffectivePoolSize() {
       Math.floor((maxVectors - GPU_SAFE_FRAGMENT_VECTOR_RESERVE) / GPU_SAFE_VECTORS_PER_SPOTLIGHT)
     );
 
+    // We do NOT auto-clamp to safeSpotLights. The user owns the SpotLight
+    // budget via the `Max Spotlights` GUI slider (1..MAX_SPOTLIGHT_POOL_SIZE)
+    // and `?spotlights=N`. We just emit a console warning below if the
+    // requested pool size exceeds what the WebGL fragment-uniform budget can
+    // hold without spilling — that's a perf hint, not a hard ceiling.
     return {
       backendName,
       manualCap,
@@ -104,6 +210,7 @@ function resolveEffectivePoolSize() {
       requested: REQUESTED_POOL_SIZE,
       safeSpotLights,
       size: cappedRequested,
+      overSafeBudget: cappedRequested > safeSpotLights,
     };
   } catch (err) {
     console.warn('[LightPool] Failed to inspect GPU uniform limits. Falling back to requested pool size.', err);
@@ -236,13 +343,20 @@ export function initLightPool() {
       }
     }
 
+    // Surface the persistent banner if the boot-time count is already past
+    // a threshold (handles both URL ?spotlights=N and scene-config defaults).
+    const initialActiveLimit = Number.isFinite(params.maxSpotlights)
+      ? Math.min(params.maxSpotlights, _effectivePoolSize)
+      : _effectivePoolSize;
+    showSpotlightCountWarning(initialActiveLimit);
+
     if (sizing.maxVectors !== undefined) {
       console.log(
         `[LightPool] WebGL uniform estimate: maxVectors=${sizing.maxVectors}, safeSpotLights=${sizing.safeSpotLights}, requested=${REQUESTED_POOL_SIZE}, manualCap=${sizing.manualCap}, using=${_effectivePoolSize}`
       );
-      if (_effectivePoolSize > sizing.safeSpotLights) {
+      if (sizing.overSafeBudget) {
         console.warn(
-          `[LightPool] Manual cap exceeds the estimated WebGL-safe spotlight budget (${sizing.safeSpotLights}). If the scene goes black, lower ?spotlights= or MAX_SPOTLIGHT_POOL_SIZE.`
+          `[LightPool] Pool size (${_effectivePoolSize}) exceeds the WebGL fragment-uniform budget for this GPU (~${sizing.safeSpotLights} SpotLights). The shader may spill uniforms — expect lower FPS or, worst case, a black scene. Lower the GUI "Max Spotlights" slider or use ?renderer=webgpu to bypass the WebGL limit.`
         );
       }
     } else {

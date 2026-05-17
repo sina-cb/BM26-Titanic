@@ -48,34 +48,49 @@ http.createServer((req, res) => {
 
         // Parse and decouple patching logic
         const configTree = yaml.load(body);
+
+        // Collect ALL fixture arrays from any known config location
+        const allFixtureArrays = [];
         if (configTree && configTree.parLights && Array.isArray(configTree.parLights.fixtures)) {
+          allFixtureArrays.push(configTree.parLights.fixtures);
+        }
+        if (configTree && Array.isArray(configTree.dmxLights)) {
+          allFixtureArrays.push(configTree.dmxLights);
+        }
+        if (configTree && configTree.dmxLights && Array.isArray(configTree.dmxLights.fixtures)) {
+          allFixtureArrays.push(configTree.dmxLights.fixtures);
+        }
+
+        if (allFixtureArrays.length > 0) {
           const patches = { patches: {} };
-          configTree.parLights.fixtures.forEach(fixture => {
-            const name = fixture.name;
-            if (name) {
-              patches.patches[name] = {
-                controllerIp: fixture.controllerIp,
-                dmxUniverse: fixture.dmxUniverse,
-                dmxAddress: fixture.dmxAddress,
-                controllerId: fixture.controllerId,
-                sectionId: fixture.sectionId,
-                fixtureId: fixture.fixtureId,
-                viewMask: fixture.viewMask,
-              };
-              // Clean structural tree
-              delete fixture.controllerIp;
-              delete fixture.dmxUniverse;
-              delete fixture.dmxAddress;
-              delete fixture.controllerId;
-              delete fixture.sectionId;
-              delete fixture.fixtureId;
-              delete fixture.viewMask;
-            }
-          });
+          for (const fixtureArray of allFixtureArrays) {
+            fixtureArray.forEach(fixture => {
+              const name = fixture.name;
+              if (name) {
+                patches.patches[name] = {
+                  controllerIp: fixture.controllerIp || '',
+                  dmxUniverse: fixture.dmxUniverse || 0,
+                  dmxAddress: fixture.dmxAddress || 0,
+                  controllerId: fixture.controllerId || 0,
+                  sectionId: fixture.sectionId || 0,
+                  fixtureId: fixture.fixtureId || 0,
+                  viewMask: fixture.viewMask || 0,
+                };
+                // Clean structural tree
+                delete fixture.controllerIp;
+                delete fixture.dmxUniverse;
+                delete fixture.dmxAddress;
+                delete fixture.controllerId;
+                delete fixture.sectionId;
+                delete fixture.fixtureId;
+                delete fixture.viewMask;
+              }
+            });
+          }
 
           // Write extracted patches.yaml
           fs.writeFileSync(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
-          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath}`);
+          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} (${Object.keys(patches.patches).length} fixture(s))`);
           
           // Re-serialize the cleaned structural tree
           body = yaml.dump(configTree, { lineWidth: -1 });

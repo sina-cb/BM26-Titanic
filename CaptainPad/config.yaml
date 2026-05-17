@@ -1,3 +1,5 @@
 # CaptainPad Configuration
-# Default engine address (fallback — network discovery overrides this at runtime)
-api_base: "http://10.1.1.172:6968"
+# Default engine address. This is the single source of truth — the app fails
+# to boot if this key is missing. Use the Config tab in CaptainPad (writes to
+# AsyncStorage) to override per-device at runtime without touching this file.
+api_base: "http://127.0.0.1:6968"

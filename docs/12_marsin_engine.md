@@ -237,6 +237,149 @@ The core bidirectional event channel for controllers.
 
 ---
 
+## 7a. CaptainPad and PortWatch Integration
+
+CaptainPad (iPad, Wi-Fi) and PortWatch (iPhone/iPad, LoRa via BLE) are
+the two operator surfaces that drive MarsinEngine. They use disjoint
+transports but a *shared* event surface — every write produces a
+broadcast that both UIs follow, so changes from one are reflected on
+the other within a frame.
+
+### 7a.1 Transports
+
+| Surface       | Transport                                  | Writes                           | Reads                                                                |
+| ------------- | ------------------------------------------ | -------------------------------- | -------------------------------------------------------------------- |
+| CaptainPad    | Wi-Fi → HTTP REST + WebSocket on port 6968 | HTTP POSTs (and WS `setControl`/`setSharedParam`) | WebSocket: `mixer`, `sharedParams`, `autopilot`, `viewOverride`, `pattern`, `playlistLibrary`, `playlistSaved`, `vis` |
+| PortWatch     | BLE → captain Heltec → LoRa → server Heltec → USB → Pi bridge → HTTP REST | Bridge translates `cmd …` frames to engine REST calls (see `control_podium/comms/bridge.py::_exec_cmd`) | Bridge subscribes to engine WS internally and publishes compact `pub` frames + on-demand `rep` responses to PortWatch |
+
+The bridge is **the only path** from LoRa to the engine, and is a
+direct mirror of the REST surface — see `docs/21_portwatch_monitor.md`
+§7 for the design rule. Adding a command means adding an entry to
+`control_podium/.config.commands.yaml`, a handler in `Bridge._exec_cmd`,
+and a builder in `PortWatch/src/frame/ops.ts`.
+
+### 7a.2 The broadcast contract
+
+Every state-mutating endpoint broadcasts so all clients converge:
+
+| Endpoint                              | Broadcast(s) emitted                                              |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `POST /set-pattern`                   | `pattern`, `mixer`                                                |
+| `POST /param-center`                  | `sharedParams` (full canonical doc; see `param_center.getCanonicalState()`) |
+| `POST /control`                       | `mixer` (channel.exports include live `v0/v1/v2`)                 |
+| `POST /mixer/channels/<id>/control`   | `mixer`                                                           |
+| `POST /global-blackout`               | `mixer` (carries `blackout: globalsState.blackout`)               |
+| `POST /global-effect`                 | `mixer`                                                           |
+| `POST /autopilot`                     | `autopilot`                                                       |
+| `POST /mixer/view-override`           | `viewOverride` (also carries `controlLock` — see §7a.4)            |
+| `POST /deck/playlist`                 | `pattern`, `mixer`                                                |
+| `POST /playlists` / `DELETE /playlists/<n>` | `playlistLibrary`, `playlistSaved` / `playlistDeleted`     |
+
+Both UIs treat the broadcast as authoritative — UI-side optimistic
+state lasts only until the next broadcast reconciles it (see
+PortWatch's `intent` reducer and CaptainPad's `useEngineState` hook).
+
+### 7a.3 The CaptainPad sync hook
+
+CaptainPad's `hooks/useEngineState.ts` is the single subscription
+point. It:
+
+1. Subscribes once at module load to the `engineEvents` bus (which the
+   deck and mixer tabs both feed from their per-tab WS handlers).
+2. Seeds itself from `GET /param-center` and `GET /mixer` on first read
+   so first paint is correct on a cold boot.
+3. Exposes typed selectors: `useSharedParamValues()`,
+   `useChannelExports()`, `useEngineState()`, plus the dedicated
+   `useEngineLock()` for the deck override.
+
+The hook replaced an earlier per-component pattern where every
+consumer bound `wsRef.current.addEventListener('message', …)` in its
+own `useEffect`. That had two failure modes the engine could not fix:
+the listener never bound when `wsRef.current` was null at mount, and
+it stayed bound to a dead WebSocket after the auto-reconnect loop
+replaced the instance. After centralisation, adding a new live-state
+surface is "call the hook and render"; no WS bookkeeping anywhere
+downstream.
+
+### 7a.4 The deck override (`controlLock`) and its lease
+
+A single global on the engine — `globalsState.controlLock` — coordinates
+which surface owns the deck:
+
+- `null` — anyone can write; both UIs are interactive.
+- `"portwatch"` — PortWatch holds the deck; CaptainPad raises a
+  full-screen overlay (`EngineLockoutOverlay`) and refuses writes.
+
+Today, the only way to set the lock is `POST /mixer/view-override
+{override: "deck"}`. The handler calls `syncControlLockToGlobals()`
+(writes `globalsState.controlLock` and persists) **and arms a 30 s
+lease timer**. The matching `viewOverride` broadcast carries the
+new `controlLock` value plus `controlLockLeaseExpiresAtMs` and
+`controlLockLeaseDurationMs` so CaptainPad / PortWatch can render the
+countdown without subscribing to a second event.
+
+The lock is a **lease, not a permanent take**. Every successful
+view-override POST restarts the 30 s timer. If nobody renews,
+`setTimeout` fires, the engine clears the override using the same
+code path as a manual `view/clear`, and broadcasts the normal
+`viewOverride` event — CaptainPad's overlay falls away identically
+to a release. This protects against a holder walking out of range,
+crashing, or losing radio.
+
+The expected renew cadence is ~20 s (PortWatch's `LEASE_RENEW_INTERVAL_MS`).
+PortWatch sends `cmd view/renew` for the silent path; the bridge
+translates `view/renew` to the same POST as `view/deck`. The verb
+split is cosmetic — logs read `RENEW` not `TAKE LOCK` 12 times an
+hour.
+
+On boot, if the engine restores `controlLock === 'portwatch'` from
+disk, `armControlLockLease()` runs at hydration time so the inherited
+lock can't outlive the engine restart by more than one full lease.
+
+Implemented entirely as a CPC global parameter — see
+`docs/15_central_param_center_cpc.md` §15. Adding the next operator
+lock (e.g. "mixer-only mode") follows exactly the same template with
+zero new transport work.
+
+### 7a.5 Connect-time hydration
+
+When a PortWatch (or any new LoRa client) comes online, the bridge
+sends a fresh `compact_status` PUB immediately on receiving `hlo`
+(rather than waiting up to `long_interval_s` for the next periodic
+poll). The PUB carries the lock owner (`lk`), lease remaining
+seconds (`lku`), active deck playlist (`pl`), pattern, brightness,
+blackout, autopilot, view — everything PortWatch needs to render its
+DECK card with real state before the operator touches anything.
+
+PortWatch's `App.tsx::onConnect` also fires a small qry burst
+(`engine/status`, `deck/playlist`, `playlists/p/0`,
+`engine/playlist-patterns/p/0`, `params`, `exports/p/0`) so the
+PARAMS and pattern picker hydrate concurrently. The contract is that
+by the time the DECK card is fully rendered, the operator is looking
+at engine ground truth — TAKE LOCK / RELEASE / DECK ACTIVE shows up
+correctly without a guess-and-correct flash.
+
+### 7a.6 Where to look
+
+- Engine: `marsin_engine/lib/api_server.js` — every broadcast in this
+  file is a candidate for both UIs to mirror. The lease + arm/disarm
+  helpers live alongside `broadcastViewOverride()`.
+- CaptainPad: `CaptainPad/hooks/useEngineState.ts`,
+  `CaptainPad/hooks/useEngineLock.ts`,
+  `CaptainPad/utils/engineEvents.ts`.
+- PortWatch: `control_podium/PortWatch/src/state/store.ts`,
+  `control_podium/PortWatch/src/frame/ops.ts`,
+  `control_podium/PortWatch/src/status/parse.ts`,
+  `control_podium/PortWatch/src/ui/DeckScreen.tsx` (renew loop).
+- Bridge: `control_podium/comms/bridge.py::_exec_cmd` /
+  `::_exec_qry`, `control_podium/.config.commands.yaml`,
+  `control_podium/comms/engine_client.py::compact_status` (the
+  `lk` / `lku` / `pl` fields).
+- Tests: `control_podium/tests/test_comms_e2e_sim.py` covers
+  the full lock + lease + connect-time-hydration surface.
+
+---
+
 ## 8. Server Interface
 
 ```bash

@@ -1,124 +1,13 @@
-master: 1
+master: 0.55
 channels:
   - id: ch_1778205858556
     name: New Layer
-    pattern: 02_phase_cathedral
-    mode: blend_screen
-    fader: 1
-    enabled: true
-    locked: false
-    transitionMode: trans_crossfade
-    transitionTime: 1
-    localControls: {}
-    patternCache:
-      07_shimmer:
-        '323270901':
-          v0: 0.21
-          v1: 0
-          v2: 0
-        '1997822791':
-          v0: 0.28
-          v1: 0
-          v2: 0
-        '2077173573':
-          v0: 0.3
-          v1: 0
-          v2: 0
-        '3317771752':
-          v0: 0.65
-          v1: 0
-          v2: 0
-        '3518326632':
-          v0: 0.31
-          v1: 0
-          v2: 0
-        '3680310977':
-          v0: 0.66
-          v1: 0
-          v2: 0
-      13_sparkle:
-        '780094268':
-          v0: 0.38
-          v1: 0
-          v2: 0
-        '796871887':
-          v0: 0.47
-          v1: 0
-          v2: 0
-        '813649506':
-          v0: 0.5
-          v1: 0
-          v2: 0
-        '2488228458':
-          v0: 0.44
-          v1: 0
-          v2: 0
-        '2524999969':
-          v0: 0.48
-          v1: 0
-          v2: 0
-        '3355752621':
-          v0: 0.18
-          v1: 0
-          v2: 0
-      14_lunar_current:
-        '243367341':
-          v0: 0.68
-          v1: 0
-          v2: 0
-        '3226462523':
-          v0: 0.64
-          v1: 0
-          v2: 0
-        '3680310977':
-          v0: 0.14
-          v1: 0
-          v2: 0
-        '4210909725':
-          v0: 0.64
-          v1: 0
-          v2: 0
-  - id: ch_1778208573620
-    name: New Layer
-    pattern: 11_bioluminescence
+    pattern: 00_golden_hour_wash
     mode: blend_screen
     fader: 0
     enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls:
-      '1391556809':
-        v0: 0.74
-        v1: 0
-        v2: 0
-      '1969168382':
-        v0: 0.44
-        v1: 0
-        v2: 0
-      '3317771752':
-        v0: 0.18
-        v1: 0
-        v2: 0
-      '3680310977':
-        v0: 0.59
-        v1: 0
-        v2: 0
-    patternCache:
-      11_bioluminescence:
-        '1391556809':
-          v0: 0.74
-          v1: 0
-          v2: 0
-        '1969168382':
-          v0: 0.44
-          v1: 0
-          v2: 0
-        '3317771752':
-          v0: 0.18
-          v1: 0
-          v2: 0
-        '3680310977':
-          v0: 0.59
-          v1: 0
-          v2: 0
+    localControls: {}
+    playlist: null

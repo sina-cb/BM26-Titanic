@@ -191,54 +191,6 @@ patches:
     sectionId: 0
     fixtureId: 0
     viewMask: 0
-  Left Center Auditorium 1:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Center Auditorium 2:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Center Auditorium 3:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Center Auditorium 4:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Center Auditorium 5:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Center Auditorium 6:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
   Left Back Wall 1:
     controllerIp: ''
     dmxUniverse: 0
@@ -480,6 +432,54 @@ patches:
     fixtureId: 0
     viewMask: 0
   Left Front Deck Generator 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 3:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 5:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Center Auditorium 6:
     controllerIp: ''
     dmxUniverse: 0
     dmxAddress: 0

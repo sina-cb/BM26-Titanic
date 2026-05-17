@@ -23,8 +23,9 @@ import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
+import { autoPatchAll, clearAllPatches, clearMetadata, validatePatches, gatherAllConfigs } from "../dmx/auto_patcher.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
-import { MAX_SPOTLIGHT_POOL_SIZE } from "../core/light_pool.js";
+import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
@@ -42,9 +43,63 @@ function setupGUI() {
   if (urlParams.get('readonly') === '1') gui.hide();
   
   window.guiInstance = gui;
-  gui.domElement.style.position = "fixed";
-  gui.domElement.style.top = "10px";
-  gui.domElement.style.right = "10px";
+
+  // ── Wrap lil-gui in a floating, draggable panel ──────────────────────
+  const panel = document.createElement('div');
+  panel.id = 'gui-panel';
+
+  // Header — drag handle + collapse
+  const header = document.createElement('div');
+  header.className = 'gui-panel-header';
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'gui-panel-title';
+  titleSpan.textContent = '🔦 LIGHTING CONTROLS';
+  header.appendChild(titleSpan);
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'pe-btn';
+  collapseBtn.title = 'Collapse';
+  collapseBtn.textContent = '─';
+  collapseBtn.addEventListener('click', () => {
+    panel.classList.toggle('collapsed');
+    collapseBtn.textContent = panel.classList.contains('collapsed') ? '□' : '─';
+  });
+  header.appendChild(collapseBtn);
+  panel.appendChild(header);
+
+  // Body — holds the lil-gui, scrollable
+  const body = document.createElement('div');
+  body.className = 'gui-panel-body';
+
+  // Strip lil-gui auto-place positioning — panel handles layout
+  gui.domElement.style.position = '';
+  gui.domElement.style.top = '';
+  gui.domElement.style.right = '';
+  gui.domElement.classList.remove('autoPlace');
+  // Hide root title — our panel header replaces it
+  const rootTitle = gui.domElement.querySelector(':scope > .title');
+  if (rootTitle) rootTitle.style.display = 'none';
+
+  body.appendChild(gui.domElement);
+  panel.appendChild(body);
+  document.body.appendChild(panel);
+
+  // ── Drag handling ────────────────────────────────────────────────────
+  let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    const rect = panel.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    panel.style.left = (e.clientX - dragOffsetX) + 'px';
+    panel.style.top = (e.clientY - dragOffsetY) + 'px';
+    panel.style.right = 'auto';
+  });
+  window.addEventListener('mouseup', () => { isDragging = false; });
 
   // ─── Section → Folder Map (for collapse persistence) ───
   const _sectionFolderMap = new Map();
@@ -121,6 +176,7 @@ function setupGUI() {
       .then(() => {
         console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
         showSaveToast();
+        if (window.PatchManager) window.PatchManager.notifySacnBridge();
       })
       .catch((err) => console.error("Failed to write config:", err));
 
@@ -145,6 +201,20 @@ function setupGUI() {
     toast.style.opacity = '1';
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+  }
+
+  function _showAutoToast(msg) {
+    let toast = document.getElementById('auto-patch-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'auto-patch-toast';
+      toast.style.cssText = 'position:fixed;top:48px;left:50%;transform:translateX(-50%);background:#1a2a3a;border:1px solid #6af;color:#6af;padding:8px 24px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.opacity = '1';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
   }
   window.exportConfig = exportConfig;
 
@@ -426,6 +496,9 @@ function setupGUI() {
             child.material = isEditMode ? editMaterial : structureMaterial;
         });
       }
+
+      // Toggle edit-mode CSS class on body — CSS handles hiding all floating panels
+      document.body.classList.toggle('edit-mode-active', isEditMode);
       const effectsEnabled = profileDef.render.effectsMode !== 'off';
 
       if (lights.moon) lights.moon.castShadow = effectsEnabled && !isEditMode;
@@ -528,10 +601,24 @@ function setupGUI() {
     }
 
     if (handlers[key]) ctrl.onChange(handlers[key]);
+
+    // The Max Spotlights slider crosses two user-facing GPU thresholds (100
+    // for FPS drop, 160 for white/black scene risk on Mac WebGPU). Show or
+    // hide the persistent HUD banner whenever the user moves the slider.
+    if (key === "maxSpotlights") {
+      const priorOnChange = handlers[key];
+      ctrl.onChange((v) => {
+        if (typeof priorOnChange === "function") {
+          try { priorOnChange(v); } catch (err) { console.error(err); }
+        }
+        try { showSpotlightCountWarning(v); } catch (err) { console.error(err); }
+      });
+    }
+
     // Store controller reference for programmatic updates (e.g. profile warning revert)
     if (!window._guiControllers) window._guiControllers = {};
     window._guiControllers[key] = ctrl;
-    if (meta.listen) ctrl;
+    if (meta.listen || key === 'generatorsVisible') ctrl.listen();
     return ctrl;
   }
 
@@ -625,7 +712,7 @@ function setupGUI() {
     // ── sACN Settings sub-folder ──
     const sacnFolder = engineFolder.addFolder('📡 sACN Settings');
     addControl(sacnFolder, 'sacn_enabled', sectionConfig.sacn_enabled || { value: true, label: '📡 Bridge Enabled' });
-    addControl(sacnFolder, 'sacn_universes', sectionConfig.sacn_universes || { value: '1,2,3,4', label: '📡 Listen Universes' });
+    addControl(sacnFolder, 'sacn_universes', sectionConfig.sacn_universes || { value: '1,2,3,4, 5', label: '📡 Listen Universes' });
     addControl(sacnFolder, 'sacn_lockout_ms', sectionConfig.sacn_lockout_ms || { value: 10000, label: '📡 Source Lockout (ms)', min: 1000, max: 30000, step: 1000 });
     addControl(sacnFolder, 'sacn_high_priority', sectionConfig.sacn_high_priority || { value: 150, label: '📡 High Priority', min: 100, max: 200, step: 10 });
     addControl(sacnFolder, 'sacn_stale_ms', sectionConfig.sacn_stale_ms || { value: 2000, label: '📡 Source Stale (ms)', min: 500, max: 10000, step: 500 });
@@ -965,97 +1052,101 @@ function setupGUI() {
       clearPatchBtn.textContent = '❌ Clear All Patches';
       clearPatchBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
       clearPatchBtn.onclick = () => {
-        if (!confirm('Clear all DMX patch mappings?')) return;
+        if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
         pushUndo();
-        params.parLights.forEach(c => {
-          c.controllerIp = '';
-          c.dmxUniverse = 0;
-          c.dmxAddress = 0;
-          c.controllerId = 0;
-          c.sectionId = 0;
-          c.fixtureId = 0;
-          c.viewMask = 0;
-        });
-        updateToast(`Cleared DMX patches`);
+        
+        // Pass params.parLights directly — this is the authoritative fixture list
+        const fixtures = params.parLights || [];
+        const traces = params.traces || [];
+        const cleared = clearAllPatches(fixtures, { includeGlobalEffects: true, traces });
+        
+        console.log(`[AutoPatcher] Cleared ${cleared} DMX patch(es)`);
+        
+        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
+        
+        // Rebuild GUI menu items (NOT fixtures) to reflect updated patch values
         if (window._setGuiRebuilding) window._setGuiRebuilding(true);
         renderParGUI();
+        if (window.renderDmxGUI) window.renderDmxGUI();
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
         exportConfig();
+        
+
       };
-      // autoPatchBtn's onclick logic follows:
+      // autoPatchBtn's onclick logic — delegates to auto_patcher.js
       autoPatchBtn.onclick = () => {
-        let universe = 1;
-        let address = 1;
-
-        // Build occupancy map from already-patched fixtures
-        const occupied = new Map(); // universe -> Set of occupied addresses
-        params.parLights.forEach(c => {
-          if (c.dmxUniverse > 0 && c.dmxAddress > 0) {
-            if (!occupied.has(c.dmxUniverse)) occupied.set(c.dmxUniverse, new Set());
-            const fDef = getDefinition(c.fixtureType || 'UkingPar');
-            const fp = fDef?.footprint || 10;
-            for (let ch = c.dmxAddress; ch < c.dmxAddress + fp; ch++) {
-              occupied.get(c.dmxUniverse).add(ch);
-            }
-          }
-        });
-
-        // Find next free slot
-        const findFreeSlot = (footprint) => {
-          while (true) {
-            if (address + footprint - 1 > 512) {
-              universe++;
-              address = 1;
-            }
-            // Check for overlap with existing patches
-            let conflict = false;
-            if (occupied.has(universe)) {
-              for (let ch = address; ch < address + footprint; ch++) {
-                if (occupied.get(universe).has(ch)) {
-                  conflict = true;
-                  address = ch + 1;
-                  break;
-                }
-              }
-            }
-            if (!conflict) return { universe, address };
-          }
-        };
-
-        let patchedCount = 0;
         pushUndo();
-        params.parLights.forEach(c => {
-          if (c.dmxUniverse > 0 && c.dmxAddress > 0) return; // already patched
-          const fDef = getDefinition(c.fixtureType || 'UkingPar');
-          const fp = fDef?.footprint || 10;
-          const slot = findFreeSlot(fp);
-          c.dmxUniverse = slot.universe;
-          c.dmxAddress = slot.address;
-          // Mark as occupied
-          if (!occupied.has(slot.universe)) occupied.set(slot.universe, new Set());
-          for (let ch = slot.address; ch < slot.address + fp; ch++) {
-            occupied.get(slot.universe).add(ch);
-          }
-          address = slot.address + fp;
-          universe = slot.universe;
-          patchedCount++;
-        });
 
-        if (patchedCount === 0) {
-          alert('All fixtures are already patched.');
-          return;
+        // 1. Patch all configs (DMX addresses + sectionIds)
+        const configs = gatherAllConfigs(params);
+        const { patchedCount, maxUniverse, groupToSectionId } = autoPatchAll(configs);
+        const sectionCount = groupToSectionId ? Object.keys(groupToSectionId).length : 0;
+
+        // 2. Sync in-memory patch tree so applyPatches doesn't overwrite during rebuild
+        if (window.__globalPatchTree) {
+          for (const c of configs) {
+            if (c.name && window.__globalPatchTree[c.name]) {
+              Object.assign(window.__globalPatchTree[c.name], {
+                dmxUniverse: c.dmxUniverse || 0,
+                dmxAddress: c.dmxAddress || 0,
+                controllerIp: c.controllerIp || '',
+                sectionId: c.sectionId || 0,
+                controllerId: c.controllerId || 0,
+                fixtureId: c.fixtureId || 0,
+              });
+            }
+          }
         }
 
+        // 3. Save to file (patches.yaml + scene_config.yaml + model export)
+        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
+        exportConfig();
+
+        // 4. Rebuild UI
         if (window._setGuiRebuilding) window._setGuiRebuilding(true);
         renderParGUI();
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+
+        // 5. Toast
+        const parts = [];
+        if (patchedCount > 0) parts.push(`${patchedCount} patched`);
+        if (sectionCount > 0) parts.push(`${sectionCount} dimmer section(s)`);
+        _showAutoToast(parts.length > 0
+          ? `✓ Auto-patch: ${parts.join(', ')} (U1–${maxUniverse})`
+          : '✓ All fixtures already patched — no changes needed.');
+      };
+      const clearMetaBtn = document.createElement('button');
+      clearMetaBtn.textContent = '🔄 Clear Metadata';
+      clearMetaBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a2a1a;color:#fa0;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      clearMetaBtn.onclick = () => {
+        pushUndo();
+        const configs = gatherAllConfigs(params);
+        const cleared = clearMetadata(configs);
+        // Sync patch tree
+        if (window.__globalPatchTree) {
+          for (const c of configs) {
+            if (c.name && window.__globalPatchTree[c.name]) {
+              window.__globalPatchTree[c.name].sectionId = 0;
+              window.__globalPatchTree[c.name].controllerId = 0;
+              window.__globalPatchTree[c.name].fixtureId = 0;
+              window.__globalPatchTree[c.name].viewMask = 0;
+            }
+          }
+        }
         exportConfig();
-        console.log(`[Auto-Patch] Assigned ${patchedCount} fixtures across universes 1-${universe}`);
+        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+        renderParGUI();
+        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+        _showAutoToast(`✓ Cleared metadata on ${cleared} fixture(s)`);
       };
       autoPatchWrap.appendChild(autoPatchBtn);
+      autoPatchWrap.appendChild(clearMetaBtn);
       autoPatchWrap.appendChild(clearPatchBtn);
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
+
+      // Ensure patches from patches.yaml are merged before building DOM
+      if (window.applyPatches) window.applyPatches(params.parLights);
 
       // Ensure all lights have a group
       params.parLights.forEach((c) => {
@@ -1146,6 +1237,24 @@ function setupGUI() {
               genFixFolder.close();
               window.parGuiFolders[index] = genFixFolder;
 
+              // Auto-select fixture in viewport when card is opened
+              const selectThisGenLight = () => {
+                const fixture = window.parFixtures[index];
+                if (fixture && fixture.hitbox) {
+                  transformControl.attach(fixture.hitbox);
+                  deselectAllFixtures();
+                  selectedFixtureIndices.add(index);
+                  fixture.setSelected(true);
+                }
+              };
+              if (typeof genFixFolder.onOpenClose === 'function') {
+                genFixFolder.onOpenClose((open) => { if (open) selectThisGenLight(); });
+              } else if (genFixFolder.domElement) {
+                genFixFolder.domElement.querySelector('.title')?.addEventListener('click', () => {
+                  if (!genFixFolder._closed) selectThisGenLight();
+                });
+              }
+
               // Name (editable)
               genFixFolder.add(config, 'name').name('Name').onFinishChange((v) => {
                 genFixFolder.title(v);
@@ -1221,14 +1330,18 @@ function setupGUI() {
 
               patchDiv.appendChild(patchRow);
 
-              // Controller IP row (inherited from generator, read-only)
+              // Controller IP row
+              if (config.controllerIp === undefined) config.controllerIp = '';
               const ipRow = document.createElement('div');
               ipRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-top:3px;';
               ipRow.appendChild(mkLabel('IP:'));
-              const ipDisplay = document.createElement('span');
-              ipDisplay.style.cssText = 'color:#999;font-size:9px;font-style:italic;';
-              ipDisplay.textContent = config.controllerIp || '(not set)';
-              ipRow.appendChild(ipDisplay);
+              const ipInput = document.createElement('input');
+              ipInput.type = 'text';
+              ipInput.value = config.controllerIp || '';
+              ipInput.placeholder = '10.1.1.102';
+              ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
+              ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
+              ipRow.appendChild(ipInput);
               patchDiv.appendChild(ipRow);
 
               if (genChildren) genChildren.appendChild(patchDiv);
@@ -1451,21 +1564,56 @@ function setupGUI() {
             holdBtn.textContent = '💨 Hold to Fog';
             holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-weight:bold;';
             const toggleFog = (state) => {
-              console.log(`[GUI] toggleFog(${state}) called. active sources:`, window.dmxRouter ? window.dmxRouter.getSourceInfo() : 'no router');
+              console.log(`[GUI] toggleFog(${state}) called`);
               [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
                 if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D' || f.config.type === 'TEFogMachine' || f.config.type === 'ChauvetHaze4D')) {
                   f._uiFogOverride = state;
+                  // When stopping, immediately flush zeros into the router buffer
+                  if (!state && window.dmxRouter) {
+                    const u = f.config.dmxUniverse;
+                    const addr = f.config.dmxAddress;
+                    if (u && u > 0 && addr && addr > 0) {
+                      const fType = f.config.type || f.config.fixtureType;
+                      const zeros = fType === 'ChauvetHaze4D' ? new Uint8Array([0, 0]) : new Uint8Array([0]);
+                      window.dmxRouter.submitFrame('fog_ui', 250, u, zeros, addr);
+                    }
+                  }
                 }
               });
-              if (!state && window.dmxRouter) window.dmxRouter.removeSource('fog_ui');
+              // Delay source removal so processFrame merges the zeros first
+              if (!state && window.dmxRouter) {
+                setTimeout(() => {
+                  if (window.dmxRouter) {
+                    // Remove all per-fixture fog sources
+                    [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
+                      if (f && f._fogSourceId) window.dmxRouter.removeSource(f._fogSourceId);
+                    });
+                  }
+                }, 200);
+              }
+
+              // Call the central Engine API (best-effort, engine may not be running)
+              const host = window.location.hostname;
+              fetch(`http://${host}:6968/global-effect`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ effect: 'fogger', state: !!state })
+              }).catch(() => {}); // silently ignore if engine not running
             };
-            const startFog = () => toggleFog(true);
+            const startFog = (e) => { e.preventDefault(); toggleFog(true); };
             const stopFog = () => toggleFog(false);
             holdBtn.addEventListener('mousedown', startFog);
             holdBtn.addEventListener('touchstart', startFog);
-            holdBtn.addEventListener('mouseup', stopFog);
-            holdBtn.addEventListener('mouseleave', stopFog);
-            holdBtn.addEventListener('touchend', stopFog);
+            // Stop on global mouseup/touchend so fog releases even if cursor leaves the button
+            holdBtn.addEventListener('mousedown', () => {
+              const onUp = () => { stopFog(); window.removeEventListener('mouseup', onUp); };
+              window.addEventListener('mouseup', onUp);
+            });
+            holdBtn.addEventListener('touchstart', () => {
+              const onEnd = () => { stopFog(); window.removeEventListener('touchend', onEnd); window.removeEventListener('touchcancel', onEnd); };
+              window.addEventListener('touchend', onEnd);
+              window.addEventListener('touchcancel', onEnd);
+            });
             const childContainer = idxFolder.domElement.querySelector('.children');
             if (childContainer) childContainer.appendChild(holdBtn);
           }
@@ -1721,6 +1869,7 @@ function setupGUI() {
       (window.traceObjects || []).forEach(t => {
         if (t.group) t.group.visible = visible;
         if (t.hitbox) t.hitbox.visible = visible;
+        if (t.aimLine) t.aimLine.visible = visible;
         (t.handles || []).forEach(h => { h.visible = visible; });
       });
     }
@@ -2081,6 +2230,23 @@ function setupGUI() {
         trace.aimX = obj.position.x;
         trace.aimY = obj.position.y;
         trace.aimZ = obj.position.z;
+
+        if (tObj.aimLine) {
+           const pts = computeTracePoints(trace);
+           let aimOrigin = new THREE.Vector3();
+           if (trace.shape === 'line') {
+              aimOrigin = pts.length > 0 ? pts[0] : new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0).lerp(new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0), 0.5);
+           } else {
+              if (pts.length > 0) {
+                 const euler = new THREE.Euler(THREE.MathUtils.degToRad(trace.rotX || 0), THREE.MathUtils.degToRad(trace.rotY || 0), THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ');
+                 aimOrigin.copy(pts[0]).applyEuler(euler).add(new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
+              } else {
+                 aimOrigin.copy(tObj.group ? tObj.group.position : new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
+              }
+           }
+           tObj.aimLine.geometry.setFromPoints([aimOrigin, obj.position]);
+           tObj.aimLine.computeLineDistances();
+        }
       } else if (obj.userData.handleType === 'start' || obj.userData.handleType === 'end') {
         // Line handle moved — compute delta and move aim handle too
         const prevKey = obj.userData.handleType === 'start' ? 'startX' : 'endX';
@@ -2139,23 +2305,19 @@ function setupGUI() {
           const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
           const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
           pts.forEach(p => { const d = new THREE.Mesh(dotGeo, dotMat); d.position.copy(p); grp.add(d); });
-          if (tObj.aimLine) grp.add(tObj.aimLine); // re-attach the preserved dash line to the new group
+          
+          grp.visible = params.generatorsVisible !== false;
+          if (tObj.aimLine) {
+            grp.add(tObj.aimLine); // re-attach the preserved dash line to the new group
+            tObj.aimLine.visible = params.generatorsVisible !== false;
+          }
           scene.add(grp);
           tObj.group = grp;
           tObj.materials = { lineMat, dotMat }; // Preserve material refs for highlighting
         }
       } else {
-        // Circle hitbox — compute position delta and move aim handle too
-        const dx = obj.position.x - (trace.x || 0);
-        const dy = obj.position.y - (trace.y || 5);
-        const dz = obj.position.z - (trace.z || 0);
-
-        trace.aimX = (trace.aimX || 0) + dx;
-        trace.aimY = (trace.aimY || 0) + dy;
-        trace.aimZ = (trace.aimZ || 0) + dz;
-
+        // Circle hitbox
         const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
-        if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
 
         if (tObj.aimLine && aimHandle) {
            const pts = computeTracePoints(trace);
@@ -2182,15 +2344,20 @@ function setupGUI() {
         trace.rotY = THREE.MathUtils.radToDeg(euler.y);
         trace.rotZ = THREE.MathUtils.radToDeg(euler.z);
       }
+      
+      if (trace.generated) {
+        generateGroupFromTrace(tIdx, true);
+      }
+
       debounceAutoSave();
       return true;
     };
 
-    function generateGroupFromTrace(traceIndex) {
+    function generateGroupFromTrace(traceIndex, skipUndo = false) {
       const trace = params.traces[traceIndex];
       if (!trace) return;
 
-      pushUndo();
+      if (!skipUndo) pushUndo();
 
       // Remove existing lights from this trace's group name
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
@@ -2202,6 +2369,10 @@ function setupGUI() {
       const grp = window.traceObjects[traceIndex]?.group;
       if (!isLine && grp) grp.updateMatrixWorld(true);
       const worldMatrix = (!isLine && grp) ? grp.matrixWorld : null;
+
+      let lockedDeltaX = null;
+      let lockedDeltaY = null;
+      let lockedDeltaZ = null;
 
       pts.forEach((pt, i) => {
         // Line points are already world-space; circle points need worldMatrix
@@ -2252,6 +2423,108 @@ function setupGUI() {
           rotX = THREE.MathUtils.radToDeg(euler.x);
           rotY = THREE.MathUtils.radToDeg(euler.y);
           rotZ = THREE.MathUtils.radToDeg(euler.z);
+        } else if (trace.aimMode && trace.aimMode.includes('_locked')) {
+          // Stage 1: Base orientation
+          let forwardDir = new THREE.Vector3(0, 0, -1);
+          let upVec = new THREE.Vector3(0, 1, 0);
+
+          if (trace.shape === 'circle') {
+             const center = new THREE.Vector3(0, 0, 0);
+             const localOutward = pt.clone().sub(center);
+             if (localOutward.lengthSq() < 0.001) localOutward.set(0, 0, -1);
+             else localOutward.normalize();
+
+             let outwardDir;
+             if (worldMatrix) {
+                const normalMatrix = new THREE.Matrix3().getNormalMatrix(worldMatrix);
+                outwardDir = localOutward.applyMatrix3(normalMatrix).normalize();
+                upVec = new THREE.Vector3(0, 1, 0).applyMatrix3(normalMatrix).normalize();
+             } else {
+                outwardDir = localOutward;
+             }
+
+             // Both lookAt_ and direction_ use outwardDir base to keep the physical bar (X axis) tangent to the curve
+             forwardDir = outwardDir;
+          } else if (trace.shape === 'line') {
+             const start = worldMatrix ? pts[0].clone().applyMatrix4(worldMatrix) : pts[0].clone();
+             const end = worldMatrix ? pts[pts.length - 1].clone().applyMatrix4(worldMatrix) : pts[pts.length - 1].clone();
+             const lineDir = end.clone().sub(start).normalize();
+             if (lineDir.lengthSq() < 0.001) lineDir.set(1, 0, 0);
+
+             if (worldMatrix) {
+                const normalMatrix = new THREE.Matrix3().getNormalMatrix(worldMatrix);
+                upVec = new THREE.Vector3(0, 1, 0).applyMatrix3(normalMatrix).normalize();
+             }
+
+             // Both lookAt_ and direction_ use perpendicular outward layout to keep the bar (X axis) aligned with the line
+             forwardDir = new THREE.Vector3().crossVectors(lineDir, upVec).normalize();
+             if (forwardDir.lengthSq() < 0.001) forwardDir.set(0, 0, -1);
+          }
+
+          if (Math.abs(forwardDir.dot(upVec)) > 0.99) {
+             upVec = new THREE.Vector3(0, 0, 1);
+          }
+
+          const baseQuat = new THREE.Quaternion().setFromRotationMatrix(
+             new THREE.Matrix4().lookAt(worldPt, worldPt.clone().add(forwardDir), upVec)
+          );
+          const baseEuler = new THREE.Euler().setFromQuaternion(baseQuat, 'YXZ');
+
+          const aimTarget = new THREE.Vector3(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+          const dir = aimTarget.clone().sub(worldPt).normalize();
+
+          if (trace.aimMode.includes('xz_locked')) {
+            rotX = THREE.MathUtils.radToDeg(baseEuler.x);
+            rotZ = THREE.MathUtils.radToDeg(baseEuler.z);
+            if (i === 0 || lockedDeltaY === null) {
+                const flatDir = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+                if (flatDir.lengthSq() > 0.001) {
+                   const aimedY = THREE.MathUtils.radToDeg(Math.atan2(-flatDir.x, -flatDir.z));
+                   let diff = aimedY - THREE.MathUtils.radToDeg(baseEuler.y);
+                   while (diff > 180) diff -= 360;
+                   while (diff < -180) diff += 360;
+                   lockedDeltaY = diff;
+                } else {
+                   lockedDeltaY = 0;
+                }
+            }
+            rotY = THREE.MathUtils.radToDeg(baseEuler.y) + lockedDeltaY;
+          } else if (trace.aimMode.includes('yz_locked')) {
+            rotY = THREE.MathUtils.radToDeg(baseEuler.y);
+            rotZ = THREE.MathUtils.radToDeg(baseEuler.z);
+            if (i === 0 || lockedDeltaX === null) {
+                const localDir = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -baseEuler.y);
+                const flatDir = new THREE.Vector3(0, localDir.y, localDir.z).normalize();
+                if (flatDir.lengthSq() > 0.001) {
+                   const aimedX = THREE.MathUtils.radToDeg(Math.atan2(flatDir.y, -flatDir.z));
+                   let diff = aimedX - THREE.MathUtils.radToDeg(baseEuler.x);
+                   while (diff > 180) diff -= 360;
+                   while (diff < -180) diff += 360;
+                   lockedDeltaX = diff;
+                } else {
+                   lockedDeltaX = 0;
+                }
+            }
+            rotX = THREE.MathUtils.radToDeg(baseEuler.x) + lockedDeltaX;
+          } else if (trace.aimMode.includes('xy_locked')) {
+            rotX = THREE.MathUtils.radToDeg(baseEuler.x);
+            rotY = THREE.MathUtils.radToDeg(baseEuler.y);
+            if (i === 0 || lockedDeltaZ === null) {
+                let localDir = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -baseEuler.y);
+                localDir.applyAxisAngle(new THREE.Vector3(1, 0, 0), -baseEuler.x);
+                const flatDir = new THREE.Vector3(localDir.x, localDir.y, 0).normalize();
+                if (flatDir.lengthSq() > 0.001) {
+                   const aimedZ = THREE.MathUtils.radToDeg(Math.atan2(-flatDir.x, flatDir.y));
+                   let diff = aimedZ - THREE.MathUtils.radToDeg(baseEuler.z);
+                   while (diff > 180) diff -= 360;
+                   while (diff < -180) diff += 360;
+                   lockedDeltaZ = diff;
+                } else {
+                   lockedDeltaZ = 0;
+                }
+            }
+            rotZ = THREE.MathUtils.radToDeg(baseEuler.z) + lockedDeltaZ;
+          }
         }
 
         params.parLights.push({
@@ -2355,11 +2628,19 @@ function setupGUI() {
         genChildren.prepend(newBtnDiv);
       }
 
-      // Ensure focusOnSelect exists for the generator folder too
       if (params.focusOnSelect === undefined) params.focusOnSelect = true;
       const existingFocusCtrl = genFolder.controllers.find(c => c.property === 'focusOnSelect');
       if (!existingFocusCtrl) {
         genFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
+      }
+
+      if (params.generatorsVisible === undefined) params.generatorsVisible = true;
+      const existingGenCtrl = genFolder.controllers.find(c => c.property === 'generatorsVisible');
+      if (!existingGenCtrl) {
+        genFolder.add(params, 'generatorsVisible').name('Show Generators').listen().onChange((v) => {
+          if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
+          debounceAutoSave();
+        });
       }
 
       window.traceGuiFolders = [];
@@ -2422,7 +2703,8 @@ function setupGUI() {
 
         tFolder.add(trace, 'name').name('Name').onFinishChange(() => {
           trace.groupName = trace.name;
-          renderGeneratorGUI();
+          tFolder.title(`${trace.shape === 'circle' ? '○' : '—'} ${trace.name}`);
+          if (trace.generated) generateGroupFromTrace(i, true);
           debounceAutoSave();
         });
 
@@ -2432,10 +2714,12 @@ function setupGUI() {
         const fixtureTypes = listTypes();
         if (fixtureTypes.length > 0) {
           tFolder.add(trace, 'fixtureType', fixtureTypes).name('Fixture Type').onChange(() => {
+            if (trace.generated) generateGroupFromTrace(i, true);
             debounceAutoSave();
           });
         }
         tFolder.add(trace, 'controllerIp').name('🌐 Controller IP').onFinishChange(() => {
+          if (trace.generated) generateGroupFromTrace(i, true);
           debounceAutoSave();
         });
 
@@ -2488,8 +2772,15 @@ function setupGUI() {
 
         // Aim mode
         if (trace.aimMode === undefined) trace.aimMode = 'lookAt';
-        tFolder.add(trace, 'aimMode', ['lookAt', 'direction']).name('Aim Mode').onChange(() => {
-          renderGeneratorGUI();
+        if (trace.aimMode === 'xz_locked') trace.aimMode = 'lookAt_xz_locked';
+        if (trace.aimMode === 'yz_locked') trace.aimMode = 'lookAt_yz_locked';
+        if (trace.aimMode === 'xy_locked') trace.aimMode = 'lookAt_xy_locked';
+        const aimModes = [
+          'lookAt', 'lookAt_xy_locked', 'lookAt_xz_locked', 'lookAt_yz_locked',
+          'direction', 'direction_xy_locked', 'direction_xz_locked', 'direction_yz_locked'
+        ];
+        tFolder.add(trace, 'aimMode', aimModes).name('Aim Mode').onChange(() => {
+          if (trace.generated) generateGroupFromTrace(i, true);
           debounceAutoSave();
         });
 
@@ -2499,7 +2790,8 @@ function setupGUI() {
         const aimBtn = document.createElement('button');
         aimBtn.textContent = '🎯 Select Aim Target';
         aimBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:#3a3a1a;color:#ffcc00;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-        aimBtn.onclick = () => {
+        aimBtn.onclick = (e) => {
+          if (e) e.stopPropagation();
           const tObj = window.traceObjects[i];
           if (!tObj) return;
           // Find the aim handle (last in handles array for lines, first for circles)

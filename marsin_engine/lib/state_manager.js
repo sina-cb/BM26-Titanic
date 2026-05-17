@@ -83,7 +83,7 @@ export class StateManager {
         transitionMode: c.transitionMode || 'trans_crossfade',
         transitionTime: c.transitionTime || 1.0,
         localControls: c.localControls,
-        patternCache: c.patternCache || {}
+        playlist: c.playlist || null
       }))
     };
     this.save('mixer_state.yaml', state);
@@ -101,7 +101,7 @@ export class StateManager {
         fader: baseCh.fader,
         enabled: baseCh.enabled,
         localControls: baseCh.localControls,
-        patternCache: baseCh.patternCache || {}
+        playlist: baseCh.playlist || null
       }
     };
     this.save('deck_state.yaml', state);

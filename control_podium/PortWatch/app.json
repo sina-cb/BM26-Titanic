@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "PortWatch",
+    "slug": "titanic-portwatch",
+    "version": "0.2.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "scheme": "portwatch",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.titanicrig.portwatch",
+      "buildNumber": "2",
+      "icon": "./assets/icon.png",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSBluetoothAlwaysUsageDescription": "PortWatch uses Bluetooth to talk to the captain Heltec radio so it can send authenticated LoRa frames to the engine for field ops and range testing.",
+        "NSBluetoothPeripheralUsageDescription": "PortWatch uses Bluetooth to talk to the captain Heltec radio so it can send authenticated LoRa frames to the engine for field ops and range testing.",
+        "UIBackgroundModes": [
+          "bluetooth-central"
+        ],
+        "UIRequiresFullScreen": false,
+        "UIStatusBarStyle": "UIStatusBarStyleLightContent"
+      }
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#0a0a0a"
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": [
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "PortWatch uses Bluetooth to talk to the captain Heltec radio."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
+  }
+}

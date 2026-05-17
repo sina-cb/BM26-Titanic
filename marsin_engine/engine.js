@@ -232,23 +232,29 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         const visData = mixer.getVisData();
         const visPayload = {};
         for (const [key, rgb] of Object.entries(visData)) {
-          if (key === 'master') continue; // Will be overwritten with true master
           visPayload[key] = rgb ? Buffer.from(rgb).toString('base64') : null;
         }
-
-        // True Master Vis: Capture post-processed pixels (after blackout, intensity, global FX)
-        const trueMasterBuffer = new Uint8Array(pixelCount * 6);
+        // `master` is set by pattern_mixer from the pre-dimmer composition,
+        // so the UI sees what the show is producing — not the dimmed-down
+        // rig output. Section dimmers are still applied to sACN, but they
+        // would otherwise wash the UI preview out to near-black.
+        //
+        // For anyone who wants the post-processed signal (blackout +
+        // section dimmers + global rig FX), broadcast it as `rig` so the
+        // hardware-truth preview is available too without clobbering the
+        // composition view.
+        const rigBuffer = new Uint8Array(pixelCount * 6);
         for (let i = 0; i < pixelCount; i++) {
           const off = i * 6;
           const px = model.pixels[i];
-          trueMasterBuffer[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
-          trueMasterBuffer[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
-          trueMasterBuffer[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
-          trueMasterBuffer[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
-          trueMasterBuffer[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
-          trueMasterBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
+          rigBuffer[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
+          rigBuffer[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
+          rigBuffer[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
+          rigBuffer[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
+          rigBuffer[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
+          rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
-        visPayload['master'] = Buffer.from(trueMasterBuffer).toString('base64');
+        visPayload['rig'] = Buffer.from(rigBuffer).toString('base64');
         statsCallback({ type: 'vis', vis: visPayload, pixelCount });
       }
     }
@@ -462,7 +468,7 @@ async function main() {
   const globalEffectsController = new GlobalEffectsController(loadConfig());
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   
-  const engineCore = { mixer, wasmHost, paramRouter, paramCenter };
+  const engineCore = { mixer, wasmHost, paramRouter, paramCenter, model };
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {

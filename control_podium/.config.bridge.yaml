@@ -1,0 +1,93 @@
+# TITANIC Control Podium — Bridge (Pi) configuration.
+# ----------------------------------------------------
+# Read by bridge_companion.py. Settings here control the bridge process; the
+# wire protocol itself is unaffected. Edit and restart the bridge to apply.
+
+engine:
+  # MarsinEngine API base URL(s). http/https only — see EngineClient init.
+  #
+  # In the dev rig the engine + simulation run on a different machine on
+  # the LAN (canonical ports come from `simulation/config.yaml`:
+  # marsin_engine_port=6968, http_port=6969). Set `url` to that host:port.
+  # Falls back to localhost when working purely on this laptop.
+  url: "http://10.1.1.172:6968"
+  # Optional fallback list. The bridge probes them in order at startup
+  # and uses the first one that responds to GET /status. If `url` above
+  # also responds, it stays selected; otherwise we promote the first
+  # reachable fallback. Comment out for single-engine deployments.
+  fallback_urls:
+    - "http://127.0.0.1:6968"   # localhost engine if running on this box
+  # Per-call timeout in seconds. Engines under heavy compile load can stall
+  # a second or two; 2s gives margin without making clients wait too long.
+  timeout_s: 2.0
+
+bus:
+  # Transport for the bridge ↔ radio connection.
+  # mode: sim   → connect to a sim_bus daemon (development)
+  # mode: serial → open a real USB serial port (production)
+  mode: sim
+  sim:
+    host: "127.0.0.1"
+    port: 7100
+  serial:
+    # Leave `port:` UNSET. The bridge auto-resolves it from the USB MAC
+    # paired to its `bridge.node_id` in .config.nodes.yaml — the same
+    # MAC pairing firmware/deploy.py wrote at flash time. Override only
+    # if you really know which device file is which (rare):
+    #   port: "/dev/cu.usbmodem21101"   # macOS server example
+    #   port: "/dev/ttyUSB0"            # Linux example
+    # Or pass --serial-port on the command line for a one-shot override.
+    baud: 115200
+
+# Status broadcast cadence.
+# ----------------------------------------------------------------
+# Architecturally the periodic PUB used to be the PRIMARY sync path
+# from the bridge to PortWatch — every status field (pattern, deck
+# playlist, target channel, view, lock, …) would surface within
+# `short_interval_s` of an engine change. That was a problem on a
+# half-duplex LoRa link: BLE notifications can be dropped silently
+# by iOS and a single dropped PUB left PortWatch's `engineStatus`
+# stale until the next event, often tens of seconds away.
+#
+# As of docs/21 §10.12, PortWatch ALSO polls `qry engine/status`
+# every 5 s (and `qry params/snapshot` every 5 s) via the two
+# pollers in `src/state/use{Status,GlobalParams}Poller.ts`. Those
+# unicast polls are now the RELIABLE sync path — every poll's REP
+# rebuilds the snapshot end-to-end, so even a long run of dropped
+# PUBs is recovered within one interval.
+#
+# The PUB still has value as the FAST path: the bridge's WS
+# subscriber wakes the publisher on engine `mixer` / `pattern` /
+# `playlistLibrary` / `viewOverride` events, broadcasting the
+# fresh state in ~hundreds of ms. Polling closes the gap in the
+# worst case; the WS-wake PUB closes it in the best case.
+#
+# Given that, `short_interval_s` was bumped from 5 s to 15 s — we
+# no longer need a fast periodic broadcast loop, just a backstop
+# in case the WS subscriber is wedged (engine restart, network
+# blip). 15 s is still <30 s of staleness in the
+# WS-broken-AND-polling-broken-AND-broadcast-is-our-last-hope
+# pathological case, while quartering the broadcast airtime.
+status_publish:
+  short_interval_s: 15     # backstop cadence when clients are active
+  long_interval_s: 30      # cadence when nobody has spoken in a while
+  idle_threshold_s: 60     # "active" means anyone within this many seconds
+
+bridge:
+  # Our own node ID. Always 0x01 (server) — keep this in sync with .config.nodes.yaml.
+  node_id: 0x01
+
+security:
+  # v2 secured-channel pre-shared key (see docs/07_control_podium.md §3.6).
+  # The key file lives at marsin_engine/secret.yaml (the single source of
+  # truth for every TITANIC component). Override path with the
+  # TITANIC_SECRET_PATH env var if you need to. The bridge ABORTS at
+  # startup if the file is missing or malformed — refusing to run is
+  # preferred to silently allowing plaintext.
+  #
+  # Anti-replay window size (per source). 64 is plenty for our message rates;
+  # only relevant if frames arrive out-of-order, which the radio ~never does.
+  replay_window: 64
+  # Whether to expose GET /bridge/stats with the bad-tag / replay counters.
+  # Off in production (debug oracle); leave on during bring-up.
+  expose_stats: false

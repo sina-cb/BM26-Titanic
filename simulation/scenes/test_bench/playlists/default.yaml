@@ -1,0 +1,140 @@
+schemaVersion: 1
+name: default
+entries:
+  - id: e_default_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderNoiseScale: 0.42
+      sliderFadeSpeed: 0
+    notes: null
+  - id: e_default_1_01_cylon_sweep
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_2_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_3_03_dual_axis_crush
+    pattern: 03_dual_axis_crush
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_4_04_beat_folded_helix
+    pattern: 04_beat_folded_helix
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_5_05_orbital_attractor_field
+    pattern: 05_orbital_attractor_field
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_6_06_neon_elevator
+    pattern: 06_neon_elevator
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_7_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_8_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_9_09_cyclone
+    pattern: 09_cyclone
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_10_10_chasers
+    pattern: 10_chasers
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_11_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_12_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_13_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_14_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_15_15_silk_prism_ribbons
+    pattern: 15_silk_prism_ribbons
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_16_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_17_17_rolling_color_dunes
+    pattern: 17_rolling_color_dunes
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_18_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_19_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_20_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_21_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_22_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_23_23_prismatic_strange_attractors
+    pattern: 23_prismatic_strange_attractors
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_24_24_chromatic_murmuration
+    pattern: 24_chromatic_murmuration
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_25_25_heartbeat
+    pattern: 25_heartbeat
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_default_26_rainbow
+    pattern: rainbow
+    label: null
+    defaults: {}
+    notes: null
