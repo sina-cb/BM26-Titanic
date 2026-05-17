@@ -169,7 +169,7 @@ parLights:
       x: -0.1273980207751736
       'y': 1.9999999999999998
       z: -4.849303195384386e-16
-      rotX: -40.00000000000002
+      rotX: -40.000000000000036
       rotY: 180
       rotZ: 180
     - group: VintageLights
@@ -180,11 +180,11 @@ parLights:
       angle: 45
       penumbra: 0.5
       x: -1.5
-      'y': 0.5
+      'y': 1
       z: 1
-      rotX: -0.1418652807780255
-      rotY: 145
-      rotZ: 0.5791656256353859
+      rotX: 0.14186528077802948
+      rotY: -145
+      rotZ: -179.42083437436463
     - group: VintageLights
       name: Vintage Right
       fixtureType: VintageLed
@@ -193,11 +193,11 @@ parLights:
       angle: 45
       penumbra: 0.5
       x: 2.5
-      'y': 0.5
+      'y': 1
       z: 1
-      rotX: -0.010242002552789991
-      rotY: -134.79537699350138
-      rotZ: 2.3836015206376797
+      rotX: 0.01024200255279506
+      rotY: 134.79537699350138
+      rotZ: -177.61639847936232
     - group: BarLights
       name: Bar Left
       fixtureType: ShehdsBar
@@ -208,9 +208,9 @@ parLights:
       x: 0.07203133767327397
       'y': 1.5
       z: 1
-      rotX: -34.99999999999999
-      rotY: 180
-      rotZ: 180
+      rotX: 34.99999999999999
+      rotY: -180
+      rotZ: 1.5491111098427209e-15
     - group: BarLights
       name: Bar Right
       fixtureType: ShehdsBar
@@ -221,9 +221,9 @@ parLights:
       x: 1.147796471297927
       'y': 1.5
       z: 1
-      rotX: -35
-      rotY: 180
-      rotZ: 180
+      rotX: 35
+      rotY: -180
+      rotZ: 1.5491111098427229e-15
     - group: SpecialEffects
       name: ChauvetHaze4D 10
       fixtureType: ChauvetHaze4D

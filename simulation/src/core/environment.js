@@ -115,11 +115,17 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   setModel(model);
 
   // Apply PBR material
+  // FrontSide (not DoubleSide) is critical: with 511 FBX meshes, DoubleSide
+  // forces the GPU to shade every fragment twice (front + back). The edit
+  // material below explicitly calls this out — the perf bug had been masked
+  // here. The model is a closed structure so backfaces are not visible from a
+  // typical orbit camera, and the analytic spotlights' shadow pass also pays a
+  // 2× cost when DoubleSide is on.
   structureMaterial = new THREE.MeshStandardMaterial({
     color: 0xd4c4a8, // warm sandy/wood tone
     roughness: 0.72,
     metalness: 0.08,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     flatShading: false,
   });
   setStructureMaterial(structureMaterial);
@@ -249,7 +255,11 @@ export function setupLighting(rebuildParLights, rebuildDmxFixtures) {
   const moon = new THREE.DirectionalLight(0x8899cc, 0.5);
   moon.position.set(r * 1.5, h * 4, r * 0.8);
   moon.castShadow = true;
-  moon.shadow.mapSize.set(4096, 4096);
+  // 2048² is visually indistinguishable from 4096² at the typical orbit
+  // distance for this scene but costs ~4× less per shadow-map sample — a
+  // measurable GPU win, especially on Mac WebGL where shadow sampling is
+  // expensive.
+  moon.shadow.mapSize.set(2048, 2048);
   moon.shadow.camera.left = -r * 1.5;
   moon.shadow.camera.right = r * 1.5;
   moon.shadow.camera.top = r * 1.5;

@@ -14,9 +14,12 @@ import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
 import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
+import PatchManager from "../dmx/patch_manager.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
+
+// Warning banner + patch state managed by PatchManager (../dmx/patch_manager.js)
 
 // Cached chroma scale — rebuilt when stops change
 let chromaScale = null;
@@ -78,6 +81,7 @@ function _rebuildBatchCache() {
     const list = [];
     pixels.forEach(px => {
        list.push({
+         r: 0, g: 0, b: 0, w: 0, a: 0, u: 0, // default black (RGBWAU)
          ...px,
          wx: px.x, wy: px.y, wz: px.z // keep w coordinates for backward compatibility in interpolation
        }); // Clone the pixel directly, including the bound `apply` function and patch maps
@@ -156,6 +160,9 @@ function _rebuildBatchCache() {
 
   _batchRenderList = list;
   _batchLastBuiltVersion = _batchCacheVersion;
+
+  // Recompute patch state after every cache rebuild
+  PatchManager.recompute();
   } catch (err) {
     console.error('[BatchCache] Failed to build render list:', err);
     _batchRenderList = null;
@@ -172,7 +179,13 @@ export function animate() {
   setFrameCount(frameCount + 1);
   const now = performance.now();
   if (now - lastFpsTime >= 1000) {
-    document.getElementById("fps-counter").textContent = `${frameCount} FPS`;
+    const fpsEl = document.getElementById("fps-counter");
+    if (fpsEl) {
+      fpsEl.textContent = `${frameCount} FPS`;
+      // Color bands match HUD theme: green ≥30 (good), amber 15–29 (ok), red <15 (poor).
+      const quality = frameCount >= 30 ? "good" : frameCount >= 15 ? "ok" : "poor";
+      if (fpsEl.dataset.quality !== quality) fpsEl.dataset.quality = quality;
+    }
     setFrameCount(0);
     setLastFpsTime(now);
   }
@@ -194,7 +207,8 @@ export function animate() {
          const [r, g, b] = scale(phase).gl();
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
-         if (entry.apply) entry.apply(r, g, b);
+         // Direct mode only (all unpatched) — when patches active, DMX router handles it
+         if (!window._patchesActive && entry.apply) entry.apply(r, g, b);
       }
     }
   }
@@ -227,12 +241,13 @@ export function animate() {
         entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
         entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
 
-        // RGBWAU → RGB blend for 3D visual preview
-        const rn = Math.min(1, entry.r + entry.w * 0.8 + entry.a * 0.9 + entry.u * 0.4);
-        const gn = Math.min(1, entry.g + entry.w * 0.8 + entry.a * 0.6);
-        const bn = Math.min(1, entry.b + entry.w * 0.8 + entry.u * 0.7);
-
-        if (entry.apply) entry.apply(rn, gn, bn);
+        // Direct mode only (all unpatched) — when patches active, DMX router handles it
+        if (!window._patchesActive && entry.apply) {
+          const rn = Math.min(1, entry.r + entry.w * 0.8 + entry.a * 0.9 + entry.u * 0.4);
+          const gn = Math.min(1, entry.g + entry.w * 0.8 + entry.a * 0.6);
+          const bn = Math.min(1, entry.b + entry.w * 0.8 + entry.u * 0.7);
+          entry.apply(rn, gn, bn);
+        }
       }
     }
   }
@@ -242,19 +257,27 @@ export function animate() {
     // Always process frame so sources stay fresh
     window.dmxRouter.processFrame();
 
+
     const mappingEnabled = getProfileDef(params.lightingProfile).mappingEnabled;
 
-    if (mappingEnabled) {
+    // In sacn_in mode, ALWAYS demap — the simulation acts as a bridge/visualizer
+    // regardless of which lighting profile is active
+    if (lightingMode === 'sacn_in') {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }
-      
-      if (lightingMode === 'sacn_in') {
-         demapSacnToPixels(_batchRenderList, window.dmxRouter);
-      } else {
+      demapSacnToPixels(_batchRenderList, window.dmxRouter);
+
+    } else if (mappingEnabled) {
+      if (_batchCacheVersion !== _batchLastBuiltVersion) {
+        _rebuildBatchCache();
+      }
+      if (window._patchesActive) {
+         // Only write to DMX router when patches exist (avoid writing to unmapped addresses)
          mapPixelsToSacn(_batchRenderList, window.dmxRouter);
       }
     }
+
 
     const applyDmx = (fixtureList) => {
       if (!fixtureList) return;
@@ -266,8 +289,8 @@ export function animate() {
           
           if (!mappingEnabled && !isGlobalEffect) continue;
 
-          const patchUniverse = Math.floor(Number(fixture.patchDef?.universe ?? fixture.config?.dmxUniverse));
-          const patchAddr = Math.floor(Number(fixture.patchDef?.addr ?? fixture.config?.dmxAddress));
+          const patchUniverse = Math.floor(Number(fixture.patchDef?.universe || fixture.config?.dmxUniverse));
+          const patchAddr = Math.floor(Number(fixture.patchDef?.addr || fixture.config?.dmxAddress));
           if (!Number.isFinite(patchUniverse) || patchUniverse < 1) continue;
           if (!Number.isFinite(patchAddr) || patchAddr < 1) continue;
           
@@ -289,10 +312,22 @@ export function animate() {
      for (let i = 0; i < count; i++) {
         const entry = _batchRenderList[i];
         
-        // Standardize RGB representations
-        const rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-        const gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-        const bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+        let rn = 0, gn = 0, bn = 0;
+        
+        if (!window._patchesActive) {
+           // All-unpatched direct mode: show pattern colors
+           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+        } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
+           // Mixed mode: unpatched pixels stay black
+           rn = 0; gn = 0; bn = 0;
+        } else {
+           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+        }
+        
         const [previewR, previewG, previewB] = scaleSimulationPreviewRgb(rn, gn, bn);
         _pixelColorCache.setRGB(previewR, previewG, previewB);
         _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
@@ -343,7 +378,7 @@ export function animate() {
 
   // ─── sACN Output: send DMX to real controllers via bridge ───
   // Completely disable sACN outbound transmission if in readonly observer mode (e.g. iPad WebView)
-  if (window.dmxRouter && params.parLights && lightingMode !== 'sacn_in' && !window._sacnBlackoutActivated && getProfileDef(params.lightingProfile).mappingEnabled && !window.__readonlyMode) {
+  if (window.dmxRouter && params.parLights && !window.__readonlyMode) {
     // Lazily enable output client
     if (!sacnOutputEnabled) {
       sacnOutputClient = getSacnOutput();
@@ -355,14 +390,22 @@ export function animate() {
       // Group fixtures by universe:controllerIp using deduplicated Map
       const outputGroups = new Map(); // 'universe:ip' → { universe, ip, priority }
 
-      // We still need to extract which IPs own which universe.
-      // (This could be cached, but for now loop 1x per frame over parLights)
+      const isMappingOutput = !window._sacnBlackoutActivated && getProfileDef(params.lightingProfile).mappingEnabled;
+
       for (const config of params.parLights) {
         if (!config) continue;
         const u = config.dmxUniverse;
         const addr = config.dmxAddress;
         const ip = config.controllerIp;
         if (!u || u <= 0 || !addr || addr <= 0 || !ip || ip === '0.0.0.0') continue;
+
+        const fType = config.fixtureType || config.type || '';
+        const isEffect = fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire') || fType.includes('Haze');
+
+        // In sacn_in mode: relay ALL universes to controllers (simulation acts as bridge)
+        // In other modes: only output when mapping is active
+        // Global effects: ALWAYS output
+        if (!isEffect && lightingMode !== 'sacn_in' && !isMappingOutput) continue;
 
         const key = `${u}:${ip}`;
         if (!outputGroups.has(key)) {
@@ -377,6 +420,8 @@ export function animate() {
           sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, fullFrame);
         }
       }
+
+
     }
   }
 

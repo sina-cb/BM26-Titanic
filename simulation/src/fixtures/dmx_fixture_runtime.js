@@ -19,17 +19,21 @@ const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
 const defaultDotMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
 const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
 
-const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 16, 1, true);
+// Lower-poly geometry constants. With ~492 pixels × (bulb + halo + dot + beam)
+// per frame, even a single SphereGeometry being (8,8) vs (6,4) costs ~100×500 =
+// 50k extra triangles per frame. These dots are millimeters across at the
+// model scale, so facets are invisible — every segment we save is free FPS.
+const baseBeamGeo = new THREE.CylinderGeometry(0.01, 1, 1, 8, 1, true);
 baseBeamGeo.translate(0, -0.5, 0);
 baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards -Z
 
-const bulbGeo = new THREE.SphereGeometry(0.5, 8, 8);
-const haloGeo = new THREE.SphereGeometry(0.8, 8, 8);
+const bulbGeo = new THREE.SphereGeometry(0.5, 6, 4);
+const haloGeo = new THREE.SphereGeometry(0.8, 6, 4);
 
 const _sphereCache = {};
 function getCachedSphere(size) {
   const key = size.toFixed(5);
-  if (!_sphereCache[key]) _sphereCache[key] = new THREE.SphereGeometry(size, 8, 8);
+  if (!_sphereCache[key]) _sphereCache[key] = new THREE.SphereGeometry(size, 6, 4);
   return _sphereCache[key];
 }
 
@@ -196,7 +200,11 @@ export class DmxFixtureRuntime {
               dots = dotMeshList; // ASSIGN DOTS HERE
             }
 
-            bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, side: THREE.DoubleSide });
+            // FrontSide is functionally equivalent to DoubleSide for an opaque
+            // sphere viewed from outside (the front face occludes the back
+            // anyway), but cuts per-mesh fragment work in half. With 492+
+            // bulb/dot meshes per frame this is a meaningful saving.
+            bulbMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
             
             if (dotMeshList.length > 0) dotMeshList.forEach(d => { d.mesh.material = bulbMat; });
 
@@ -315,18 +323,20 @@ export class DmxFixtureRuntime {
 
     this.pixels.forEach(p => {
 
-      // Beam scale
+      // Beam scale (always sync geometry)
       if (p.beam) {
         const coneLen = 1.5;
         const angleRad = THREE.MathUtils.degToRad(angle);
         const radius = Math.tan(angleRad) * coneLen;
         p.beam.scale.set(radius, radius, coneLen);
-        p.beam.material.color.set(color);
       }
 
-      // Bulb + halo color
-      if (p.bulbMat) p.bulbMat.color.set(color);
-      if (p.haloMat) p.haloMat.color.set(color);
+      // Only reset colors to config defaults when DMX is NOT driving them
+      if (!window._patchesActive) {
+        if (p.beam) p.beam.material.color.set(color);
+        if (p.bulbMat) p.bulbMat.color.set(color);
+        if (p.haloMat) p.haloMat.color.set(color);
+      }
     });
   }
 

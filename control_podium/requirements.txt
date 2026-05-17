@@ -2,3 +2,11 @@ pyserial
 pyyaml
 bleak>=0.21
 PySide6>=6.6
+# Bridge subscribes to MarsinEngine's WebSocket so pattern / autopilot
+# / blackout transitions arrive in milliseconds instead of waiting for
+# the next periodic poll (which is 5 s when active, 30 s when idle).
+# That subscription is what flips the "engine WS just told us X
+# changed → republish a compact-status PUB over LoRa right now" path,
+# the same path PortWatch uses to mirror remote toggles in real time.
+websockets>=12
+cryptography>=42

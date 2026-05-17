@@ -137,7 +137,14 @@ function _finishRebuild() {
   }
   invalidSelections.forEach(idx => selectedFixtureIndices.delete(idx));
 
+  // Re-apply patches from the global patch tree to any fixtures that lost them
+  // (e.g., generators create new config objects without dmxUniverse/dmxAddress)
+  if (window.__globalPatchTree && window.applyPatches) {
+    window.applyPatches(params.parLights);
+  }
+
   if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('fixtures rebuilt');
+  if (window.recomputePatchesActive) window.recomputePatchesActive();
 
   // Async rebuild complete -- allow saves again and queue one
   if (window._isRebuildingFixtures) {

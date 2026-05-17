@@ -14,12 +14,18 @@ export class PatternChannel {
     // Exports from WASM
     this.localExports = [];
     
-    // Control state
+    // Control state. Per docs/19_playlists.md the playlist entry's
+    // `defaults` field is the canonical per-slot store; `localControls`
+    // tracks live values for the current entry.
     this.localControls = {}; // controlId -> {v0, v1, v2}
-    this.patternCache = {}; // patternName -> { controlId -> {v0, v1, v2} }
-    
+
     // Shared parameter bindings
-    this.sharedBindings = {}; 
+    this.sharedBindings = {};
+
+    // Playlist assignment for this channel — { name, activeEntryId, cursor, autopilot }.
+    // Every channel is conceptually in playlist mode (default playlist
+    // covers the "I haven't customized this yet" case).
+    this.playlist = null;
   }
 
   beginFrame(wasmHost, elapsedSeconds, forceRender = false) {

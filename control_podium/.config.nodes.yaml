@@ -1,0 +1,79 @@
+# TITANIC Control Podium — Node ID assignment (committed).
+# ---------------------------------------------------------
+# Source of truth for which physical node ID maps to which name and role.
+# Used by the Pi bridge for ACL checks and by client_companion to label
+# its own identity at boot.
+#
+# Roles (ship-themed for fun):
+#   server   — the Pi-side translator (only one). Sends pubs / acks.
+#              Kept literal because it's also a protocol constant.
+#   captain  — privileged client (was: priv). May send cmd, qry, hlo, pin.
+#   crew     — regular client (was: reg). May send qry, hlo, pin only.
+#              Read-only with respect to the engine, but MAY ping any
+#              captain so they can flag attention if something happens.
+#
+# Types (informational; bridge logs use these, ACL doesn't gate on them):
+#   pi             — Raspberry Pi running the bridge
+#   heltec_v4      — Heltec WiFi LoRa V4 (ESP32-S3 + SX1262)
+#   companion_sim  — virtual node running on a developer laptop
+#   ipad           — CaptainPad on BLE→radio fallback (planned)
+#
+# Reserved IDs:
+#   0x00 — RESERVED (never assign; "0" frames are rejected by the parser).
+#   0x01 — server. Hardcoded as SERVER_ID in frame.py.
+#   0xFF — broadcast (never assign to a node).
+#
+# Note: bridge enforces role permissions by node_id. Adding a node here
+# is necessary AND sufficient to bring it onto the mesh. Removing a node
+# (or commenting it out) immediately denies it on the next bridge restart.
+#
+# Out of scope (intentionally NOT in this file):
+#   * Fire effect controller (FW-SPEC-001). Runs different firmware on
+#     a separate transport — not on the mesh radio.
+#   * Long-range hardware control surface. Will be its own program with
+#     its own firmware; commands to the engine still travel through this
+#     same allowlist (.config.commands.yaml) when it joins.
+
+nodes:
+  0x01:
+    name: server
+    role: server
+    type: heltec_v4   # currently a Heltec acting as the radio side of the Pi bridge
+    # USB MAC of the physical board paired to this node. firmware/deploy.py
+    # refuses to flash unless the connected /dev/cu.usbmodem* reports this
+    # exact serial_number (set by ESP32-S3 USB-CDC from the factory MAC).
+    # If the board is replaced, re-pair with: `python deploy.py --pair --node 0x01`.
+    usb_mac: "8C:FD:49:B5:42:90"
+    notes: "Pi-side radio bridge. Single instance."
+
+  # ── Captains (privileged operators) ──────────────────────────────────
+  # Sina is currently a Heltec while CaptainPad BLE-radio integration is
+  # being built; will switch back to type=ipad once the iPad app speaks
+  # Titanic Frame v2 over BLE→radio.
+  0x0A:
+    name: sina
+    role: captain
+    type: heltec_v4
+    notes: "Captain handheld (Heltec for now; CaptainPad target later)."
+    usb_mac: "8C:FD:49:B5:7E:B8"
+  0x0B:
+    name: misha
+    role: captain
+    type: ipad
+    notes: "CaptainPad-2."
+
+  # ── Crew (read-only; can ping captains) ──────────────────────────────
+  # Crew can't issue commands but CAN /ping any captain (or the server)
+  # to flag attention. Captains' clients reply with PONG when pinged.
+  0x10:
+    name: crew_01
+    role: crew
+    type: heltec_v4
+  0x11:
+    name: crew_02
+    role: crew
+    type: heltec_v4
+  0x12:
+    name: crew_03
+    role: crew
+    type: heltec_v4

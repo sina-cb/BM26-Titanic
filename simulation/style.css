@@ -100,20 +100,54 @@ canvas {
   margin-bottom: 4px;
 }
 
+/* FPS counter — sits at the left of .hud-top-bar as a HUD chip, balanced
+   visually with the hud-title to its right. Color tint follows performance
+   bands via [data-quality]. */
 #fps-counter {
-  position: fixed;
-  top: 14px;
-  left: 14px;
-  z-index: 100;
-  font-size: 0.65rem;
-  color: #555;
-  font-family: "Courier New", monospace;
+  font-family: "Courier New", "Consolas", monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 1px 7px;
+  border-radius: 3px;
+  border: 1px solid rgba(240, 192, 96, 0.3);
+  background: rgba(240, 192, 96, 0.06);
+  color: rgba(240, 192, 96, 0.85);
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: center;
+  flex: 0 0 auto;
   pointer-events: none;
+  transition: color 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+}
+
+#fps-counter:empty::before {
+  content: "-- FPS";
+  opacity: 0.5;
+}
+
+#fps-counter[data-quality="good"] {
+  color: #4f4;
+  border-color: rgba(68, 255, 68, 0.3);
+  background: rgba(68, 255, 68, 0.06);
+}
+
+#fps-counter[data-quality="ok"] {
+  color: #f0c060;
+  border-color: rgba(240, 192, 96, 0.35);
+  background: rgba(240, 192, 96, 0.06);
+}
+
+#fps-counter[data-quality="poor"] {
+  color: #ff7a7a;
+  border-color: rgba(255, 100, 100, 0.4);
+  background: rgba(255, 80, 80, 0.08);
+  animation: hud-pulse 2s ease-in-out infinite;
 }
 
 #engine-blackout-warning {
   position: fixed;
-  top: 44px;
+  bottom: 140px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10000;
@@ -122,17 +156,164 @@ canvas {
   display: flex;
   align-items: center;
   gap: 16px;
-  background: rgba(136, 0, 0, 0.95);
+  background: rgba(136, 0, 0, 0.35);
   color: #ffffff;
-  border: 2px solid #ff0000;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
+  border: 2px solid rgba(255, 0, 0, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-  pointer-events: auto;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 #engine-blackout-warning.hidden {
   display: none;
 }
+
+/* ─── Unpatched Warning (discrete left-side pill) ─── */
+#unpatched-warning {
+  position: fixed;
+  bottom: 140px;
+  left: 14px;
+  z-index: 9999;
+  padding: 6px 14px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffcc44;
+  background: rgba(80, 55, 0, 0.5);
+  border: 1px solid rgba(255, 180, 0, 0.35);
+  border-radius: 4px;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  text-shadow: 0 0 3px rgba(255, 180, 0, 0.3);
+  animation: hud-pulse 3s ease-in-out infinite;
+}
+
+#unpatched-warning.hidden {
+  display: none;
+}
+
+/* ─── SpotLight Count Warning (bottom-center HUD banner) ───
+   Sits above the view-presets row (bottom: 20px) and below the engine
+   warnings (bottom: 140px). Auto-hides after 30s; user can dismiss
+   sooner via the inline close button. */
+#spotlight-warning {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9998;
+  width: min(720px, calc(100vw - 96px));
+  padding: 10px 12px 11px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  border-radius: 4px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+#spotlight-warning.hidden {
+  display: none;
+}
+
+#spotlight-warning[data-severity="caution"] {
+  background: rgba(80, 55, 0, 0.55);
+  border: 1px solid rgba(255, 180, 0, 0.45);
+  color: #ffd884;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 0 4px rgba(255, 180, 0, 0.2);
+}
+
+#spotlight-warning[data-severity="critical"] {
+  background: rgba(80, 10, 10, 0.6);
+  border: 1px solid rgba(255, 70, 70, 0.55);
+  color: #ffb3b3;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  text-shadow: 0 0 4px rgba(255, 0, 0, 0.25);
+  animation: hud-pulse 2.5s ease-in-out infinite;
+}
+
+#spotlight-warning .sw-icon {
+  font-size: 1.1rem;
+  line-height: 1.2;
+  flex: 0 0 auto;
+}
+
+#spotlight-warning .sw-body {
+  flex: 1 1 auto;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+}
+
+#spotlight-warning .sw-title {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  margin-bottom: 4px;
+  opacity: 0.9;
+}
+
+#spotlight-warning .sw-count {
+  font-family: "Courier New", monospace;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+#spotlight-warning code {
+  font-family: "Courier New", monospace;
+  font-size: 0.95em;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+#spotlight-warning .sw-close {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  margin-left: 4px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.65;
+  transition: opacity 0.15s ease, background 0.15s ease, transform 0.1s ease;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+#spotlight-warning .sw-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#spotlight-warning .sw-close:active {
+  transform: scale(0.94);
+}
+
+/* Edit mode hides the spotlight warning along with other floating panels (handled below). */
 
 .engine-blackout-title {
   flex: 0 0 auto;
@@ -159,7 +340,7 @@ canvas {
 
 @media (max-width: 720px) {
   #engine-blackout-warning {
-    top: 42px;
+    bottom: 12px;
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
@@ -171,6 +352,18 @@ canvas {
     width: 100%;
   }
 }
+
+/* ─── Edit Mode: hide all floating panels ─── */
+body.edit-mode-active #pattern-editor-panel,
+body.edit-mode-active #sacn-in-monitor-panel,
+body.edit-mode-active #sacn-out-monitor-panel,
+body.edit-mode-active #engine-blackout-warning,
+body.edit-mode-active #unpatched-warning,
+body.edit-mode-active #spotlight-warning,
+body.edit-mode-active #engine-params-panel {
+  display: none !important;
+}
+
 /* ─── HUD Frame Overlay ─── */
 #hud-frame {
   position: fixed;
@@ -389,6 +582,84 @@ canvas {
   color: #f0c060;
   background: rgba(240, 192, 96, 0.08);
   box-shadow: 0 0 16px rgba(240, 192, 96, 0.15);
+}
+
+/* ─── Floating GUI Panel ─── */
+#gui-panel {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  width: 330px;
+  height: 80vh;
+  min-width: 260px;
+  min-height: 200px;
+  max-width: 600px;
+  max-height: 95vh;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 20, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(240, 192, 96, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  font-family: inherit;
+  resize: both;
+  transition: height 0.25s ease, opacity 0.2s ease;
+}
+
+#gui-panel.collapsed {
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  border-radius: 8px;
+  resize: none;
+  overflow: hidden;
+}
+
+.gui-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.gui-panel-header:active {
+  cursor: grabbing;
+}
+
+.gui-panel-title {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: rgba(240, 192, 96, 0.8);
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.gui-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+/* lil-gui inside panel — strip own positioning/scrolling, panel handles it */
+#gui-panel .lil-gui.root {
+  width: 100% !important;
+  max-height: none;
+  overflow-y: visible;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* ─── Compact/Dense GUI Overrides ─── */

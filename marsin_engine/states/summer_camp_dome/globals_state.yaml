@@ -1,0 +1,58 @@
+blackout: false
+effects:
+  fogger: false
+  blastWhite: false
+  vintageWhite: false
+  uvBlast: false
+  uvBlastBypassDimmer: false
+  vintageWhiteBypassDimmer: false
+  blastWhiteBypassDimmer: false
+params:
+  revision: 9
+  sourceLock: null
+  params:
+    speed:
+      value: 1
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 9
+    direction:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 2
+    count:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 3
+    size:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
+    rotate:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
+    colorPalette1:
+      value:
+        h: 0.33
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 6
+    colorPalette2:
+      value:
+        h: 0.78
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 7
+dimmers:
+  '2': 0.125
+  '3': 0.1696428571428571
+controlLock: null

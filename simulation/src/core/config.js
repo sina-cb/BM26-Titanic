@@ -62,6 +62,14 @@ export function extractParams(node, parentKey = null) {
  */
 export function reconstructYAML(node, parentKey = null) {
   if (!node || typeof node !== "object") return;
+
+  if (parentKey === null) {
+    if (params.traces && params.traces.length > 0) {
+      if (!node.traces) node.traces = [];
+    } else if (params.traces && params.traces.length === 0) {
+      delete node.traces;
+    }
+  }
   for (const key of Object.keys(node)) {
     if (key === "_section") continue;
 

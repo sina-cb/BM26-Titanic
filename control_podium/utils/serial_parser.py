@@ -10,8 +10,16 @@ Firmware protocol:
   BLE:      BLE_CMD: <msg>\n  |  BLE: <status>\n
 """
 
+import re
 from dataclasses import dataclass
 from typing import Optional
+
+
+# Regex that handles payloads containing ':' (which the previous split-on-':'
+# approach got wrong). We anchor on the ':RSSI=' suffix and treat everything
+# between 'RX:' and ':RSSI=' as the payload. Note: payloads must NOT contain
+# the literal substring ':RSSI=' — that's a hard rule of the wire format.
+_RX_LINE_RE = re.compile(r"^RX:(?P<payload>.*?):RSSI=(?P<rssi>\S+?):SNR=(?P<snr>\S+)\s*$")
 
 
 @dataclass
@@ -50,24 +58,30 @@ class FirmwareEvent:
 def parse_rx_line(line: str) -> Optional[RXMessage]:
     """Parse an RX: line from firmware serial output.
 
-    Expected format: RX:<payload>:RSSI=<r>:SNR=<s>
+    Expected format: ``RX:<payload>:RSSI=<r>:SNR=<s>``
 
-    Returns RXMessage or None if not an RX line.
+    Unlike the original implementation, this preserves ``:`` characters inside
+    ``<payload>`` (the v2 wire protocol uses ``|`` as its field delimiter so it
+    happens to avoid ``:`` already, but other payloads like ``titanic:scene:sunset``
+    used in v1 would otherwise be truncated to just ``titanic``).
+
+    Returns RXMessage or None if the line doesn't match.
     """
     if not line.startswith("RX:"):
         return None
 
-    parts = line.split(":")
-    payload = parts[1] if len(parts) > 1 else "?"
-    rssi = ""
-    snr = ""
-    for p in parts[2:]:
-        if p.startswith("RSSI="):
-            rssi = p[5:]
-        elif p.startswith("SNR="):
-            snr = p[4:]
+    m = _RX_LINE_RE.match(line)
+    if not m:
+        # Fallback: legacy format where the RSSI/SNR suffix is missing or
+        # malformed. We still want to surface the payload.
+        return RXMessage(payload=line[3:], rssi="", snr="", raw=line)
 
-    return RXMessage(payload=payload, rssi=rssi, snr=snr, raw=line)
+    return RXMessage(
+        payload=m.group("payload"),
+        rssi=m.group("rssi"),
+        snr=m.group("snr"),
+        raw=line,
+    )
 
 
 def parse_tx_ack(line: str) -> Optional[TXAck]:

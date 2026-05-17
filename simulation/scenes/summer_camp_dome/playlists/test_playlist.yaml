@@ -1,0 +1,52 @@
+schemaVersion: 1
+name: test_playlist
+entries:
+  - id: e_1778886249366_9260
+    pattern: 09_cyclone
+    label: null
+    defaults:
+      sliderDensity: 1
+      sliderParticleSize: 0.25
+      hsvPickerColorA:
+        h: 0
+        s: 1
+        v: 1
+      hsvPickerColorB:
+        h: 0
+        s: 1
+        v: 1
+    notes: null
+  - id: e_1778886251094_8425
+    pattern: 05_orbital_attractor_field
+    label: null
+    defaults:
+      hsvPickerBaseColor:
+        h: 0
+        s: 1
+        v: 1
+      sliderColorSpread: 0.75
+      sliderFalloff: 0.25
+      sliderFocus: 0.75
+    notes: null
+  - id: e_1778886253574_696
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    notes: null
+  - id: e_1778886258047_8497
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults:
+      sliderSpeed: 0
+      sliderReach: 0
+      sliderFocus: 0
+      sliderTrailBlend: 0
+      hsvPickerPrimary:
+        h: 0
+        s: 1
+        v: 1
+      hsvPickerSecondary:
+        h: 0
+        s: 1
+        v: 1
+    notes: null

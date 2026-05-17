@@ -315,7 +315,14 @@ export function onPointerDown(event) {
   if (transformControl.axis) return;
 
   raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(interactiveObjects, false);
+  let intersects = raycaster.intersectObjects(interactiveObjects, false);
+
+  // When generators are hidden, filter out all trace objects from raycast results.
+  // Three.js does not check .visible for objects passed directly in an array,
+  // so invisible trace hitboxes/visuals still appear in results and must be excluded.
+  if (!params.generatorsVisible) {
+    intersects = intersects.filter(i => !i.object.userData.isTrace && !i.object.userData.isTraceVisual);
+  }
 
   if (intersects.length > 0) {
     const hit = intersects[0].object;
@@ -367,6 +374,11 @@ export function onPointerDown(event) {
 
 // ─── Keyboard Handler ────────────────────────────────────────────────────
 export function onKeyDown(event) {
+  // Ignore keyboard shortcuts if the user is typing in an input or textarea
+  if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
+    return;
+  }
+
   // Undo / Redo (always active)
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
     event.preventDefault();

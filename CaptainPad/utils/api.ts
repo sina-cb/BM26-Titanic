@@ -4,7 +4,19 @@ import { Platform } from 'react-native';
 const defaultConfigsRaw: any = require('@/config.yaml');
 const defaultConfigs = defaultConfigsRaw?.default || defaultConfigsRaw || {};
 
-let api_base = defaultConfigs.api_base || 'http://10.1.1.172:6968';
+// Fail fast: config.yaml is the single source of truth for the default engine
+// address. If the YAML loader returned an asset URI string (because metro's
+// assetExts was misconfigured) or the key is missing, surface the misconfig
+// instead of silently falling back to a stale hard-coded IP.
+if (!defaultConfigs || typeof defaultConfigs !== 'object' || typeof defaultConfigs.api_base !== 'string' || !defaultConfigs.api_base) {
+  throw new Error(
+    'CaptainPad config error: CaptainPad/config.yaml must define `api_base` as a non-empty string. ' +
+      'Got: ' + JSON.stringify(defaultConfigs),
+  );
+}
+
+let api_base: string = defaultConfigs.api_base;
+const DEFAULT_API_BASE: string = defaultConfigs.api_base;
 
 // ── Async-safe API base resolution ────────────────────────────────────────
 // Screens must await getApiBaseAsync() before their first network call
@@ -34,10 +46,14 @@ export async function getApiBaseAsync(): Promise<string> {
   return _resolvePromise;
 }
 
+export function getDefaultApiBase(): string {
+  return DEFAULT_API_BASE;
+}
+
 export async function setApiBase(val: string) {
   api_base = val;
   _resolved = true;
-  if (val === defaultConfigs.api_base) {
+  if (val === DEFAULT_API_BASE) {
     await AsyncStorage.removeItem('API_BASE');
   } else {
     await AsyncStorage.setItem('API_BASE', val);
@@ -199,6 +215,17 @@ export async function fetchDimmers(): Promise<ApiResult<Record<string, number>>>
   }
 }
 
+export async function fetchDimmerGroups(): Promise<ApiResult<Record<string, number>>> {
+  try {
+    const res = await fetch(`${api_base}/dimmer-groups`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    console.warn('Fetch dimmer groups failed:', err);
+    return { ok: false, error: err.message, data: {} };
+  }
+}
+
 export async function setGlobalBlackout(state: boolean): Promise<ApiResult<any>> {
   try {
     const res = await fetch(`${api_base}/global-blackout`, {
@@ -244,14 +271,15 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
   }
 }
 
-export async function setMixerView(view: 'deck' | 'mixer', deckChannel?: string | null): Promise<ApiResult<any>> {
+export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<any>> {
+  // The deck is always bound to its base channel — the old `deckChannel`
+  // override argument was removed along with the TARGET CHANNEL picker
+  // in May 2026. See docs/16_captain_pad.md §"Target channel removal".
   try {
-    const body: any = { view };
-    if (deckChannel !== undefined) body.deckChannel = deckChannel;
     const res = await fetch(`${api_base}/mixer/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ view }),
     });
     const data = await res.json();
     return { ok: true, data };
@@ -352,20 +380,6 @@ export async function fetchMixerState(): Promise<ApiResult<any>> {
   }
 }
 
-export async function addMixerChannel(pattern: string, name?: string, mode?: string, fader?: number): Promise<ApiResult<any>> {
-  try {
-    const res = await fetch(`${api_base}/mixer/channels`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pattern, name, mode, fader }),
-    });
-    const data = await res.json();
-    return { ok: true, data };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
-  }
-}
-
 export async function updateMixerChannel(id: string, updates: any): Promise<ApiResult<any>> {
   try {
     const res = await fetch(`${api_base}/mixer/channels/${id}`, {
@@ -399,6 +413,156 @@ export async function removeMixerChannel(id: string): Promise<ApiResult<any>> {
     const res = await fetch(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
     const data = await res.json();
     return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Playlist API ─────────────────────────────────────────────────────────
+
+export interface PlaylistEntry {
+  id: string;
+  pattern: string;
+  label: string | null;
+  defaults: Record<string, any>;
+  notes?: string | null;
+  _missing?: boolean;
+}
+
+export interface PlaylistData {
+  schemaVersion: number;
+  name: string;
+  entries: PlaylistEntry[];
+}
+
+export interface PlaylistAssignment {
+  name: string;
+  activeEntryId: string | null;
+  cursor: number;
+  autopilot?: { active: boolean; delay_s: number; shuffle: boolean };
+}
+
+export async function fetchPlaylists(): Promise<ApiResult<string[]>> {
+  try {
+    const res = await fetch(`${api_base}/playlists`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    return { ok: false, error: err.message, data: [] };
+  }
+}
+
+export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistData>> {
+  try {
+    const res = await fetch(`${api_base}/playlists/${encodeURIComponent(name)}`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function savePlaylist(playlist: { name: string; entries: PlaylistEntry[] }): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/playlists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(playlist),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// NOTE: There used to be deck-specific playlist helpers
+// (fetchDeckPlaylist/setDeckPlaylist/captureDeckDefaults/setDeckPlaylistAutopilot)
+// but the deck's "base" channel is just another mixer channel, so we use
+// `/mixer/channels/:id/playlist*` for both deck and mixer. The /deck/playlist
+// endpoints in the engine remain as thin aliases for back-compat.
+
+export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setMixerChannelPlaylist(channelId: string, name: string | null): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setMixerChannelPlaylistEntry(channelId: string, entryId: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/entry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entryId }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function captureMixerChannelDefaults(channelId: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/capture`, { method: 'POST' });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Throw away in-memory edits and reset the channel to the saved playlist
+// entry defaults. Paired with captureMixerChannelDefaults() to give the
+// user the "save or discard" choice on unlock.
+export async function discardMixerChannelDefaults(channelId: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/discard`, { method: 'POST' });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function addMixerChannel(opts: { playlist?: string; playlistEntryId?: string; pattern?: string; name?: string; mode?: string; fader?: number }): Promise<ApiResult<{ channelId: string; pattern: string; playlist: PlaylistAssignment | null }>> {
+  try {
+    const res = await fetch(`${api_base}/mixer/channels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }

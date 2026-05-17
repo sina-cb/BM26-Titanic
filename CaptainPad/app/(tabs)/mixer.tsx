@@ -1,20 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, PanResponder, AppState, Animated, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
 import { useFocusEffect } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
-import { 
-  fetchPatterns, getApiBaseAsync, testConnection,
+import {
+  getApiBaseAsync, testConnection,
   fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
-  addMixerChannel, updateMixerMaster, setGlobalEffect, setGlobalBlackout, fetchExports,
-  fetchChannelBlends, fetchTransitions, setMixerView
+  addMixerChannel, updateMixerMaster,
+  fetchChannelBlends, fetchTransitions, setMixerView,
+  fetchPlaylists,
+  captureMixerChannelDefaults, discardMixerChannelDefaults,
 } from '@/utils/api';
+import { engineEvents } from '@/utils/engineEvents';
 
-import { GlobalParams } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
+import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 
@@ -45,7 +48,11 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 };
 
 // ── Channel Strip ──────────────────────────────────────────────────────
-const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions, isSolo, isDeck, visData, onPatternSelect, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onAddPattern, onRemovePattern, onTransition, onTransitionSettingsChange }: any) => {
+// "1 list to rule them all": the strip's body shows the channel's PlaylistPanel
+// as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
+// inside the panel add or remove entries; SAVE persists. No parallel "all
+// patterns" column anymore.
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
@@ -59,10 +66,10 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
       <View style={styles.channelHeader}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
           <View style={styles.channelBadge}>
-            <Text style={[styles.valueReadout, {color: C.primary}]}>{index}</Text>
+            <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
-          <TextInput 
-            style={[styles.headlineSm, {fontSize: 14, color: C.text, flex: 1, padding: 0}]}
+          <TextInput
+            style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
             defaultValue={channel.name || 'CH ' + index}
             onEndEditing={(e) => updateMixerChannel(channel.id, { name: e.nativeEvent.text })}
             placeholderTextColor={C.icon}
@@ -73,7 +80,7 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
             <IconSymbol name={locked ? "lock.fill" : "lock.open.fill"} size={14} color={locked ? '#F5A623' : C.secondary} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.modeDropdown} onPress={() => { if (!locked) setShowBlendPicker(true); }} activeOpacity={locked ? 1.0 : 0.2}>
-            <Text style={[styles.valueReadout, {color: locked ? C.secondary : C.primary, fontSize: 11}]}>{(channel.mode || 'normal').replace('blend_','').toUpperCase()}{locked ? '' : ' ▾'}</Text>
+            <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
           {!locked && (
             <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(channel.id)}>
@@ -89,53 +96,37 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
       {/* Level Fader */}
       <View style={styles.levelRow}>
         <Text style={[styles.labelCaps, { width: 36 }]}>LEVEL</Text>
-        <HorizontalFader 
-          value={channel.fader} 
-          onChange={(v: number) => onFaderChange(channel.id, v)} 
-          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]} 
-          fillStyle={styles.faderFill} 
+        <HorizontalFader
+          value={channel.fader}
+          onChange={(v: number) => onFaderChange(channel.id, v)}
+          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
+          fillStyle={styles.faderFill}
         />
         <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13 }]}>
           {Math.round(channel.fader * 100)}
         </Text>
       </View>
 
-      {/* Hue Shift (disabled placeholder) */}
-      <View style={[styles.levelRow, { opacity: 0.35 }]} pointerEvents="none">
-        <Text style={[styles.labelCaps, { width: 36 }]}>HUE</Text>
-        <View style={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]} />
-        <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 10, color: C.secondary }]}>OFF</Text>
-      </View>
-
       <View style={styles.channelBody}>
-        {/* Pattern List (Left) */}
+        {/* Left column = the playlist (this IS the pattern list — "1 list to
+            rule them all"). Wider than the params column so long names fit. */}
         <View style={styles.patternListPanel}>
-          <View style={styles.patternListHeader}>
-            <Text style={styles.labelCaps}>PATTERN</Text>
-          </View>
-          <ScrollView style={{ flex: 1, padding: 4 }} nestedScrollEnabled>
-            {patterns.map((p: string, i: number) => {
-              const isActive = channel.pattern === p;
-              return (
-                <TouchableOpacity 
-                  key={p} 
-                  style={[styles.patternRow, isActive && styles.patternRowActive]}
-                  onPress={() => onPatternSelect(channel.id, p)}
-                >
-                  <Text style={[styles.patternNumber, isActive && {color: C.primary}]}>{(i+1).toString().padStart(2, '0')}</Text>
-                  <Text style={[styles.patternName, isActive && {color: C.primary}]} numberOfLines={1}>{p}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          <PlaylistPanel
+            channelId={channel.id}
+            channelLabel={isDeck ? 'DECK MAIN' : `CH ${index}`}
+            compact
+            locked={locked}
+          />
         </View>
 
-        {/* Parameters (Right) */}
+        {/* Right column = live parameter sliders only. Mute/Solo and the
+            transition controls have moved to full-column-width rows BELOW
+            this body so they stretch the full strip width (item 1). */}
         <View style={styles.paramsPanel}>
-          <ScrollView nestedScrollEnabled>
+          <ScrollView nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <View style={{ gap: 4 }}>
               {(channel.exports || []).map((exp: any) => (
-                <MiniFader 
+                <MiniFader
                   key={exp.id}
                   label={exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12)}
                   value={exp.v0 !== undefined ? exp.v0 : 0.5}
@@ -143,39 +134,39 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
                 />
               ))}
               {(!channel.exports || channel.exports.length === 0) && (
-                <Text style={[styles.labelCaps, {textAlign: 'center', marginTop: 16}]}>NO PARAMS</Text>
+                <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>
               )}
             </View>
           </ScrollView>
+        </View>
+      </View>
 
-          {/* Mute/Solo */}
-          <View style={styles.muteSoloRow}>
-            <TouchableOpacity 
-              style={[styles.toggleBtn, !channel.enabled && styles.toggleBtnMuted]}
-              onPress={() => onMuteToggle(channel.id, !channel.enabled)}>
-              <Text style={[styles.labelCaps, !channel.enabled && {color: '#FFF'}]}>Mute</Text>
+      {/* ── Bottom action rows: full strip width ─────────────────────── */}
+      <View style={styles.muteSoloRow}>
+        <TouchableOpacity
+          style={[styles.toggleBtn, !channel.enabled && styles.toggleBtnMuted]}
+          onPress={() => onMuteToggle(channel.id, !channel.enabled)}>
+          <Text style={[styles.labelCaps, !channel.enabled && { color: '#FFF' }]}>Mute</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
+          onPress={() => onSoloToggle(channel.id)}>
+          <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>Solo</Text>
+        </TouchableOpacity>
+      </View>
+
+      {!isDeck && (
+        <View style={styles.transitionBar}>
+          <TouchableOpacity
+            style={[styles.toggleBtn, styles.transitionBtn]}
+            onPress={() => onTransition && onTransition(channel.id, parseFloat(transTime) || 2.0, transMode, channel.mode)}>
+            <Text style={[styles.labelCaps, { color: '#FFF' }]}>Transition</Text>
+          </TouchableOpacity>
+          <View style={[styles.transitionDetails, { flex: 1 }]}>
+            <TouchableOpacity style={[styles.modeDropdown, { flex: 1, height: 32, justifyContent: 'center' }]} onPress={() => setShowTransPicker(true)}>
+              <Text style={[styles.valueReadout, { color: C.primary, fontSize: 11 }]}>{transMode.replace('trans_', '').toUpperCase()} ▾</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
-              onPress={() => onSoloToggle(channel.id)}>
-              <Text style={[styles.labelCaps, isSolo && {color: '#FFF'}]}>Solo</Text>
-            </TouchableOpacity>
-          </View>
-          
-          {/* Transition — only for mixer channels, not the deck */}
-          {!isDeck && (<>
-          <View style={[styles.muteSoloRow, { marginTop: 8 }]}>
-            <TouchableOpacity 
-              style={[styles.toggleBtn, { flex: 1, backgroundColor: C.secondary, borderColor: C.secondary }]}
-              onPress={() => onTransition && onTransition(channel.id, parseFloat(transTime) || 2.0, transMode, channel.mode)}>
-              <Text style={[styles.labelCaps, {color: '#FFF'}]}>Transition</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
-            <TouchableOpacity style={[styles.modeDropdown, { flex: 1, height: 32 }]} onPress={() => setShowTransPicker(true)}>
-              <Text style={[styles.valueReadout, {color: C.primary, fontSize: 11}]}>{transMode.replace('trans_','').toUpperCase()} ▾</Text>
-            </TouchableOpacity>
-            <TextInput 
+            <TextInput
               style={[styles.displayMono, { width: 40, textAlign: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, height: 32, fontSize: 13 }]}
               value={transTime}
               onChangeText={setTransTime}
@@ -184,9 +175,8 @@ const ChannelStrip = React.memo(({ channel, index, patterns, blends, transitions
             />
             <Text style={[styles.labelCaps, { width: 10 }]}>s</Text>
           </View>
-          </>)}
         </View>
-      </View>
+      )}
     </View>
   );
 });
@@ -194,7 +184,8 @@ ChannelStrip.displayName = 'ChannelStrip';
 
 // ── Main Mixer Screen ──────────────────────────────────────────────────
 export default function MixerScreen() {
-  const [patterns, setPatterns] = useState<string[]>([]);
+  const { width, height } = useWindowDimensions();
+  const isPortrait = width < height;
   const [channels, setChannels] = useState<any[]>([]);
   const channelsRef = useRef<any[]>([]);
   
@@ -235,6 +226,9 @@ export default function MixerScreen() {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
+          // Fan out so nested components (PlaylistPanel etc.) can react to
+          // engine broadcasts without owning their own socket.
+          engineEvents.emit(msg);
           if (msg.type === 'mixer') {
             setMaster(msg.master);
             // During active transitions, ignore engine mixer echoes —
@@ -273,9 +267,6 @@ export default function MixerScreen() {
     setIsConnected(conn.ok);
     if (!conn.ok) return;
 
-    const pRes = await fetchPatterns();
-    if (pRes.ok && pRes.data) setPatterns(pRes.data);
-
     const bRes = await fetchChannelBlends();
     if (bRes.ok && bRes.data) setBlends(bRes.data);
 
@@ -304,12 +295,9 @@ export default function MixerScreen() {
   }, [loadAll]);
 
   // ── Handlers ───────────────────────────────────────────────────────
-  const handlePatternSelect = async (channelId: string, pattern: string) => {
-    const channel = channelsRef.current.find(c => c.id === channelId);
-    if (!channel || channel.pattern === pattern) return;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, pattern } : c));
-    await updateMixerChannel(channelId, { pattern });
-  };
+  // (Pattern selection is handled by the per-channel PlaylistPanel, which talks
+  //  to /mixer/channels/:id/playlist/entry directly. No more "swap pattern"
+  //  button — every pattern lives in a playlist entry.)
 
   const handleFaderChange = async (channelId: string, level: number) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, fader: level } : c));
@@ -397,10 +385,63 @@ export default function MixerScreen() {
     await updateMixerChannel(channelId, { mode: newMode });
   };
 
+  // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
+  // whose in-memory params differ from the saved playlist entry. The user
+  // must decide whether to discard the live edits or capture them into the
+  // playlist before the lock actually releases.
+  const [unlockPrompt, setUnlockPrompt] = useState<{
+    channelId: string;
+    channelName: string;
+    pending: boolean;
+  } | null>(null);
+
   const handleLockToggle = async (channelId: string, locked: boolean) => {
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked } : c));
-    await updateMixerChannel(channelId, { locked });
+    // Locking is always immediate — freezing playlist saves is a safe op.
+    if (locked) {
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
+      await updateMixerChannel(channelId, { locked: true });
+      return;
+    }
+    // Unlocking: if the channel accumulated edits while locked, intercept
+    // and let the operator pick save-or-discard before we actually release
+    // the lock. The engine's `dirty` flag rides in on every `mixer` WS
+    // broadcast (see serializeMixerState).
+    const ch = channelsRef.current.find(c => c.id === channelId);
+    if (ch?.dirty) {
+      setUnlockPrompt({ channelId, channelName: ch.name || ch.id, pending: false });
+      return;
+    }
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
+    await updateMixerChannel(channelId, { locked: false });
   };
+
+  // Resolve the unlock-dirty prompt. `mode` is the user's choice:
+  //   - 'save'    → capture live params into the playlist entry, then unlock
+  //   - 'discard' → snap params back to the saved entry defaults, then unlock
+  //   - 'cancel'  → close the modal, leave the channel locked
+  const resolveUnlockPrompt = useCallback(async (mode: 'save' | 'discard' | 'cancel') => {
+    const prompt = unlockPrompt;
+    if (!prompt) return;
+    if (mode === 'cancel') {
+      setUnlockPrompt(null);
+      return;
+    }
+    setUnlockPrompt({ ...prompt, pending: true });
+    const op = mode === 'save'
+      ? captureMixerChannelDefaults(prompt.channelId)
+      : discardMixerChannelDefaults(prompt.channelId);
+    const res = await op;
+    if (!res.ok) {
+      // Keep the channel locked and surface the failure. The user can retry.
+      setUnlockPrompt({ ...prompt, pending: false });
+      console.warn('[Mixer] Unlock-dirty resolve failed:', res.error);
+      return;
+    }
+    // Persisted (or reverted) cleanly — now drop the lock.
+    setChannels(chs => chs.map(c => c.id === prompt.channelId ? { ...c, locked: false, dirty: false } : c));
+    await updateMixerChannel(prompt.channelId, { locked: false });
+    setUnlockPrompt(null);
+  }, [unlockPrompt]);
 
   const handleControlChange = (channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
@@ -414,8 +455,26 @@ export default function MixerScreen() {
     }
   };
 
-  const handleAddChannel = async () => {
-    await addMixerChannel(patterns[0] || '08_ocean_liner', 'New Layer', 'blend_screen', 1.0);
+  // Adding a channel is playlist-first. The "+ ADD CHANNEL" button opens the
+  // picker so the user can spin up a new layer with one tap. The first row is
+  // always "+ DEFAULT" for the fastest possible add.
+  const [addPickerOpen, setAddPickerOpen] = useState(false);
+  const [addPickerPlaylists, setAddPickerPlaylists] = useState<string[]>([]);
+
+  const openAddChannelPicker = async () => {
+    const lib = await fetchPlaylists();
+    setAddPickerPlaylists(lib.ok && lib.data ? lib.data : ['default']);
+    setAddPickerOpen(true);
+  };
+
+  const handleAddChannelWithPlaylist = async (playlistName: string) => {
+    setAddPickerOpen(false);
+    await addMixerChannel({
+      playlist: playlistName,
+      name: playlistName === 'default' ? 'New Layer' : playlistName,
+      mode: 'blend_screen',
+      fader: 1.0,
+    });
   };
 
   const handleMasterChange = async (val: number) => {
@@ -554,27 +613,40 @@ export default function MixerScreen() {
   return (
     <View style={styles.container}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          <Text style={styles.brandText}>Marsin Mixer</Text>
-          <View style={styles.statusBadge}>
+      <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 16 }}>
+          <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>Marsin Mixer</Text>
+          <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
             <View style={[styles.statusDot, !isConnected && {backgroundColor: C.error}]} />
-            <Text style={[styles.labelCaps, {color: isConnected ? '#00a86b' : C.error}]}>
-              {isConnected ? 'CONNECTED' : 'OFFLINE'}
-            </Text>
+            {!isPortrait && (
+              <Text style={[styles.labelCaps, {color: isConnected ? '#00a86b' : C.error}]}>
+                {isConnected ? 'CONNECTED' : 'OFFLINE'}
+              </Text>
+            )}
           </View>
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Text style={styles.labelCaps}>MASTER</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+          {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
           <HorizontalFader 
             value={master} 
             onChange={handleMasterChange} 
             trackStyle={[styles.faderTrack, { width: 180 }]} 
             fillStyle={styles.faderFill} 
           />
-          <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}]}>{Math.round(master * 100)}</Text>
-          <TouchableOpacity style={styles.addBtn} onPress={handleAddChannel}>
-            <Text style={[styles.labelCaps, {color: '#FFF'}]}>+ ADD CHANNEL</Text>
+          <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
+          {/* One-tap default add: fastest path */}
+          <TouchableOpacity
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            onPress={() => handleAddChannelWithPlaylist('default')}
+          >
+            <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>+ DEFAULT</Text>
+          </TouchableOpacity>
+          {/* Open the playlist picker for a curated add */}
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            onPress={openAddChannelPicker}
+          >
+            <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -594,17 +666,15 @@ export default function MixerScreen() {
         {channels.slice(1).map((channel, idx) => {
           const isSoloActive = soloRef.current === channel.id;
           return (
-            <ChannelStrip 
-              key={channel.id} 
-              index={idx + 1} 
-              channel={channel} 
+            <ChannelStrip
+              key={channel.id}
+              index={idx + 1}
+              channel={channel}
               isSolo={isSoloActive}
               isDeck={false}
-              patterns={patterns} 
               blends={blends}
               transitions={transitionsList}
               visData={visDataRef.current[channel.id]}
-              onPatternSelect={handlePatternSelect}
               onFaderChange={handleFaderChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
@@ -619,7 +689,7 @@ export default function MixerScreen() {
         })}
         {channels.length === 0 && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={[styles.labelCaps, {fontSize: 14}]}>NO CHANNELS — TAP &quot;+ ADD CHANNEL&quot;</Text>
+            <Text style={[styles.labelCaps, { fontSize: 14 }]}>NO CHANNELS — TAP &quot;+ DEFAULT&quot; OR &quot;+ FROM PLAYLIST&quot;</Text>
           </View>
         )}
       </ScrollView>
@@ -628,6 +698,76 @@ export default function MixerScreen() {
       <View style={styles.globalRigBar}>
         <RigGlobals variant="mixer" />
       </View>
+
+      {/* ── Add-channel playlist picker ─────────────────────────────── */}
+      <Modal transparent visible={addPickerOpen} animationType="fade" onRequestClose={() => setAddPickerOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAddPickerOpen(false)}>
+          <View style={styles.modalContent}>
+            <Text style={[styles.labelCaps, {marginBottom: 12}]}>NEW CHANNEL · PICK A PLAYLIST</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {addPickerPlaylists.map(name => (
+                <TouchableOpacity
+                  key={name}
+                  style={[styles.modalRow, name === 'default' && styles.modalRowActive]}
+                  onPress={() => handleAddChannelWithPlaylist(name)}
+                >
+                  <Text style={[styles.valueReadout, name === 'default' && { color: C.primary }]}>
+                    {name === 'default' ? '★ default' : name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Unlock-dirty prompt ─────────────────────────────────────── */}
+      {/* Channel has unsaved param edits made while locked. The user must
+          choose to either persist them into the playlist entry or roll
+          back to the saved defaults before the lock actually releases. */}
+      <Modal transparent visible={!!unlockPrompt} animationType="fade" onRequestClose={() => resolveUnlockPrompt('cancel')}>
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => { if (!unlockPrompt?.pending) resolveUnlockPrompt('cancel'); }}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={[styles.modalContent, { maxWidth: 420 }]}>
+              <Text style={[styles.labelCaps, { marginBottom: 8 }]}>UNSAVED PARAM CHANGES</Text>
+              <Text style={{ color: C.text, fontSize: 14, lineHeight: 20, marginBottom: 16 }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold' }}>{unlockPrompt?.channelName}</Text>
+                {' was edited while locked. What should we do with those changes before unlocking?'}
+              </Text>
+              <View style={{ gap: 8 }}>
+                <TouchableOpacity
+                  style={[styles.unlockPromptBtn, styles.unlockPromptSave]}
+                  onPress={() => resolveUnlockPrompt('save')}
+                  disabled={!!unlockPrompt?.pending}
+                >
+                  <Text style={[styles.unlockPromptBtnText, { color: C.primary }]}>SAVE TO PLAYLIST</Text>
+                  <Text style={styles.unlockPromptHint}>Capture current params into the active entry</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.unlockPromptBtn, styles.unlockPromptDiscard]}
+                  onPress={() => resolveUnlockPrompt('discard')}
+                  disabled={!!unlockPrompt?.pending}
+                >
+                  <Text style={[styles.unlockPromptBtnText, { color: '#B3261E' }]}>DISCARD CHANGES</Text>
+                  <Text style={styles.unlockPromptHint}>Reload saved params from the playlist</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.unlockPromptBtn, styles.unlockPromptCancel]}
+                  onPress={() => resolveUnlockPrompt('cancel')}
+                  disabled={!!unlockPrompt?.pending}
+                >
+                  <Text style={[styles.unlockPromptBtnText, { color: C.secondary }]}>KEEP LOCKED</Text>
+                  <Text style={styles.unlockPromptHint}>Stay locked, decide later</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -735,6 +875,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.ghostBorder,
     overflow: 'hidden',
+    // Stretch to the parent ScrollView's height so the playlist column fills
+    // the entire visible strip area, regardless of how many entries exist.
+    alignSelf: 'stretch',
     ...globalStyles.ambientShadow,
   },
   channelCardLocked: {
@@ -799,53 +942,26 @@ const styles = StyleSheet.create({
   channelBody: {
     flex: 1,
     flexDirection: 'row',
+    minHeight: 0,
   },
   patternListPanel: {
-    width: '50%',
-    borderRightWidth: 1,
-    borderRightColor: C.ghostBorder,
-  },
-  patternListHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 8,
-    backgroundColor: C.surfaceContainerHigh,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  patternRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  patternRowActive: {
-    backgroundColor: 'rgba(0,104,117,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(0,104,117,0.3)',
-  },
-  patternNumber: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 10,
-    color: C.secondary,
-  },
-  patternName: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 11,
-    color: C.text,
-    flex: 1,
+    // Wider than params (item 1): the list is the channel's primary surface.
+    width: '60%',
+    padding: 6,
   },
   paramsPanel: {
-    width: '50%',
-    padding: 12,
-    justifyContent: 'space-between',
+    width: '40%',
+    padding: 8,
   },
+  // Mute / Solo span the full strip width below the body.
   muteSoloRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: C.ghostBorder,
   },
   toggleBtn: {
     flex: 1, height: 32,
@@ -856,6 +972,24 @@ const styles = StyleSheet.create({
   toggleBtnMuted: {
     backgroundColor: C.error,
     borderColor: C.error,
+  },
+  // Transition action + dropdown + time on its own full-width row.
+  transitionBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    paddingTop: 4,
+    gap: 6,
+  },
+  transitionBtn: {
+    backgroundColor: C.secondary,
+    borderColor: C.secondary,
+    height: 36,
+  },
+  transitionDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   modalOverlay: {
     flex: 1,
@@ -882,5 +1016,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,104,117,0.1)',
     borderWidth: 1,
     borderColor: 'rgba(0,104,117,0.3)',
+  },
+  unlockPromptBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  unlockPromptSave: {
+    borderColor: 'rgba(0,104,117,0.4)',
+    backgroundColor: 'rgba(0,104,117,0.08)',
+  },
+  unlockPromptDiscard: {
+    borderColor: 'rgba(179,38,30,0.4)',
+    backgroundColor: 'rgba(179,38,30,0.06)',
+  },
+  unlockPromptCancel: {
+    borderColor: C.ghostBorder,
+  },
+  unlockPromptBtnText: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 13,
+    letterSpacing: 0.5,
+  },
+  unlockPromptHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: C.icon,
+    marginTop: 2,
   },
 });

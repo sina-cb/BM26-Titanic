@@ -1,84 +1,199 @@
-# TITANIC Control Podium (`cli.py`)
+# `control_podium/` — TITANIC LoRa Mesh + Bridge
 
-This repository contains the remote show control firmware and companion software for the TITANIC lighting installation. 
-It uses **raw LoRa** for wireless, infrastructure-free communication between a portable control podium and the main visual server.
+Everything that lives between the **iPad / laptop in the captain's hand**
+and the **MarsinEngine running the show** lives in this directory.
 
-This README serves as a guide for operating the automated unified `cli.py` tool.
+The system is a **half-duplex LoRa mesh** of small `T2|…` ASCII frames
+(authenticated + encrypted with AES-128-GCM) that carries operator
+commands and engine status between Heltec V4 radios. A host-side
+**bridge companion** translates those frames into REST/WebSocket calls
+against the LAN MarsinEngine and publishes engine state back over the
+air. Multiple **client companions** (captain handhelds + crew read-only
+nodes) sit on the other side of the airwaves.
 
-> [!NOTE]
-> For details on the desktop PySide6 UI, please read the [Companion App README](companions/README.md).
+> **One source of truth for the design:** [`docs/07_control_podium.md`](../docs/07_control_podium.md). Read that first when picking up new work — it's the protocol spec, the topology, the milestones, and the bring-up plan all in one place.
 
-## Philosophy
+---
 
-The `cli.py` script replaces all previous disconnected build, flash, and configuration scripts. It is the single point of entry for managing the hardware lifecycle of the TITANIC controllers. It abstracts away `platformio`, `esptool`, USB port discovery, and MAC address mapping.
+## What lives where
 
-## The Config System
+```
+control_podium/
+├── README.md                  ← (this file) high-level orientation
+├── AGENTS.md                  ← rules for AI/human agents working here
+├── .config.nodes.yaml         ← node id ↔ role ↔ USB-MAC pairing (committed)
+├── .config.commands.yaml      ← cmd/qry allowlist + per-cmd role gating (committed)
+├── .config.bridge.yaml        ← bridge runtime: engine URL, pub cadence (committed)
+│
+├── comms/                     ← THE PROTOCOL: frames, AEAD, replay window,
+│                                ACL, registry, sim_bus, USB-CDC + sim transports,
+│                                Pi-bridge runtime, MarsinEngine REST client.
+│                                See comms/README.md for the module map.
+│
+├── companions/                ← HOST-SIDE APPS that drive the radios:
+│                                client_companion (captain/crew CLI),
+│                                bridge_companion (server-side translator),
+│                                + 3 acceptance demos (mesh / hil_secured / hil_full).
+│                                See companions/README.md.
+│
+├── firmware/                  ← C++ FIRMWARE for the Heltec radios:
+│                                src/podium_tx/ (client), src/server_rx/ (server),
+│                                src/titanic_common.h (shared logic),
+│                                deploy.py (MAC-locked role-aware flasher).
+│                                See firmware/README.md.
+│
+├── tests/                     ← pytest unit + e2e-sim suite. Run with
+│                                PYTHONPATH=. pytest control_podium/tests/ -q
+│
+└── utils/                     ← Small shared helpers (USB MAC discovery,
+                                 serial parser used by RadioPortSerial).
+```
 
-The CLI relies on three files in the `control_podium/` directory:
-1. `.config.yaml` — The **Source of Truth** (committed to Git). Defines roles (podium, server), radio parameters (915MHz, SF7), and DMX universes.
-2. `.config.pairing.yaml` — Maps physical board MAC addresses to roles (gitignored).
-3. `.config.deploy.yaml` — Tracks the last successful deployment timestamps and ports (gitignored).
+The fourth piece of the system that doesn't live here:
 
-## Commands
+* **`marsin_engine/secret.yaml`** — the shared AES-128 pre-shared key.
+  Single source of truth across the whole TITANIC stack (this subsystem,
+  the engine, and any future CaptainPad iPad app). **Gitignored**, with
+  `marsin_engine/secret.yaml.example` checked in as the template.
+  Companions refuse to start without this file.
 
-All commands should be executed from within the `control_podium/` directory.
+---
 
-### 1. `python cli.py status`
-Shows the complete state of the ecosystem.
-- Reads paired MAC addresses and scans active USB ports to report if boards are **ONLINE** or **OFFLINE**.
-- Displays the LoRa radio configuration and OLED timeout settings.
-- Shows the timestamp of the last successful deployment.
+## The two-app production topology
 
-### 2. `python cli.py pair`
-Automatically detects connected Heltec ESP32-S3 boards via USB.
-- Scans `esptool` properties to find Heltec MAC addresses.
-- Prompts the user to assign each detected board to a role defined in `.config.yaml` (e.g., "podium" or "server").
-- Saves the mapping to `.config.pairing.yaml`.
-- **Must be run once when connecting new hardware.**
+```
+[captain laptop]                                            [bridge laptop / Pi]
 
-### 3. `python cli.py deploy`
-The most powerful command. Completely automates the build and flash process.
-- **Builds** the C++ firmware using PlatformIO for all roles.
-- **Resolves Ports** automatically by looking up the MAC addresses in the pairing file.
-- **Flashes** the boards via USB without requiring the user to hold the BOOT button (uses DTR/RTS auto-reset).
-- **Reboots** the boards robustly (trying multiple serial touch modes to kick the ESP32 out of the bootloader).
-- **Verifies** by reading the serial output to confirm the board reached the `READY` state and is advertising BLE.
-- **Pings** between the podium and server (if both are flashed) to prove the raw LoRa RF link is working and report the RSSI.
+companions/client_companion.py        LoRa air        companions/bridge_companion.py
+   │  (does AEAD)                     (T2 frames)        │  (does AEAD + replay window)
+   ▼                                                     ▼
+USB-CDC ──→ Heltec 0x0A ─────────────────────────→ Heltec 0x01 ──→ USB-CDC
+            (firmware = byte relay)                   (firmware = byte relay)
 
-*Options:*
-- `python cli.py deploy --role podium` (Deploy only specific roles)
-- `python cli.py deploy --build-only` (Verify compilation without flashing)
-- `python cli.py deploy --skip-ping` (Skip the end-to-end RF test)
+                                                                  HTTP / WS
+                                                                       │
+                                                                       ▼
+                                                          MarsinEngine (10.1.1.172:6968)
+                                                                       │
+                                                                       ▼
+                                                          DMX / sACN → fixtures
+```
 
-### 4. `python cli.py monitor`
-Launches the PySide6 desktop **Control Center**.
-- This is the UI the user interacts with during a show.
-- Connects automatically to the Podium board over BLE (or Serial).
-- See the [Companion README](companions/README.md) for UI architecture details.
+Both companions can run on the same laptop today (with both Heltecs
+plugged into the same machine). Splitting them across hosts later is a
+no-code change — the engine URL is in YAML and the USB-MAC pairing is
+per-host.
 
-### 5. `python cli.py test`
-Runs the automated integration test suite suite (`pytest`).
+The Heltec firmware never decodes a frame, never parses ACL, never holds
+the AES key, and never speaks to MarsinEngine. It is a pure ASCII byte
+relay between USB-CDC and the SX1262 — and that simplicity is the whole
+reason this design works on a $30 board.
 
-## Concepts Explained
+---
 
-### LoRa Radio Parameters (e.g., SF7)
-When you see `SF7` in the application or config, this refers to **Spreading Factor 7**.
-- **Spreading Factor (SF):** Determines the chirp rate of the raw LoRa signal. Lower values like `SF7` transmit data much faster (lower latency) but have shorter range. Higher values like `SF12` have extreme range but are very slow. Since TITANIC needs near-instant show-control triggers (latency ~400ms), `SF7` is chosen as the perfect balance between speed and visual line-of-sight range.
-- **Bandwidth (BW):** Typically `250.0` kHz. A wider bandwidth equals a wider pipe for faster transmissions.
+## How to develop in here
 
-### Firmware Versioning
-When the Control Center displays "Firmware 1.3-ble-sync deployed," this version string is controlled purely by your `.config.yaml` Source of Truth under the `firmware_version` key.
-- To increment the firmware version (e.g. from `1.3` to `1.4`), simply edit the `firmware_version` line in `.config.yaml`.
-- The next time you run `python cli.py deploy`, that exact version string will be compiled into the C++ firmware, burned into both the Podium and Server chips, embedded onto their OLED screens, and reflected instantly in the desktop Control Center UI.
+### Day-to-day loop (no hardware needed)
 
-### OLED Power Saver
-To prevent screen burn-in and save battery while running wirelessly, the firmware automatically sleeps the OLED panels.
-- The timeout duration is controlled by the `display: timeout_sec:` block in your `.config.yaml` (default 10s).
-- The `cli.py` script automatically parses this YAML key and injects it as a C++ compile-time macro (`OLED_TIMEOUT_SEC`) during the deployment process.
+```bash
+# from the repo root
+cd control_podium
+PYTHONPATH=. ../.venv-dev/bin/python -m companions.mesh_demo -q
+```
 
-## Typical Workflow
+That spins up the simulated radio bus + the bridge + a captain client +
+a crew client + a mock MarsinEngine, and asserts wire shapes AND engine
+state changes. Must print `ALL CHECKS PASSED — mesh is HIL-ready` and
+exit 0. This is the baseline check before any change.
 
-1. Plug in your Heltec V4 boards via USB.
-2. `python cli.py pair` (Assign board A to podium, board B to server)
-3. `python cli.py deploy` (Go get a coffee while it builds, flashes, reboots, and verifies the radio link)
-4. `python cli.py monitor` (Launch the GUI)
+For the unit suite:
+
+```bash
+PYTHONPATH=. ../.venv-dev/bin/python -m pytest control_podium/tests/ -q
+```
+
+(Run from the repo root, with `PYTHONPATH=.`. The test imports use
+absolute paths like `from control_podium.comms.replay import …`.)
+
+### When you change the protocol
+
+Touchpoints, in order:
+
+1. `comms/frame.py` (encoding / decoding) — must round-trip.
+2. `comms/secure.py` (AEAD codec) — must hold the test vector at
+   `tests/test_comms_secure.py`.
+3. `comms/replay.py` (per-source counter window).
+4. `comms/bridge.py` (dispatch).
+5. `tests/test_comms_e2e_sim.py` — add the new behaviour as an end-to-end
+   assertion, NOT just a unit test.
+6. Mesh demo + HIL demos pass.
+
+### When you change the firmware
+
+See [`firmware/README.md`](firmware/README.md). Short version:
+
+```bash
+PYTHONPATH=. python -m control_podium.firmware.deploy --node 0x01 --build-only
+PYTHONPATH=. python -m control_podium.firmware.deploy --node 0x0A --build-only
+# then with the boards plugged in:
+PYTHONPATH=. python -m control_podium.firmware.deploy --node 0x01
+PYTHONPATH=. python -m control_podium.firmware.deploy --node 0x0A
+PYTHONPATH=. python -m control_podium.companions.hil_companion_demo
+```
+
+The `deploy.py` script refuses to flash a board whose USB MAC isn't
+paired in `.config.nodes.yaml`, so you can't accidentally turn a captain
+handheld into the server radio when both are plugged in.
+
+### When you add a new operator command
+
+1. Add the entry to `.config.commands.yaml` with the right role
+   (`captain` for write commands, no role gate for queries).
+2. Implement the dispatch in `comms/bridge.py` (one method on
+   `EngineClient` + one branch in `_exec_cmd`).
+3. Add a sim-bus assertion in `tests/test_comms_e2e_sim.py`.
+4. Re-run `mesh_demo.py` then `hil_companion_demo.py`.
+
+### When you add a new node (radio handheld)
+
+1. Add the entry to `.config.nodes.yaml` (next free id, `name`, `role`).
+2. Plug the new Heltec in.
+3. `python -m control_podium.firmware.deploy --node 0x<id>` — first
+   deploy will offer to auto-pair the USB MAC.
+4. The bridge picks up the new node on next start. No code change needed.
+
+---
+
+## What this subsystem is deliberately NOT
+
+These three things are explicitly **out of scope** here. If you need
+them, they live elsewhere — please don't reintroduce them:
+
+* **Cooldowns / rate limiting** — pacing of slider drags, debouncing of
+  pattern picks, per-knob throttles. That's the captain UI's job (the
+  `client_companion.py` interactive loop, and eventually CaptainPad).
+  The bridge is the protocol, not the politeness layer.
+* **Fire-effect commands** — the Flame Effect Controller (FW-SPEC-001)
+  is a separate firmware on separate hardware (WT32-ETH01) with a
+  separate protocol. The radio mesh has **no** fire path; the bridge
+  HARD-rejects any cmd containing `fire` regardless of role.
+* **Long-range visual control surface** — that's its own program / its
+  own firmware. When it ships it will join this mesh as a `captain`-role
+  client driving the same `cmd` allowlist, but its hardware, button
+  mapping, and operator UX are not this subsystem's problem.
+
+See [`docs/07_control_podium.md`](../docs/07_control_podium.md) §1 (Why a
+new design) and §17 (Workflow for future agents) for the full reasoning.
+
+---
+
+## Where to look first
+
+| You want to…                                       | Read this                                                     |
+|----------------------------------------------------|---------------------------------------------------------------|
+| Understand the protocol / topology / threat model  | [`docs/07_control_podium.md`](../docs/07_control_podium.md)   |
+| Run captains + bridges on real hardware            | [`companions/README.md`](companions/README.md)                |
+| Flash a Heltec or pair a new board                 | [`firmware/README.md`](firmware/README.md)                    |
+| Add a new command / role / wire-shape              | [`comms/README.md`](comms/README.md)                          |
+| Set up the shared AEAD secret on a new machine     | [`marsin_engine/secret.yaml.example`](../marsin_engine/secret.yaml.example) |
+| Verify the system after any change                 | `companions.mesh_demo` (sim), `companions.hil_companion_demo` (HIL) |

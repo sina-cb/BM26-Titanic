@@ -4,6 +4,13 @@ const path = require('path');
 const config = getDefaultConfig(__dirname);
 
 config.transformer.babelTransformerPath = require.resolve('./yaml-transformer.js');
+// IMPORTANT: yaml/yml are in Metro's default `assetExts`, which means
+// `require('./config.yaml')` resolves to an asset URI string instead of the
+// transformed JS module. Move them to `sourceExts` so the YAML transformer
+// (yaml-transformer.js) actually runs and emits `export default { … }`.
+config.resolver.assetExts = config.resolver.assetExts.filter(
+  (ext) => ext !== 'yaml' && ext !== 'yml',
+);
 config.resolver.sourceExts.push('yaml', 'yml');
 
 function escapeRegExp(value) {

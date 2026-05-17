@@ -1,0 +1,21 @@
+presets:
+  - name: Front
+    key: front
+    position:
+      x: -5.844
+      'y': 10.401
+      z: -32.684
+    target:
+      x: 0
+      'y': 4
+      z: -0.0
+  - name: Aerial
+    key: aerial
+    position:
+      x: -1.272
+      'y': 40.24
+      z: -10.424
+    target:
+      x: -0.996
+      'y': 3.814
+      z: -0.668

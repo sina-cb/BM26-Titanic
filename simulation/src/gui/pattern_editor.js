@@ -248,6 +248,7 @@ async function ensureGlobalParamsGui() {
 
   paramGuiInstance = new GUI({ title: '🎛️ Engine Parameters' });
   const dom = paramGuiInstance.domElement;
+  dom.id = 'engine-params-panel';
   dom.style.position = 'fixed';
   dom.style.zIndex = '9999';
 

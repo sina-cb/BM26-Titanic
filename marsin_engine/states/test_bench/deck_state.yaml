@@ -1,129 +1,24 @@
 channel:
-  id: ch_base_1778209259268
+  id: ch_base_1778870620551
   name: Base
-  pattern: 01_cylon_sweep
+  pattern: 00_golden_hour_wash
   mode: blend_screen
   fader: 1
   enabled: true
-  localControls: {}
-  patternCache:
-    02_phase_cathedral: {}
-    12_breathing:
-      '1115050250':
-        v0: 0.29
-        v1: 0
-        v2: 0
-    22_abyssal_sway_garden:
-      '1115050250':
-        v0: 0.3
-        v1: 0
-        v2: 0
-    09_cyclone:
-      '1364490687':
-        v0: 0.58
-        v1: 0
-        v2: 0
-      '1381268306':
-        v0: 0.32
-        v1: 0
-        v2: 0
-      '3680310977':
-        v0: 0.63
-        v1: 0
-        v2: 0
-    18_deep_space_lattice:
-      '667518146':
-        v0: 0.5
-        v1: 0
-        v2: 0
-      '1115050250':
-        v0: 0.62
-        v1: 0
-        v2: 0
-    00_golden_hour_wash: {}
-    05_orbital_attractor_field:
-      '1115050250':
-        v0: 0.23
-        v1: 0
-        v2: 0
-    04_beat_folded_helix:
-      '1115050250':
-        v0: 0.87
-        v1: 0
-        v2: 0
-      '2065987366':
-        v0: 0.54
-        v1: 0
-        v2: 0
-    23_prismatic_strange_attractors:
-      '1381268306':
-        v0: 0.21
-        v1: 0
-        v2: 0
-    24_chromatic_murmuration:
-      '532406411':
-        v0: 0.32
-        v1: 0
-        v2: 0
-      '803978575':
-        v0: 0.89
-        v1: 0
-        v2: 0
-      '1115050250':
-        v0: 0.05
-        v1: 0
-        v2: 0
-      '2986872652':
-        v0: 0.86
-        v1: 0
-        v2: 0
-    07_shimmer:
-      '323270901':
-        v0: 0.75
-        v1: 0
-        v2: 0
-      '1997822791':
-        v0: 0.75
-        v1: 0
-        v2: 0
-      '2077173573':
-        v0: 0.79
-        v1: 0
-        v2: 0
-      '3317771752':
-        v0: 0.45
-        v1: 0
-        v2: 0
-      '3518326632':
-        v0: 0.39
-        v1: 0
-        v2: 0
-      '3680310977':
-        v0: 0.81
-        v1: 0
-        v2: 0
-    08_ocean_liner:
-      '23515769':
-        v0: 0.85
-        v1: 0
-        v2: 0
-      '1115050250':
-        v0: 0.83
-        v1: 0
-        v2: 0
-      '1857415886':
-        v0: 0.36
-        v1: 0
-        v2: 0
-      '2929877459':
-        v0: 0.33
-        v1: 0
-        v2: 0
-      '3651408529':
-        v0: 0.59
-        v1: 0
-        v2: 0
-      '4193208886':
-        v0: 0.39
-        v1: 0
-        v2: 0
+  localControls:
+    '682166867':
+      v0: 0.42
+      v1: 0
+      v2: 0
+    '3064579436':
+      v0: 0
+      v1: 0
+      v2: 0
+  playlist:
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 0
+    autopilot:
+      active: false
+      delay_s: 30
+      shuffle: false

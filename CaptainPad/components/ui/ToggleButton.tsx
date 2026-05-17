@@ -17,7 +17,7 @@ export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: num
       ]}
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : Colors.light.text, textAlign: 'center' }}>
-        {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
+        {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
       </Text>
     </TouchableOpacity>
   );
@@ -38,7 +38,7 @@ export const MomentaryButton = ({ id, name, onChange }: { id: number, name: stri
       ]}
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : Colors.light.text, textAlign: 'center' }}>
-        {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
+        {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
       </Text>
     </TouchableOpacity>
   );

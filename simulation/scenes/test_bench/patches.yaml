@@ -1,85 +1,81 @@
 patches:
   Par 1:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 136
+    dmxUniverse: 2
+    dmxAddress: 1
     controllerId: 1
     sectionId: 1
     fixtureId: 1
     viewMask: 0
   Par 2:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 146
+    dmxUniverse: 2
+    dmxAddress: 11
     controllerId: 1
     sectionId: 1
     fixtureId: 2
     viewMask: 0
   Par 3:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 156
+    dmxUniverse: 2
+    dmxAddress: 21
     controllerId: 1
     sectionId: 1
     fixtureId: 3
     viewMask: 0
   Par 4:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 166
+    dmxUniverse: 2
+    dmxAddress: 31
     controllerId: 1
     sectionId: 1
     fixtureId: 4
     viewMask: 0
   Vintage Left:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 176
+    dmxUniverse: 2
+    dmxAddress: 41
     controllerId: 1
     sectionId: 2
     fixtureId: 5
     viewMask: 0
   Vintage Right:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 209
+    dmxUniverse: 2
+    dmxAddress: 74
     controllerId: 1
     sectionId: 2
     fixtureId: 6
     viewMask: 0
   Bar Left:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 242
+    dmxUniverse: 2
+    dmxAddress: 107
     controllerId: 1
     sectionId: 3
     fixtureId: 7
     viewMask: 0
   Bar Right:
     controllerIp: 10.1.1.102
-    dmxUniverse: 1
-    dmxAddress: 362
+    dmxUniverse: 2
+    dmxAddress: 226
     controllerId: 1
     sectionId: 3
     fixtureId: 8
     viewMask: 0
-  # Intentional fog/haze DMX collision:
-  # Both special-effects foggers share universe 1, address 511 on purpose.
-  # This lets one fogger control path fire both units together. Do not "fix"
-  # this overlap unless the physical patch design changes.
   ChauvetHaze4D 10:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
     dmxAddress: 511
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    controllerId: 1
+    sectionId: 4
+    fixtureId: 9
     viewMask: 0
   TEFogMachine 10:
     controllerIp: 10.1.1.102
     dmxUniverse: 1
-    dmxAddress: 511
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    dmxAddress: 512
+    controllerId: 1
+    sectionId: 4
+    fixtureId: 10
     viewMask: 0

@@ -1,135 +1,152 @@
 """
-Shared fixtures for Heltec Raw LoRa HIL tests.
+Shared fixtures for control_podium tests.
 
-Both Heltec V4 controllers must be plugged in via USB.
-Ports are resolved by MAC address from .config.pairing.yaml.
+Two flavors of test live alongside each other in this directory:
 
-Usage:
-    cd control_podium
-    python -m pytest tests/ -v -s
+* **Unit / sim tests** (``test_comms_*``) — no hardware. They drive the
+  Python comms stack directly or against ``sim_bus``. These run anywhere.
+* **HIL tests** (``test_hil_*``, plus any test that takes the
+  ``server_port`` / ``podium_port`` fixtures) — require both Heltec V4
+  controllers plugged into USB and recorded in ``.config.nodes.yaml``.
+
+The HIL fixtures are **opt-in**: tests that don't request them never
+trigger a hardware probe. Tests that do request them either get the
+right ports back, or the test is skipped with a clear message
+(rather than session-failing on machines without hardware).
+
+Single source of truth for board ↔ MAC mapping is
+``.config.nodes.yaml``, written by ``firmware/deploy.py``.
 """
-import os
-os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+from __future__ import annotations
+
+import os
+import sys
 import time
-import threading
-import pytest
-import serial
-import yaml
 from pathlib import Path
 from collections import deque
+from typing import Dict, Optional
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils import discovery
+import pytest
+import yaml
 
+# Ensure ``control_podium`` is importable when pytest is invoked from the
+# repo root with ``PYTHONPATH=.``.
+_HERE = Path(__file__).resolve()
+_PODIUM_DIR = _HERE.parent.parent
+sys.path.insert(0, str(_PODIUM_DIR.parent))  # repo root, for `control_podium.*`
+sys.path.insert(0, str(_PODIUM_DIR))         # in-package imports
 
-# -- Config ------
-PAIRING_PATH = Path(__file__).parent.parent / ".config.pairing.yaml"
-HEALTH_CHECK_TIMEOUT = 120   # 2 minutes
-HEALTH_CHECK_INTERVAL = 5
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-
-def load_heltec_config():
-    """Load .config.pairing.yaml for MAC discovery."""
-    with open(PAIRING_PATH, "r") as f:
-        return yaml.safe_load(f)
-
-
-# ── Fixtures ────────────────────────────────────────────────────────
-
-@pytest.fixture(scope="session")
-def config():
-    """Load heltec config — fail fast if missing."""
-    try:
-        return load_heltec_config()
-    except FileNotFoundError:
-        pytest.fail(
-            f"Config not found: {CONFIG_PATH}. "
-            "This file defines node ports, MACs, and radio settings."
-        )
+# ── Config source ─────────────────────────────────────────────────────
+NODES_PATH = _PODIUM_DIR / ".config.nodes.yaml"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def health_check(config):
-    """Gate ALL tests: verify both Heltec nodes are connected (MAC discovery).
-
-    Does NOT open serial ports — that's left to the port fixtures so
-    each test only holds the ports it needs.
+def _load_hil_pairings() -> Dict[str, Dict[str, str]]:
+    """Return ``{role_or_name: {mac, node_id, role}}`` from
+    ``.config.nodes.yaml``. Empty dict if missing — HIL tests self-skip.
     """
-    nodes = ["podium", "server"]
-    found = {}
+    if not NODES_PATH.exists():
+        return {}
+    try:
+        doc = yaml.safe_load(NODES_PATH.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+    nodes_by_id = doc.get("nodes") or {}
+    out: Dict[str, Dict[str, str]] = {}
+    for nid, n in nodes_by_id.items():
+        if not isinstance(n, dict):
+            continue
+        mac = n.get("usb_mac")
+        if not mac:
+            continue
+        # Index by both name and role so test code can ask for either.
+        entry = {"mac": mac, "node_id": nid, "role": n.get("role")}
+        if n.get("name"):
+            out[n["name"]] = entry
+        if n.get("role"):
+            out.setdefault(n["role"], entry)
+    return out
 
-    print("\n" + "=" * 60)
-    print("  HEALTH CHECK — waiting for Heltec controllers...")
-    print(f"  Timeout: {HEALTH_CHECK_TIMEOUT}s | Retry: {HEALTH_CHECK_INTERVAL}s")
-    print("=" * 60)
 
-    deadline = time.time() + HEALTH_CHECK_TIMEOUT
+def _resolve_port(mac: str) -> Optional[str]:
+    """Find /dev/cu.usbmodem* whose USB serial number == mac. None if no match."""
+    try:
+        from utils.discovery import find_port_by_mac
+    except ImportError:
+        return None
+    try:
+        return find_port_by_mac(mac)
+    except Exception:
+        return None
 
-    while time.time() < deadline:
-        for name in nodes:
-            if name in found:
-                continue
-            node = config.get("nodes", {}).get(name, {})
-            mac = node.get("mac")
-            if not mac:
-                continue
-            port = discovery.find_port_by_mac(mac)
-            if port:
-                found[name] = port
-                print(f"  [OK] {name}: {port} (MAC: {mac})")
 
-        if len(found) == len(nodes):
-            print("  [OK] Both Heltec controllers detected!\n")
-            break
+# ── HIL fixtures (opt-in) ─────────────────────────────────────────────
 
-        remaining = int(deadline - time.time())
-        missing = [n for n in nodes if n not in found]
-        print(f"  [..] Waiting for: {', '.join(missing)} ({remaining}s remaining)...")
-        time.sleep(HEALTH_CHECK_INTERVAL)
-    else:
-        missing = [n for n in nodes if n not in found]
-        pytest.fail(
-            f"HEALTH CHECK TIMEOUT: {', '.join(missing)} not detected "
-            f"within {HEALTH_CHECK_TIMEOUT}s. Are they plugged in?"
+
+@pytest.fixture(scope="session")
+def hil_pairings() -> Dict[str, Dict[str, str]]:
+    """Loaded ``.config.nodes.yaml``; empty dict if file missing."""
+    return _load_hil_pairings()
+
+
+def _port_for(role_or_name: str, pairings: Dict[str, Dict[str, str]]) -> str:
+    entry = pairings.get(role_or_name)
+    if not entry:
+        pytest.skip(
+            f"HIL: no entry for {role_or_name!r} in .config.nodes.yaml "
+            "(run firmware/deploy.py to bind a board)"
         )
-
-    config["_discovered_ports"] = found
-
-
-@pytest.fixture(scope="session")
-def podium_port(config, health_check):
-    """Resolved COM port for the podium node."""
-    return config["_discovered_ports"]["podium"]
-
-
-@pytest.fixture(scope="session")
-def server_port(config, health_check):
-    """Resolved COM port for the server node."""
-    return config["_discovered_ports"]["server"]
+    mac = entry.get("mac")
+    if not mac:
+        pytest.skip(f"HIL: {role_or_name!r} has no usb_mac")
+    port = _resolve_port(mac)
+    if not port:
+        pytest.skip(
+            f"HIL: board for {role_or_name!r} (MAC {mac}) not connected. "
+            "Plug it in or run firmware/deploy.py --list to confirm."
+        )
+    return port
 
 
 @pytest.fixture(scope="session")
-def podium_serial(podium_port):
-    """Open serial connection to the Podium node."""
-    baud = 115200
-    ser = serial.Serial(podium_port, baud, timeout=0.5)
-    time.sleep(1)  # Let firmware boot message pass
-    ser.reset_input_buffer()
-    yield ser
-    ser.close()
+def server_port(hil_pairings) -> str:
+    """COM port for the server radio (node 0x01). Skips if missing."""
+    return _port_for("server", hil_pairings)
+
+
+@pytest.fixture(scope="session")
+def podium_port(hil_pairings) -> str:
+    """COM port for the captain radio (node 0x0A). Resolves by name
+    ('sina') or role ('captain') from .config.nodes.yaml."""
+    for key in ("sina", "captain"):
+        if key in hil_pairings:
+            return _port_for(key, hil_pairings)
+    pytest.skip("HIL: no sina / captain entry in .config.nodes.yaml")
 
 
 @pytest.fixture(scope="session")
 def server_serial(server_port):
-    """Open serial connection to the Server node."""
-    baud = 115200
-    ser = serial.Serial(server_port, baud, timeout=0.5)
+    import serial
+    ser = serial.Serial(server_port, 115200, timeout=0.5)
     time.sleep(1)
     ser.reset_input_buffer()
     yield ser
     ser.close()
+
+
+@pytest.fixture(scope="session")
+def podium_serial(podium_port):
+    import serial
+    ser = serial.Serial(podium_port, 115200, timeout=0.5)
+    time.sleep(1)
+    ser.reset_input_buffer()
+    yield ser
+    ser.close()
+
+
+# ── Background serial reader (used by HIL tests) ──────────────────────
 
 
 class SerialReader:
@@ -143,6 +160,7 @@ class SerialReader:
         self._thread = None
 
     def start(self):
+        import threading
         self.running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -165,7 +183,6 @@ class SerialReader:
                     time.sleep(0.01)
 
     def wait_for(self, prefix, timeout=5):
-        """Wait for a line starting with prefix. Returns the line or None."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             for line in list(self.lines):
@@ -175,7 +192,6 @@ class SerialReader:
         return None
 
     def wait_for_containing(self, text, timeout=5):
-        """Wait for a line containing text. Returns the line or None."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             for line in list(self.lines):
@@ -190,7 +206,6 @@ class SerialReader:
 
 @pytest.fixture
 def server_reader(server_serial):
-    """Background reader for the server serial port."""
     reader = SerialReader(server_serial, "server")
     reader.start()
     yield reader
@@ -199,7 +214,6 @@ def server_reader(server_serial):
 
 @pytest.fixture
 def podium_reader(podium_serial):
-    """Background reader for the podium serial port."""
     reader = SerialReader(podium_serial, "podium")
     reader.start()
     yield reader

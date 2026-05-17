@@ -573,3 +573,290 @@ export function sliderTailLength(v) { tailLength = 0.02 + v * 0.3; }
 | **Autopilot** | Pattern scheduling (playlist, shuffle) | Pattern swap trigger | Yes (`config.yaml`) |
 | **IntensityController** | Hardware brightness (per-section dimming, blackout) | Post-render: pixel scaling | Yes (`pattern_state.yaml` `_dimmers`) |
 | **GlobalEffectsController** | Hardware effects (fogger, UV, vintage white) | Post-render: DMX bypass | No |
+
+---
+
+## 15. PortWatch Integration with the CPC
+
+PortWatch (see `docs/21_portwatch_monitor.md`) is the LoRa-side operator
+surface. It reads and writes the same shared params CaptainPad does,
+through the Pi bridge, so the LoRa link gets first-class access to
+*the canonical* engine state — not a side cache.
+
+### 15.1 Read path (PortWatch → CPC)
+
+PortWatch fetches the global params via a single LoRa frame:
+
+| Wire (LoRa frame)      | Bridge action                                 | Engine endpoint         |
+| ---------------------- | --------------------------------------------- | ----------------------- |
+| `qry params`           | Builds compact KV from `GET /param-center`    | `GET /param-center`     |
+| `qry param/<key>`      | Pulls one named scalar / palette              | `GET /param-center`     |
+| `qry param/all`        | Same as `qry params` legacy alias             | `GET /param-center`     |
+
+Reply shape for `qry params`:
+
+```
+sp/<f>,dr/<f>,ct/<f>,sz/<f>,rt/<f>,p1/<h>-<s>-<v>,p2/<h>-<s>-<v>
+```
+
+~70 chars at full precision, well under the LoRa plaintext budget.
+Fields the engine doesn't have are *omitted* rather than null-filled,
+so the PortWatch parser can distinguish "engine is older" from "value
+is genuinely 0".
+
+### 15.2 Write path (PortWatch → CPC)
+
+Bridge commands translate 1:1 to the same `POST /param-center` body
+shape CaptainPad uses:
+
+| Wire (LoRa frame)                              | Bridge call                                                     | Engine body                                    |
+| ---------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------- |
+| `cmd param/<key>/<float>`                      | `engine.set_param(key, value)`                                  | `{<key>: <float>}`                             |
+| `cmd param/colorPalette<n>/<h>-<s>-<v>`        | `engine.set_palette(slot, h, s, v)`                             | `{colorPalette<n>: {h, s, v}}`                 |
+| `cmd palette/<n>/<h>-<s>-<v>`                  | Alias for the above — easier to type / grep                     | Same                                           |
+
+Both paths land in the same CPC handler, which:
+
+1. Validates against the registry (range, clamp, type).
+2. Updates the canonical store with a `lastSource` of `"http"`.
+3. Broadcasts `{type: "sharedParams", ...getCanonicalState()}` on the
+   WebSocket — *which CaptainPad picks up via its `useEngineState`
+   hook* (`hooks/useEngineState.ts`). The result is a sub-second
+   round-trip from a PortWatch slider gesture to a CaptainPad UI
+   refresh.
+
+There's no separate "PortWatch state" anywhere — PortWatch is just
+another writer, and the broadcast carries the canonical truth to every
+other surface.
+
+### 15.3 The `controlLock` global
+
+A `globalsState.controlLock` field coordinates which operator surface
+owns the deck. Today the only writer is the engine's
+`/mixer/view-override` handler, but the value is observable just like
+any other global:
+
+- `GET /globals` returns `{..., controlLock: "portwatch" | null}`.
+- The `viewOverride` WS broadcast includes `controlLock` alongside the
+  deck pin so a UI doesn't need to subscribe to two events to react.
+- `globalsState` is persisted, so a hard restart of the engine
+  preserves whatever lock was in effect (with a fresh lease — see
+  below).
+
+Implementation pointers:
+
+- `marsin_engine/lib/api_server.js::syncControlLockToGlobals()` —
+  single source of truth that maps `viewOverrideMode` →
+  `controlLock`. Called on boot and on every `POST
+  /mixer/view-override`.
+- `marsin_engine/lib/api_server.js::broadcastViewOverride()` —
+  attaches `controlLock`, `controlLockLeaseExpiresAtMs`, and
+  `controlLockLeaseDurationMs` to every override broadcast.
+- `CaptainPad/hooks/useEngineLock.ts` — the only consumer surface in
+  CaptainPad today. Drives `EngineLockoutOverlay` (see
+  `docs/16_captain_pad.md` §4.5).
+- `control_podium/PortWatch/src/state/store.ts` — `engineStatus.viewOverrideActive`,
+  `controlLockOwner`, `controlLockLeaseRemainSec`, `deckPlaylistName`,
+  and `engineView` are all pulled from the same compact-status PUB.
+  The PortWatch DeckScreen reads them to show TAKE LOCK / RELEASE /
+  DECK ACTIVE and to drive its 20 s lease-renew loop.
+
+### 15.3.1 The lease (auto-expiring lock)
+
+`controlLock` is a **lease**, not a permanent take. The engine arms a
+30 s timer on every successful `POST /mixer/view-override {override:
+'deck'}` and auto-clears the override when the timer fires. This
+makes the lock safe against three failure modes that would otherwise
+strand CaptainPad:
+
+* The holder walks out of LoRa range mid-show.
+* The holder's app crashes or is force-quit.
+* The bridge or the radio link silently goes down.
+
+PortWatch keeps the lease alive by sending `cmd view/renew` every
+~20 s while holding the lock. The bridge translates `view/renew`
+into the same POST as `view/deck` (idempotent take), so each renew
+restarts the timer with no special-case code in the engine. The
+verbs are split so the wire log reads `RENEW` not `TAKE LOCK` 12
+times an hour.
+
+| Constant | Value | Defined in |
+| -------- | ----- | ---------- |
+| Lease duration | 30 s | `CONTROL_LOCK_LEASE_MS` in `marsin_engine/lib/api_server.js` |
+| Renew interval | 20 s | `LEASE_RENEW_INTERVAL_MS` in `control_podium/PortWatch/src/ui/DeckScreen.tsx` |
+| Defensive renew threshold | 12 s | `LEASE_LOW_WATER_SEC` in same file |
+
+On boot, if the engine restored `controlLock === 'portwatch'` from
+disk, it arms a *fresh* 30 s lease (the original expiry is lost
+across restarts; conservatively giving the holder one full lease
+worth from boot is the safe choice). Without this a crash during a
+held lock would leave CaptainPad locked out for the full
+between-restarts gap.
+
+The CaptainPad overlay reacts identically to a manual release and a
+lease expiry — both fire the same `viewOverride` broadcast with
+`override: null`, so `useEngineLock` doesn't need to know which
+caused it. This keeps the lock state model truly single-source.
+
+### 15.3.2 Connect-time refresh from PortWatch
+
+When PortWatch comes online over BLE → LoRa, it queries the engine's
+current state *before* enabling any write controls. This is the
+"don't override an active show" guarantee. Two mechanisms cooperate:
+
+1. **Bridge eager PUB.** On receiving `hlo`, the bridge wakes its
+   publisher (`self._publisher_wake.set()`) so the next compact
+   PUB lands within tens of milliseconds rather than waiting up to
+   `long_interval_s` for the periodic poll.
+2. **PortWatch qry burst.** `App.tsx::onConnect` fires `HLO`,
+   `qry engine/status`, `qry deck/playlist`, `qry playlists/p/0`,
+   `qry engine/playlist-patterns/p/0`, `qry params`, and
+   `qry exports/p/0` in sequence. Each one hydrates a different card
+   so the DECK / PARAMS screens render with engine ground truth.
+
+The full set of integration tests for this surface lives at
+`control_podium/tests/test_comms_e2e_sim.py`:
+`test_view_override_cmd`, `test_compact_status_surfaces_lock_and_playlist`,
+`test_view_renew_is_idempotent_take`, `test_lock_lease_auto_expires`,
+`test_hlo_triggers_eager_pub`.
+
+### 15.4 Why surface a lock as a global parameter (and not a bespoke
+field)
+
+Because the CPC already has every property a lock needs:
+
+- *Persistence.* `globalsState` is saved alongside blackout / autopilot.
+- *Broadcast for free.* Every UI that already listens for
+  `sharedParams` / `globals` / `viewOverride` gets the new field
+  without code changes.
+- *Hydration on cold boot.* `GET /globals` is already on the front-page
+  REST surface.
+- *Consistent observability.* Every writer goes through the same
+  arbitration model — same logs, same broadcast cadence.
+
+The cost is one registry entry and one mapping function. The benefit
+is that "add the next operator lock" (e.g. `mixerLock`, `studioLock`)
+is now a 30-line change.
+
+---
+
+## 16. Adding a New Global Parameter — End-to-End
+
+The CPC registry is the canonical place to declare a new global param.
+Patterns opt into the param by exporting a matching `shared*` function.
+The walkthrough below uses a hypothetical `chaos` float param to
+illustrate every layer that needs touching.
+
+### 16.1 Engine: declare the param
+
+In `marsin_engine/lib/param_center.js`, append to `PARAM_REGISTRY` (or
+the registry the engine is loading from):
+
+```js
+{
+  key: 'chaos', label: 'Chaos', type: 'float',
+  default: 0.0, range: [0, 1], clamp: true, persist: true,
+  oscAddress: '/marsin/param/chaos', sharedFnName: 'sharedChaos',
+}
+```
+
+The CPC will:
+
+- Allocate a slot in its canonical store.
+- Accept `POST /param-center {chaos: 0.42}`.
+- Include `chaos` in every `GET /param-center` and every
+  `sharedParams` broadcast.
+- Persist the value to `param_center_state.yaml`.
+
+### 16.2 Pattern (optional): wire the WASM injection
+
+In any pattern that wants the value passed in, declare:
+
+```js
+export var chaos = 0.0;
+export function sharedChaos(v) {
+  chaos = v;
+}
+```
+
+That's the full pattern-author opt-in. `sharedChaos` becomes the
+exclusive writer for the `chaos` variable (the
+[exclusive-variable rule](#32-solution-exclusive-variable-ownership--dirty-flag-injection)).
+The CPC injects the current value at pattern swap and re-injects only
+when it changes — never every frame.
+
+If a pattern doesn't declare `sharedChaos`, the CPC simply skips
+injection for that pattern. The param still exists in the canonical
+store and remains visible to UI clients; it just doesn't affect that
+pattern's output.
+
+### 16.3 CaptainPad: render the control
+
+CaptainPad already renders shared controls from
+`/param-center/schema`. If the new param's `type` (`float`, `int`,
+`hsv`) maps to an existing widget, **nothing else is needed** —
+`CPCControls` and the future schema-driven renderer pick it up
+automatically.
+
+For a new type (e.g. `enum`, `range[]`), add the widget in
+`CaptainPad/components/CPCControls.tsx` and the matching renderer in
+the schema dispatcher.
+
+Live state arrives via the centralised `useEngineState()` hook — the
+`sharedParams` broadcast carries the new key on every change, no
+per-component subscription needed.
+
+### 16.4 PortWatch: surface it over LoRa
+
+Two layers:
+
+1. **Bridge query reply.** The `qry params` handler in
+   `control_podium/comms/bridge.py::_exec_qry` enumerates known keys
+   explicitly. Add the new key to the `(short, full)` mapping:
+
+   ```python
+   for short, full in (
+       ("sp", "speed"),
+       ("dr", "direction"),
+       ("ct", "count"),
+       ("sz", "size"),
+       ("rt", "rotate"),
+       ("ch", "chaos"),     # ← add this
+   ):
+       ...
+   ```
+
+   Pick a short tag (2 chars; the LoRa plaintext budget is tight) and
+   document it inline.
+
+2. **PortWatch parser + UI.** Mirror the new tag in
+   `control_podium/PortWatch/src/status/parse.ts::parseGlobalParamsSnapshot`
+   (add the field to `GlobalParamsSnapshot`, pull `kv.ch` →
+   `Number(...)`). Then add a `StepperBar` in
+   `control_podium/PortWatch/src/ui/ParamsCard.tsx::GlobalParamsCard`
+   with whatever discretisation makes sense for the parameter.
+
+   Writes go through `cmd param/<key>/<value>` (already in the
+   allowlist) — no new bridge command needed.
+
+### 16.5 Tests
+
+Pull `tests/test_comms_e2e_sim.py::test_global_params_round_trip` as a
+template and add a new param to the FakeEngine state + the assertions.
+The wire surface for a new scalar is identical to existing ones, so
+the test is mostly mechanical.
+
+### 16.6 Summary of files touched
+
+| Layer       | File                                                       | What changes                                |
+| ----------- | ---------------------------------------------------------- | ------------------------------------------- |
+| Engine      | `marsin_engine/lib/param_center.js`                        | Append to `PARAM_REGISTRY`.                 |
+| Patterns    | Any pattern wanting the value: add `sharedNewParam(v)`.    | Opt-in only.                                |
+| CaptainPad  | `CaptainPad/components/CPCControls.tsx`                    | Only if new type; otherwise auto-picked up. |
+| Bridge      | `control_podium/comms/bridge.py::_exec_qry` (`qry params`) | Add 2-char short tag mapping.               |
+| PortWatch   | `PortWatch/src/status/parse.ts` + `ParamsCard.tsx`         | Field + UI control.                         |
+| Tests       | `control_podium/tests/test_comms_e2e_sim.py`               | Extend the FakeEngine snapshot + asserts.   |
+
+The CaptainPad → engine path requires no transport changes at all —
+the schema-driven UI flow + the `useEngineState` hook make every new
+CPC param effectively zero-config on the iPad.

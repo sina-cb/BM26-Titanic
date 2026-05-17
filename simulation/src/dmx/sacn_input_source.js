@@ -185,6 +185,8 @@ export class SacnInputSource {
     const priority = view.getUint8(2);
     const dmx = new Uint8Array(data, 3, 512);
 
+
+
     // Submit to the router
     if (window.dmxRouter) {
       // Ensure universe exists in router

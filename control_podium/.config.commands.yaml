@@ -1,0 +1,227 @@
+# TITANIC Control Podium — Command allowlist (committed).
+# --------------------------------------------------------
+# Authoritative list of `cmd` and `qry` paths the bridge will translate
+# into MarsinEngine REST calls. THIS is the contract between the captain
+# companion (or future CaptainPad) and the bridge — keep it small,
+# explicit, and reviewed.
+#
+# Each entry declares:
+#
+#   enabled     — set false to soft-disable a command in the field
+#                 without redeploying code.
+#   min_role    — the lowest role allowed to issue this command.
+#                 Roles are defined in .config.nodes.yaml. Order is
+#                 crew < captain < server (server only ever SENDS
+#                 replies, never executes commands).
+#                 Old labels priv/reg are still accepted as aliases.
+#   description — human-readable note for /help and the design doc.
+#
+# Bridge resolves paths by the FIRST PATH SEGMENT (e.g. `pattern/sunset`
+# matches the `pattern` entry). The handler in comms/bridge.py owns the
+# rest of the argument parsing.
+#
+# Adding a new command:
+#   1. Add an entry below.
+#   2. Add a handler in Bridge._exec_cmd().
+#   3. Add a test in tests/test_comms_e2e_sim.py.
+#
+# Out of scope (intentionally NOT in this file):
+#   * Cooldowns / rate limiting. Handled by the captain companion or the
+#     CaptainPad UI — the bridge is the router, not the politeness layer.
+#   * Fire-station commands. The fire effect controller (FW-SPEC-001)
+#     runs DIFFERENT firmware on a separate transport. The mesh radio
+#     carries no fire path — by design.
+#   * Per-channel mixer writes. Use the engine web UI for those; the
+#     `brightness` command sets master only.
+
+commands:
+  pattern:
+    enabled: true
+    min_role: captain
+    description: "Switch to a named pattern. Usage: cmd pattern/<name>"
+
+  param:
+    enabled: true
+    min_role: captain
+    description: |
+      Set a global/shared parameter in the Central Parameter Center
+      (engine `paramCenter`). Patterns read these via shared* WASM
+      exports, so changing one steers every active pattern at once.
+      Common keys: speed, direction, count, size, rotate.
+      Usage: cmd param/<key>/<value>
+
+  blackout:
+    enabled: true
+    min_role: captain
+    description: "Global blackout. Usage: cmd blackout/0|1"
+
+  autopilot:
+    enabled: true
+    min_role: captain
+    description: "Toggle autopilot. Usage: cmd autopilot/0|1"
+
+  fx:
+    enabled: true
+    min_role: captain
+    description: |
+      Toggle a named global rig effect on the engine
+      (`GlobalEffectsController`). Usage: cmd fx/<name>/0|1
+      Recognized names (engine-side): vintageWhite, fogger, uvBlast,
+      blastWhite, horn, plus *BypassDimmer variants for the LEDs that
+      have one. Any name containing "fire" is HARD-REJECTED by the
+      bridge — the radio mesh carries no fire path.
+
+  brightness:
+    enabled: true
+    min_role: captain
+    description: "Mixer master brightness 0..100. Usage: cmd brightness/<n>"
+
+  view:
+    enabled: true
+    min_role: captain
+    description: |
+      Engine view override (a.k.a. controlLock). The override is a
+      LEASE — engine auto-releases after CONTROL_LOCK_LEASE_MS
+      (30 s today) if not renewed. Three sub-verbs:
+
+        cmd view/deck   — take the lock (force deck output AND
+                          arm/restart the 30 s lease). Idempotent —
+                          a second take from the same client is
+                          equivalent to a renew.
+        cmd view/renew  — silent renew. Same wire effect as view/deck
+                          but logs / metrics the intent separately so
+                          a flood of renews doesn't look like
+                          repeated takes. PortWatch sends this every
+                          ~20 s while holding the lock.
+        cmd view/clear  — release the lock (restores the
+                          pre-override view; disarms the lease).
+
+  palette:
+    enabled: true
+    min_role: captain
+    description: |
+      Set one of the two engine color palette CPC slots. Usage:
+      cmd palette/<1|2>/<h>-<s>-<v>. Components are floats in [0, 1];
+      bridge clamps and sends an HSV object to /param-center. Convenience
+      alias for `cmd param/colorPalette<n>/<h>-<s>-<v>` — same wire cost,
+      easier to type and grep for.
+
+  exp:
+    enabled: true
+    min_role: captain
+    description: |
+      Per-pattern WASM export write (local pattern parameter slider).
+      Usage: cmd exp/<crc32_id>/<v0>. The ``id`` is the engine-assigned
+      CRC32 control id (discovered via `qry exports/p/<n>`); ``v0`` is a
+      float. v1/v2 are not yet on the radio surface — extend the path
+      to `exp/<id>/<v0>/<v1>/<v2>` once 2-D / HSV exports need it.
+
+  playlist:
+    enabled: true
+    min_role: captain
+    description: |
+      Switch the deck base channel's active playlist. Usage:
+      cmd playlist/<name>. Engine reloads the first non-missing entry
+      and broadcasts both `mixer` and `pattern` WS events; the bridge's
+      WS subscriber wakes the publisher so PortWatch sees the new
+      pattern name within a couple hundred milliseconds.
+
+queries:
+  engine/status:
+    enabled: true
+    min_role: crew
+    description: "Compact engine status (active pattern, brightness, blackout, autopilot, speed)."
+
+  engine/patterns:
+    enabled: true
+    min_role: crew
+    description: |
+      Pattern catalog. Two reply shapes:
+        * qry engine/patterns        -> first-page CSV + "+N" if extra
+                                        names didn't fit in one frame
+                                        (legacy compat)
+        * qry engine/patterns/p/<n>  -> "p/<n>,t/<total>,n/<count>,c/<csv>"
+                                        for a multi-page fetch from the
+                                        client side.
+      NOTE: returns the engine's WHOLE pattern library. For just the
+      patterns of the deck's currently-loaded playlist (which is what
+      PortWatch's picker actually wants) see `engine/playlist-patterns`.
+
+  engine/playlist-patterns:
+    enabled: true
+    min_role: crew
+    description: |
+      Pattern names of the deck's currently-loaded playlist, paginated.
+      Usage: qry engine/playlist-patterns/p/<n>. Reply shape:
+        p/<idx>,t/<total>,n/<count>,pl/<playlist_name>,c/<csv>
+      `pl/-` is sent when no playlist is loaded — PortWatch surfaces
+      this as "no playlist loaded" instead of falling back to the full
+      engine catalog (which would let the operator pick a pattern not
+      in the playlist, defeating the picker scope).
+
+  engine/get-playlist-patterns:
+    enabled: true
+    min_role: crew
+    description: |
+      Pattern names for an ARBITRARY playlist by name, paginated. Does
+      NOT change the deck's loaded playlist as a side-effect — used by
+      PortWatch's REFRESH-WORLD action to fan a single operator press
+      out into a full pre-population of the per-playlist patterns cache,
+      so every subsequent CaptainPad-driven playlist switch is rendered
+      instantly from the local cache.
+      Usage: qry engine/get-playlist-patterns/<name>/p/<n>. Reply shape:
+        p/<idx>,t/<total>,n/<count>,pl/<name>,c/<csv>
+      The name MUST be wire-safe (alphanumeric, `_`, `.`, `-`, ≤32 chars;
+      the engine_client emits names through the same sanitizer the
+      `pl/` field on compact_status uses, so any name surfaced by
+      compact_status round-trips losslessly).
+      Unknown / unmatched names return one valid empty page (`p/0,t/1,
+      n/0,pl/<name>,c/`) rather than a NAK so PortWatch can persist a
+      "this playlist exists in the library but has zero usable entries"
+      record and skip retrying it on every REFRESH.
+
+  param:
+    enabled: true
+    min_role: crew
+    description: "Read CPC param values. Usage: qry param/<key> | qry param/all"
+
+  params:
+    enabled: true
+    min_role: crew
+    description: |
+      Full global-params snapshot for PortWatch's ParamsCard:
+      `sp/<f>,dr/<f>,ct/<f>,sz/<f>,rt/<f>,p1/<h>-<s>-<v>,p2/<h>-<s>-<v>`.
+      One frame; ~70 chars at full precision. Fields the engine doesn't
+      advertise are omitted rather than nulled so the parser can tell
+      "engine is older" from "value is genuinely 0".
+
+  exports:
+    enabled: true
+    min_role: crew
+    description: |
+      Paginated per-pattern WASM exports for the deck base channel.
+      Usage: qry exports/p/<n>. Reply shape:
+        p/<idx>,t/<total>,n/<count>,c/<id>~<kind>~<v0>~<name>,...
+      `~` is the within-record separator (`:` and `|` are forbidden in
+      Frame args). Names are ASCII-folded to a 24-char safe slice.
+
+  playlists:
+    enabled: true
+    min_role: crew
+    description: |
+      Paginated playlist directory listing. Usage: qry playlists/p/<n>.
+      Reply shape: `p/<idx>,t/<total>,n/<count>,c/<name>,<name>,...`.
+      Used by PortWatch's deck-playlist switcher.
+
+  deck/playlist:
+    enabled: true
+    min_role: crew
+    description: |
+      Deck base channel's currently-loaded playlist snapshot.
+      Reply shape: `pl/<name>,en/<entryId>` when assigned;
+      `pl/-` (single-char placeholder) when no playlist is loaded.
+
+  mixer/state:
+    enabled: true
+    min_role: crew
+    description: "Mixer master + channel count (read-only; no per-channel writes over radio)."

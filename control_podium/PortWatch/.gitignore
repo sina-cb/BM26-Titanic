@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Expo / RN build artifacts
+.expo/
+.expo-export/
+dist/
+web-build/
+ios/
+android/
+
+# Generated secret (baked at build time from marsin_engine/secret.yaml).
+# NEVER commit. Re-run `npm run sync-secret` to regenerate.
+src/_generated/
+
+# Env, logs, OS noise
+.env
+*.log
+.DS_Store
+
+# TypeScript build cache
+*.tsbuildinfo

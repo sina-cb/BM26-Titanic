@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Modal } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, TouchableOpacity, Modal, useWindowDimensions } from 'react-native';
 import { Colors } from '@/constants/theme';
-import { fetchParamCenter, updateParamCenter } from '@/utils/api';
+import { updateParamCenter } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { useSharedParamValues } from '@/hooks/useEngineState';
 
 const C = Colors.light;
 
@@ -26,8 +27,15 @@ function hsvToRgbString(h: number, s: number, v: number) {
   return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 }
 
-export const CPCControls = ({ wsRef }: { wsRef?: any }) => {
-  const defaultParams = {
+// Note: the `wsRef` prop is accepted for backward-compat with the
+// existing tab files but no longer required — live state now flows
+// through the module-level `useEngineState` subscription, which means
+// PortWatch / scripts / any future external writer ends up reflected
+// here automatically.
+export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
+  const { width, height } = useWindowDimensions();
+  const isPortrait = width < height;
+  const defaultParams = useMemo(() => ({
     speed: 0.5,
     direction: 1.0,
     count: 0.5,
@@ -35,86 +43,51 @@ export const CPCControls = ({ wsRef }: { wsRef?: any }) => {
     rotate: 0,
     colorPalette1: { h: 0, s: 1, v: 1 },
     colorPalette2: { h: 0.5, s: 1, v: 1 }
-  };
-  
-  const [params, setParams] = useState<any>(defaultParams);
+  }), []);
+
+  // Live shared-param values. Every sharedParams broadcast (whether it
+  // originated from this UI, PortWatch over LoRa, or any script) flows
+  // through the engineEvents bus → useSharedParamValues → here, so the
+  // sliders/colour swatches always show the canonical engine state.
+  const params = useSharedParamValues(defaultParams) as typeof defaultParams;
   const [pickerModal, setPickerModal] = useState<{ visible: boolean, key: string, h: number, s: number, v: number }>({ visible: false, key: '', h: 0, s: 1, v: 1 });
 
-  // Map from canonical server state: { params: { speed: { value: 0.5 } } } to flat state
-  const parseCanonical = (state: any) => {
-    if (!state || !state.params) return {};
-    const flat: any = {};
-    for (const key in state.params) {
-      if (state.params[key]?.value !== undefined) {
-        flat[key] = state.params[key].value;
-      }
-    }
-    return flat;
-  };
-
-  useEffect(() => {
-    fetchParamCenter().then(r => {
-      if (r.ok && r.data) setParams((prev: any) => ({ ...defaultParams, ...parseCanonical(r.data) }));
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!wsRef?.current) return;
-    const handler = (e: any) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'sharedParams') {
-          setParams((prev: any) => ({ ...defaultParams, ...prev, ...parseCanonical(msg) }));
-        }
-      } catch {}
-    };
-    wsRef.current.addEventListener('message', handler);
-    return () => wsRef.current?.removeEventListener('message', handler);
-  }, [wsRef]);
-
+  // Writers post to /param-center. The engine's POST handler
+  // broadcasts a fresh sharedParams to every subscriber (including us),
+  // so we don't need a separate optimistic local-state path — the
+  // broadcast round-trip is already sub-second on Wi-Fi.
   const update = (key: string, val: any) => {
-    setParams((prev: any) => ({ ...prev, [key]: val }));
-    if (wsRef?.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'setSharedParam', key, value: val }));
-    } else {
-      updateParamCenter({ [key]: val });
-    }
+    updateParamCenter({ [key]: val });
   };
 
   const updateColor = (key: string, h: number, s: number, v: number) => {
-    const c = { h, s, v };
-    setParams((prev: any) => ({ ...prev, [key]: c }));
-    if (wsRef?.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'setSharedParam', key, value: c }));
-    } else {
-      updateParamCenter({ [key]: c });
-    }
+    updateParamCenter({ [key]: { h, s, v } });
   };
 
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', backgroundColor: C.surfaceContainerLowest, padding: 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginRight: 16, textTransform: 'uppercase' }}>GLOBAL PARAMS</Text>
+    <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, marginRight: isPortrait ? 8 : 16, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
       
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 24, paddingRight: 16 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'nowrap', gap: isPortrait ? 8 : 24, paddingRight: isPortrait ? 4 : 16, flex: 1 }}>
         
-        <View style={{ width: 140 }}>
+        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
           <MiniFader label="SPEED" value={params.speed ?? 0.5} onChange={(v) => update('speed', v)} />
         </View>
 
-        <View style={{ width: 140 }}>
+        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
           <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
         </View>
 
-        <View style={{ width: 140 }}>
+        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
           <MiniFader label="COUNT" value={params.count ?? 0.5} onChange={(v) => update('count', v)} />
         </View>
 
-        <View style={{ width: 140 }}>
+        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
           {/* DIR: 0=REV, 0.5=STOP, 1.0=FWD */}
-          <MiniFader label="DIR (R/S/F)" value={params.direction ?? 1.0} onChange={(v) => update('direction', v)} />
+          <MiniFader label={isPortrait ? "DIR" : "DIR (R/S/F)"} value={params.direction ?? 1.0} onChange={(v) => update('direction', v)} />
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+        <View style={{ flexDirection: 'row', gap: isPortrait ? 6 : 12, alignItems: 'center' }}>
           <View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>C1</Text>
             <TouchableOpacity 
