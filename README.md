@@ -4,7 +4,7 @@ Lighting design, pattern engineering, and simulation toolkit for the **Titanic**
 
 > *Make it glow. Make it welcoming. Make it fun.*
 
-### 🌐 [**Live Demo →**](https://sina-cb.github.io/BM26-Titanic/simulation/?scene=test_bench&profile=full)
+### 🌐 [**Live Demo →**](https://sina-cb.github.io/BM26-Titanic/simulation/?scene=test_bench&profile=full&spotlights=60)
 
 ---
 

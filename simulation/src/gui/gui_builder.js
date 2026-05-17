@@ -63,6 +63,10 @@ function setupGUI() {
     panel.classList.toggle('collapsed');
     collapseBtn.textContent = panel.classList.contains('collapsed') ? '□' : '─';
   });
+  if (window.innerWidth < 800) {
+    panel.classList.add('collapsed');
+    collapseBtn.textContent = '□';
+  }
   header.appendChild(collapseBtn);
   panel.appendChild(header);
 
