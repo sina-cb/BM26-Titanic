@@ -10,3 +10,4 @@ PySide6>=6.6
 # the same path PortWatch uses to mirror remote toggles in real time.
 websockets>=12
 cryptography>=42
+zeroconf>=0.132,<1

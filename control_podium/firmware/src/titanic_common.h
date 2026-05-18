@@ -46,7 +46,8 @@
 
 #include <heltec_unofficial.h>
 #include "titanic_ble.h"
-#include "titanic_pwr.h"   // power profile (HIGH/LOW) for BLE+LoRa
+#include "titanic_pwr.h"      // power profile (HIGH/LOW) for BLE+LoRa
+#include "titanic_profiles.h" // runtime LoRa profile switching (playa/local/test_bench)
 
 // ── Configurable parameters (override via PlatformIO build flags) ─
 // Every constant below is derived from .config.firmware.yaml at flash
@@ -512,6 +513,14 @@ void titanicSetup() {
     // "HIGH forever" inside titanic_pwr_setup() so the rest of the
     // code path is identical on both roles.
     titanic_pwr_setup(DEVICE_ROLE);
+
+    // LoRa profile (playa/local/test_bench/…) MUST initialise after
+    // the radio is configured: titanic_profile_setup() replays any
+    // persisted profile from NVS over the compile-time defaults, so
+    // a box that was switched to test_bench yesterday comes up at
+    // test_bench today without the operator having to redo the
+    // PortWatch dropdown. See titanic_profiles.h for the wire format.
+    titanic_profile_setup();
 
     // First battery sample at boot so the header can show something useful.
     _sampleBattery();

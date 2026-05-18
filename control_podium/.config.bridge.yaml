@@ -1,15 +1,16 @@
 # TITANIC Control Podium — Bridge (Pi) configuration.
 # ----------------------------------------------------
-# Read by bridge_companion.py. Settings here control the bridge process; the
-# wire protocol itself is unaffected. Edit and restart the bridge to apply.
+# Read by server_bridge.runner. Settings here control the bridge process;
+# the wire protocol itself is unaffected. Edit and restart the bridge to
+# apply.
 
 engine:
   # MarsinEngine API base URL(s). http/https only — see EngineClient init.
   #
   # In the dev rig the engine + simulation run on a different machine on
-  # the LAN (canonical ports come from `simulation/config.yaml`:
-  # marsin_engine_port=6968, http_port=6969). Set `url` to that host:port.
-  # Falls back to localhost when working purely on this laptop.
+  # the LAN (canonical port is simulation/config.yaml::marsin_engine_port,
+  # default 6968). Set `url` to that host:port; falls back to localhost
+  # when working purely on this laptop.
   url: "http://10.1.1.172:6968"
   # Optional fallback list. The bridge probes them in order at startup
   # and uses the first one that responds to GET /status. If `url` above
@@ -20,6 +21,15 @@ engine:
   # Per-call timeout in seconds. Engines under heavy compile load can stall
   # a second or two; 2s gives margin without making clients wait too long.
   timeout_s: 2.0
+
+health:
+  # HTTP /health endpoint exposed by the bridge for PortWatch to poll.
+  # Listens on 0.0.0.0:<port> by default. Keep INSIDE the LAN — the
+  # endpoint is unauthenticated by design.
+  port: 7099
+  # Optional Bonjour PTR type for LAN auto-discovery. Set to "" to
+  # disable mDNS advertisement.
+  discovery_hint: "_titanic-bridge._tcp"
 
 bus:
   # Transport for the bridge ↔ radio connection.
@@ -91,3 +101,11 @@ security:
   # Whether to expose GET /bridge/stats with the bad-tag / replay counters.
   # Off in production (debug oracle); leave on during bring-up.
   expose_stats: false
+
+# Optional feature toggles (defaults keep legacy behaviour).
+features:
+  # Engine WebSocket subscriber wakes the compact_status publisher on every
+  # vis/mixer/pattern frame. On a busy engine + half-duplex LoRa that can
+  # flood the radio and starve operator qry/rep traffic. Set false when
+  # measuring link reliability; leave true for responsive field PUBs.
+  enable_engine_ws_subscriber: false

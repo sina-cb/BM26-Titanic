@@ -53,24 +53,49 @@ radio:
   # antennas. Misconfiguring this is a hardware-violation issue, not
   # just a "won't connect" issue, so keep it explicit per region.
   frequency_mhz: 915.0
-  # Bandwidth (kHz). 500 ~doubles the symbol rate vs 250 (so we get
-  # ~10.9 kbps at SF7/CR4-5 instead of ~5.5 kbps), which directly
-  # halves the per-page airtime for the bridge's `rep` paging on
-  # the playlist library + pattern picker. Range trade-off is mild
-  # at the deck-to-stage distances we care about (LoRa link budget
-  # at +22 dBm still covers ~300 m line-of-sight at 500 kHz / SF7).
-  # Drop to 250 in a .config.firmware.local.yaml if you need the
-  # extra sensitivity for a particularly hostile range walk.
-  bandwidth_khz: 500.0
-  # Spreading factor (7..12). Lower = faster, less range. 7 at 250 kHz
-  # gives ~6 kbps and ~600 m line-of-sight on a +22 dBm radio — that's
-  # our deck-to-stage budget. Bumping to SF9 doubles range at quarter
-  # data rate; see power_profile.lora_slow_sf for the battery-saver
-  # variant.
-  spreading_factor: 7
+  # Bandwidth (kHz). Lower BW = narrower channel = more sensitivity
+  # (~3 dB per halving) at the cost of proportional airtime. The
+  # target use case is now max ~2 mile range with mesh-node hops, so
+  # we trade airtime for link budget aggressively.
+  #
+  # Link budget at BW=125 / SF=10 / CR=4/5 / +22 dBm TX:
+  #   SX1262 sensitivity ≈ -135 dBm  →  link budget ≈ 161 dB
+  #   2 mile (3.2 km) urban path loss ≈ 120-130 dB
+  #   → ~30 dB margin, plenty for foliage / body absorption / one
+  #     additional mesh hop.
+  #
+  # Airtime cost:
+  #   * 30-byte compact_status PUB ≈ 350 ms
+  #   * 100-byte qry/rep round-trip ≈ 1.8 s (well inside PortWatch's
+  #     5 s status_interval_ms and the 12 s pattern page_timeout_ms).
+  #
+  # Field default: BW=125 + SF=10 for ~2 mile + mesh-hops margin. Any
+  # short-range / bench tuning must keep BOTH radios on the SAME triple —
+  # a mismatched BW/SF silently drops all uplink `RX:` lines on the server.
+  bandwidth_khz: 125.0
+  # Spreading factor (7..12). Lower = faster, less range. Each +1
+  # step adds ~2.5 dB of link budget (≈40 % more LOS range) and
+  # ~2× per-byte airtime.
+  #
+  # Picked SF=10 as the highest-sensitivity setting whose airtime
+  # is still under our worst-case timeout budgets:
+  #   * SF=10 / BW=125 → ~9 ms/symbol → 100 B frame ≈ 1.8 s.
+  #   * SF=11 / BW=125 → ~18 ms/symbol → 100 B frame ≈ 3.5 s; the
+  #     bridge's compact_status PUB cadence becomes barely faster
+  #     than the airtime of one frame and the half-duplex link
+  #     starves the pattern picker.
+  #   * SF=10 puts us ~7.5 dB above SF=7 (the old default) and is
+  #     also LoRaWAN's "long-range" default — a sweet spot the
+  #     ecosystem has battle-tested.
+  #
+  # Keep in lockstep with power_profile.lora_slow_sf below — that's
+  # the LOW-power copy for battery-saver mode.
+  spreading_factor: 10
   # Coding rate (4/5 .. 4/8). 5 = 4/5, the lightest FEC. Heavier
   # codes (4/7, 4/8) help in noisy environments at the cost of more
-  # airtime per byte.
+  # airtime per byte. 4/5 is the LoRaWAN default and gives us
+  # ~1.5 dB of coding gain for "free" — enough for our use case
+  # without doubling airtime.
   coding_rate: 5
 
 # ── BLE peripheral (NimBLE) ─────────────────────────────────────
@@ -168,7 +193,7 @@ power_profile:
   # roughly quarter the data rate — fine when nobody is actively
   # poking the box. We DON'T switch BW because the bridge expects a
   # fixed BW for syncword math.
-  lora_slow_sf: 7        # set to 9 to favor range over data rate in LOW
+  lora_slow_sf: 10       # MUST match spreading_factor whenever LOW mode can change SF
 
 # ── Diagnostic / development overrides ──────────────────────────
 # Set these via a per-developer .config.firmware.local.yaml override
@@ -178,7 +203,17 @@ debug:
   # Force the controller to behave as if it just had a BLE write —
   # never drops out of HIGH. Useful for measuring max-range throughput
   # without a phone in the loop.
-  pin_high_forever: false
+  #
+  # Bench / HIL: keep ENABLED (true) so every controller holds +22 dBm LoRa
+  # and BLE at the YAML high tier regardless of idle — otherwise a captain
+  # with no phone paired can slide to LOW (14 dBm LoRa) and look "degraded"
+  # beside a pinned HIGH server until you touch BLE or PRG again.
+  # Flip back to false before shipping a battery-budgeted build —
+  # leaving this on can double a client's idle current draw.
+  pin_high_forever: true
   # Emit a `POWERMODE:HIGH/LOW` serial line on every transition. Cheap
-  # but noisy — leave off for production builds.
-  log_mode_transitions: false
+  # but noisy — leave off for production builds. Currently ENABLED so
+  # the captain's HIGH→LOW transitions (or lack thereof while a phone
+  # is paired) are visible on the USB serial during HIL diagnosis.
+  # Flip back to false when shipping a "no laptop is plugged in" build.
+  log_mode_transitions: true

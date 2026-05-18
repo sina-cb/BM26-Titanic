@@ -1,0 +1,30 @@
+# server_bridge — runtime deps for the Pi.
+#
+# Pinned conservatively: every version below has been validated on
+# Debian 13 (Bookworm/Trixie) aarch64 with the Pi's stock Python 3.11+.
+# When bumping a pin, run the full pytest suite on the dev laptop AND
+# do a live deploy with `python -m control_podium.server_bridge.deploy`
+# before merging — this is the only piece of the stack that has no
+# operator nearby to babysit a regression.
+#
+# Notes:
+#   * `pyserial` is the USB-CDC transport to the Heltec.
+#   * `pyyaml` parses .config.*.yaml + secret.yaml.
+#   * `cryptography` provides AES-GCM for the Titanic Frame v2 codec.
+#   * `aiohttp` is the engine HTTP client (EngineClient).
+#   * `websockets` is the engine state subscriber (best-effort).
+#   * `requests` is only used by `utils.discovery` for a small helper;
+#     left in to keep `requirements.txt` matching the dev environment
+#     so we don't trip an ImportError after deploy.
+#
+# DO NOT add a dep here without also adding it to
+# control_podium/requirements.txt (the dev-side superset) — the deploy
+# script installs from THIS file on the Pi, but our test suite runs
+# against the dev-side one.
+
+pyserial>=3.5
+pyyaml>=6.0
+cryptography>=41.0
+aiohttp>=3.9
+websockets>=12.0
+requests>=2.31

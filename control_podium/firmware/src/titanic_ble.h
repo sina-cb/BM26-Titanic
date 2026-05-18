@@ -144,12 +144,15 @@ static void _regenerateBlePasskey(const char* reason) {
                   reason, (unsigned)_ble_passkey);
 }
 
-// Forward decl for the power profile bump. Defined in titanic_pwr.h;
-// keeping the forward here means BLE callbacks can wake the radio
-// without titanic_ble.h growing a hard dependency on titanic_pwr.h
-// (the .ino includes both). Server builds short-circuit to a no-op
-// internally so the call is safe even when the profile is pinned.
+// Forward decls for the power profile. Defined in titanic_pwr.h;
+// keeping the forwards here means BLE callbacks can manage the
+// power mode without titanic_ble.h growing a hard dependency on
+// titanic_pwr.h (the .ino includes both). Server builds
+// short-circuit to no-ops internally so the calls are safe even
+// when the profile is pinned.
 void titanic_pwr_bump();
+void titanic_pwr_holdBegin();
+void titanic_pwr_holdEnd();
 
 // ── Simple callbacks (no constructor args — avoids crash) ──
 class _BLEServerCB : public NimBLEServerCallbacks {
@@ -157,10 +160,12 @@ class _BLEServerCB : public NimBLEServerCallbacks {
         if (_ble_active_connections < 0xFF) _ble_active_connections++;
         // A phone just paired (or hopped onto an existing bond) —
         // bump to HIGH so the link layer + LoRa stack are at max TX
-        // for the operator's first few commands. The fast→slow
-        // timeout in titanic_pwr_loop() will drop us back to LOW
-        // after PWR_FAST_IDLE_MS of silence.
+        // for the operator's first few commands, AND latch the
+        // power profile so we STAY at HIGH for the entire duration
+        // of the BLE session (not just the first 60 s). The latch
+        // is released in onDisconnect.
         titanic_pwr_bump();
+        titanic_pwr_holdBegin();
         Serial.printf("BLE: central connected (handle %d, addr %s, total=%u)\n",
                       connInfo.getConnHandle(),
                       connInfo.getAddress().toString().c_str(),
@@ -184,6 +189,12 @@ class _BLEServerCB : public NimBLEServerCallbacks {
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
         if (_ble_active_connections > 0) _ble_active_connections--;
+        // Drop the BLE-held latch so the normal fast→slow timeout
+        // resumes from NOW. titanic_pwr_holdEnd() refreshes
+        // _lastBumpMs internally, so the box runs at HIGH for one
+        // more PWR_FAST_IDLE_MS window (covering reconnect attempts
+        // and any in-flight LoRa retries) and then settles to LOW.
+        titanic_pwr_holdEnd();
         // We track authenticated connections per-event by listening
         // for onAuthenticationComplete. NimBLE doesn't tell us in
         // onDisconnect whether the just-dropped link had pairing
