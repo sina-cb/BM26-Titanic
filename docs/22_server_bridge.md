@@ -56,8 +56,8 @@ for pattern state, autopilot state, the control lock, everything.
 
 ### What the bridge replaces
 
-Before this package, the bridge ran via `companions/bridge_companion.py`
-on the developer laptop — same Mac that runs MarsinEngine. That worked
+Before this package, the bridge ran via a `companions/bridge_companion.py`
+script on the developer laptop — same Mac that runs MarsinEngine. That worked
 for bench testing but fails the real install because:
 
 * **The Mac sleeps.** macOS aggressively suspends USB on lid close
@@ -82,21 +82,20 @@ laptop becomes a laptop again.
 ```
 control_podium/server_bridge/
   __init__.py              ← package marker + entrypoint notes
-  __main__.py              ← `python -m server_bridge` → bridge.main()
+  __main__.py              ← `python -m server_bridge` → runner.main()
+  runner.py                ← the bridge runtime (was companions/bridge_companion.py)
   deploy.py                ← `python -m server_bridge.deploy` → push to Pi
   requirements.txt         ← runtime pip deps (pyserial, aiohttp, etc.)
-  `.ssh.secret.example`    ← Template for the gitignored `.ssh.secret`; documents HOST/USER/PORT/INSTALL_ROOT/PASSWORD/ENGINE_URL.
+  .ssh.secret.example      ← template for the gitignored .ssh.secret
   .ssh.secret              ← REAL creds (gitignored)
   systemd/
     titanic-bridge.service ← unit file templated by deploy.py
 ```
 
-The actual bridge runtime is still imported from
-`companions/bridge_companion.py` for now. That file is the shim
-historical entrypoint and is preserved; `server_bridge/__main__.py`
-delegates to its `main()`. If/when the runtime is fully migrated
-into this package, the existing systemd unit and deploy script
-require zero changes — only the import in `__main__.py` moves.
+The bridge runtime lives in `server_bridge/runner.py` — moved out of
+`companions/` (a test-fixtures directory) into this Pi-deployable
+package now that it ships to production. `__main__.py` is a thin
+shim that does `from .runner import main` and runs it.
 
 ---
 
@@ -167,7 +166,7 @@ effort anyway, and the bridge MUST NOT die because the operator
 wiggled a USB cable. Reopen success emits an INFO line so the
 journal shows the recovery.
 
-**Layer 2 — In-process supervisor.** `bridge_companion._run()` wraps
+**Layer 2 — In-process supervisor.** `server_bridge.runner._run()` wraps
 `bridge.run()` in a forever-loop with the same backoff (1 s → 30 s,
 reset to 1 s after 30 s of healthy uptime). It distinguishes:
 
@@ -522,7 +521,7 @@ If any of these results in the bridge process exiting,
 `active`, or the journal filling with repeated identical INFO lines
 faster than one per `_LogThrottle` window, the bulletproofing has
 regressed — that's a bug to fix in `comms/radio_port_serial.py`,
-`comms/bridge.py`, or `companions/bridge_companion.py`, not on the
+`comms/bridge.py`, or `server_bridge/runner.py`, not on the
 Pi side.
 
 ---
@@ -647,10 +646,10 @@ USB cable hoping for the best.
 
 * **2026-05-17** — Initial draft. Created the
   `control_podium/server_bridge/` package, the deploy.py script, the
-  systemd unit template, and `.ssh.secret(.example)`. Moved the
-  documented home of "bridge bulletproofing" from
-  `companions/bridge_companion.py` (which stays as the runtime) to
-  here.
+  systemd unit template, and `.ssh.secret(.example)`.
+* **2026-05-19** — Moved the bridge runtime out of the
+  `companions/` test-fixtures directory into `server_bridge/runner.py`.
+  `__main__.py` now does `from .runner import main` directly.
 * **2026-05-17 (later)** — Added `--firmware` / `--firmware-only`
   flash modes to deploy.py. The server Heltec is now reflashable
   from the laptop via the Pi: build local with PIO, ship the four

@@ -48,8 +48,8 @@
 
 // ── BLE advertised name source ─────────────────────────────────────
 // Preferred: deploy.py reads `name:` from .config.nodes.yaml and
-// passes it as a build flag, e.g. `-DBLE_NODE_NAME="sina"` for node
-// 0x0A. The firmware then advertises itself as `tcon_sina`. Per-board
+// passes it as a build flag, e.g. `-DBLE_NODE_NAME="captain"` for node
+// 0x0A. The firmware then advertises itself as `tcon_captain`. Per-board
 // names mean the operator can distinguish two captains visually
 // without inspecting node id bytes — useful on a crowded mesh.
 //
@@ -374,7 +374,7 @@ public:
         //   2. per-node short name from BLE_NODE_NAME (defaults to
         //      "node" if deploy.py wasn't used to flash; deploy.py
         //      sources this from `name:` in .config.nodes.yaml).
-        // Examples: tcon_sina, tcon_server, tcon_crew_01.
+        // Examples: tcon_captain, tcon_server, tcon_crew_01.
         //
         // We deliberately ignore the `shortName` arg (it's still
         // accepted to keep begin()'s signature backwards-compatible

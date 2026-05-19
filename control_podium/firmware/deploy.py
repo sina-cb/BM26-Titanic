@@ -798,7 +798,7 @@ def build(env: str, node_id: int, *, upload_port: str | None = None,
 
     If `node` is supplied, its `name` field is also baked into the
     firmware as `BLE_NODE_NAME` so the BLE advertisement reads
-    `tcon_<name>` (e.g. `tcon_sina` for node 0x0A) instead of the
+    `tcon_<name>` (e.g. `tcon_captain` for node 0x0A) instead of the
     generic per-env DEVICE_SHORT label. Names are normalised to
     lowercase and any non-`[a-z0-9_]` characters are replaced with `_`
     to keep the AD-name field BLE-spec safe.
@@ -1044,7 +1044,7 @@ def cmd_deploy_all(args: argparse.Namespace) -> int:
     # Snapshot both locations once so we can plan flash order without
     # bouncing back and forth.
     # Normalize on BOTH sides (strip colons, uppercase) so a YAML
-    # entry like ``8C:FD:49:B5:7E:B8`` matches the colon-less form
+    # entry like ``AA:BB:CC:DD:EE:FF`` matches the colon-less form
     # pyserial returns for ESP32-S3 serial numbers. Without this the
     # local board appears in inventory but the lookup misses it and
     # the node gets falsely reported as "not connected".

@@ -7,7 +7,7 @@
 # * Auto-start on every Pi power cycle (`WantedBy=multi-user.target`).
 # * Auto-restart on any process exit, including OOM kills and panics
 #   in the supervisor itself (defence-in-depth on top of the in-
-#   process supervisor in bridge_companion._run).
+#   process supervisor in server_bridge.runner._run).
 # * Bounded restart rate so a hard config error (refused at boot by
 #   sys.exit) doesn't burn CPU on the Pi — 5 restarts per 60 s window
 #   then journalctl-visible failure.

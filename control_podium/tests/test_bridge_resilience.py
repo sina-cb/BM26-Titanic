@@ -10,7 +10,7 @@ run unattended on a Raspberry Pi for days at a time:
   * :class:`RadioPortSerial` transparently reopens its USB-CDC port
     when a `readline()` raises (USB unplug, fd invalidation), so a
     cable wiggle no longer kills the bridge process.
-  * The companion's serial-port resolver refuses to attach as the
+  * The runner's serial-port resolver refuses to attach as the
     bridge unless the configured node's role is ``server``.
 
 We intentionally avoid spinning up the full Bridge/sim-bus stack
@@ -222,7 +222,7 @@ async def test_radio_port_serial_close_swallows_bad_fd(monkeypatch):
     assert radio._ser is None
 
 
-# ── companion serial-port resolver: role gating ──────────────────────
+# ── runner serial-port resolver: role gating ─────────────────────────
 
 
 def _write_nodes_yaml(tmp_path: Path, body: str) -> Path:
@@ -236,24 +236,24 @@ def test_resolver_refuses_when_node_role_is_not_server(tmp_path, monkeypatch):
     `captain` or `crew` — even if its usb_mac is paired. This is the
     "bridge connects only to the server controller" invariant.
     """
-    from server_bridge import runner as bridge_companion
+    from server_bridge import runner
     yaml_path = _write_nodes_yaml(tmp_path, """
         nodes:
           0x0A:
-            name: sina
+            name: captain
             role: captain
             usb_mac: "02:00:00:00:00:0A"
     """)
-    monkeypatch.setattr(bridge_companion, "BASE", tmp_path)
+    monkeypatch.setattr(runner, "BASE", tmp_path)
 
     with pytest.raises(SystemExit) as exc:
-        bridge_companion._resolve_serial_port(node_id=0x0A, override=None)
+        runner._resolve_serial_port(node_id=0x0A, override=None)
     assert "role 'captain'" in str(exc.value)
     assert "'server'" in str(exc.value)
 
 
 def test_resolver_refuses_when_node_missing_from_config(tmp_path, monkeypatch):
-    from server_bridge import runner as bridge_companion
+    from server_bridge import runner
     _write_nodes_yaml(tmp_path, """
         nodes:
           0x01:
@@ -261,10 +261,10 @@ def test_resolver_refuses_when_node_missing_from_config(tmp_path, monkeypatch):
             role: server
             usb_mac: "AA:BB:CC:DD:EE:FF"
     """)
-    monkeypatch.setattr(bridge_companion, "BASE", tmp_path)
+    monkeypatch.setattr(runner, "BASE", tmp_path)
 
     with pytest.raises(SystemExit) as exc:
-        bridge_companion._resolve_serial_port(node_id=0x05, override=None)
+        runner._resolve_serial_port(node_id=0x05, override=None)
     assert "0x05" in str(exc.value)
     assert "missing from .config.nodes.yaml" in str(exc.value)
 
@@ -283,7 +283,7 @@ def test_resolver_raises_transient_when_usb_not_plugged_in(tmp_path, monkeypatch
     Pi with no bridge until someone SSH'd in to relaunch it. That
     defeats the entire "zero monitoring" promise.
     """
-    from server_bridge import runner as bridge_companion
+    from server_bridge import runner
     _write_nodes_yaml(tmp_path, """
         nodes:
           0x01:
@@ -291,13 +291,13 @@ def test_resolver_raises_transient_when_usb_not_plugged_in(tmp_path, monkeypatch
             role: server
             usb_mac: "DE:AD:BE:EF:00:01"
     """)
-    monkeypatch.setattr(bridge_companion, "BASE", tmp_path)
+    monkeypatch.setattr(runner, "BASE", tmp_path)
     monkeypatch.setattr(
         "utils.discovery.find_port_by_mac", lambda mac: None,
     )
 
-    with pytest.raises(bridge_companion.TransientBootError) as exc:
-        bridge_companion._resolve_serial_port(node_id=0x01, override=None)
+    with pytest.raises(runner.TransientBootError) as exc:
+        runner._resolve_serial_port(node_id=0x01, override=None)
     assert "DE:AD:BE:EF:00:01" in str(exc.value)
     # Must NOT be a SystemExit — that's what killed the process.
     assert not isinstance(exc.value, SystemExit), (
@@ -310,16 +310,16 @@ def test_resolver_accepts_override_without_mac_lookup(tmp_path, monkeypatch):
     operator to set up usb_mac in the YAML — useful for first-boot
     pairing of a brand-new server Heltec. The role check on the
     *configured node* still applies though."""
-    from server_bridge import runner as bridge_companion
+    from server_bridge import runner
     _write_nodes_yaml(tmp_path, """
         nodes:
           0x01:
             name: server
             role: server
     """)
-    monkeypatch.setattr(bridge_companion, "BASE", tmp_path)
+    monkeypatch.setattr(runner, "BASE", tmp_path)
 
-    result = bridge_companion._resolve_serial_port(
+    result = runner._resolve_serial_port(
         node_id=0x01, override="/dev/cu.usbmodem9999",
     )
     assert result == "/dev/cu.usbmodem9999"

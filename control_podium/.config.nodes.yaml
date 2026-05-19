@@ -47,20 +47,20 @@ nodes:
     notes: "Pi-side radio bridge. Single instance."
 
   # ── Captains (privileged operators) ──────────────────────────────────
-  # Sina is currently a Heltec while CaptainPad BLE-radio integration is
-  # being built; will switch back to type=ipad once the iPad app speaks
-  # Titanic Frame v2 over BLE→radio.
+  # Primary captain is currently a Heltec while CaptainPad BLE-radio
+  # integration is being built; will switch back to type=ipad once the
+  # iPad app speaks Titanic Frame v2 over BLE→radio.
   0x0A:
-    name: sina
+    name: captain
     role: captain
     type: heltec_v4
-    notes: "Captain handheld (Heltec for now; CaptainPad target later)."
+    notes: "Primary captain handheld (Heltec for now; CaptainPad target later)."
     usb_mac: "8C:FD:49:B5:7E:B8"
   0x0B:
-    name: misha
+    name: captain_02
     role: captain
     type: ipad
-    notes: "CaptainPad-2."
+    notes: "Secondary captain (CaptainPad)."
 
   # ── Crew (read-only; can ping captains) ──────────────────────────────
   # Crew can't issue commands but CAN /ping any captain (or the server)

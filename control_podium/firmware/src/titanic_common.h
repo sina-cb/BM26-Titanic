@@ -535,7 +535,7 @@ void titanicSetup() {
 //   [BLE name (lower-case, exactly as advertised)]   [batt% / USB / CHRG]
 // followed by a 1-px separator at LINE_Y.
 //
-// Showing the BLE name (e.g. "tcon_sina") rather than the legacy
+// Showing the BLE name (e.g. "tcon_captain") rather than the legacy
 // DEVICE_SHORT label means the operator can confirm at a glance that
 // the iPhone is talking to the right physical box — the string on
 // screen is identical to the string in iOS's BLE picker.

@@ -43,7 +43,7 @@ to be the **always-on tail** of the radio chain:
 PortWatch (iPhone/iPad)
    │  BLE
    ▼
-Captain Heltec (tcon_sina, node 0x0A)
+Captain Heltec (tcon_captain, node 0x0A)
    │  LoRa SF=10 / BW=125 kHz / CR=4/5 / +22 dBm
    ▼
 Server Heltec (tcon_server, node 0x01)
@@ -129,8 +129,8 @@ when bootstrapping a new Pi. Never commit the real file.
 │   ├── .config.firmware.yaml   Compile-time firmware knobs (read here by deploy)
 │   ├── secret.yaml             AES-128 key (gitignored, rsync'd over by deploy)
 │   ├── comms/                  Framing, codec, radio, bridge, health server
-│   ├── companions/             bridge_companion + client_companion
-│   ├── server_bridge/          Pi-side packaging + systemd unit
+│   ├── companions/             client_companion + HIL demos (dev-only)
+│   ├── server_bridge/          Pi-side bridge runtime (runner.py) + deploy + systemd
 │   └── …                       (firmware/ is shipped to enable remote flashing)
 └── docs/                       docs/22_server_bridge.md is the design doc
 ```

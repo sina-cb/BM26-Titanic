@@ -356,8 +356,8 @@ class RadioPortSerial(RadioPort):
         Heltec brown-out without operator intervention — the original
         symptom on the Pi was the bridge process exiting on
         ``Errno 6`` and never coming back until restart. The
-        bridge_companion supervisor will additionally restart us if
-        the open itself fails for a prolonged period.
+        server_bridge.runner supervisor will additionally restart us
+        if the open itself fails for a prolonged period.
 
         Termination
         -----------

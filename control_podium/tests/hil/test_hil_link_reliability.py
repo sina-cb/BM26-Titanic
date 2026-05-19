@@ -3,7 +3,7 @@
 
 What this proves
 ----------------
-The single-shot ``test_hil_tcon_sina_status.py`` confirms ONE
+The single-shot ``test_hil_tcon_captain_status.py`` confirms ONE
 ``qry engine/status`` round-trip works. That's not enough evidence to
 say the link is "reliable" — it just proves it's "occasionally
 reachable". This test runs many round-trips back-to-back and reports:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HIL: connect to tcon_sina (node 0x0A, captain) and validate every
+"""HIL: connect to tcon_captain (node 0x0A, captain) and validate every
 status field that PortWatch's Status screen renders.
 
 What this proves
@@ -7,7 +7,7 @@ What this proves
 End-to-end, on REAL hardware (not the in-process sim_bus), that:
 
   1. A USB-CDC serial link to the captain Heltec (BLE name
-     ``tcon_sina``, node id 0x0A) is openable from the laptop.
+     ``tcon_captain``, node id 0x0A) is openable from the laptop.
   2. The Heltec relays our ``qry engine/status`` over LoRa to the
      server Heltec, which the Pi-side ``server_bridge`` translates
      into an engine HTTP call.
@@ -37,7 +37,7 @@ opt-in gates.
 Usage
 -----
     PYTHONPATH=. ../.venv-dev/bin/python \\
-        -m pytest tests/hil/test_hil_tcon_sina_status.py -v -s
+        -m pytest tests/hil/test_hil_tcon_captain_status.py -v -s
 
 The ``-s`` flag is useful here: the test prints a per-field status
 report so the operator can see exactly what came back.
@@ -180,7 +180,7 @@ def _check_typed(value: str, kind: str) -> tuple[bool, str]:
 
 
 @pytest.mark.timeout(30)
-def test_tcon_sina_status_field_by_field():
+def test_tcon_captain_status_field_by_field():
     """Send `qry engine/status` to the captain over real USB,
     verify the bridge returns a compact-status REP whose fields
     match what PortWatch reads.
@@ -271,7 +271,7 @@ def test_tcon_sina_status_field_by_field():
 
 
 @pytest.mark.timeout(45)
-def test_tcon_sina_receives_compact_status_pub_within_cadence():
+def test_tcon_captain_receives_compact_status_pub_within_cadence():
     """The bridge broadcasts compact_status on a long-interval timer
     (default 15 s active / 30 s idle). Listen on the captain for up
     to 40 s and verify we see AT LEAST one PUB. Confirms the
@@ -311,7 +311,7 @@ def test_tcon_sina_receives_compact_status_pub_within_cadence():
 
 
 if __name__ == "__main__":  # pragma: no cover
-    # Allows `python tests/hil/test_hil_tcon_sina_status.py` for
+    # Allows `python tests/hil/test_hil_tcon_captain_status.py` for
     # interactive runs without going through pytest. Exits non-zero
     # on any assertion failure so it composes with shell scripts.
     sys.exit(
