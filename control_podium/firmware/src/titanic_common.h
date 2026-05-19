@@ -504,6 +504,24 @@ void titanicSetup() {
     RADIOLIB_OR_HALT(radio.begin(FREQUENCY, BANDWIDTH, SF, CR));
     RADIOLIB_OR_HALT(radio.setOutputPower(TX_POWER));
 
+    // ── LoRa link-quality fixes (diagnostic 2026-05-18) ─────────
+    // Without these three, RadioLib's defaults silently knee-cap the
+    // +22 dBm path: OCP trips at 60 mA limiting PA current, the LDO
+    // regulator can't supply the +22 dBm PA cleanly, and RX runs at
+    // "normal" gain mode. Pre-fix bench symptom: RSSI ~-125 dBm at
+    // 3 m (~110 dB below the free-space expectation of -15 dBm).
+    //
+    // setCurrentLimit(140 mA) — SX1262 +22 dBm PA pulls ~120 mA peak;
+    // raise the OCP trip with margin so the PA isn't current-starved.
+    RADIOLIB_OR_HALT(radio.setCurrentLimit(140));
+    // DC-DC regulator is required for high-power TX. LDO (default)
+    // cannot supply +22 dBm cleanly even with OCP raised.
+    RADIOLIB_OR_HALT(radio.setRegulatorDCDC());
+    // Boosted RX gain adds ~3 dB sensitivity at a few mA RX cost.
+    // persist=true (default) keeps it across profile-switch set*()
+    // calls that drop the radio to standby.
+    RADIOLIB_OR_HALT(radio.setRxBoostedGainMode(true));
+
     // Init BLE
     ble.begin(DEVICE_SHORT, DEVICE_ROLE, FREQUENCY, SF, BANDWIDTH, TX_POWER);
 
