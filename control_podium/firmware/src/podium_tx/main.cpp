@@ -54,15 +54,17 @@ void transmitMessage(String msg) {
     _transmitRaw(msg);
 }
 
-// Redundant-transmit count for v2 frames. With ~50% per-direction LoRa
-// loss on this rig, 3 back-to-back copies push the effective single-
-// hop delivery rate from ~50% to ~87.5%. The bridge's replay window
-// (comms/replay.py) rejects the duplicates by counter, so the engine
-// only sees one logical request. Non-secured strings (*CFG and any
-// other plaintext debug) still send once — they have their own retry
-// logic via titanic_profile_handle_cfg_line.
+// Redundant-transmit count for v2 frames. Set to 1 = single TX, no
+// retransmit. Measurements on this rig (2026-05-19) showed that
+// MORE redundancy actually HURT round-trip reliability: each extra
+// copy makes the sender deaf to peer frames for ~310 ms longer,
+// dramatically increasing the chance of missing the reply. At
+// SF=10/BW=125 with our broken antenna, single TX + 53% per-copy
+// delivery gives ~28% round-trip; 3x/4x/5x dropped further to
+// 0-25%. Reliability work moves to the bridge PUB cadence (slower
+// = less collision) and protocol-level retries from PortWatch.
 #ifndef LORA_REDUNDANT_TX_COUNT
-#define LORA_REDUNDANT_TX_COUNT 3
+#define LORA_REDUNDANT_TX_COUNT 1
 #endif
 // Gap between redundant transmits (ms). Small enough that the bridge
 // hasn't yet sent a reply; large enough that the SX1262 has switched

@@ -81,8 +81,14 @@ bus:
 # WS-broken-AND-polling-broken-AND-broadcast-is-our-last-hope
 # pathological case, while quartering the broadcast airtime.
 status_publish:
-  short_interval_s: 15     # backstop cadence when clients are active
-  long_interval_s: 30      # cadence when nobody has spoken in a while
+  # At 4x redundant TX per frame (firmware), each PUB consumes ~2 s of
+  # airtime. The previous 15 s active cadence ate >13% of every 15 s
+  # window — colliding with operator qry/cmd traffic and degrading
+  # PortWatch responsiveness. Bumped to 60 s because PortWatch polls
+  # `qry engine/status` every 8 s on its own (the reliable sync path);
+  # the PUB is now purely a backstop for "WS subscriber wedged".
+  short_interval_s: 60     # backstop cadence when clients are active
+  long_interval_s: 120     # cadence when nobody has spoken in a while
   idle_threshold_s: 60     # "active" means anyone within this many seconds
 
 bridge:

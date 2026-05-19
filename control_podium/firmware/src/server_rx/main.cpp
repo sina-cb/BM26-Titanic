@@ -59,13 +59,12 @@ void transmitMessage(String msg) {
     _transmitRaw(msg);
 }
 
-// Redundant-transmit count for v2 frames. Same rationale as the captain:
-// with ~50% per-direction loss on this rig, 3 back-to-back copies push
-// single-hop reply delivery from ~50% to ~87.5%. Captain's replay
-// window (mirrors comms/replay.py) dedupes by counter so the BLE peer
-// only sees one logical reply.
+// Redundant-transmit count for v2 frames. Set to 1 = single TX.
+// See podium_tx/main.cpp for the measurement rationale — higher
+// counts made round-trip reliability worse on this rig because
+// the sender went deaf to peer frames during its own TX burst.
 #ifndef LORA_REDUNDANT_TX_COUNT
-#define LORA_REDUNDANT_TX_COUNT 3
+#define LORA_REDUNDANT_TX_COUNT 1
 #endif
 #ifndef LORA_REDUNDANT_TX_GAP_MS
 #define LORA_REDUNDANT_TX_GAP_MS 60
