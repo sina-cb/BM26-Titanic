@@ -7,17 +7,19 @@
 engine:
   # MarsinEngine API base URL(s). http/https only — see EngineClient init.
   #
-  # In the dev rig the engine + simulation run on a different machine on
-  # the LAN (canonical port is simulation/config.yaml::marsin_engine_port,
-  # default 6968). Set `url` to that host:port; falls back to localhost
-  # when working purely on this laptop.
-  url: "http://10.1.1.172:6968"
+  # Default is loopback so a fresh checkout works without leaking any
+  # per-rig LAN address. In real deployments (engine on a different
+  # LAN machine), set `url` to that host:port — the canonical port is
+  # simulation/config.yaml::marsin_engine_port (default 6968).
+  #
+  # Example for a LAN engine:
+  #   url: "http://<engine-lan-ip>:6968"
+  url: "http://127.0.0.1:6968"
   # Optional fallback list. The bridge probes them in order at startup
   # and uses the first one that responds to GET /status. If `url` above
   # also responds, it stays selected; otherwise we promote the first
   # reachable fallback. Comment out for single-engine deployments.
-  fallback_urls:
-    - "http://127.0.0.1:6968"   # localhost engine if running on this box
+  fallback_urls: []
   # Per-call timeout in seconds. Engines under heavy compile load can stall
   # a second or two; 2s gives margin without making clients wait too long.
   timeout_s: 2.0

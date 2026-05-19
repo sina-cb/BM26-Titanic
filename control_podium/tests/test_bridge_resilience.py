@@ -242,7 +242,7 @@ def test_resolver_refuses_when_node_role_is_not_server(tmp_path, monkeypatch):
           0x0A:
             name: sina
             role: captain
-            usb_mac: "8C:FD:49:B5:7E:B8"
+            usb_mac: "02:00:00:00:00:0A"
     """)
     monkeypatch.setattr(bridge_companion, "BASE", tmp_path)
 
