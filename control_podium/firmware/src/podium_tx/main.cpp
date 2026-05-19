@@ -54,18 +54,45 @@ void transmitMessage(String msg) {
     _transmitRaw(msg);
 }
 
+// Redundant-transmit count for v2 frames. With ~50% per-direction LoRa
+// loss on this rig, 3 back-to-back copies push the effective single-
+// hop delivery rate from ~50% to ~87.5%. The bridge's replay window
+// (comms/replay.py) rejects the duplicates by counter, so the engine
+// only sees one logical request. Non-secured strings (*CFG and any
+// other plaintext debug) still send once — they have their own retry
+// logic via titanic_profile_handle_cfg_line.
+#ifndef LORA_REDUNDANT_TX_COUNT
+#define LORA_REDUNDANT_TX_COUNT 3
+#endif
+// Gap between redundant transmits (ms). Small enough that the bridge
+// hasn't yet sent a reply; large enough that the SX1262 has switched
+// from TX → standby → TX again cleanly.
+#ifndef LORA_REDUNDANT_TX_GAP_MS
+#define LORA_REDUNDANT_TX_GAP_MS 60
+#endif
+
 static void _transmitRaw(String msg) {
     ble.onTransmit();
-    int state = radio.transmit(msg);
-    if (state == RADIOLIB_ERR_NONE) {
-        Serial.println("TX_OK");
+    // Only enable redundant TX for v2 secured frames ("T2|..."). Plaintext
+    // (*CFG control messages and any other debug strings) are sent once
+    // because they aren't carried by the replay-protected codec.
+    const bool is_secured = msg.startsWith("T2|");
+    const int copies = is_secured ? LORA_REDUNDANT_TX_COUNT : 1;
+    int last_state = RADIOLIB_ERR_NONE;
+    for (int i = 0; i < copies; ++i) {
+        if (i > 0) delay(LORA_REDUNDANT_TX_GAP_MS);
+        last_state = radio.transmit(msg);
+        if (last_state != RADIOLIB_ERR_NONE) break;
+    }
+    if (last_state == RADIOLIB_ERR_NONE) {
+        Serial.printf("TX_OK%s\n", copies > 1 ? "_RDX" : "");
         titanicLedFlash(50, 30);
         titanicShowTX(ble.txCount, msg, true);
     } else {
-        Serial.printf("TX_FAIL:%d\n", state);
-        titanicShowTX(ble.txCount, msg, false, state);
+        Serial.printf("TX_FAIL:%d\n", last_state);
+        titanicShowTX(ble.txCount, msg, false, last_state);
     }
-    // After TX, listen for response. Now runs immediately (was blocked 30ms
+    // After TX, listen for response. Runs immediately (was blocked 30ms
     // by the LED delay) so the peer doesn't have to retry as much.
     radio.startReceive();
 }

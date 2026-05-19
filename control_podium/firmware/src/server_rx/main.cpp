@@ -59,16 +59,35 @@ void transmitMessage(String msg) {
     _transmitRaw(msg);
 }
 
+// Redundant-transmit count for v2 frames. Same rationale as the captain:
+// with ~50% per-direction loss on this rig, 3 back-to-back copies push
+// single-hop reply delivery from ~50% to ~87.5%. Captain's replay
+// window (mirrors comms/replay.py) dedupes by counter so the BLE peer
+// only sees one logical reply.
+#ifndef LORA_REDUNDANT_TX_COUNT
+#define LORA_REDUNDANT_TX_COUNT 3
+#endif
+#ifndef LORA_REDUNDANT_TX_GAP_MS
+#define LORA_REDUNDANT_TX_GAP_MS 60
+#endif
+
 static void _transmitRaw(String msg) {
     ble.onTransmit();
-    int state = radio.transmit(msg);
-    if (state == RADIOLIB_ERR_NONE) {
-        Serial.println("TX_OK");
+    const bool is_secured = msg.startsWith("T2|");
+    const int copies = is_secured ? LORA_REDUNDANT_TX_COUNT : 1;
+    int last_state = RADIOLIB_ERR_NONE;
+    for (int i = 0; i < copies; ++i) {
+        if (i > 0) delay(LORA_REDUNDANT_TX_GAP_MS);
+        last_state = radio.transmit(msg);
+        if (last_state != RADIOLIB_ERR_NONE) break;
+    }
+    if (last_state == RADIOLIB_ERR_NONE) {
+        Serial.printf("TX_OK%s\n", copies > 1 ? "_RDX" : "");
         titanicLedFlash(50, 30);
         titanicShowTX(ble.txCount, msg, true);
     } else {
-        Serial.printf("TX_FAIL:%d\n", state);
-        titanicShowTX(ble.txCount, msg, false, state);
+        Serial.printf("TX_FAIL:%d\n", last_state);
+        titanicShowTX(ble.txCount, msg, false, last_state);
     }
     // Return to receive mode (now runs immediately).
     radio.startReceive();
