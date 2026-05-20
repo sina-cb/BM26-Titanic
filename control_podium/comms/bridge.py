@@ -1130,6 +1130,16 @@ class Bridge:
                 arg = "dn/1"
                 self.stats.engine_errors += 1
                 self._engine_last_fail_ms = time.monotonic() * 1000.0
+            # Announce the active LoRa profile in every PUB so any node
+            # in earshot — including a freshly-booted crew or captain
+            # joining the mesh — can learn what profile to switch to.
+            # `prof/<name>` is a single short field; cost is ~12 bytes
+            # on top of a ~80-150 byte status frame. Omitted when no
+            # profile has been applied since boot (let the receiver
+            # keep its compile-time default).
+            prof = self._lora_profile_current
+            if prof:
+                arg = f"{arg},prof/{prof}"
             await self._send(
                 None, TYPE_PUB, arg, dst=BROADCAST, seq=pub_seq & 0xFF,
             )

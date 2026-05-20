@@ -182,6 +182,51 @@ export class TitanicLink {
   }
 
   /**
+   * Switch the LoRa profile on EVERY controller on the mesh.
+   *
+   * This is a "master" change initiated by the operator from PortWatch.
+   * Since PortWatch is the captain's BLE peer and the captain firmware
+   * intercepts `*CFG` lines + relays them over LoRa on the OLD
+   * profile, a single BLE write here flips both the captain AND the
+   * server (and any other nodes in range) onto the new profile at a
+   * synchronized monotonic deadline.
+   *
+   * The line is plaintext — bypasses the v2 codec — because:
+   *   1. The captain firmware's transmitMessage() checks for `*CFG `
+   *      prefix BEFORE handing to the codec. A v2-encoded *CFG would
+   *      not be recognised.
+   *   2. The *CFG protocol predates the v2 codec and is intentionally
+   *      operator-control only — the v2 codec is for engine traffic
+   *      whose payloads are radio-untrusted.
+   *
+   * Note: this DOES bypass our serializer (`_txChain`) — *CFG control
+   * is rare, latency-critical, and shouldn't queue behind a
+   * paginated pattern fetch. Caller is responsible for not spamming.
+   *
+   * @param name  one of "test_bench" / "local" / "playa" (firmware
+   *              rejects anything else with no on-air relay).
+   * @param delayMs  synchronized apply delay (default 2000 ms gives
+   *              the LoRa relay enough time to land on the server
+   *              before both sides flip).
+   */
+  async setLoraProfile(name: string, delayMs = 2000): Promise<void> {
+    const safe = name.trim();
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(safe)) {
+      throw new Error(`bad profile name: ${JSON.stringify(name)}`);
+    }
+    const line = `*CFG name=${safe} t=${delayMs}\n`;
+    this.onWireEvent({
+      ts: Date.now(),
+      dir: "tx",
+      summary: `*CFG name=${safe} t=${delayMs} (mesh-wide profile switch)`,
+      frame: null,
+      raw: line,
+      ok: true,
+    });
+    await this.ble.writeFrame(line);
+  }
+
+  /**
    * Inner sendOp — the unsynchronized version that actually talks
    * to BLE + waits for a reply. Wrapped by `sendOp()` for serialization.
    */

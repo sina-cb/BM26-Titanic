@@ -96,6 +96,16 @@ export interface EngineStatus {
    */
   deckPlaylistName: string | null;
   /**
+   * Active LoRa profile name the bridge is currently running
+   * (`test_bench` / `local` / `playa`). Sourced from the bridge's
+   * `prof/<name>` field, which is omitted until the bridge has
+   * applied a profile change since boot. Null means "we don't know
+   * yet — bridge hasn't broadcast one." Drives the Status screen's
+   * profile picker so the operator sees which pill is actually
+   * active rather than guessing from their last tap.
+   */
+  loraProfile: string | null;
+  /**
    * Wall-clock millis when this status was received on the phone.
    * Used by Status screen to display "last update X s ago".
    */
@@ -200,10 +210,23 @@ export function parseEngineStatus(arg: string, receivedAtMs: number): EngineStat
     controlLockOwner: ownerOrNull(kv["lk"]),
     controlLockLeaseRemainSec: nonNegIntOrZero(kv["lku"]),
     deckPlaylistName: dashOrNull(kv["pl"]),
+    loraProfile: profileNameOrNull(kv["prof"]),
     receivedAtMs,
     rawArg: arg,
   };
   return status;
+}
+
+/**
+ * Allow only the canonical LoRa profile names (anything else is
+ * either truncated, a future profile this PortWatch build doesn't
+ * know about, or wire corruption). Falling back to null is safer
+ * than echoing a garbage string into the picker.
+ */
+function profileNameOrNull(v: string | undefined): string | null {
+  if (!v) return null;
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(v)) return null;
+  return v;
 }
 
 /**

@@ -62,7 +62,11 @@ RestartSec=5
 # Nothing else.
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=${INSTALL_ROOT}
+# INSTALL_ROOT for the venv + ${INSTALL_ROOT}/firmware-images writes
+# during remote flash. /var/lib/titanic-bridge holds the persisted
+# LoRa profile so a service restart resumes on the same profile the
+# operator left it on (bridge.py::_save_profile_to_disk).
+ReadWritePaths=${INSTALL_ROOT} /var/lib/titanic-bridge
 ProtectHome=true
 PrivateTmp=true
 

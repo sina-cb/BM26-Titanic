@@ -356,8 +356,16 @@ def _step_venv(ssh: SSHRunner, install_root: str) -> None:
 
 
 def _step_dialout(ssh: SSHRunner) -> None:
-    print("[5/8] add user to dialout (USB serial access)")
+    print("[5/8] add user to dialout (USB serial access) + state dir")
     ssh.sudo(f"usermod -aG dialout {ssh.user}")
+    # Bridge persists the last-applied LoRa profile here so a restart
+    # comes back on the same profile the operator left it on. Read-only
+    # if missing; bridge tolerates the failure but the operator loses
+    # the persistence on every redeploy.
+    ssh.sudo(
+        "mkdir -p /var/lib/titanic-bridge "
+        f"&& chown {shlex.quote(ssh.user)}:{shlex.quote(ssh.user)} /var/lib/titanic-bridge"
+    )
 
 
 def _step_install_unit(ssh: SSHRunner, install_root: str,

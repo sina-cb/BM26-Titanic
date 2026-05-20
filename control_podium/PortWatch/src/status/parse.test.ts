@@ -24,6 +24,24 @@ describe("parseEngineStatus", () => {
     expect(s.deckPlaylistName).toBeNull();
   });
 
+  it("extracts the active LoRa profile from `prof/<name>` so the picker can reflect ground truth", () => {
+    const arg = "pat/sunset,pl/warmup,prof/playa";
+    const s = parseEngineStatus(arg, 1);
+    expect(s.loraProfile).toBe("playa");
+  });
+
+  it("returns loraProfile=null when the bridge omits `prof/` (no switch since boot)", () => {
+    const arg = "pat/sunset,pl/warmup";
+    const s = parseEngineStatus(arg, 1);
+    expect(s.loraProfile).toBeNull();
+  });
+
+  it("rejects malformed profile names (defense against truncated/corrupted PUBs)", () => {
+    const arg = "pat/sunset,prof/play@!a";
+    const s = parseEngineStatus(arg, 1);
+    expect(s.loraProfile).toBeNull();
+  });
+
   it("does NOT expose legacy hash fields on EngineStatus", () => {
     // Regression guard: when the compact_status payload was slimmed
     // (no more `plh` / `pph` over the wire), the EngineStatus
