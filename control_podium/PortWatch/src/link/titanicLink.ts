@@ -72,6 +72,15 @@ export interface TitanicLinkOpts {
   src?: number;
   defaultTimeoutMs?: number;
   onWireEvent?: (e: WireEvent) => void;
+  /**
+   * Minimum wall time between the end of one `sendOp` (BLE write
+   * + reply or timeout) and the start of the next. Keeps the
+   * captain firmware's BLE→LoRa queue from filling on a slow link.
+   * Default 200 ms is small enough that interactive feel isn't hurt
+   * but large enough that the SX1262 has switched standby→RX before
+   * the next frame lands.
+   */
+  interFrameGapMs?: number;
 }
 
 export class TitanicLink {
@@ -82,13 +91,46 @@ export class TitanicLink {
   private pending = new Map<string, PendingAwaiter>();
   private onWireEvent: (e: WireEvent) => void;
   private defaultTimeoutMs: number;
+  private interFrameGapMs: number;
+  // ── Single-flight request manager ──────────────────────────────
+  //
+  // Every BLE characteristic write goes through `_txChain` so the
+  // captain firmware sees a STRICTLY SERIAL stream of commands, not
+  // a burst that overflows its 8-slot ring queue. Without this, the
+  // three pollers + a user tap + a REFRESH page-fetch can all fire
+  // `sendOp()` from independent async tasks within ~1 ms; the OS
+  // BLE stack may or may not serialize them, and the firmware
+  // CERTAINLY can't drain that fast at SF=10/BW=125 (~250 ms per
+  // frame on air).
+  //
+  // We chain Promises: each new sendOp awaits the previous one's
+  // completion (success OR timeout) plus an inter-frame gap before
+  // starting. Cleaner than an explicit lock — no risk of forgetting
+  // to release, no recursive-lock surprises, and it's typed.
+  private _txChain: Promise<unknown> = Promise.resolve();
+  // Diagnostic counters so the Status screen can surface "you have
+  // N requests queued" if the link is slow enough that the wait
+  // matters to the operator.
+  private _queueDepth = 0;
+  private _peakQueueDepth = 0;
+  private _serializedCount = 0;
 
   constructor(codec: Codec, ble: BleClient, opts: TitanicLinkOpts = {}) {
     this.codec = codec;
     this.ble = ble;
     this.src = opts.src ?? DEFAULT_IPHONE_NODE_ID;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 6000;
+    this.interFrameGapMs = opts.interFrameGapMs ?? 200;
     this.onWireEvent = opts.onWireEvent ?? (() => undefined);
+  }
+
+  /** Observable depth of the outbound request queue (incl. in-flight). */
+  get queueDepth(): number {
+    return this._queueDepth;
+  }
+  /** All-time peak queue depth. Useful for tuning timeouts. */
+  get peakQueueDepth(): number {
+    return this._peakQueueDepth;
   }
 
   /** Allocate the next per-sender seq (wraps modulo 256). */
@@ -109,8 +151,44 @@ export class TitanicLink {
    *
    * If the link drops mid-flight, the pending awaiter eventually
    * times out; cleanup() is the explicit reset path.
+   *
+   * Serialization: this method awaits a per-link transmit chain so
+   * the captain firmware never has more than one frame in flight on
+   * the BLE characteristic. Callers don't need to coordinate — they
+   * can `sendOp()` from independent async tasks freely.
    */
   async sendOp(op: OpDescriptor, opts: { timeoutMs?: number; dst?: number } = {}): Promise<SendResult> {
+    this._queueDepth++;
+    if (this._queueDepth > this._peakQueueDepth) {
+      this._peakQueueDepth = this._queueDepth;
+    }
+    // Chain this request after whatever's currently in flight. We
+    // catch the previous chain's error so one failed request can't
+    // poison the queue for everyone behind it.
+    const prev = this._txChain.catch(() => undefined);
+    const ours = prev.then(() => this._doSendOp(op, opts));
+    // Update the chain so the next sendOp() awaits ours (plus the
+    // inter-frame gap) before starting. We schedule the gap AFTER
+    // ours settles, success or fail.
+    this._txChain = ours
+      .catch(() => undefined)
+      .then(() => new Promise<void>((r) => setTimeout(r, this.interFrameGapMs)));
+    try {
+      return await ours;
+    } finally {
+      this._queueDepth--;
+      this._serializedCount++;
+    }
+  }
+
+  /**
+   * Inner sendOp — the unsynchronized version that actually talks
+   * to BLE + waits for a reply. Wrapped by `sendOp()` for serialization.
+   */
+  private async _doSendOp(
+    op: OpDescriptor,
+    opts: { timeoutMs?: number; dst?: number },
+  ): Promise<SendResult> {
     const seq = this.allocSeq();
     const dst = opts.dst ?? SERVER_ID;
     const frame = frameForOp(op, seq, this.src, dst);

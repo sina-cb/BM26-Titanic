@@ -61,9 +61,37 @@
 #define BLE_NODE_NAME "node"
 #endif
 
-// ── Static command buffer (shared between callback and main loop) ──
-static volatile bool _ble_pending_cmd = false;
-static String _ble_cmd_buffer = "";
+// ── Command queue (shared between BLE callback and main loop) ──
+//
+// Previously this was a single-slot buffer (`_ble_cmd_buffer` + a
+// `_ble_pending_cmd` bool). Two BLE writes landing in the same
+// FreeRTOS loop tick — easy to trigger when PortWatch's status
+// poller fires while an operator taps a pattern — would overwrite
+// the first command before the main loop could pop it, silently
+// losing it.
+//
+// Replaced with a small fixed-capacity ring queue. The BLE
+// onWrite callback (always on the NimBLE host task) pushes; the
+// main loop pops at LoRa-transmit rate. The two indices are
+// updated atomically on the ESP32-S3 (32-bit aligned writes), and
+// since only the callback ever pushes and only the main loop
+// ever pops, no further locking is needed.
+//
+// Capacity sized for the worst case: PortWatch's three pollers
+// firing simultaneously plus an operator tap = 4 frames queued.
+// 8 gives 2x headroom without burning RAM (8 * 256 byte String =
+// 2 KB worst case, but Strings are dynamically allocated so the
+// idle cost is just the array overhead).
+#ifndef BLE_CMD_QUEUE_CAPACITY
+#define BLE_CMD_QUEUE_CAPACITY 8
+#endif
+static String _ble_cmd_queue[BLE_CMD_QUEUE_CAPACITY];
+static volatile uint8_t _ble_cmd_q_head = 0;  // next slot to pop
+static volatile uint8_t _ble_cmd_q_tail = 0;  // next slot to push
+// Dropped-write counter exposed for the serial log when the queue
+// overflows — operator can spot when the link is so slow that we
+// can't drain BLE writes fast enough.
+static volatile uint16_t _ble_cmd_q_dropped = 0;
 
 // ── Active connection bookkeeping ─────────────────────────────────
 // We support multiple simultaneous centrals (iPhone + iPad + spare;
@@ -285,8 +313,23 @@ class _BLECmdCB : public NimBLECharacteristicCallbacks {
         String cmd = pChar->getValue().c_str();
         cmd.trim();
         if (cmd.length() > 0 && cmd.length() <= 250) {
-            _ble_cmd_buffer = cmd;
-            _ble_pending_cmd = true;
+            // Push into the ring queue. Check for full first — if so,
+            // drop the new write rather than overwriting an unprocessed
+            // one. The main loop has been the bottleneck for queue
+            // overflow on this link (slow LoRa drain rate); dropping
+            // the latest is preferable to losing the in-flight command
+            // an operator is actively waiting on.
+            uint8_t next_tail = (uint8_t)((_ble_cmd_q_tail + 1) % BLE_CMD_QUEUE_CAPACITY);
+            if (next_tail == _ble_cmd_q_head) {
+                _ble_cmd_q_dropped++;
+                Serial.printf("BLE_CMD_DROP: queue full (cap=%d dropped=%u) cmd=%s\n",
+                              BLE_CMD_QUEUE_CAPACITY,
+                              (unsigned)_ble_cmd_q_dropped,
+                              cmd.c_str());
+                return;
+            }
+            _ble_cmd_queue[_ble_cmd_q_tail] = cmd;
+            _ble_cmd_q_tail = next_tail;
             Serial.printf("BLE_CMD: %s\n", cmd.c_str());
             // Real command came in over BLE — bump to HIGH so the
             // outbound LoRa relay goes out at max TX. This is the
@@ -353,13 +396,15 @@ public:
     }
 
     // ── Command queue (phone writes → main loop reads) ────
-    bool hasCommand() { return _ble_pending_cmd; }
+    bool hasCommand() { return _ble_cmd_q_head != _ble_cmd_q_tail; }
     String popCommand() {
-        _ble_pending_cmd = false;
-        String cmd = _ble_cmd_buffer;
-        _ble_cmd_buffer = "";
+        if (_ble_cmd_q_head == _ble_cmd_q_tail) return String("");
+        String cmd = _ble_cmd_queue[_ble_cmd_q_head];
+        _ble_cmd_queue[_ble_cmd_q_head] = String("");  // free the heap chunk
+        _ble_cmd_q_head = (uint8_t)((_ble_cmd_q_head + 1) % BLE_CMD_QUEUE_CAPACITY);
         return cmd;
     }
+    uint16_t cmdQueueDroppedCount() const { return _ble_cmd_q_dropped; }
 
     void begin(const char* shortName, const char* role,
                float freq, int sf, float bw, int txPower) {
