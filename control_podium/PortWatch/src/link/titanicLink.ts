@@ -158,27 +158,7 @@ export class TitanicLink {
    * can `sendOp()` from independent async tasks freely.
    */
   async sendOp(op: OpDescriptor, opts: { timeoutMs?: number; dst?: number } = {}): Promise<SendResult> {
-    this._queueDepth++;
-    if (this._queueDepth > this._peakQueueDepth) {
-      this._peakQueueDepth = this._queueDepth;
-    }
-    // Chain this request after whatever's currently in flight. We
-    // catch the previous chain's error so one failed request can't
-    // poison the queue for everyone behind it.
-    const prev = this._txChain.catch(() => undefined);
-    const ours = prev.then(() => this._doSendOp(op, opts));
-    // Update the chain so the next sendOp() awaits ours (plus the
-    // inter-frame gap) before starting. We schedule the gap AFTER
-    // ours settles, success or fail.
-    this._txChain = ours
-      .catch(() => undefined)
-      .then(() => new Promise<void>((r) => setTimeout(r, this.interFrameGapMs)));
-    try {
-      return await ours;
-    } finally {
-      this._queueDepth--;
-      this._serializedCount++;
-    }
+    return await this._runThroughChain(() => this._doSendOp(op, opts));
   }
 
   /**
@@ -199,9 +179,14 @@ export class TitanicLink {
    *      operator-control only — the v2 codec is for engine traffic
    *      whose payloads are radio-untrusted.
    *
-   * Note: this DOES bypass our serializer (`_txChain`) — *CFG control
-   * is rare, latency-critical, and shouldn't queue behind a
-   * paginated pattern fetch. Caller is responsible for not spamming.
+   * Serialization: this DOES go through `_txChain` (unlike the
+   * earlier implementation which bypassed it). The earlier bypass
+   * felt safe because *CFG is rare, but it meant a profile-switch
+   * tap could land mid-BLE-write of a pattern qry and corrupt the
+   * captain's BLE→LoRa command queue. Now every outbound write —
+   * secured frame OR plaintext control — goes through the same
+   * single-flight chain, so the firmware never sees overlapped
+   * writes regardless of what the operator did.
    *
    * @param name  one of "test_bench" / "local" / "playa" (firmware
    *              rejects anything else with no on-air relay).
@@ -215,15 +200,47 @@ export class TitanicLink {
       throw new Error(`bad profile name: ${JSON.stringify(name)}`);
     }
     const line = `*CFG name=${safe} t=${delayMs}\n`;
-    this.onWireEvent({
-      ts: Date.now(),
-      dir: "tx",
-      summary: `*CFG name=${safe} t=${delayMs} (mesh-wide profile switch)`,
-      frame: null,
-      raw: line,
-      ok: true,
+    await this._runThroughChain(async () => {
+      this.onWireEvent({
+        ts: Date.now(),
+        dir: "tx",
+        summary: `*CFG name=${safe} t=${delayMs} (mesh-wide profile switch)`,
+        frame: null,
+        raw: line,
+        ok: true,
+      });
+      await this.ble.writeFrame(line);
     });
-    await this.ble.writeFrame(line);
+  }
+
+  /**
+   * Single-flight queue primitive shared by `sendOp` and
+   * `setLoraProfile`. Every outbound write goes through here — both
+   * v2-secured ops AND plaintext control lines like `*CFG`. The
+   * captain firmware's BLE→LoRa ring queue (titanic_ble.h) is
+   * single-producer/single-consumer; this enforces the producer side
+   * never lets two writes land in the same firmware tick.
+   *
+   * A failed/timed-out request does NOT poison the chain — we catch
+   * the previous chain's error so a subsequent send still runs.
+   * Inter-frame gap is enforced AFTER each operation settles.
+   */
+  private async _runThroughChain<T>(work: () => Promise<T>): Promise<T> {
+    this._queueDepth++;
+    if (this._queueDepth > this._peakQueueDepth) {
+      this._peakQueueDepth = this._queueDepth;
+    }
+    const prev = this._txChain.catch(() => undefined);
+    const ours = prev.then(() => work());
+    this._txChain = ours
+      .catch(() => undefined)
+      .then(() => new Promise<void>((r) => setTimeout(r, this.interFrameGapMs)));
+    try {
+      return await ours;
+    } finally {
+      this._queueDepth--;
+      this._serializedCount++;
+    }
   }
 
   /**

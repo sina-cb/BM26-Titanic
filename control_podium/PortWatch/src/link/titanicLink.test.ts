@@ -115,6 +115,42 @@ describe("TitanicLink — single-flight TX manager", () => {
     expect(writes.length).toBe(1);
   });
 
+  it("setLoraProfile serializes against concurrent sendOp through the same chain", async () => {
+    // Regression: an earlier version of setLoraProfile bypassed the
+    // TX chain "because *CFG is rare and latency-critical". That
+    // caused operator-side profile taps landing mid-pattern-fetch
+    // to corrupt the captain firmware's BLE ring queue. Now both
+    // share _txChain and never overlap on the BLE characteristic.
+    const ble = makeFakeBle({ writeDelayMs: 40 });
+    const link = new TitanicLink(codec, ble, { interFrameGapMs: 0 });
+
+    const a = link.sendOp(
+      { id: "qry", label: "qry", kind: "qry", arg: "engine/status" },
+      { timeoutMs: 100 },
+    );
+    const b = link.setLoraProfile("test_bench");
+    const c = link.sendOp(
+      { id: "qry2", label: "qry2", kind: "qry", arg: "params" },
+      { timeoutMs: 100 },
+    );
+    await Promise.all([a, b, c]);
+
+    expect(ble.writes.length).toBe(3);
+    // Never two on the wire concurrently.
+    expect(ble.peakInFlight).toBe(1);
+    // Strict ordering — including the plaintext *CFG line in the
+    // middle of two v2 frames.
+    for (let i = 0; i < ble.writes.length - 1; i++) {
+      expect(ble.writes[i + 1].startMs).toBeGreaterThanOrEqual(
+        ble.writes[i].endMs,
+      );
+    }
+    // The *CFG line is the only one starting with "*CFG ".
+    const cfgWrites = ble.writes.filter((w) => w.line.startsWith("*CFG "));
+    expect(cfgWrites.length).toBe(1);
+    expect(cfgWrites[0].line).toMatch(/^\*CFG name=test_bench t=\d+\n$/);
+  });
+
   it("queueDepth + peakQueueDepth track concurrent callers", async () => {
     const ble = makeFakeBle({ writeDelayMs: 30 });
     const link = new TitanicLink(codec, ble, { interFrameGapMs: 0 });
