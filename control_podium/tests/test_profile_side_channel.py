@@ -70,6 +70,72 @@ async def test_request_profile_change_writes_expected_wire_line(tmp_path):
     assert (tmp_path / "profile.txt").read_text().strip() == "playa"
 
 
+def test_confirm_profile_applied_corrects_drift(tmp_path):
+    """When the firmware reports `CFG_APPLIED name=local` over USB
+    but the bridge's `_lora_profile_current` says `playa` (the
+    captain-originated path that previously left the bridge stale),
+    `confirm_profile_applied` MUST update bridge state + persist to
+    disk + wake the publisher so the next PUB carries the right
+    `prof/<name>` field.
+    """
+    from comms.bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._lora_profile_current = "playa"          # bridge thinks A
+    bridge._lora_profile_last_applied_ms = None
+    bridge._PROFILE_DISK_PATH = str(tmp_path / "profile.txt")
+    bridge._publisher_wake = asyncio.Event()        # spy that .set() fires
+
+    assert not bridge._publisher_wake.is_set()
+
+    bridge.confirm_profile_applied("local")          # firmware says B
+
+    # Bridge bookkeeping caught up.
+    assert bridge._lora_profile_current == "local"
+    # Disk persisted (so a bridge restart resumes at the right profile).
+    assert (tmp_path / "profile.txt").read_text().strip() == "local"
+    # Publisher woken — next PUB will go out with prof/local.
+    assert bridge._publisher_wake.is_set()
+
+
+def test_confirm_profile_applied_match_is_silent_noop(tmp_path):
+    """When firmware confirms what bridge already thought, no state
+    change, no disk write, no publisher wake. Avoids burning a PUB
+    every time the bridge's own /profile call gets echoed back."""
+    from comms.bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._lora_profile_current = "playa"
+    bridge._lora_profile_last_applied_ms = None
+    bridge._PROFILE_DISK_PATH = str(tmp_path / "profile.txt")
+    bridge._publisher_wake = asyncio.Event()
+
+    bridge.confirm_profile_applied("playa")
+
+    assert bridge._lora_profile_current == "playa"
+    assert not (tmp_path / "profile.txt").exists()  # no write on no-op
+    assert not bridge._publisher_wake.is_set()
+
+
+def test_confirm_profile_applied_ignores_unknown_name(tmp_path):
+    """A future firmware emitting a profile name we don't know about
+    must NOT corrupt bridge state. Log + ignore is the safe behaviour;
+    the bridge isn't authoritative on what profiles exist (the
+    firmware compile-time table is)."""
+    from comms.bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge._lora_profile_current = "playa"
+    bridge._lora_profile_last_applied_ms = None
+    bridge._PROFILE_DISK_PATH = str(tmp_path / "profile.txt")
+    bridge._publisher_wake = asyncio.Event()
+
+    bridge.confirm_profile_applied("super_fast_v2")  # not in LORA_PROFILE_NAMES
+
+    assert bridge._lora_profile_current == "playa"  # unchanged
+    assert not bridge._publisher_wake.is_set()
+
+
 @pytest.mark.asyncio
 async def test_request_profile_change_rejects_unknown_name(tmp_path):
     from comms.bridge import Bridge

@@ -216,6 +216,19 @@ static void _titanic_profile_apply_now(int idx) {
     if (rc != 0) Serial.printf("PROF: startReceive → rc=%d\n", rc);
 
     _titanic_profile_active_idx = idx;
+
+    // Machine-readable confirmation line for the Pi-side bridge to
+    // parse on the server controller's USB-CDC. Closes the
+    // bookkeeping loop: regardless of WHO originated the *CFG (USB
+    // host = bridge, BLE = captain operator via PortWatch, LoRa peer
+    // = relayed from captain), the bridge sees a single `CFG_APPLIED`
+    // line and updates its own `_lora_profile_current` so the next
+    // PUB carries the correct `prof/<name>` field.
+    //
+    // On the captain firmware this line is also emitted but nobody is
+    // listening to the captain's USB in production — harmless. The
+    // dev-laptop HIL scripts can parse it if they want.
+    Serial.printf("CFG_APPLIED name=%s\n", p.name);
 }
 
 // Public API ─────────────────────────────────────────────────────────

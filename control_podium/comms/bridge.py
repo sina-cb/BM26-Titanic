@@ -219,6 +219,15 @@ class Bridge:
         self._lora_profile_current: Optional[str] = self._load_profile_from_disk()
         self._lora_profile_last_applied_ms: Optional[float] = None
 
+        # Subscribe to the firmware's out-of-band profile-applied
+        # confirmation if the radio supports it (RadioPortSerial does;
+        # the sim doesn't, harmless). Closes the bookkeeping loop for
+        # captain-originated and manual-USB-push profile switches —
+        # without it, bridge state can drift from the actual radio
+        # state and PUBs advertise the wrong `prof/<name>`.
+        if hasattr(self.radio, "_cfg_applied_callback"):
+            self.radio._cfg_applied_callback = self.confirm_profile_applied
+
     # ── LoRa profile side channel ───────────────────────────────────
     # The controllers (titanic_profiles.h) recognise a plaintext
     # "*CFG name=… t=…" line on either USB serial or as a LoRa-relayed
@@ -315,6 +324,50 @@ class Bridge:
                 "profile change deferred: USB write failed for name=%s", name,
             )
         return ok
+
+    def confirm_profile_applied(self, name: str) -> None:
+        """Out-of-band callback from the radio when firmware reports
+        a successful profile apply (CFG_APPLIED line on USB).
+
+        This is how we keep `_lora_profile_current` honest regardless
+        of WHO originated the switch:
+          * Bridge initiated via /profile: confirmation matches what
+            request_profile_change() already set; logs "confirmed".
+          * Captain initiated via BLE *CFG: server applied it, relayed
+            over LoRa, then echoes CFG_APPLIED to us. We had stale
+            state ("playa") and the actual radio moved to "test_bench";
+            this callback corrects the drift.
+          * Manual USB push by an operator: same as above.
+
+        The callback is idempotent and tolerates being called with
+        unknown profile names (defends against a future firmware
+        emitting names we don't yet know about — log + ignore).
+        """
+        if name not in self.LORA_PROFILE_NAMES:
+            logger.warning(
+                "CFG_APPLIED with unknown profile name %r — ignoring; "
+                "this bridge may be older than the firmware",
+                name,
+            )
+            return
+        prev = self._lora_profile_current
+        if prev == name:
+            logger.debug("CFG_APPLIED confirmed: name=%s (no change)", name)
+            return
+        # Drift detected — the radio is on a profile the bridge didn't
+        # know about. Update state + persist + wake the publisher so
+        # the next PUB carries the correct `prof/<name>` and any UI
+        # subscribed to that field re-syncs within one PUB cycle.
+        self._lora_profile_current = name
+        import time as _t
+        self._lora_profile_last_applied_ms = _t.monotonic() * 1000.0
+        self._save_profile_to_disk(name)
+        logger.info(
+            "CFG_APPLIED drift corrected: %r → %r (firmware authoritative)",
+            prev, name,
+        )
+        if self._publisher_wake is not None:
+            self._publisher_wake.set()
 
     # Persistence is intentionally a small file (not the NVS the
     # firmware uses — that lives on the ESP). We just need the bridge

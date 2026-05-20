@@ -27,7 +27,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from .frame import Frame, FrameError
 from .radio_port import RadioPort
@@ -147,7 +147,8 @@ class RadioPortSerial(RadioPort):
                  codec=_AUTO, replay=_AUTO,
                  pre_send_delay_s: float = 0.0,
                  reconnect_backoff_initial_s: float = 1.0,
-                 reconnect_backoff_max_s: float = 30.0):
+                 reconnect_backoff_max_s: float = 30.0,
+                 cfg_applied_callback: Optional[Callable[[str], None]] = None):
         """``pre_send_delay_s`` is a deliberate stall before each TX,
         kept around as an escape hatch.
 
@@ -177,6 +178,14 @@ class RadioPortSerial(RadioPort):
         self.replay = replay
         self._reconnect_backoff_initial_s = reconnect_backoff_initial_s
         self._reconnect_backoff_max_s = reconnect_backoff_max_s
+        # Optional hook fired when the firmware reports a successful
+        # profile-switch on its end (`CFG_APPLIED name=<x>` line).
+        # Bridge uses this to keep its in-memory `_lora_profile_current`
+        # in sync regardless of WHO originated the switch — the bridge
+        # via /profile, a captain via BLE, or even a manual USB push.
+        # Without this hook, captain-originated switches left the bridge
+        # advertising the wrong profile in PUBs (`prof/<name>`).
+        self._cfg_applied_callback = cfg_applied_callback
         self._ser = None
         self._open = False
         self._send_lock = asyncio.Lock()
@@ -426,6 +435,30 @@ class RadioPortSerial(RadioPort):
                 continue
             line = raw.decode("utf-8", errors="replace").strip()
             if not line:
+                continue
+
+            # Out-of-band control: firmware confirmation that a
+            # `*CFG name=<x>` was actually applied. Fires for every
+            # apply path on the firmware side (USB host, LoRa peer,
+            # or BLE-originated). The bridge subscribes to update its
+            # `_lora_profile_current` so the next PUB carries the
+            # correct `prof/<name>` field, regardless of who initiated
+            # the change. Parse before the RX-line fallthrough so it
+            # doesn't get logged as "non-RX line: ...".
+            if line.startswith("CFG_APPLIED "):
+                if self._cfg_applied_callback is not None:
+                    try:
+                        # Format: `CFG_APPLIED name=<name>`
+                        kv = line[len("CFG_APPLIED "):].strip()
+                        if kv.startswith("name="):
+                            name = kv[len("name="):].strip()
+                            if name:
+                                self._cfg_applied_callback(name)
+                    except Exception as exc:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            "cfg_applied_callback failed: %s (line=%r)",
+                            exc, line,
+                        )
                 continue
 
             rx = parse_rx_line(line)
