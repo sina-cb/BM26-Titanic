@@ -1,0 +1,79 @@
+[Unit]
+# Titanic server_bridge — systemd unit installed by
+# `python -m server_bridge.deploy` onto the Pi.
+#
+# What this gives us
+# ------------------
+# * Auto-start on every Pi power cycle (`WantedBy=multi-user.target`).
+# * Auto-restart on any process exit, including OOM kills and panics
+#   in the supervisor itself (defence-in-depth on top of the in-
+#   process supervisor in server_bridge.runner._run).
+# * Bounded restart rate so a hard config error (refused at boot by
+#   sys.exit) doesn't burn CPU on the Pi — 5 restarts per 60 s window
+#   then journalctl-visible failure.
+# * Network-online dependency so we don't try to reach the engine
+#   before WiFi has an IP.
+# * Logs go to journalctl (`journalctl -u titanic-bridge -f`).
+#
+# Placeholders ${...} are filled in by deploy.py at install time so
+# the path and the runtime user can vary per Pi.
+
+Description=Titanic radio<->engine bridge (server_bridge)
+Documentation=file:///opt/titanic-bridge/docs/22_server_bridge.md
+After=network-online.target dev-${SERIAL_DEV_ESCAPED}.device
+Wants=network-online.target
+
+# Restart-burst protection lives in [Unit] in modern systemd (≥230).
+# After 5 starts in a 60 s window the unit parks in `failed` state
+# rather than burning the Pi's CPU on a hard config bug.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=${BRIDGE_USER}
+Group=${BRIDGE_USER}
+
+# Working directory is the deployed control_podium tree. The bridge
+# reads .config.*.yaml relative to BASE = parent-of-companions, so
+# this must point at the control_podium dir itself.
+WorkingDirectory=${INSTALL_ROOT}/control_podium
+
+# Force unbuffered I/O so journalctl shows logs in real time even
+# when the bridge is idle between PUBs.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=${INSTALL_ROOT}/control_podium
+
+# Use the venv interpreter that deploy.py creates so package
+# upgrades are isolated from the system Python.
+ExecStart=${INSTALL_ROOT}/venv/bin/python -m server_bridge --bus serial -v
+
+# Restart policy. `on-failure` would NOT restart on a clean exit
+# from the in-process supervisor's stop path, which is what we want
+# during a `systemctl stop`. `always` would loop on the SystemExit
+# branch (hard config errors). `on-failure` is the right pick.
+Restart=on-failure
+RestartSec=5
+
+# Hardening — minimal-privilege defaults. The bridge needs:
+#   * Read+write on /dev/ttyACM* (granted via the dialout group).
+#   * Read on /opt/titanic-bridge.
+#   * Outbound TCP to the engine on the WiFi.
+# Nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+# INSTALL_ROOT for the venv + ${INSTALL_ROOT}/firmware-images writes
+# during remote flash. /var/lib/titanic-bridge holds the persisted
+# LoRa profile so a service restart resumes on the same profile the
+# operator left it on (bridge.py::_save_profile_to_disk).
+ReadWritePaths=${INSTALL_ROOT} /var/lib/titanic-bridge
+ProtectHome=true
+PrivateTmp=true
+
+# Don't kill us aggressively during a shutdown so the supervisor's
+# cleanup path (close radio, close engine HTTP session) gets to run.
+TimeoutStopSec=10
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

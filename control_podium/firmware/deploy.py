@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import re
 import shutil
 import subprocess
@@ -75,6 +76,24 @@ from utils.discovery import scan_ports, _normalize_mac  # noqa: E402
 
 NODES_YAML = PODIUM_DIR / ".config.nodes.yaml"
 FIRMWARE_YAML = PODIUM_DIR / ".config.firmware.yaml"
+# Optional Pi credentials. When this file exists, deploy.py auto-scans
+# the Pi's USB ports too, so a target Heltec plugged into the Pi can be
+# flashed remotely with `--node 0xNN` without any extra flags. This
+# unifies the "flash locally vs flash via Pi" UX into ONE command —
+# the operator says what node they want, deploy.py figures out where
+# the board actually lives. See docs/22_server_bridge.md §4.4.
+SSH_SECRET = PODIUM_DIR / "server_bridge" / ".ssh.secret"
+PIO_BIN = "pio"
+SERVER_RX_ENV = "server_rx"
+# ESP32-S3 standard partition offsets — must match what
+# `pio run -t upload` does locally. Mirrored from server_bridge/deploy.py
+# so the remote flash invocation is identical to the local one.
+ESP32_FLASH_OFFSETS = [
+    ("bootloader.bin", "0x0"),
+    ("partitions.bin", "0x8000"),
+    ("boot_app0.bin",  "0xe000"),
+    ("firmware.bin",   "0x10000"),
+]
 # Optional per-developer override that wins over the committed file.
 # Lets someone bench-test with debug.pin_high_forever without making
 # everyone else build with it.
@@ -450,13 +469,326 @@ def _confirm(prompt: str, *, assume_yes: bool) -> bool:
 # ── pio invocation ─────────────────────────────────────────────────
 
 def _check_pio() -> str:
+    """Resolve a usable pio binary.
+
+    Priority:
+      1. ``$PATH`` (works when the dev venv is activated, or when
+         pio is symlinked into ``/usr/local/bin``).
+      2. The standard PlatformIO core install location at
+         ``~/.platformio/penv/bin/pio`` (created by the official
+         PlatformIO installer + by VS Code's PIO extension).
+
+    Why we fall back to the home-dir copy: the user installs pio
+    once and expects every project to find it without sourcing a
+    venv. Hard-failing here would force them to remember an extra
+    step that adds no safety. We only error when pio is genuinely
+    nowhere to be found.
+    """
     pio = shutil.which("pio")
-    if not pio:
+    if pio:
+        return pio
+    home_pio = Path.home() / ".platformio" / "penv" / "bin" / "pio"
+    if home_pio.is_file() and os.access(home_pio, os.X_OK):
+        return str(home_pio)
+    sys.exit(
+        "pio not found on $PATH and not at ~/.platformio/penv/bin/pio.\n"
+        "Install it with: python -m pip install --user platformio\n"
+        "or activate the dev venv: source .venv-dev/bin/activate"
+    )
+
+
+# ── Remote (Pi-side) flash support ───────────────────────────────────
+
+
+_SSH_SECRET_KV_RE = re.compile(r"^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$")
+
+
+def _load_ssh_secret() -> dict | None:
+    """Read Pi SSH creds from ``server_bridge/.ssh.secret``. Returns None
+    when the file is missing or lacks the required HOST/USER fields,
+    in which case remote-flash via the Pi is unavailable.
+    """
+    if not SSH_SECRET.is_file():
+        return None
+    merged: dict[str, str] = {}
+    for raw in SSH_SECRET.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _SSH_SECRET_KV_RE.match(line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2)
+        if (val.startswith('"') and val.endswith('"')) or (
+            val.startswith("'") and val.endswith("'")
+        ):
+            val = val[1:-1]
+        merged[key] = val
+    if not merged.get("HOST") or not merged.get("USER"):
+        return None
+    merged.setdefault("PORT", "22")
+    return merged
+
+def _ssh_argv(cred: dict, *, sudo: bool = False,
+              remote_cmd: str = "") -> tuple[list[str], dict, str]:
+    """Build an ssh argv that uses sshpass when a password is
+    configured. Returns (argv, env, stdin) — stdin is the sudo
+    password to pipe when sudo=True, else empty."""
+    has_pw = bool(cred.get("PASSWORD"))
+    if has_pw and not shutil.which("sshpass"):
         sys.exit(
-            "pio not found on $PATH. Activate the dev venv first:\n"
-            "  source .venv-dev/bin/activate"
+            "sshpass missing — needed for password auth to the Pi.\n"
+            "  brew install hudochenkov/sshpass/sshpass"
         )
-    return pio
+    env = os.environ.copy()
+    if has_pw:
+        env["SSHPASS"] = cred["PASSWORD"]
+    opts = [
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=8",
+        "-p", str(cred["PORT"]),
+    ]
+    prefix = ["sshpass", "-e"] if has_pw else []
+    target = f"{cred['USER']}@{cred['HOST']}"
+    if sudo:
+        wrapped = f"sudo -S -p '' bash -c {shlex.quote(remote_cmd)}"
+        argv = prefix + ["ssh", *opts, target, wrapped]
+        return argv, env, (cred.get("PASSWORD") or "") + "\n"
+    argv = prefix + ["ssh", *opts, target, remote_cmd]
+    return argv, env, ""
+
+
+def _ssh_run(cred: dict, cmd: str, *, sudo: bool = False,
+             capture: bool = False, check: bool = True) -> subprocess.CompletedProcess:
+    argv, env, stdin = _ssh_argv(cred, sudo=sudo, remote_cmd=cmd)
+    return subprocess.run(
+        argv, env=env, check=check, text=True,
+        capture_output=capture,
+        input=stdin if sudo else None,
+    )
+
+
+# Tiny remote scanner: list Heltec USB-CDC devices on the Pi and their
+# serial numbers (factory MACs surface as `iSerialNumber`). Mirrors what
+# utils.discovery.scan_ports does locally. Uses pyserial on the Pi
+# because we know it's installed there (server_bridge requirements).
+_PI_SCAN_SCRIPT = r"""
+import json, sys
+try:
+    from serial.tools import list_ports
+except Exception as e:
+    print(json.dumps({"error": str(e)}))
+    sys.exit(0)
+out = []
+for p in list_ports.comports():
+    # Heltec V3/V4 enumerate as ESP32-S3 USB-CDC. We only care about
+    # ports that look like an ESP32-S3 (VID 0x303A, PID 0x1001 etc.).
+    if p.vid in (0x303A,) or (p.product and "ESP32" in p.product.upper()):
+        out.append({
+            "port": p.device,
+            "serial": p.serial_number or "",
+            "product": p.product or "",
+        })
+print(json.dumps(out))
+"""
+
+
+def _remote_scan_pi(cred: dict, *, venv_python: str | None = None,
+                    quiet: bool = False) -> list[dict]:
+    """SSH into the Pi and enumerate Heltec-shaped USB serials.
+    Returns a list of ``{"port", "mac", "product"}`` dicts where
+    ``mac`` is the factory MAC normalised to colon-uppercase form
+    (matching ``utils.discovery._normalize_mac``). Empty list if
+    nothing relevant is connected or the scan errored.
+
+    The MAC comes from pyserial's ``serial_number`` field, which for
+    ESP32-S3 USB-CDC devices is the chip's factory MAC with the colons
+    stripped. Heltec firmware doesn't override it, so this is reliable
+    for any board flashed with stock or Titanic firmware.
+    """
+    py = venv_python or f"{cred.get('INSTALL_ROOT', '/opt/titanic-bridge')}/venv/bin/python"
+    # Send the scan script via stdin so we don't have to escape it
+    # through `ssh "<here>"`.
+    argv, env, _ = _ssh_argv(cred, remote_cmd=f"{py} -")
+    proc = subprocess.run(
+        argv, env=env, input=_PI_SCAN_SCRIPT, text=True,
+        capture_output=True, check=False,
+    )
+    if proc.returncode != 0:
+        if not quiet:
+            cprint("yellow",
+                   f"  ⚠ remote scan failed (rc={proc.returncode}): "
+                   f"{proc.stderr.strip()[:160]}")
+        return []
+    try:
+        import json as _json
+        items = _json.loads(proc.stdout.strip() or "[]")
+    except Exception as e:
+        if not quiet:
+            cprint("yellow", f"  ⚠ remote scan returned non-JSON: {e}")
+        return []
+    if isinstance(items, dict) and items.get("error"):
+        if not quiet:
+            cprint("yellow", f"  ⚠ remote scanner error: {items['error']}")
+        return []
+    out = []
+    for it in items:
+        mac = _normalize_mac(it.get("serial", ""))
+        if not mac:
+            continue
+        out.append({
+            "port": it["port"],
+            "mac": mac,
+            "product": it.get("product", ""),
+        })
+    return out
+
+
+def _remote_flash_build(env: str, node_id: int, node: dict) -> Path:
+    """Reuse the existing build() helper but in --build-only mode so
+    we get the .bin artifacts without needing a local USB target.
+
+    Also stages ``boot_app0.bin`` into the build dir alongside the
+    project-built bins. PlatformIO doesn't copy that file into the
+    build output (it's a toolchain asset that lives under
+    ``~/.platformio/packages/framework-arduinoespressif32/tools/
+    partitions/boot_app0.bin``). When PIO flashes locally it pulls
+    it from the toolchain dir directly; for the remote-flash path
+    we need every offset's bin to be one rsync away.
+    """
+    cprint("cyan", "  [remote] building locally (PIO + ESP32 toolchain "
+                   "stays on the laptop, only binaries go to the Pi)")
+    if not build(env, node_id, upload_port=None, node=node):
+        sys.exit("local build failed; nothing shipped to the Pi")
+    build_dir = HERE / ".pio" / "build" / env
+
+    # Stage boot_app0.bin from the framework dir into the build dir.
+    boot_app0_src = (
+        Path.home() / ".platformio" / "packages"
+        / "framework-arduinoespressif32" / "tools" / "partitions"
+        / "boot_app0.bin"
+    )
+    if not boot_app0_src.is_file():
+        # Search the platforms tree as a fallback (older PIO layouts
+        # ship boot_app0.bin under a versioned subdir).
+        candidates = list(
+            (Path.home() / ".platformio" / "packages").glob(
+                "framework-arduinoespressif32*/tools/partitions/boot_app0.bin"
+            )
+        )
+        if not candidates:
+            sys.exit(
+                "couldn't locate boot_app0.bin under ~/.platformio. "
+                "Run `pio pkg install --platform espressif32` and retry."
+            )
+        boot_app0_src = candidates[0]
+    boot_app0_dst = build_dir / "boot_app0.bin"
+    if not boot_app0_dst.is_file():
+        shutil.copy2(boot_app0_src, boot_app0_dst)
+
+    for name, _ in ESP32_FLASH_OFFSETS:
+        if not (build_dir / name).is_file():
+            sys.exit(
+                f"build dir {build_dir} missing {name}. Either the env "
+                f"renamed the artifact, or the build was interrupted."
+            )
+    return build_dir
+
+
+def _remote_flash_ship(cred: dict, build_dir: Path) -> str:
+    """rsync the four .bin images to the Pi and return the remote
+    images dir. Re-uses the install_root from .ssh.secret."""
+    install_root = cred.get("INSTALL_ROOT", "/opt/titanic-bridge")
+    remote_dir = install_root + "/firmware-images"
+    # Make the dir + open it up to the runtime user.
+    _ssh_run(cred,
+             f"mkdir -p {shlex.quote(remote_dir)} && "
+             f"chown -R {cred['USER']}:{cred['USER']} {shlex.quote(remote_dir)}",
+             sudo=True)
+    cprint("cyan", f"  [remote] rsync → {cred['HOST']}:{remote_dir}")
+    # Build rsync argv mirroring the same SSH options we use elsewhere.
+    has_pw = bool(cred.get("PASSWORD"))
+    prefix = ["sshpass", "-e"] if has_pw else []
+    ssh_opts = (
+        f"ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "
+        f"-p {cred['PORT']}"
+    )
+    rsync_env = os.environ.copy()
+    if has_pw:
+        rsync_env["SSHPASS"] = cred["PASSWORD"]
+    argv = prefix + [
+        "rsync", "-a", "--rsync-path=sudo rsync",
+        "-e", ssh_opts,
+        *[str(build_dir / name) for name, _ in ESP32_FLASH_OFFSETS],
+        f"{cred['USER']}@{cred['HOST']}:{remote_dir}/",
+    ]
+    subprocess.run(argv, env=rsync_env, check=True)
+    return remote_dir
+
+
+def _remote_flash_run(cred: dict, *, remote_port: str, remote_dir: str,
+                      verify: bool, env: str, node_id: int) -> bool:
+    """Stop the bridge service (releases /dev/ttyACM0), esptool flash,
+    restart the bridge, verify systemd reports active. Returns True
+    on success."""
+    install_root = cred.get("INSTALL_ROOT", "/opt/titanic-bridge")
+    venv_py = install_root + "/venv/bin/python"
+    cprint("cyan", "  [remote] stop titanic-bridge.service (release "
+                   f"{remote_port})")
+    _ssh_run(cred, "systemctl stop titanic-bridge.service", sudo=True,
+             check=False)
+    # Give systemd time to actually release the file descriptor.
+    # 1.5 s was occasionally racy (esptool would see the port as
+    # busy on the first attempt right after a service restart);
+    # 3 s buys us comfortable headroom without making the operator
+    # wait long. Also poll fuser as a belt-and-braces check.
+    time.sleep(3.0)
+    _ssh_run(cred,
+             f"fuser -k {shlex.quote(remote_port)} || true",
+             sudo=True, check=False)
+    time.sleep(0.5)
+    cprint("cyan", "  [remote] pip install esptool (idempotent)")
+    _ssh_run(cred, f"{install_root}/venv/bin/pip install --quiet "
+                   "'esptool>=4.7,<5'")
+    images = " ".join(
+        f"{off} {shlex.quote(remote_dir + '/' + name)}"
+        for name, off in ESP32_FLASH_OFFSETS
+    )
+    flash_cmd = (
+        f"{venv_py} -m esptool --chip esp32s3 "
+        f"--port {shlex.quote(remote_port)} --baud 460800 "
+        "--before default_reset --after hard_reset "
+        "write_flash --flash_mode dio --flash_freq 80m "
+        f"--flash_size detect {images}"
+    )
+    cprint("cyan", f"  [remote] esptool write_flash on {cred['HOST']}")
+    try:
+        _ssh_run(cred, flash_cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        cprint("red", f"  ✗ remote flash failed: {exc}")
+        # Resume the bridge anyway so the Pi isn't left with a dead
+        # service alongside a half-flashed board.
+        _ssh_run(cred, "systemctl restart titanic-bridge.service",
+                 sudo=True, check=False)
+        return False
+    cprint("green", "  ✓ remote flash OK")
+    cprint("cyan", "  [remote] restart titanic-bridge.service")
+    _ssh_run(cred, "systemctl restart titanic-bridge.service",
+             sudo=True, check=False)
+    if not verify:
+        return True
+    time.sleep(6.0)
+    proc = _ssh_run(cred, "systemctl is-active titanic-bridge.service",
+                    capture=True, check=False)
+    state = (proc.stdout or "").strip()
+    if state == "active":
+        cprint("green", f"  ✓ bridge active again after flash "
+                        f"(env={env}, node=0x{node_id:02X})")
+        return True
+    cprint("red", f"  ✗ bridge state after flash: {state!r}")
+    _ssh_run(cred, "journalctl -u titanic-bridge.service --no-pager -n 40",
+             sudo=True, check=False)
+    return False
 
 
 def build(env: str, node_id: int, *, upload_port: str | None = None,
@@ -466,7 +798,7 @@ def build(env: str, node_id: int, *, upload_port: str | None = None,
 
     If `node` is supplied, its `name` field is also baked into the
     firmware as `BLE_NODE_NAME` so the BLE advertisement reads
-    `tcon_<name>` (e.g. `tcon_sina` for node 0x0A) instead of the
+    `tcon_<name>` (e.g. `tcon_captain` for node 0x0A) instead of the
     generic per-env DEVICE_SHORT label. Names are normalised to
     lowercase and any non-`[a-z0-9_]` characters are replaced with `_`
     to keep the AD-name field BLE-spec safe.
@@ -685,6 +1017,75 @@ def cmd_clear_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deploy_all(args: argparse.Namespace) -> int:
+    """Walk every paired node and flash each one we can find on either
+    side. Designed for the "I just changed C, push it everywhere"
+    workflow — the same single command updates both the captain
+    Heltec on the laptop AND the server Heltec on the Pi.
+
+    Order: laptop-side first (faster, no rsync), then Pi-side. Stops
+    on first failure to preserve evidence (don't leave half the
+    fleet on the new firmware and half on the old).
+    """
+    args.yes = True   # --all is non-interactive by contract
+    nodes = load_nodes()
+    paired = [
+        (nid, n) for nid, n in sorted(nodes.items()) if n.get("usb_mac")
+    ]
+    if not paired:
+        cprint("yellow", "  no paired nodes; nothing to flash. Use "
+                         "`--node 0xNN --pair` first.")
+        return 0
+    cprint("bold", f"\n--all: {len(paired)} paired node(s) to consider:")
+    for nid, n in paired:
+        print(f"  0x{nid:02X}  {n.get('name','?'):<14} role={n.get('role'):<8} "
+              f"mac={n['usb_mac']}")
+
+    # Snapshot both locations once so we can plan flash order without
+    # bouncing back and forth.
+    # Normalize on BOTH sides (strip colons, uppercase) so a YAML
+    # entry like ``AA:BB:CC:DD:EE:FF`` matches the colon-less form
+    # pyserial returns for ESP32-S3 serial numbers. Without this the
+    # local board appears in inventory but the lookup misses it and
+    # the node gets falsely reported as "not connected".
+    local_macs = {_normalize_mac(p["mac"]) for p in heltec_ports()}
+    cred = _load_ssh_secret()
+    remote_macs: set[str] = set()
+    if cred is not None:
+        remote_boards = _remote_scan_pi(cred, quiet=True)
+        remote_macs = {_normalize_mac(b["mac"]) for b in remote_boards}
+        cprint("dim", f"  inventory: local={len(local_macs)} board(s), "
+                      f"remote@{cred['HOST']}={len(remote_macs)} board(s)")
+    else:
+        cprint("dim", "  inventory: local-only (Pi SSH topology unavailable)")
+
+    flashed = 0
+    skipped: list[str] = []
+    for nid, n in paired:
+        mac = _normalize_mac(n["usb_mac"])
+        if mac in local_macs:
+            location = "local"
+        elif mac in remote_macs:
+            location = "remote"
+        else:
+            skipped.append(f"0x{nid:02X} {n.get('name','?')} (mac {mac} not connected)")
+            continue
+        cprint("bold", f"\n→ 0x{nid:02X} {n.get('name','?')} via {location}")
+        rc = cmd_deploy(args, nid, n)
+        if rc != 0:
+            cprint("red", f"  ✗ flash failed for 0x{nid:02X} (rc={rc}); "
+                          "stopping --all to preserve evidence")
+            return rc
+        flashed += 1
+
+    cprint("green", f"\n✓ --all done: flashed {flashed} node(s)")
+    if skipped:
+        cprint("yellow", "  skipped (not currently connected):")
+        for s in skipped:
+            print(f"    {s}")
+    return 0
+
+
 def cmd_deploy(args: argparse.Namespace, target_id: int, target_node: dict) -> int:
     env = env_for_node(target_id, target_node)
     expected_mac = target_node.get("usb_mac")
@@ -728,34 +1129,82 @@ def cmd_deploy(args: argparse.Namespace, target_id: int, target_node: dict) -> i
         expected_mac = chosen["mac"]
 
     port_info = find_port_for_mac(expected_mac)
-    if not port_info:
-        connected = ", ".join(f"{p['port']}({p['mac']})" for p in heltec_ports()) or "<none>"
-        sys.exit(
-            f"node 0x{target_id:02X} expects MAC {expected_mac} but no connected "
-            f"Heltec reports that MAC.\n  connected: {connected}\n"
-            f"Plug the right board in, or re-pair: python deploy.py --node 0x{target_id:02X} --clear --yes "
-            f"&& python deploy.py --node 0x{target_id:02X} --pair"
+    if port_info:
+        # ── LOCAL FLASH (target Heltec on this laptop's USB) ──────────
+        port = port_info["port"]
+        cprint("green", f"  ✓ MAC match (local): {expected_mac} → {port}")
+
+        if not _confirm(f"  Flash {env} → {port}? [y/N] ", assume_yes=args.yes):
+            cprint("yellow", "  aborted")
+            return 130
+
+        if not build(env, target_id, upload_port=port, node=target_node):
+            cprint("red", "  ✗ flash failed")
+            return 1
+        cprint("green", "  ✓ flash OK")
+
+        if args.no_verify:
+            return 0
+        time.sleep(1.0)
+        return 0 if verify_banner(port, env, target_id) else 2
+
+    # ── REMOTE FLASH (try the Pi) ─────────────────────────────────
+    # Local USB doesn't have the target Heltec. If a Pi is configured
+    # in server_bridge/.ssh.secret, query its USB too — the user's
+    # workflow has the server Heltec on the Pi, and `firmware/deploy.py`
+    # should "just work" for that case without a separate command.
+    cred = _load_ssh_secret()
+    if cred is not None and not args.no_remote:
+        cprint("yellow",
+               f"  MAC {expected_mac} not on this laptop's USB; "
+               f"scanning Pi at {cred['HOST']}…")
+        remote_boards = _remote_scan_pi(cred)
+        match = next(
+            (b for b in remote_boards
+             if _normalize_mac(b["mac"]) == _normalize_mac(expected_mac)),
+            None,
         )
+        if match:
+            cprint("green",
+                   f"  ✓ MAC match (Pi): {expected_mac} → "
+                   f"{cred['HOST']}:{match['port']}")
+            if not _confirm(
+                f"  Flash {env} → {cred['HOST']}:{match['port']} via Pi? [y/N] ",
+                assume_yes=args.yes,
+            ):
+                cprint("yellow", "  aborted")
+                return 130
+            build_dir = _remote_flash_build(env, target_id, target_node)
+            remote_dir = _remote_flash_ship(cred, build_dir)
+            ok = _remote_flash_run(
+                cred,
+                remote_port=match["port"],
+                remote_dir=remote_dir,
+                verify=not args.no_verify,
+                env=env, node_id=target_id,
+            )
+            return 0 if ok else 2
 
-    port = port_info["port"]
-    cprint("green", f"  ✓ MAC match: {expected_mac} → {port}")
-
-    if not _confirm(f"  Flash {env} → {port}? [y/N] ", assume_yes=args.yes):
-        cprint("yellow", "  aborted")
-        return 130
-
-    if not build(env, target_id, upload_port=port, node=target_node):
-        cprint("red", "  ✗ flash failed")
-        return 1
-    cprint("green", "  ✓ flash OK")
-
-    if args.no_verify:
-        return 0
-
-    # Give the board a beat to come back from the post-flash hard reset
-    # before we grab the serial port.
-    time.sleep(1.0)
-    return 0 if verify_banner(port, env, target_id) else 2
+    # ── Nothing matched, anywhere — surface BOTH inventories ─────
+    local = ", ".join(f"{p['port']}({p['mac']})"
+                      for p in heltec_ports()) or "<none>"
+    msg = (
+        f"node 0x{target_id:02X} expects MAC {expected_mac} but no connected "
+        f"Heltec reports that MAC.\n  local: {local}"
+    )
+    if cred is not None:
+        remote_boards = _remote_scan_pi(cred, quiet=True)
+        remote_summary = ", ".join(
+            f"{cred['HOST']}:{b['port']}({b['mac']})"
+            for b in remote_boards
+        ) or "<none>"
+        msg += f"\n  remote ({cred['HOST']}): {remote_summary}"
+    msg += (
+        f"\nPlug the right board in, or re-pair: "
+        f"python deploy.py --node 0x{target_id:02X} --clear --yes "
+        f"&& python deploy.py --node 0x{target_id:02X} --pair"
+    )
+    sys.exit(msg)
 
 
 # ── main ───────────────────────────────────────────────────────────
@@ -777,6 +1226,19 @@ def main() -> int:
                     help="remove every node's usb_mac pairing (asks first)")
     ap.add_argument("--no-verify", action="store_true", help="skip post-flash banner check")
     ap.add_argument("--yes", "-y", action="store_true", help="don't prompt before flashing or editing the YAML")
+    ap.add_argument(
+        "--no-remote", action="store_true",
+        help="Don't auto-fallback to the Pi when the target Heltec "
+             "isn't on this laptop's USB. Useful when you know the "
+             "board should be local and you'd rather fail loudly than "
+             "ship binaries over SSH.",
+    )
+    ap.add_argument(
+        "--all", action="store_true",
+        help="Flash every paired node we can find — laptop USB and "
+             "Pi-side USB (when .ssh.secret is present) — in one pass. "
+             "Stops on the first failure. Implies --yes.",
+    )
     args = ap.parse_args()
 
     if args.list:
@@ -787,6 +1249,16 @@ def main() -> int:
         if args.node or args.role:
             sys.exit("--clear-all clears every pairing; don't pass --node/--role with it.")
         return cmd_clear_all(args)
+
+    if args.all:
+        # --all walks every paired node; ignore --node/--role for it
+        # but error if the operator combined incompatible flags.
+        if args.node or args.role:
+            sys.exit("--all flashes every paired node; "
+                     "don't pass --node/--role with it.")
+        if args.pair or args.clear:
+            sys.exit("--all doesn't combine with --pair / --clear.")
+        return cmd_deploy_all(args)
 
     nodes = load_nodes()
     target_id, target_node = select_target(

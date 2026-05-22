@@ -21,8 +21,8 @@
 // are derived defensively — `muted` is the preferred fallback so we
 // never accuse a card of being broken when the data is just late.
 
-import React, { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useState, useCallback } from "react";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { TitanicLink } from "../link/titanicLink";
 import { buildStatusQuery } from "../frame/ops";
 import { maskFingerprint } from "../security/secretStore";
@@ -31,6 +31,17 @@ import { useFormFactor, MAX_CONTENT_WIDTH } from "./layout";
 import { Card } from "./primitives/Card";
 import { StatRow, StatTone } from "./primitives/StatRow";
 import { C, F, R, S } from "./theme";
+
+// Canonical LoRa profile list — must match TITANIC_PROFILES in
+// control_podium/firmware/src/titanic_profiles.h AND
+// Bridge.LORA_PROFILE_NAMES in control_podium/comms/bridge.py.
+// Order is "fastest → most-range" so the operator scans left-to-
+// right when they want lower latency.
+const LORA_PROFILES = [
+  { name: "test_bench", label: "test_bench", hint: "SF7/BW500 +0dBm" },
+  { name: "local",      label: "local",      hint: "SF9/BW250 +14dBm" },
+  { name: "playa",      label: "playa",      hint: "SF10/BW125 +22dBm" },
+] as const;
 
 interface Props {
   link: TitanicLink;
@@ -231,6 +242,13 @@ export function StatusScreen({ link, fingerprint }: Props) {
                 the same SF/BW config.
               </Text>
             )}
+          {/* Master profile picker. Tapping a pill writes a plaintext
+              `*CFG name=…` over BLE; captain firmware applies locally
+              and relays over LoRa so the server flips with us. Only
+              shown when we have a working BLE link to the captain. */}
+          {conn.kind === "connected" && (
+            <ProfilePicker link={link} />
+          )}
         </ChainCard>
 
         <Connector />
@@ -413,6 +431,80 @@ export function StatusScreen({ link, fingerprint }: Props) {
 }
 
 // ── Chain card wrapper ─────────────────────────────────────────────
+
+function ProfilePicker({ link }: { link: TitanicLink }) {
+  // Bridge echoes the active profile in every compact PUB via the
+  // `prof/` field, so once we get a PUB after a switch the picker
+  // reflects ground truth. Until the first PUB lands we show the
+  // operator's last-tapped value as an optimistic hint.
+  const [pending, setPending] = useState<string | null>(null);
+  const [lastApplied, setLastApplied] = useState<string | null>(null);
+  const liveProfile = useAppStore((s) => s.engineStatus?.loraProfile ?? null);
+  const activeProfile = liveProfile ?? lastApplied;
+
+  const apply = useCallback(
+    async (name: string) => {
+      if (pending) return; // ignore double-taps
+      setPending(name);
+      try {
+        await link.setLoraProfile(name);
+        setLastApplied(name);
+        // Give the captain firmware's "schedule local + relay" cycle
+        // time to settle (default delayMs is 2 s).
+        await new Promise((r) => setTimeout(r, 2200));
+      } catch (err) {
+        Alert.alert(
+          "Profile switch failed",
+          `${(err as Error).message}\n\nBoth controllers may now be on DIFFERENT profiles. If you can't reach the captain over LoRa, USB-push the right profile: \`echo '*CFG name=<name> t=0' > /dev/cu.usbmodem...\`.`,
+        );
+      } finally {
+        setPending(null);
+      }
+    },
+    [link, pending],
+  );
+
+  return (
+    <View style={pickerStyles.wrap}>
+      <Text style={pickerStyles.label}>LoRa profile (master)</Text>
+      <View style={pickerStyles.row}>
+        {LORA_PROFILES.map((p) => {
+          const isActive = activeProfile === p.name;
+          const isPending = pending === p.name;
+          const disabled = pending !== null;
+          return (
+            <Pressable
+              key={p.name}
+              onPress={() => apply(p.name)}
+              disabled={disabled}
+              style={({ pressed }) => [
+                pickerStyles.pill,
+                isActive && pickerStyles.pillActive,
+                isPending && pickerStyles.pillPending,
+                disabled && !isPending && pickerStyles.pillDisabled,
+                pressed && pickerStyles.pillPressed,
+              ]}
+            >
+              <Text
+                style={[
+                  pickerStyles.pillLabel,
+                  isActive && pickerStyles.pillLabelActive,
+                ]}
+              >
+                {p.label}
+              </Text>
+              <Text style={pickerStyles.pillHint}>{p.hint}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={pickerStyles.help}>
+        Tap a profile to switch the WHOLE mesh (captain + server). Takes
+        ~2 s to land; faster profiles cut RTT but need a strong link.
+      </Text>
+    </View>
+  );
+}
 
 function ChainCard({
   step,
@@ -601,5 +693,69 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     lineHeight: 18,
     marginTop: 4,
+  },
+});
+
+const pickerStyles = StyleSheet.create({
+  wrap: {
+    marginTop: S.md,
+    paddingTop: S.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.border,
+  },
+  label: {
+    fontSize: F.small,
+    fontWeight: "700",
+    color: C.textDim,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  row: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  pill: {
+    flex: 1,
+    borderRadius: R.pill,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    backgroundColor: C.cardSunken,
+    alignItems: "center",
+  },
+  pillActive: {
+    borderColor: C.brightness,
+    backgroundColor: C.brightness + "20",
+  },
+  pillPending: {
+    borderColor: C.warn,
+    backgroundColor: C.warn + "30",
+  },
+  pillDisabled: {
+    opacity: 0.5,
+  },
+  pillPressed: {
+    opacity: 0.7,
+  },
+  pillLabel: {
+    fontSize: F.small,
+    fontWeight: "700",
+    color: C.text,
+  },
+  pillLabelActive: {
+    color: C.brightness,
+  },
+  pillHint: {
+    fontSize: 10,
+    color: C.textDim,
+    marginTop: 2,
+  },
+  help: {
+    fontSize: F.small,
+    color: C.textDim,
+    marginTop: 8,
+    lineHeight: 16,
   },
 });

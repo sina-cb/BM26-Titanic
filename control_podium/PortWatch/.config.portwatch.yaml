@@ -88,8 +88,11 @@ patterns:
 # can afford shorter timeouts.
 exports:
   max_pages: 8
-  max_page_retries: 3
-  page_timeout_ms: 4000
+  max_page_retries: 4
+  # 12 s matches measured RTT on this rig with 3x redundant TX
+  # (median ~5 s, p95 ~7 s, occasional 10 s+ outliers). 4 s was
+  # too tight and caused user-visible "always loading" symptoms.
+  page_timeout_ms: 12000
   retry_backoff_ms: 500
 
 # ── Log retention (LOGS tab) ─────────────────────────────────
@@ -156,11 +159,12 @@ ble:
 #     slow enough not to compete with the ~280 ms per-page
 #     pattern fetches.
 polling:
-  status_interval_ms: 5000
-  # Per-poll timeout. Generous because LoRa can be congested
-  # under heavy CaptainPad activity; a stale poll just means the
-  # next one runs ~5s later. Tested across SF7/SF9 fields.
-  status_timeout_ms: 6000
+  status_interval_ms: 8000
+  # Per-poll timeout. Tuned for this rig's measured LoRa RTT
+  # distribution (median ~5 s at SF=10/BW=125 with redundant TX);
+  # 6 s was too tight and made every poll timeout. A stale poll
+  # just means the next one runs ~8 s later.
+  status_timeout_ms: 12000
   # Local-exports polling cadence (ms). The exports list is
   # pattern-scoped; we already refetch on every pattern change
   # (LocalParamsCard auto-hydrates off `engineStatus.activePattern`),
@@ -180,8 +184,8 @@ polling:
   #
   # Set to 0 to disable polling entirely (rely on pattern-change
   # refresh + manual REFRESH only).
-  local_exports_interval_ms: 5000
-  local_exports_timeout_ms: 6000
+  local_exports_interval_ms: 8000
+  local_exports_timeout_ms: 12000
 
 # ── Layout ───────────────────────────────────────────────────
 layout:

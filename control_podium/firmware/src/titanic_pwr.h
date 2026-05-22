@@ -42,9 +42,24 @@
  *                                 connect, BLE write, PRG press).
  *                                 Cheap; safe to call from BLE
  *                                 callbacks. No-op when pinned HIGH.
+ *   titanic_pwr_holdBegin()     — call from BLE onConnect. Latches
+ *                                 the client at HIGH as long as
+ *                                 >=1 BLE central is connected,
+ *                                 regardless of activity bumps.
+ *                                 Field need: operator pairs the
+ *                                 phone, then walks away to test
+ *                                 range; we must NOT drop their
+ *                                 TX power to LOW mid-walk just
+ *                                 because they haven't tapped a
+ *                                 button in 60 s.
+ *   titanic_pwr_holdEnd()       — call from BLE onDisconnect.
+ *                                 Releases the latch. The normal
+ *                                 fast→slow timeout (PWR_FAST_IDLE_MS)
+ *                                 then takes over from the time of
+ *                                 the last bump.
  *   titanic_pwr_loop()          — call every loop. Handles the
  *                                 fast→slow timeout. No-op when
- *                                 pinned HIGH.
+ *                                 pinned HIGH or while held.
  *   titanic_pwr_isHigh()        — read accessor. Used by the OLED's
  *                                 RADIO page to show the current
  *                                 mode badge.
@@ -113,19 +128,37 @@ static inline esp_power_level_t _titanic_pwr_ble_lvl(int dbm) {
 
 // State. _isHigh is the source of truth; _lastBumpMs tracks the
 // idle countdown; _pinHigh is "compile-time forever" (server) or
-// "debug-tune-time forever" (developer override).
+// "debug-tune-time forever" (developer override); _bleHeld is the
+// dynamic "stay HIGH while a phone is connected" latch.
+//
+// _bleHeld is a counter, not a bool, because multiple BLE centrals
+// can be connected simultaneously (rare on the client side but
+// possible: phone + service tool). It only drops to zero when ALL
+// of them disconnect. Decrement is clamped at zero so a stray
+// onDisconnect callback after a panic-induced reboot can't underflow.
 static bool          _titanic_pwr_isHigh = true;
 static unsigned long _titanic_pwr_lastBumpMs = 0;
 static bool          _titanic_pwr_pinHigh = false;
 static bool          _titanic_pwr_initialised = false;
+static uint8_t       _titanic_pwr_bleHeld = 0;
+
+// Runtime overrides for the LoRa TX dBm. Default to the compile-time
+// YAML values; titanic_profile_apply_now() pokes new numbers in here
+// whenever the operator switches profile from PortWatch. Without
+// this, _titanic_pwr_apply() would always re-apply the compile-time
+// values and silently UNDO the profile change every BLE connect /
+// activity bump.
+static int _titanic_pwr_lora_dbm_high_rt = PWR_LORA_TX_DBM_HIGH;
+static int _titanic_pwr_lora_dbm_low_rt  = PWR_LORA_TX_DBM_LOW;
 
 // Apply the radio + BLE config for `high`. We deliberately set BOTH
 // stacks on every transition rather than tracking which is dirty;
 // the SET calls are cheap (NimBLE writes a register; SX1262 writes
 // a few bytes over SPI) and being unconditional is more debuggable.
 static void _titanic_pwr_apply(bool high) {
-    int    ble_dbm  = high ? PWR_BLE_TX_DBM_HIGH  : PWR_BLE_TX_DBM_LOW;
-    int    lora_dbm = high ? PWR_LORA_TX_DBM_HIGH : PWR_LORA_TX_DBM_LOW;
+    int    ble_dbm  = high ? PWR_BLE_TX_DBM_HIGH         : PWR_BLE_TX_DBM_LOW;
+    int    lora_dbm = high ? _titanic_pwr_lora_dbm_high_rt
+                           : _titanic_pwr_lora_dbm_low_rt;
     NimBLEDevice::setPower(_titanic_pwr_ble_lvl(ble_dbm));
     int rc = radio.setOutputPower(lora_dbm);
     // RADIOLIB_OR_HALT would kill us on a transient failure — be
@@ -192,12 +225,51 @@ inline void titanic_pwr_bump() {
     }
 }
 
+// Public: BLE-connected hold. Called from titanic_ble.h's
+// onConnect / onDisconnect callbacks. While held > 0, the
+// fast→slow timeout is suppressed: the client stays HIGH for as
+// long as a phone is paired, then resumes the normal idle
+// timeout from the moment of the last activity bump.
+//
+// Safe to call when pinned HIGH (server) — it just maintains the
+// counter so a future un-pin would behave consistently. Safe to
+// call before titanic_pwr_setup() — the counter is just an int.
+inline void titanic_pwr_holdBegin() {
+    if (_titanic_pwr_bleHeld < 0xFF) _titanic_pwr_bleHeld++;
+    // While held the client should be at HIGH — if we're somehow
+    // already in LOW (e.g. operator paired AFTER the idle timeout
+    // fired) bump now so the upgrade is immediate, not delayed
+    // until the next BLE write.
+    if (_titanic_pwr_initialised && !_titanic_pwr_pinHigh
+        && !_titanic_pwr_isHigh) {
+        _titanic_pwr_isHigh = true;
+        _titanic_pwr_lastBumpMs = millis();
+        _titanic_pwr_apply(true);
+    }
+}
+
+inline void titanic_pwr_holdEnd() {
+    if (_titanic_pwr_bleHeld > 0) _titanic_pwr_bleHeld--;
+    // Reset the activity clock on disconnect so the timeout window
+    // starts NOW, not from whenever the last BLE write happened
+    // 20 minutes ago during the operator's range walk. Without this
+    // the box would drop to LOW the instant the phone disconnects.
+    if (_titanic_pwr_bleHeld == 0) {
+        _titanic_pwr_lastBumpMs = millis();
+    }
+}
+
 // Public: per-loop tick. Handles the HIGH → LOW timeout. Cheap (one
 // millis() compare + a possible apply()) so safe to call every loop.
 inline void titanic_pwr_loop() {
     if (!_titanic_pwr_initialised) return;
     if (_titanic_pwr_pinHigh) return;
     if (!_titanic_pwr_isHigh) return;
+    // Suppress the timeout while a phone is paired — the operator
+    // is actively using the box, the radio MUST stay at full power
+    // so a range walk or a multi-step config session isn't
+    // silently degraded after 60 s of "no commands sent".
+    if (_titanic_pwr_bleHeld > 0) return;
     if (millis() - _titanic_pwr_lastBumpMs >= PWR_FAST_IDLE_MS) {
         _titanic_pwr_isHigh = false;
         _titanic_pwr_apply(false);
@@ -210,6 +282,26 @@ inline bool titanic_pwr_isPinned() { return _titanic_pwr_pinHigh; }
 inline const char* titanic_pwr_modeLabel() {
     if (_titanic_pwr_pinHigh) return "HIGH*";   // * = pinned
     return _titanic_pwr_isHigh ? "HIGH" : "LOW";
+}
+
+// Runtime override of LoRa TX power tiers. Used by titanic_profiles.h
+// when the operator switches profile from PortWatch — without this
+// the next HIGH/LOW transition would silently undo the change. We
+// re-apply immediately so the new TX dBm is in effect on the very
+// next packet, not just after the next BLE event.
+inline void titanic_pwr_set_runtime(int hi_dbm, int lo_dbm) {
+    _titanic_pwr_lora_dbm_high_rt = hi_dbm;
+    _titanic_pwr_lora_dbm_low_rt  = lo_dbm;
+    if (_titanic_pwr_initialised) {
+        _titanic_pwr_apply(_titanic_pwr_isHigh);
+    }
+}
+
+// Accessor for the current LoRa TX dBm in HIGH state (the value the
+// radio is actually configured to right now if the box is in HIGH).
+// Used by the OLED RADIO page and /health snapshots.
+inline int titanic_pwr_lora_dbm_high() {
+    return _titanic_pwr_lora_dbm_high_rt;
 }
 
 #endif  // TITANIC_PWR_H

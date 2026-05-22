@@ -72,6 +72,15 @@ export interface TitanicLinkOpts {
   src?: number;
   defaultTimeoutMs?: number;
   onWireEvent?: (e: WireEvent) => void;
+  /**
+   * Minimum wall time between the end of one `sendOp` (BLE write
+   * + reply or timeout) and the start of the next. Keeps the
+   * captain firmware's BLE→LoRa queue from filling on a slow link.
+   * Default 200 ms is small enough that interactive feel isn't hurt
+   * but large enough that the SX1262 has switched standby→RX before
+   * the next frame lands.
+   */
+  interFrameGapMs?: number;
 }
 
 export class TitanicLink {
@@ -82,13 +91,46 @@ export class TitanicLink {
   private pending = new Map<string, PendingAwaiter>();
   private onWireEvent: (e: WireEvent) => void;
   private defaultTimeoutMs: number;
+  private interFrameGapMs: number;
+  // ── Single-flight request manager ──────────────────────────────
+  //
+  // Every BLE characteristic write goes through `_txChain` so the
+  // captain firmware sees a STRICTLY SERIAL stream of commands, not
+  // a burst that overflows its 8-slot ring queue. Without this, the
+  // three pollers + a user tap + a REFRESH page-fetch can all fire
+  // `sendOp()` from independent async tasks within ~1 ms; the OS
+  // BLE stack may or may not serialize them, and the firmware
+  // CERTAINLY can't drain that fast at SF=10/BW=125 (~250 ms per
+  // frame on air).
+  //
+  // We chain Promises: each new sendOp awaits the previous one's
+  // completion (success OR timeout) plus an inter-frame gap before
+  // starting. Cleaner than an explicit lock — no risk of forgetting
+  // to release, no recursive-lock surprises, and it's typed.
+  private _txChain: Promise<unknown> = Promise.resolve();
+  // Diagnostic counters so the Status screen can surface "you have
+  // N requests queued" if the link is slow enough that the wait
+  // matters to the operator.
+  private _queueDepth = 0;
+  private _peakQueueDepth = 0;
+  private _serializedCount = 0;
 
   constructor(codec: Codec, ble: BleClient, opts: TitanicLinkOpts = {}) {
     this.codec = codec;
     this.ble = ble;
     this.src = opts.src ?? DEFAULT_IPHONE_NODE_ID;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 6000;
+    this.interFrameGapMs = opts.interFrameGapMs ?? 200;
     this.onWireEvent = opts.onWireEvent ?? (() => undefined);
+  }
+
+  /** Observable depth of the outbound request queue (incl. in-flight). */
+  get queueDepth(): number {
+    return this._queueDepth;
+  }
+  /** All-time peak queue depth. Useful for tuning timeouts. */
+  get peakQueueDepth(): number {
+    return this._peakQueueDepth;
   }
 
   /** Allocate the next per-sender seq (wraps modulo 256). */
@@ -109,8 +151,106 @@ export class TitanicLink {
    *
    * If the link drops mid-flight, the pending awaiter eventually
    * times out; cleanup() is the explicit reset path.
+   *
+   * Serialization: this method awaits a per-link transmit chain so
+   * the captain firmware never has more than one frame in flight on
+   * the BLE characteristic. Callers don't need to coordinate — they
+   * can `sendOp()` from independent async tasks freely.
    */
   async sendOp(op: OpDescriptor, opts: { timeoutMs?: number; dst?: number } = {}): Promise<SendResult> {
+    return await this._runThroughChain(() => this._doSendOp(op, opts));
+  }
+
+  /**
+   * Switch the LoRa profile on EVERY controller on the mesh.
+   *
+   * This is a "master" change initiated by the operator from PortWatch.
+   * Since PortWatch is the captain's BLE peer and the captain firmware
+   * intercepts `*CFG` lines + relays them over LoRa on the OLD
+   * profile, a single BLE write here flips both the captain AND the
+   * server (and any other nodes in range) onto the new profile at a
+   * synchronized monotonic deadline.
+   *
+   * The line is plaintext — bypasses the v2 codec — because:
+   *   1. The captain firmware's transmitMessage() checks for `*CFG `
+   *      prefix BEFORE handing to the codec. A v2-encoded *CFG would
+   *      not be recognised.
+   *   2. The *CFG protocol predates the v2 codec and is intentionally
+   *      operator-control only — the v2 codec is for engine traffic
+   *      whose payloads are radio-untrusted.
+   *
+   * Serialization: this DOES go through `_txChain` (unlike the
+   * earlier implementation which bypassed it). The earlier bypass
+   * felt safe because *CFG is rare, but it meant a profile-switch
+   * tap could land mid-BLE-write of a pattern qry and corrupt the
+   * captain's BLE→LoRa command queue. Now every outbound write —
+   * secured frame OR plaintext control — goes through the same
+   * single-flight chain, so the firmware never sees overlapped
+   * writes regardless of what the operator did.
+   *
+   * @param name  one of "test_bench" / "local" / "playa" (firmware
+   *              rejects anything else with no on-air relay).
+   * @param delayMs  synchronized apply delay (default 2000 ms gives
+   *              the LoRa relay enough time to land on the server
+   *              before both sides flip).
+   */
+  async setLoraProfile(name: string, delayMs = 2000): Promise<void> {
+    const safe = name.trim();
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(safe)) {
+      throw new Error(`bad profile name: ${JSON.stringify(name)}`);
+    }
+    const line = `*CFG name=${safe} t=${delayMs}\n`;
+    await this._runThroughChain(async () => {
+      this.onWireEvent({
+        ts: Date.now(),
+        dir: "tx",
+        summary: `*CFG name=${safe} t=${delayMs} (mesh-wide profile switch)`,
+        frame: null,
+        raw: line,
+        ok: true,
+      });
+      await this.ble.writeFrame(line);
+    });
+  }
+
+  /**
+   * Single-flight queue primitive shared by `sendOp` and
+   * `setLoraProfile`. Every outbound write goes through here — both
+   * v2-secured ops AND plaintext control lines like `*CFG`. The
+   * captain firmware's BLE→LoRa ring queue (titanic_ble.h) is
+   * single-producer/single-consumer; this enforces the producer side
+   * never lets two writes land in the same firmware tick.
+   *
+   * A failed/timed-out request does NOT poison the chain — we catch
+   * the previous chain's error so a subsequent send still runs.
+   * Inter-frame gap is enforced AFTER each operation settles.
+   */
+  private async _runThroughChain<T>(work: () => Promise<T>): Promise<T> {
+    this._queueDepth++;
+    if (this._queueDepth > this._peakQueueDepth) {
+      this._peakQueueDepth = this._queueDepth;
+    }
+    const prev = this._txChain.catch(() => undefined);
+    const ours = prev.then(() => work());
+    this._txChain = ours
+      .catch(() => undefined)
+      .then(() => new Promise<void>((r) => setTimeout(r, this.interFrameGapMs)));
+    try {
+      return await ours;
+    } finally {
+      this._queueDepth--;
+      this._serializedCount++;
+    }
+  }
+
+  /**
+   * Inner sendOp — the unsynchronized version that actually talks
+   * to BLE + waits for a reply. Wrapped by `sendOp()` for serialization.
+   */
+  private async _doSendOp(
+    op: OpDescriptor,
+    opts: { timeoutMs?: number; dst?: number },
+  ): Promise<SendResult> {
     const seq = this.allocSeq();
     const dst = opts.dst ?? SERVER_ID;
     const frame = frameForOp(op, seq, this.src, dst);

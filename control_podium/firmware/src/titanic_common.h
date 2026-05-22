@@ -46,7 +46,8 @@
 
 #include <heltec_unofficial.h>
 #include "titanic_ble.h"
-#include "titanic_pwr.h"   // power profile (HIGH/LOW) for BLE+LoRa
+#include "titanic_pwr.h"      // power profile (HIGH/LOW) for BLE+LoRa
+#include "titanic_profiles.h" // runtime LoRa profile switching (playa/local/test_bench)
 
 // ── Configurable parameters (override via PlatformIO build flags) ─
 // Every constant below is derived from .config.firmware.yaml at flash
@@ -503,6 +504,24 @@ void titanicSetup() {
     RADIOLIB_OR_HALT(radio.begin(FREQUENCY, BANDWIDTH, SF, CR));
     RADIOLIB_OR_HALT(radio.setOutputPower(TX_POWER));
 
+    // ── LoRa link-quality fixes (diagnostic 2026-05-18) ─────────
+    // Without these three, RadioLib's defaults silently knee-cap the
+    // +22 dBm path: OCP trips at 60 mA limiting PA current, the LDO
+    // regulator can't supply the +22 dBm PA cleanly, and RX runs at
+    // "normal" gain mode. Pre-fix bench symptom: RSSI ~-125 dBm at
+    // 3 m (~110 dB below the free-space expectation of -15 dBm).
+    //
+    // setCurrentLimit(140 mA) — SX1262 +22 dBm PA pulls ~120 mA peak;
+    // raise the OCP trip with margin so the PA isn't current-starved.
+    RADIOLIB_OR_HALT(radio.setCurrentLimit(140));
+    // DC-DC regulator is required for high-power TX. LDO (default)
+    // cannot supply +22 dBm cleanly even with OCP raised.
+    RADIOLIB_OR_HALT(radio.setRegulatorDCDC());
+    // Boosted RX gain adds ~3 dB sensitivity at a few mA RX cost.
+    // persist=true (default) keeps it across profile-switch set*()
+    // calls that drop the radio to standby.
+    RADIOLIB_OR_HALT(radio.setRxBoostedGainMode(true));
+
     // Init BLE
     ble.begin(DEVICE_SHORT, DEVICE_ROLE, FREQUENCY, SF, BANDWIDTH, TX_POWER);
 
@@ -512,6 +531,14 @@ void titanicSetup() {
     // "HIGH forever" inside titanic_pwr_setup() so the rest of the
     // code path is identical on both roles.
     titanic_pwr_setup(DEVICE_ROLE);
+
+    // LoRa profile (playa/local/test_bench/…) MUST initialise after
+    // the radio is configured: titanic_profile_setup() replays any
+    // persisted profile from NVS over the compile-time defaults, so
+    // a box that was switched to test_bench yesterday comes up at
+    // test_bench today without the operator having to redo the
+    // PortWatch dropdown. See titanic_profiles.h for the wire format.
+    titanic_profile_setup();
 
     // First battery sample at boot so the header can show something useful.
     _sampleBattery();
@@ -526,7 +553,7 @@ void titanicSetup() {
 //   [BLE name (lower-case, exactly as advertised)]   [batt% / USB / CHRG]
 // followed by a 1-px separator at LINE_Y.
 //
-// Showing the BLE name (e.g. "tcon_sina") rather than the legacy
+// Showing the BLE name (e.g. "tcon_captain") rather than the legacy
 // DEVICE_SHORT label means the operator can confirm at a glance that
 // the iPhone is talking to the right physical box — the string on
 // screen is identical to the string in iOS's BLE picker.

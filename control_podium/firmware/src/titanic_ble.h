@@ -48,8 +48,8 @@
 
 // ── BLE advertised name source ─────────────────────────────────────
 // Preferred: deploy.py reads `name:` from .config.nodes.yaml and
-// passes it as a build flag, e.g. `-DBLE_NODE_NAME="sina"` for node
-// 0x0A. The firmware then advertises itself as `tcon_sina`. Per-board
+// passes it as a build flag, e.g. `-DBLE_NODE_NAME="captain"` for node
+// 0x0A. The firmware then advertises itself as `tcon_captain`. Per-board
 // names mean the operator can distinguish two captains visually
 // without inspecting node id bytes — useful on a crowded mesh.
 //
@@ -61,9 +61,37 @@
 #define BLE_NODE_NAME "node"
 #endif
 
-// ── Static command buffer (shared between callback and main loop) ──
-static volatile bool _ble_pending_cmd = false;
-static String _ble_cmd_buffer = "";
+// ── Command queue (shared between BLE callback and main loop) ──
+//
+// Previously this was a single-slot buffer (`_ble_cmd_buffer` + a
+// `_ble_pending_cmd` bool). Two BLE writes landing in the same
+// FreeRTOS loop tick — easy to trigger when PortWatch's status
+// poller fires while an operator taps a pattern — would overwrite
+// the first command before the main loop could pop it, silently
+// losing it.
+//
+// Replaced with a small fixed-capacity ring queue. The BLE
+// onWrite callback (always on the NimBLE host task) pushes; the
+// main loop pops at LoRa-transmit rate. The two indices are
+// updated atomically on the ESP32-S3 (32-bit aligned writes), and
+// since only the callback ever pushes and only the main loop
+// ever pops, no further locking is needed.
+//
+// Capacity sized for the worst case: PortWatch's three pollers
+// firing simultaneously plus an operator tap = 4 frames queued.
+// 8 gives 2x headroom without burning RAM (8 * 256 byte String =
+// 2 KB worst case, but Strings are dynamically allocated so the
+// idle cost is just the array overhead).
+#ifndef BLE_CMD_QUEUE_CAPACITY
+#define BLE_CMD_QUEUE_CAPACITY 8
+#endif
+static String _ble_cmd_queue[BLE_CMD_QUEUE_CAPACITY];
+static volatile uint8_t _ble_cmd_q_head = 0;  // next slot to pop
+static volatile uint8_t _ble_cmd_q_tail = 0;  // next slot to push
+// Dropped-write counter exposed for the serial log when the queue
+// overflows — operator can spot when the link is so slow that we
+// can't drain BLE writes fast enough.
+static volatile uint16_t _ble_cmd_q_dropped = 0;
 
 // ── Active connection bookkeeping ─────────────────────────────────
 // We support multiple simultaneous centrals (iPhone + iPad + spare;
@@ -144,12 +172,15 @@ static void _regenerateBlePasskey(const char* reason) {
                   reason, (unsigned)_ble_passkey);
 }
 
-// Forward decl for the power profile bump. Defined in titanic_pwr.h;
-// keeping the forward here means BLE callbacks can wake the radio
-// without titanic_ble.h growing a hard dependency on titanic_pwr.h
-// (the .ino includes both). Server builds short-circuit to a no-op
-// internally so the call is safe even when the profile is pinned.
+// Forward decls for the power profile. Defined in titanic_pwr.h;
+// keeping the forwards here means BLE callbacks can manage the
+// power mode without titanic_ble.h growing a hard dependency on
+// titanic_pwr.h (the .ino includes both). Server builds
+// short-circuit to no-ops internally so the calls are safe even
+// when the profile is pinned.
 void titanic_pwr_bump();
+void titanic_pwr_holdBegin();
+void titanic_pwr_holdEnd();
 
 // ── Simple callbacks (no constructor args — avoids crash) ──
 class _BLEServerCB : public NimBLEServerCallbacks {
@@ -157,10 +188,12 @@ class _BLEServerCB : public NimBLEServerCallbacks {
         if (_ble_active_connections < 0xFF) _ble_active_connections++;
         // A phone just paired (or hopped onto an existing bond) —
         // bump to HIGH so the link layer + LoRa stack are at max TX
-        // for the operator's first few commands. The fast→slow
-        // timeout in titanic_pwr_loop() will drop us back to LOW
-        // after PWR_FAST_IDLE_MS of silence.
+        // for the operator's first few commands, AND latch the
+        // power profile so we STAY at HIGH for the entire duration
+        // of the BLE session (not just the first 60 s). The latch
+        // is released in onDisconnect.
         titanic_pwr_bump();
+        titanic_pwr_holdBegin();
         Serial.printf("BLE: central connected (handle %d, addr %s, total=%u)\n",
                       connInfo.getConnHandle(),
                       connInfo.getAddress().toString().c_str(),
@@ -184,6 +217,12 @@ class _BLEServerCB : public NimBLEServerCallbacks {
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
         if (_ble_active_connections > 0) _ble_active_connections--;
+        // Drop the BLE-held latch so the normal fast→slow timeout
+        // resumes from NOW. titanic_pwr_holdEnd() refreshes
+        // _lastBumpMs internally, so the box runs at HIGH for one
+        // more PWR_FAST_IDLE_MS window (covering reconnect attempts
+        // and any in-flight LoRa retries) and then settles to LOW.
+        titanic_pwr_holdEnd();
         // We track authenticated connections per-event by listening
         // for onAuthenticationComplete. NimBLE doesn't tell us in
         // onDisconnect whether the just-dropped link had pairing
@@ -274,8 +313,23 @@ class _BLECmdCB : public NimBLECharacteristicCallbacks {
         String cmd = pChar->getValue().c_str();
         cmd.trim();
         if (cmd.length() > 0 && cmd.length() <= 250) {
-            _ble_cmd_buffer = cmd;
-            _ble_pending_cmd = true;
+            // Push into the ring queue. Check for full first — if so,
+            // drop the new write rather than overwriting an unprocessed
+            // one. The main loop has been the bottleneck for queue
+            // overflow on this link (slow LoRa drain rate); dropping
+            // the latest is preferable to losing the in-flight command
+            // an operator is actively waiting on.
+            uint8_t next_tail = (uint8_t)((_ble_cmd_q_tail + 1) % BLE_CMD_QUEUE_CAPACITY);
+            if (next_tail == _ble_cmd_q_head) {
+                _ble_cmd_q_dropped++;
+                Serial.printf("BLE_CMD_DROP: queue full (cap=%d dropped=%u) cmd=%s\n",
+                              BLE_CMD_QUEUE_CAPACITY,
+                              (unsigned)_ble_cmd_q_dropped,
+                              cmd.c_str());
+                return;
+            }
+            _ble_cmd_queue[_ble_cmd_q_tail] = cmd;
+            _ble_cmd_q_tail = next_tail;
             Serial.printf("BLE_CMD: %s\n", cmd.c_str());
             // Real command came in over BLE — bump to HIGH so the
             // outbound LoRa relay goes out at max TX. This is the
@@ -342,13 +396,15 @@ public:
     }
 
     // ── Command queue (phone writes → main loop reads) ────
-    bool hasCommand() { return _ble_pending_cmd; }
+    bool hasCommand() { return _ble_cmd_q_head != _ble_cmd_q_tail; }
     String popCommand() {
-        _ble_pending_cmd = false;
-        String cmd = _ble_cmd_buffer;
-        _ble_cmd_buffer = "";
+        if (_ble_cmd_q_head == _ble_cmd_q_tail) return String("");
+        String cmd = _ble_cmd_queue[_ble_cmd_q_head];
+        _ble_cmd_queue[_ble_cmd_q_head] = String("");  // free the heap chunk
+        _ble_cmd_q_head = (uint8_t)((_ble_cmd_q_head + 1) % BLE_CMD_QUEUE_CAPACITY);
         return cmd;
     }
+    uint16_t cmdQueueDroppedCount() const { return _ble_cmd_q_dropped; }
 
     void begin(const char* shortName, const char* role,
                float freq, int sf, float bw, int txPower) {
@@ -363,7 +419,7 @@ public:
         //   2. per-node short name from BLE_NODE_NAME (defaults to
         //      "node" if deploy.py wasn't used to flash; deploy.py
         //      sources this from `name:` in .config.nodes.yaml).
-        // Examples: tcon_sina, tcon_server, tcon_crew_01.
+        // Examples: tcon_captain, tcon_server, tcon_crew_01.
         //
         // We deliberately ignore the `shortName` arg (it's still
         // accepted to keep begin()'s signature backwards-compatible

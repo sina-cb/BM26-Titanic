@@ -89,6 +89,57 @@ class BridgeStats:
     started_at: float = field(default_factory=time.time)
 
 
+class _LogThrottle:
+    """Tiny utility for collapsing repeated identical log lines.
+
+    Designed for the bridge's two main log-spam sources during an
+    outage: engine HTTP failures (every client poll generates one
+    "qry engine_error: unreachable" line) and engine WS reconnect
+    attempts (one line per backoff tick). With a 30 s engine outage
+    and ~5 active clients, the old behaviour emitted ~50 lines of
+    log noise — enough to push real anomalies off the screen.
+
+    Behaviour:
+      * The FIRST event for a given key always logs.
+      * Subsequent events with the same key within ``period_s``
+        log at DEBUG (kept for verbose troubleshooting) and bump a
+        suppressed-count counter.
+      * The first event AFTER ``period_s`` since the last INFO line
+        emits an INFO summary including the suppressed-count.
+      * Calling :meth:`clear` resets the key and emits a "recovered"
+        line at INFO when something previously throttled comes back.
+    """
+
+    def __init__(self, *, period_s: float = 30.0):
+        self.period_s = period_s
+        # key → (last_info_log_monotonic, suppressed_count_since)
+        self._state: dict[str, tuple[float, int]] = {}
+
+    def log(self, logger_: logging.Logger, key: str, msg: str, *args) -> None:
+        now = time.monotonic()
+        last, suppressed = self._state.get(key, (0.0, 0))
+        if last == 0.0 or (now - last) >= self.period_s:
+            if suppressed > 0:
+                logger_.info(
+                    msg + " (+%d similar suppressed in last %.0fs)",
+                    *args, suppressed, self.period_s,
+                )
+            else:
+                logger_.info(msg, *args)
+            self._state[key] = (now, 0)
+        else:
+            logger_.debug(msg, *args)
+            self._state[key] = (last, suppressed + 1)
+
+    def clear(self, logger_: logging.Logger, key: str, recovery_msg: str, *args) -> None:
+        """Mark `key` as recovered; emit `recovery_msg` only if we'd
+        previously logged a failure for it (avoids spammy "all clear"
+        lines for keys that never went bad)."""
+        if key in self._state:
+            logger_.info(recovery_msg, *args)
+            self._state.pop(key, None)
+
+
 class Bridge:
     """Glue between the radio and the engine."""
 
@@ -126,10 +177,341 @@ class Bridge:
         # 3-second reply timeouts.
         self._enable_engine_ws_subscriber = enable_engine_ws_subscriber
 
+        # Log dampening state. Repeated identical failures (engine
+        # down, WS port refused, etc.) used to fill the bridge log
+        # with one INFO line per retry — on a 30 s WS backoff that's
+        # still 120 lines/hour of "still down" while the engine is
+        # actually out. Each `_LogThrottle` reports the first event
+        # immediately, then at most once per `period_s` while the
+        # same key keeps firing, and emits a "recovered" line the
+        # first time a clear event lands after a stretch of muted
+        # failures. Quiet logs make real anomalies obvious on a Pi
+        # running unattended for days.
+        self._engine_err_log = _LogThrottle(period_s=30.0)
+        self._ws_log = _LogThrottle(period_s=60.0)
+
         self.stats = BridgeStats()
         self._last_client_activity: dict[int, float] = {}
         self._seen_seq: dict[int, int] = {}
         self._publisher_wake: asyncio.Event | None = None
+        # Engine reachability — last successful `engine.status()` call.
+        # Updated by `_status_publisher` on every cycle; surfaced by
+        # ``health_snapshot()`` so PortWatch can show "bridge says engine
+        # is reachable / unreachable" without needing the WS subscriber
+        # to bounce (the WS subscriber stays connected even while the
+        # engine is up but mid-pattern compile).
+        self._engine_last_ok_ms: Optional[float] = None
+        self._engine_last_fail_ms: Optional[float] = None
+        self._engine_last_status: Optional[dict] = None
+        self._engine_ws_connected: bool = False
+
+        # Active LoRa profile — set by the most recent
+        # ``request_profile_change()`` call (or by reading the persisted
+        # name at startup). Surfaced in ``/health`` so PortWatch's
+        # dropdown can render the right "currently selected" item.
+        # None means the bridge has never explicitly applied a profile;
+        # the firmware is then running on its compile-time defaults
+        # OR on the profile remembered in its OWN NVS (independent of
+        # the bridge). We don't auto-re-send a *CFG on startup because
+        # the firmware's NVS is the ground truth for what the radio is
+        # actually doing — re-sending could cause a brief mismatch
+        # window if the controllers haven't finished booting yet.
+        self._lora_profile_current: Optional[str] = self._load_profile_from_disk()
+        self._lora_profile_last_applied_ms: Optional[float] = None
+
+        # Subscribe to the firmware's out-of-band profile-applied
+        # confirmation if the radio supports it (RadioPortSerial does;
+        # the sim doesn't, harmless). Closes the bookkeeping loop for
+        # captain-originated and manual-USB-push profile switches —
+        # without it, bridge state can drift from the actual radio
+        # state and PUBs advertise the wrong `prof/<name>`.
+        if hasattr(self.radio, "_cfg_applied_callback"):
+            self.radio._cfg_applied_callback = self.confirm_profile_applied
+
+    # ── LoRa profile side channel ───────────────────────────────────
+    # The controllers (titanic_profiles.h) recognise a plaintext
+    # "*CFG name=… t=…" line on either USB serial or as a LoRa-relayed
+    # payload. The bridge owns the operator-facing API: PortWatch hits
+    # ``POST /profile`` (bridge_health.py), which calls into the
+    # methods below.
+    #
+    # We deliberately keep the profile *table* on the firmware side —
+    # the bridge just ships a name + a delay. That way adding a new
+    # profile is a firmware-only change; the bridge and PortWatch
+    # don't need to know its parameters.
+    LORA_PROFILE_NAMES: tuple[str, ...] = (
+        "test_bench", "local", "playa",
+    )
+    LORA_PROFILE_DEFAULT_DELAY_MS: int = 4000
+
+    def lora_profiles_available(self) -> list[str]:
+        """List of profile names recognised by the current firmware.
+
+        Kept in lock-step with ``TITANIC_PROFILES[]`` in
+        ``firmware/src/titanic_profiles.h``. If the two diverge, the
+        firmware silently ignores unknown names (see
+        ``_titanic_profile_find_by_name``) — PortWatch will appear to
+        "apply" but nothing happens. Keep this list in sync when you
+        add a new profile.
+        """
+        return list(self.LORA_PROFILE_NAMES)
+
+    def lora_profile_current(self) -> Optional[str]:
+        return self._lora_profile_current
+
+    async def request_profile_change(
+        self,
+        name: str,
+        *,
+        delay_ms: Optional[int] = None,
+    ) -> bool:
+        """Send a ``*CFG name=<name> t=<delay_ms>`` line to the server
+        controller via USB. The server firmware:
+
+          1) Schedules the local apply for ``now() + delay_ms``.
+          2) Re-transmits the same line on LoRa (3 retries spaced
+             ~700 ms) so the captain receives it on the CURRENT
+             profile and switches in lock-step.
+
+        Returns True on a successful write (line bytes delivered to
+        USB). Returns False if the radio port doesn't expose
+        ``send_raw_line`` (e.g. simulated radio in unit tests) or if
+        the name isn't in the recognised list.
+
+        Persists the requested profile to disk via
+        ``_save_profile_to_disk`` so a bridge restart re-applies the
+        same choice — operator doesn't have to re-pick after a power
+        blip.
+        """
+        if name not in self.LORA_PROFILE_NAMES:
+            logger.warning("profile change rejected: unknown name %r", name)
+            return False
+        delay = (
+            int(delay_ms)
+            if delay_ms is not None
+            else int(self.LORA_PROFILE_DEFAULT_DELAY_MS)
+        )
+        if delay < 0:
+            delay = 0
+        if delay > 30_000:
+            delay = 30_000  # cap; longer than this is operator error
+        sender = getattr(self.radio, "send_raw_line", None)
+        if sender is None:
+            logger.warning(
+                "profile change rejected: radio port has no "
+                "send_raw_line() (probably simulated)"
+            )
+            return False
+        # Construct the wire line. Embed the params even though the
+        # firmware looks up by name — gives the operator a paper trail
+        # in journalctl when something goes sideways.
+        line = f"*CFG name={name} t={delay}\n"
+        try:
+            ok = bool(await sender(line))
+        except Exception:
+            logger.exception("profile change: send_raw_line failed")
+            return False
+        if ok:
+            self._lora_profile_current = name
+            import time as _t
+            self._lora_profile_last_applied_ms = _t.monotonic() * 1000.0
+            self._save_profile_to_disk(name)
+            logger.info(
+                "profile change applied: name=%s delay_ms=%d", name, delay,
+            )
+        else:
+            logger.warning(
+                "profile change deferred: USB write failed for name=%s", name,
+            )
+        return ok
+
+    def confirm_profile_applied(self, name: str) -> None:
+        """Out-of-band callback from the radio when firmware reports
+        a successful profile apply (CFG_APPLIED line on USB).
+
+        This is how we keep `_lora_profile_current` honest regardless
+        of WHO originated the switch:
+          * Bridge initiated via /profile: confirmation matches what
+            request_profile_change() already set; logs "confirmed".
+          * Captain initiated via BLE *CFG: server applied it, relayed
+            over LoRa, then echoes CFG_APPLIED to us. We had stale
+            state ("playa") and the actual radio moved to "test_bench";
+            this callback corrects the drift.
+          * Manual USB push by an operator: same as above.
+
+        The callback is idempotent and tolerates being called with
+        unknown profile names (defends against a future firmware
+        emitting names we don't yet know about — log + ignore).
+        """
+        if name not in self.LORA_PROFILE_NAMES:
+            logger.warning(
+                "CFG_APPLIED with unknown profile name %r — ignoring; "
+                "this bridge may be older than the firmware",
+                name,
+            )
+            return
+        prev = self._lora_profile_current
+        if prev == name:
+            logger.debug("CFG_APPLIED confirmed: name=%s (no change)", name)
+            return
+        # Drift detected — the radio is on a profile the bridge didn't
+        # know about. Update state + persist + wake the publisher so
+        # the next PUB carries the correct `prof/<name>` and any UI
+        # subscribed to that field re-syncs within one PUB cycle.
+        self._lora_profile_current = name
+        import time as _t
+        self._lora_profile_last_applied_ms = _t.monotonic() * 1000.0
+        self._save_profile_to_disk(name)
+        logger.info(
+            "CFG_APPLIED drift corrected: %r → %r (firmware authoritative)",
+            prev, name,
+        )
+        if self._publisher_wake is not None:
+            self._publisher_wake.set()
+
+    # Persistence is intentionally a small file (not the NVS the
+    # firmware uses — that lives on the ESP). We just need the bridge
+    # process to remember its last operator choice across restarts.
+    _PROFILE_DISK_PATH = "/var/lib/titanic-bridge/profile.txt"
+
+    def _save_profile_to_disk(self, name: str) -> None:
+        # Validate name against the allowlist so a buggy caller can't
+        # write arbitrary text (which would then be replayed verbatim
+        # at boot). Defence in depth — request_profile_change() already
+        # gates by name.
+        if name not in self.LORA_PROFILE_NAMES:
+            return
+        import os
+        try:
+            os.makedirs(
+                os.path.dirname(self._PROFILE_DISK_PATH), exist_ok=True,
+            )
+            with open(self._PROFILE_DISK_PATH, "w") as f:
+                f.write(name + "\n")
+        except OSError as exc:
+            # Don't crash the bridge; operator can re-pick after restart.
+            logger.warning(
+                "profile persist failed (%s); not fatal", exc,
+            )
+
+    def _load_profile_from_disk(self) -> Optional[str]:
+        try:
+            with open(self._PROFILE_DISK_PATH, "r") as f:
+                name = f.read().strip()
+        except OSError:
+            return None
+        if name in self.LORA_PROFILE_NAMES:
+            return name
+        # Stale / renamed profile from a previous firmware. Drop the
+        # file rather than re-applying a profile that no longer exists.
+        return None
+
+    async def restore_profile_from_disk(self) -> Optional[str]:
+        """Called once after the bridge has come up (and the server
+        controller has had a moment to boot) so the persisted profile
+        is re-applied without operator intervention.
+
+        Safe to call when nothing is persisted — it just returns None.
+        """
+        name = self._load_profile_from_disk()
+        if name is None:
+            return None
+        logger.info("profile restore from disk: name=%s", name)
+        await self.request_profile_change(name)
+        return name
+
+    def health_snapshot(self) -> dict:
+        """Return a JSON-safe operational snapshot for the bridge's
+        ``/health`` HTTP endpoint. Mixes:
+
+          * Bridge process stats (rx/tx frame counters, error counters,
+            uptime, configured pub cadence).
+          * LoRa link stats (RSSI/SNR last+avg, rx/tx counts, last-RX
+            age) — pulled straight from the radio's ``link_stats``.
+          * Engine reachability summary (URL the bridge is pointed at,
+            last successful + last failing call timestamps, WS state).
+
+        Security: NEVER include frame payloads, AES keys, the engine
+        bearer token (if any), or any operator PII. The endpoint is on
+        the LAN with no auth and the data is meant to be SAFE to render
+        on any device that can reach the Pi — operational metrics only.
+        """
+        import time as _t
+        now_ms = _t.monotonic() * 1000.0
+        radio_stats = getattr(self.radio, "link_stats", None)
+        lora_block = (
+            radio_stats.snapshot()
+            if radio_stats is not None
+            else {"available": False}
+        )
+        # Engine reachability heuristic: "ok" if the last successful
+        # status call was within ~3× short_interval_s (covers a few
+        # missed cycles without alarming). "fail" if the last failing
+        # call is newer than the last success. "unknown" before any
+        # call has completed.
+        if self._engine_last_ok_ms is None and self._engine_last_fail_ms is None:
+            engine_ok: Optional[bool] = None
+        elif self._engine_last_fail_ms is None:
+            engine_ok = True
+        elif self._engine_last_ok_ms is None:
+            engine_ok = False
+        else:
+            engine_ok = self._engine_last_ok_ms >= self._engine_last_fail_ms
+        engine_block = {
+            "url": getattr(self.engine, "base_url", None),
+            "reachable": engine_ok,
+            "ws_connected": self._engine_ws_connected,
+            "last_ok_ms_ago": (
+                int(now_ms - self._engine_last_ok_ms)
+                if self._engine_last_ok_ms is not None else None
+            ),
+            "last_fail_ms_ago": (
+                int(now_ms - self._engine_last_fail_ms)
+                if self._engine_last_fail_ms is not None else None
+            ),
+            "engine_errors": self.stats.engine_errors,
+            "pubs_sent": self.stats.pubs_sent,
+            # Echo a small subset of the last engine /status response so
+            # PortWatch can confirm the bridge and the phone are looking
+            # at the same engine. Stripped to non-sensitive fields only.
+            "last_active_pattern": (
+                (self._engine_last_status or {}).get("activePattern")
+            ),
+            "last_unreal_state": (
+                (self._engine_last_status or {}).get("unrealState")
+            ),
+        }
+        profile_block = {
+            "available": list(self.LORA_PROFILE_NAMES),
+            "current": self._lora_profile_current,
+            "last_applied_ms_ago": (
+                int(now_ms - self._lora_profile_last_applied_ms)
+                if self._lora_profile_last_applied_ms is not None else None
+            ),
+            "default_delay_ms": int(self.LORA_PROFILE_DEFAULT_DELAY_MS),
+        }
+        return {
+            "service": "titanic-bridge",
+            "version": "1.1",
+            "node_id": f"0x{self.node_id:02X}",
+            "uptime_s": int(_t.time() - self.stats.started_at),
+            "config": {
+                "short_interval_s": self.short_interval_s,
+                "long_interval_s": self.long_interval_s,
+                "idle_threshold_s": self.idle_threshold_s,
+            },
+            "stats": {
+                "rx_frames": self.stats.rx_frames,
+                "tx_frames": self.stats.tx_frames,
+                "parse_errors": self.stats.parse_errors,
+                "acl_denied": self.stats.acl_denied,
+                "unknown_cmd": self.stats.unknown_cmd,
+                "min_role_denied": self.stats.min_role_denied,
+            },
+            "lora": lora_block,
+            "engine": engine_block,
+            "profile": profile_block,
+        }
 
     # ── Entry point ──────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -257,11 +639,20 @@ class Bridge:
         except EngineUnavailable as exc:
             self.stats.engine_errors += 1
             await self._send(frame, TYPE_NAK, "engine_error")
-            logger.info("qry engine_error: %s", exc)
+            # Same outage typically fires this once per client poll
+            # (~5 clients × 5 s cadence = 60 lines/min). Throttle.
+            self._engine_err_log.log(
+                logger, "qry_unreachable", "qry engine_error: %s", exc,
+            )
             return
         except KeyError:
             await self._send(frame, TYPE_NAK, "unknown_qry")
             return
+        # Clean exec → engine is back. Emit a one-shot recovery
+        # line if we were previously in the throttled state.
+        self._engine_err_log.clear(
+            logger, "qry_unreachable", "engine HTTP recovered",
+        )
         await self._send(frame, TYPE_REP, arg_out)
 
     async def _exec_qry(self, path: tuple[str, ...]) -> str:
@@ -572,7 +963,9 @@ class Bridge:
         except EngineUnavailable as exc:
             self.stats.engine_errors += 1
             await self._send(frame, TYPE_NAK, "engine_error")
-            logger.info("cmd engine_error: %s", exc)
+            self._engine_err_log.log(
+                logger, "cmd_unreachable", "cmd engine_error: %s", exc,
+            )
             return
         except KeyError:
             self.stats.unknown_cmd += 1
@@ -771,9 +1164,35 @@ class Bridge:
         while True:
             try:
                 arg = await self.engine.compact_status()
+                # Health-snapshot bookkeeping: every successful
+                # compact_status hit is also a successful engine probe
+                # from the bridge's perspective. We don't need a separate
+                # /status round-trip just to refresh the health endpoint
+                # — same thing the publisher already does, no extra cost.
+                self._engine_last_ok_ms = time.monotonic() * 1000.0
+                try:
+                    self._engine_last_status = await self.engine.status()
+                except EngineUnavailable:
+                    # Status() failure right after compact_status() worked
+                    # is exotic but possible (e.g. engine restarted in the
+                    # ~ms gap). Don't flip the engine_ok bit on its own —
+                    # only the compact_status path does that. Just skip
+                    # the snapshot refresh; we'll get it next cycle.
+                    pass
             except EngineUnavailable:
                 arg = "dn/1"
                 self.stats.engine_errors += 1
+                self._engine_last_fail_ms = time.monotonic() * 1000.0
+            # Announce the active LoRa profile in every PUB so any node
+            # in earshot — including a freshly-booted crew or captain
+            # joining the mesh — can learn what profile to switch to.
+            # `prof/<name>` is a single short field; cost is ~12 bytes
+            # on top of a ~80-150 byte status frame. Omitted when no
+            # profile has been applied since boot (let the receiver
+            # keep its compile-time default).
+            prof = self._lora_profile_current
+            if prof:
+                arg = f"{arg},prof/{prof}"
             await self._send(
                 None, TYPE_PUB, arg, dst=BROADCAST, seq=pub_seq & 0xFF,
             )
@@ -830,8 +1249,17 @@ class Bridge:
                     ping_interval=20.0,
                     ping_timeout=10.0,
                 ) as ws:
-                    logger.info("engine WS connected: %s", ws_url)
+                    # First successful connect after a failure stretch
+                    # gets a clear "recovered" line; otherwise just a
+                    # debug-level connect log (every reconnect would
+                    # otherwise spam INFO during a flap).
+                    self._ws_log.clear(
+                        logger, "ws_down",
+                        "engine WS recovered: %s", ws_url,
+                    )
+                    logger.debug("engine WS connected: %s", ws_url)
                     backoff = 1.0  # reset on success
+                    self._engine_ws_connected = True
                     async for raw in ws:
                         # We deliberately don't try to forward the
                         # full payload — the LoRa wire is too narrow
@@ -849,13 +1277,23 @@ class Bridge:
                 raise
             except _WSInvalidStatus as exc:
                 # 404 / 401 etc — usually means the engine doesn't
-                # speak WS on this port. Don't spam the log; back off.
-                logger.warning(
-                    "engine WS rejected (%s); retrying in %.1fs", exc, backoff
+                # speak WS on this port. Throttle so a misconfigured
+                # engine URL doesn't blow up the log.
+                self._engine_ws_connected = False
+                self._ws_log.log(
+                    logger, "ws_down",
+                    "engine WS rejected (%s); will retry every %.0fs",
+                    exc, self._ws_log.period_s,
                 )
             except (_WSClosed, OSError, ConnectionError) as exc:
-                logger.info(
-                    "engine WS closed (%s); reconnecting in %.1fs", exc, backoff
+                self._engine_ws_connected = False
+                # Same throttle key — operator sees one line per
+                # `period_s` while the engine is down, plus an
+                # explicit "recovered" line when it comes back.
+                self._ws_log.log(
+                    logger, "ws_down",
+                    "engine WS closed (%s); will retry every %.0fs",
+                    exc, self._ws_log.period_s,
                 )
             except Exception:  # pragma: no cover — defensive
                 logger.exception("engine WS subscriber error")
