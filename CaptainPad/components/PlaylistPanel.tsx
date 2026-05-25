@@ -61,8 +61,30 @@ interface Props {
    *  /mixer/channels/<id>/playlist GET to come back. Important during
    *  rapid-add scenarios where N panels mount together — without this
    *  hint the engine sees N parallel GETs and some can stall past the
-   *  8 s fetch timeout. */
+   *  8 s fetch timeout.
+   *
+   *  Live updates: this prop is ALSO honoured when it changes from
+   *  null → non-null (or between names) AFTER first render. That is
+   *  the failure mode we used to hit on the iPad when a channel was
+   *  added via "+ default" / "+ from playlist": the parent's first
+   *  render of the new PlaylistPanel could see `channel.playlist`
+   *  arrive on the SECOND mixer broadcast (a few ms after mount), and
+   *  useState's initial value was already locked in as `null`. The
+   *  `useEffect([initialAssignment])` below adopts the late prop.
+   */
   initialAssignment?: PlaylistAssignment | null;
+  /** Pre-fetched playlist content (entries + defaults) from the parent.
+   *  When the iPad's POST /mixer/channels response arrives, it carries
+   *  the FULL playlist inline as `playlistData`. The mixer screen
+   *  caches that keyed by channelId and forwards it here so the panel
+   *  can render the entry list on first paint — without depending on
+   *  refresh()'s own GETs to succeed. This is the synchronous-hand-off
+   *  guarantee that makes "+ default" / "+ from playlist" feel instant
+   *  even when the iPad's wifi is laggy and the panel's own refresh
+   *  GETs would otherwise race the WS broadcast and lose. Honoured on
+   *  every prop change (not just first render) for the same late-prop
+   *  reason as `initialAssignment` above. */
+  initialPlaylist?: PlaylistData | null;
   /** Optional refresh / reconnect handler. When provided, a small
    *  ↻ icon button is rendered in the panel header (top-right) so the
    *  operator can reconnect to the engine without leaving the playlist
@@ -88,13 +110,17 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection, refreshNonce }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
   // Seed assignment from parent immediately so the dropdown shows the
   // playlist name on first render — no "LOAD…" flash while the panel
   // races its own /mixer/channels/<id>/playlist GET to land.
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(initialAssignment ?? null);
-  const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
+  // Seed entries-list content from parent too. When mixer.tsx forwards the
+  // inline `playlistData` from the POST /mixer/channels response (keyed by
+  // the new channel's id), patterns appear synchronously on first paint
+  // and the panel never has to depend on refresh()'s GETs landing in time.
+  const [playlist, setPlaylist] = useState<PlaylistData | null>(initialPlaylist ?? null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
@@ -136,6 +162,43 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const assignmentRef = useRef<PlaylistAssignment | null>(null);
   useEffect(() => { playlistRef.current = playlist; }, [playlist]);
   useEffect(() => { assignmentRef.current = assignment; }, [assignment]);
+
+  // ── Late-prop hydration: adopt initialAssignment / initialPlaylist ──
+  //
+  // The mixer screen now caches the POST /mixer/channels response's
+  // inline playlist payload keyed by the new channel id and forwards
+  // it here. But because of how React batches mixer broadcasts vs the
+  // first paint of the new PlaylistPanel, the prop value at FIRST
+  // RENDER can still be null even though the parent already has the
+  // data — useState's initial value gets captured before the parent's
+  // setState lands. These effects pick up the prop the moment it
+  // becomes non-null (or changes name) so we never depend on
+  // refresh()'s own GETs landing in time. This is THE fix for the
+  // "+ default / + from playlist → patterns don't show until I re-pick
+  // from the dropdown" iPad bug — without it, the panel sat empty
+  // when refresh() raced the slow iPad wifi and lost.
+  //
+  // No-ops when the value matches what we already have, so a chatty
+  // parent that re-renders the same assignment object on every WS
+  // broadcast doesn't cause unnecessary state updates.
+  useEffect(() => {
+    if (!initialAssignment) return;
+    const cur = assignmentRef.current;
+    if (cur && cur.name === initialAssignment.name && cur.activeEntryId === initialAssignment.activeEntryId) return;
+    setAssignment(initialAssignment);
+  }, [initialAssignment]);
+  useEffect(() => {
+    if (!initialPlaylist || !initialPlaylist.name) return;
+    const cur = playlistRef.current;
+    // Adopt if we have no playlist yet OR the parent's snapshot is for
+    // a different name (operator re-picked from the dropdown and the
+    // mixer screen pushed a fresh payload through). Same-name same-
+    // length snapshots are skipped because refresh() / WS playlistSaved
+    // events are the canonical source of subsequent edits.
+    if (!cur || cur.name !== initialPlaylist.name) {
+      setPlaylist(initialPlaylist);
+    }
+  }, [initialPlaylist]);
 
   // Scroll-active-entry-into-view machinery (item 2 in the user
   // feedback). When the deck auto-swaps to the next pattern, the
