@@ -712,6 +712,13 @@ export async function fetchViewSelectionOptions(): Promise<ApiResult<{
   sections: number[];
   fixtures: number[];
   viewMaskUnion: number;
+  // Named view-mask presets the model author declared (model inline
+  // export or `<model>.viewmasks.js` sidecar). Each entry maps a
+  // human-readable name to its 1-hot bit and a hint whether any pixel
+  // in the live model actually has that bit set (`inUse`). The mixer
+  // strip's view-selection picker renders these in a dedicated
+  // "VIEW MASKS" section, alongside ALL and GROUPS.
+  viewMasks: { name: string; bit: number; inUse: boolean }[];
   pixelCount: number;
 }>> {
   try {

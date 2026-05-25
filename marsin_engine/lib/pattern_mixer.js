@@ -17,13 +17,47 @@ import path from 'path';
 // (fall back to ALL) so the render loop never hangs on a malformed
 // config, but the upstream API path should refuse the write so the
 // operator sees the error immediately.
-export function compileViewSelectionMask({ pixels, pixelCount, viewSelection }) {
+//
+// `viewMasks` (optional) is the model's named-view-mask dictionary:
+//   [{ name: 'MainShow', bit: 2 }, ...]
+// When viewSelection.type === 'viewMask' and target is a string, we
+// resolve the bit by name lookup. If target is a positive integer the
+// legacy bitmask path is used (also handy when no named dictionary is
+// available, e.g. in unit tests). An unresolvable name produces a
+// fully-zero mask (no pixels selected) rather than falling back to ALL
+// — masking nothing would be the silent black-out that §3.1 calls out
+// against. The API validator should have caught the name typo upstream.
+export function compileViewSelectionMask({ pixels, pixelCount, viewSelection, viewMasks = [] }) {
   if (!viewSelection || viewSelection.type === 'all') return null;
   if (!Array.isArray(pixels) || pixels.length === 0) return null;
 
   const mask = new Uint8Array(pixelCount);
   const target = viewSelection.target;
   const invert = !!viewSelection.invert;
+
+  // Resolve a viewMask string target (e.g. 'MainShow') to its bit value
+  // BEFORE entering the per-pixel loop so the hot path stays integer-only.
+  // A missing name resolves to 0 — the mask will be all-zero for the
+  // selected region (or all-one inverted), which is visibly wrong and
+  // therefore catches typos at smoke-check time instead of hiding them.
+  let resolvedViewMaskBit = null;
+  if (viewSelection.type === 'viewMask') {
+    if (typeof target === 'number' && Number.isInteger(target)) {
+      resolvedViewMaskBit = target;
+    } else if (typeof target === 'string') {
+      const entry = Array.isArray(viewMasks)
+        ? viewMasks.find(vm => vm && vm.name === target)
+        : null;
+      if (!entry) {
+        console.warn(`[PatternMixer] Unknown viewMask name '${target}' — no pixels will match. ` +
+          `Known viewMasks: [${(viewMasks || []).map(v => v && v.name).filter(Boolean).join(', ')}]`);
+      }
+      resolvedViewMaskBit = entry && Number.isInteger(entry.bit) ? entry.bit : 0;
+    } else {
+      console.warn(`[PatternMixer] viewMask target must be string or integer, got ${typeof target}`);
+      resolvedViewMaskBit = 0;
+    }
+  }
 
   for (let i = 0; i < pixelCount; i++) {
     const px = pixels[i] || {};
@@ -44,7 +78,7 @@ export function compileViewSelectionMask({ pixels, pixelCount, viewSelection }) 
       }
       case 'viewMask': {
         const viewMask = px.vMask ?? px.viewMask ?? 0;
-        match = (viewMask & target) !== 0;
+        match = resolvedViewMaskBit !== 0 && (viewMask & resolvedViewMaskBit) !== 0;
         break;
       }
       default:
@@ -110,7 +144,7 @@ function applyPreviewMaskBlackout(buffer, pixelMask, pixelCount) {
 }
 
 export class PatternMixer {
-  constructor({ wasmHost, pixelCount, maxChannels, pixels = [] }) {
+  constructor({ wasmHost, pixelCount, maxChannels, pixels = [], viewMasks = [] }) {
     this.wasmHost = wasmHost;
     this.pixelCount = pixelCount;
     // ── Channel split (May 2026) ─────────────────────────────────────
@@ -165,6 +199,20 @@ export class PatternMixer {
         }
       }
     }
+
+    // Named view-mask dictionary from the active model:
+    //   [{ name: 'MainShow', bit: 2 }, ...]
+    // Used by compileViewSelectionMask to resolve viewSelection
+    // { type: 'viewMask', target: '<name>' } payloads to their bit
+    // value at mask-compile time. Empty array is fine — the engine
+    // just won't enumerate any named view masks in
+    // /model/view-selection-options and the picker will hide that
+    // section in CaptainPad. Validation is defensive: drops entries
+    // missing a string name or integer bit instead of throwing, so a
+    // model author typo doesn't block boot.
+    this.viewMasks = Array.isArray(viewMasks)
+      ? viewMasks.filter(vm => vm && typeof vm.name === 'string' && vm.name.length > 0 && Number.isInteger(vm.bit))
+      : [];
 
     // View crossfade state (0.0 = deck exclusively, 1.0 = mixer exclusively).
     // Default to mixer view per docs/27 §2 — at engine startup the live output
@@ -311,6 +359,7 @@ export class PatternMixer {
       pixels: this.pixels,
       pixelCount: this.pixelCount,
       viewSelection: channel.viewSelection,
+      viewMasks: this.viewMasks,
     });
   }
 

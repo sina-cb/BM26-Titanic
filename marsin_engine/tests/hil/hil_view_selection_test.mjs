@@ -222,6 +222,70 @@ async function main() {
         `got ${JSON.stringify(ch?.viewSelection)}`);
     }
 
+    // ─── Test 7: named viewMask preset enumeration ────────────────
+    // /model/view-selection-options must enumerate the model's
+    // viewMasks array (from inline export OR `<model>.viewmasks.js`
+    // sidecar) so CaptainPad's picker can list them. The test_bench
+    // sidecar declares at least 'ParsOnly', 'VintageOnly', 'BarsOnly',
+    // 'MainWash' — assert the contract, not the exact list, so a future
+    // operator edit to the sidecar doesn't make this test brittle.
+    console.log('\n[TEST 7] /model/view-selection-options enumerates named view masks');
+    check(Array.isArray(opts.viewMasks),
+      `viewMasks is an array (got ${typeof opts.viewMasks})`);
+    check((opts.viewMasks || []).length > 0,
+      `viewMasks has at least one preset (got ${opts.viewMasks?.length || 0})`,
+      'sidecar test_bench.viewmasks.js may not be loaded');
+    for (const vm of (opts.viewMasks || [])) {
+      check(typeof vm.name === 'string' && vm.name.length > 0
+            && Number.isInteger(vm.bit) && vm.bit > 0
+            && typeof vm.inUse === 'boolean',
+        `viewMask entry well-formed: ${JSON.stringify(vm)}`,
+        `bad shape: ${JSON.stringify(vm)}`);
+    }
+
+    // ─── Test 8: PATCH viewSelection with a NAMED viewMask ────────
+    const namedVM = (opts.viewMasks || []).find(v => v.inUse) || (opts.viewMasks || [])[0];
+    if (namedVM) {
+      console.log(`\n[TEST 8] PATCH viewSelection type=viewMask target='${namedVM.name}'`);
+      const r = await httpJson('PATCH', `/mixer/channels/${overlayId}`, {
+        viewSelection: { type: 'viewMask', target: namedVM.name },
+      });
+      check(r.status === 200, `PATCH named viewMask returned 200`,
+        `status ${r.status} body=${JSON.stringify(r.body)}`);
+      const m = (await httpJson('GET', '/mixer')).body;
+      const ch = (m.channels || []).find(c => c.id === overlayId);
+      check(ch?.viewSelection?.type === 'viewMask' && ch?.viewSelection?.target === namedVM.name,
+        `viewMask=${namedVM.name} persisted`,
+        `got ${JSON.stringify(ch?.viewSelection)}`);
+
+      // ── Test 9: PATCH with malformed viewMask target (object) → 400
+      console.log('\n[TEST 9] PATCH malformed viewMask target rejected with 400');
+      const badVM = await httpJson('PATCH', `/mixer/channels/${overlayId}`, {
+        viewSelection: { type: 'viewMask', target: { not: 'a string or int' } },
+      });
+      check(badVM.status === 400, `bad viewMask target → 400`, `got ${badVM.status}`);
+      // Empty string also rejected.
+      const badVM2 = await httpJson('PATCH', `/mixer/channels/${overlayId}`, {
+        viewSelection: { type: 'viewMask', target: '' },
+      });
+      check(badVM2.status === 400, `empty viewMask name → 400`, `got ${badVM2.status}`);
+
+      // ── Test 10: legacy integer viewMask target still works ─────
+      console.log('\n[TEST 10] PATCH viewSelection type=viewMask with integer bitmask (legacy path)');
+      const intVM = await httpJson('PATCH', `/mixer/channels/${overlayId}`, {
+        viewSelection: { type: 'viewMask', target: namedVM.bit },
+      });
+      check(intVM.status === 200, `integer viewMask target returned 200`,
+        `status ${intVM.status}`);
+      const m2 = (await httpJson('GET', '/mixer')).body;
+      const ch2 = (m2.channels || []).find(c => c.id === overlayId);
+      check(ch2?.viewSelection?.type === 'viewMask' && ch2?.viewSelection?.target === namedVM.bit,
+        `integer viewMask=${namedVM.bit} persisted`,
+        `got ${JSON.stringify(ch2?.viewSelection)}`);
+    } else {
+      console.log('\n[TEST 8-10 skipped — no named viewMasks declared in model]');
+    }
+
   } finally {
     // ─── Restore ────────────────────────────────────────────────
     try {

@@ -55,10 +55,23 @@ export function validateViewSelection(vs) {
       }
       return { ok: true, value: { type: 'fixture', target, invert } };
     case 'viewMask':
-      if (!Number.isInteger(target) || target <= 0) {
-        return { ok: false, error: "viewSelection.target must be a positive integer bitmask when type === 'viewMask'" };
+      // Two shapes accepted:
+      //   1. target: '<name>'  (preferred — resolved against the model's
+      //      viewMasks dictionary at mask-compile time so operators
+      //      pick by human label, not a bitmask integer).
+      //   2. target: <positive int>  (legacy bitmask passthrough; kept so
+      //      tests / programmatic clients can still drive raw bits
+      //      without going through the model dictionary).
+      if (typeof target === 'string') {
+        if (target.length === 0) {
+          return { ok: false, error: "viewSelection.target must be a non-empty string name when type === 'viewMask'" };
+        }
+        return { ok: true, value: { type: 'viewMask', target, invert } };
       }
-      return { ok: true, value: { type: 'viewMask', target, invert } };
+      if (Number.isInteger(target) && target > 0) {
+        return { ok: true, value: { type: 'viewMask', target, invert } };
+      }
+      return { ok: false, error: "viewSelection.target must be a non-empty string name OR a positive integer bitmask when type === 'viewMask'" };
     default:
       return { ok: false, error: `Unknown viewSelection.type '${type}' (expected: all | group | section | fixture | viewMask)` };
   }
@@ -1768,12 +1781,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const vMask = px.vMask ?? px.viewMask;
         if (Number.isInteger(vMask)) viewMaskUnion |= vMask;
       }
+      // Named view-mask presets the model author declared (e.g.
+      // [{name:'MainShow', bit:2}, ...]). Picker rows in the CaptainPad
+      // mixer strip render straight from this array, so we strip any
+      // malformed entries here rather than push that work onto the iPad.
+      // We also enrich each entry with `inUse` = whether ANY pixel has
+      // that bit set, so the picker can dim presets that the operator
+      // hasn't tagged any fixtures with yet (without removing them —
+      // they may belong to a future scene).
+      const rawViewMasks = (model && Array.isArray(model.viewMasks)) ? model.viewMasks : [];
+      const viewMasks = rawViewMasks
+        .filter(vm => vm && typeof vm.name === 'string' && vm.name.length > 0 && Number.isInteger(vm.bit))
+        .map(vm => ({
+          name: vm.name,
+          bit: vm.bit,
+          inUse: (viewMaskUnion & vm.bit) !== 0,
+        }));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         groups: [...groups].sort(),
         sections: [...sections].sort((a, b) => a - b),
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
+        viewMasks,
         pixelCount: pixels.length,
       }));
     }
