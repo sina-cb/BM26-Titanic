@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
+import { validateModulationMapping } from './modulation_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
 
@@ -130,6 +131,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     });
   }
 
+  // Wire the ModulationController's broadcast publisher to our local
+  // broadcastWs. The controller was constructed in engine.js BEFORE
+  // this fn ran, so it was given a deferred ref — now it flows.
+  //
+  // WS topic routing note: when the round-3 WS topic split lands,
+  // `modulationState` must route to /ws/params (the "values changing
+  // live" socket alongside sharedParams + liveParams). Until then it
+  // rides the single global.wss like everything else.
+  if (engineCore.modulationBroadcastRef) {
+    engineCore.modulationBroadcastRef.publish = broadcastWs;
+  }
+
   const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
 
@@ -139,6 +152,36 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     opts.modelName || 'default', 'playlists'
   );
   const playlistManager = new PlaylistManager(playlistsDir, patternsDir);
+
+  // ── Modulation context push ─────────────────────────────────────────
+  // Whenever the deck's (playlist, activeEntryId) tuple changes OR a
+  // CRUD mutation lands on the currently-active entry, push the
+  // matching mappings into the ModulationController. The hot loop
+  // never reads disk for this.
+  function pushActiveEntryToModulation() {
+    const mc = engineCore.modulationController;
+    if (!mc) return;
+    const deckCh = mixer.getDeckChannel();
+    const playlistName = deckCh?.playlist?.name || null;
+    const entryId = deckCh?.playlist?.activeEntryId || null;
+    if (!playlistName || !entryId) {
+      mc.setActiveEntry({ playlistName: null, entryId: null, pattern: null, mappings: [] });
+      return;
+    }
+    let mappings = [];
+    let pattern = deckCh?.pattern || null;
+    try {
+      const pl = playlistManager.load(playlistName);
+      const entry = pl && pl.entries.find(e => e.id === entryId);
+      if (entry) {
+        mappings = Array.isArray(entry.modulations) ? entry.modulations : [];
+        pattern = entry.pattern || pattern;
+      }
+    } catch (err) {
+      console.warn(`[Modulation] could not load mappings for ${playlistName}/${entryId}: ${err.message}`);
+    }
+    mc.setActiveEntry({ playlistName, entryId, pattern, mappings });
+  }
   if (playlistManager.list().length === 0) {
     try {
       playlistManager.generateDefault();
@@ -505,6 +548,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // edits made in the previous entry are no longer relevant here.
     channel._dirty = false;
 
+    // Push the entry's modulations into the ModulationController if this
+    // load lands on the deck channel.
+    if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
+      pushActiveEntryToModulation();
+    }
+
     return { entry, index: idx, total: playlist.entries.length };
   }
 
@@ -684,6 +733,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         channel.playlist.cursor = idx;
         channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         channel._dirty = false;
+
+        // Refresh modulation context for the new entry now that the
+        // deck channel's handle and playlist tuple reflect the swap.
+        pushActiveEntryToModulation();
 
         opts.pattern = channel.pattern;
         saveAllState();
@@ -2459,6 +2512,116 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     }
+    // ── PLAYLIST MODULATIONS (Phase 1A) ──────────────────────────────────
+    //
+    // Per docs/26 §5.1. CRUD by mapping id, scoped to a playlist item.
+    // v1 policy: at most one continuous mapping per target parameter —
+    // the validator + save path enforce this.
+    //
+    // Routes:
+    //   PUT    /api/playlists/:name/items/:itemId/modulations/:mappingId
+    //   PATCH  /api/playlists/:name/items/:itemId/modulations/:mappingId
+    //   DELETE /api/playlists/:name/items/:itemId/modulations/:mappingId
+    //
+    // All mutations re-save the playlist via playlistManager.save (which
+    // re-validates everything strict), then re-push the entry's
+    // mappings to the ModulationController IF the entry is currently
+    // active on the deck.
+    else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/modulations\/[^\/]+$/)) {
+      const parts = req.url.split('/');
+      let playlistName, itemId, mappingId;
+      try {
+        playlistName = decodeURIComponent(parts[3]);
+        itemId = decodeURIComponent(parts[5]);
+        mappingId = decodeURIComponent(parts[7]);
+      } catch (e) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: 'invalid URI encoding' }));
+      }
+
+      const finishOk = (savedEntry) => {
+        broadcastWs({ type: 'playlistSaved', name: playlistName });
+        const deckCh = mixer.getDeckChannel();
+        if (deckCh && deckCh.playlist
+            && deckCh.playlist.name === playlistName
+            && deckCh.playlist.activeEntryId === itemId) {
+          pushActiveEntryToModulation();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', entry: savedEntry }));
+      };
+
+      if (req.method === 'PUT') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const incoming = { ...data, id: mappingId };
+            // Validate before mutating in-memory so we don't leave a
+            // half-edited playlist behind on bad input.
+            try { validateModulationMapping(incoming); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            entry.modulations = (entry.modulations || []).filter(m => m.id !== mappingId);
+            entry.modulations.push(incoming);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'PATCH') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const existing = (entry.modulations || []).find(m => m.id === mappingId);
+            if (!existing) { res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' })); }
+            const merged = { ...existing, ...data, id: mappingId };
+            try { validateModulationMapping(merged); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            entry.modulations = (entry.modulations || []).map(m => m.id === mappingId ? merged : m);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        try {
+          const playlist = playlistManager.load(playlistName);
+          if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+          const entry = playlist.entries.find(e => e.id === itemId);
+          if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+          const before = (entry.modulations || []).length;
+          entry.modulations = (entry.modulations || []).filter(m => m.id !== mappingId);
+          if (entry.modulations.length === before) {
+            res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' }));
+          }
+          const saved = playlistManager.save(playlist);
+          const savedEntry = saved.entries.find(e => e.id === itemId);
+          finishOk(savedEntry);
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+      }
+      res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+    }
     // ── DECK CHANNEL (post-split) ────────────────────────────────────────
     // Replaces the deck-via-/mixer/channels/<baseId>/... access pattern.
     // The deck is a singleton (no id needed in the URL) and these routes
@@ -3057,6 +3220,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (c.readyState === 1) c.send(msg);
     });
   };
+
+  // Boot-time: if the persisted deck state has a playlist+activeEntryId,
+  // hand its modulations to the controller now so the very first render
+  // tick already has them. Subsequent swaps refresh via the existing
+  // pushActiveEntryToModulation() calls in loadPlaylistEntry +
+  // deckSwapComplete.
+  pushActiveEntryToModulation();
 
   return server;
 }

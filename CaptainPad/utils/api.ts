@@ -1344,3 +1344,98 @@ export async function fetchGlobalEffectLibrary(): Promise<ApiResult<{ effects: R
     return { ok: false, error: err.message };
   }
 }
+
+// ── Playlist modulation CRUD (docs/26 Phase 1A) ──────────────────────────
+// Endpoints expose mappings scoped to (playlist, item, mappingId). All
+// validation lives in the engine; these wrappers surface 4xx errors as
+// `{ ok: false, error }`.
+
+export type ModulationSourceKey = 'micLow' | 'micMid' | 'micHigh' | 'micKick';
+export type ModulationMode = 'offset' | 'scale';
+export type ModulationPolarity = 'unipolar' | 'bipolar';
+export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';
+
+export type ModulationMapping = {
+  id: string;
+  type: 'continuous';
+  enabled: boolean;
+  source: { scope: 'cpc'; key: ModulationSourceKey; label?: string };
+  target: { scope: 'pattern'; parameter: string };
+  mode: ModulationMode;
+  polarity: ModulationPolarity;
+  range: [number, number];
+  curve: ModulationCurve;
+};
+
+function modulationUrl(playlistName: string, itemId: string, mappingId: string): string {
+  return `${api_base}/api/playlists/${encodeURIComponent(playlistName)}` +
+    `/items/${encodeURIComponent(itemId)}` +
+    `/modulations/${encodeURIComponent(mappingId)}`;
+}
+
+export async function putModulation(
+  playlistName: string, itemId: string, mapping: ModulationMapping,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(modulationUrl(playlistName, itemId, mapping.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mapping),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('put-modulation', `Failed to PUT modulation:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchModulation(
+  playlistName: string, itemId: string, mappingId: string, patch: Partial<ModulationMapping>,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(modulationUrl(playlistName, itemId, mappingId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('patch-modulation', `Failed to PATCH modulation:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteModulation(
+  playlistName: string, itemId: string, mappingId: string,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(modulationUrl(playlistName, itemId, mappingId), {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('delete-modulation', `Failed to DELETE modulation:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Fetch the saved playlist (entries + per-entry modulations). Used by
+// the modulation popover so it can pre-fill an existing mapping for
+// the current entry. Distinct from the inline-cached version used by
+// PlaylistPanel — this is on-demand and uncached.
+export async function fetchPlaylistByName(name: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`fetch-playlist-${name}`, `Failed to fetch playlist ${name}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
