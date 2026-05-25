@@ -14,6 +14,7 @@ import {
   fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
   invalidatePlaylistsCache, invalidatePlaylistCache,
+  type PlaylistData,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 
@@ -53,7 +54,14 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 // as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
 // inside the panel add or remove entries; SAVE persists. No parallel "all
 // patterns" column anymore.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+//
+// `initialPlaylist` is the inline `playlistData` payload from POST
+// /mixer/channels (or POST /mixer/channels/:id/playlist), cached by the
+// parent in `inlinePlaylistRef`. Forwarding it here gives the freshly-
+// mounted PlaylistPanel synchronous entry-list content on first paint,
+// so the operator doesn't have to re-pick from the dropdown when their
+// iPad's wifi is too slow for refresh()'s GETs to land in time.
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
@@ -195,6 +203,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             compact
             locked={locked}
             initialAssignment={channel.playlist || null}
+            initialPlaylist={initialPlaylist || null}
             refreshNonce={refreshNonce}
           />
         </View>
@@ -364,6 +373,32 @@ export default function MixerScreen() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef('');
+  // Per-channel inline playlist payload, populated synchronously from
+  // the POST /mixer/channels response BEFORE the matching mixer WS event
+  // mounts the PlaylistPanel. This is what makes "+ default" /
+  // "+ from playlist" feel instant even on a laggy iPad wifi link —
+  // the panel's first paint reads from this map and the entry list
+  // shows up without a single follow-up GET. We also fall back to
+  // populating it from the WS `channelPlaylistData` event so a panel
+  // that re-mounts later (e.g. after the user scrolled it off-screen
+  // on RN's recycling) still hydrates instantly. Entries here are
+  // garbage-collected with the channel: when a delete event arrives
+  // we drop the entry. The `Map` is wrapped in a ref + a version
+  // counter so the parent re-renders when contents change but the
+  // strips that aren't affected don't.
+  const inlinePlaylistRef = useRef<Map<string, PlaylistData>>(new Map());
+  const [inlinePlaylistVersion, setInlinePlaylistVersion] = useState(0);
+  const setInlinePlaylist = useCallback((channelId: string, pd: PlaylistData | null) => {
+    const cur = inlinePlaylistRef.current.get(channelId) || null;
+    if (!pd) {
+      if (!cur) return;
+      inlinePlaylistRef.current.delete(channelId);
+    } else {
+      if (cur && cur.name === pd.name && cur.entries.length === pd.entries.length) return;
+      inlinePlaylistRef.current.set(channelId, pd);
+    }
+    setInlinePlaylistVersion(v => v + 1);
+  }, []);
   // globalExports fetching moved to GlobalParams.tsx
   const throttleRef = useRef<{[key: string]: number}>({});
   const visDataRef = useRef<{[key: string]: string | null}>({});
@@ -415,6 +450,19 @@ export default function MixerScreen() {
           // Fan out so nested components (PlaylistPanel etc.) can react to
           // engine broadcasts without owning their own socket.
           engineEvents.emit(msg);
+          // Capture inline playlist payloads BEFORE we process the mixer
+          // event. The engine guarantees `channelPlaylistData` lands
+          // before its matching `mixer` broadcast (see
+          // broadcastChannelPlaylistData in api_server.js), so by the
+          // time the new PlaylistPanel mounts off the mixer event below
+          // we already have the entry-list payload waiting in
+          // `inlinePlaylistRef`. This is the synchronous-hand-off path
+          // that fixes the iPad "+ default" / "+ from playlist" bug —
+          // refresh() no longer needs to win a race with WS for entries
+          // to render on first paint.
+          if (msg.type === 'channelPlaylistData' && msg.channelId && msg.playlistData && msg.playlistData.name) {
+            setInlinePlaylist(msg.channelId, msg.playlistData as PlaylistData);
+          }
           if (msg.type === 'mixer') {
             setMaster(msg.master);
             if (msg.baseChannelId) baseChannelIdRef.current = msg.baseChannelId;
@@ -445,6 +493,22 @@ export default function MixerScreen() {
             });
             for (const ch of incoming) {
               if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
+            }
+            // GC inlinePlaylistRef: drop entries for channels the engine
+            // no longer reports. Keeps the map bounded across long
+            // sessions of add/remove churn without holding references
+            // to deleted channels' playlist payloads.
+            if (inlinePlaylistRef.current.size > 0) {
+              const liveIds = new Set<string>();
+              for (const ch of incoming) if (ch && ch.id) liveIds.add(ch.id);
+              let dropped = false;
+              for (const id of Array.from(inlinePlaylistRef.current.keys())) {
+                if (!liveIds.has(id)) {
+                  inlinePlaylistRef.current.delete(id);
+                  dropped = true;
+                }
+              }
+              if (dropped) setInlinePlaylistVersion(v => v + 1);
             }
             // ── WS-driven add button clear ──────────────────────────
             // If we're waiting on an in-flight add, check if the
@@ -853,6 +917,18 @@ export default function MixerScreen() {
         // cleared addBusy by the time this HTTP continuation runs,
         // but if not, this is the second guaranteed clear path.
         clearAddBusy();
+        // Synchronously stash the inline playlist payload for the
+        // newly-minted channel id. The WS `channelPlaylistData` event
+        // typically lands BEFORE this HTTP continuation runs (the
+        // engine emits it first), but on a slow iPad the HTTP path
+        // can occasionally win. Either way, the new PlaylistPanel
+        // mounting off the mixer event below reads this map and
+        // gets its entries on first paint — no refresh()-vs-WS race.
+        const pd = result.data?.playlistData;
+        const cid = result.data?.channelId;
+        if (cid && pd && pd.name) {
+          setInlinePlaylist(cid, pd);
+        }
       }
     }).catch((err) => {
       clearAddBusy();
@@ -1021,6 +1097,13 @@ export default function MixerScreen() {
       <ScrollView horizontal scrollEnabled={false} contentContainerStyle={{ padding: 16, gap: 16, flexGrow: 1 }} style={{ flex: 1 }}>
         {channels.map((channel, idx) => {
           const isSoloActive = soloRef.current === channel.id;
+          // Pull the inline playlist payload (POST response or WS-prime)
+          // for this channel if we have one. PlaylistPanel uses it to
+          // render the entry list on first paint, no GET needed.
+          // The version state above is read here so this scope re-renders
+          // when the map changes (Maps aren't structurally compared).
+          void inlinePlaylistVersion;
+          const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
           return (
             <ChannelStrip
               key={channel.id}
@@ -1031,6 +1114,7 @@ export default function MixerScreen() {
               blends={blends}
               transitions={transitionsList}
               visData={visDataRef.current[channel.id]}
+              initialPlaylist={channelInlinePlaylist}
               onFaderChange={handleFaderChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
