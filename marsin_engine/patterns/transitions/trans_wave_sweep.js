@@ -2,8 +2,13 @@
   trans_wave_sweep.js — Sinusoidal Wave-Front Sweep (left -> right)
   Like trans_wipe_right but the leading edge is a sine wave instead
   of a straight vertical line — evokes a tide rolling across the hull.
-  Wave amplitude shrinks as progress nears 0 or 1 so start/end remain
-  clean. Frequency is tunable.
+  Wave amplitude is gated by an envelope that goes to 0 at progress=0
+  and progress=1, so the wavy edge is purely cosmetic and never lets
+  pixels leak TO before the transition starts.
+
+  Pixel-perfect endpoints — same bias trick as trans_wipe_right, plus
+  the envelope ensures `disp = 0` at p=0 and p=1 so the wavefront
+  collapses to a flat vertical line at the endpoints.
   Uses transition built-ins: progress, fromR/G/B/W/A/U, toR/G/B/W/A/U
 */
 
@@ -15,15 +20,16 @@ export function sliderWaveFreq(v) { waveFreq = 1.0 + v * 8.0; }
 export function sliderWaveAmp(v)  { waveAmp = v * 0.4; }
 
 export function render(index, x, y, z) {
-  // Amplitude envelope: zero at the endpoints, max near the middle,
-  // so the wavy edge never juts past the [0,1] band at t=0 or t=1.
+  // Per-pixel reveal threshold: leftmost pixels (x=0) want pp=0
+  // (reveal first). The wave displacement perturbs pp along y so the
+  // leading edge becomes wavy. env is 0 at both endpoints so disp
+  // vanishes there — pp collapses to x and the endpoint behavior
+  // matches a straight wipe_right.
   var env = 4.0 * progress * (1.0 - progress);
-  // Sine displacement along y. PI2 is the VM's 2*pi constant; sin
-  // is radian-based, so multiply phase by PI2 to get y in [0,1] to
-  // map across `waveFreq` full cycles.
   var disp = sin(y * waveFreq * PI2) * waveAmp * env;
-  var edgePos = progress + disp;
-  var edge = 1.0 - smoothstep(edgePos - feather, edgePos + feather, x);
+  var pp = x - disp;
+  var ep = progress * (1.0 + 2.0 * feather) - feather;
+  var edge = smoothstep(pp - feather, pp + feather, ep);
   rgbwau(
     mix(fromR, toR, edge),
     mix(fromG, toG, edge),
