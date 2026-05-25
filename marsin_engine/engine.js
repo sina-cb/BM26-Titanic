@@ -17,6 +17,7 @@ import { WasmHost } from './lib/wasm_host.js';
 import { PatternMixer } from './lib/pattern_mixer.js';
 import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
+import { ModulationController } from './lib/modulation_controller.js';
 import { IntensityController } from './lib/intensity_controller.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
@@ -215,10 +216,15 @@ async function loadModel(modelName) {
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
-function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, paramCenter, statsCallback, visConfig) {
+function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, intensityController, globalEffectsController, paramCenter, statsCallback, visConfig, hooks = {}) {
   let running = false;
   let timer = null;
   let frameCount = 0;
+  // Optional pre-frame hook for ModulationController (Phase 1B). Runs
+  // AFTER paramCenter.flushDirty (so CPC sources are current) and
+  // BEFORE mixer.beginFrame (so modulated control writes participate
+  // in this frame's render).
+  const beforeFrameHook = typeof hooks.beforeFrame === 'function' ? hooks.beforeFrame : null;
   let windowFrames = 0;
   let startTime = 0;
   let lastStatsTime = 0;
@@ -351,6 +357,18 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     // Flush pending shared parameters (CPC) to all active VMs before frame compute
     if (paramCenter) paramCenter.flushDirty(mixer.wasmHost);
+
+    // ModulationController: evaluate per-playlist-item audio modulations
+    // and write modulated control values to the deck channel's WASM.
+    // Runs in between CPC flush and beginFrame so the modulated value
+    // is the one this frame's pattern.render() actually sees.
+    if (beforeFrameHook) {
+      try {
+        beforeFrameHook(now);
+      } catch (err) {
+        console.warn(`[engine] beforeFrame hook threw: ${err.message}`);
+      }
+    }
 
     // Render all pixels in one WASM call (batch)
     mixer.beginFrame(elapsed);
@@ -785,9 +803,24 @@ async function main() {
     lastKickAt: 0,
   };
 
+  // ModulationController (Phase 1B): evaluates per-playlist-item audio
+  // modulations each frame. Constructed here so it's available to
+  // api_server (which pushes deck-swap + REST CRUD updates into it)
+  // AND to the render loop's beforeFrame hook. The broadcast publisher
+  // is a deferred ref filled in by api_server once broadcastWs is
+  // in scope — same pattern as broadcastStatsRef above.
+  const modulationBroadcastRef = { publish: () => {} };
+  const modulationController = new ModulationController({
+    mixer,
+    paramCenter,
+    broadcast: (msg) => modulationBroadcastRef.publish(msg),
+  });
+
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
     globalEffectSlotManager,
+    modulationController,
+    modulationBroadcastRef,
     // Expose the live frame counter as a getter so API routes can
     // pass the engine's true frame index to dispatchSlotAction
     // (strobe phase needs that to start at the right cycle).
@@ -802,7 +835,9 @@ async function main() {
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
-  }, engineConfig.vis || {});
+  }, engineConfig.vis || {}, {
+    beforeFrame: (nowMs) => modulationController.applyFrame(nowMs),
+  });
   // Now that the loop exists, give engineCore a way to read the live
   // frame counter (used by /global-effect-slots/:id/activate so the
   // strobe phase anchors to the right frame).

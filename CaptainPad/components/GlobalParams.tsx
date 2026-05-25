@@ -6,6 +6,7 @@ import { setMixerChannelControl, sendControl } from '@/utils/api';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useEngineState, MixerChannelExport } from '@/hooks/useEngineState';
+import { ModulatedSlider, useEntryModulations, useModulationState } from '@/components/Modulation';
 
 const C = Colors.light;
 
@@ -25,6 +26,17 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   const liveDeckExports = useChannelExports(channelId);
   const baseChannelId = deckChannel?.id;
   const liveBaseExports = useChannelExports(baseChannelId);
+
+  // Modulation context for the deck variant. Hooks must run on every
+  // render path (mixer + deck), so they live ABOVE the variant
+  // branch even though only the deck variant uses the result.
+  const deckPlaylist = deckChannel?.playlist as { name?: string; activeEntryId?: string } | undefined;
+  const deckPlaylistName = deckPlaylist?.name ?? null;
+  const deckEntryId = deckPlaylist?.activeEntryId ?? null;
+  const { mappings: entryMappings, refresh: refreshMappings } = useEntryModulations(deckPlaylistName, deckEntryId);
+  const modulationLive = useModulationState();
+  const mappingByTarget: Record<string, any> = {};
+  for (const m of entryMappings) mappingByTarget[m.target.parameter] = m;
 
   if (variant === 'mixer') {
     // BASE-PARAMS strip = the deck base channel's live exports. We
@@ -78,23 +90,40 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         // they're surfaced as disabled with a "MATCHED · LABEL" badge
         // so operators can see what each pattern actually declares.
         // The slider is non-interactive (no onChange) because the CPC
-        // would clobber any write on the next tick anyway.
+        // would clobber any write on the next tick anyway. Matched
+        // sliders also cannot be modulated — modulation writes per
+        // frame, CPC would still win.
         const matched = !!e.cpcOwned;
-        const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
-        return (
-          <View key={`slider-${e.id}`} style={{ opacity: matched ? 0.5 : 1 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
-                {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
+        if (matched) {
+          const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
+          return (
+            <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
+                  <MatchedBadge cpcLabel={e.cpcLabel} />
+                </View>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
               </View>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
+              <HorizontalFader
+                value={e.v0 ?? 0.5}
+                onChange={() => {}}
+                trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
+                fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.secondary, borderRadius: 12 }}
+              />
             </View>
-            <HorizontalFader
-              value={e.v0 ?? 0.5}
-              onChange={matched ? (() => {}) : ((val: number) => channelId && setMixerChannelControl(channelId, e.id, val))}
-              trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
-              fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: matched ? C.secondary : C.primary, borderRadius: 12 }}
+          );
+        }
+        return (
+          <View key={`slider-${e.id}`}>
+            <ModulatedSlider
+              exportItem={{ id: e.id, name: e.name, v0: e.v0 }}
+              onChangeBase={(val: number) => channelId && setMixerChannelControl(channelId, e.id, val)}
+              playlistName={deckPlaylistName}
+              entryId={deckEntryId}
+              mapping={mappingByTarget[e.name] ?? null}
+              live={modulationLive[e.name] ?? null}
+              onChanged={refreshMappings}
             />
           </View>
         );
