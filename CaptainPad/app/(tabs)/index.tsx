@@ -363,24 +363,33 @@ export default function ControlDeckScreen() {
                 the wheel was hard to hit, ate vertical space, and rendered
                 inconsistently across iOS versions. Pills are direct-tap
                 and scroll horizontally if the operator's currently-active
-                pick is off-screen. */}
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 8 }}>AUTOPILOT TRANSITIONS</Text>
-            <View style={{ marginBottom: 16, padding: 12, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 12 }}>
-              {/* Row 1: PLAY/PAUSE + SHUFFLE */}
+                pick is off-screen.
+                Card-internal header (May 2026): the AUTOPILOT TRANSITIONS
+                label was hoisted INSIDE the card to recover the ~24px the
+                free-standing label + its 8px margin used to occupy. Same
+                typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
+                10pt / 1.2 tracking / secondary / uppercase). */}
+            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
+              {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
+                  costs zero extra vertical height — the label rides the
+                  baseline of the tallest control next to it. */}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <TouchableOpacity
-                  onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
-                >
-                  <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : Colors.light.text} />
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : Colors.light.text, fontSize: 12 }}>
-                    {isPlaylistActive ? 'PAUSE' : 'PLAY'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: Colors.light.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
+                  <TouchableOpacity
+                    onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
+                  >
+                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : Colors.light.text} />
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : Colors.light.text, fontSize: 12 }}>
+                      {isPlaylistActive ? 'PAUSE' : 'PLAY'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
                 <TouchableOpacity
                   onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 6 }}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
                   accessibilityRole="switch"
                   accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
                 >
