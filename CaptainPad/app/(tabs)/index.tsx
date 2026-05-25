@@ -302,8 +302,14 @@ export default function ControlDeckScreen() {
         <PixelStrip base64Data={visDataRef.current[deckChannelId || 'master']} height={18} style={{ borderRadius: 6 }} />
       </View>
       <View style={globalStyles.container}>
-        {/* Left Pane — Playlist (the one and only pattern list) */}
-        <View style={globalStyles.leftPane}>
+        {/* Left Pane — Playlist (the one and only pattern list).
+            Padding is tightened from the default leftPane (24) so the
+            playlist + Rig globals strip get more vertical room. The
+            playlist now shows ≥5 entries on 11" iPad landscape and the
+            REFRESH/RECONNECT button moved INTO the playlist header
+            (top-right ↻ icon, see PlaylistPanel `onRefreshConnection`)
+            so the old full-width button below the list is gone. */}
+        <View style={[globalStyles.leftPane, { padding: 14, gap: 8 }]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
           {/* THE pattern list = the active playlist for the deck.
@@ -320,6 +326,7 @@ export default function ControlDeckScreen() {
                 // disable taps. The engine also rejects taps server-side
                 // with 409 — this is just the UX layer of the contract.
                 disabled={deckSwapInFlight}
+                onRefreshConnection={connectToEngine}
               />
             </View>
           ) : (
@@ -327,10 +334,6 @@ export default function ControlDeckScreen() {
               Waiting for deck…
             </Text>
           )}
-
-          <TouchableOpacity onPress={connectToEngine} style={{ marginVertical: 12, padding: 10, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 12 }}>REFRESH / RECONNECT</Text>
-          </TouchableOpacity>
 
           <RigGlobals />
         </View>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Colors } from '@/constants/theme';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
   fetchMixerChannelPlaylist, setMixerChannelPlaylist, setMixerChannelPlaylistEntry,
@@ -55,6 +56,13 @@ interface Props {
    *  hint the engine sees N parallel GETs and some can stall past the
    *  8 s fetch timeout. */
   initialAssignment?: PlaylistAssignment | null;
+  /** Optional refresh / reconnect handler. When provided, a small
+   *  ↻ icon button is rendered in the panel header (top-right) so the
+   *  operator can reconnect to the engine without leaving the playlist
+   *  view. Used by the deck tab to replace the old full-width
+   *  REFRESH/RECONNECT button that was eating vertical space below the
+   *  list. */
+  onRefreshConnection?: () => void;
 }
 
 function genEntryId() {
@@ -65,7 +73,7 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled, initialAssignment }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
   // Seed assignment from parent immediately so the dropdown shows the
   // playlist name on first render — no "LOAD…" flash while the panel
@@ -484,19 +492,25 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   }, [refresh]);
 
   // ── Compact / regular sizing tokens ────────────────────────────────────
+  // The deck (non-compact) path was tuned tighter on 2026-05-25 so the
+  // landscape layout shows ≥5 pattern rows on an 11" iPad alongside the
+  // (now-also-compacted) Rig globals strip. Touch targets stay ≥44 pt
+  // because the entry's <TouchableOpacity flex:1> spans the full row
+  // width plus the surrounding rowPadY; the visible row chrome is just
+  // smaller, the tap area isn't.
   const sz = {
-    rowPadY: compact ? 4 : 8,
-    rowPadX: compact ? 6 : 10,
-    rowGap: compact ? 1 : 3,
-    fontPrimary: compact ? 12 : 14,
-    fontSecondary: compact ? 9 : 11,
-    fontMicro: compact ? 8 : 10,
-    indexWidth: compact ? 16 : 22,
-    btnH: compact ? 22 : 28,
+    rowPadY: compact ? 4 : 5,
+    rowPadX: compact ? 6 : 8,
+    rowGap: compact ? 1 : 2,
+    fontPrimary: compact ? 12 : 13,
+    fontSecondary: compact ? 9 : 10,
+    fontMicro: compact ? 8 : 9,
+    indexWidth: compact ? 16 : 20,
+    btnH: compact ? 22 : 26,
     btnFont: compact ? 10 : 11,
     headerFont: compact ? 10 : 11,
-    panelPad: compact ? 6 : 10,
-    panelGap: compact ? 4 : 8,
+    panelPad: compact ? 6 : 8,
+    panelGap: compact ? 4 : 6,
   };
 
   const editable = !locked;
@@ -518,14 +532,20 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         minHeight: 0,
       }}
     >
-      {/* ── Row 1: section label + saved indicator ─────────────────── */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: sz.btnH - 4 }}>
+      {/* ── Row 1: section label + saved indicator + refresh icon ────
+          The refresh icon is rendered only when the parent passes an
+          onRefreshConnection handler (deck tab). It replaces the old
+          full-width REFRESH/RECONNECT button that used to sit below the
+          playlist — putting it inline here frees a chunky vertical
+          slot for an extra entry row. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: sz.btnH - 4 }}>
         <Text
           style={{
             fontFamily: 'SpaceGrotesk_700Bold',
             fontSize: sz.headerFont,
             color: C.secondary,
             letterSpacing: 1.2,
+            flex: 1,
           }}
           numberOfLines={1}
         >
@@ -547,6 +567,26 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
               ✓ SAVED
             </Text>
           </View>
+        )}
+        {onRefreshConnection && (
+          <TouchableOpacity
+            onPress={onRefreshConnection}
+            accessibilityLabel="Refresh / reconnect to engine"
+            accessibilityRole="button"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={{
+              width: sz.btnH,
+              height: sz.btnH,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <IconSymbol name="arrow.clockwise" size={sz.btnFont + 4} color={C.primary} />
+          </TouchableOpacity>
         )}
       </View>
 
