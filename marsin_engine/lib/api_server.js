@@ -622,9 +622,41 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const pending = captureTimers.get(channel.id);
     if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
 
-    const src = loadPattern(patternsDir, entry.pattern);
-    const comp = wasmHost.compile(src);
-    if (!comp.ok) throw new Error(`Compile error: ${comp.error}`);
+    // ── Ping-pong handle reuse ──────────────────────────────────────
+    // The mixer keeps the previously-active deck handle alive in an
+    // INACTIVE slot after every swap completes (its WASM handle stays
+    // warm and is ticked each frame). If the operator is ping-ponging
+    // A→B→A→B, the inactive slot already holds the target pattern's
+    // compiled handle from the last swap — recompiling would burn
+    // tens-to-hundreds of ms per tap. We check the inactive slot HERE,
+    // BEFORE paying the compile cost. If it's warm, signal reuse to
+    // the mixer with newHandle:null.
+    //
+    // We do NOT reuse if the inactive holds the SAME pattern but the
+    // entry has different `defaults` — in that case we want a fresh
+    // compile so default application starts from a clean export-table
+    // state rather than overwriting whatever the previous swap's
+    // controls were when the handle got demoted. (Most playlist
+    // entries have empty defaults, so this branch is rare.)
+    const inactivePattern = mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern();
+    const wantHandleReuse = inactivePattern === entry.pattern
+      && (!entry.defaults || Object.keys(entry.defaults).length === 0);
+
+    let handleForSwap = null;
+    let handleExports = null;
+    let isReused = false;
+    if (wantHandleReuse) {
+      const inactiveCh = mixer.getInactiveDeckChannel && mixer.getInactiveDeckChannel();
+      handleForSwap = inactiveCh ? inactiveCh.handle : null;
+      isReused = !!handleForSwap;
+    }
+    if (!handleForSwap) {
+      const src = loadPattern(patternsDir, entry.pattern);
+      const comp = wasmHost.compile(src);
+      if (!comp.ok) throw new Error(`Compile error: ${comp.error}`);
+      handleForSwap = comp.handle;
+    }
+    handleExports = wasmHost.getExports(handleForSwap);
 
     // Resolve transition mode + duration. Shuffle picks a fresh random
     // visual style per swap; otherwise the operator's configured pick wins.
@@ -632,21 +664,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (transitionConfig.shuffle) transMode = pickRandomTransitionMode();
     const durationMs = Math.max(50, Math.min(30000, Number(transitionConfig.durationMs) || 1000));
 
-    // CPC needs to know about the new handle so the swap channel
-    // receives global color palette / speed / etc. during the fade.
-    // We register under a stable shadow id so it cleans up tidily.
+    // CPC needs to know about the inactive handle so it receives
+    // global color palette / speed / etc. during the fade. We register
+    // under a stable shadow id so it cleans up tidily. On reuse the
+    // handle is already warm — re-registering is still cheap and
+    // ensures CPC's per-channel snapshot reflects the current global
+    // state (which may have shifted since the previous swap).
     if (paramCenter) {
-      paramCenter.registerChannel('__deck_swap__', comp.handle, wasmHost.getExports(comp.handle));
-      wasmHost.beginFrame(comp.handle, 0); // execute top-level scope so export var defaults land
+      paramCenter.registerChannel('__deck_swap__', handleForSwap, handleExports);
+      if (!isReused) {
+        // Execute top-level scope so export var defaults land. Skip on
+        // reuse — the handle has been ticking via beginFrame() the
+        // whole time (warm in the inactive slot) so its exports are
+        // already initialized.
+        wasmHost.beginFrame(handleForSwap, 0);
+      }
       paramCenter.applyToChannel(wasmHost, '__deck_swap__');
     }
-    // Apply per-entry defaults to the NEW handle directly (not via the
-    // channel object — that's still pointing at the OLD handle). Mimics
-    // playlistManager.applyEntryDefaults but bypasses the channel lookup.
+    // Apply per-entry defaults to the swap handle directly (not via
+    // the channel object — that's still pointing at the active
+    // channel). Mimics playlistManager.applyEntryDefaults but bypasses
+    // the channel lookup.
     if (entry.defaults && Object.keys(entry.defaults).length > 0) {
-      const newExports = wasmHost.getExports(comp.handle) || [];
       const byName = {};
-      for (const e of newExports) byName[e.name] = e;
+      for (const e of (handleExports || [])) byName[e.name] = e;
       for (const [name, value] of Object.entries(entry.defaults)) {
         const exp = byName[name];
         if (!exp) continue;
@@ -655,9 +696,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (paramCenter && paramCenter.isSharedExport('__deck_swap__', exp.name)) continue;
         if (paramCenter && paramCenter.getBlockedIds('__deck_swap__').has(exp.id)) continue;
         if (typeof value === 'object' && value !== null) {
-          wasmHost.setControl(comp.handle, exp.id, value.h ?? 0, value.s ?? 0, value.v ?? 0);
+          wasmHost.setControl(handleForSwap, exp.id, value.h ?? 0, value.s ?? 0, value.v ?? 0);
         } else {
-          wasmHost.setControl(comp.handle, exp.id, value, 0, 0);
+          wasmHost.setControl(handleForSwap, exp.id, value, 0, 0);
         }
       }
     }
@@ -666,7 +707,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const done = new Promise((res) => { resolveDone = res; });
 
     const txid = mixer.triggerDeckPatternSwap({
-      newHandle: comp.handle,
+      // On reuse, signal "use the warm inactive handle" by passing
+      // null. Otherwise transfer ownership of the fresh compile to
+      // the mixer (it destroys the previously-inactive handle on our
+      // behalf).
+      newHandle: isReused ? null : handleForSwap,
       patternName: entry.pattern,
       durationMs,
       transitionMode: transMode,

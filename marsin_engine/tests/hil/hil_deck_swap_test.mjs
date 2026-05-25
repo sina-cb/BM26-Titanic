@@ -58,8 +58,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
-const ENGINE_BASE = 'http://127.0.0.1:6968';
-const WS_URL = 'ws://127.0.0.1:6968';
+const ENGINE_BASE = process.env.ENGINE_BASE || 'http://127.0.0.1:6968';
+const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:6968';
 const PIXEL_COUNT = 52;
 const SETTLE_MS = 250;
 
@@ -282,8 +282,18 @@ async function resetDeckTo(entryId, restoreCfg) {
   // Make sure the deck playlist is loaded and seeded with deterministic
   // entries we control: test_const, then test_dualband. We'll switch
   // between them with transitions on.
+  // Post channel-isolation: the deck channel lives in its OWN slot,
+  // NOT in /mixer.channels[]. Fetch via /deck/channel; fall back to
+  // /mixer.baseChannelId for older engines.
   const baseChMixer = await httpJson('GET', '/mixer');
-  const baseCh = baseChMixer.channels.find((c) => c.id === baseChMixer.baseChannelId);
+  let baseCh = null;
+  try {
+    const deckResp = await httpJson('GET', '/deck/channel');
+    baseCh = deckResp && deckResp.channel ? deckResp.channel : null;
+  } catch {}
+  if (!baseCh) {
+    baseCh = baseChMixer.channels.find((c) => c.id === baseChMixer.baseChannelId);
+  }
   if (!baseCh) {
     console.log('  FATAL: no deck base channel — engine not initialized');
     await cleanup();
@@ -460,8 +470,9 @@ async function resetDeckTo(entryId, restoreCfg) {
   const seen = new Set();
   for (let i = 0; i < 4; i++) {
     await sleep(1200);
-    const m = await httpJson('GET', '/mixer');
-    const ch = m.channels.find((c) => c.id === baseChId);
+    // Post channel-isolation: deck is at /deck/channel, not in /mixer.
+    const deck = await httpJson('GET', '/deck/channel');
+    const ch = deck && deck.channel;
     const eid = ch && ch.playlist && ch.playlist.activeEntryId;
     if (eid) seen.add(eid);
   }
@@ -523,8 +534,9 @@ async function resetDeckTo(entryId, restoreCfg) {
   check(parsedBody.code === 'EBUSY', `409 body carries code: 'EBUSY' (got ${parsedBody.code})`);
   // Let the first swap complete unhindered
   await sleep(2000);
-  const t7Mixer = await httpJson('GET', '/mixer');
-  const t7Ch = t7Mixer.channels.find((c) => c.id === baseChId);
+  // Post channel-isolation: deck is at /deck/channel, not in /mixer.
+  const t7Deck = await httpJson('GET', '/deck/channel');
+  const t7Ch = t7Deck && t7Deck.channel;
   check(
     t7Ch && t7Ch.pattern === 'test_dualband',
     `first swap (A→B) completes despite mid-fade tap (got ${t7Ch?.pattern})`,
@@ -562,8 +574,9 @@ async function resetDeckTo(entryId, restoreCfg) {
   await httpJson('POST', '/mixer/view', { view: 'deck' });
   await sleep(SETTLE_MS);
   // And confirm the deck is settled on B
-  const t8Mixer = await httpJson('GET', '/mixer');
-  const t8Ch = t8Mixer.channels.find((c) => c.id === baseChId);
+  // Post channel-isolation: deck is at /deck/channel, not in /mixer.
+  const t8Deck = await httpJson('GET', '/deck/channel');
+  const t8Ch = t8Deck && t8Deck.channel;
   check(
     t8Ch && t8Ch.pattern === 'test_dualband',
     `deck pattern is test_dualband after view-finalize (got ${t8Ch?.pattern})`,
