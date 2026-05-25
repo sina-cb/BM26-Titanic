@@ -3,27 +3,30 @@
   RGB-only nested lattice ribbons that rise, dip, curl upward, and settle back down.
 */
 
-export var timeScale = 0.032;
+export var speedTrim = 0.5;
 export var density = 5.5;
 export var width = 0.22;
 export var softness = 2.6;
-export var baseHue = 0.68;
-export var accentHue = 0.48;
 
-// Invert slider so maxing the UI makes the timeScale smaller (which loops the VM faster natively)
-export function sliderSpeed(v) { timeScale = 0.8 - (v * 0.78); } // 0.8 (Very Slow) to 0.02 (Rapid)
+export var cp1H = 0.68, cp1S = 0.9, cp1V = 1.0; // Base Color (Purple default)
+export var cp2H = 0.48, cp2S = 0.9, cp2V = 1.0; // Accent Color (Teal default)
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderSpeedTrim(v) { speedTrim = v; }
 export function sliderDensity(v) { density = 2.0 + v * 10.0; }
 export function sliderWidth(v) { width = 0.08 + v * 0.38; }
 export function sliderSoftness(v) { softness = 1.0 + v * 5.0; }
-export function hsvPickerBaseColor(h, s, v) { baseHue = h; }
-export function hsvPickerAccentColor(h, s, v) { accentHue = h; }
 
 var mainPhase = 0.0;
 var tSlow = 0.0;
+var currentScale = 0.032;
 
 export function beforeRender(delta) {
-  mainPhase = time(timeScale) * 6.2831853;
-  tSlow = time(timeScale * 0.37) * 6.2831853;
+  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  currentScale = 0.032 / localMultiplier;
+  mainPhase = time(currentScale) * 6.2831853;
+  tSlow = time(currentScale * 0.37) * 6.2831853;
 }
 
 export function render3D(index, x, y, z) {
@@ -42,14 +45,17 @@ export function render3D(index, x, y, z) {
   ribbon = pow(ribbon, softness);
 
   var sideCurl = wave(nx * density + sin(tSlow + ny * 3.0) * 0.35);
-  var cross = wave((nx - ny) * density * 0.42 + time(timeScale * 0.61));
+  var cross = wave((nx - ny) * density * 0.42 + time(currentScale * 0.61));
   var v = ribbon * (0.55 + sideCurl * 0.3 + cross * 0.25);
 
-  var colorMix = wave(nx * 0.7 + ny * 1.4 + time(timeScale * 0.43));
-  var dh = accentHue - baseHue;
+  var colorMix = wave(nx * 0.7 + ny * 1.4 + time(currentScale * 0.43));
+  var dh = cp2H - cp1H;
   if (dh > 0.5) dh -= 1.0;
   else if (dh < -0.5) dh += 1.0;
 
-  var h = baseHue + dh * colorMix;
-  hsv(h - floor(h), 0.9, min(1.0, v));
+  var h = cp1H + dh * colorMix;
+  var s = cp1S + (cp2S - cp1S) * colorMix;
+  var maxVal = cp1V + (cp2V - cp1V) * colorMix;
+
+  hsv(h - floor(h), s, min(1.0, v * maxVal));
 }

@@ -3,27 +3,30 @@
   RGB-only parametric light field with dancing attractors and soft harmonic trails.
 */
 
-export var timeScale = 0.15;
+export var speedTrim = 0.5;
 export var reach = 0.42;
 export var focus = 3.0;
 export var trailBlend = 0.55;
-export var hueA = 0.58;
-export var hueB = 0.78;
 
-// Invert slider so maxing the UI makes the timeScale smaller (which loops the VM faster natively)
-export function sliderSpeed(v) { timeScale = 0.8 - (v * 0.78); } // 0.8 (Very Slow) to 0.02 (Rapid)
+export var cp1H = 0.58, cp1S = 0.88, cp1V = 1.0; // Primary Color (Teal/Blue default)
+export var cp2H = 0.78, cp2S = 0.88, cp2V = 1.0; // Secondary Color (Purple/Magenta default)
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderSpeedTrim(v) { speedTrim = v; }
 export function sliderReach(v) { reach = 0.18 + v * 0.55; }
 export function sliderFocus(v) { focus = 1.2 + v * 5.5; }
 export function sliderTrailBlend(v) { trailBlend = v; }
-export function hsvPickerPrimary(h, s, v) { hueA = h; }
-export function hsvPickerSecondary(h, s, v) { hueB = h; }
 
 var p = 0.0;
 var q = 0.0;
+var currentScale = 0.15;
 
 export function beforeRender(delta) {
-  p = time(timeScale) * 6.2831853;
-  q = time(timeScale * 0.53) * 6.2831853;
+  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  currentScale = 0.15 / localMultiplier;
+  p = time(currentScale) * 6.2831853;
+  q = time(currentScale * 0.53) * 6.2831853;
 }
 
 export function render3D(index, x, y, z) {
@@ -48,14 +51,17 @@ export function render3D(index, x, y, z) {
   var nearest = min(dA, min(dB, dC));
   var glow = pow(max(0.0, 1.0 - nearest * focus), 2.0);
 
-  var trail = wave((dA - dB + dC) * 3.0 + time(timeScale * 0.67));
+  var trail = wave((dA - dB + dC) * 3.0 + time(currentScale * 0.67));
   var v = min(1.0, glow + trail * trailBlend * 0.22);
 
-  var mixVal = wave((dB - dA) * 2.2 + nx * 0.5 + time(timeScale * 0.29));
-  var dh = hueB - hueA;
+  var mixVal = wave((dB - dA) * 2.2 + nx * 0.5 + time(currentScale * 0.29));
+  var dh = cp2H - cp1H;
   if (dh > 0.5) dh -= 1.0;
   else if (dh < -0.5) dh += 1.0;
 
-  var h = hueA + dh * mixVal;
-  hsv(h - floor(h), 0.88, v);
+  var h = cp1H + dh * mixVal;
+  var s = cp1S + (cp2S - cp1S) * mixVal;
+  var maxVal = cp1V + (cp2V - cp1V) * mixVal;
+
+  hsv(h - floor(h), s, v * maxVal);
 }

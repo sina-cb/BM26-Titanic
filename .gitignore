@@ -113,3 +113,8 @@ marsin_pb/wasm/*-Live-*.wasm
 # scripts/sync-config.mjs for the pattern.
 control_podium/.config.firmware.local.yaml
 control_podium/PortWatch/.config.portwatch.local.yaml
+
+# Local binaries
+bin/
+marsin_engine/bin/
+

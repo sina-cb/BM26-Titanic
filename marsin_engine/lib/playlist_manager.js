@@ -30,22 +30,67 @@ export class PlaylistManager {
   }
 
   patternExists(patternName) {
+    // Hardened: an older / malformed playlist may have null / number /
+    // missing pattern field. Anything non-string is just "doesn't
+    // exist" — caller marks the entry _missing and moves on. Throwing
+    // here would explode every load() chain (api_server.js calls this
+    // from ~10 places, most without their own try/catch).
+    if (typeof patternName !== 'string' || !patternName) return false;
     const safe = patternName.replace(/\\/g, '/');
     if (!VALID_PATTERN.test(safe)) return false;
     const p = path.join(this.patternsDir, `${safe}.js`);
     return fs.existsSync(p);
   }
 
+  /**
+   * Load a playlist from disk and coerce it into the current schema.
+   *
+   * Resilience contract: a malformed YAML file or an older format must
+   * NEVER crash the engine. The user reported "I chose fast playlist
+   * and it seems like it crashed" — that was this method throwing on
+   * a stale-format file and bubbling a 500 through the iPad. Now:
+   *
+   *   - bad YAML       → warn + return null (caller treats as missing)
+   *   - missing entries → coerced to []
+   *   - non-object entry → dropped + warned
+   *   - entry without a string pattern → kept as _missing (visible in
+   *     the UI as the "⚠" badge) so the operator can heal the file
+   *     instead of guessing why a row disappeared
+   */
   load(name) {
     this.validateName(name);
     const filePath = path.join(this.playlistsDir, `${name}.yaml`);
     if (!fs.existsSync(filePath)) return null;
-    const data = yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
-    data.name = data.name || name;
-    data.schemaVersion = data.schemaVersion || 1;
-    data.entries = Array.isArray(data.entries) ? data.entries : [];
-    for (const entry of data.entries) {
-      if (!this.patternExists(entry.pattern)) entry._missing = true;
+    let raw = {};
+    try {
+      raw = yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
+      if (typeof raw !== 'object') raw = {};
+    } catch (err) {
+      console.warn(`[Playlist] malformed YAML in "${name}.yaml" — treating as missing: ${err.message}`);
+      return null;
+    }
+    const data = {
+      name: typeof raw.name === 'string' ? raw.name : name,
+      schemaVersion: typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 1,
+      entries: [],
+    };
+    const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
+    for (const entry of rawEntries) {
+      if (!entry || typeof entry !== 'object') {
+        console.warn(`[Playlist] "${name}" — dropping non-object entry`);
+        continue;
+      }
+      // Force a sane shape so downstream consumers (mixer, autopilot,
+      // applyEntryDefaults) don't need their own per-field guards.
+      const coerced = {
+        id: typeof entry.id === 'string' && entry.id ? entry.id : this.generateEntryId(),
+        pattern: typeof entry.pattern === 'string' ? entry.pattern : null,
+        label: typeof entry.label === 'string' ? entry.label : null,
+        defaults: (entry.defaults && typeof entry.defaults === 'object') ? entry.defaults : {},
+        notes: typeof entry.notes === 'string' ? entry.notes : null,
+      };
+      if (!this.patternExists(coerced.pattern)) coerced._missing = true;
+      data.entries.push(coerced);
     }
     return data;
   }

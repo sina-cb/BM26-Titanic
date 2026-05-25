@@ -96,6 +96,71 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // (which onChannelCompiled already does).
   if (paramCenter) paramCenter.applySnapshot(wasmHost);
 
+  // ── CPC fan-out via onChange (docs/24 §7.2) ────────────────────────────
+  //
+  // Single source of truth for post-mutation work after a CPC write
+  // from any source (HTTP, WS, OSC, future MIDI). Replaces the
+  // ad-hoc `applySnapshot/save/broadcastWs` calls that used to live
+  // in each handler, which would double-broadcast as soon as we
+  // added a second source.
+  //
+  // - WASM injection: relies on the render loop's flushDirty() —
+  //   set() marks the slot dirty; flushDirty pushes on the next
+  //   frame. No applySnapshot call here.
+  // - Persistence: skipped entirely for batches that touch only
+  //   live (persist:false) params, so audio at 60 Hz never writes
+  //   to disk.
+  // - WS broadcast: throttled per-key by registry broadcastHz.
+  let lastOscStats = null;
+  // Same caching contract as lastOscStats — a WS client that connects
+  // after the most recent audioStatus broadcast gets it replayed on
+  // connect so the Audio Analysis tab paints the right state without
+  // waiting up to a second for the next 1Hz heartbeat (docs/25 §6.3).
+  let lastAudioStatus = null;
+  const lastBroadcastMs = {};
+  let hzByKeyCache = null;
+  function getHzByKey() {
+    if (hzByKeyCache) return hzByKeyCache;
+    hzByKeyCache = {};
+    if (paramCenter) {
+      for (const e of paramCenter.getSchema()) {
+        hzByKeyCache[e.key] = e.broadcastHz || 30;
+      }
+    }
+    return hzByKeyCache;
+  }
+  // Emit `sharedParams` iff at least one changed key is past its
+  // broadcastHz interval. Update timestamps for every changed key
+  // on emit so a high-rate key (stemsVocals) can't starve a quiet
+  // key (speed). NB: broadcastHz gates EMISSIONS caused by a key —
+  // a higher-rate key elsewhere may still pull lower-rate keys
+  // into the payload more often (see docs/24 §7.2 callout).
+  function broadcastSharedParamsThrottled(state, changedKeys) {
+    if (!changedKeys || changedKeys.length === 0) return;
+    const now = Date.now();
+    const hzByKey = getHzByKey();
+    let shouldEmit = false;
+    for (const k of changedKeys) {
+      const hz = hzByKey[k] || 30;
+      const interval = 1000 / hz;
+      if (!lastBroadcastMs[k] || (now - lastBroadcastMs[k]) >= interval) {
+        shouldEmit = true;
+        break;
+      }
+    }
+    if (!shouldEmit) return;
+    for (const k of changedKeys) lastBroadcastMs[k] = now;
+    broadcastWs({ type: 'sharedParams', ...state });
+  }
+  if (paramCenter) {
+    paramCenter.onChange = ({ changedKeys, state }) => {
+      if (paramCenter.hasPersistentDirty(changedKeys)) {
+        paramCenter.save();
+      }
+      broadcastSharedParamsThrottled(state, changedKeys);
+    };
+  }
+
   function saveAllState() {
     stateManager.saveMixerState(mixer);
     stateManager.saveDeckState(mixer);
@@ -1203,16 +1268,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'POST' && req.url === '/param-center') {
       readBody(data => {
         if (!paramCenter) return res.end('{}');
+        // CPC fan-out via paramCenter.onChange handles WASM dirty
+        // marking, persistence, and throttled WS broadcast. No
+        // need to call applySnapshot/save/broadcastWs here — doing
+        // so would double-broadcast every write (docs/24 §7.2).
         let rev = 0;
         for (const k in data) {
           const r = paramCenter.set(k, data[k], 'api');
           if (r.status === 'ok') rev = r.revision;
         }
-        paramCenter.applySnapshot(wasmHost);
-        paramCenter.save();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', revision: rev }));
-        broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
       });
     } else if (req.method === 'POST' && req.url === '/param-center/source-lock') {
       readBody(data => {
@@ -1220,6 +1286,66 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', sourceLock: paramCenter ? paramCenter.getSourceLock() : null }));
         broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+      });
+    }
+    // ── AUDIO ANALYSIS ───────────────────────────────────────────────────
+    // See docs/25_marsin_audio_analysis.md §9. `audioState` is wired
+    // by engine.js and may be absent if engine wasn't booted with
+    // audio support — those routes degrade to a clear 503.
+    else if (req.method === 'GET' && req.url === '/audio/config') {
+      const audioState = engineCore && engineCore.audioState;
+      if (!audioState) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_not_initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(audioState.config || {}));
+    } else if (req.method === 'GET' && req.url === '/audio/status') {
+      const audioState = engineCore && engineCore.audioState;
+      if (!audioState) { res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_not_initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(audioState.lastStatus || { enabled: false }));
+    } else if (req.method === 'POST' && req.url === '/audio/config/reset') {
+      // CaptainPad → "Reset to defaults" on the Audio Analysis tab.
+      // Wipes the scene's analyzer tuning back to config.yaml defaults
+      // while preserving the chosen mic. See engine.js
+      // audioState.resetToDefaults for the persistence contract.
+      const audioState = engineCore && engineCore.audioState;
+      if (!audioState || typeof audioState.resetToDefaults !== 'function') {
+        res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_not_initialized' }));
+      }
+      try {
+        const next = audioState.resetToDefaults();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(next));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    } else if (req.method === 'PATCH' && req.url === '/audio/config') {
+      const audioState = engineCore && engineCore.audioState;
+      if (!audioState || typeof audioState.applyLiveUpdate !== 'function') {
+        res.writeHead(503); return res.end(JSON.stringify({ error: 'audio_not_initialized' }));
+      }
+      readBody(data => {
+        // Lazy-import to avoid pulling audio_config into the api_server
+        // module graph when audio support is disabled. Lazy import
+        // inside an async closure isn't worth the complexity in this
+        // sync handler — require it at the top of the file would be
+        // cleaner, but this keeps the cross-file deps obvious.
+        import('./audio_config.js').then(({ validateLivePatch }) => {
+          const v = validateLivePatch(data);
+          if (!v.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: v.error }));
+          }
+          try {
+            const next = audioState.applyLiveUpdate(v.live);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(next));
+          } catch (err) {
+            // Analyzer.reconfigure throws RangeError on bad combos.
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+        });
       });
     }
     // ── PLAYLIST LIBRARY ─────────────────────────────────────────────────
@@ -1548,6 +1674,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // ignore
     }
 
+    // Replay cached OSC stats so the pill in CaptainPad paints the
+    // correct state immediately on connect rather than waiting up
+    // to one second for the next stats tick (docs/24 §10.1).
+    try {
+      if (lastOscStats)    ws.send(JSON.stringify(lastOscStats));
+      if (lastAudioStatus) ws.send(JSON.stringify(lastAudioStatus));
+    } catch (e) {
+      // ignore
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
@@ -1594,11 +1730,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
           if (res.status === 'ignored') {
             ws.send(JSON.stringify({ type: 'paramRejected', key: d.key, reason: res.reason, lockedTo: res.lockedTo }));
-          } else {
-            paramCenter.applySnapshot(wasmHost);
-            paramCenter.save();
-            broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
           }
+          // Success path: paramCenter.onChange (wired at boot)
+          // handles persistence + throttled WS broadcast + WASM
+          // dirty marking. See docs/24 §7.2.
         }
       } catch(e) {}
     });
@@ -1609,10 +1744,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   });
 
   publishStatsRef.publish = (data) => {
-    // Vis data has its own type
-    const msg = data.type === 'vis'
-      ? JSON.stringify(data)
-      : JSON.stringify({ type: 'stats', ...data });
+    // Three message shapes flow through this hook:
+    //   - { type: 'vis', ...}     → vis frame, passed verbatim.
+    //   - { type: 'oscStats', ...}→ OSC listener telemetry per docs/24 §10.
+    //                               Cached for late-joining WS clients so a
+    //                               freshly-opened CaptainPad sees the
+    //                               current pill state inside a single
+    //                               render frame instead of waiting up to
+    //                               one second for the next stats tick.
+    //   - everything else         → engine frame stats, wrapped in
+    //                               { type: 'stats', ...} for legacy clients.
+    let payload;
+    if (data && data.type === 'vis') {
+      payload = data;
+    } else if (data && data.type === 'oscStats') {
+      payload = data;
+      lastOscStats = data;
+    } else if (data && data.type === 'audioStatus') {
+      payload = data;
+      lastAudioStatus = data;
+    } else {
+      payload = { type: 'stats', ...data };
+    }
+    const msg = JSON.stringify(payload);
     wss.clients.forEach(c => {
       if (c.readyState === 1) c.send(msg);
     });

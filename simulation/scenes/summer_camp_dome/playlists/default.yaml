@@ -9,8 +9,7 @@ entries:
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
-    defaults:
-      sliderBackgroundGlow: 0.75
+    defaults: {}
     notes: null
   - id: e_default_2_02_phase_cathedral
     pattern: 02_phase_cathedral
@@ -30,14 +29,7 @@ entries:
   - id: e_default_5_05_orbital_attractor_field
     pattern: 05_orbital_attractor_field
     label: null
-    defaults:
-      hsvPickerBaseColor:
-        h: 0
-        s: 1
-        v: 1
-      sliderColorSpread: 0.25
-      sliderFalloff: 0.25
-      sliderFocus: 0.25
+    defaults: {}
     notes: null
   - id: e_default_6_06_neon_elevator
     pattern: 06_neon_elevator
@@ -72,13 +64,7 @@ entries:
   - id: e_default_12_12_breathing
     pattern: 12_breathing
     label: null
-    defaults:
-      hsvPickerColor:
-        h: 0
-        s: 1
-        v: 1
-      sliderRipple: 0.5
-      sliderSharpness: 0.5
+    defaults: {}
     notes: null
   - id: e_default_13_13_sparkle
     pattern: 13_sparkle

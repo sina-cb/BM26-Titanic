@@ -112,6 +112,13 @@ export default function TabLayout() {
             } as any}
           />
           <Tabs.Screen
+            name="audio"
+            options={{
+              title: 'Audio',
+              tabBarIconName: 'waveform',
+            } as any}
+          />
+          <Tabs.Screen
             name="monitor"
             options={{
               title: 'Monitor',

@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
+import { DeckTopBar } from '@/components/DeckTopBar';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
@@ -230,6 +231,9 @@ export default function ControlDeckScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+      {/* Top bar: title + connection status + master fader. Matches the
+          Marsin Mixer header layout, minus channel-add buttons. */}
+      <DeckTopBar isConnected={isConnected} />
       <CPCControls wsRef={wsRef} />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>

@@ -18,6 +18,63 @@ if (!defaultConfigs || typeof defaultConfigs !== 'object' || typeof defaultConfi
 let api_base: string = defaultConfigs.api_base;
 const DEFAULT_API_BASE: string = defaultConfigs.api_base;
 
+// ── Fetch with timeout ────────────────────────────────────────────────────
+// RN's `fetch` has NO default timeout. A flaky packet or a server that
+// hangs mid-response leaves the promise pending forever. Three bugs in
+// the iPad app traced back to that:
+//   1. PlaylistPanel.handleEntryTap sets busy=true, awaits the fetch,
+//      then setBusy(false). Hung fetch ⇒ "cannot change patterns".
+//   2. mixer.addMixerChannel call hangs ⇒ operator mashes the button ⇒
+//      5 POSTs queued ⇒ when the connection un-stalls all 5 land at once.
+//   3. PlaylistPanel.refresh() on mount fails silently ⇒ "mixer can't
+//      see playlists for channels".
+// Wrapping the fetches in an AbortController-based timeout converts all
+// three into a clean rejection that the existing error paths already
+// handle (busy is released in a finally, the user can retry, etc.).
+const DEFAULT_TIMEOUT_MS = 8000;
+
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ── Throttled warn ────────────────────────────────────────────────────────
+// When the engine is offline every screen's polling timer spams
+// `TypeError: Network request failed` once per fetch. The errors are
+// real but identical, so we only log each "tag" once per WARN_THROTTLE_MS.
+// On the next successful call the operator can clear it explicitly via
+// `resetWarnThrottle()` if we wire that in later — for now it just
+// re-arms after the window.
+const WARN_THROTTLE_MS = 30_000;
+const _lastWarnAt: Record<string, number> = {};
+
+function isOfflineError(err: unknown): boolean {
+  // RN's fetch throws TypeError with message 'Network request failed'
+  // when the host is unreachable; treat that as offline and downgrade.
+  const m = (err && typeof err === 'object' && 'message' in err) ? String((err as any).message) : '';
+  return m.includes('Network request failed');
+}
+
+function warnThrottled(tag: string, msg: string, err: unknown) {
+  const now = Date.now();
+  if ((now - (_lastWarnAt[tag] || 0)) < WARN_THROTTLE_MS) return;
+  _lastWarnAt[tag] = now;
+  if (isOfflineError(err)) {
+    console.warn(`${msg} (engine offline; suppressing further warnings for ${WARN_THROTTLE_MS / 1000}s)`);
+  } else {
+    console.warn(msg, err);
+  }
+}
+
 // ── Async-safe API base resolution ────────────────────────────────────────
 // Screens must await getApiBaseAsync() before their first network call
 // to avoid racing AsyncStorage on cold start.
@@ -125,7 +182,7 @@ export async function sendControl(id: number, v0: number, v1?: number, v2?: numb
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Control request failed:', err);
+    warnThrottled('Control request failed:', 'Control request failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -136,7 +193,7 @@ export async function fetchPatterns(): Promise<ApiResult<string[]>> {
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
-    console.warn('Fetch patterns failed:', err);
+    warnThrottled('Fetch patterns failed:', 'Fetch patterns failed:', err);
     return { ok: false, error: err.message, data: [] };
   }
 }
@@ -147,7 +204,7 @@ export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
-    console.warn('Fetch channel blends failed:', err);
+    warnThrottled('Fetch channel blends failed:', 'Fetch channel blends failed:', err);
     return { ok: false, error: err.message, data: [] };
   }
 }
@@ -158,7 +215,7 @@ export async function fetchTransitions(): Promise<ApiResult<string[]>> {
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
-    console.warn('Fetch transitions failed:', err);
+    warnThrottled('Fetch transitions failed:', 'Fetch transitions failed:', err);
     return { ok: false, error: err.message, data: [] };
   }
 }
@@ -173,7 +230,7 @@ export async function setActivePattern(pattern: string): Promise<ApiResult<any>>
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Set active pattern failed:', err);
+    warnThrottled('Set active pattern failed:', 'Set active pattern failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -184,7 +241,7 @@ export async function fetchExports(): Promise<ApiResult<any[]>> {
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Fetch exports failed:', err);
+    warnThrottled('Fetch exports failed:', 'Fetch exports failed:', err);
     return { ok: false, error: err.message, data: [] };
   }
 }
@@ -199,7 +256,7 @@ export async function setSectionBrightness(sectionId: number, brightness: number
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
-    console.warn(`Failed to set section ${sectionId} brightness:`, err);
+    warnThrottled('set-section-brightness', `Failed to set section ${sectionId} brightness:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -210,7 +267,7 @@ export async function fetchDimmers(): Promise<ApiResult<Record<string, number>>>
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Fetch dimmers failed:', err);
+    warnThrottled('Fetch dimmers failed:', 'Fetch dimmers failed:', err);
     return { ok: false, error: err.message, data: {} };
   }
 }
@@ -221,7 +278,7 @@ export async function fetchDimmerGroups(): Promise<ApiResult<Record<string, numb
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Fetch dimmer groups failed:', err);
+    warnThrottled('Fetch dimmer groups failed:', 'Fetch dimmer groups failed:', err);
     return { ok: false, error: err.message, data: {} };
   }
 }
@@ -236,18 +293,18 @@ export async function setGlobalBlackout(state: boolean): Promise<ApiResult<any>>
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
-    console.warn(`Failed to set global blackout:`, err);
+    warnThrottled('set-global-blackout', 'Failed to set global blackout:', err);
     return { ok: false, error: err.message };
   }
 }
 
 export async function fetchGlobals(): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/globals`);
+    const res = await fetchWithTimeout(`${api_base}/globals`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Fetch globals failed:', err);
+    warnThrottled('Fetch globals failed:', 'Fetch globals failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -266,7 +323,7 @@ export async function setGlobalEffect(effect: string, state: boolean): Promise<A
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
-    console.warn(`Failed to set global effect ${effect}:`, err);
+    warnThrottled(`set-global-effect-${effect}`, `Failed to set global effect ${effect}:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -276,7 +333,7 @@ export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<an
   // override argument was removed along with the TARGET CHANNEL picker
   // in May 2026. See docs/16_captain_pad.md §"Target channel removal".
   try {
-    const res = await fetch(`${api_base}/mixer/view`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ view }),
@@ -284,7 +341,7 @@ export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<an
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
-    console.warn(`Failed to set mixer view to ${view}:`, err);
+    warnThrottled(`set-mixer-view-${view}`, `Failed to set mixer view to ${view}:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -295,7 +352,7 @@ export async function fetchPatternCode(name: string): Promise<ApiResult<string>>
     const text = await res.text();
     return { ok: true, data: text };
   } catch (err: any) {
-    console.warn('Fetch pattern code failed:', err);
+    warnThrottled('Fetch pattern code failed:', 'Fetch pattern code failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -306,7 +363,7 @@ export async function getAutopilot(): Promise<ApiResult<any>> {
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
-    console.warn('Fetch autopilot failed:', err);
+    warnThrottled('Fetch autopilot failed:', 'Fetch autopilot failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -326,7 +383,7 @@ export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?:
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
-    console.warn('Set autopilot failed:', err);
+    warnThrottled('Set autopilot failed:', 'Set autopilot failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -343,6 +400,16 @@ export async function savePatternCode(name: string, code: string): Promise<ApiRe
   } catch (err: any) {
     console.warn('Save pattern failed:', err);
     return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchParamCenterSchema(): Promise<ApiResult<any[]>> {
+  try {
+    const res = await fetch(`${api_base}/param-center/schema`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    return { ok: false, error: err.message, data: [] };
   }
 }
 
@@ -370,9 +437,66 @@ export async function updateParamCenter(params: Record<string, any>): Promise<Ap
   }
 }
 
+// ── Audio Analysis (docs/25) ──────────────────────────────────────────────
+// `/audio/config` GET returns the full merged audio config the engine
+// is running with right now (post `config.yaml` + `audio_config.yaml`
+// overrides). PATCH accepts a partial of just the live-tunable
+// `bands.*` / `kick.*` subset — anything else returns 400 with a
+// clear message that engine restart is required.
+export async function fetchAudioConfig(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/config`);
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchAudioConfig(partial: any): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Roll the analyzer (bands + kick + enabled / fftSize / hopSize) back
+ * to the engine's `config.yaml` defaults. Mic selection is preserved.
+ * Server returns the new merged config so the caller can refresh.
+ */
+export async function resetAudioConfig(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/config/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchAudioStatus(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/status`);
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function fetchMixerState(): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer`);
+    const res = await fetchWithTimeout(`${api_base}/mixer`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -382,7 +506,7 @@ export async function fetchMixerState(): Promise<ApiResult<any>> {
 
 export async function updateMixerChannel(id: string, updates: any): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${id}`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -396,7 +520,7 @@ export async function updateMixerChannel(id: string, updates: any): Promise<ApiR
 
 export async function updateMixerMaster(master: number): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ master }),
@@ -410,7 +534,7 @@ export async function updateMixerMaster(master: number): Promise<ApiResult<any>>
 
 export async function removeMixerChannel(id: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -444,7 +568,7 @@ export interface PlaylistAssignment {
 
 export async function fetchPlaylists(): Promise<ApiResult<string[]>> {
   try {
-    const res = await fetch(`${api_base}/playlists`);
+    const res = await fetchWithTimeout(`${api_base}/playlists`);
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
@@ -454,7 +578,7 @@ export async function fetchPlaylists(): Promise<ApiResult<string[]>> {
 
 export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistData>> {
   try {
-    const res = await fetch(`${api_base}/playlists/${encodeURIComponent(name)}`);
+    const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`);
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
     return { ok: true, data };
@@ -465,7 +589,7 @@ export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistDat
 
 export async function savePlaylist(playlist: { name: string; entries: PlaylistEntry[] }): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/playlists`, {
+    const res = await fetchWithTimeout(`${api_base}/playlists`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(playlist),
@@ -479,7 +603,7 @@ export async function savePlaylist(playlist: { name: string; entries: PlaylistEn
 
 export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
     const data = await res.json();
     return { ok: res.ok, data };
   } catch (err: any) {
@@ -495,7 +619,7 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
 
 export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist`);
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -505,7 +629,7 @@ export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiR
 
 export async function setMixerChannelPlaylist(channelId: string, name: string | null): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -519,7 +643,7 @@ export async function setMixerChannelPlaylist(channelId: string, name: string | 
 
 export async function setMixerChannelPlaylistEntry(channelId: string, entryId: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/entry`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist/entry`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entryId }),
@@ -533,7 +657,7 @@ export async function setMixerChannelPlaylistEntry(channelId: string, entryId: s
 
 export async function captureMixerChannelDefaults(channelId: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/capture`, { method: 'POST' });
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist/capture`, { method: 'POST' });
     const data = await res.json();
     return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
   } catch (err: any) {
@@ -546,7 +670,7 @@ export async function captureMixerChannelDefaults(channelId: string): Promise<Ap
 // user the "save or discard" choice on unlock.
 export async function discardMixerChannelDefaults(channelId: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/playlist/discard`, { method: 'POST' });
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist/discard`, { method: 'POST' });
     const data = await res.json();
     return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
   } catch (err: any) {
@@ -556,7 +680,7 @@ export async function discardMixerChannelDefaults(channelId: string): Promise<Ap
 
 export async function addMixerChannel(opts: { playlist?: string; playlistEntryId?: string; pattern?: string; name?: string; mode?: string; fader?: number }): Promise<ApiResult<{ channelId: string; pattern: string; playlist: PlaylistAssignment | null }>> {
   try {
-    const res = await fetch(`${api_base}/mixer/channels`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
@@ -573,7 +697,7 @@ export async function setMixerChannelControl(channelId: string, id: number, v0: 
     const payload: any = { id, v0 };
     if (v1 !== undefined) payload.v1 = v1;
     if (v2 !== undefined) payload.v2 = v2;
-    const res = await fetch(`${api_base}/mixer/channels/${channelId}/control`, {
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/control`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

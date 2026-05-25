@@ -1,0 +1,27 @@
+# Auto-written by MarsinEngine — per-scene audio state.
+# Contains:
+#   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
+#   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
+# Written by `engine.js --choose_mic --model <scene>` (mic) and by
+# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
+# the engine is running.
+capture:
+  platform: win32
+  inputFormat: dshow
+  device: audio=Microphone Array (Realtek(R) Audio)
+  deviceId: dshow-audio-Microphone Array (Realtek(R) Audio)
+  deviceLabel: Microphone Array (Realtek(R) Audio)
+  selectedAt: '2026-05-25T04:50:06.479Z'
+enabled: false
+fftSize: 1024
+hopSize: 512
+bands:
+  lowMaxHz: 250
+  midMaxHz: 2000
+  smoothingAlpha: 0.5
+kick:
+  minHz: 40
+  maxHz: 120
+  threshold: 1.6
+  refractoryMs: 1000
+  decayMs: 120

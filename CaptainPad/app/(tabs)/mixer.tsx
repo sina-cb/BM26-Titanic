@@ -460,21 +460,44 @@ export default function MixerScreen() {
   // always "+ DEFAULT" for the fastest possible add.
   const [addPickerOpen, setAddPickerOpen] = useState(false);
   const [addPickerPlaylists, setAddPickerPlaylists] = useState<string[]>([]);
+  // addBusyRef guards both add buttons against rapid taps that used to
+  // queue up 5 POST /mixer/channels at once (the user reported "one
+  // time it added like 5 layers"). A ref instead of state because
+  // setState is async — between two quick taps the state hasn't
+  // updated yet so the guard would miss. Ref mutates synchronously.
+  const addBusyRef = useRef(false);
+  const [addBusy, setAddBusy] = useState(false);
 
   const openAddChannelPicker = async () => {
-    const lib = await fetchPlaylists();
-    setAddPickerPlaylists(lib.ok && lib.data ? lib.data : ['default']);
-    setAddPickerOpen(true);
+    if (addBusyRef.current) return;
+    addBusyRef.current = true;
+    setAddBusy(true);
+    try {
+      const lib = await fetchPlaylists();
+      setAddPickerPlaylists(lib.ok && lib.data ? lib.data : ['default']);
+      setAddPickerOpen(true);
+    } finally {
+      addBusyRef.current = false;
+      setAddBusy(false);
+    }
   };
 
   const handleAddChannelWithPlaylist = async (playlistName: string) => {
+    if (addBusyRef.current) return;
+    addBusyRef.current = true;
+    setAddBusy(true);
     setAddPickerOpen(false);
-    await addMixerChannel({
-      playlist: playlistName,
-      name: playlistName === 'default' ? 'New Layer' : playlistName,
-      mode: 'blend_screen',
-      fader: 1.0,
-    });
+    try {
+      await addMixerChannel({
+        playlist: playlistName,
+        name: playlistName === 'default' ? 'New Layer' : playlistName,
+        mode: 'blend_screen',
+        fader: 1.0,
+      });
+    } finally {
+      addBusyRef.current = false;
+      setAddBusy(false);
+    }
   };
 
   const handleMasterChange = async (val: number) => {
@@ -634,17 +657,20 @@ export default function MixerScreen() {
             fillStyle={styles.faderFill} 
           />
           <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
-          {/* One-tap default add: fastest path */}
+          {/* One-tap default add: fastest path. disabled+opacity gives the
+              operator visual feedback while the POST is in flight, so they
+              don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
+            disabled={addBusy}
           >
-            <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>+ DEFAULT</Text>
+            <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
-          {/* Open the playlist picker for a curated add */}
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
             onPress={openAddChannelPicker}
+            disabled={addBusy}
           >
             <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>

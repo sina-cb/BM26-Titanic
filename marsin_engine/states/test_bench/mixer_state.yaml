@@ -1,13 +1,28 @@
-master: 0.55
+master: 1
 channels:
-  - id: ch_1778205858556
+  - id: ch_1779683287704
     name: New Layer
     pattern: 00_golden_hour_wash
     mode: blend_screen
-    fader: 0
+    fader: 1
     enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls: {}
-    playlist: null
+    localControls:
+      '682166867':
+        v0: 0.94
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.25
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false

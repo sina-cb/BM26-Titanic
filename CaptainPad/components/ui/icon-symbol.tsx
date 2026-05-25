@@ -29,6 +29,7 @@ const MAPPING = {
   'slider.horizontal.3': 'tune',
   'lock.fill': 'lock',
   'lock.open.fill': 'lock-open',
+  'waveform': 'graphic-eq',
 } as IconMapping;
 
 /**

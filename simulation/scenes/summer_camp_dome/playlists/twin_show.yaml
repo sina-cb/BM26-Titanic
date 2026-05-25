@@ -1,0 +1,13 @@
+schemaVersion: 1
+name: twin_show
+entries:
+  - id: e_slow
+    pattern: 13_sparkle
+    label: Slow Sparkle
+    defaults: {}
+    notes: null
+  - id: e_fast
+    pattern: 13_sparkle
+    label: Fast Sparkle
+    defaults: {}
+    notes: null

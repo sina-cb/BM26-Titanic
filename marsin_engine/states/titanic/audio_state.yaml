@@ -1,0 +1,15 @@
+# Per-scene audio tuning for titanic. See marsin_engine/config.yaml's
+# `audio:` block for the field reference.
+enabled: false
+fftSize: 1024
+hopSize: 512
+bands:
+  lowMaxHz: 250
+  midMaxHz: 2000
+  smoothingAlpha: 0.5
+kick:
+  minHz: 40
+  maxHz: 120
+  threshold: 1.6
+  refractoryMs: 200
+  decayMs: 120

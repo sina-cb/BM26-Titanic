@@ -8,14 +8,14 @@ effects:
   vintageWhiteBypassDimmer: false
   blastWhiteBypassDimmer: false
 params:
-  revision: 9
+  revision: 53021
   sourceLock: null
   params:
     speed:
-      value: 1
+      value: 0.22
       lastSource: api
       lastOrigin: api
-      lastRevision: 9
+      lastRevision: 53005
     direction:
       value: 1
       lastSource: init
@@ -52,6 +52,16 @@ params:
       lastSource: init
       lastOrigin: init
       lastRevision: 7
+    audioLevel:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    stemsVocals:
+      value: 0.45115333795547485
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:62625
+      lastRevision: 53021
 dimmers:
   '2': 0.125
   '3': 0.1696428571428571

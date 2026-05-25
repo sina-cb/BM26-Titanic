@@ -58,6 +58,75 @@ node engine.js --help
 | `--priority` | `100` | sACN source priority (0–200) |
 | `--dest` | `127.0.0.1` | sACN unicast destination IP |
 | `--dry-run` | `false` | Load + compile only, no sACN output |
+
+### Audio listener CLI (mic discovery)
+
+The engine can capture audio from a local microphone and turn it into
+`micLow` / `micMid` / `micHigh` / `micKick` global parameters that
+patterns can react to. The first time you run a scene on a new rig you
+need to pick a mic. Mic selection is **per scene** — saved into
+`states/<scene>/audio_state.yaml` alongside the analyzer tuning. See
+[`docs/25_marsin_audio_analysis.md`](../docs/25_marsin_audio_analysis.md)
+for the full design.
+
+```bash
+# 1. See what mics this rig has (no engine boot, no --model needed).
+node marsin_engine/engine.js --list_mics
+
+# 2. Pick a mic for a specific scene (interactive). Saves to
+#    marsin_engine/states/<scene>/audio_state.yaml and exits.
+node marsin_engine/engine.js --choose_mic --model test_bench
+
+# 3. Or pin a mic non-interactively (handy for scripts / agents).
+node marsin_engine/engine.js --mic "audio=USB Audio Device" --model titanic
+
+# 4. Choose AND immediately start the engine in one go.
+node marsin_engine/engine.js --choose_mic --model test_bench --start --pattern rainbow
+
+# 5. Forget the saved mic for a scene (tuning is preserved).
+node marsin_engine/engine.js --clear_mic --model test_bench
+```
+
+| Flag | Behavior |
+|------|----------|
+| `--list_mics`  | Print detected mics and exit. No `--model` required. |
+| `--choose_mic` | Interactive chooser; saves into the scene file. **Requires `--model`.** |
+| `--mic <dev>`  | Non-interactive; saves `<dev>` into the scene file. **Requires `--model`.** |
+| `--clear_mic`  | Strips only the `capture.*` mic fields from the scene file. **Requires `--model`.** |
+| `--start`      | Pair with `--choose_mic` or `--mic` to keep booting after saving. |
+
+**Requirements:** `ffmpeg` on `PATH` (macOS: `brew install ffmpeg`,
+Windows: install the official build and either set
+`audio.capture.ffmpegPath` in `config.yaml` or add it to `PATH`,
+Linux: `apt install ffmpeg`). If you forget `--model` on a mutating
+flag, the engine prints exactly which command to run instead of
+guessing where to write.
+
+### Reading audio levels
+
+Once a mic is chosen and `enabled: true` is set in the scene's
+`audio_state.yaml` (or via CaptainPad → **Audio Analysis** tab),
+patterns get four globals on top of the OSC-derived
+`stemsVocals / stemsBass / stemsDrums`:
+
+| Param | Range | Source |
+|-------|-------|--------|
+| `micLow`  | `0..1` | Energy in `[0, bands.lowMaxHz]` Hz, smoothed |
+| `micMid`  | `0..1` | Energy in `(lowMaxHz, midMaxHz]` Hz, smoothed |
+| `micHigh` | `0..1` | Energy in `(midMaxHz, +∞)` Hz, smoothed |
+| `micKick` | `0..1` | Transient envelope in `[kick.minHz, kick.maxHz]` Hz |
+
+Patterns multiply each by their per-band gain (`micLowGain` etc.) and
+the master `audioReactivity` slider on the deck. Tune the gains, kick
+threshold, smoothing, and BPM-to-speed mapping live from CaptainPad's
+Audio Analysis tab — every change PATCHes the scene file so it sticks
+across restarts.
+
+Boot logs (`[audio] mic listener on :1 (MacBook Pro Microphone)`) tell
+you which device actually opened. If `ffmpeg` isn't on PATH or the
+device can't be opened, `audioStatus` over the WebSocket will surface a
+stable `errorCode` (`ffmpeg_missing` / `device_not_configured` / etc.)
+and the rest of the engine keeps running.
 | `--list, -l` | — | List available patterns |
 | `--help, -h` | — | Show help |
 

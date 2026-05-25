@@ -3,25 +3,28 @@
   Wide, smooth moonlit currents with white and UV riding through the upper layers.
 */
 
-export var speed = 0.035;
+export var speedTrim = 0.5;
 export var density = 2.8;
-export var whiteLift = 0.75;
-export var uvLift = 0.55;
-export var blueHue = 0.58;
-export var blueSat = 0.85;
+export var whiteLift = 0.5;
+export var uvLift = 0.5;
 
-export function sliderSpeed(v) { speed = 0.01 + v * 0.08; }
+export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0; // Current (Deep Blue default)
+export var cp2H = 0.5, cp2S = 1.0, cp2V = 1.0;  // Caustic/Accent (Teal default)
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderSpeedTrim(v) { speedTrim = v; }
 export function sliderDensity(v) { density = 1.0 + v * 5.0; }
 export function sliderWhiteLift(v) { whiteLift = v; }
 export function sliderUvLift(v) { uvLift = v; }
-export function hsvPickerWaterTone(h, s, v) { blueHue = h; blueSat = s; }
 
 var driftA = 0.0;
 var driftB = 0.0;
 
 export function beforeRender(delta) {
-  driftA = time(speed);
-  driftB = time(speed * 0.43);
+  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  driftA = time(0.035 / localMultiplier);
+  driftB = time(0.015 / localMultiplier); 
 }
 
 export function render3D(index, x, y, z) {
@@ -36,16 +39,27 @@ export function render3D(index, x, y, z) {
   current = pow(current, 1.8);
 
   var crown = pow(max(0.0, ny), 1.6);
-  var white = current * crown * whiteLift;
-  var uv = (0.2 + crossWave * 0.8) * crown * uvLift;
+  
+  var effWhiteLift = whiteLift * 1.5; 
+  var effUvLift = uvLift * 1.1;       
+  
+  var white = current * crown * effWhiteLift * (1.0 - cp1S);
+  var uv = (0.2 + crossWave * 0.8) * crown * effUvLift;
 
-  var rgbV = current * (0.35 + 0.45 * (1.0 - crown));
-  var sat = blueSat * (0.75 + 0.25 * longWave);
+  var dh = cp2H - cp1H;
+  if (dh > 0.5) dh -= 1.0;
+  else if (dh < -0.5) dh += 1.0;
+  var hue = cp1H + dh * crossWave;
+  var sat = cp1S + (cp2S - cp1S) * crossWave;
+  var maxVal = cp1V + (cp2V - cp1V) * crossWave;
 
-  var base = rgbV * (1.0 - sat);
-  var r = base + (rgbV * wave(blueHue + 0.000) * sat);
-  var g = base + (rgbV * wave(blueHue + 0.333) * sat);
-  var b = base + (rgbV * wave(blueHue + 0.666) * sat);
+  var rgbV = current * (0.35 + 0.45 * (1.0 - crown)) * maxVal;
+  var effSat = sat * (0.75 + 0.25 * longWave);
+
+  var base = rgbV * (1.0 - effSat);
+  var r = base + (rgbV * wave(hue + 0.000) * effSat);
+  var g = base + (rgbV * wave(hue + 0.333) * effSat);
+  var b = base + (rgbV * wave(hue + 0.666) * effSat);
 
   rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), min(1.0, white), 0.0, min(1.0, uv));
 }

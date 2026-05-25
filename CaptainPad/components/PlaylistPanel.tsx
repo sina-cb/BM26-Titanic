@@ -78,27 +78,56 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   }, [savedAt]);
 
   // ── Data refresh ─────────────────────────────────────────────────────
+  // refresh() is the panel's only path to "I have a playlist to show".
+  // If this hits a flaky network on the first attempt the panel goes
+  // blank and never recovers (the user reported "mixer can't see
+  // playlists for channels"). Two defences:
+  //   1. Each fetch has an 8s timeout (utils/api fetchWithTimeout) so
+  //      hung requests reject instead of hanging the panel.
+  //   2. On any non-ok response we schedule a single retry after 1.5s,
+  //      then leave it to the WS `mixer` event or the next tab focus.
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refresh = useCallback(async () => {
     if (!channelId) return;
-    await getApiBaseAsync();
-    const [lib, a, ps] = await Promise.all([
-      fetchPlaylists(),
-      fetchMixerChannelPlaylist(channelId),
-      fetchPatterns(),
-    ]);
-    if (lib.ok && lib.data) setPlaylists(lib.data);
-    const nextAssign = a.ok ? (a.data || null) : null;
-    setAssignment(nextAssign);
-    if (nextAssign?.name) {
-      const pl = await fetchPlaylist(nextAssign.name);
-      setPlaylist(pl.ok && pl.data ? pl.data : null);
-    } else {
-      setPlaylist(null);
+    try {
+      await getApiBaseAsync();
+      const [lib, a, ps] = await Promise.all([
+        fetchPlaylists(),
+        fetchMixerChannelPlaylist(channelId),
+        fetchPatterns(),
+      ]);
+      const anyFailed = !lib.ok || !a.ok || !ps.ok;
+      if (lib.ok && lib.data) setPlaylists(lib.data);
+      const nextAssign = a.ok ? (a.data || null) : null;
+      setAssignment(nextAssign);
+      if (nextAssign?.name) {
+        const pl = await fetchPlaylist(nextAssign.name);
+        if (pl.ok && pl.data) setPlaylist(pl.data);
+        else if (!pl.ok) scheduleRetry();
+      } else if (a.ok) {
+        // a.ok with no assignment is a real "no playlist" state.
+        setPlaylist(null);
+      }
+      if (ps.ok && ps.data) setAllPatterns(ps.data);
+      if (anyFailed) scheduleRetry();
+    } catch {
+      scheduleRetry();
     }
-    if (ps.ok && ps.data) setAllPatterns(ps.data);
+    function scheduleRetry() {
+      if (retryTimerRef.current) return;
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = null;
+        refresh();
+      }, 1500);
+    }
   }, [channelId]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    refresh();
+    return () => {
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    };
+  }, [refresh]);
 
   // Refresh whenever this tab gains focus (e.g. switching between Deck and
   // Mixer) so cross-tab edits show up immediately.
@@ -153,26 +182,48 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   const handleLoadPlaylist = useCallback(async (name: string) => {
     setBusy(true);
     setShowLibrary(false);
-    const res = await setMixerChannelPlaylist(channelId, name);
-    setBusy(false);
-    if (!res.ok) {
-      Alert.alert('Load failed', res.error || 'Unknown error');
-      return;
+    // try/finally so a hung/aborted request can't strand `busy` true
+    // forever — that's what made "I can't switch patterns" look like
+    // a UI freeze.
+    try {
+      const res = await setMixerChannelPlaylist(channelId, name);
+      if (!res.ok) {
+        Alert.alert('Load failed', res.error || 'Unknown error');
+        return;
+      }
+      flashSaved();
+      await refresh();
+    } finally {
+      setBusy(false);
     }
-    flashSaved();
-    await refresh();
   }, [channelId, flashSaved, refresh]);
 
   const handleEntryTap = useCallback(async (entryId: string) => {
     if (!assignment || assignment.activeEntryId === entryId) return;
-    setBusy(true);
-    const res = await setMixerChannelPlaylistEntry(channelId, entryId);
-    setBusy(false);
-    if (!res.ok) {
-      Alert.alert('Switch failed', (res as { error?: string }).error || 'Unknown error');
-      return;
+    // Optimistic: flip the active entry in local state IMMEDIATELY so
+    // the row highlight moves on tap, not after the HTTP round-trip.
+    // The engine swaps the actual pattern fast (the operator already
+    // sees the lights change); the only thing that was lagging was
+    // this React tree waiting on `await refresh()`. We still POST and
+    // refresh in the background — if the server rejects we roll back
+    // and surface the error.
+    const prev = assignment;
+    setAssignment({ ...assignment, activeEntryId: entryId });
+    try {
+      const res = await setMixerChannelPlaylistEntry(channelId, entryId);
+      if (!res.ok) {
+        setAssignment(prev);   // roll back optimistic flip
+        Alert.alert('Switch failed', (res as { error?: string }).error || 'Unknown error');
+        return;
+      }
+      // Don't await refresh — the WS `mixer` broadcast will reconcile
+      // anything the optimistic update missed (e.g. server-side entry
+      // capture). Awaiting here is what the operator perceived as lag.
+      refresh();
+    } catch (e) {
+      setAssignment(prev);
+      Alert.alert('Switch failed', (e as Error)?.message || 'Network error');
     }
-    await refresh();
   }, [assignment, channelId, refresh]);
 
   // Add a pattern and persist immediately — no manual SAVE step. The user

@@ -1,11 +1,35 @@
 patches:
-  ChauvetHaze4D 20:
+  ShehdsBar 21:
     controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 511
+    dmxUniverse: 6
+    dmxAddress: 1
     controllerId: 0
     sectionId: 1
-    fixtureId: 1
+    fixtureId: 2
+    viewMask: 0
+  ShehdsBar 22:
+    controllerIp: ''
+    dmxUniverse: 6
+    dmxAddress: 120
+    controllerId: 0
+    sectionId: 1
+    fixtureId: 3
+    viewMask: 0
+  UkingPar 24:
+    controllerIp: ''
+    dmxUniverse: 6
+    dmxAddress: 249
+    controllerId: 0
+    sectionId: 2
+    fixtureId: 5
+    viewMask: 0
+  UkingPar 25:
+    controllerIp: ''
+    dmxUniverse: 6
+    dmxAddress: 259
+    controllerId: 0
+    sectionId: 2
+    fixtureId: 6
     viewMask: 0
   BarLights 1:
     controllerIp: 10.1.1.102
@@ -151,35 +175,11 @@ patches:
     sectionId: 3
     fixtureId: 19
     viewMask: 0
-  ShehdsBar 21:
+  TEFogMachine 26:
     controllerIp: ''
-    dmxUniverse: 6
-    dmxAddress: 1
+    dmxUniverse: 1
+    dmxAddress: 512
     controllerId: 0
     sectionId: 1
-    fixtureId: 2
-    viewMask: 0
-  ShehdsBar 22:
-    controllerIp: ''
-    dmxUniverse: 6
-    dmxAddress: 120
-    controllerId: 0
-    sectionId: 1
-    fixtureId: 3
-    viewMask: 0
-  UkingPar 24:
-    controllerIp: ''
-    dmxUniverse: 6
-    dmxAddress: 249
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 5
-    viewMask: 0
-  UkingPar 25:
-    controllerIp: ''
-    dmxUniverse: 6
-    dmxAddress: 259
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 6
+    fixtureId: 1
     viewMask: 0

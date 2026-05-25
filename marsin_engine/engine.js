@@ -20,6 +20,17 @@ import { startApiServer } from './lib/api_server.js';
 import { IntensityController } from './lib/intensity_controller.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { ParamCenter } from './lib/param_center.js';
+import { OscListener } from './lib/osc_listener.js';
+import { AudioCapture } from './lib/audio_capture.js';
+import { AudioAnalyzer } from './lib/audio_analyzer.js';
+import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
+import { mergeAudioConfig, pickLiveFields } from './lib/audio_config.js';
+import {
+  loadSceneAudio, saveSceneAudio,
+} from './lib/audio_config_store.js';
+import { parseEngineFlags } from './lib/engine_cli_flags.js';
+import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
+import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
@@ -283,6 +294,31 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 async function main() {
   const opts = parseArgs();
 
+  // ── Audio CLI flags (mic discovery / selection) ─────────────────────────
+  // Handled BEFORE the engine boots so --list_mics / --choose_mic /
+  // --clear_mic short-circuit cleanly and don't kill the operator's
+  // running show by accident. `--mic` and `--choose_mic --start` fall
+  // through and continue normal boot.
+  //
+  // Mutating audio flags require --model because mic selection now lives
+  // inside the scene's audio_state.yaml (one source of truth — see
+  // docs/25 §7). --list_mics is read-only and works without --model.
+  const audioFlags = parseEngineFlags(process.argv.slice(2));
+  const _bootCfgForAudio = loadConfig();
+  const _earlySceneDir = opts.modelName
+    ? path.join(__dirname, 'states', opts.modelName)
+    : null;
+  const rawFfmpegPath = _bootCfgForAudio?.audio?.capture?.ffmpegPath || 'ffmpeg';
+  const resolvedFfmpegPath = await resolveFfmpegPath(rawFfmpegPath);
+  const audioCliResult = await handleAudioCliFlags(audioFlags, {
+    sceneDir: _earlySceneDir,
+    ffmpegPath: resolvedFfmpegPath,
+    platform: process.platform,
+  });
+  if (audioCliResult.shouldExit) {
+    process.exit(audioCliResult.exitCode || 0);
+  }
+
   console.log(`
   ╔══════════════════════════════════════════╗
   ║       🔥 MarsinEngine v2.0 (WASM VM)    ║
@@ -365,8 +401,28 @@ async function main() {
   }
   console.log('  ✅ Pattern compiled via MarsinCompiler (bytecode)');
 
-  // 3a. Instantiate CPC
-  const paramCenter = new ParamCenter(null);
+  // 3a. Instantiate CPC.
+  //
+  // `osc.gainMax` (config.yaml) reshapes the per-stem gain ranges
+  // before the CPC store is seeded. Default is 2 — matches the
+  // registry's literal range — so omitting the config is a no-op.
+  // Clamping inside ParamCenter ensures the override default never
+  // exceeds the new max even if someone writes a tiny gainMax.
+  const gainMax = Number((engineConfig.osc || {}).gainMax) || 2;
+  const stemGainOverride = { range: [0, gainMax], default: Math.min(1, gainMax) };
+  const paramCenter = new ParamCenter(null, {
+    registryOverrides: {
+      stemsVocalsGain: stemGainOverride,
+      stemsBassGain:   stemGainOverride,
+      stemsDrumsGain:  stemGainOverride,
+      // Mic-derived bands use the same per-band gain contract as
+      // stems, so they share the gainMax override.
+      micLowGain:  stemGainOverride,
+      micMidGain:  stemGainOverride,
+      micHighGain: stemGainOverride,
+      micKickGain: stemGainOverride,
+    },
+  });
 
   const mixer = new PatternMixer({ wasmHost, pixelCount: model.pixelCount });
   mixer.patternsDir = path.join(__dirname, 'patterns');
@@ -468,7 +524,18 @@ async function main() {
   const globalEffectsController = new GlobalEffectsController(loadConfig());
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   
-  const engineCore = { mixer, wasmHost, paramRouter, paramCenter, model };
+  // 7a. Audio analysis state (filled below). Passed by reference into
+  //     engineCore so api_server's /audio routes can reach the live
+  //     analyzer for reconfigure / status without circular wiring.
+  const audioState = {
+    capture: null,
+    analyzer: null,
+    config: null,
+    lastStatus: { enabled: false, error: null },
+    lastKickAt: 0,
+  };
+
+  const engineCore = { mixer, wasmHost, paramRouter, paramCenter, model, audioState };
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
@@ -478,9 +545,234 @@ async function main() {
 
   loop.start();
 
+  // 7b. BPM → speed sync. Attaches to the CPC subscriber list, so it
+  // works whether BPM arrives via OSC (`/lx/tempo/bpm`), a future
+  // mic-derived detector, or REST. Operator gates the behaviour via
+  // the `bpmSpeedSync` CPC param (default off).
+  const bpmSync = new BpmSpeedSync(paramCenter);
+  bpmSync.attach();
+
+  // 7c. Microphone audio listener. Disabled by default — opt in via
+  // config.yaml `audio.enabled: true`. A bad config / missing
+  // ffmpeg / device-permission error logs and disables the listener
+  // but never crashes the engine (same posture as the OSC listener).
+  const baseAudioCfg = engineConfig.audio || {};
+
+  // Audio config merge order (docs/25 §7):
+  //
+  //   config.yaml (portable defaults)
+  //     < states/<model>/audio_state.yaml (per-scene EVERYTHING)
+  //
+  // One file per scene now holds mic selection + analyzer tuning +
+  // enabled flag. Trade-off: running the same scene on a different rig
+  // means re-running `--choose_mic --model <scene>` once on that rig.
+  // The win: a single source of truth, no hidden machine-local file.
+  const sceneStateDir  = path.join(__dirname, 'states', opts.modelName);
+  const sceneAudioOv   = loadSceneAudio(sceneStateDir);
+  audioState.sceneDir  = sceneStateDir;
+  // `defaults` is what the operator gets back when they hit "Reset to
+  // defaults" in the Audio Analysis tab — the portable `config.yaml`
+  // audio block, BEFORE any per-scene overrides. Stored once at boot
+  // so the reset endpoint doesn't have to re-read disk on every call.
+  audioState.defaults = baseAudioCfg;
+  audioState.config = mergeAudioConfig(baseAudioCfg, sceneAudioOv);
+
+  // Lifecycle helper so /audio/config PATCH can hot-restart the
+  // analyzer with new band/kick settings without juggling state by
+  // hand. Defined here so it closes over paramCenter + broadcasts.
+  async function buildAndStartAudio() {
+    const cfg = audioState.config;
+    if (!cfg || !cfg.enabled) {
+      audioState.lastStatus = { enabled: false, error: null };
+      broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+      return;
+    }
+    try {
+      const resolvedFfmpeg = await resolveFfmpegPath(cfg.capture.ffmpegPath || 'ffmpeg');
+      audioState.analyzer = new AudioAnalyzer({
+        sampleRate: cfg.capture.sampleRate,
+        fftSize:    cfg.fftSize,
+        hopSize:    cfg.hopSize,
+        bands:      cfg.bands,
+        kick:       cfg.kick,
+        onAnalysis: ({ low, mid, high, kick }) => {
+          if (kick > 0.95) audioState.lastKickAt = Date.now();
+          paramCenter.setMany([
+            { kind: 'scalar', key: 'micLow',  value: low  },
+            { kind: 'scalar', key: 'micMid',  value: mid  },
+            { kind: 'scalar', key: 'micHigh', value: high },
+            { kind: 'scalar', key: 'micKick', value: kick },
+          ], 'audio', 'audio:mic');
+        },
+      });
+      audioState.capture = new AudioCapture({
+        backend:      cfg.capture.backend,
+        ffmpegPath:   resolvedFfmpeg,
+        platform:     cfg.capture.platform || process.platform,
+        device:       cfg.capture.device,
+        deviceLabel:  cfg.capture.deviceLabel,
+        deviceId:     cfg.capture.deviceId,
+        sampleRate:   cfg.capture.sampleRate,
+        channels:     cfg.capture.channels,
+        inputFormat:  cfg.capture.inputFormat || undefined,
+        frameSamples: cfg.hopSize,
+        stopTimeoutMs:        cfg.capture.stopTimeoutMs,
+        stderrWarnIntervalMs: cfg.capture.stderrWarnIntervalMs,
+        onFrame:  (i16) => audioState.analyzer.pushSamples(i16),
+        onStatus: (s)   => {
+          audioState.lastStatus = { ...s, error: s.error || null, lastKickMs: audioState.lastKickAt };
+          broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+        },
+      });
+      audioState.capture.start();
+      // Log the RESOLVED device (capture.device on the instance), not the
+      // raw config — `null` in config.yaml is legal and means "use the
+      // platform default" (mac :0, linux default, win throws).
+      const dev = audioState.capture.device;
+      const label = audioState.capture.deviceLabel ? ` "${audioState.capture.deviceLabel}"` : '';
+      console.log(`  🎙  audio listener on ${dev}${label} ` +
+        `(${cfg.capture.sampleRate} Hz, ${cfg.capture.channels} ch, fft=${cfg.fftSize})`);
+    } catch (err) {
+      console.error(`  ⚠️  audio listener disabled at boot: ${err.message}`);
+      audioState.capture = null;
+      audioState.analyzer = null;
+      audioState.lastStatus = { enabled: false, error: err.message };
+      broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    }
+  }
+
+  /** Hot-reconfigure live-tunable analyzer fields; returns updated cfg. */
+  audioState.applyLiveUpdate = function applyLiveUpdate(partial) {
+    const next = mergeAudioConfig(audioState.config, partial);
+    if (audioState.analyzer) {
+      // Throws on invalid combinations — caller (api_server) catches
+      // and returns 400 with the message so the operator gets useful
+      // feedback in the Audio Analysis tab.
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+    }
+    audioState.config = next;
+    // Persist the per-scene subset (enabled / fftSize / hopSize /
+    // bands / kick) but MERGE on top of the existing file so we don't
+    // wipe a mic selection that was saved by `--choose_mic`.
+    try {
+      const onDisk = loadSceneAudio(audioState.sceneDir);
+      saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(next) });
+    } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
+    broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    return next;
+  };
+
+  /**
+   * Wipe the live-tunable subset (bands + kick + enabled / fftSize /
+   * hopSize) from the scene state and re-apply the boot defaults from
+   * config.yaml. Preserves `capture.*` so the operator's mic choice
+   * survives the reset — only the analyzer tuning gets rolled back.
+   *
+   * Used by POST /audio/config/reset (CaptainPad "Reset to defaults").
+   */
+  audioState.resetToDefaults = function resetToDefaults() {
+    const defaults = audioState.defaults || {};
+    // Rebuild the live snapshot as if no scene-state override existed
+    // for bands / kick / etc. Keep capture.* from the current config
+    // so the running mic doesn't get pulled out from under the engine.
+    const next = mergeAudioConfig(defaults, {
+      capture: audioState.config?.capture,
+    });
+    if (audioState.analyzer) {
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+    }
+    audioState.config = next;
+    try {
+      // Strip the live-tunable subset off disk and keep ONLY capture.*.
+      // This way a future `audio.lowMaxHz = 222` change in config.yaml
+      // actually wins next boot, instead of being shadowed by a stale
+      // operator-tuned scene file.
+      const onDisk = loadSceneAudio(audioState.sceneDir);
+      const stripped = {};
+      if (onDisk?.capture) stripped.capture = onDisk.capture;
+      saveSceneAudio(audioState.sceneDir, stripped);
+    } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
+    broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    return next;
+  };
+
+  await buildAndStartAudio();
+
+  // 1-Hz audioStatus heartbeat so CaptainPad's Audio Analysis tab
+  // shows a live captureFps + lastKickMs even between explicit
+  // lifecycle events from the capture layer. Cheap and unconditional
+  // — when audio is disabled the payload is just `{ enabled: false }`.
+  const audioStatusTimer = setInterval(() => {
+    const live = audioState.capture
+      ? { ...audioState.lastStatus, captureFps: audioState.capture.getCaptureFps?.() ?? 0, lastKickMs: audioState.lastKickAt }
+      : audioState.lastStatus;
+    broadcastStatsRef.publish({ type: 'audioStatus', ...live });
+  }, 1000);
+  if (audioStatusTimer.unref) audioStatusTimer.unref();
+
+  // 7d. OSC listener (binds LAST, after CPC + API/WS + render loop
+  // are all live). A bad config or port-bind failure disables OSC
+  // but never breaks the engine — every other subsystem stays
+  // running. See docs/24_osc_integration.md §12.1.
+  let oscListener = null;
+  const oscCfg = engineConfig.osc || {};
+  if (oscCfg.enabled) {
+    try {
+      oscListener = new OscListener({
+        port:           oscCfg.port,
+        host:           oscCfg.host || '0.0.0.0',
+        bindings:       oscCfg.bindings || {},
+        allowedSenders: oscCfg.allowedSenders || [],
+        paramCenter,
+        onStats:        (s) => broadcastStatsRef.publish(s),
+      });
+      oscListener.start();
+      console.log(`  📡 OSC listener on ${oscListener.host}:${oscListener.port} ` +
+        `(${oscListener._bindingsCount} binding(s), ${oscListener._allowedCount} allowedSender(s))`);
+      // Push first status now so a CaptainPad connecting before
+      // the 1-second timer fires sees the correct pill state.
+      broadcastStatsRef.publish({ type: 'oscStats', ...oscListener.getStatus() });
+    } catch (err) {
+      console.error(`  ⚠️  OSC disabled at boot: ${err.message}`);
+      oscListener = null;
+      broadcastStatsRef.publish({
+        type: 'oscStats',
+        enabled: false, port: oscCfg.port || null, host: oscCfg.host || null,
+        allowedSendersCount: 0, bindingsCount: 0,
+        rxMessagesPerSec: 0, mappedMessagesPerSec: 0,
+        droppedMessagesPerSec: 0, invalidMessagesPerSec: 0,
+        lastSeenMs: 0, lastSender: null,
+        now: Date.now(),
+      });
+    }
+  } else {
+    // Listener intentionally off — publish the "disabled" snapshot
+    // once so CaptainPad's pill paints "OSC OFF" immediately.
+    broadcastStatsRef.publish({
+      type: 'oscStats',
+      enabled: false, port: null, host: null,
+      allowedSendersCount: 0, bindingsCount: 0,
+      rxMessagesPerSec: 0, mappedMessagesPerSec: 0,
+      droppedMessagesPerSec: 0, invalidMessagesPerSec: 0,
+      lastSeenMs: 0, lastSender: null,
+      now: Date.now(),
+    });
+  }
+
   // 8. Graceful shutdown
   function shutdown() {
     console.log('\n\n  ⏹ Stopping...');
+    // Stop external input sources FIRST so an in-flight packet or
+    // audio frame can't sneak a CPC write in after we've decided to
+    // go dark. Audio first (it's the noisier source), then OSC.
+    // See docs/24 §12.2 / docs/25 §3.3.
+    if (audioState.capture) {
+      try { audioState.capture.stop(); } catch (_) { /* ignore */ }
+    }
+    if (oscListener) {
+      try { oscListener.stop(); } catch (_) { /* ignore */ }
+    }
+    try { bpmSync.detach(); } catch (_) { /* ignore */ }
     loop.stop();
 
     // Send blackout frame

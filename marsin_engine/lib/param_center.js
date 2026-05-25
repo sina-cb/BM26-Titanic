@@ -48,7 +48,175 @@ const PARAM_REGISTRY = [
     default: { h: 0.5, s: 1.0, v: 1.0 }, range: [0, 1], clamp: true, persist: true,
     oscAddress: '/marsin/param/colorPalette2', sharedFnName: 'colorPalette2',
   },
+  // ── Audio reactivity knobs (docs/24 §4.3 + §5) ─────────────────────────
+  //
+  // Three roles:
+  //
+  //   audioReactivity — MASTER reactivity scale. Operator-tuned,
+  //     persistent. Multiplied on top of every per-stem gain so the
+  //     operator can globally dial audio reactivity up/down without
+  //     re-balancing the individual stems.
+  //
+  //   stems<Bass|Drums|Vocals> — LIVE OSC scalars from the external
+  //     analyser (bound to /marsin/stems/<name>). High-rate, ephemeral,
+  //     throttled broadcast, no persistence, no LoRa (live-param
+  //     policy, docs/24 §7.4).
+  //
+  //   stems<Bass|Drums|Vocals>Gain — PER-STEM operator gain. Default
+  //     range [0, 2] but configurable per deployment via the
+  //     `osc.gainMax` config field, applied through the ParamCenter
+  //     constructor's `registryOverrides`. Persisted alongside the
+  //     other scene/model parameters.
+  //
+  //   tempoBpm — LIVE BPM scalar on the custom /lx/tempo/bpm address.
+  //     Live-param policy, no per-stem gain (BPM is a tempo reference,
+  //     not a level to be scaled).
+  //
+  // Patterns combine these as:
+  //     effective = audioReactivity * stemsVocalsGain * stemsVocals
+  // and similar for bass / drums. See docs/24 §4.3.
+  {
+    key: 'audioReactivity', label: 'Audio Reactivity', type: 'float',
+    default: 0.5, range: [0, 1], clamp: true, persist: true,
+    oscAddress: '/marsin/param/audioReactivity', sharedFnName: 'audioReactivity',
+  },
+  {
+    key: 'stemsVocalsGain', label: 'Vocals Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/stemsVocalsGain', sharedFnName: 'stemsVocalsGain',
+  },
+  {
+    key: 'stemsBassGain', label: 'Bass Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/stemsBassGain', sharedFnName: 'stemsBassGain',
+  },
+  {
+    key: 'stemsDrumsGain', label: 'Drums Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/stemsDrumsGain', sharedFnName: 'stemsDrumsGain',
+  },
+  {
+    key: 'stemsVocals', label: 'Stems · Vocals', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/stems/vocals', sharedFnName: 'stemsVocals',
+  },
+  {
+    key: 'stemsBass', label: 'Stems · Bass', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/stems/bass', sharedFnName: 'stemsBass',
+  },
+  {
+    key: 'stemsDrums', label: 'Stems · Drums', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/stems/drums', sharedFnName: 'stemsDrums',
+  },
+  {
+    key: 'tempoBpm', label: 'Tempo · BPM', type: 'float',
+    default: 0.0, range: [0, 300], clamp: true,
+    persist: false, live: true, broadcastHz: 5, portWatch: false,
+    // Non-canonical address: LX Studio (/lx/tempo/bpm) is the de-facto
+    // upstream tempo source on this rig. Kept here so it auto-binds
+    // out of the box; an operator-defined custom binding could route
+    // a different tempo source if needed.
+    oscAddress: '/lx/tempo/bpm', sharedFnName: 'tempoBpm',
+  },
+
+  // ── Mic-derived live params (docs/25 Marsin Audio Analysis) ────────────
+  // Source: in-engine AudioAnalyzer (lib/audio_analyzer.js). Same
+  // live-param policy as stems — high-rate, non-persistent, hidden
+  // from LoRa. Canonical OSC addresses included so an external
+  // analyser could also feed these keys if the mic listener is off.
+  {
+    key: 'micLow', label: 'Mic · Low', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/mic/low', sharedFnName: 'micLow',
+  },
+  {
+    key: 'micMid', label: 'Mic · Mid', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/mic/mid', sharedFnName: 'micMid',
+  },
+  {
+    key: 'micHigh', label: 'Mic · High', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/mic/high', sharedFnName: 'micHigh',
+  },
+  {
+    key: 'micKick', label: 'Mic · Kick', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 30, portWatch: false,
+    oscAddress: '/marsin/mic/kick', sharedFnName: 'micKick',
+  },
+
+  // ── Per-band mic gains (operator-tunable, persistent) ──────────────────
+  // Range reshaped at boot by `osc.gainMax` via registryOverrides,
+  // same mechanism as the stem gains.
+  {
+    key: 'micLowGain', label: 'Mic Low Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/micLowGain', sharedFnName: 'micLowGain',
+  },
+  {
+    key: 'micMidGain', label: 'Mic Mid Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/micMidGain', sharedFnName: 'micMidGain',
+  },
+  {
+    key: 'micHighGain', label: 'Mic High Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/micHighGain', sharedFnName: 'micHighGain',
+  },
+  {
+    key: 'micKickGain', label: 'Mic Kick Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/micKickGain', sharedFnName: 'micKickGain',
+  },
+
+  // ── BPM → speed sync (docs/25 §6) ──────────────────────────────────────
+  // Operator-tunable, persistent. `bpmSpeedSync` is float-with-options
+  // so the existing UI-toggle pattern (cf. `direction`) reuses without
+  // adding a bool type to the CPC schema.
+  {
+    key: 'bpmSpeedSync', label: 'BPM → Speed', type: 'float',
+    default: 0.0, range: [0, 1], options: [0, 1], clamp: true, persist: true,
+    oscAddress: '/marsin/param/bpmSpeedSync', sharedFnName: 'bpmSpeedSync',
+  },
+  {
+    key: 'bpmSpeedMin', label: 'BPM Sync Min', type: 'int',
+    default: 60, range: [30, 240], clamp: true, persist: true,
+    oscAddress: '/marsin/param/bpmSpeedMin', sharedFnName: 'bpmSpeedMin',
+  },
+  {
+    key: 'bpmSpeedMax', label: 'BPM Sync Max', type: 'int',
+    default: 180, range: [30, 240], clamp: true, persist: true,
+    oscAddress: '/marsin/param/bpmSpeedMax', sharedFnName: 'bpmSpeedMax',
+  },
 ];
+
+// Defaults applied to every registry entry when read by schema /
+// throttle / persistence callers. Keeping these out of the literal
+// entries lets the bulk of the registry stay terse.
+const REGISTRY_DEFAULTS = {
+  live: false,
+  broadcastHz: 30,
+  persist: false,
+  portWatch: true,
+};
+
+function withDefaults(entry) {
+  return {
+    live: REGISTRY_DEFAULTS.live,
+    broadcastHz: REGISTRY_DEFAULTS.broadcastHz,
+    portWatch: REGISTRY_DEFAULTS.portWatch,
+    ...entry,
+  };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -112,10 +280,29 @@ function sharedSuffix(name) {
 export class ParamCenter {
   /**
    * @param {string} statePath — absolute path to param_center_state.yaml
+   * @param {object} [options]
+   * @param {Record<string, { range?: [number, number], default?: number }>} [options.registryOverrides]
+   *   Per-key overrides applied to the registry before lookup maps and
+   *   the per-param store are built. Currently used to let
+   *   `config.yaml`'s `osc.gainMax` reshape the range of the per-stem
+   *   gain params at boot. The override `default` (if provided) is
+   *   re-clamped to the (possibly overridden) range so a config
+   *   change can't push a default outside its own range.
    */
-  constructor(statePath) {
+  constructor(statePath, options = {}) {
     this._statePath = statePath;
-    this._registry = PARAM_REGISTRY;
+    const overrides = (options && options.registryOverrides) || {};
+    this._registry = PARAM_REGISTRY.map(withDefaults).map(entry => {
+      const o = overrides[entry.key];
+      if (!o) return entry;
+      const next = { ...entry };
+      if (Array.isArray(o.range) && o.range.length === 2) next.range = [...o.range];
+      if (typeof o.default === 'number') next.default = o.default;
+      // Re-clamp default into the (possibly new) range so we never
+      // store a seed value the param itself would reject on write.
+      next.default = clampValue(next.default, next);
+      return next;
+    });
     this._registryByKey = {};
     this._registryByFnName = {};
 
@@ -124,6 +311,16 @@ export class ParamCenter {
       this._registryByKey[entry.key] = entry;
       this._registryByFnName[entry.sharedFnName] = entry;
     }
+
+    // Single fan-out hook for post-mutation work (persistence,
+    // throttled WS broadcast, future MIDI/mic adapters). See
+    // docs/24_osc_integration.md §7.2. Wired once by api_server.js.
+    //
+    // For additional listeners (BpmSpeedSync, future MIDI adapter, …)
+    // use `subscribe(fn)` instead of stomping `onChange`. Subscribers
+    // fire BEFORE the legacy `onChange` slot, in registration order.
+    this.onChange = null;
+    this._subscribers = [];
 
     // Global state
     this._revision = 0;
@@ -166,17 +363,26 @@ export class ParamCenter {
    * @returns {{ status: 'ok', revision: number } | { status: 'ignored', reason: string, lockedTo?: string }}
    */
   set(key, value, source, origin = null) {
+    const result = this._setNoFire(key, value, source, origin);
+    if (result.status === 'ok') this._fireOnChange([key]);
+    return result;
+  }
+
+  /**
+   * Internal single-write that does NOT fire onChange. Used by both
+   * the public set() (which fires after) and setMany() (which fires
+   * once after the whole batch). Same return shape as set().
+   * @private
+   */
+  _setNoFire(key, value, source, origin = null) {
     const entry = this._registryByKey[key];
     if (!entry) return { status: 'ignored', reason: 'unknown_key' };
 
-    // Source-lock check
     const lockResult = this._checkSourceLock(key, source);
     if (lockResult) return lockResult;
 
-    // Validate and clamp
     const clamped = clampValue(value, entry);
 
-    // Update store
     this._revision++;
     const slot = this._store[key];
     slot.value = deepCopy(clamped);
@@ -186,6 +392,107 @@ export class ParamCenter {
     slot.lastRevision = this._revision;
 
     return { status: 'ok', revision: this._revision };
+  }
+
+  /**
+   * Set one component of an HSV-typed param atomically. See
+   * docs/24_osc_integration.md §7.1.
+   * @param {string} key — HSV-typed CPC key
+   * @param {'h'|'s'|'v'} field
+   * @param {number} value
+   * @param {string} source
+   * @param {string} [origin]
+   */
+  setHsvField(key, field, value, source, origin = null) {
+    const result = this._setHsvFieldNoFire(key, field, value, source, origin);
+    if (result.status === 'ok') this._fireOnChange([key]);
+    return result;
+  }
+
+  /** @private — see setHsvField; doesn't fire onChange. */
+  _setHsvFieldNoFire(key, field, value, source, origin = null) {
+    const entry = this._registryByKey[key];
+    if (!entry || entry.type !== 'hsv') {
+      return { status: 'ignored', reason: 'not_hsv' };
+    }
+    if (field !== 'h' && field !== 's' && field !== 'v') {
+      return { status: 'ignored', reason: 'bad_field' };
+    }
+    const cur = this._store[key].value;
+    return this._setNoFire(key, { ...cur, [field]: value }, source, origin);
+  }
+
+  /**
+   * Apply N writes from a single source event (one OSC packet, one
+   * future MIDI bundle) atomically. Fires onChange exactly once
+   * with the union of changed keys so downstream broadcast + persist
+   * see one batch. See docs/24_osc_integration.md §7.1.
+   *
+   * @param {Array<{kind:'scalar', key:string, value:*}
+   *               | {kind:'hsv',  key:string, field:'h'|'s'|'v', value:number}>} writes
+   * @param {string} source
+   * @param {string} [origin]
+   * @returns {{status:'ok', changedKeys:string[], revision:number}}
+   */
+  setMany(writes, source, origin = null) {
+    const changedKeys = [];
+    if (Array.isArray(writes)) {
+      for (const w of writes) {
+        if (!w || typeof w !== 'object') continue;
+        const result = (w.kind === 'hsv')
+          ? this._setHsvFieldNoFire(w.key, w.field, w.value, source, origin)
+          : this._setNoFire(w.key, w.value, source, origin);
+        if (result.status === 'ok') changedKeys.push(w.key);
+      }
+    }
+    if (changedKeys.length > 0) this._fireOnChange(changedKeys);
+    return { status: 'ok', changedKeys, revision: this._revision };
+  }
+
+  /**
+   * Subscribe to post-mutation events. Returns an unsubscribe fn.
+   * Subscribers fire in registration order, BEFORE the legacy
+   * `onChange` slot. A throwing subscriber is logged and skipped
+   * so it can never break the fan-out chain.
+   *
+   * @param {(ev: { changedKeys: string[], state: object }) => void} fn
+   * @returns {() => void}
+   */
+  subscribe(fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError('paramCenter.subscribe requires a function');
+    }
+    this._subscribers.push(fn);
+    return () => {
+      this._subscribers = this._subscribers.filter(s => s !== fn);
+    };
+  }
+
+  /** @private — emit onChange to every subscriber + the legacy slot. */
+  _fireOnChange(changedKeys) {
+    const ev = { changedKeys, state: this.getCanonicalState() };
+    for (const fn of this._subscribers) {
+      try { fn(ev); }
+      catch (e) { console.warn(`[CPC] subscriber threw: ${e && e.message}`); }
+    }
+    if (this.onChange) {
+      try { this.onChange(ev); }
+      catch (e) { console.warn(`[CPC] onChange threw: ${e && e.message}`); }
+    }
+  }
+
+  /**
+   * Whether any of the given changedKeys references a registry entry
+   * with persist:true. Used by the fan-out in api_server.js to skip
+   * disk I/O for pure live-param batches. See docs/24 §7.2 / §7.4.
+   */
+  hasPersistentDirty(changedKeys) {
+    if (!Array.isArray(changedKeys)) return false;
+    for (const k of changedKeys) {
+      const entry = this._registryByKey[k];
+      if (entry && entry.persist) return true;
+    }
+    return false;
   }
 
   /**
@@ -233,6 +540,11 @@ export class ParamCenter {
       default: deepCopy(e.default),
       oscAddress: e.oscAddress,
       options: e.options || undefined,
+      // New live-param / fan-out fields — docs/24 §7.3.
+      live: !!e.live,
+      broadcastHz: e.broadcastHz ?? REGISTRY_DEFAULTS.broadcastHz,
+      persist: !!e.persist,
+      portWatch: e.portWatch !== false,
     }));
   }
 

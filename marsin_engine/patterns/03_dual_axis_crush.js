@@ -1,23 +1,22 @@
 /*
-  03_dual_axis_crush_optimized.js
+  03_dual_axis_crush.js
   A linear continuous attack pattern that spawns at the extreme left and right 
   edges of the room and collapses into the physical stage center forever.
-  -- Refactored for Continuous Modulo Trailing --
 */
 
-export var animSpeed = 0.05;
-export var swipeLength = 0.8; // Distance between continuous waves
-export var beamWidth = 0.5; // Thicker default to show off the neon trail
-export var hue = 0.55; 
-export var sat = 1.0;
-export var hueSpread = 0.5; // Allows the user to shift colors down the trail
+export var speedTrim = 0.5;
+export var swipeLength = 0.8;
+export var beamWidth = 0.5;
 export var globalDir = 1.0;
 
-export function speed(v) { animSpeed = 0.01 + v * 0.1; }
+export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Cyan default
+export var cp2H = 0.1, cp2S = 1.0, cp2V = 1.0;  // Orange default
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderSpeedTrim(v) { speedTrim = v; }
 export function count(v) { swipeLength = 0.2 + v * 1.5; }
 export function size(v) { beamWidth = 0.1 + v * 0.8; }
-export function colorPalette1(h, s, v) { hue = h; sat = s; }
-export function sliderHueSpread(v) { hueSpread = v * 2.0; }
 export function direction(v) { globalDir = (v * 2.0) - 1.0; }
 
 var attackPos = 0.0;
@@ -25,15 +24,13 @@ var flashIntensity = 0;
 var invBeamWidth = 1.0; 
 
 export function beforeRender(delta) {
-  // Manually accumulate time phase so changing the speed slider doesn't cause glitches/jumps
-  var phaseIncrement = (delta / 65536.0) / animSpeed;
+  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var phaseIncrement = (delta / 65536.0) / (0.05 / localMultiplier);
   attackPos = (attackPos + phaseIncrement * globalDir) % 1.0; 
   if (attackPos < 0) attackPos += 1.0;
   
-  // Pre-calculate multiplication inverse
   invBeamWidth = 1.0 / beamWidth;
 
-  // Flash collision exactly when the attack hits the center (attackPos wraps at 1.0->0.0)
   var flashPhase = attackPos % 1.0;
   flashIntensity = 0.0;
   if (flashPhase < 0.1) {
@@ -43,8 +40,6 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // --- ASYMMETRICAL X-AXIS MAPPING ---
-  // Calculates exact distance from the physical stage center (x = 0.6)
   var normDist = 0.0;
   if (x < 0.6) {
     normDist = (0.6 - x) * 0.5376;
@@ -52,42 +47,29 @@ export function render3D(index, x, y, z) {
     normDist = (x - 0.6) * 0.7936;
   }
   
-  // --- CONTINUOUS NEON TRAIL LOGIC ---
-  // Spatial phase increases as we move towards the outer walls
   var spatialPhase = normDist / swipeLength; 
-  
-  // Modulo wrap forces the wave to repeat infinitely inward.
-  // cycle = 0.0 represents the absolute leading white core edge.
   var cycle = (spatialPhase + attackPos) % 1.0;
-  
-  // Maps the infinite cycle back to a physical trailing distance
   var distBehind = cycle * swipeLength;
   
-  var brightness = 0.0;
-  var pixelHue = hue;
-  var pixelSat = sat;
+  var tVal = min(1.0, distBehind * invBeamWidth);
+  var brightness = max(0.0, 1.0 - tVal);
+  brightness *= brightness;
   
-  // The trail fades out smoothly the further back it is
-  brightness = max(0.0, 1.0 - (distBehind * invBeamWidth));
-  brightness *= brightness; // Curve preserves intense brightness closer to the head
+  var dh = cp2H - cp1H;
+  if (dh > 0.5) dh -= 1.0;
+  else if (dh < -0.5) dh += 1.0;
   
-  // NEON GRADIENT: The trailing wipe shifts through the color spectrum
-  pixelHue = hue + (distBehind * hueSpread);
+  var pixelHue = cp1H + dh * tVal;
+  var pixelSat = cp1S + (cp2S - cp1S) * tVal;
+  var maxVal = cp1V + (cp2V - cp1V) * tVal;
   
-  // ARC-WELDER CORE: The absolute leading edge burns pure white.
-  // It rapidly regains saturation as it moves backwards into the neon tail.
-  pixelSat = sat * min(1.0, distBehind * 15.0);
+  pixelSat = pixelSat * min(1.0, distBehind * 15.0);
 
-  // --- IMPACT CRUSH BLAST ---
-  // Center proximity fades out natively beyond distance threshold (1/4)
   var centerProximity = max(0.0, 1.0 - normDist * 4.0);
-  
-  // Calculate local pixel blast impact
   var localFlash = flashIntensity * centerProximity;
   
-  // Mix saturations & peaks perfectly
   pixelSat *= max(0.0, 1.0 - localFlash); 
-  brightness = max(brightness, localFlash);
+  var finalV = max(brightness * maxVal, localFlash);
   
-  hsv(pixelHue, pixelSat, brightness);
+  hsv(pixelHue - floor(pixelHue), pixelSat, finalV);
 }

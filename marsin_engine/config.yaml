@@ -16,3 +16,36 @@ web_client:
   enabled: false
   port: 6967
   build_dir: ../CaptainPad/dist
+osc:
+  enabled: true
+  port: 10000
+  host: 0.0.0.0
+  gainMax: 2
+  allowedSenders: []
+  bindings: {}
+audio:
+  enabled: false
+  capture:
+    backend: ffmpeg
+    ffmpegPath: ffmpeg
+    platform: auto
+    device: null
+    deviceLabel: null
+    deviceId: null
+    sampleRate: 44100
+    channels: 1
+    inputFormat: null
+    stopTimeoutMs: 2000
+    stderrWarnIntervalMs: 60000
+  fftSize: 1024
+  hopSize: 512
+  bands:
+    lowMaxHz: 250
+    midMaxHz: 2000
+    smoothingAlpha: 0.5
+  kick:
+    minHz: 40
+    maxHz: 120
+    threshold: 1.6
+    refractoryMs: 200
+    decayMs: 120
