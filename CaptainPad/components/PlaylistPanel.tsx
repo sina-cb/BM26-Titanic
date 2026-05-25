@@ -73,44 +73,39 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(initialAssignment ?? null);
   const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
-  const [busy, setBusyRaw] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // ── Busy watchdog ───────────────────────────────────────────────────
-  // The user reported "after selecting a new playlist, the playlist
-  // dropdown is not even usable anymore on that channel". The only
-  // thing that disables the dropdown is `busy`, and every code path
-  // that sets it to true wraps the work in try/finally so setBusy(false)
-  // always runs. But "always" only holds if neither React state batching,
-  // an unmount mid-await, nor a JS error inside finally itself ever
-  // strands the flag.
+  // ── Why the dropdown has no `busy` gate anymore ─────────────────────
+  // The previous design wrapped handleLoadPlaylist in a busy flag and
+  // disabled the dropdown while the POST was in-flight. Two failure
+  // modes operators reported:
+  //   1. "After selecting a new playlist, the dropdown is not usable
+  //      anymore on that channel" — busy somehow stayed true past the
+  //      POST. Even with the v2 watchdog the operator perceived the
+  //      6-second window as "permanently broken".
+  //   2. "Watchdog is a shitty approach, make sure the button works
+  //      correctly" — the v2 watchdog was an explicit anti-pattern.
   //
-  // The watchdog turns this from a hope into a guarantee: any setBusy(true)
-  // call also arms a timer that force-clears the flag after MAX_BUSY_MS
-  // even if the surrounding try/finally never fires. Worst case the
-  // operator sees a brief flicker; they NEVER see a permanently dead
-  // dropdown.
-  const busyWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const MAX_BUSY_MS = 6000;
-  const setBusy = useCallback((next: boolean) => {
-    if (busyWatchdogRef.current) {
-      clearTimeout(busyWatchdogRef.current);
-      busyWatchdogRef.current = null;
-    }
-    if (next) {
-      busyWatchdogRef.current = setTimeout(() => {
-        busyWatchdogRef.current = null;
-        setBusyRaw(false);
-      }, MAX_BUSY_MS);
-    }
-    setBusyRaw(next);
-  }, []);
-  useEffect(() => () => {
-    if (busyWatchdogRef.current) clearTimeout(busyWatchdogRef.current);
-  }, []);
+  // The root cause is real but subtle: any path that sets a UI gate
+  // and tries to clear it from an async continuation is at the mercy
+  // of (a) React batching, (b) the WS event handler running between
+  // the await and the finally, (c) the component unmounting mid-await
+  // (Fast Refresh, route change, channel removal), and (d) any
+  // exception inside the finally itself. In production the operator
+  // does sometimes see the flag get stranded.
+  //
+  // The cure is to NOT GATE the dropdown at all. The dropdown opens
+  // a Modal — a pure UI action — and the modal's onLoad fires the
+  // POST. Concurrent POSTs are legal on the engine side (last-write
+  // wins), the optimistic local state gives instant visual feedback,
+  // and the WS broadcast reconciles the canonical state in <10 ms.
+  // No state machine, no watchdog, no stranded-flag failure mode.
+  // The `+` and entry-tap buttons keep their own narrower disabled
+  // states (no-playlist, already-active, in-transition) which are
+  // derived from already-tracked state with no try/finally needed.
 
   // Single source of truth: avoid stale closures inside the WS event
   // listener by routing through refs.
@@ -333,31 +328,26 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   }, [channelId, refresh, flashSaved]);
 
   // ── Actions ─────────────────────────────────────────────────────────
-  // Switch this channel to a different playlist. Reported bug history:
-  //   1. "Switching doesn't do it" — race between awaited refresh() and
-  //      the WS `mixer` broadcast left the dropdown showing stale data.
-  //   2. "Dropdown is not even usable anymore on that channel after
-  //      selecting a new playlist" — busy stayed true past the POST
-  //      because we were awaiting a 4-GET refresh() inside the same
-  //      try block, and any slow GET (or even a transient retry) held
-  //      the dropdown disabled for seconds.
+  // Switch this channel to a different playlist.
   //
-  // The current shape:
-  //   - Optimistically set assignment to the new name so the dropdown
-  //     label flips immediately. This also short-circuits the WS
-  //     subscriber's "name changed → refresh" path so we don't double
-  //     up with the awaited refresh below.
-  //   - Use the engine's own response (which already carries the new
-  //     `playlist` assignment) as the canonical post-switch state.
-  //   - Clear `busy` AS SOON AS the POST resolves. The follow-up GET
-  //     for the playlist contents runs in the background and updates
-  //     the entry list when it lands — the operator can already tap
-  //     the dropdown again.
-  //   - The watchdog above guarantees busy clears within MAX_BUSY_MS
-  //     even if every promise hangs.
+  // Design: the dropdown is NEVER disabled (see the long comment
+  // above the busy-state removal). The user can re-open the modal and
+  // pick another playlist while a POST is in-flight; the engine
+  // accepts concurrent swaps (last-write wins) and the WS broadcast
+  // reconciles the canonical state in <10 ms.
+  //
+  // We DO need a small in-flight guard so we don't apply a STALE POST
+  // response on top of a newer one. swapEpochRef ticks on every tap;
+  // each in-flight request remembers its epoch and bails out of the
+  // setAssignment(next) call if a newer swap has started since. The
+  // engine's WS `channelPlaylistData` broadcast (which arrives
+  // ~1 ms after each POST handler runs) is the authoritative source
+  // for the final state anyway — the HTTP response is just a
+  // belt-and-suspenders confirmation.
+  const swapEpochRef = useRef(0);
   const handleLoadPlaylist = useCallback(async (name: string) => {
-    setBusy(true);
     setShowLibrary(false);
+    const myEpoch = ++swapEpochRef.current;
     const prevAssignment = assignmentRef.current;
     const prevPlaylist = playlistRef.current;
     // Optimistic flip of the dropdown label + "loading…" placeholder
@@ -372,6 +362,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     setPlaylist(null);
     try {
       const res = await setMixerChannelPlaylist(channelId, name);
+      // If a newer swap started while we were awaiting, the engine's
+      // WS broadcast has already (or will shortly) reconcile state
+      // for the latest pick. Don't clobber it with our stale result.
+      if (myEpoch !== swapEpochRef.current) return;
       if (!res.ok) {
         setAssignment(prevAssignment);
         setPlaylist(prevPlaylist);
@@ -385,20 +379,17 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
       if (next) setAssignment(next);
       flashSaved();
     } catch (err: any) {
+      if (myEpoch !== swapEpochRef.current) return;
       setAssignment(prevAssignment);
       setPlaylist(prevPlaylist);
       Alert.alert('Load failed', err?.message || 'Network error');
       return;
-    } finally {
-      // Clear BEFORE the entries fetch so the dropdown is responsive
-      // again the instant the engine acknowledges the switch.
-      setBusy(false);
     }
     // Fire-and-forget background refresh to pull the new playlist's
     // entries / patterns library / etc. Any failure is handled by
     // refresh()'s own scheduleRetry().
     refresh();
-  }, [channelId, flashSaved, refresh, setAssignment, setPlaylist, setBusy]);
+  }, [channelId, flashSaved, refresh]);
 
   const handleEntryTap = useCallback(async (entryId: string) => {
     if (disabled) return;                                  // tap-during-transition lock
@@ -568,7 +559,6 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         {editable ? (
           <TouchableOpacity
             onPress={() => setShowLibrary(true)}
-            disabled={busy}
             style={{
               flex: 1,
               height: sz.btnH,
@@ -612,7 +602,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         {editable && (
           <TouchableOpacity
             onPress={() => setShowAddPattern(true)}
-            disabled={!playlist || busy}
+            disabled={!playlist}
             style={{
               width: sz.btnH,
               height: sz.btnH,
@@ -621,7 +611,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
               borderColor: C.primary,
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: !playlist || busy ? 0.4 : 1,
+              opacity: !playlist ? 0.4 : 1,
             }}
             accessibilityLabel="Add pattern to playlist"
           >
@@ -689,7 +679,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
                   </Text>
                   <TouchableOpacity
                     onPress={() => handleEntryTap(e.id)}
-                    disabled={busy || missing || disabled}
+                    disabled={missing || disabled}
                     style={{ flex: 1 }}
                   >
                     <Text
