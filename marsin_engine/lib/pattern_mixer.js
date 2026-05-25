@@ -466,6 +466,15 @@ export class PatternMixer {
     const channel = this.getChannel(channelId);
     if (!channel) return false;
 
+    // Fader-lock: a fader-locked channel's value is frozen against
+    // scripted transitions. Refuse to schedule the fade — the caller
+    // (typically triggerMixerTransition) should skip the channel
+    // upstream so the transition group accounting stays consistent,
+    // but this is the final belt-and-suspenders guarantee that no
+    // server-side animation can ever drive a locked fader. See the
+    // PatternChannel.faderLocked docstring for the full semantics.
+    if (channel.faderLocked) return false;
+
     // Last-write-wins: cancel any existing transition for this channel
     // before pushing the new one. Two stacked fadeChannel calls without
     // this guard would produce visibly jittery faders as updateTransitions
@@ -583,6 +592,21 @@ export class PatternMixer {
     this.scriptedTransitionTargetId = useScriptedTransition ? targetChannelId : null;
 
     for (const c of overlays) {
+      // Fader-lock: skip locked channels entirely. We do NOT force-
+      // enable them, do NOT touch their fader, and do NOT schedule a
+      // fade. This implements the "transitions don't affect this
+      // layer" rule literally — a locked channel keeps whatever fader
+      // value the operator parked it at, regardless of what the rest
+      // of the mix is doing. The transition group accounting still
+      // works because fadeChannel() is never invoked for this id.
+      // Note: this applies even if `c.id === targetChannelId`. If the
+      // operator picks a locked channel as a transition target, the
+      // transition for everyone else still runs, but the locked
+      // target's fader stays put. Pattern content swaps (which go
+      // through loadPlaylistEntry) are still permitted — only the
+      // fader value is frozen.
+      if (c.faderLocked) continue;
+
       // Force-enable + anchor at the *visible* contribution. A channel
       // that's currently muted is rendering at 0; treating its start as
       // the stored fader would make it snap to that value the moment we

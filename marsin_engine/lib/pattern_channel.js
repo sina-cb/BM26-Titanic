@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -8,6 +8,24 @@ export class PatternChannel {
     this.fader = fader;
     this.enabled = enabled;
     this.locked = locked;
+    // Fader-lock (independent of `locked`): when true, the channel's
+    // fader value is frozen against scripted transitions and solo
+    // gestures. See slot 5 / fader_lock for the four semantic rules:
+    //   1. Manual fader writes (PATCH / WS) are rejected at the engine
+    //      boundary — the operator's slider tap no-ops on a locked
+    //      channel, and the iPad re-syncs to the engine value on the
+    //      next broadcast.
+    //   2. triggerMixerTransition skips fader-locked channels entirely
+    //      (no force-enable, no fade scheduled, fader stays where it
+    //      is). Pattern content swaps still work.
+    //   3. Solo (implemented client-side in CaptainPad mixer.tsx) skips
+    //      fader-locked channels: a sibling channel's solo does NOT
+    //      mute this one, and un-solo does NOT restore it.
+    //   4. Explicit mute (enabled=false) still works — fader-lock does
+    //      NOT override an operator-chosen mute on this same channel.
+    // `locked` (playlist/pattern lock) is unrelated and can be on/off
+    // independently of `faderLocked`.
+    this.faderLocked = faderLocked;
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
 

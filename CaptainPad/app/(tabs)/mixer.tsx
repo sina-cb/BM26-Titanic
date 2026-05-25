@@ -52,13 +52,19 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 // as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
 // inside the panel add or remove entries; SAVE persists. No parallel "all
 // patterns" column anymore.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, onViewSelectionChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
   const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
   const locked = !!channel.locked;
+  // Fader-lock (slot 5, independent of `locked`): freezes the fader
+  // against scripted transitions and client-side solo. Distinct icon
+  // + colour so operators can tell the two locks apart at a glance:
+  //   locked (playlist/pattern lock) → lock.fill, amber
+  //   faderLocked                    → arrow.left.and.right circle-style, teal
+  const faderLocked = !!channel.faderLocked;
 
   // View-selection state read straight from the channel (engine is the
   // source of truth — broadcasts overwrite local state on every mixer
@@ -88,6 +94,24 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <TouchableOpacity style={[styles.lockBtn, locked && styles.lockBtnActive]} onPress={() => onLockToggle(channel.id, !locked)}>
             <IconSymbol name={locked ? "lock.fill" : "lock.open.fill"} size={14} color={locked ? '#F5A623' : C.secondary} />
           </TouchableOpacity>
+          {/* Fader-lock (slot 5): independent of `locked`. Distinct icon
+              + colour (teal-on-teal-tint vs the amber lock above) so the
+              two locks are visually unambiguous. When ON, the engine
+              ignores manual fader writes on this channel and skips it
+              from scripted transitions; the client-side solo handler
+              below also skips it. Tap to toggle. */}
+          {onFaderLockToggle && (
+            <TouchableOpacity
+              style={[styles.lockBtn, faderLocked && styles.faderLockBtnActive]}
+              onPress={() => onFaderLockToggle(channel.id, !faderLocked)}
+            >
+              <IconSymbol
+                name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
+                size={14}
+                color={faderLocked ? C.primary : C.secondary}
+              />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.modeDropdown} onPress={() => { if (!locked) setShowBlendPicker(true); }} activeOpacity={locked ? 1.0 : 0.2}>
             <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
@@ -480,16 +504,33 @@ export default function MixerScreen() {
 
   const handleSoloToggle = async (channelId: string) => {
     // Solo remains interactive at all times (see handleMuteToggle).
+    //
+    // Fader-lock (slot 5) interaction: solo is implemented entirely
+    // client-side (by mutating enabled+fader on each sibling channel)
+    // so the engine has no way to know "this enable/fader change is
+    // really a solo gesture". The rule is enforced HERE: fader-locked
+    // channels are SKIPPED in both the solo-on and solo-off branches
+    // — we never write enabled/fader to them, never save their state
+    // to preSoloStateRef, never restore them. The result is that a
+    // locked layer keeps its current contribution intact regardless
+    // of which other layer the operator solos. Explicit mute (the
+    // operator tapping MUTE on the locked layer itself) still works
+    // because handleMuteToggle is a separate code path and writes
+    // through to setChannelEnabled directly.
     if (soloRef.current === channelId) {
       // Un-solo: restore all channels to their pre-solo state
       soloRef.current = null;
       const restored = preSoloStateRef.current;
-      setChannels(chs => chs.map(c => ({ 
-        ...c, 
-        enabled: restored[c.id]?.enabled ?? true,
-        fader: restored[c.id]?.fader ?? c.fader
-      })));
+      setChannels(chs => chs.map(c => {
+        if (c.faderLocked) return c;
+        return {
+          ...c,
+          enabled: restored[c.id]?.enabled ?? true,
+          fader: restored[c.id]?.fader ?? c.fader,
+        };
+      }));
       for (const c of channelsRef.current) {
+        if (c.faderLocked) continue;
         const prev = restored[c.id];
         const enabled = prev?.enabled ?? true;
         const fader = prev?.fader ?? c.fader;
@@ -501,18 +542,28 @@ export default function MixerScreen() {
       }
       preSoloStateRef.current = {};
     } else {
-      // Solo: save current state, enable + fader=1.0 only on target
+      // Solo: save current state, enable + fader=1.0 only on target.
+      // Locked channels are skipped from the saved snapshot too —
+      // they're not getting mutated, so there's nothing to restore
+      // later either.
       const saveState: { [id: string]: { enabled: boolean; fader: number } } = {};
-      channelsRef.current.forEach(c => { saveState[c.id] = { enabled: c.enabled, fader: c.fader }; });
+      channelsRef.current.forEach(c => {
+        if (c.faderLocked) return;
+        saveState[c.id] = { enabled: c.enabled, fader: c.fader };
+      });
       preSoloStateRef.current = saveState;
       soloRef.current = channelId;
 
-      setChannels(chs => chs.map(c => ({ 
-        ...c, 
-        enabled: c.id === channelId, 
-        fader: c.id === channelId ? 1.0 : c.fader 
-      })));
+      setChannels(chs => chs.map(c => {
+        if (c.faderLocked) return c;
+        return {
+          ...c,
+          enabled: c.id === channelId,
+          fader: c.id === channelId ? 1.0 : c.fader,
+        };
+      }));
       for (const c of channelsRef.current) {
+        if (c.faderLocked) continue;
         const enabled = c.id === channelId;
         const fader = c.id === channelId ? 1.0 : c.fader;
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -590,6 +641,16 @@ export default function MixerScreen() {
     await updateMixerChannel(prompt.channelId, { locked: false });
     setUnlockPrompt(null);
   }, [unlockPrompt]);
+
+  // Fader-lock toggle (slot 5). Independent of the playlist lock
+  // (`handleLockToggle` above). The engine is the source of truth —
+  // we optimistically update local state and PATCH; the next mixer
+  // broadcast confirms. No dirty-prompt machinery because faderLocked
+  // doesn't gate playlist edits.
+  const handleFaderLockToggle = async (channelId: string, faderLocked: boolean) => {
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderLocked } : c));
+    await updateMixerChannel(channelId, { faderLocked });
+  };
 
   const handleControlChange = (channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
@@ -888,6 +949,7 @@ export default function MixerScreen() {
               onControlChange={handleControlChange}
               onDelete={handleDeleteChannel}
               onLockToggle={handleLockToggle}
+              onFaderLockToggle={handleFaderLockToggle}
               onTransition={handleTransition}
               onTransitionSettingsChange={handleTransitionSettingsChange}
               viewSelectionGroups={viewSelectionGroups}
@@ -1116,6 +1178,15 @@ const styles = StyleSheet.create({
   lockBtnActive: {
     backgroundColor: 'rgba(245,166,35,0.15)',
     borderColor: 'rgba(245,166,35,0.5)',
+  },
+  // Fader-lock (slot 5): teal accent so the operator can tell it
+  // apart from the amber playlist lock above without reading the
+  // icon. Same footprint as lockBtnActive — uses the project's
+  // primary teal at 15% / 50% opacity to match the existing
+  // "active toggle" visual language elsewhere in the strip.
+  faderLockBtnActive: {
+    backgroundColor: 'rgba(0,104,117,0.15)',
+    borderColor: 'rgba(0,104,117,0.5)',
   },
   modeDropdown: {
     backgroundColor: C.surfaceContainerLowest,

@@ -724,6 +724,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         mode: saved.mode,
         fader: saved.fader,
         enabled: saved.enabled,
+        // Restore lock flags so the channel survives engine restart in
+        // the same lock state the operator left it in. Pre-fader_lock
+        // these were silently dropped; with the new faderLocked field
+        // added in slot 5 we plumb them through explicitly. Falsy
+        // defaults match the PatternChannel constructor.
+        locked: !!saved.locked,
+        faderLocked: !!saved.faderLocked,
+        // Same reasoning for transition prefs.
+        transitionMode: saved.transitionMode || 'trans_crossfade',
+        transitionTime: saved.transitionTime || 1.0,
         // Restore view-selection so a mask-restricted channel survives
         // engine restart. setDeckChannel / addMixerChannel will compile
         // the mask immediately via recompileChannelMask (no extra call
@@ -822,6 +832,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       fader: c.fader,
       enabled: c.enabled,
       locked: !!c.locked,
+      // Fader-lock: surfaced so CaptainPad can render the lock icon
+      // and skip the channel in client-side solo gestures. Independent
+      // of `locked` (the playlist/pattern lock). See
+      // PatternChannel.faderLocked for the four semantic rules.
+      faderLocked: !!c.faderLocked,
       // `dirty` is true iff the operator changed a param *while this
       // channel was locked*. Drives the unlock-time save-or-discard
       // prompt on the client. Cleared on lock toggle / capture /
@@ -891,6 +906,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fader: c.fader,
         enabled: c.enabled,
         locked: !!c.locked,
+        // Fader-lock — see serializeChannel above for semantics.
+        faderLocked: !!c.faderLocked,
         // `dirty` is true iff the operator changed a param *while this
         // channel was locked*. Drives the unlock-time save-or-discard
         // prompt on the client. Cleared on lock toggle / capture / discard
@@ -1899,12 +1916,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
-          // Manual fader writes ALWAYS cancel any in-flight transition
-          // for that channel — mirrors WS setChannelFader (see above).
-          mixer.cancelChannelTransition(id);
-          channel.fader = data.fader;
+          // Fader-lock: reject the fader portion silently (no-op) but
+          // still process other fields in this PATCH. We do NOT 4xx
+          // because operators bulk-PATCH multiple fields at once and a
+          // hard error would block name / mode / enabled updates that
+          // are still valid on a fader-locked channel. The next mixer
+          // broadcast carries the unchanged fader so the iPad re-syncs.
+          if (!channel.faderLocked) {
+            // Manual fader writes ALWAYS cancel any in-flight transition
+            // for that channel — mirrors WS setChannelFader (see above).
+            mixer.cancelChannelTransition(id);
+            channel.fader = data.fader;
+          }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
+        if (data.faderLocked !== undefined) {
+          // Pure boolean toggle — orthogonal to `locked`. No transition
+          // cleanup needed: an in-flight fade on this channel can
+          // continue naturally (the locked flag will gate the NEXT
+          // fadeChannel call), and we don't want to interrupt a
+          // visually-mid-fade animation just because the operator
+          // tapped the lock icon.
+          channel.faderLocked = !!data.faderLocked;
+        }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
         // View-selection update: validate first so a typo can't brick
@@ -2387,10 +2421,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
-          mixer.cancelChannelTransition(channel.id);
-          channel.fader = data.fader;
+          // Fader-lock: same silent-skip semantics as the mixer PATCH.
+          if (!channel.faderLocked) {
+            mixer.cancelChannelTransition(channel.id);
+            channel.fader = data.fader;
+          }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
+        if (data.faderLocked !== undefined) channel.faderLocked = !!data.faderLocked;
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
@@ -2798,6 +2836,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
           const channel = mixer.getChannel(d.channelId);
           if (channel) {
+            // Fader-lock: refuse manual fader writes on a locked
+            // channel. We do NOT broadcast or push back here — the
+            // iPad's optimistic local update will be corrected on the
+            // next `mixer` broadcast (slider snaps back to the engine
+            // truth). This is the cheapest UX path: the operator sees
+            // the slider try to move, then it visibly re-pegs to the
+            // locked value within ~100ms.
+            if (channel.faderLocked) {
+              // Force a broadcast so the iPad's slider re-syncs
+              // immediately rather than waiting for the next periodic
+              // mixer event. Without this the slider can "stick"
+              // visually wherever the finger left it.
+              broadcastMixerState();
+              return;
+            }
             // Manual fader writes ALWAYS cancel any in-flight transition
             // for that channel — otherwise the server-side animation
             // would keep overwriting the operator's slider drag, causing
