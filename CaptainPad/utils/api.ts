@@ -1253,3 +1253,63 @@ export async function panicStopGlobalEffectMacros(): Promise<ApiResult<any>> {
     return { ok: false, error: err.message };
   }
 }
+
+// Unified e-stop endpoint. POST /global-effect-macros/blackout
+// sets the engine's pixel-level blackout AND clears every active
+// macro / legacy global effect so the rig stays dark until released.
+// Body: { enabled: boolean }. Server returns the resolved flag so
+// the UI can confirm the round-trip without waiting for the WS push.
+export async function setGlobalEffectBlackout(enabled: boolean): Promise<ApiResult<{ blackout: boolean }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-macros/blackout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effect-blackout', 'Failed to set global effect blackout:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH a single slot binding. Sub-helper of the GlobalEffectMacros
+// hold-to-swap sheet — operator long-presses a slot, picks a new
+// effect/preset, and we round-trip the change here. The engine
+// broadcasts `globalEffectSlots` on success so connected clients
+// refresh in lockstep without us awaiting the response.
+export async function patchGlobalEffectSlot(
+  slotId: number,
+  patch: { effectId?: string; presetId?: string; behavior?: string; label?: string; enabled?: boolean; paramsOverride?: Record<string, any> },
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`patch-slot-${slotId}`, `Failed to patch slot ${slotId}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchGlobalEffectLibrary(): Promise<ApiResult<{ effects: Record<string, any> }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-library`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-global-effect-library', 'Failed to fetch global effect library:', err);
+    return { ok: false, error: err.message };
+  }
+}

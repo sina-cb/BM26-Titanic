@@ -10,6 +10,10 @@ import { strobeEffect } from '../effects/strobe.js';
 import { dropHitEffect } from '../effects/dropHit.js';
 import { colorWashEffect } from '../effects/colorWash.js';
 import { feedbackTrailsEffect } from '../effects/feedbackTrails.js';
+import { vintageWhiteEffect } from '../effects/vintageWhite.js';
+import { blastWhiteEffect } from '../effects/blastWhite.js';
+import { uvBlastEffect } from '../effects/uvBlast.js';
+import { foggerEffect } from '../effects/fogger.js';
 
 /** Safety tiers, in increasing strictness. */
 export const SAFETY_TIERS = Object.freeze({
@@ -180,8 +184,100 @@ export const GLOBAL_EFFECT_LIBRARY = {
     },
     apply: feedbackTrailsEffect.apply,
   },
-};
 
+  // ── Legacy RigGlobals effects, migrated into the GEM library ─────
+  // These four route through `controller.setEffect(effectId, bool)` so
+  // the existing dimmer-aware applyPixels / DMX paths in
+  // GlobalEffectsController stay intact. The `legacyEffectId` field is
+  // the cue the slot dispatcher uses to take the legacy path instead of
+  // dispatching into the pixel-buffer macro pipeline.
+  vintageWhite: {
+    id: 'vintageWhite',
+    name: 'Vintage White Boost',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'vintageWhite',
+    presets: {
+      default: {
+        label: 'Vintage White',
+        params: { bypassDimmer: false },
+        defaultBehavior: 'toggle',
+      },
+      bypass_dimmer: {
+        label: 'Vintage White (Bypass Dimmer)',
+        params: { bypassDimmer: true },
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: vintageWhiteEffect.apply,
+  },
+
+  blastWhite: {
+    id: 'blastWhite',
+    name: 'Blast White',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'blastWhite',
+    presets: {
+      default: {
+        label: 'Blast White',
+        params: { bypassDimmer: false },
+        defaultBehavior: 'toggle',
+      },
+      bypass_dimmer: {
+        label: 'Blast White (Bypass Dimmer)',
+        params: { bypassDimmer: true },
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: blastWhiteEffect.apply,
+  },
+
+  uvBlast: {
+    id: 'uvBlast',
+    name: 'UV Blast',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'uvBlast',
+    presets: {
+      default: {
+        label: 'UV Blast',
+        params: { bypassDimmer: false },
+        defaultBehavior: 'toggle',
+      },
+      bypass_dimmer: {
+        label: 'UV Blast (Bypass Dimmer)',
+        params: { bypassDimmer: true },
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: uvBlastEffect.apply,
+  },
+
+  fogger: {
+    id: 'fogger',
+    name: 'Fogger / Haze',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'fogger',
+    presets: {
+      default: {
+        label: 'Fogger',
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: foggerEffect.apply,
+  },
+};
 /**
  * Serializable description of the registry (no fn refs) for
  * GET /global-effect-library.
@@ -196,6 +292,7 @@ export function describeLibrary(library = GLOBAL_EFFECT_LIBRARY) {
       behaviorTypes: [...fx.behaviorTypes],
       singleton: !!fx.singleton,
       safetySensitive: !!fx.safetySensitive,
+      legacyEffectId: fx.legacyEffectId || null,
       presets: Object.fromEntries(
         Object.entries(fx.presets).map(([pid, p]) => [pid, {
           id: pid,
@@ -307,6 +404,18 @@ export function validateParams(effectId, params = {}) {
       if (out.blendMode !== undefined && !['add', 'replace', 'max'].includes(out.blendMode)) {
         throw new Error(`feedbackTrails.blendMode='${out.blendMode}' must be one of add|replace|max`);
       }
+      break;
+    }
+    case 'vintageWhite':
+    case 'blastWhite':
+    case 'uvBlast': {
+      if (out.bypassDimmer !== undefined && typeof out.bypassDimmer !== 'boolean') {
+        throw new Error(`${effectId}.bypassDimmer must be a boolean`);
+      }
+      break;
+    }
+    case 'fogger': {
+      // No tunable params; ignore any overrides.
       break;
     }
     default:

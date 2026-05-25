@@ -352,8 +352,14 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       if (frame) dmxBuffers[u] = frame;
     }
 
-    // Apply explicit raw-hardware bypasses directly onto the payload arrays (like Fogger)
-    if (globalEffectsController) globalEffectsController.applyDmx(dmxBuffers);
+    // Apply explicit raw-hardware bypasses directly onto the payload arrays (like Fogger).
+    // Pass blackout so the DMX-only fixtures (fogger / horn / fire) are
+    // also silenced — pixel-level blackout alone wouldn't touch them.
+    if (globalEffectsController) {
+      globalEffectsController.applyDmx(dmxBuffers, {
+        blackout: !!(intensityController && intensityController.blackoutActive),
+      });
+    }
 
     // Send sACN using the _read buffers
     sacnOut.sendFrame(dmxBuffers);
