@@ -374,3 +374,32 @@ Do not try to tune pattern speeds by making CPC inject `speed` into every patter
 Use CPC `speed` as the global engine-clock control. Then tune every pattern at global speed `0.5` with local speed trim centered at `0.5`. Once the pattern set feels right, the local trim controls can be hidden, frozen, or left as development-only controls.
 
 Color should be stricter than speed: every pattern should default to cp1/cp2 only. Local hue spread, white/amber/UV lift, section colors, party mode, and prismatic third-color behavior are all legitimate artistic tools, but they should not be active in the default global-palette path.
+
+---
+
+## 9. Handoff & Progress Report (May 24, 2026)
+
+### 9.1 Completed Tasks
+- **WebAssembly Compliance**: Successfully migrated and compiled all 26 patterns (`00_*` through `25_*`) against the new radians-compliant WebAssembly engine.
+- **Reference Pattern Migration**: Fully refactored [00_golden_hour_wash.js](file:///Users/ssolaimanpour/workspace/BM26-Titanic/marsin_engine/patterns/00_golden_hour_wash.js) to serve as the master implementation template:
+  - Implemented decoupled local speed trim (`localSpeed` defaulting to `0.5`) and global speed (`speed` defaulting to `0.5`) multipliers:
+    `var globalMult = pow(2.0, (speed - 0.5) * 4.0);`
+    `var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);`
+  - Replaced hardcoded warm-wash variables with standard CPC color palettes (`colorPalette1` / `colorPalette2`) using shortest-path hue wrapping.
+  - Positioned `sliderLocalSpeed` as the first export so it renders as the primary local slider in CaptainPad.
+- **Dynamic Reactivity Design**: Refactored the playlist-item audio parameter mapping design doc [26_audio_params_playlist.md](file:///Users/ssolaimanpour/workspace/BM26-Titanic/docs/26_audio_params_playlist.md) to integrate the decoupled `ModulationEngine` module, unipolar/bipolar offset/scale ranges, curve mapping, and mappingId endpoint specs.
+- **CaptainPad Specifications**: Prepared full visual, layout, and data specifications for both the Control Deck and Live Mixer tabs to guide the frontend designer.
+
+### 9.2 Tasks for the Next Agent
+1. **Bulk Pattern Migration (Phase 2 & 3)**:
+   - Review [MARSIN_ENGINE_PATTERNS.md](file:///Users/ssolaimanpour/workspace/BM26-Titanic/docs/MARSIN_ENGINE_PATTERNS.md) for the shared pattern contracts.
+   - Refactor patterns `01_cylon_sweep` through `25_heartbeat` following the migration template established in `00_golden_hour_wash.js`.
+   - Ensure local speed exports are renamed to `sliderLocalSpeed` or `sliderSpeedTrim` (no raw `speed` exports).
+   - Ensure color palettes (`colorPalette1`/`2`) are implemented as the exclusive default color drivers, eliminating hardcoded color sweeps.
+2. **Modulation Engine Implementation**:
+   - Implement `marsin_engine/lib/modulation_engine.js` containing `applyContinuousModulation()`, `resolveModulationSources()`, and `applyModulations()`.
+   - Update `marsin_engine/engine.js`'s tick loop to run the modulation engine and pass computed variables to `mixer.wasmHost.setControl()`.
+   - Broadcast the lightweight `modulationState` frame to WebSocket clients at 15–30 Hz.
+3. **API & Front-End Hookup**:
+   - Wire up the PUT, DELETE, and PATCH endpoints for mappings in the API.
+   - Integrate the custom modulated sliders with colored ghost overlays, map badges, and configuration popovers into CaptainPad.

@@ -3,7 +3,7 @@
   RGB-only nested lattice ribbons that rise, dip, curl upward, and settle back down.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var density = 5.5;
 export var width = 0.22;
 export var softness = 2.6;
@@ -13,7 +13,7 @@ export var cp2H = 0.48, cp2S = 0.9, cp2V = 1.0; // Accent Color (Teal default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderDensity(v) { density = 2.0 + v * 10.0; }
 export function sliderWidth(v) { width = 0.08 + v * 0.38; }
 export function sliderSoftness(v) { softness = 1.0 + v * 5.0; }
@@ -23,7 +23,7 @@ var tSlow = 0.0;
 var currentScale = 0.032;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   currentScale = 0.032 / localMultiplier;
   mainPhase = time(currentScale) * 6.2831853;
   tSlow = time(currentScale * 0.37) * 6.2831853;

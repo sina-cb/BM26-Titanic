@@ -67,43 +67,113 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 
   return (
     <View style={{ gap: 12 }}>
-      {sliders.map((e: any) => (
-        <View key={`slider-${e.id}`}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15)}</Text>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
+      {sliders.map((e: any) => {
+        // CPC-matched local exports were hidden through May 2026 — now
+        // they're surfaced as disabled with a "MATCHED · LABEL" badge
+        // so operators can see what each pattern actually declares.
+        // The slider is non-interactive (no onChange) because the CPC
+        // would clobber any write on the next tick anyway.
+        const matched = !!e.cpcOwned;
+        const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
+        return (
+          <View key={`slider-${e.id}`} style={{ opacity: matched ? 0.5 : 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
+                {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
+              </View>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
+            </View>
+            <HorizontalFader
+              value={e.v0 ?? 0.5}
+              onChange={matched ? (() => {}) : ((val: number) => channelId && setMixerChannelControl(channelId, e.id, val))}
+              trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
+              fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: matched ? C.secondary : C.primary, borderRadius: 12 }}
+            />
           </View>
-          <HorizontalFader
-            value={e.v0 ?? 0.5}
-            onChange={(val: number) => channelId && setMixerChannelControl(channelId, e.id, val)}
-            trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
-            fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 12 }}
-          />
-        </View>
-      ))}
-      {colorPickers.map((e: any) => (
-        <View key={`color-${e.id}`}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>HUE</Text>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0).toFixed(2)}</Text>
+        );
+      })}
+      {colorPickers.map((e: any) => {
+        const matched = !!e.cpcOwned;
+        return (
+          <View key={`color-${e.id}`} style={{ opacity: matched ? 0.5 : 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>HUE</Text>
+                {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
+              </View>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0).toFixed(2)}</Text>
+            </View>
+            <HorizontalFader
+              value={e.v0 ?? 0}
+              onChange={matched ? (() => {}) : ((val: number) => channelId && setMixerChannelControl(channelId, e.id, val, e.v1, e.v2))}
+              trackStyle={{ height: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 4, justifyContent: 'center' }}
+              fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 4 }}
+              thumbStyle={{ position: 'absolute', width: 14, height: 18, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -7 }] }}
+            />
           </View>
-          <HorizontalFader
-            value={e.v0 ?? 0}
-            onChange={(val: number) => channelId && setMixerChannelControl(channelId, e.id, val, e.v1, e.v2)}
-            trackStyle={{ height: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 4, justifyContent: 'center' }}
-            fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 4 }}
-            thumbStyle={{ position: 'absolute', width: 14, height: 18, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -7 }] }}
-          />
-        </View>
-      ))}
+        );
+      })}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
         {toggles.map((e: any) => (
-          <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
+          e.cpcOwned
+            ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+            : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
         ))}
         {triggers.map((e: any) => (
-          <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
+          e.cpcOwned
+            ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+            : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
         ))}
       </View>
     </View>
   );
 };
+
+// ── CPC-matched indicator subcomponents ────────────────────────────────
+//
+// When a pattern's local export aliases a global (e.g. `sliderSize`
+// matches CPC `size`), we surface the export anyway — disabled, with a
+// "MATCHED · SIZE" pill — so operators can see what the pattern
+// actually declares. The decision to show-instead-of-hide came from the
+// May 2026 operator review: hiding silently was confusing because
+// patterns *looked* identical even when they declared different sets
+// of locals.
+
+function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
+  return (
+    <View style={{
+      paddingHorizontal: 6, paddingVertical: 1,
+      borderRadius: 4, backgroundColor: C.surfaceContainerHigh,
+      borderWidth: 1, borderColor: C.ghostBorder,
+    }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
+        color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.5,
+      }} numberOfLines={1}>
+        MATCHED{cpcLabel ? ` · ${cpcLabel}` : ''}
+      </Text>
+    </View>
+  );
+}
+
+function MatchedButton({ name, cpcLabel }: { name: string; cpcLabel?: string }) {
+  const label = name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 12);
+  return (
+    <View style={{
+      flexBasis: '30%', flexDirection: 'column', alignItems: 'center',
+      paddingVertical: 8, paddingHorizontal: 6,
+      borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+      opacity: 0.55, gap: 2,
+    }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }} numberOfLines={1}>{label || '—'}</Text>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: C.secondary,
+        textTransform: 'uppercase', letterSpacing: 0.4,
+      }} numberOfLines={1}>
+        MATCHED{cpcLabel ? ` · ${cpcLabel}` : ''}
+      </Text>
+    </View>
+  );
+}

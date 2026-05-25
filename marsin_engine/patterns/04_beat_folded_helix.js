@@ -3,7 +3,7 @@
   Beat-Folded Pseudo-3D Helix Tunnel
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var armCount = 3.0;
 export var twistFreq = 4.0;
 export var contrast = 1.5;
@@ -13,9 +13,10 @@ export var cp2H = 0.0, cp2S = 1.0, cp2V = 1.0; // Red default
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
-export function count(v) { armCount = 1.0 + floor(v * 12.0); }
-export function size(v) { twistFreq = -10.0 + v * 40.0; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
+// Local sliders post-May 2026 (size is now engine-owned).
+export function sliderCount(v) { armCount = 1.0 + floor(v * 12.0); }
+export function sliderTwistFreq(v) { twistFreq = -10.0 + v * 40.0; }
 export function sliderContrast(v) { contrast = 0.5 + v * 9.0; }
 
 var masterTime = 0;
@@ -27,7 +28,7 @@ export function beforeRender(delta) {
   var d = delta > 0.0 ? delta : 25.0; 
   masterTime += d / 1000.0;
   
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   var dSpeed = 0.05 * localMultiplier;
   
   tunnelZ = masterTime * (dSpeed * 120.0);

@@ -3,7 +3,7 @@
   A huge, beat-locked interference field made from several phase-shifted sine planes crossing the rig. 
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var radialDensity = 15.0;
 export var ratioA = 1.618;
 export var ratioB = 0.618;
@@ -15,18 +15,28 @@ export var cp2H = 0.8, cp2S = 1.0, cp2V = 1.0; // Pink/Magenta default
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
-export function count(v) { radialDensity = 2 + v * 20; }
-export function size(v) { sharpness = 1 + v * 9; }
-export function direction(v) { globalDir = (v * 2.0) - 1.0; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
+// Local sliders post-May 2026 (count/direction were demoted from
+// globals; size is engine-owned and sharpness is a per-pattern tunable).
+export function sliderCount(v) { radialDensity = 2 + v * 20; }
+export function sliderSharpness(v) { sharpness = 1 + v * 9; }
+export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
 
 var beatPhase = 0.0;
 
+// Wrap beatPhase at a *large multiple* of 2π instead of 2π exactly.
+// f3 and f4 multiply beatPhase by irrational ratios (ratioA=1.618,
+// ratioB=0.618), so wrapping at 2π causes a discontinuous phase jump
+// (2π × ratioA mod 2π ≠ 0) → a visible flicker every full cycle
+// (~1–2s at default speed).  Wrapping at 10000×2π keeps float64
+// precision intact and shifts the audible glitch to once every ~14 hours.
+var BEAT_WRAP = 62831.853; // 10000 * 2π
+
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   var phaseIncrement = (delta / 65536.0) / (0.02 / localMultiplier);
-  beatPhase = (beatPhase + phaseIncrement * globalDir * 6.2831853) % 6.2831853;
-  if (beatPhase < 0) beatPhase += 6.2831853;
+  beatPhase = (beatPhase + phaseIncrement * globalDir * 6.2831853) % BEAT_WRAP;
+  if (beatPhase < 0) beatPhase += BEAT_WRAP;
 }
 
 export function render3D(index, x, y, z) {

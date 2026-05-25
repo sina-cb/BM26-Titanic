@@ -1,6 +1,6 @@
 master: 1
 channels:
-  - id: ch_1779683287704
+  - id: ch_1779705193366_7
     name: New Layer
     pattern: 00_golden_hour_wash
     mode: blend_screen
@@ -11,17 +11,51 @@ channels:
     transitionTime: 1
     localControls:
       '682166867':
-        v0: 0.94
+        v0: 0
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.25
+        v0: 0.39
         v1: 0
         v2: 0
     playlist:
       name: default
       activeEntryId: e_default_0_00_golden_hour_wash
       cursor: 0
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+  - id: ch_1779705193371_8
+    name: New Layer
+    pattern: 01_cylon_sweep
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '1037917937':
+        v0: 0.78
+        v1: 0
+        v2: 0
+      '1278139614':
+        v0: 0.22
+        v1: 0
+        v2: 0
+      '2571730692':
+        v0: 0.73
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.67
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_1_01_cylon_sweep
+      cursor: 1
       autopilot:
         active: false
         delay_s: 30

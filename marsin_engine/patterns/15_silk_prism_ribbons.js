@@ -3,7 +3,7 @@
   RGB-only satin ribbons sliding through the rig with soft phase-locked color blends.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var ribbonCount = 4.0;
 export var softness = 2.2;
 
@@ -12,7 +12,7 @@ export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // Ribbon B (Magenta default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderRibbonCount(v) { ribbonCount = 1.0 + v * 9.0; }
 export function sliderSoftness(v) { softness = 1.0 + v * 5.0; }
 
@@ -20,7 +20,7 @@ var phase = 0.0;
 var slowPhase = 0.0;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   phase = time(0.045 / localMultiplier);
   slowPhase = time(0.014 / localMultiplier);
 }

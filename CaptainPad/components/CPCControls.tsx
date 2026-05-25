@@ -1,17 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { updateParamCenter } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { useSharedParamValues, useOscStatus } from '@/hooks/useEngineState';
+import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
 import { OscStatusPill } from '@/components/OscStatusPill';
-
-// Hue swatch is rendered at full saturation + value to advertise the
-// "always pure" colour policy enforced by the picker (see hue-only
-// rationale below the picker modal).
-const FULL_S = 1;
-const FULL_V = 1;
+import { ColorPickerModal, DualSwatch } from '@/components/ColorPickerModal';
 
 const C = Colors.light;
 // BPM-sync "auto-driven" accent (green). Lives here as a local
@@ -19,25 +13,6 @@ const C = Colors.light;
 // landing in every consumer's TS server cache. Mirrors the value in
 // constants/theme.ts → Colors.light.tertiary.
 const ACCENT_AUTO = '#1b9e77';
-
-function hsvToRgbString(h: number, s: number, v: number) {
-  let r, g, b, i, f, p, q, t;
-  i = Math.floor(h * 6);
-  f = h * 6 - i;
-  p = v * (1 - s);
-  q = v * (1 - f * s);
-  t = v * (1 - (1 - f) * s);
-  switch (i % 6) {
-    case 0: r = v, g = t, b = p; break;
-    case 1: r = q, g = v, b = p; break;
-    case 2: r = p, g = v, b = t; break;
-    case 3: r = p, g = q, b = v; break;
-    case 4: r = t, g = p, b = v; break;
-    case 5: r = v, g = p, b = q; break;
-    default: r = 0, g = 0, b = 0;
-  }
-  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-}
 
 // Note: the `wsRef` prop is accepted for backward-compat with the
 // existing tab files but no longer required — live state now flows
@@ -49,8 +24,6 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
   const isPortrait = width < height;
   const defaultParams = useMemo(() => ({
     speed: 0.5,
-    direction: 1.0,
-    count: 0.5,
     size: 0.5,
     rotate: 0,
     colorPalette1: { h: 0, s: 1, v: 1 },
@@ -88,10 +61,19 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
   // originated from this UI, PortWatch over LoRa, or any script) flows
   // through the engineEvents bus → useSharedParamValues → here, so the
   // sliders/colour swatches always show the canonical engine state.
-  const params = useSharedParamValues(defaultParams) as typeof defaultParams;
-  // Hue-only picker state. Saturation and value are locked to 1.0 on
-  // write (`FULL_S` / `FULL_V`) — see picker modal for rationale.
-  const [pickerModal, setPickerModal] = useState<{ visible: boolean, key: string, h: number }>({ visible: false, key: '', h: 0 });
+  //
+  // tempoBpm is on the separate `liveParams` channel because it
+  // ticks at the analyser's rate; reading it via useLiveParamValues
+  // keeps this component's re-render scope tight (the BpmTile child
+  // is the only thing that visibly changes when BPM nudges).
+  const steadyParams = useSharedParamValues(defaultParams) as typeof defaultParams;
+  const { tempoBpm } = useLiveParamValues({ tempoBpm: 0 });
+  const params = useMemo(() => ({ ...steadyParams, tempoBpm }), [steadyParams, tempoBpm]);
+  // The Deck's two old per-colour swatches collapsed into one COLORS
+  // button (May 2026). The picker itself lives in ColorPickerModal —
+  // hue-only writes, atomic dual apply, presets sourced from
+  // config.yaml. We only track open/closed here.
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
 
   // Writers post to /param-center. The engine's POST handler
   // broadcasts a fresh sharedParams to every subscriber (including us),
@@ -99,13 +81,6 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
   // broadcast round-trip is already sub-second on Wi-Fi.
   const update = (key: string, val: any) => {
     updateParamCenter({ [key]: val });
-  };
-
-  // Color writes always pin S/V at 1.0 to avoid washed-out palettes
-  // on stage. If we ever expose a "stage dim" pass, do it as a
-  // separate brightness param rather than re-opening S/V here.
-  const updateColorHue = (key: string, h: number) => {
-    updateParamCenter({ [key]: { h, s: FULL_S, v: FULL_V } });
   };
 
   const faderMaxWidth = isPortrait ? 90 : 140;
@@ -159,9 +134,11 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
       ) : null}
 
       {/* ── Row 1: pattern globals + colour swatches + BPM + OSC pill ─ */}
-      {/* Order: SPEED · SIZE · COUNT · DIR · C1 · C2 · BPM · OSC. The
-          OSC pill is intentionally LAST so the eye finishes the row on
-          health status rather than starting there. */}
+      {/* Order: SPEED · SIZE · C1 · C2 · BPM · OSC. `count` and `dir`
+          were demoted to pattern-local in May 2026 — they were too
+          per-pattern to act as globals. The OSC pill is intentionally
+          LAST so the eye finishes the row on health status rather than
+          starting there. */}
       {/* Row labels share `labelWidth` so the first slider in each row
           starts at the same x. Tweaking one number keeps the two rows
           glued together. */}
@@ -185,27 +162,15 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
             <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
           </View>
 
-          <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-            <MiniFader label="COUNT" value={params.count ?? 0.5} onChange={(v) => update('count', v)} />
-          </View>
-
-          <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-            {/* DIR: 0=REV, 0.5=STOP, 1.0=FWD */}
-            <MiniFader label={isPortrait ? "DIR" : "DIR (R/S/F)"} value={params.direction ?? 1.0} onChange={(v) => update('direction', v)} />
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: isPortrait ? 6 : 10, alignItems: 'center' }}>
-            <ColorSwatch
-              label="C1"
-              hue={params.colorPalette1?.h ?? 0}
-              onPress={() => setPickerModal({ visible: true, key: 'colorPalette1', h: params.colorPalette1?.h ?? 0 })}
-            />
-            <ColorSwatch
-              label="C2"
-              hue={params.colorPalette2?.h ?? 0.5}
-              onPress={() => setPickerModal({ visible: true, key: 'colorPalette2', h: params.colorPalette2?.h ?? 0.5 })}
-            />
-          </View>
+          {/* Single COLORS button. Tapping opens the tabbed picker
+              (Presets · Manual) — see ColorPickerModal. We render both
+              hues as a split-circle swatch so the operator can see the
+              current pair at a glance without opening the modal. */}
+          <ColorPairButton
+            h1={params.colorPalette1?.h ?? 0}
+            h2={params.colorPalette2?.h ?? 0.5}
+            onPress={() => setColorPickerOpen(true)}
+          />
 
           {/* BPM tile sits just before the OSC pill — a "tempo + source
               health" cluster at the end of the row. */}
@@ -265,88 +230,53 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
         </View>
       </View>
 
-      {/* ── Color Picker Modal (hue only) ────────────────────────────── */}
-      {/* S and V are locked to 100% so palette colours can never end up
-          washed out on stage. If we ever need a stage-dim pass it
-          should be a separate brightness control, not a re-enabled
-          S/V here — see updateColorHue() rationale. */}
-      <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal(p => ({ ...p, visible: false }))}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ width: 320, backgroundColor: C.surfaceContainerLowest, padding: 24, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase' }}>
-                {pickerModal.key === 'colorPalette1' ? 'Color 1' : 'Color 2'}
-              </Text>
-              {/* Big preview chip so operators can confirm hue before APPLY. */}
-              <View style={{
-                width: 40, height: 40, borderRadius: 20,
-                borderWidth: 2, borderColor: C.ghostBorder,
-                backgroundColor: hsvToRgbString(pickerModal.h, FULL_S, FULL_V),
-              }} />
-            </View>
-
-            <View style={{ marginBottom: 16 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10, textTransform: 'uppercase' }}>Hue</Text>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10 }}>{Math.round(pickerModal.h * 360)}°</Text>
-              </View>
-              <HorizontalFader
-                value={pickerModal.h}
-                onChange={(v: number) => setPickerModal(p => ({ ...p, h: v }))}
-                trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }}
-                fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: hsvToRgbString(pickerModal.h, FULL_S, FULL_V), borderRadius: 12 }}
-              />
-            </View>
-
-            {/* Read-only hint reminding operators why S/V aren't here. */}
-            <Text style={{
-              fontFamily: 'Inter_400Regular', fontSize: 11,
-              color: C.icon, marginBottom: 20,
-            }}>
-              Saturation and brightness are locked to 100% to keep stage colours pure.
-            </Text>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <TouchableOpacity onPress={() => setPickerModal(p => ({ ...p, visible: false }))} style={{ padding: 12 }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary }}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  updateColorHue(pickerModal.key, pickerModal.h);
-                  setPickerModal(p => ({ ...p, visible: false }));
-                }}
-                style={{ backgroundColor: C.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 }}
-              >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000' }}>APPLY</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
+      <ColorPickerModal
+        visible={colorPickerOpen}
+        initialH1={params.colorPalette1?.h ?? 0}
+        initialH2={params.colorPalette2?.h ?? 0.5}
+        onClose={() => setColorPickerOpen(false)}
+      />
     </View>
   );
 };
 
 // ── Small subcomponents ────────────────────────────────────────────────────
 
-// Round colour chip. Forced to display hue at full S/V to advertise the
-// "always pure" picker policy — the canonical CPC value may be anything,
-// but every write coming out of this UI pins S=V=1, so showing the
-// stored S/V on the swatch would lie about what the next tap will write.
-function ColorSwatch({ label, hue, onPress }: { label: string; hue: number; onPress: () => void }) {
+/**
+ * Single COLORS button on the Deck. Shows both global hues as a split
+ * circle so the operator can confirm the current pair at a glance.
+ * Tapping opens the tabbed picker (Presets · Manual).
+ */
+/**
+ * Single COLORS button. Wide pill (~96px) sized so it sits comfortably
+ * next to the SPEED/SIZE MiniFaders and gives the operator a fat
+ * tap-target on the iPad. Shows both global hues as a split-circle
+ * preview + a "COLORS" caption; opens the tabbed picker on tap.
+ */
+function ColorPairButton({ h1, h2, onPress }: { h1: number; h2: number; onPress: () => void }) {
   return (
     <View>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>{label}</Text>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>COLORS</Text>
       <TouchableOpacity
         onPress={onPress}
-        style={{
-          width: 32, height: 32, borderRadius: 16,
-          borderWidth: 2, borderColor: C.ghostBorder,
-          backgroundColor: hsvToRgbString(hue, FULL_S, FULL_V),
-        }}
-        accessibilityLabel={`${label} hue picker, ${Math.round(hue * 360)} degrees`}
+        accessibilityLabel="Open colour picker"
         accessibilityRole="button"
-      />
+        style={{
+          minWidth: 96, paddingHorizontal: 10, paddingVertical: 6,
+          borderRadius: 10, borderWidth: 1, borderColor: C.ghostBorder,
+          backgroundColor: C.surface,
+          flexDirection: 'row', alignItems: 'center', gap: 10,
+        }}
+      >
+        <DualSwatch h1={h1} h2={h2} size={32} />
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+          color: C.text, letterSpacing: 0.6,
+        }}>
+          EDIT
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }

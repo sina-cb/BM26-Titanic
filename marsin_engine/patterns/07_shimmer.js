@@ -3,7 +3,7 @@
   Shimmering Glow
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var shimmerSpeedTrim = 0.5;
 export var shimmerDensity = 10.0;
 export var breathingInt = 0.4;
@@ -14,7 +14,7 @@ export var cp2H = 0.2, cp2S = 1.0, cp2V = 1.0; // Shimmer glints default (white/
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderShimmerSpeedTrim(v) { shimmerSpeedTrim = v; }
 export function sliderDensity(v) { shimmerDensity = 2.0 + v * 30.0; }
 export function sliderBreathing(v) { breathingInt = v; }
@@ -23,7 +23,7 @@ var tBreathing;
 var tShimmer;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   var localShimmerMultiplier = pow(2.0, (shimmerSpeedTrim - 0.5) * 4.0);
   tBreathing = time(0.1 / localMultiplier);
   tShimmer = time(0.5 / localShimmerMultiplier);

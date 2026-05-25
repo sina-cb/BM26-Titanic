@@ -277,6 +277,7 @@ async def test_profile_get_returns_available():
         assert body == {
             "available": ["test_bench", "playa"],
             "current": "playa",
+            "enabled": False,
         }
 
 
@@ -314,9 +315,50 @@ async def test_health_snapshot_includes_profile_block(tmp_path):
     bridge._lora_profile_last_applied_ms = None
     bridge._PROFILE_DISK_PATH = str(tmp_path / "profile.txt")
 
+    bridge.usb_cfg_enabled = True
+
     snap = bridge.health_snapshot()
     assert snap["version"] == "1.1"
     assert "profile" in snap
     assert snap["profile"]["available"] == ["test_bench", "local", "playa"]
     assert snap["profile"]["current"] == "playa"
     assert snap["profile"]["default_delay_ms"] == 4000
+    assert snap["profile"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_request_profile_change_disabled_by_config(tmp_path):
+    from comms.bridge import Bridge
+
+    bridge = Bridge.__new__(Bridge)
+    bridge.usb_cfg_enabled = False
+    bridge._lora_profile_current = "playa"
+    bridge._lora_profile_last_applied_ms = None
+    bridge._PROFILE_DISK_PATH = str(tmp_path / "profile.txt")
+
+    ok = await bridge.request_profile_change("local")
+    assert ok is False
+    assert not (tmp_path / "profile.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_profile_get_reflects_disabled_in_config():
+    from aiohttp.test_utils import TestClient, TestServer
+    from comms.bridge_health import build_app
+
+    # When profile_apply_fn is None, enabled should be False
+    app = build_app(
+        snapshot_fn=lambda: {"service": "titanic-bridge"},
+        profile_apply_fn=None,
+        profile_list_fn=lambda: ["test_bench", "playa"],
+        profile_current_fn=lambda: "playa",
+    )
+    async with TestClient(TestServer(app)) as client:
+        r = await client.get("/profile")
+        assert r.status == 200
+        body = await r.json()
+        assert body == {
+            "available": ["test_bench", "playa"],
+            "current": "playa",
+            "enabled": False,
+        }

@@ -3,7 +3,7 @@
   RGB-only rolling dunes of color with broad, slow movement across X and height.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var scale = 3.0;
 export var contrast = 1.7;
 
@@ -12,7 +12,7 @@ export var cp2H = 0.47, cp2S = 0.88, cp2V = 1.0; // High Color (Teal default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderScale(v) { scale = 1.0 + v * 7.0; }
 export function sliderContrast(v) { contrast = 0.8 + v * 3.5; }
 
@@ -20,7 +20,7 @@ var roll = 0.0;
 var drift = 0.0;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   roll = time(0.035 / localMultiplier);
   drift = time(0.01 / localMultiplier); 
 }

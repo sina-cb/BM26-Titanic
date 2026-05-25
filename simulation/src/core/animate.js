@@ -250,6 +250,7 @@ export function animate() {
         }
       }
     }
+  }
   // ─── Clear Pixels if Lighting Disabled ───
   if (!lightingEnabled) {
     if (_batchCacheVersion !== _batchLastBuiltVersion) {

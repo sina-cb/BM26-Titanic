@@ -1,19 +1,21 @@
 /*
   14_lunar_current.js
-  Wide, smooth moonlit currents with white and UV riding through the upper layers.
+  Wide, smooth moonlit currents. Strict cp1<->cp2 palette in RGB-space.
+  White/UV emitters are gated behind named sliders (default 0) so the
+  palette stays pure unless explicitly opted into.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var density = 2.8;
 export var whiteLift = 0.5;
 export var uvLift = 0.5;
 
-export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0; // Current (Deep Blue default)
-export var cp2H = 0.5, cp2S = 1.0, cp2V = 1.0;  // Caustic/Accent (Teal default)
+export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0; // Current colour
+export var cp2H = 0.50, cp2S = 1.00, cp2V = 1.0; // Caustic accent colour
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderDensity(v) { density = 1.0 + v * 5.0; }
 export function sliderWhiteLift(v) { whiteLift = v; }
 export function sliderUvLift(v) { uvLift = v; }
@@ -21,10 +23,44 @@ export function sliderUvLift(v) { uvLift = v; }
 var driftA = 0.0;
 var driftB = 0.0;
 
+// ── Palette RGB cache ─────────────────────────────────────────────────
+var pr1 = 1, pg1 = 0, pb1 = 0;
+var pr2 = 0, pg2 = 0, pb2 = 1;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp1V * (1 - cp1S);
+  var qv = cp1V * (1 - fv * cp1S);
+  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;    pb1 = pv;    }
+  else if (iv == 1) { pr1 = qv;    pg1 = cp1V; pb1 = pv;    }
+  else if (iv == 2) { pr1 = pv;    pg1 = cp1V; pb1 = tv;    }
+  else if (iv == 3) { pr1 = pv;    pg1 = qv;    pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;    pg1 = pv;    pb1 = cp1V; }
+  else             { pr1 = cp1V; pg1 = pv;    pb1 = qv;    }
+}
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp2V * (1 - cp2S);
+  var qv = cp2V * (1 - fv * cp2S);
+  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;    pb2 = pv;    }
+  else if (iv == 1) { pr2 = qv;    pg2 = cp2V; pb2 = pv;    }
+  else if (iv == 2) { pr2 = pv;    pg2 = cp2V; pb2 = tv;    }
+  else if (iv == 3) { pr2 = pv;    pg2 = qv;    pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;    pg2 = pv;    pb2 = cp2V; }
+  else             { pr2 = cp2V; pg2 = pv;    pb2 = qv;    }
+}
+
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   driftA = time(0.035 / localMultiplier);
-  driftB = time(0.015 / localMultiplier); 
+  driftB = time(0.015 / localMultiplier);
+  _hsv2rgb1();
+  _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
@@ -39,27 +75,18 @@ export function render3D(index, x, y, z) {
   current = pow(current, 1.8);
 
   var crown = pow(max(0.0, ny), 1.6);
-  
-  var effWhiteLift = whiteLift * 1.5; 
-  var effUvLift = uvLift * 1.1;       
-  
-  var white = current * crown * effWhiteLift * (1.0 - cp1S);
-  var uv = (0.2 + crossWave * 0.8) * crown * effUvLift;
+  var v = current * (0.6 + 0.4 * crown);
 
-  var dh = cp2H - cp1H;
-  if (dh > 0.5) dh -= 1.0;
-  else if (dh < -0.5) dh += 1.0;
-  var hue = cp1H + dh * crossWave;
-  var sat = cp1S + (cp2S - cp1S) * crossWave;
-  var maxVal = cp1V + (cp2V - cp1V) * crossWave;
+  // Strict cp1<->cp2 RGB lerp driven by crossWave.
+  var tColour = crossWave;
+  var r = (pr1 + (pr2 - pr1) * tColour) * v;
+  var g = (pg1 + (pg2 - pg1) * tColour) * v;
+  var b = (pb1 + (pb2 - pb1) * tColour) * v;
 
-  var rgbV = current * (0.35 + 0.45 * (1.0 - crown)) * maxVal;
-  var effSat = sat * (0.75 + 0.25 * longWave);
+  // Optional white / UV crown — defaults to 0 so the palette stays pure.
+  var w = current * crown * whiteLift;
+  var u = (0.2 + crossWave * 0.8) * crown * uvLift;
 
-  var base = rgbV * (1.0 - effSat);
-  var r = base + (rgbV * wave(hue + 0.000) * effSat);
-  var g = base + (rgbV * wave(hue + 0.333) * effSat);
-  var b = base + (rgbV * wave(hue + 0.666) * effSat);
-
-  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), min(1.0, white), 0.0, min(1.0, uv));
+  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b),
+         min(1.0, w), 0.0, min(1.0, u));
 }

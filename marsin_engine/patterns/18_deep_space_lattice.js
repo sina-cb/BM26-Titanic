@@ -3,7 +3,7 @@
   RGB-only drifting lattice waves with smooth color depth and no hard flashes.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var latticeScale = 6.0;
 export var lineSoftness = 2.0;
 
@@ -12,7 +12,7 @@ export var cp2H = 0.92, cp2S = 0.95, cp2V = 1.0; // Accent Color (Pink default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLatticeScale(v) { latticeScale = 2.0 + v * 12.0; }
 export function sliderLineSoftness(v) { lineSoftness = 1.0 + v * 5.0; }
 
@@ -20,7 +20,7 @@ var phaseA = 0.0;
 var phaseB = 0.0;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   phaseA = time(0.028 / localMultiplier);
   phaseB = time(0.011 / localMultiplier);
 }

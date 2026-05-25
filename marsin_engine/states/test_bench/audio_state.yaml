@@ -6,13 +6,12 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  platform: win32
-  inputFormat: dshow
-  device: audio=Microphone Array (Realtek(R) Audio)
-  deviceId: dshow-audio-Microphone Array (Realtek(R) Audio)
-  deviceLabel: Microphone Array (Realtek(R) Audio)
-  selectedAt: '2026-05-25T04:50:06.479Z'
-enabled: false
+  device: ':1'
+  deviceLabel: MacBook Pro Microphone
+  deviceId: avfoundation-audio-1
+  inputFormat: avfoundation
+  platform: darwin
+enabled: true
 fftSize: 1024
 hopSize: 512
 bands:
@@ -23,5 +22,5 @@ kick:
   minHz: 40
   maxHz: 120
   threshold: 1.6
-  refractoryMs: 1000
+  refractoryMs: 200
   decayMs: 120

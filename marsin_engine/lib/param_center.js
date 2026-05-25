@@ -14,23 +14,34 @@ import yaml from 'js-yaml';
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 const PARAM_REGISTRY = [
   {
+    // `speed` and `size` are ENGINE-OWNED globals since May 2026.
+    //
+    // The engine reads their CPC value directly each tick and applies
+    // it itself — speed accumulates a scaled `patternClockSeconds`
+    // (see engine.js createRenderLoop), size rebuilds the WASM coord
+    // buffer (see wasm_host.applySizeScale). They are deliberately
+    // NOT injected as pattern variables, so patterns can't fight the
+    // engine over the same knob. The `engineOwned: true` flag tells
+    // `registerChannel` to skip the per-pattern function binding
+    // even though the entries still appear in /param-center/schema
+    // (so the CaptainPad UI, OSC, and persistence still work).
     key: 'speed', label: 'Speed', type: 'float',
     default: 0.5, range: [0, 1], clamp: true, persist: true,
+    engineOwned: true,
     oscAddress: '/marsin/param/speed', sharedFnName: 'speed',
   },
+  // `direction` and `count` were globals through May 2026 but ended up
+  // being too pattern-specific to make sense as cross-pattern controls
+  // (every pattern interpreted "count" differently and many had no
+  // meaningful direction). They're now pattern-local only — declare
+  // `sliderDirection` / `sliderCount` (or whatever fits) inside the
+  // pattern and they'll surface in the per-channel local controls.
+  // See report .agent/02_reports/202605/20260508_1 §6 for context.
   {
-    key: 'direction', label: 'Direction', type: 'float',
-    default: 1.0, range: [0, 1], options: [0, 0.5, 1.0], clamp: true, persist: true,
-    oscAddress: '/marsin/param/direction', sharedFnName: 'direction',
-  },
-  {
-    key: 'count', label: 'Count', type: 'float',
-    default: 0.5, range: [0, 1], clamp: true, persist: true,
-    oscAddress: '/marsin/param/count', sharedFnName: 'count',
-  },
-  {
+    // Engine-owned (see comment on `speed` above).
     key: 'size', label: 'Size', type: 'float',
     default: 0.5, range: [0, 1], clamp: true, persist: true,
+    engineOwned: true,
     oscAddress: '/marsin/param/size', sharedFnName: 'size',
   },
   {
@@ -545,6 +556,10 @@ export class ParamCenter {
       broadcastHz: e.broadcastHz ?? REGISTRY_DEFAULTS.broadcastHz,
       persist: !!e.persist,
       portWatch: e.portWatch !== false,
+      // Surfaces engine-owned globals (e.g. `speed`, `size`) so
+      // CaptainPad can render them with a small "ENGINE" annotation
+      // and patterns can stop trying to bind them as pattern vars.
+      engineOwned: !!e.engineOwned,
     }));
   }
 
@@ -556,20 +571,27 @@ export class ParamCenter {
     const blockedIds = new Set();
     const sharedFnNames = new Set();
 
-    // 1. Find shared* exports
+    // 1. Find shared* exports — but skip engine-owned entries (e.g.
+    // `speed`, `size`). The engine reads those CPC values directly
+    // each tick; injecting them as pattern variables would let a
+    // pattern shadow the engine's authoritative value.
     for (const exp of exports) {
       const entry = this._registryByFnName[exp.name];
-      if (entry) {
+      if (entry && !entry.engineOwned) {
         controlMap[entry.key] = { id: exp.id, fnName: exp.name };
         sharedFnNames.add(exp.name);
       }
     }
 
-    // 2. Conflict detection
+    // 2. Conflict detection — same engine-owned guard. We don't want
+    // to block a `sliderSpeed` local just because `speed` exists in
+    // the registry; the engine owns global speed, the pattern keeps
+    // its local trim.
     for (const exp of exports) {
       if (sharedFnNames.has(exp.name)) continue;
       const lowerName = exp.name.toLowerCase();
       for (const entry of this._registry) {
+        if (entry.engineOwned) continue;
         const suffix = entry.key.toLowerCase();
         if (!controlMap[entry.key]) continue;
         if (lowerName === `slider${suffix}` || lowerName === `hsvpicker${suffix}` || lowerName === `toggle${suffix}`) {
@@ -604,6 +626,60 @@ export class ParamCenter {
       if (ch.controlMap[key].id === controlId) return true;
     }
     return false;
+  }
+
+  /**
+   * Resolve the CPC key + human label for a pattern export, if the
+   * export is being driven by the Central Parameter Center on this
+   * channel. Returns `null` for purely local exports.
+   *
+   * Two flavours of "CPC-owned" are recognised — both are surfaced
+   * by the CaptainPad UI as disabled "MATCHED" controls (instead of
+   * the older behaviour, which hid them entirely):
+   *
+   *   1. Direct shared-fn match — the export's name is the canonical
+   *      shared function (e.g. `colorPalette1`, `size`). These are
+   *      what `applySnapshot`/`flushDirty` actively write into.
+   *
+   *   2. Conflict-blocked match — the export's id is in `blockedIds`
+   *      because its name aliases a CPC variable via the
+   *      `sliderX` / `hsvPickerX` / `toggleX` naming convention.
+   *      The CPC owns the
+   *      underlying variable; the local export still exists in the
+   *      WASM module but never receives writes through the normal
+   *      /control path.
+   *
+   * @param {string} channelId
+   * @param {{ id: number, name: string }} exp — one entry from `wasmHost.getExports`
+   * @returns {{ key: string, label: string } | null}
+   */
+  cpcKeyForExport(channelId, exp) {
+    const ch = this._channels?.[channelId];
+    if (!ch || !exp) return null;
+
+    // Flavour 1 — direct shared-fn export. Skip engine-owned globals
+    // (speed/size); they're never injected so a pattern that happens
+    // to export `speed()` would just receive no writes, not be CPC-
+    // matched. The MATCHED badge would be misleading.
+    const direct = this._registryByFnName[exp.name];
+    if (direct && !direct.engineOwned) return { key: direct.key, label: direct.label };
+
+    // Flavour 2 — a blocked export that aliases a registered key
+    // via the slider*/hsvPicker*/toggle* convention. Mirrors the
+    // detection loop in registerChannel().
+    if (ch.blockedIds.has(exp.id)) {
+      const lowerName = exp.name.toLowerCase();
+      for (const entry of this._registry) {
+        const suffix = entry.key.toLowerCase();
+        if (!ch.controlMap[entry.key]) continue;
+        if (lowerName === `slider${suffix}` ||
+            lowerName === `hsvpicker${suffix}` ||
+            lowerName === `toggle${suffix}`) {
+          return { key: entry.key, label: entry.label };
+        }
+      }
+    }
+    return null;
   }
 
   applySnapshot(wasmHost) {

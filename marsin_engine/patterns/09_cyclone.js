@@ -3,7 +3,7 @@
   Confetti Cyclone
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var density = 30;
 export var particleSize = 0.5;
 
@@ -12,13 +12,13 @@ export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // Green default
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderDensity(v) { density = 5.0 + v * 50.0; }
 export function sliderParticleSize(v) { particleSize = 0.1 + v * 0.8; }
 
 var t1;
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   t1 = time(0.6 / localMultiplier);
 }
 

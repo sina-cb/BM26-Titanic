@@ -5,111 +5,154 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.47
-      sliderNoiseScale: 0.94
+      sliderLocalSpeed: 0.39
+      sliderNoiseScale: 0
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderSpeedTrim: 0.61
-      sliderBackgroundGlow: 0.38
+      sliderLocalSpeed: 0.78
+      sliderBeamWidth: 0.73
+      sliderBackgroundGlow: 0.22
+      sliderDirection: 0.67
     notes: null
   - id: e_default_2_02_phase_cathedral
     pattern: 02_phase_cathedral
     label: null
     defaults:
-      sliderSpeedTrim: 0.19
+      sliderLocalSpeed: 0.44
+      sliderCount: 0.71
+      sliderSharpness: 0.15
+      sliderDirection: 0.77
     notes: null
   - id: e_default_3_03_dual_axis_crush
     pattern: 03_dual_axis_crush
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.84
+      sliderCount: 0.23
+      sliderBeamWidth: 0.77
+      sliderDirection: 0.71
     notes: null
   - id: e_default_4_04_beat_folded_helix
     pattern: 04_beat_folded_helix
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.39
+      sliderCount: 0.73
+      sliderTwistFreq: 0.28
+      sliderContrast: 0.79
     notes: null
   - id: e_default_5_05_orbital_attractor_field
     pattern: 05_orbital_attractor_field
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.69
+      sliderFalloff: 0.3
+      sliderFocus: 0.7
     notes: null
   - id: e_default_6_06_neon_elevator
     pattern: 06_neon_elevator
     label: null
     defaults:
-      sliderSpeedTrim: 0.95
-      sliderSteps: 0.09
-      sliderThickness: 0.77
-      sliderBloom: 0.69
+      sliderLocalSpeed: 0.88
+      sliderSteps: 0.1
+      sliderThickness: 0.75
+      sliderBloom: 0.78
     notes: null
   - id: e_default_7_07_shimmer
     pattern: 07_shimmer
     label: null
     defaults:
-      sliderSpeedTrim: 0.13
-      sliderShimmerSpeedTrim: 0.2
-      sliderDensity: 0.3
-      sliderBreathing: 0.32
+      sliderLocalSpeed: 1
+      sliderShimmerSpeedTrim: 0.76
+      sliderDensity: 0.78
+      sliderBreathing: 0.89
     notes: null
   - id: e_default_8_08_ocean_liner
     pattern: 08_ocean_liner
     label: null
     defaults:
-      sliderSpeedTrim: 0.75
-      sliderContrast: 0.84
-      sliderWindowCount: 0.83
-      sliderWindowFocus: 0.32
+      sliderLocalSpeed: 0.82
+      sliderContrast: 0.86
+      sliderWindowCount: 0.33
+      sliderWindowFocus: 0.89
     notes: null
   - id: e_default_9_09_cyclone
     pattern: 09_cyclone
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDensity: 0.74
+      sliderParticleSize: 0.65
     notes: null
   - id: e_default_10_10_chasers
     pattern: 10_chasers
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.54
+      sliderParticleCount: 0.24
+      sliderTailLength: 0.74
     notes: null
   - id: e_default_11_11_bioluminescence
     pattern: 11_bioluminescence
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.85
+      sliderDensity: 0.23
+      sliderUvGlow: 0.75
+      sliderPartyMode: 0.78
     notes: null
   - id: e_default_12_12_breathing
     pattern: 12_breathing
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.7
+      sliderRipple: 0.8
+      sliderSharpness: 0.28
     notes: null
   - id: e_default_13_13_sparkle
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderSpeedTrim: 0.19
-      sliderSparkleSpeedTrim: 0
-      sliderSparkleDensity: 0
+      sliderLocalSpeed: 0.71
+      sliderSparkleSpeedTrim: 0.27
+      sliderSparkleDensity: 0.54
     notes: null
   - id: e_default_14_14_lunar_current
     pattern: 14_lunar_current
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.56
+      sliderDensity: 0.85
+      sliderWhiteLift: 0.85
+      sliderUvLift: 0.89
     notes: null
   - id: e_default_15_15_silk_prism_ribbons
     pattern: 15_silk_prism_ribbons
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.75
+      sliderRibbonCount: 0.24
+      sliderSoftness: 0.75
     notes: null
   - id: e_default_16_16_ghost_tide_uv
     pattern: 16_ghost_tide_uv
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.35
+      sliderTideWidth: 0.76
+      sliderWhiteLevel: 0.86
+      sliderUvLevel: 1
     notes: null
   - id: e_default_17_17_rolling_color_dunes
     pattern: 17_rolling_color_dunes
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.52
+      sliderScale: 0.22
+      sliderContrast: 0.77
     notes: null
   - id: e_default_18_18_deep_space_lattice
     pattern: 18_deep_space_lattice
@@ -120,10 +163,10 @@ entries:
     pattern: 19_swaying_lattice_ballet
     label: null
     defaults:
-      sliderSpeedTrim: 0.16
-      sliderDensity: 1
-      sliderWidth: 0.97
-      sliderSoftness: 0.83
+      sliderLocalSpeed: 0.74
+      sliderDensity: 0.38
+      sliderWidth: 0.72
+      sliderSoftness: 0.77
     notes: null
   - id: e_default_20_20_parametric_sway_field
     pattern: 20_parametric_sway_field
@@ -162,9 +205,9 @@ entries:
     pattern: 24_chromatic_murmuration
     label: null
     defaults:
-      sliderSpeedTrim: 0.27
+      sliderLocalSpeed: 0
       sliderFlockReach: 0.21
-      sliderFlockFocus: 0.17
+      sliderFlockFocus: 0.53
       sliderFilamentDensity: 0.3
       sliderContrast: 0.95
       sliderSaturation: 0.77
@@ -174,9 +217,9 @@ entries:
     pattern: 25_heartbeat
     label: null
     defaults:
-      sliderSpeedTrim: 0.68
-      sliderDormantGlow: 0.24
-      sliderRippleSweep: 0.83
+      sliderLocalSpeed: 0.72
+      sliderDormantGlow: 0.09
+      sliderRippleSweep: 0.55
     notes: null
   - id: e_default_26_rainbow
     pattern: rainbow

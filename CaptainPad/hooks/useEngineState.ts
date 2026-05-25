@@ -130,8 +130,39 @@ export interface ParamSchemaEntry {
   portWatch: boolean;
 }
 
+/**
+ * Live-only CPC subset, broadcast on the `liveParams` WS message
+ * type. This is the high-rate audio-derived state — mic bands + kick,
+ * OSC stems, tempoBpm — that used to ride the same `sharedParams`
+ * broadcast as colors/speed/size and force the mixer / deck UIs to
+ * parse a 1.5 KB snapshot ~30× / second whenever the analyser was
+ * running.
+ *
+ * Engine: `liveParams` only contains the keys whose schema entry has
+ * `live: true`. The full canonical doc still lives on `sharedParams`
+ * (REST + WS) and is broadcast only when a STEADY key actually
+ * changes.
+ *
+ * Consumers:
+ *   - audio.tsx — meters + BPM read from useLiveParamValues
+ *   - everything else — keeps reading useSharedParamValues, never
+ *     re-renders just because the analyser ticked
+ */
+export interface LiveParams {
+  revision: number;
+  params: Record<string, SharedParamValue>;
+}
+
 export interface EngineLiveState {
   sharedParams: SharedParams | null;
+  /**
+   * Audio-derived live params (see LiveParams). Null until the first
+   * liveParams broadcast or REST seed lands. Components that depend
+   * on these MUST go through useLiveParamValues / useLiveParams so a
+   * UI that needs a single live key (e.g. the deck's BPM badge)
+   * still re-renders cheaply when the field changes.
+   */
+  liveParams: LiveParams | null;
   mixerChannels: MixerChannel[];
   blackout: boolean;
   /**
@@ -168,6 +199,7 @@ export interface AudioStatus {
 
 const EMPTY_STATE: EngineLiveState = {
   sharedParams: null,
+  liveParams: null,
   mixerChannels: [],
   blackout: false,
   master: 1.0,
@@ -180,6 +212,16 @@ let _cached: EngineLiveState = EMPTY_STATE;
 const _listeners = new Set<(s: EngineLiveState) => void>();
 let _initialized = false;
 
+// liveParams rides its own micro-bus on purpose. It updates 15-30 Hz
+// while the audio analyser is running and we don't want every
+// useEngineState() consumer (mixer chrome, deck top bar, playlist
+// panel) to re-render at that rate just because the mic kick fired.
+// Only useLiveParams / useLiveParamValues subscribe here, so the
+// fan-out is bounded to the components that actually visualise live
+// audio data (audio.tsx meters + the BPM badge).
+let _liveCached: LiveParams | null = null;
+const _liveListeners = new Set<(s: LiveParams | null) => void>();
+
 function _emit(next: EngineLiveState) {
   _cached = next;
   _listeners.forEach((cb) => {
@@ -187,6 +229,22 @@ function _emit(next: EngineLiveState) {
       cb(next);
     } catch {
       // A buggy subscriber must never break the broadcast pipeline.
+    }
+  });
+}
+
+function _emitLive(next: LiveParams | null) {
+  _liveCached = next;
+  // Mirror onto _cached.liveParams too so an audio-tab cold mount
+  // that reads useEngineState().liveParams sees the latest known
+  // value without having to subscribe via useLiveParams first.
+  _cached = { ..._cached, liveParams: next };
+  _liveListeners.forEach((cb) => {
+    try {
+      cb(next);
+    } catch {
+      // Same defensive isolation as _emit — a buggy subscriber must
+      // never break the audio meter pipeline.
     }
   });
 }
@@ -203,6 +261,17 @@ function _onMessage(msg: EngineMessage) {
         sourceLock: raw.sourceLock ?? null,
         params: (raw.params as Record<string, SharedParamValue>) || {},
       },
+    });
+  } else if (msg.type === 'liveParams') {
+    // Audio-derived high-rate keys. Routed onto its own micro-bus so
+    // only audio meters / BPM badge re-render at the analyser's
+    // 15-30 Hz cadence; the rest of the UI stays still even when the
+    // analyser is hot. See engine `broadcastCpcSplit` in
+    // lib/api_server.js.
+    const raw = msg as unknown as { revision?: number; params?: Record<string, SharedParamValue> };
+    _emitLive({
+      revision: typeof raw.revision === 'number' ? raw.revision : 0,
+      params: raw.params || {},
     });
   } else if (msg.type === 'mixer') {
     // The mixer broadcast carries every channel's exports with live
@@ -271,6 +340,14 @@ function _ensureInitialized() {
   // Seed from REST so the first paint is already correct even before
   // the first WS message lands. Both endpoints fail silently — the WS
   // path will catch us up within a couple of seconds.
+  //
+  // The REST seed also feeds the liveParams cache: /param-center
+  // returns the WHOLE CPC doc (steady + live keys), so we extract the
+  // live-flagged subset and prime _liveCached too. Without this,
+  // useLiveParamValues would return defaults until the first WS
+  // liveParams broadcast lands (which can take up to ~70 ms with the
+  // analyser idle, or longer if the analyser is disabled — see
+  // engine.js audio bootstrap).
   fetchParamCenter()
     .then((r) => {
       if (!r.ok || !r.data) return;
@@ -283,6 +360,25 @@ function _ensureInitialized() {
           params: data.params || {},
         },
       });
+      // Best-effort live-key extraction. We don't have the schema
+      // yet (the fetchParamCenterSchema chain races us), so we use a
+      // hardcoded list of the live keys defined in
+      // marsin_engine/lib/param_center.js. Adding a new live key
+      // there requires updating this set too; if the set drifts the
+      // worst case is a one-frame stale meter on cold boot.
+      const liveKeys = new Set([
+        'micLow', 'micMid', 'micHigh', 'micKick',
+        'stemsVocals', 'stemsBass', 'stemsDrums',
+        'tempoBpm',
+      ]);
+      const liveSlice: Record<string, SharedParamValue> = {};
+      for (const k of liveKeys) {
+        const slot = data.params?.[k];
+        if (slot) liveSlice[k] = slot;
+      }
+      if (Object.keys(liveSlice).length > 0) {
+        _emitLive({ revision: data.revision ?? 0, params: liveSlice });
+      }
     })
     .catch(() => undefined);
 
@@ -348,6 +444,47 @@ export function useSharedParamValues<T extends Record<string, unknown>>(
   const flat: Record<string, unknown> = { ...defaults };
   for (const key in sharedParams.params) {
     const v = sharedParams.params[key]?.value;
+    if (v !== undefined) flat[key] = v;
+  }
+  return flat as T;
+}
+
+/**
+ * Subscribe to the live audio-derived CPC subset. Components that
+ * only need a single live key (e.g. the deck's BPM badge) should use
+ * useLiveParamValues with just that key in `defaults` so they only
+ * re-render on liveParams broadcasts. Mixer / deck chrome should NOT
+ * call this — they'd re-render at the analyser's 15-30 Hz cadence.
+ */
+export function useLiveParams(): LiveParams | null {
+  _ensureInitialized();
+  const [state, setState] = useState<LiveParams | null>(_liveCached);
+  useEffect(() => {
+    _liveListeners.add(setState);
+    // Resync — see useEngineState for rationale.
+    setState(_liveCached);
+    return () => { _liveListeners.delete(setState); };
+  }, []);
+  return state;
+}
+
+/**
+ * Convenience selector mirroring useSharedParamValues but bound to
+ * the live audio bus. Defaults are merged on top so callers don't
+ * have to deal with the pre-load null case.
+ *
+ * Examples:
+ *   const { micLow, micMid } = useLiveParamValues({ micLow: 0, micMid: 0 });
+ *   const { tempoBpm } = useLiveParamValues({ tempoBpm: 0 });
+ */
+export function useLiveParamValues<T extends Record<string, unknown>>(
+  defaults: T,
+): T {
+  const live = useLiveParams();
+  if (!live) return defaults;
+  const flat: Record<string, unknown> = { ...defaults };
+  for (const key in live.params) {
+    const v = live.params[key]?.value;
     if (v !== undefined) flat[key] = v;
   }
   return flat as T;

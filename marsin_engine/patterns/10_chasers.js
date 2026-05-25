@@ -3,7 +3,7 @@
   Life-Cycle Chasers
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var particleCount = 5.0;
 export var tailLength = 0.15; 
 
@@ -12,7 +12,7 @@ export var cp2H = 0.15, cp2S = 1.0, cp2V = 1.0; // Tail (Orange/Yellow default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderParticleCount(v) { particleCount = 1.0 + floor(v * 20.0); }
 export function sliderTailLength(v) { tailLength = 0.02 + v * 0.3; }
 
@@ -20,7 +20,7 @@ var t1;
 var localMultiplier = 1.0;
 
 export function beforeRender(delta) {
-  localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   t1 = time(0.05 / localMultiplier);
 }
 

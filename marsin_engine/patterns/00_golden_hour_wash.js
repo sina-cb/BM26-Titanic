@@ -3,9 +3,27 @@
   Extremely warm, ambient, shifting sunset lighting.
 */
 
-export var localSpeed = 0.5; // Local speed trim
+// ── MASTER PATTERN TEMPLATE ────────────────────────────────────────────
+// Every pattern in this folder should follow this shape. See
+// docs/MARSIN_ENGINE_PATTERNS.md (and 20260508_1 report §3/§4/§5)
+// for the rationale.
+//
+// What the engine owns globally (do NOT redeclare):
+//   • speed → engine accumulates a scaled pattern clock; `delta`
+//             arriving in beforeRender is already speed-scaled.
+//   • size  → engine rescales the (x,y,z) coords passed to render3D.
+//             Pattern features grow/shrink automatically — no per-
+//             pattern math required.
+//
+// What the pattern owns:
+//   • sliderLocalSpeed — local trim on top of the engine's clock,
+//                        v=0.5 = 1×, v=1 ≈ 4×, v=0 ≈ 0.25×.
+//   • colorPalette1/2  — both global colours always come through cp1
+//                        and cp2; render outputs only the cp1↔cp2
+//                        gradient (no third hues, no rainbow drift).
+
+export var localSpeed = 0.5;
 export var noiseScale = 0.5;
-export var speed = 0.5;      // Global speed (CPC-controlled)
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;
 export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // Sunset orange default cp2
@@ -18,12 +36,13 @@ export function sliderNoiseScale(v) { noiseScale = 0.1 + (v * 0.8); }
 var tPhase = 0.0;
 
 export function beforeRender(delta) {
-  var globalMult = pow(2.0, (speed - 0.5) * 4.0);
+  // Engine already scaled `delta` by the global SPEED knob, so we
+  // only apply the local trim here. v=0.5 → 1×, exponential so the
+  // fader feels consistent across its travel.
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
-  var overallSpeed = globalMult * localMult;
-  
+
   // Base loop duration at normal speed is 1310.72ms
-  tPhase = (tPhase + (delta / 1310.72) * overallSpeed) % 1.0;
+  tPhase = (tPhase + (delta / 1310.72) * localMult) % 1.0;
   if (tPhase < 0.0) tPhase += 1.0;
 }
 

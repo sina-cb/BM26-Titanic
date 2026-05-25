@@ -40,6 +40,23 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
 });
 
 /**
+ * Capture fields the operator can change from the iPad (mic picker).
+ * Changing any of these triggers a capture-stream restart in the
+ * engine — analyzer.reconfigure can't swap mics, so applyLiveUpdate
+ * tears down ffmpeg and respawns with the new device.
+ *
+ * Why these and not e.g. sampleRate: changing sampleRate would also
+ * require rebuilding the analyzer (FFT bin map, kick filter) — out of
+ * scope for the iPad surface; keep it in config.yaml + restart.
+ */
+export const AUDIO_LIVE_CAPTURE_FIELDS = Object.freeze([
+  'device', 'deviceLabel', 'deviceId', 'inputFormat', 'platform',
+]);
+
+/** Top-level scalars the operator can flip live from the iPad. */
+export const AUDIO_LIVE_TOPLEVEL_FIELDS = Object.freeze(['enabled']);
+
+/**
  * Scalar (non-nested) fields persisted per-scene alongside the live
  * groups. Saved on every PATCH so a CaptainPad tweak immediately
  * follows the scene. `capture` is intentionally NOT included — it
@@ -123,6 +140,16 @@ export function pickLiveFields(cfg) {
       if (src[f] !== undefined) out[group][f] = src[f];
     }
   }
+  // Persist the operator's mic selection (capture.*) into the scene
+  // state. AUDIO_LIVE_CAPTURE_FIELDS only — runtime knobs like
+  // sampleRate / channels / ffmpegPath stay sourced from config.yaml.
+  if (cfg?.capture && typeof cfg.capture === 'object') {
+    const captureOut = {};
+    for (const f of AUDIO_LIVE_CAPTURE_FIELDS) {
+      if (cfg.capture[f] !== undefined) captureOut[f] = cfg.capture[f];
+    }
+    if (Object.keys(captureOut).length > 0) out.capture = captureOut;
+  }
   return out;
 }
 
@@ -136,24 +163,61 @@ export function validateLivePatch(partial) {
     return { ok: false, error: 'patch body must be an object' };
   }
   const live = {};
-  for (const [group, fields] of Object.entries(partial)) {
-    const allowedFields = AUDIO_LIVE_FIELDS[group];
+  // Whether this patch touches the capture stream — used by the engine
+  // to decide between a hot reconfigure and a stop/restart.
+  let requiresCaptureRestart = false;
+
+  for (const [key, value] of Object.entries(partial)) {
+    // Top-level scalar: `enabled` toggle from the iPad.
+    if (AUDIO_LIVE_TOPLEVEL_FIELDS.includes(key)) {
+      if (key === 'enabled') {
+        if (typeof value !== 'boolean') {
+          return { ok: false, error: `"enabled" must be a boolean` };
+        }
+        live.enabled = value;
+        requiresCaptureRestart = true;
+      }
+      continue;
+    }
+
+    // Nested groups: bands, kick, capture.
+    if (key === 'capture') {
+      if (!value || typeof value !== 'object') {
+        return { ok: false, error: `"capture" must be an object of {field: value}` };
+      }
+      live.capture = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (!AUDIO_LIVE_CAPTURE_FIELDS.includes(k)) {
+          return { ok: false, error: `field "capture.${k}" is not live-tunable; restart the engine to change it` };
+        }
+        // All capture fields are strings (or null for device when
+        // intentionally unset). Reject other types defensively.
+        if (v !== null && typeof v !== 'string') {
+          return { ok: false, error: `"capture.${k}" must be a string or null` };
+        }
+        live.capture[k] = v;
+      }
+      requiresCaptureRestart = true;
+      continue;
+    }
+
+    const allowedFields = AUDIO_LIVE_FIELDS[key];
     if (!allowedFields) {
-      return { ok: false, error: `field "${group}" is not live-tunable; restart the engine to change it` };
+      return { ok: false, error: `field "${key}" is not live-tunable; restart the engine to change it` };
     }
-    if (!fields || typeof fields !== 'object') {
-      return { ok: false, error: `"${group}" must be an object of {field: value}` };
+    if (!value || typeof value !== 'object') {
+      return { ok: false, error: `"${key}" must be an object of {field: value}` };
     }
-    live[group] = {};
-    for (const [k, v] of Object.entries(fields)) {
+    live[key] = {};
+    for (const [k, v] of Object.entries(value)) {
       if (!allowedFields.includes(k)) {
-        return { ok: false, error: `field "${group}.${k}" is not live-tunable` };
+        return { ok: false, error: `field "${key}.${k}" is not live-tunable` };
       }
       if (typeof v !== 'number' || !Number.isFinite(v)) {
-        return { ok: false, error: `"${group}.${k}" must be a finite number` };
+        return { ok: false, error: `"${key}.${k}" must be a finite number` };
       }
-      live[group][k] = v;
+      live[key][k] = v;
     }
   }
-  return { ok: true, live };
+  return { ok: true, live, requiresCaptureRestart };
 }

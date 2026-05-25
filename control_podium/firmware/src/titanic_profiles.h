@@ -68,6 +68,10 @@
 #ifndef TITANIC_PROFILES_H
 #define TITANIC_PROFILES_H
 
+#ifndef ALLOW_PLAINTEXT_PROFILE_CFG
+#define ALLOW_PLAINTEXT_PROFILE_CFG 0
+#endif
+
 #include <Arduino.h>
 #include <Preferences.h>
 #include <heltec_unofficial.h>
@@ -357,6 +361,11 @@ inline bool titanic_profile_handle_cfg_line(
     if (!line) return false;
     // Strict prefix gate: "*CFG " — anything else falls through.
     if (strncmp(line, "*CFG ", 5) != 0) return false;
+
+    if (!originated_locally && !ALLOW_PLAINTEXT_PROFILE_CFG) {
+        Serial.println("PROF: OTA *CFG rejected (plaintext over LoRa disabled in production)");
+        return true;  // consumed so it is not parsed as a frame, but ignored
+    }
 
     char        name_buf[32] = {0};
     unsigned long delay_ms = 0;

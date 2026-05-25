@@ -144,7 +144,8 @@ def build_app(
     async def handle_profile_get(_request: web.Request) -> web.Response:
         available = profile_list_fn() if profile_list_fn else []
         current = profile_current_fn() if profile_current_fn else None
-        return _ok_json({"available": list(available), "current": current})
+        enabled = profile_apply_fn is not None
+        return _ok_json({"available": list(available), "current": current, "enabled": enabled})
 
     async def handle_profile_post(request: web.Request) -> web.Response:
         if profile_apply_fn is None:

@@ -3,7 +3,7 @@
   RGB-only deep-water kelp and caustic currents swaying in layered mathematical arcs.
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var stalkCount = 7.0;
 export var causticScale = 5.5;
 export var softness = 2.8;
@@ -13,7 +13,7 @@ export var cp2H = 0.38, cp2S = 0.9, cp2V = 1.0; // Kelp Color (Kelp green defaul
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderStalkCount(v) { stalkCount = 2.0 + v * 14.0; }
 export function sliderCausticScale(v) { causticScale = 2.0 + v * 10.0; }
 export function sliderSoftness(v) { softness = 1.0 + v * 5.0; }
@@ -23,7 +23,7 @@ var currentB = 0.0;
 var currentScale = 0.22;
 
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   currentScale = 0.22 / localMultiplier;
   currentA = time(currentScale) * 6.2831853;
   currentB = time(currentScale * 0.39) * 6.2831853;

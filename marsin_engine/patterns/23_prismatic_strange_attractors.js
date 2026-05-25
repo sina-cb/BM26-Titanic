@@ -1,9 +1,10 @@
 /*
   23_prismatic_strange_attractors.js
-  Strange moving gravity wells, prismatic contrast, soft white cores, and a UV ghost field.
+  Strange moving gravity wells in strict cp1<->cp2 palette (RGB-space).
+  White-core / UV-ghost surfaced as named sliders (default 0).
 */
 
-export var speedTrim = 0.5;
+export var localSpeed = 0.5;
 export var chaos = 4.5;
 export var orbitReach = 0.42;
 export var contrast = 3.0;
@@ -12,12 +13,12 @@ export var whiteCore = 0.5;
 export var uvGhost = 0.35;
 export var colorSpread = 1.0;
 
-export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0; // Color A (Teal default)
-export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // Color B (Magenta default)
+export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0;
+export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-export function sliderSpeedTrim(v) { speedTrim = v; }
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderChaos(v) { chaos = 1.0 + v * 10.0; }
 export function sliderOrbitReach(v) { orbitReach = 0.12 + v * 0.55; }
 export function sliderContrast(v) { contrast = 1.0 + v * 7.0; }
@@ -31,12 +32,46 @@ var phaseB = 0.0;
 var phaseC = 0.0;
 var currentScale = 0.16;
 
+// ── Palette RGB cache ─────────────────────────────────────────────────
+var pr1 = 1, pg1 = 0, pb1 = 0;
+var pr2 = 0, pg2 = 0, pb2 = 1;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp1V * (1 - cp1S);
+  var qv = cp1V * (1 - fv * cp1S);
+  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
+  else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
+  else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
+  else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
+  else             { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+}
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp2V * (1 - cp2S);
+  var qv = cp2V * (1 - fv * cp2S);
+  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
+  else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
+  else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
+  else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
+  else             { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
+}
+
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (speedTrim - 0.5) * 4.0);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   currentScale = 0.16 / localMultiplier;
   phaseA = time(currentScale) * 6.2831853;
   phaseB = time(currentScale * 0.47) * 6.2831853;
   phaseC = time(currentScale * 0.29) * 6.2831853;
+  _hsv2rgb1();
+  _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
@@ -68,24 +103,19 @@ export function render3D(index, x, y, z) {
   var filament = pow(curl, contrast);
   var intensity = min(1.0, darkFloor + glow * 0.75 + filament * 0.55);
 
-  var colorPhase = (curl * colorSpread + glow * 1.4 + time(currentScale * 0.19) * 2.0) % 1.0;
-  if (colorPhase < 0.0) colorPhase += 1.0;
+  // Use curl + glow to blend along cp1<->cp2 (still 0..1, clamp-safe).
+  var colorPhase = curl * colorSpread + glow * 0.6;
+  colorPhase = colorPhase - floor(colorPhase);
+  // Bounce 0..1..0..1 so we sweep back and forth instead of wrapping
+  // (which would otherwise jump back to cp1 with a visible discontinuity).
+  if (colorPhase > 0.5) colorPhase = 1.0 - (colorPhase - 0.5) * 2.0;
+  else                  colorPhase = colorPhase * 2.0;
 
-  var dh = cp2H - cp1H;
-  if (dh > 0.5) dh -= 1.0;
-  else if (dh < -0.5) dh += 1.0;
-  var hue = cp1H + dh * colorPhase;
-  var sat = cp1S + (cp2S - cp1S) * colorPhase;
-  var maxVal = cp1V + (cp2V - cp1V) * colorPhase;
+  var r = (pr1 + (pr2 - pr1) * colorPhase) * intensity;
+  var g = (pg1 + (pg2 - pg1) * colorPhase) * intensity;
+  var b = (pb1 + (pb2 - pb1) * colorPhase) * intensity;
 
-  var effSat = (0.92 - glow * 0.32) * sat;
-  var val = intensity * maxVal;
-  var base = val * (1.0 - effSat);
-  var r = base + val * wave(hue + 0.000) * effSat;
-  var g = base + val * wave(hue + 0.333) * effSat;
-  var b = base + val * wave(hue + 0.666) * effSat;
-
-  var white = min(1.0, pow(glow, 2.4) * whiteCore * (1.0 - sat));
+  var white = min(1.0, pow(glow, 2.4) * whiteCore);
   var uv = min(1.0, (filament * 0.35 + (1.0 - ny) * curl * 0.35) * uvGhost);
 
   rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, 0.0, uv);

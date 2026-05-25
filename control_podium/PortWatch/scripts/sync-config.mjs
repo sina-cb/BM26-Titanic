@@ -103,6 +103,8 @@ const bindings = [
   ["polling.local_exports_timeout_ms",    "polling.local_exports_timeout_ms",    "number", "Per-poll wait for each exports page (ms)."],
   // Layout.
   ["layout.max_content_width",     "layout.max_content_width",     "number", "Max content width (px) on iPad / landscape."],
+  // Features.
+  ["features.profile_switching_enabled", "features.profile_switching_enabled", "boolean", "Whether the profile switching UI picker is enabled in PortWatch."],
 ];
 
 function dig(obj, path) {

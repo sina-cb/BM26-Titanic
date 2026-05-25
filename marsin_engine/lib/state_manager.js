@@ -89,7 +89,16 @@ export class StateManager {
     this.save('mixer_state.yaml', state);
   }
 
-  saveDeckState(mixer) {
+  /**
+   * @param mixer            The PatternMixer instance
+   * @param extras           Optional extra top-level fields to persist
+   *                         alongside `channel:` (e.g. transitionConfig).
+   *                         Lets api_server keep deck-wide UI prefs in the
+   *                         same file as the deck's base channel without
+   *                         adding new YAML files for one-shot operator
+   *                         settings.
+   */
+  saveDeckState(mixer, extras = null) {
     const baseCh = mixer.getChannel(mixer.baseChannelId);
     if (!baseCh) return;
     const state = {
@@ -104,6 +113,9 @@ export class StateManager {
         playlist: baseCh.playlist || null
       }
     };
+    if (extras && typeof extras === 'object') {
+      Object.assign(state, extras);
+    }
     this.save('deck_state.yaml', state);
   }
 

@@ -42,3 +42,19 @@ vi.mock("@react-native-async-storage/async-storage", () => {
     ...api,
   };
 });
+
+vi.mock("expo-secure-store", () => {
+  const memory = new Map<string, string>();
+  return {
+    getItemAsync: vi.fn(async (key: string): Promise<string | null> => {
+      return memory.has(key) ? (memory.get(key) as string) : null;
+    }),
+    setItemAsync: vi.fn(async (key: string, value: string): Promise<void> => {
+      memory.set(key, value);
+    }),
+    deleteItemAsync: vi.fn(async (key: string): Promise<void> => {
+      memory.delete(key);
+    }),
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: "WHEN_UNLOCKED_THIS_DEVICE_ONLY",
+  };
+});

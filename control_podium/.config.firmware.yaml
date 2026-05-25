@@ -204,16 +204,21 @@ debug:
   # never drops out of HIGH. Useful for measuring max-range throughput
   # without a phone in the loop.
   #
-  # Bench / HIL: keep ENABLED (true) so every controller holds +22 dBm LoRa
-  # and BLE at the YAML high tier regardless of idle — otherwise a captain
-  # with no phone paired can slide to LOW (14 dBm LoRa) and look "degraded"
-  # beside a pinned HIGH server until you touch BLE or PRG again.
-  # Flip back to false before shipping a battery-budgeted build —
-  # leaving this on can double a client's idle current draw.
-  pin_high_forever: true
+  # Bench / HIL: override to true via .config.firmware.local.yaml so every
+  # controller holds +22 dBm LoRa and BLE at the YAML high tier.
+  # Defaults to false in production to save battery power on clients.
+  pin_high_forever: false
   # Emit a `POWERMODE:HIGH/LOW` serial line on every transition. Cheap
   # but noisy — leave off for production builds. Currently ENABLED so
   # the captain's HIGH→LOW transitions (or lack thereof while a phone
   # is paired) are visible on the USB serial during HIL diagnosis.
   # Flip back to false when shipping a "no laptop is plugged in" build.
   log_mode_transitions: true
+
+# ── Profile Switching ───────────────────────────────────────────
+profile_switching:
+  # Whether raw *CFG lines over LoRa are processed (unauthenticated DoS threat).
+  # Defaults to false for production safety. Bench testing can override to true.
+  plaintext_cfg_over_lora_enabled: false
+  # Whether local USB profile configuration changes are allowed.
+  usb_cfg_enabled: true

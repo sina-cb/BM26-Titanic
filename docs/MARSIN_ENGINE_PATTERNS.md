@@ -185,7 +185,93 @@ export function render3D(index, x, y, z) {
 
 ---
 
-## 7. Audio Reactivity (Planned Interfaces)
+## 7. Pattern-Local Palette Helpers (`_hsv2rgb1` / `_hsv2rgb2`)
+
+> **Status:** required pattern-local idiom today, slated to become language-level built-ins (`paletteRgb1()` / `paletteRgb2()`). See [§6.x — Future: Built-in palette accessors](file:///Users/ssolaimanpour/workspace/BM26-Titanic/docs/MARSIN_PB_LANG_SPEC.md#6.x-future-built-in-palette-accessors-paletterbg1-paletterbg2).
+
+### 7.1 The problem these helpers solve
+
+Patterns receive the two global palette pickers as **HSV** triplets (`cp1H/cp1S/cp1V`, `cp2H/cp2S/cp2V`). The naïve "blend in HSV-space" approach has two failure modes that have caused every "weird colour appearing" bug operators have reported on stage:
+
+1. **Hue-shortest-path traversal.** Interpolating `cp1H → cp2H` walks *around* the colour wheel. When the picker pair is, e.g., red (h=0.0) + blue (h=0.6), the intermediate hues are purple, magenta, pink, deep red — none of which the operator picked. With a complementary pair like blue + orange the midpoint becomes green. The cleanest fix is to convert each picker to RGB **once** and lerp in linear-RGB space — the output then stays strictly on the straight line between the two pickers and nothing else.
+
+2. **Rainbow-wave synthesis leaks third hues.** A common compact pattern idiom — `r = v * wave(h + 0.000); g = v * wave(h + 0.333); b = v * wave(h + 0.666);` — *always* emits non-zero values on all three channels regardless of `h` and saturation. This is why patterns 06, 08, 11, 14, 16, 21, 23 used to "follow the palette but with weird colours mixed in". RGB lerping between two pre-converted endpoints fixes all of these at once.
+
+### 7.2 The canonical idiom (copy-paste this into every new pattern)
+
+Each pattern that wants strict cp1↔cp2 blending declares this once. The two helpers are run **inside `beforeRender`** so the conversion happens once per frame (instead of per pixel), and the per-pixel `render3D` path then lerps using the cached `pr1/pg1/pb1` and `pr2/pg2/pb2`.
+
+```javascript
+// ── Palette RGB cache (strict cp1<->cp2 blending) ─────────────────────
+// Pre-convert cp1/cp2 (HSV) to RGB once per frame, then lerp in RGB-space
+// in the per-pixel path. This guarantees output stays on the straight line
+// between the two pickers (e.g. red+blue -> only red/magenta/blue, no
+// green/yellow/cyan drift from HSV shortest-path interpolation).
+var pr1 = 1, pg1 = 0, pb1 = 0;
+var pr2 = 0, pg2 = 0, pb2 = 1;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp1V * (1 - cp1S);
+  var qv = cp1V * (1 - fv * cp1S);
+  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
+  else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
+  else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
+  else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
+  else              { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+}
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp2V * (1 - cp2S);
+  var qv = cp2V * (1 - fv * cp2S);
+  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
+  else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
+  else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
+  else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
+  else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
+}
+
+export function beforeRender(delta) {
+  // ... pattern timing math ...
+  _hsv2rgb1();
+  _hsv2rgb2();
+}
+
+export function render3D(index, x, y, z) {
+  var t = /* your 0..1 blend factor */;
+  var v = /* your 0..1 brightness  */;
+  var r = (pr1 + (pr2 - pr1) * t) * v;
+  var g = (pg1 + (pg2 - pg1) * t) * v;
+  var b = (pb1 + (pb2 - pb1) * t) * v;
+  rgb(r, g, b);
+}
+```
+
+### 7.3 Why the locals are named `hv/iv/fv/pv/qv/tv`
+
+MarsinScript reserves single-letter identifiers (`h`, `i`, `f`, `p`, `q`, `t`, `r`, `g`, `b`) for built-in slots and per-pixel context — declaring `var i = ...` triggers a compile error (`Cannot declare reserved name 'i'`). Always use the two-character `*v` suffix inside palette helpers. See also `MARSIN_PB_LANG_SPEC.md` §2.4 (Reserved identifiers).
+
+### 7.4 When to opt out
+
+The strict cp1↔cp2 contract is the default for production patterns, but two exceptions are legitimate:
+
+- **Hardcoded section-driven colours (`sectionId`).** Patterns that intentionally drive different fixture sections in different palette positions (e.g. cp1 on the bars, cp2 on the vintage row) still use the helpers, but pick `tColour` from `sectionId` instead of a continuous gradient.
+- **W / A / UV emitters.** Additive writes to the W/A/UV channels on top of the RGB lerp are fine — they don't pollute the palette hue because they sit on dedicated emitters. Expose them as named sliders (`sliderWhiteLift`, `sliderUvLevel`, …) so operators can disable them per show.
+
+### 7.5 Patterns that depend on this idiom today
+
+`01_cylon_sweep`, `03_dual_axis_crush`, `06_neon_elevator`, `08_ocean_liner`, `11_bioluminescence`, `13_sparkle`, `14_lunar_current`, `16_ghost_tide_uv`, `20_parametric_sway_field`, `21_pelagic_manta_rays`, `23_prismatic_strange_attractors`, `24_chromatic_murmuration`, `25_heartbeat`. All 13 have identical `_hsv2rgb1` and `_hsv2rgb2` bodies — the proposed language built-in collapses these to two function calls.
+
+---
+
+## 8. Audio Reactivity (Planned Interfaces)
 
 The audio analysis subsystem (currently in active integration) will expose frame-level audio metrics. Future patterns can declare these globals to receive automatic BPM and frequency spectrum sync:
 

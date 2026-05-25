@@ -1,0 +1,10 @@
+schemaVersion: 1
+name: fast
+entries:
+  - id: e_1779704961785_8455
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.56
+      sliderNoiseScale: 0.43
+    notes: null

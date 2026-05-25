@@ -141,7 +141,7 @@ export async function testConnection(baseUrl?: string): Promise<ConnectionResult
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`${url}/status`, { signal: controller.signal });
+    const res = await fetchWithTimeout(`${url}/status`, { signal: controller.signal });
     clearTimeout(timeout);
     const latencyMs = Date.now() - t0;
     if (!res.ok) {
@@ -174,7 +174,7 @@ export async function sendControl(id: number, v0: number, v1?: number, v2?: numb
     if (v1 !== undefined) payload.v1 = v1;
     if (v2 !== undefined) payload.v2 = v2;
 
-    const res = await fetch(`${api_base}/control`, {
+    const res = await fetchWithTimeout(`${api_base}/control`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -189,7 +189,7 @@ export async function sendControl(id: number, v0: number, v1?: number, v2?: numb
 
 export async function fetchPatterns(): Promise<ApiResult<string[]>> {
   try {
-    const res = await fetch(`${api_base}/list-patterns`);
+    const res = await fetchWithTimeout(`${api_base}/list-patterns`);
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
@@ -200,7 +200,7 @@ export async function fetchPatterns(): Promise<ApiResult<string[]>> {
 
 export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
   try {
-    const res = await fetch(`${api_base}/channel-blends`);
+    const res = await fetchWithTimeout(`${api_base}/channel-blends`);
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
@@ -211,7 +211,7 @@ export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
 
 export async function fetchTransitions(): Promise<ApiResult<string[]>> {
   try {
-    const res = await fetch(`${api_base}/transitions`);
+    const res = await fetchWithTimeout(`${api_base}/transitions`);
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
@@ -220,9 +220,52 @@ export async function fetchTransitions(): Promise<ApiResult<string[]>> {
   }
 }
 
+// ── Deck transition config ─────────────────────────────────────────────
+// The DECK TRANSITIONS row in the deck tab writes through these. When
+// enabled, playlist entry swaps on the deck base channel run as soft
+// double-buffer swaps via the mixer's hidden shadow channel — see
+// `triggerDeckPatternSwap` in marsin_engine/lib/pattern_mixer.js.
+//
+// Shape on the wire:
+//   { enabled: boolean, mode: string, durationMs: number, shuffle: boolean }
+//
+// Partial PATCH-style writes are supported (POST any subset of fields).
+export type DeckTransitionConfig = {
+  enabled: boolean;
+  mode: string;
+  durationMs: number;
+  shuffle: boolean;
+};
+
+export async function fetchDeckTransitionConfig(): Promise<ApiResult<DeckTransitionConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/transition-config`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch deck transition config failed:', 'Fetch deck transition config failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfig>): Promise<ApiResult<DeckTransitionConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/transition-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set deck transition config failed:', 'Set deck transition config failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function setActivePattern(pattern: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/set-pattern`, {
+    const res = await fetchWithTimeout(`${api_base}/set-pattern`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern }),
@@ -237,7 +280,7 @@ export async function setActivePattern(pattern: string): Promise<ApiResult<any>>
 
 export async function fetchExports(): Promise<ApiResult<any[]>> {
   try {
-    const res = await fetch(`${api_base}/exports`);
+    const res = await fetchWithTimeout(`${api_base}/exports`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -248,7 +291,7 @@ export async function fetchExports(): Promise<ApiResult<any[]>> {
 
 export async function setSectionBrightness(sectionId: number, brightness: number): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/section-brightness`, {
+    const res = await fetchWithTimeout(`${api_base}/section-brightness`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sectionId, brightness }),
@@ -263,7 +306,7 @@ export async function setSectionBrightness(sectionId: number, brightness: number
 
 export async function fetchDimmers(): Promise<ApiResult<Record<string, number>>> {
   try {
-    const res = await fetch(`${api_base}/dimmers`);
+    const res = await fetchWithTimeout(`${api_base}/dimmers`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -274,7 +317,7 @@ export async function fetchDimmers(): Promise<ApiResult<Record<string, number>>>
 
 export async function fetchDimmerGroups(): Promise<ApiResult<Record<string, number>>> {
   try {
-    const res = await fetch(`${api_base}/dimmer-groups`);
+    const res = await fetchWithTimeout(`${api_base}/dimmer-groups`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -285,7 +328,7 @@ export async function fetchDimmerGroups(): Promise<ApiResult<Record<string, numb
 
 export async function setGlobalBlackout(state: boolean): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/global-blackout`, {
+    const res = await fetchWithTimeout(`${api_base}/global-blackout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state }),
@@ -311,7 +354,7 @@ export async function fetchGlobals(): Promise<ApiResult<any>> {
 
 export async function setGlobalEffect(effect: string, state: boolean): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/global-effect`, {
+    const res = await fetchWithTimeout(`${api_base}/global-effect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ effect, state }),
@@ -348,7 +391,7 @@ export async function setMixerView(view: 'deck' | 'mixer'): Promise<ApiResult<an
 
 export async function fetchPatternCode(name: string): Promise<ApiResult<string>> {
   try {
-    const res = await fetch(`${api_base}/pattern-code?name=${name}`);
+    const res = await fetchWithTimeout(`${api_base}/pattern-code?name=${name}`);
     const text = await res.text();
     return { ok: true, data: text };
   } catch (err: any) {
@@ -359,7 +402,7 @@ export async function fetchPatternCode(name: string): Promise<ApiResult<string>>
 
 export async function getAutopilot(): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/autopilot`);
+    const res = await fetchWithTimeout(`${api_base}/autopilot`);
     const data = await res.json();
     return { ok: true, data };
   } catch (err: any) {
@@ -375,7 +418,7 @@ export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?:
     if (delay_s !== undefined) payload.delay_s = delay_s;
     if (shuffle !== undefined) payload.shuffle = shuffle;
     
-    const res = await fetch(`${api_base}/autopilot`, {
+    const res = await fetchWithTimeout(`${api_base}/autopilot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -390,7 +433,7 @@ export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?:
 
 export async function savePatternCode(name: string, code: string): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/save-pattern`, {
+    const res = await fetchWithTimeout(`${api_base}/save-pattern`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, code }),
@@ -405,7 +448,7 @@ export async function savePatternCode(name: string, code: string): Promise<ApiRe
 
 export async function fetchParamCenterSchema(): Promise<ApiResult<any[]>> {
   try {
-    const res = await fetch(`${api_base}/param-center/schema`);
+    const res = await fetchWithTimeout(`${api_base}/param-center/schema`);
     const data = await res.json();
     return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err: any) {
@@ -415,7 +458,7 @@ export async function fetchParamCenterSchema(): Promise<ApiResult<any[]>> {
 
 export async function fetchParamCenter(): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/param-center`);
+    const res = await fetchWithTimeout(`${api_base}/param-center`);
     const data = await res.json();
     return { ok: true, data };
   } catch(err: any) {
@@ -425,7 +468,7 @@ export async function fetchParamCenter(): Promise<ApiResult<any>> {
 
 export async function updateParamCenter(params: Record<string, any>): Promise<ApiResult<any>> {
   try {
-    const res = await fetch(`${api_base}/param-center`, {
+    const res = await fetchWithTimeout(`${api_base}/param-center`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -484,11 +527,135 @@ export async function resetAudioConfig(): Promise<ApiResult<any>> {
   }
 }
 
+// Curated CPC colour-pair presets. Surfaces the rig's house palette
+// (config.yaml → colorPalettes) so the COLORS picker's Presets tab can
+// render tap-to-apply cards. Each entry: { id, name, c1: hue, c2: hue }.
+// Empty array is a valid response (hide the Presets tab).
+export async function fetchColorPalettes(): Promise<ApiResult<Array<{ id: string; name: string; c1: number; c2: number }>>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/color-palettes`);
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch (err: any) {
+    warnThrottled('color-palettes', 'Fetch color palettes failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Color palette cache ─────────────────────────────────────────────────
+// Reported bug: "color palette presets are not showing again" — the modal
+// re-fetches on every open and that fetch can race the engine's first
+// boot, the api_base resolve, or a transient WS reconnect. Symptom: empty
+// Presets tab even though /color-palettes returns a healthy list.
+//
+// Fix: cache the presets in module-level state and pre-warm on app boot
+// (see CaptainPad/app/_layout.tsx). The modal reads synchronously from
+// the cache so it can render presets immediately; a background refresh
+// keeps the cache fresh and self-heals if the first warm hit an
+// offline window.
+type ColorPalette = { id: string; name: string; c1: number; c2: number };
+let _colorPaletteCache: ColorPalette[] = [];
+let _colorPaletteWarmInflight: Promise<ColorPalette[]> | null = null;
+
+export function getCachedColorPalettes(): ColorPalette[] {
+  return _colorPaletteCache;
+}
+
+/**
+ * Fetch palettes once and cache them. Subsequent callers either reuse the
+ * cached list (instant) or piggy-back on the in-flight fetch. Pass
+ * `{ force: true }` to bypass the cache and re-hit the engine — used by
+ * the color picker's "refresh if empty" path.
+ */
+export async function warmColorPalettesCache(opts?: { force?: boolean }): Promise<ColorPalette[]> {
+  if (!opts?.force && _colorPaletteCache.length > 0) return _colorPaletteCache;
+  if (_colorPaletteWarmInflight) return _colorPaletteWarmInflight;
+  _colorPaletteWarmInflight = (async () => {
+    try {
+      await getApiBaseAsync();
+      const res = await fetchColorPalettes();
+      if (res.ok && Array.isArray(res.data) && res.data.length > 0) {
+        _colorPaletteCache = res.data as ColorPalette[];
+      }
+      return _colorPaletteCache;
+    } finally {
+      _colorPaletteWarmInflight = null;
+    }
+  })();
+  return _colorPaletteWarmInflight;
+}
+
 export async function fetchAudioStatus(): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/audio/status`);
     const data = await res.json();
     return { ok: res.ok, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Microphone discovery on the ENGINE machine. The iPad needs the rig's
+// mic list, not its own — server shells out to ffmpeg and parses the
+// platform-specific output (avfoundation / dshow / pulse). Cached
+// server-side for 2 s so opening the picker doesn't fork ffmpeg per
+// re-render. Returns `{ platform, inputFormat, devices, current }`.
+export async function fetchAudioDevices(): Promise<ApiResult<{
+  platform: string;
+  inputFormat: string;
+  devices: Array<{ id: string; label: string; platform: string; inputFormat: string; ffmpegDevice: string; isDefault?: boolean; alternativeName?: string }>;
+  current: { device: string | null; deviceLabel: string | null; deviceId: string | null; inputFormat: string | null };
+}>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/devices`, undefined, 8000);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// OSC config surface for the new OSC tab. GET returns the engine's
+// current OSC config (enabled / port / host / allowedSenders + a
+// bindings count). PATCH supports `enabled`, `allowedSenders`,
+// `port`, `host` — listener stops + respawns on every successful
+// PATCH so changes take effect immediately.
+export async function fetchOscConfig(): Promise<ApiResult<{
+  enabled: boolean;
+  port: number | null;
+  host: string | null;
+  gainMax: number | null;
+  allowedSenders: Array<{ name: string; ip: string }>;
+  bindingsCount: number;
+  running: boolean;
+  status?: any;
+}>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/osc/config`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchOscConfig(partial: {
+  enabled?: boolean;
+  allowedSenders?: Array<{ name: string; ip: string }>;
+  port?: number;
+  host?: string;
+}): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/osc/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -641,7 +808,7 @@ export async function setMixerChannelPlaylist(channelId: string, name: string | 
   }
 }
 
-export async function setMixerChannelPlaylistEntry(channelId: string, entryId: string): Promise<ApiResult<any>> {
+export async function setMixerChannelPlaylistEntry(channelId: string, entryId: string): Promise<ApiResult<any> & { code?: string }> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist/entry`, {
       method: 'POST',
@@ -649,7 +816,14 @@ export async function setMixerChannelPlaylistEntry(channelId: string, entryId: s
       body: JSON.stringify({ entryId }),
     });
     const data = await res.json();
-    return { ok: res.ok, data };
+    // Surface the server's 'EBUSY' marker explicitly so the deck
+    // PlaylistPanel can swallow "swap in flight" rejections silently
+    // (the operator gets visual disabled-state instead of alert spam
+    // when they double-tap during a transition).
+    const code = !res.ok && data && data.code
+      ? String(data.code)
+      : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+    return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }

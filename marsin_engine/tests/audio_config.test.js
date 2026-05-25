@@ -58,35 +58,85 @@ test('mergeAudioConfig: undefined and null layers are skipped', () => {
   assert.deepEqual(m, { fftSize: 1024 });
 });
 
-test('pickLiveFields keeps scene-level scalars + bands + kick (no capture leak)', () => {
+test('pickLiveFields keeps scene-level scalars + bands + kick + mic-selection subset', () => {
   // pickLiveFields is what the engine writes to
-  // states/<scene>/audio_state.yaml on every PATCH /audio/config, so
-  // the projected subset must include everything the scene needs to
-  // reproduce the listener (enabled / fftSize / hopSize / bands / kick)
-  // but never the mic capture block — that lives per-machine.
-  const out = pickLiveFields(FULL_CFG);
+  // states/<scene>/audio_state.yaml on every PATCH /audio/config. As
+  // of the iPad mic picker, it ALSO includes the operator's mic
+  // selection (capture mic-identity fields). Runtime knobs like
+  // backend/sampleRate/channels stay sourced from config.yaml and
+  // never leak into the per-scene file.
+  const out = pickLiveFields({
+    ...FULL_CFG,
+    capture: {
+      backend: 'ffmpeg', sampleRate: 44100, channels: 1,                  // dropped
+      platform: 'darwin', inputFormat: 'avfoundation',                    // kept
+      device: ':1', deviceId: 'avfoundation-audio-1', deviceLabel: 'MBP', // kept
+    },
+  });
   assert.deepEqual(out, {
     enabled: true,
     fftSize: 1024,
     hopSize: 512,
     bands: { lowMaxHz: 250, midMaxHz: 2000, smoothingAlpha: 0.5 },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 120 },
+    capture: {
+      platform: 'darwin', inputFormat: 'avfoundation',
+      device: ':1', deviceId: 'avfoundation-audio-1', deviceLabel: 'MBP',
+    },
   });
-  assert.equal(out.capture, undefined, 'capture must never leak into the per-scene file');
+});
+
+test('pickLiveFields omits capture entirely when no mic-identity fields are set', () => {
+  // backend / sampleRate / channels are runtime fields, not mic
+  // identity — they must not produce an empty `capture:` block.
+  const out = pickLiveFields({
+    ...FULL_CFG,
+    capture: { backend: 'ffmpeg', sampleRate: 44100, channels: 1 },
+  });
+  assert.equal(out.capture, undefined);
 });
 
 test('validateLivePatch accepts a well-formed bands+kick PATCH', () => {
   const v = validateLivePatch({ bands: { lowMaxHz: 200 }, kick: { threshold: 1.8 } });
   assert.ok(v.ok);
   assert.deepEqual(v.live, { bands: { lowMaxHz: 200 }, kick: { threshold: 1.8 } });
+  assert.equal(v.requiresCaptureRestart, false);
 });
 
-test('validateLivePatch rejects config-only fields', () => {
-  const v1 = validateLivePatch({ capture: { device: ':2' } });
-  assert.equal(v1.ok, false);
-  assert.match(v1.error, /not live-tunable/);
-  const v2 = validateLivePatch({ fftSize: 2048 });
-  assert.equal(v2.ok, false);
+test('validateLivePatch accepts mic-identity capture changes (iPad mic picker)', () => {
+  const v = validateLivePatch({
+    capture: { device: ':2', deviceLabel: 'USB Mic', deviceId: 'avfoundation-audio-2', inputFormat: 'avfoundation', platform: 'darwin' },
+  });
+  assert.ok(v.ok, v.error);
+  assert.equal(v.requiresCaptureRestart, true);
+  assert.deepEqual(v.live.capture.device, ':2');
+});
+
+test('validateLivePatch accepts an `enabled` toggle (iPad master switch)', () => {
+  const v = validateLivePatch({ enabled: false });
+  assert.ok(v.ok);
+  assert.equal(v.live.enabled, false);
+  assert.equal(v.requiresCaptureRestart, true);
+});
+
+test('validateLivePatch rejects non-mic-identity capture fields', () => {
+  // backend, sampleRate, channels still require an engine restart —
+  // surface a clear error so the iPad doesn't silently fail.
+  const v = validateLivePatch({ capture: { sampleRate: 48000 } });
+  assert.equal(v.ok, false);
+  assert.match(v.error, /capture\.sampleRate.+not live-tunable/);
+});
+
+test('validateLivePatch rejects config-only top-level fields', () => {
+  const v = validateLivePatch({ fftSize: 2048 });
+  assert.equal(v.ok, false);
+  assert.match(v.error, /not live-tunable/);
+});
+
+test('validateLivePatch rejects non-boolean enabled', () => {
+  const v = validateLivePatch({ enabled: 'yes' });
+  assert.equal(v.ok, false);
+  assert.match(v.error, /"enabled" must be a boolean/);
 });
 
 test('validateLivePatch rejects unknown fields inside a known group', () => {

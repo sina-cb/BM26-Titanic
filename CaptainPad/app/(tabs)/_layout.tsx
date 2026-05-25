@@ -119,6 +119,13 @@ export default function TabLayout() {
             } as any}
           />
           <Tabs.Screen
+            name="osc"
+            options={{
+              title: 'OSC',
+              tabBarIconName: 'antenna.radiowaves.left.and.right',
+            } as any}
+          />
+          <Tabs.Screen
             name="monitor"
             options={{
               title: 'Monitor',

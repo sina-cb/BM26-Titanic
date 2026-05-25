@@ -39,6 +39,12 @@ interface Props {
    *  picker, SAVE). Taps on entries still work so an operator can perform
    *  the show, but the playlist contents are frozen for safety. */
   locked?: boolean;
+  /** When true, all entry taps are no-ops and the list is greyed out.
+   *  Used by the deck tab to ignore operator taps during an in-flight
+   *  pattern transition — server also rejects with 409, this just makes
+   *  the lock visible (and avoids the operator hearing the "switch
+   *  failed" alert spam if they tap repeatedly). */
+  disabled?: boolean;
 }
 
 function genEntryId() {
@@ -49,16 +55,49 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(null);
   const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyRaw] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // ── Busy watchdog ───────────────────────────────────────────────────
+  // The user reported "after selecting a new playlist, the playlist
+  // dropdown is not even usable anymore on that channel". The only
+  // thing that disables the dropdown is `busy`, and every code path
+  // that sets it to true wraps the work in try/finally so setBusy(false)
+  // always runs. But "always" only holds if neither React state batching,
+  // an unmount mid-await, nor a JS error inside finally itself ever
+  // strands the flag.
+  //
+  // The watchdog turns this from a hope into a guarantee: any setBusy(true)
+  // call also arms a timer that force-clears the flag after MAX_BUSY_MS
+  // even if the surrounding try/finally never fires. Worst case the
+  // operator sees a brief flicker; they NEVER see a permanently dead
+  // dropdown.
+  const busyWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const MAX_BUSY_MS = 6000;
+  const setBusy = useCallback((next: boolean) => {
+    if (busyWatchdogRef.current) {
+      clearTimeout(busyWatchdogRef.current);
+      busyWatchdogRef.current = null;
+    }
+    if (next) {
+      busyWatchdogRef.current = setTimeout(() => {
+        busyWatchdogRef.current = null;
+        setBusyRaw(false);
+      }, MAX_BUSY_MS);
+    }
+    setBusyRaw(next);
+  }, []);
+  useEffect(() => () => {
+    if (busyWatchdogRef.current) clearTimeout(busyWatchdogRef.current);
+  }, []);
 
   // Single source of truth: avoid stale closures inside the WS event
   // listener by routing through refs.
@@ -66,6 +105,34 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   const assignmentRef = useRef<PlaylistAssignment | null>(null);
   useEffect(() => { playlistRef.current = playlist; }, [playlist]);
   useEffect(() => { assignmentRef.current = assignment; }, [assignment]);
+
+  // Scroll-active-entry-into-view machinery (item 2 in the user
+  // feedback). When the deck auto-swaps to the next pattern, the
+  // operator wants the playlist to scroll so the new active row is
+  // visible — otherwise on a 20-entry playlist they have no idea
+  // which one is playing.
+  //
+  // We track per-row y offsets via onLayout, plus the ScrollView's
+  // visible height. When the active id changes we scroll to centre
+  // that row in the viewport (clamped to [0, contentHeight - height]).
+  const scrollRef = useRef<ScrollView>(null);
+  const rowOffsetsRef = useRef<Map<string, { y: number; h: number }>>(new Map());
+  const viewportHeightRef = useRef<number>(0);
+  const contentHeightRef = useRef<number>(0);
+  const scrollActiveIntoView = useCallback((entryId: string | null | undefined) => {
+    if (!entryId || !scrollRef.current) return;
+    const row = rowOffsetsRef.current.get(entryId);
+    if (!row) return;
+    const viewportH = viewportHeightRef.current || 0;
+    const contentH = contentHeightRef.current || 0;
+    if (viewportH <= 0) return;
+    // Centre the row vertically; clamp so we don't try to scroll
+    // past the content edges (which RN would clip silently anyway,
+    // but explicit clamping avoids janky overscroll bounce).
+    let targetY = row.y + row.h / 2 - viewportH / 2;
+    targetY = Math.max(0, Math.min(targetY, Math.max(0, contentH - viewportH)));
+    scrollRef.current.scrollTo({ y: targetY, animated: true });
+  }, []);
 
   // ── Saved-toast: visible for 1.4 s after the last save ──────────────
   const flashSaved = useCallback(() => {
@@ -129,6 +196,17 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     };
   }, [refresh]);
 
+  // When the active entry id changes (autopilot tick, manual tap, or
+  // cross-tab sync), scroll the matching row into view. Defer one tick
+  // so the row's onLayout has a chance to run for newly-rendered
+  // entries (e.g. when assignment + playlist arrive together on first
+  // load).
+  useEffect(() => {
+    if (!assignment?.activeEntryId) return;
+    const t = setTimeout(() => scrollActiveIntoView(assignment.activeEntryId), 50);
+    return () => clearTimeout(t);
+  }, [assignment?.activeEntryId, scrollActiveIntoView]);
+
   // Refresh whenever this tab gains focus (e.g. switching between Deck and
   // Mixer) so cross-tab edits show up immediately.
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
@@ -179,26 +257,75 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
   }, [channelId, refresh, flashSaved]);
 
   // ── Actions ─────────────────────────────────────────────────────────
+  // Switch this channel to a different playlist. Reported bug history:
+  //   1. "Switching doesn't do it" — race between awaited refresh() and
+  //      the WS `mixer` broadcast left the dropdown showing stale data.
+  //   2. "Dropdown is not even usable anymore on that channel after
+  //      selecting a new playlist" — busy stayed true past the POST
+  //      because we were awaiting a 4-GET refresh() inside the same
+  //      try block, and any slow GET (or even a transient retry) held
+  //      the dropdown disabled for seconds.
+  //
+  // The current shape:
+  //   - Optimistically set assignment to the new name so the dropdown
+  //     label flips immediately. This also short-circuits the WS
+  //     subscriber's "name changed → refresh" path so we don't double
+  //     up with the awaited refresh below.
+  //   - Use the engine's own response (which already carries the new
+  //     `playlist` assignment) as the canonical post-switch state.
+  //   - Clear `busy` AS SOON AS the POST resolves. The follow-up GET
+  //     for the playlist contents runs in the background and updates
+  //     the entry list when it lands — the operator can already tap
+  //     the dropdown again.
+  //   - The watchdog above guarantees busy clears within MAX_BUSY_MS
+  //     even if every promise hangs.
   const handleLoadPlaylist = useCallback(async (name: string) => {
     setBusy(true);
     setShowLibrary(false);
-    // try/finally so a hung/aborted request can't strand `busy` true
-    // forever — that's what made "I can't switch patterns" look like
-    // a UI freeze.
+    const prevAssignment = assignmentRef.current;
+    const prevPlaylist = playlistRef.current;
+    // Optimistic flip of the dropdown label + "loading…" placeholder
+    // for the entry list so the operator gets instant feedback that
+    // the switch is being applied.
+    setAssignment({
+      name,
+      activeEntryId: null,
+      cursor: 0,
+      autopilot: prevAssignment?.autopilot ?? { active: false, delay_s: 30, shuffle: false },
+    });
+    setPlaylist(null);
     try {
       const res = await setMixerChannelPlaylist(channelId, name);
       if (!res.ok) {
+        setAssignment(prevAssignment);
+        setPlaylist(prevPlaylist);
         Alert.alert('Load failed', res.error || 'Unknown error');
         return;
       }
+      // Engine returns `{ status, playlist }` — adopt that as the
+      // canonical assignment so the activeEntryId / cursor reflect the
+      // real engine state, not our optimistic guess.
+      const next = (res.data && res.data.playlist) || null;
+      if (next) setAssignment(next);
       flashSaved();
-      await refresh();
+    } catch (err: any) {
+      setAssignment(prevAssignment);
+      setPlaylist(prevPlaylist);
+      Alert.alert('Load failed', err?.message || 'Network error');
+      return;
     } finally {
+      // Clear BEFORE the entries fetch so the dropdown is responsive
+      // again the instant the engine acknowledges the switch.
       setBusy(false);
     }
-  }, [channelId, flashSaved, refresh]);
+    // Fire-and-forget background refresh to pull the new playlist's
+    // entries / patterns library / etc. Any failure is handled by
+    // refresh()'s own scheduleRetry().
+    refresh();
+  }, [channelId, flashSaved, refresh, setAssignment, setPlaylist, setBusy]);
 
   const handleEntryTap = useCallback(async (entryId: string) => {
+    if (disabled) return;                                  // tap-during-transition lock
     if (!assignment || assignment.activeEntryId === entryId) return;
     // Optimistic: flip the active entry in local state IMMEDIATELY so
     // the row highlight moves on tap, not after the HTTP round-trip.
@@ -213,6 +340,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
       const res = await setMixerChannelPlaylistEntry(channelId, entryId);
       if (!res.ok) {
         setAssignment(prev);   // roll back optimistic flip
+        // 409 = "swap already in flight" (engine rejects taps during
+        // an in-flight transition per operator spec). Swallow silently
+        // — this is expected when a user double-taps; no alert spam.
+        const code = (res as { code?: string }).code;
+        if (code === 'EBUSY' || code === '409') return;
         Alert.alert('Switch failed', (res as { error?: string }).error || 'Unknown error');
         return;
       }
@@ -224,7 +356,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
       setAssignment(prev);
       Alert.alert('Switch failed', (e as Error)?.message || 'Network error');
     }
-  }, [assignment, channelId, refresh]);
+  }, [assignment, channelId, disabled, refresh]);
 
   // Add a pattern and persist immediately — no manual SAVE step. The user
   // never has to think "did I save?".
@@ -437,9 +569,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
           </Text>
         ) : (
           <ScrollView
+            ref={scrollRef}
             nestedScrollEnabled
-            style={{ flex: 1, minHeight: 0 }}
+            style={{ flex: 1, minHeight: 0, opacity: disabled ? 0.55 : 1 }}
             contentContainerStyle={{ paddingBottom: 4 }}
+            onLayout={(ev) => { viewportHeightRef.current = ev.nativeEvent.layout.height; }}
+            onContentSizeChange={(_w, h) => { contentHeightRef.current = h; }}
           >
             {playlist.entries.map((e, idx) => {
               const isActive = assignment?.activeEntryId === e.id;
@@ -448,6 +583,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
               return (
                 <View
                   key={e.id}
+                  onLayout={(ev) => {
+                    const { y, height } = ev.nativeEvent.layout;
+                    rowOffsetsRef.current.set(e.id, { y, h: height });
+                  }}
                   style={{
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -474,7 +613,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
                   </Text>
                   <TouchableOpacity
                     onPress={() => handleEntryTap(e.id)}
-                    disabled={busy || missing}
+                    disabled={busy || missing || disabled}
                     style={{ flex: 1 }}
                   >
                     <Text

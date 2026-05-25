@@ -30,6 +30,15 @@ const MAPPING = {
   'lock.fill': 'lock',
   'lock.open.fill': 'lock-open',
   'waveform': 'graphic-eq',
+  'waveform.path.ecg': 'monitor-heart',
+  'mic': 'mic',
+  'power': 'power-settings-new',
+  'metronome': 'music-note',
+  'dot.radiowaves.left.and.right': 'graphic-eq',
+  'antenna.radiowaves.left.and.right': 'cell-tower',
+  'network': 'lan',
+  'plus.circle': 'add-circle-outline',
+  'trash': 'delete-outline',
 } as IconMapping;
 
 /**

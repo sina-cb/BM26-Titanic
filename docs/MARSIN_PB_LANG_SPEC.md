@@ -518,6 +518,69 @@ hsv(time(0.1) + x, 1, 1)
 rgbwau(0, 0, 0, 1, 0.3, 0)
 ```
 
+### 6.x Future: Built-in palette accessors (`paletteRgb1` / `paletteRgb2`)
+
+> **Status:** proposed. Not yet implemented in `MarsinCompiler` or the WASM VM. Tracked because every production pattern today re-implements the same logic by hand — see `docs/MARSIN_ENGINE_PATTERNS.md` §7.
+
+#### Motivation
+
+The two global palette pickers (`cp1H/cp1S/cp1V`, `cp2H/cp2S/cp2V`) arrive in patterns as HSV triplets. To produce output that stays strictly within the operator-chosen palette, every pattern needs the RGB form of each picker so it can lerp **in RGB-space** (HSV-space interpolation traverses non-palette hues via the colour-wheel shortest path).
+
+Today every pattern carries an inlined ~30-line `_hsv2rgb1` / `_hsv2rgb2` helper that:
+1. Reads `cp1H/S/V` (or `cp2H/S/V`) from script globals.
+2. Performs an HSV→RGB conversion.
+3. Writes the result to six pattern-local vars (`pr1/pg1/pb1`, `pr2/pg2/pb2`).
+4. Is invoked once per frame from `beforeRender`.
+
+These ~60 lines are bit-identical across 13+ production patterns. Worse, every pattern author has to remember:
+- To call both helpers in `beforeRender`.
+- To avoid the reserved single-letter locals (`h`, `i`, `f`, `p`, `q`, `t`) inside the helper.
+- To reuse the cached `pr1…pb2` in `render3D`, not re-derive RGB per pixel.
+
+#### Proposed shape
+
+Add two zero-arg builtins that return the up-to-date RGB form of the current global palette pickers. The VM maintains an internal RGB cache invalidated whenever the CPC writes any of `cp1H/cp1S/cp1V` or `cp2H/cp2S/cp2V`, so cost is amortised across all patterns and re-computation only happens on palette change, not every frame.
+
+| Function | Args | Returns | Meaning |
+|---|---:|---|---|
+| `paletteRgb1()` | 0 | `(r, g, b)` triple | Current `cp1H/cp1S/cp1V` converted to RGB |
+| `paletteRgb2()` | 0 | `(r, g, b)` triple | Current `cp2H/cp2S/cp2V` converted to RGB |
+
+Triple-return semantics mirror the existing `array(size)` and `rgbwau()` precedent: assign via destructured-style multi-target assignment, e.g. `pr1, pg1, pb1 = paletteRgb1()`. If multi-return assignment is not added to the language, an equivalent shape using four single-result accessors (`paletteR1()`, `paletteG1()`, `paletteB1()`, `paletteR2()`, `paletteG2()`, `paletteB2()`) is acceptable.
+
+Sample pattern after the built-ins land:
+
+```javascript
+var pr1, pg1, pb1, pr2, pg2, pb2;
+
+export function beforeRender(delta) {
+  pr1, pg1, pb1 = paletteRgb1();
+  pr2, pg2, pb2 = paletteRgb2();
+}
+
+export function render3D(index, x, y, z) {
+  var t = wave(x + time(0.1));
+  rgb(pr1 + (pr2 - pr1) * t,
+      pg1 + (pg2 - pg1) * t,
+      pb1 + (pb2 - pb1) * t);
+}
+```
+
+That's a ~60-line reduction per pattern and removes an entire class of "I forgot the helper" bugs.
+
+#### Implementation notes
+
+- Cache invalidation is cheap: the host already mediates every CPC write into the VM, so it can flip a `paletteDirty` flag and lazy-recompute on first call per frame.
+- Helpers must respect the same hue wrap rule as `hsv()`: `h = h - floor(h)`.
+- `paletteRgb1`/`paletteRgb2` are **non-terminal** (unlike `rgb()`/`hsv()`/`rgbwau()`) — they return values for use in further expressions, not a `MarsinPixel`.
+- On `paletteRgb1` / `paletteRgb2`, S=0 must collapse to `(V, V, V)` (white), matching `hsv(h, 0, v)` semantics — operators have a "always pure" picker policy that pins S=V=1, but the language helper should still behave correctly if a script writes a desaturated `cp*` directly.
+
+#### Until then…
+
+Every production pattern uses the pattern-local `_hsv2rgb1` / `_hsv2rgb2` idiom documented in `docs/MARSIN_ENGINE_PATTERNS.md` §7.
+
+---
+
 ### 6.5.1 Pixelblaze-compatible RGBW usage
 
 How to write RGBW-friendly scripts:

@@ -31,6 +31,7 @@ import { useFormFactor, MAX_CONTENT_WIDTH } from "./layout";
 import { Card } from "./primitives/Card";
 import { StatRow, StatTone } from "./primitives/StatRow";
 import { C, F, R, S } from "./theme";
+import { features } from "../config";
 
 // Canonical LoRa profile list — must match TITANIC_PROFILES in
 // control_podium/firmware/src/titanic_profiles.h AND
@@ -246,7 +247,7 @@ export function StatusScreen({ link, fingerprint }: Props) {
               `*CFG name=…` over BLE; captain firmware applies locally
               and relays over LoRa so the server flips with us. Only
               shown when we have a working BLE link to the captain. */}
-          {conn.kind === "connected" && (
+          {conn.kind === "connected" && features.profile_switching_enabled && (
             <ProfilePicker link={link} />
           )}
         </ChainCard>

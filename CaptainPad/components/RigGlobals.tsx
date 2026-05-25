@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
 import { setGlobalEffect, setGlobalBlackout, fetchGlobals } from '@/utils/api';
+import { engineEvents } from '@/utils/engineEvents';
 
 interface RigState {
   effects: Record<string, boolean>;
@@ -30,6 +31,13 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
       }
     });
 
+    // This provider mounts at the (tabs) layout level and stays alive
+    // for the whole app session — unlike the per-tab WSes in
+    // mixer.tsx / index.tsx which are torn down when you swipe to
+    // another tab. So we use this WS to feed engineEvents (the bus
+    // useEngineState / useLiveParams subscribe to) so the audio tab
+    // and any other tab without its own socket still gets live updates
+    // for sharedParams / liveParams / mixer / audioStatus / etc.
     let ws: WebSocket;
     import('@/utils/api').then(({ getApiBaseAsync }) => {
       getApiBaseAsync().then(apiBase => {
@@ -38,6 +46,9 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            // Fan-out first so the rest of the app stays warm regardless
+            // of which tab is mounted.
+            engineEvents.emit(data);
             if (data.type === 'mixer' && data.blackout !== undefined) {
               setBlackout(data.blackout);
             }

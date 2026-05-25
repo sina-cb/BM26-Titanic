@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions, Alert } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
@@ -204,11 +204,32 @@ export default function MixerScreen() {
   const visDataRef = useRef<{[key: string]: string | null}>({});
   const [visVersion, setVisVersion] = useState(0);
   const lastVisUpdateRef = useRef(0);
-  const transitionActiveRef = useRef(false);
-  const transitionGenRef = useRef(0); // Cancels previous transition when a new one starts
+  // Note: previous versions tracked an `transitionActiveRef` echo-lockout
+  // and a `transitionGenRef` cancellation token here. Both are gone —
+  // transitions are now driven server-side (see handleTransition), so the
+  // client just trusts every incoming mixer broadcast and the engine
+  // handles cancellation natively when a new triggerMixerTransition lands.
+  //
+  // Per-channel "I just wrote this locally" timestamps. When the user
+  // drags a slider we stamp the channel; broadcasts arriving within
+  // LOCAL_WRITE_HOLD_MS afterward keep the local fader value instead of
+  // snapping back to the stale broadcast value. This protects the
+  // operator's finger against in-flight 10 Hz progress broadcasts that
+  // were emitted just before their drag cancelled the transition.
+  // Agent review (May 2026) §5.
+  const localFaderWriteRef = useRef<{[id: string]: number}>({});
+  const LOCAL_WRITE_HOLD_MS = 400;
   // Canonical blend modes per channel — only updated by engine state or user mode changes.
   // Transitions never touch this, so it always reflects the "true" saved blend mode.
   const savedModesRef = useRef<{[id: string]: string}>({});
+  // Engine's canonical base/deck channel id (e.g. ch_base_1778870620551). Used
+  // by handleTransition to robustly identify the deck channel — string-prefix
+  // matching against "ch_base" is the legacy fallback only.
+  const baseChannelIdRef = useRef<string | null>(null);
+  // Engine-reported max channel cap (mirror of mixer.maxChannels from
+  // config.yaml). Surfaced in the Alert when the user hits the cap so they
+  // see the real number, not a stale UI constant.
+  const maxChannelsRef = useRef<number>(3);
 
   useFocusEffect(
     useCallback(() => {
@@ -231,20 +252,46 @@ export default function MixerScreen() {
           engineEvents.emit(msg);
           if (msg.type === 'mixer') {
             setMaster(msg.master);
-            // During active transitions, ignore engine mixer echoes —
-            // the iPad animation is the source of truth for fader values.
-            if (!transitionActiveRef.current) {
-              setChannels(msg.channels || []);
-              // Update canonical blend modes from engine state (ignore intermediate trans modes)
-              for (const ch of (msg.channels || [])) {
-                if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
-              }
-            } else {
-              // Engine echo ignored during active transition
+            if (msg.baseChannelId) baseChannelIdRef.current = msg.baseChannelId;
+            if (typeof msg.maxChannels === 'number') maxChannelsRef.current = msg.maxChannels;
+            // Always trust the engine: it owns transitions, mute/solo
+            // bookkeeping, and saved state. The 10 Hz progress broadcasts
+            // that arrive during a server-side transition animate the
+            // slider UI smoothly.
+            //
+            // EXCEPTION: a channel the user just dragged (within
+            // LOCAL_WRITE_HOLD_MS) keeps its local fader value. This
+            // protects the slider from snapping back to a stale in-flight
+            // broadcast that was emitted milliseconds before the drag
+            // landed on the engine. The rest of the broadcast (enabled,
+            // mode, exports, …) still applies normally.
+            const incoming = msg.channels || [];
+            const now = Date.now();
+            setChannels(prev => {
+              const prevById: { [id: string]: any } = {};
+              for (const c of prev) prevById[c.id] = c;
+              return incoming.map((ch: any) => {
+                const localTs = localFaderWriteRef.current[ch.id] || 0;
+                if (now - localTs < LOCAL_WRITE_HOLD_MS && prevById[ch.id]) {
+                  return { ...ch, fader: prevById[ch.id].fader };
+                }
+                return ch;
+              });
+            });
+            for (const ch of incoming) {
+              if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
             }
           } else if (msg.type === 'vis') {
             visDataRef.current = msg.vis || {};
-            // Throttle UI updates to ~5fps (200ms) to avoid re-render storm
+            // The engine throttles vis broadcasts to `vis.broadcastHz`
+            // (config.yaml, default 1 Hz). At 1 Hz we don't need any
+            // client-side rate limiting — the previous 5 Hz throttle
+            // here was a defence against the legacy 10 Hz cadence
+            // that was making the iPad strip re-render 50× faster
+            // than the operator needed. Force a re-render every
+            // broadcast so the strip always reflects the latest
+            // frame; for higher engine rates we still cap at 5 Hz
+            // so the iPad doesn't melt.
             const now = Date.now();
             if (now - lastVisUpdateRef.current > 200) {
               lastVisUpdateRef.current = now;
@@ -276,6 +323,8 @@ export default function MixerScreen() {
     const mRes = await fetchMixerState();
     if (mRes.ok && mRes.data) {
       setMaster(mRes.data.master);
+      if (mRes.data.baseChannelId) baseChannelIdRef.current = mRes.data.baseChannelId;
+      if (typeof mRes.data.maxChannels === 'number') maxChannelsRef.current = mRes.data.maxChannels;
       setChannels(mRes.data.channels || []);
       for (const ch of (mRes.data.channels || [])) {
         if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
@@ -300,8 +349,15 @@ export default function MixerScreen() {
   //  button — every pattern lives in a playlist entry.)
 
   const handleFaderChange = async (channelId: string, level: number) => {
+    // Stamp BEFORE the WS send so any racing broadcast that arrives
+    // during the round-trip is held off the slider's last finger position.
+    localFaderWriteRef.current[channelId] = Date.now();
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, fader: level } : c));
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      // The engine's setChannelFader handler cancels any in-flight
+      // transition for this channel automatically (see api_server.js),
+      // so dragging a slider during a transition stops that channel's
+      // server-side animation cleanly.
       wsRef.current.send(JSON.stringify({ type: 'setChannelFader', channelId, fader: level }));
     } else {
       const now = Date.now();
@@ -314,7 +370,11 @@ export default function MixerScreen() {
   };
 
   const handleMuteToggle = async (channelId: string, enabled: boolean) => {
-    // If enabling a channel while solo is active, clear solo
+    // Mute remains interactive at all times — the operator must always be
+    // able to drop a channel even during a transition. "Transitions take
+    // precedence over mute/solo" is enforced at *transition start* time
+    // (force-enable + clear solo); after that, the operator's manual
+    // mute/solo input wins.
     if (enabled && soloRef.current) {
       soloRef.current = null;
       preSoloStateRef.current = {};
@@ -332,6 +392,7 @@ export default function MixerScreen() {
   const preSoloStateRef = useRef<{ [id: string]: { enabled: boolean; fader: number } }>({});
 
   const handleSoloToggle = async (channelId: string) => {
+    // Solo remains interactive at all times (see handleMuteToggle).
     if (soloRef.current === channelId) {
       // Un-solo: restore all channels to their pre-solo state
       soloRef.current = null;
@@ -488,13 +549,40 @@ export default function MixerScreen() {
     setAddBusy(true);
     setAddPickerOpen(false);
     try {
-      await addMixerChannel({
+      const res = await addMixerChannel({
         playlist: playlistName,
         name: playlistName === 'default' ? 'New Layer' : playlistName,
         mode: 'blend_screen',
         fader: 1.0,
       });
+      if (!res.ok) {
+        // Surface a real error instead of silently leaving the UI in
+        // the "ADDING…" state. The user reported "it says adding, but
+        // didn't do it" — almost always a transient engine/WS hiccup
+        // that we now explicitly recover from with a refetch + alert.
+        Alert.alert(
+          'Add channel failed',
+          res.error || 'Engine did not accept the new channel. Check that the engine is running and reachable, then try again.',
+        );
+      }
+      // ALWAYS refetch the canonical mixer state from the engine after an
+      // add. WS broadcast is async and not guaranteed to land before the
+      // user's next tap; an explicit GET /mixer is the source of truth
+      // and makes the new channel show up immediately in the UI.
+      const mRes = await fetchMixerState();
+      if (mRes.ok && mRes.data) {
+        setChannels(mRes.data.channels || []);
+        for (const ch of (mRes.data.channels || [])) {
+          if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) {
+            savedModesRef.current[ch.id] = ch.mode;
+          }
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Add channel failed', err?.message || String(err));
     } finally {
+      // Ref + state both cleared in finally so a thrown error can never
+      // strand the UI in a permanently-busy state (the original bug).
       addBusyRef.current = false;
       setAddBusy(false);
     }
@@ -517,120 +605,76 @@ export default function MixerScreen() {
     updateMixerChannel(channelId, updates);
   }, []);
 
-  const handleTransition = useCallback((targetChannelId: string, durationSec: number, transMode: string, originalMode: string) => {
-    const durationMs = durationSec * 1000;
-    const startTime = Date.now();
+  // ─────────────────────────────────────────────────────────────────────
+  // handleTransition — server-driven (May 2026, third rewrite)
+  //
+  // What used to be ~150 lines of rAF + WS-throttle + ease-curve math
+  // collapses to a single triggerMixerTransition WS message. The
+  // marsin_engine owns the entire fader animation:
+  // pattern_mixer.triggerMixerTransition() force-enables every overlay,
+  // schedules a smooth-step interpolation for each channel, and ticks
+  // them at the engine's 40 Hz render rate inside updateTransitions().
+  // The engine then throttles the resulting mixer broadcasts to 10 Hz so
+  // the iPad sliders animate smoothly without flooding the WS connection.
+  //
+  // Why this fixes the stepping/jumping the operator was seeing:
+  //   - The DMX/SACN output is updated EVERY engine tick (40 Hz) with
+  //     the smooth-step-interpolated fader value. No throttle dead-zones,
+  //     no WS jitter, no rAF stepping.
+  //   - Smooth-step (3t² − 2t³) is symmetric: derivative is 0 at both
+  //     endpoints. Winner (start→1) and losers (start→0) ride the SAME
+  //     curve in their respective directions, so brightness evolves
+  //     symmetrically — no "creep then snap" artifacts that the
+  //     asymmetric sin/cos pair produced.
+  //   - The previous 250 ms echo lockout is gone. The iPad trusts every
+  //     mixer broadcast unconditionally (with a tiny per-channel guard
+  //     to protect against stale broadcasts arriving milliseconds after
+  //     a user's slider drag — see localFaderWriteRef), so the final
+  //     mixer-state broadcast that lands ~5 ms after the engine
+  //     completes the transition snaps the UI into perfect sync
+  //     immediately.
+  //
+  // See agent diagnostic "Mixer Transition Behavior Analysis" (May 2026)
+  // for the full root-cause breakdown of the previous client-driven
+  // implementation, and the agent review of the server-side plan for
+  // why we use smooth-step (not sin/cos) + a single per-group completion
+  // callback + manual-fader cancellation.
+  //
+  // `transMode` is the user-selected trans_* blend script (trans_flash,
+  // trans_dissolve, trans_iris, trans_wipe_left/right/up, or
+  // trans_crossfade). The engine swaps the target channel's blend mode
+  // to this script for the duration of the fade so the visual effect
+  // (flash white at midpoint, random-pixel dissolve, iris open, wipe
+  // edge…) plays out across the requested time. trans_crossfade keeps
+  // the cheaper fader-only smoothstep behavior (no script swap). See
+  // pattern_mixer.triggerMixerTransition() for the full contract.
+  // ─────────────────────────────────────────────────────────────────────
+  const handleTransition = useCallback((targetChannelId: string, durationSec: number, transMode: string, _originalMode: string) => {
+    const durationMs = Math.max(1, Math.min(30000, Math.round(durationSec * 1000)));
     const ws = wsRef.current;
-    const wsOk = ws && ws.readyState === WebSocket.OPEN;
-    
-    // Lock out engine echoes during the transition — iPad is source of truth
-    transitionActiveRef.current = true;
-    // Cancel any previous transition by incrementing the generation
-    transitionGenRef.current++;
-    const myGen = transitionGenRef.current;
-
-    // 1. Clear solo if active
-    if (soloRef.current) {
-      soloRef.current = null;
-      preSoloStateRef.current = {};
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[Mixer] Transition aborted: WS not open');
+      return;
     }
-
-    // 2. Unmute ALL channels via WS only (no HTTP PATCH — avoids disk write + broadcast)
-    setChannels(chs => chs.map(c => ({ ...c, enabled: true })));
-    for (const c of channelsRef.current) {
-      if (!c.enabled && wsOk) {
-        ws!.send(JSON.stringify({ type: 'setChannelEnabled', channelId: c.id, enabled: true }));
-      }
-    }
-    
-    // 3. Set ALL overlay channels to the transition blend mode via WS only.
-    //    savedModesRef is the canonical source — never modified by transitions.
-    const currentChannels = channelsRef.current;
-    for (const c of currentChannels) {
-      if (c.id.startsWith('ch_base')) continue;
-      // Protect canonical mode: if missing or invalid, default to 'blend_screen'
-      if (!savedModesRef.current[c.id] || savedModesRef.current[c.id].startsWith('trans_')) {
-        savedModesRef.current[c.id] = c.mode.startsWith('trans_') ? 'blend_screen' : c.mode;
-      }
-      if (wsOk) ws!.send(JSON.stringify({ type: 'setChannelMode', channelId: c.id, mode: transMode }));
-    }
-    const restoreModes = { ...savedModesRef.current };
-    
-    // 4. Snapshot starting faders for smooth interpolation
-    // We intentionally DO NOT update the UI's mode to transMode.
-    // The UI should stably display the target blend modes throughout.
-    setChannels(chs => chs.map(c => {
-      if (c.id.startsWith('ch_base')) return { ...c, enabled: true };
-      return { ...c, enabled: true };
+    // Defensive: trans_* dropdown strings only. Anything else falls back
+    // to crossfade so a stale UI state can't break the transition.
+    const safeTransMode = (typeof transMode === 'string' && transMode.startsWith('trans_'))
+      ? transMode
+      : 'trans_crossfade';
+    // Clear solo client-side so the SOLO button visually pops back to off
+    // immediately. The engine's triggerMixerTransition() force-enables
+    // every overlay and broadcasts the new state within 100 ms, but the
+    // operator shouldn't have to wait that long to see the badge clear.
+    soloRef.current = null;
+    preSoloStateRef.current = {};
+    ws.send(JSON.stringify({
+      type: 'triggerMixerTransition',
+      targetChannelId,
+      durationMs,
+      curve: 'smoothstep',
+      mode: 'exclusiveOverlays',
+      transitionMode: safeTransMode,
     }));
-
-    const startFaders: {[id: string]: number} = {};
-    const lastSentFaders: {[id: string]: number} = {};
-    currentChannels.forEach(c => { 
-      startFaders[c.id] = c.fader; 
-      lastSentFaders[c.id] = c.fader; 
-    });
-
-    const animate = () => {
-      // If a newer transition was started, bail out silently
-      if (transitionGenRef.current !== myGen) return;
-
-      const now = Date.now();
-      const progress = Math.min((now - startTime) / durationMs, 1.0);
-      const ease = progress * progress * (3 - 2 * progress); // smooth-step
-      
-      // WS fader updates at ~30fps (33ms) to match engine's 40fps render rate
-      const needsWsUpdate = now - (throttleRef.current['transition'] || 0) > 33 || progress === 1.0;
-
-      // Always update React state for smooth UI
-      setChannels(chs => {
-        const next = chs.map(c => {
-          if (c.id.startsWith('ch_base') || startFaders[c.id] === undefined) return c;
-          const start = startFaders[c.id];
-          const target = c.id === targetChannelId ? 1.0 : 0.0;
-          const val = start + (target - start) * ease;
-          
-          if (progress === 1.0) {
-            return { ...c, fader: val, mode: restoreModes[c.id] || c.mode };
-          }
-          return { ...c, fader: val };
-        });
-        
-        // Send WS fader updates at throttled rate
-        if (needsWsUpdate && wsOk) {
-          throttleRef.current['transition'] = now;
-          next.forEach(c => {
-            if (c.id.startsWith('ch_base') || startFaders[c.id] === undefined) return;
-            if (Math.abs(c.fader - lastSentFaders[c.id]) > 0.005 || progress === 1.0) {
-              lastSentFaders[c.id] = c.fader;
-              ws!.send(JSON.stringify({ type: 'setChannelFader', channelId: c.id, fader: c.fader }));
-              
-              if (progress === 1.0) {
-                // Restore saved blend mode via WS
-                const restoreMode = restoreModes[c.id] || c.mode;
-                ws!.send(JSON.stringify({ type: 'setChannelMode', channelId: c.id, mode: restoreMode }));
-              }
-            }
-          });
-        }
-        return next;
-      });
-      
-      if (progress < 1.0) {
-        requestAnimationFrame(animate);
-      } else {
-        // Single save: persist final state to disk once
-        if (wsOk) ws!.send(JSON.stringify({ type: 'saveMixerState' }));
-        
-        // Unlock engine echoes after a short delay to ensure any in-flight
-        // WS broadcasts from the intermediate transition state are swallowed.
-        setTimeout(() => {
-          transitionActiveRef.current = false;
-        }, 500);
-      }
-    };
-    
-    requestAnimationFrame(animate);
   }, []);
 
   return (
