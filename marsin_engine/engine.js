@@ -149,7 +149,69 @@ async function loadModel(modelName) {
     console.warn(`[Model] Could not load companion effects model: ${err.message}`);
   }
 
-  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects };
+  // Optional named view-mask dictionary the model author declared.
+  // Two sources are honored, in priority order:
+  //
+  //   1. Model file inline export:
+  //        export const viewMasks = [{ name: 'MainShow', bit: 2 }, ...]
+  //
+  //   2. Sidecar file `<model>.viewmasks.js`:
+  //        export const viewMasks = [
+  //          { name: 'MainShow', bit: 2, pixelIndices: [0,1,2,...] },
+  //          ...
+  //        ];
+  //      The sidecar is the preferred path because the model file is
+  //      auto-regenerated from the simulator and would clobber any
+  //      hand-edited `viewMasks`. The sidecar `pixelIndices` (optional
+  //      per entry) is OR-merged into the corresponding `pixels[i].vMask`
+  //      at load time so view-mask selection actually matches pixels
+  //      even though the auto-generated model has `vMask: 0` everywhere.
+  //
+  // Used by the engine to resolve {type:'viewMask', target:'<name>'}
+  // view selections in compileViewSelectionMask. Models that haven't
+  // declared either source get an empty array — view-mask selections
+  // by name then no-op and CaptainPad hides the "VIEW MASKS" section
+  // of the picker. See docs/27 §3.1 and docs/13 §4.
+  let viewMasks = Array.isArray(mod.viewMasks) ? mod.viewMasks : [];
+
+  const viewMasksPath = path.join(__dirname, 'models', `${modelName}.viewmasks.js`);
+  if (viewMasks.length === 0 && fs.existsSync(viewMasksPath)) {
+    try {
+      const vmUrl = 'file://' + viewMasksPath;
+      const vmMod = await import(vmUrl);
+      if (Array.isArray(vmMod.viewMasks)) {
+        viewMasks = vmMod.viewMasks;
+        // OR-merge each entry's pixelIndices into the pixel's existing
+        // vMask. Cheap O(sum(pixelIndices)). Done in-place because the
+        // pixels array is the model's source of truth for the rest of
+        // the engine (mapPixelsToSacn, vis, etc.) and the merge is
+        // additive (never zeroes a bit).
+        for (const entry of viewMasks) {
+          if (!entry || !Number.isInteger(entry.bit) || !Array.isArray(entry.pixelIndices)) continue;
+          for (const idx of entry.pixelIndices) {
+            if (!Number.isInteger(idx) || idx < 0 || idx >= mod.pixels.length) continue;
+            const px = mod.pixels[idx];
+            if (!px) continue;
+            // Mirror both the abbrev (vMask) and full (viewMask) keys —
+            // the rest of the engine reads vMask, but pattern code may
+            // still read viewMask per docs/13.
+            const cur = (px.vMask ?? px.viewMask ?? 0) | entry.bit;
+            px.vMask = cur;
+            px.viewMask = cur;
+          }
+        }
+        console.log(`[Model] Loaded ${viewMasks.length} view-mask preset(s) from ${path.basename(viewMasksPath)}`);
+      }
+    } catch (err) {
+      // Sidecar is optional. A load failure (syntax error, etc.) is
+      // surfaced but not fatal — the engine still boots with whatever
+      // viewMasks the model file declared (likely none). The CaptainPad
+      // picker then hides the section, mirroring the no-sidecar case.
+      console.warn(`[Model] Failed to load viewmasks sidecar ${viewMasksPath}: ${err.message}`);
+    }
+  }
+
+  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks };
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
@@ -590,6 +652,10 @@ async function main() {
     // validates length + index alignment at construction; corrupted
     // pixel ordering would silently mis-map masks, so we fail at boot.
     pixels: model.pixels,
+    // Named view-mask presets the model declared. Empty array is fine —
+    // bitmask-by-name lookups just won't resolve and the picker UI
+    // hides the section. See loadModel() above.
+    viewMasks: model.viewMasks || [],
   });
   mixer.patternsDir = path.join(__dirname, 'patterns');
   mixer.onChannelRemoved = (channelId) => paramCenter.unregisterChannel(channelId);

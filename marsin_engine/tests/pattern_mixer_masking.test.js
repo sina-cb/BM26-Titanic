@@ -158,11 +158,64 @@ test('compileViewSelectionMask: type=fixture honors px.fId', () => {
   assert.deepEqual(Array.from(m), [0, 1, 0, 0]);
 });
 
-test('compileViewSelectionMask: type=viewMask matches any overlapping bit', () => {
+test('compileViewSelectionMask: type=viewMask matches any overlapping bit (integer target legacy path)', () => {
   const pixels = makeTestPixels();
   // mask 0b001 matches pixels 0 (vMask=0b001) and 2 (vMask=0b001)
   const m = compileViewSelectionMask({ pixels, pixelCount: 4, viewSelection: { type: 'viewMask', target: 0b001 } });
   assert.deepEqual(Array.from(m), [1, 0, 1, 0]);
+});
+
+test('compileViewSelectionMask: type=viewMask resolves string target via viewMasks dictionary', () => {
+  const pixels = makeTestPixels();
+  // Named "Power" → bit 0b010. Only pixel 1 has vMask=0b010 in
+  // makeTestPixels(), so the mask must be [0,1,0,0].
+  const viewMasks = [
+    { name: 'Power', bit: 0b010 },
+    { name: 'Aux',   bit: 0b100 },
+  ];
+  const m = compileViewSelectionMask({
+    pixels, pixelCount: 4,
+    viewSelection: { type: 'viewMask', target: 'Power' },
+    viewMasks,
+  });
+  assert.deepEqual(Array.from(m), [0, 1, 0, 0]);
+});
+
+test('compileViewSelectionMask: type=viewMask string + invert flips the mask', () => {
+  const pixels = makeTestPixels();
+  const viewMasks = [{ name: 'Power', bit: 0b010 }];
+  const m = compileViewSelectionMask({
+    pixels, pixelCount: 4,
+    viewSelection: { type: 'viewMask', target: 'Power', invert: true },
+    viewMasks,
+  });
+  // Complement of [0,1,0,0] = [1,0,1,1].
+  assert.deepEqual(Array.from(m), [1, 0, 1, 1]);
+});
+
+test('compileViewSelectionMask: unknown viewMask name selects NO pixels (loud nothing, not silent all)', () => {
+  const pixels = makeTestPixels();
+  const viewMasks = [{ name: 'Power', bit: 0b010 }];
+  // We expect a warn message but no throw; the returned mask is all-zero
+  // so the operator sees the bad name as "nothing selected" rather than
+  // accidentally turning a typo into a full-rig overlay.
+  const m = compileViewSelectionMask({
+    pixels, pixelCount: 4,
+    viewSelection: { type: 'viewMask', target: 'NoSuchMask' },
+    viewMasks,
+  });
+  assert.deepEqual(Array.from(m), [0, 0, 0, 0]);
+});
+
+test('compileViewSelectionMask: viewMask without dictionary AND string target → no pixels', () => {
+  const pixels = makeTestPixels();
+  const m = compileViewSelectionMask({
+    pixels, pixelCount: 4,
+    viewSelection: { type: 'viewMask', target: 'Power' },
+    // No viewMasks dictionary supplied — equivalent to a model that
+    // never declared any named presets.
+  });
+  assert.deepEqual(Array.from(m), [0, 0, 0, 0]);
 });
 
 // ─── validateViewSelection: API-facing schema gate ────────────────────
@@ -204,11 +257,25 @@ test('validateViewSelection: type=fixture requires integer target', () => {
   assert.equal(validateViewSelection({ type: 'fixture', target: 'x' }).ok, false);
 });
 
-test('validateViewSelection: type=viewMask requires positive integer target', () => {
+test('validateViewSelection: type=viewMask accepts positive integer target (legacy bitmask)', () => {
   assert.equal(validateViewSelection({ type: 'viewMask', target: 1 }).ok, true);
   assert.equal(validateViewSelection({ type: 'viewMask', target: 0 }).ok, false);
   assert.equal(validateViewSelection({ type: 'viewMask', target: -1 }).ok, false);
   assert.equal(validateViewSelection({ type: 'viewMask', target: 1.5 }).ok, false);
+});
+
+test('validateViewSelection: type=viewMask accepts non-empty string target (named preset)', () => {
+  // String name → resolved against the model's viewMasks dictionary at
+  // compile time. We don't validate the name's existence here (the API
+  // doesn't know about model state); compileViewSelectionMask logs and
+  // returns an all-zero mask if it can't resolve.
+  const r = validateViewSelection({ type: 'viewMask', target: 'MainShow' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.type, 'viewMask');
+  assert.equal(r.value.target, 'MainShow');
+  // Empty string is rejected (would be useless and indistinguishable
+  // from a missing target).
+  assert.equal(validateViewSelection({ type: 'viewMask', target: '' }).ok, false);
 });
 
 test('validateViewSelection: rejects unknown type', () => {
@@ -338,6 +405,54 @@ test('renderAll6ch: overlay masked to "Wall" only paints the wall pixels', () =>
   }
   // Pixels 2, 3: red base preserved.
   for (const i of [2, 3]) {
+    assert.equal(out[i * 6 + 0], 255, `pixel ${i} R should be 255 (base preserved)`);
+    assert.equal(out[i * 6 + 2], 0,   `pixel ${i} B should be 0`);
+  }
+});
+
+test('renderAll6ch: overlay masked to a NAMED viewMask only paints those pixels', () => {
+  // End-to-end: PatternMixer constructed with a viewMasks dictionary,
+  // overlay's viewSelection set to a named viewMask, then the render
+  // loop must honour the resolved bit. This is the load-bearing
+  // assertion for the "operator picks 'MainShow' in the dropdown"
+  // path — if compileViewSelectionMask, the constructor, and
+  // recompileChannelMask aren't all wired through, this test fails.
+  const wasmHost = makeFakeWasmHost();
+  const pixels = makeTestPixels();
+  // 'Wall' bit = 0b001 → matches pixels with vMask=0b001 (px 0, px 2).
+  const viewMasks = [
+    { name: 'Wall',  bit: 0b001 },
+    { name: 'Power', bit: 0b010 },
+  ];
+  const mixer = new PatternMixer({ wasmHost, pixelCount: 4, maxChannels: 3, pixels, viewMasks });
+  mixer.blendHandles['blend_screen'] = { fake: true };
+  mixer.blendHandles['blend_normal'] = { fake: true };
+  const redPainter  = { fillFn: (buf) => { for (let i = 0; i < 4; i++) setPixel(buf, i, 255, 0, 0); } };
+  const blueOverlay = { fillFn: (buf) => { for (let i = 0; i < 4; i++) setPixel(buf, i, 0, 0, 255); } };
+  mixer.setDeckChannel({
+    id: 'ch_deck', name: 'Deck', pattern: 'red',
+    handle: redPainter, mode: 'blend_screen', fader: 1.0, enabled: true,
+  });
+  mixer.addMixerChannel({
+    id: 'ch_base', name: 'Base', pattern: 'red',
+    handle: redPainter, mode: 'blend_screen', fader: 1.0, enabled: true,
+  });
+  mixer.addMixerChannel({
+    id: 'ch_overlay', name: 'Blue', pattern: 'blue',
+    handle: blueOverlay, mode: 'blend_screen', fader: 1.0, enabled: true,
+  });
+  // The whole point of this test: a string viewMask target threaded
+  // through the public PatternMixer API.
+  mixer.setChannelViewSelection('ch_overlay', { type: 'viewMask', target: 'Wall' });
+  mixer.viewFader = 1.0; mixer.targetViewFader = 1.0;
+  const out = mixer.renderAll6ch();
+  // Pixels 0, 2 carry vMask=0b001 → overlay wins → blue.
+  for (const i of [0, 2]) {
+    assert.equal(out[i * 6 + 0], 0,   `pixel ${i} R should be 0 (overlay won)`);
+    assert.equal(out[i * 6 + 2], 255, `pixel ${i} B should be 255`);
+  }
+  // Pixels 1, 3 carry vMask=0b010 / 0b100 → no match → background red.
+  for (const i of [1, 3]) {
     assert.equal(out[i * 6 + 0], 255, `pixel ${i} R should be 255 (base preserved)`);
     assert.equal(out[i * 6 + 2], 0,   `pixel ${i} B should be 0`);
   }

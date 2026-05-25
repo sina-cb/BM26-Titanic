@@ -52,7 +52,7 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 // as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
 // inside the panel add or remove entries; SAVE persists. No parallel "all
 // patterns" column anymore.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
@@ -62,11 +62,26 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
 
   // View-selection state read straight from the channel (engine is the
   // source of truth — broadcasts overwrite local state on every mixer
-  // event). v1 supports ALL vs one named GROUP per docs/27 §1.
+  // event). Supports ALL, GROUP (string name), and VIEW MASK (string
+  // name resolved against the model's named-viewMask dictionary).
+  // Section / fixture targets exist in the API but aren't surfaced in
+  // the picker yet — they target by numeric id which isn't
+  // operator-friendly.
   const viewSel = channel.viewSelection || { type: 'all', target: null, invert: false };
-  const viewSelLabel = viewSel.type === 'all'
-    ? 'ALL'
-    : (viewSel.type === 'group' ? String(viewSel.target || '').toUpperCase() : viewSel.type.toUpperCase());
+  let viewSelLabel: string;
+  if (viewSel.type === 'all') {
+    viewSelLabel = 'ALL';
+  } else if (viewSel.type === 'group') {
+    viewSelLabel = String(viewSel.target || '').toUpperCase();
+  } else if (viewSel.type === 'viewMask') {
+    // Named viewMask renders as its uppercased name; a raw bitmask
+    // (legacy / programmatic clients) renders as MASK·0x<bits>.
+    viewSelLabel = typeof viewSel.target === 'string'
+      ? viewSel.target.toUpperCase()
+      : `MASK·0x${(viewSel.target || 0).toString(16).toUpperCase()}`;
+  } else {
+    viewSelLabel = String(viewSel.type).toUpperCase();
+  }
   return (
     <View style={[styles.channelCard, locked && styles.channelCardLocked]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
@@ -164,10 +179,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>Solo</Text>
         </TouchableOpacity>
 
-        {/* View-selection picker (v1: ALL vs GROUP). Tap to cycle ALL →
-            each group → ALL. Full group/section/fixture picker UI is a
-            follow-up; this is the minimum operator-flippable cut per
-            the slot brief. */}
+        {/* View-selection picker. Three sections in the modal: ALL,
+            GROUPS, and VIEW MASKS. Sections/fixtures are still routed
+            via the REST API directly — they target by numeric id which
+            isn't operator-friendly so we don't surface them in the
+            picker. The VIEW MASKS section only appears when the model
+            declared at least one named viewMask preset (model export
+            or `<model>.viewmasks.js` sidecar). */}
         {!locked && onViewSelectionChange && (
           <>
             <TouchableOpacity
@@ -181,25 +199,55 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowViewPicker(false)}>
                 <View style={styles.modalContent}>
                   <Text style={[styles.labelCaps, { marginBottom: 12 }]}>VIEW SELECTION</Text>
-                  <TouchableOpacity
-                    style={[styles.modalRow, viewSel.type === 'all' && styles.modalRowActive]}
-                    onPress={() => { onViewSelectionChange(channel.id, { type: 'all', target: null, invert: false }); setShowViewPicker(false); }}>
-                    <Text style={[styles.valueReadout, viewSel.type === 'all' && { color: C.primary }]}>ALL PIXELS</Text>
-                  </TouchableOpacity>
-                  {(viewSelectionGroups || []).map((g: string) => {
-                    const active = viewSel.type === 'group' && viewSel.target === g;
-                    return (
-                      <TouchableOpacity
-                        key={g}
-                        style={[styles.modalRow, active && styles.modalRowActive]}
-                        onPress={() => { onViewSelectionChange(channel.id, { type: 'group', target: g, invert: false }); setShowViewPicker(false); }}>
-                        <Text style={[styles.valueReadout, active && { color: C.primary }]}>GROUP · {g.toUpperCase()}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                  {(viewSelectionGroups || []).length === 0 && (
-                    <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO GROUPS IN MODEL</Text>
-                  )}
+                  <ScrollView style={{ maxHeight: 420 }}>
+                    {/* ── ALL ────────────────────────────────────── */}
+                    <TouchableOpacity
+                      style={[styles.modalRow, viewSel.type === 'all' && styles.modalRowActive]}
+                      onPress={() => { onViewSelectionChange(channel.id, { type: 'all', target: null, invert: false }); setShowViewPicker(false); }}>
+                      <Text style={[styles.valueReadout, viewSel.type === 'all' && { color: C.primary }]}>ALL PIXELS</Text>
+                    </TouchableOpacity>
+
+                    {/* ── GROUPS ─────────────────────────────────── */}
+                    {(viewSelectionGroups || []).length > 0 && (
+                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>GROUPS</Text>
+                    )}
+                    {(viewSelectionGroups || []).map((g: string) => {
+                      const active = viewSel.type === 'group' && viewSel.target === g;
+                      return (
+                        <TouchableOpacity
+                          key={`g_${g}`}
+                          style={[styles.modalRow, active && styles.modalRowActive]}
+                          onPress={() => { onViewSelectionChange(channel.id, { type: 'group', target: g, invert: false }); setShowViewPicker(false); }}>
+                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>GROUP · {g.toUpperCase()}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    {/* ── VIEW MASKS ─────────────────────────────── */}
+                    {(viewSelectionViewMasks || []).length > 0 && (
+                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>VIEW MASKS</Text>
+                    )}
+                    {(viewSelectionViewMasks || []).map((vm: { name: string; bit: number; inUse: boolean }) => {
+                      const active = viewSel.type === 'viewMask' && viewSel.target === vm.name;
+                      // `inUse=false` presets are kept visible but
+                      // dimmed — the operator may have just added the
+                      // preset and not yet tagged any fixtures with the
+                      // bit. Better to show "no pixels yet" than to
+                      // hide the row entirely.
+                      return (
+                        <TouchableOpacity
+                          key={`vm_${vm.name}`}
+                          style={[styles.modalRow, active && styles.modalRowActive, !vm.inUse && { opacity: 0.5 }]}
+                          onPress={() => { onViewSelectionChange(channel.id, { type: 'viewMask', target: vm.name, invert: false }); setShowViewPicker(false); }}>
+                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>MASK · {vm.name.toUpperCase()}{!vm.inUse ? ' (NO PIXELS)' : ''}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    {(viewSelectionGroups || []).length === 0 && (viewSelectionViewMasks || []).length === 0 && (
+                      <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO GROUPS OR VIEW MASKS IN MODEL</Text>
+                    )}
+                  </ScrollView>
                 </View>
               </TouchableOpacity>
             </Modal>
@@ -249,10 +297,15 @@ export default function MixerScreen() {
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
   // Available view-selection groups (from /model/view-selection-options).
-  // Used by the channel-strip view-selection picker. Sections / fixtures
-  // / viewMask targets are deferred to a follow-up — v1 ships ALL vs
-  // GROUP as the minimum operator-flippable cut. See docs/27 §1.
+  // Used by the channel-strip view-selection picker. Sections /
+  // fixtures stay backend-only (they target by numeric id which isn't
+  // operator-friendly); view masks ship alongside groups now.
   const [viewSelectionGroups, setViewSelectionGroups] = useState<string[]>([]);
+  // Named view-mask presets the model author declared (via the
+  // `<model>.viewmasks.js` sidecar or an inline `viewMasks` export).
+  // The picker renders these in a "VIEW MASKS" section under groups;
+  // the channel's viewSelection is then `{type:'viewMask', target:<name>}`.
+  const [viewSelectionViewMasks, setViewSelectionViewMasks] = useState<{ name: string; bit: number; inUse: boolean }[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef('');
@@ -401,11 +454,16 @@ export default function MixerScreen() {
     const tRes = await fetchTransitions();
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
 
-    // Cache view-selection options (groups only for v1). Failure is
-    // non-fatal: the strip falls back to a disabled picker that just
-    // shows "ALL" if the engine can't enumerate.
+    // Cache view-selection options. Failure is non-fatal: the strip
+    // falls back to a disabled picker that just shows "ALL" if the
+    // engine can't enumerate. We pull both groups and named view-mask
+    // presets — sections / fixtures stay backend-only (operator-
+    // unfriendly numeric ids).
     const vsRes = await fetchViewSelectionOptions();
-    if (vsRes.ok && vsRes.data) setViewSelectionGroups(vsRes.data.groups || []);
+    if (vsRes.ok && vsRes.data) {
+      setViewSelectionGroups(vsRes.data.groups || []);
+      setViewSelectionViewMasks(vsRes.data.viewMasks || []);
+    }
 
     const mRes = await fetchMixerState();
     if (mRes.ok && mRes.data) {
@@ -891,6 +949,7 @@ export default function MixerScreen() {
               onTransition={handleTransition}
               onTransitionSettingsChange={handleTransitionSettingsChange}
               viewSelectionGroups={viewSelectionGroups}
+              viewSelectionViewMasks={viewSelectionViewMasks}
               onViewSelectionChange={handleViewSelectionChange}
             />
           );
