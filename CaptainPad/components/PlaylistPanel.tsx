@@ -70,6 +70,14 @@ interface Props {
    *  REFRESH/RECONNECT button that was eating vertical space below the
    *  list. */
   onRefreshConnection?: () => void;
+  /** Bump this from the parent to force a hard reload of the playlist
+   *  library, the channel's assignment, and the playlist's entries
+   *  (busts the per-name + global playlists caches first). The mixer
+   *  channel strip's name-row refresh arrow uses this so the operator
+   *  has a one-tap rescue for a panel that lost its entries to a WS
+   *  race or transient fetch failure. The default (0) never triggers a
+   *  reload — only a CHANGE in the value does. */
+  refreshNonce?: number;
 }
 
 function genEntryId() {
@@ -80,7 +88,7 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection, refreshNonce }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
   // Seed assignment from parent immediately so the dropdown shows the
   // playlist name on first render — no "LOAD…" flash while the panel
@@ -267,6 +275,25 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // Refresh whenever this tab gains focus (e.g. switching between Deck and
   // Mixer) so cross-tab edits show up immediately.
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+
+  // Parent-driven hard refresh. Bumping `refreshNonce` from the parent
+  // (the channel strip's name-row arrow) invalidates BOTH the global
+  // playlists library cache AND this channel's playlist cache, then
+  // re-fires refresh(). This is the operator's rescue path when a panel
+  // has lost its entries to a transient WS race or fetch failure — no
+  // need to delete and re-add the channel. We skip the initial render
+  // (nonce === 0 / undefined on first mount) so the regular mount
+  // refresh effect handles the cold-start case cleanly.
+  const prevNonceRef = useRef<number | undefined>(refreshNonce);
+  useEffect(() => {
+    if (prevNonceRef.current === refreshNonce) return;
+    prevNonceRef.current = refreshNonce;
+    if (refreshNonce === undefined) return;
+    invalidatePlaylistsCache();
+    const cur = assignmentRef.current?.name;
+    if (cur) invalidatePlaylistCache(cur);
+    refresh();
+  }, [refreshNonce, refresh]);
 
   // Subscribe to engine WS broadcasts via the global bus. The screen-level
   // ws.onmessage forwards every parsed message here.

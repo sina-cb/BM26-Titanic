@@ -13,6 +13,7 @@ import {
   fetchChannelBlends, fetchTransitions, setMixerView,
   fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
+  invalidatePlaylistsCache, invalidatePlaylistCache,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 
@@ -58,6 +59,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showViewPicker, setShowViewPicker] = useState(false);
   const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
+  // Per-strip refresh nonce. Tapping the ↻ arrow on the channel name row
+  // bumps this, which propagates to the PlaylistPanel via the
+  // `refreshNonce` prop and forces it to re-fetch the playlist library +
+  // this channel's playlist content (after busting both caches). This is
+  // the operator's one-tap rescue for the "added a 3rd layer and patterns
+  // aren't showing" failure mode — instead of having to delete and re-add
+  // the channel, just tap the arrow next to the name.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const locked = !!channel.locked;
 
   // View-selection state read straight from the channel (engine is the
@@ -73,7 +82,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
       {/* Header */}
       <View style={styles.channelHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
@@ -83,6 +92,27 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             onEndEditing={(e) => updateMixerChannel(channel.id, { name: e.nativeEvent.text })}
             placeholderTextColor={C.icon}
           />
+          {/* Per-channel refresh arrow. Tapped when a freshly-added
+              layer didn't render its patterns list (the operator's
+              reported failure mode for the 3rd channel add). Busts
+              the playlist library cache + this channel's per-name
+              playlist cache then re-fires PlaylistPanel.refresh() via
+              the `refreshNonce` prop. Sits flush to the right of the
+              name textbox so a one-tap rescue is always at hand. */}
+          <TouchableOpacity
+            onPress={() => {
+              invalidatePlaylistsCache();
+              const curName = channel.playlist?.name;
+              if (curName) invalidatePlaylistCache(curName);
+              setRefreshNonce(n => n + 1);
+            }}
+            accessibilityLabel="Refresh this channel's playlist + patterns list"
+            accessibilityRole="button"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={styles.channelRefreshBtn}
+          >
+            <IconSymbol name="arrow.clockwise" size={12} color={C.secondary} />
+          </TouchableOpacity>
         </View>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
           <TouchableOpacity style={[styles.lockBtn, locked && styles.lockBtnActive]} onPress={() => onLockToggle(channel.id, !locked)}>
@@ -126,6 +156,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             compact
             locked={locked}
             initialAssignment={channel.playlist || null}
+            refreshNonce={refreshNonce}
           />
         </View>
 
@@ -1109,6 +1140,12 @@ const styles = StyleSheet.create({
   },
   lockBtn: {
     width: 28, height: 28, borderRadius: 6,
+    backgroundColor: C.surfaceContainerLowest,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.ghostBorder,
+  },
+  channelRefreshBtn: {
+    width: 22, height: 22, borderRadius: 5,
     backgroundColor: C.surfaceContainerLowest,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: C.ghostBorder,
