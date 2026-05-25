@@ -28,8 +28,9 @@
  */
 import React, { useState, createContext, useEffect } from 'react';
 import { View } from 'react-native';
-import { setGlobalEffect, fetchGlobals, setGlobalEffectBlackout } from '@/utils/api';
+import { setGlobalEffect, fetchGlobals, setGlobalEffectBlackout, getApiBaseAsync } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { initEngineBuses } from '@/utils/engineBus';
 import { GlobalEffectMacros } from '@/components/GlobalEffectMacros';
 
 interface RigState {
@@ -67,25 +68,17 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
     });
 
     // This provider mounts at the (tabs) layout level and stays alive
-    // for the whole app session — unlike the per-tab WSes in
-    // mixer.tsx / index.tsx which are torn down when you swipe to
-    // another tab. So we use this WS to feed engineEvents (the bus
-    // useEngineState / useLiveParams subscribe to) so the audio tab
-    // and any other tab without its own socket still gets live updates
-    // for sharedParams / liveParams / mixer / audioStatus / etc.
-    let ws: WebSocket | null = null;
-    import('@/utils/api').then(({ getApiBaseAsync }) => {
-      getApiBaseAsync().then(apiBase => {
-        if (!alive) return;
-        const wsUrl = apiBase.replace(/^http/, 'ws');
-        ws = new WebSocket(wsUrl);
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            engineEvents.emit(data);
-          } catch {}
-        };
-      });
+    // for the whole app session. It owns the singleton engineBus that
+    // opens all four topic sockets (/ws/control, /ws/params,
+    // /ws/signals, /ws/viz). Each bus also mirrors into engineEvents
+    // (the legacy unified bus useEngineState / useLiveParams subscribe
+    // to) so existing consumers keep working unchanged. Per-tab
+    // components (deck/mixer preview strips) subscribe to engineVizBus
+    // directly to avoid paying for vis frames on tabs that don't render
+    // a preview strip.
+    getApiBaseAsync().then(apiBase => {
+      if (!alive) return;
+      initEngineBuses(apiBase);
     });
 
     const unsub = engineEvents.subscribe((data: any) => {
@@ -102,7 +95,10 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
       }
     });
 
-    return () => { alive = false; unsub(); if (ws) ws.close(); };
+    // engineBus sockets live for the app's lifetime — we deliberately
+    // do NOT tear them down when this provider unmounts (it doesn't
+    // unmount in practice; the (tabs) layout is the root of the app).
+    return () => { alive = false; unsub(); };
   }, []);
 
   const toggleEffect = (id: string, def: boolean) => {

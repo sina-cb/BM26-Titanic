@@ -38,7 +38,11 @@ import http from 'http';
 import WebSocket from 'ws';
 
 const ENGINE_BASE = 'http://127.0.0.1:6968';
-const WS_URL = 'ws://127.0.0.1:6968';
+// Post-topic-split (May 2026), sharedParams is on /ws/params and
+// liveParams is on /ws/signals. Subscribe to both so the assertions
+// covering each can still observe their payloads.
+const WS_PARAMS_URL  = 'ws://127.0.0.1:6968/ws/params';
+const WS_SIGNALS_URL = 'ws://127.0.0.1:6968/ws/signals';
 
 const SAMPLE_WINDOW_MS = 2500;
 const LIVE_KEYS = new Set([
@@ -69,9 +73,9 @@ function httpJson(method, path, body = null) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function openWs() {
+function openWs(url) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(url);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -85,17 +89,25 @@ function check(cond, passLabel, failLabel, failDetail) {
 }
 
 // Collect ALL `sharedParams` and `liveParams` messages for `windowMs`.
-async function sampleParams(ws, windowMs) {
+// Pre-split this was a single socket; post-split sharedParams lives on
+// /ws/params and liveParams on /ws/signals, so we sample both in
+// parallel and merge the results.
+async function sampleParams(wsParams, wsSignals, windowMs) {
   const live = [];
   const shared = [];
-  const onMsg = (raw) => {
+  const onMsgSig = (raw) => {
     let o; try { o = JSON.parse(raw); } catch { return; }
     if (o.type === 'liveParams') live.push({ raw: Buffer.byteLength(raw), params: o.params, t: Date.now() });
-    else if (o.type === 'sharedParams') shared.push({ raw: Buffer.byteLength(raw), params: o.params, t: Date.now() });
   };
-  ws.on('message', onMsg);
+  const onMsgPar = (raw) => {
+    let o; try { o = JSON.parse(raw); } catch { return; }
+    if (o.type === 'sharedParams') shared.push({ raw: Buffer.byteLength(raw), params: o.params, t: Date.now() });
+  };
+  wsSignals.on('message', onMsgSig);
+  wsParams.on('message', onMsgPar);
   await sleep(windowMs);
-  ws.off('message', onMsg);
+  wsSignals.off('message', onMsgSig);
+  wsParams.off('message', onMsgPar);
   return { live, shared };
 }
 
@@ -121,12 +133,15 @@ async function main() {
   } catch { /* /audio/config not available, assume off */ }
   console.log(`Audio analyser: ${audioOn ? 'ENABLED' : 'disabled — live-rate checks skipped'}\n`);
 
-  const ws = await openWs();
+  const [wsParams, wsSignals] = await Promise.all([
+    openWs(WS_PARAMS_URL),
+    openWs(WS_SIGNALS_URL),
+  ]);
 
   try {
     // ─── TEST 1: under audio load, liveParams flows + sharedParams is quiet
     console.log('[TEST 1] Sample WS for ' + SAMPLE_WINDOW_MS + ' ms with no operator input');
-    const { live, shared } = await sampleParams(ws, SAMPLE_WINDOW_MS);
+    const { live, shared } = await sampleParams(wsParams, wsSignals, SAMPLE_WINDOW_MS);
     const liveHz = live.length / (SAMPLE_WINDOW_MS / 1000);
     const sharedHz = shared.length / (SAMPLE_WINDOW_MS / 1000);
     const avgLive = live.length ? Math.round(live.reduce((s, m) => s + m.raw, 0) / live.length) : 0;
@@ -165,19 +180,24 @@ async function main() {
     {
       const seenSpeed = [];
       const seenLive = [];
-      const onMsg = (raw) => {
+      const onMsgPar = (raw) => {
         let o; try { o = JSON.parse(raw); } catch { return; }
         if (o.type === 'sharedParams' && o.params?.speed?.value === 0.42) seenSpeed.push(o);
-        else if (o.type === 'liveParams') seenLive.push(o);
       };
-      ws.on('message', onMsg);
+      const onMsgSig = (raw) => {
+        let o; try { o = JSON.parse(raw); } catch { return; }
+        if (o.type === 'liveParams') seenLive.push(o);
+      };
+      wsParams.on('message', onMsgPar);
+      wsSignals.on('message', onMsgSig);
       const before = Date.now();
       await httpJson('POST', '/param-center', { speed: 0.42 });
       // Give the broadcast 400 ms to land (sharedParams is throttled by
       // speed.broadcastHz which defaults to 30 → 33 ms interval; 400 ms
       // is comfortably more than that even with replay quirks).
       await sleep(400);
-      ws.off('message', onMsg);
+      wsParams.off('message', onMsgPar);
+      wsSignals.off('message', onMsgSig);
       const after = Date.now();
 
       check(seenSpeed.length >= 1,
@@ -193,7 +213,8 @@ async function main() {
       console.log(`  observed in ${after - before} ms: ${seenSpeed.length} sharedParams, ${seenLive.length} liveParams (live ok)`);
     }
   } finally {
-    try { ws.close(); } catch {}
+    try { wsParams.close(); } catch {}
+    try { wsSignals.close(); } catch {}
     // Restore speed to a sensible value
     try { await httpJson('POST', '/param-center', { speed: 0.5 }); } catch {}
   }

@@ -20,7 +20,7 @@ import {
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   type DeckTransitionConfig,
 } from '@/utils/api';
-import { engineEvents } from '@/utils/engineEvents';
+import { engineControlBus, engineVizBus, isControlConnected } from '@/utils/engineBus';
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -124,7 +124,6 @@ export default function ControlDeckScreen() {
   // come back this flag is stale by definition.
   const [deckSwapInFlight, setDeckSwapInFlight] = useState(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef<string>('');
   const visDataRef = useRef<{ [key: string]: string | null }>({});
   const [, setVisVersion] = useState(0);
@@ -141,89 +140,80 @@ export default function ControlDeckScreen() {
     }, [])
   );
 
-  const connectWebSocket = useCallback((base: string) => {
-    // Close existing
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-    const wsPort = base.split(':').pop();
-    const wsUrl = `ws://${engineHost}:${wsPort}`;
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      ws.onopen = () => {
-        setIsConnected(true);
-        setConnectionError('');
-      };
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          // Fan out to subscribers (PlaylistPanel, etc.) before any local
-          // handling. Listeners only react to types they care about.
-          engineEvents.emit(msg);
-          if (msg.type === 'deck') {
-            // The deck channel arrives on its own event (post channel
-            // split) — see `serializeDeckState` in
-            // marsin_engine/lib/api_server.js. The mixer event is
-            // explicitly ignored by the deck tab; it carries overlay
-            // channels that the deck doesn't render.
-            setDeckChannel(msg.channel || null);
-          } else if (msg.type === 'autopilot') {
-            // The engine broadcasts every autopilot transition (so any
-            // writer — this UI, PortWatch over LoRa, an HTTP script —
-            // ends up rendered the same way). Mirror it into local state
-            // so the toggle/picker on this tab tracks remote flips
-            // without having to re-fetch on a timer.
-            if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
-            if (typeof msg.delay_s === 'string' && msg.delay_s.length) {
-              setPlaylistDelayStr(msg.delay_s);
-            }
-            if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
-          } else if (msg.type === 'deckTransitionConfig') {
-            // Mirror remote writes (other tablets, scripts) so the UI
-            // tracks them without needing a re-fetch.
-            setDeckTxConfig((prev) => ({
-              enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
-              mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
-              durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
-              shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
-            }));
-          } else if (msg.type === 'deckSwapStarted') {
-            // Engine just kicked off a soft-swap. Lock the playlist so
-            // operator taps during the fade are silently ignored (the
-            // server will also reject with 409, but locking the UI
-            // gives clear visual feedback that we're mid-transition).
-            setDeckSwapInFlight(true);
-          } else if (msg.type === 'deckSwapComplete') {
-            setDeckSwapInFlight(false);
-          } else if (msg.type === 'vis') {
-            visDataRef.current = msg.vis || {};
-            // Throttle UI updates to ~5fps (200ms)
-            const now = Date.now();
-            if (now - lastVisUpdateRef.current > 200) {
-              lastVisUpdateRef.current = now;
-              setVisVersion(v => v + 1);
-            }
-          }
-        } catch {}
-      };
-      ws.onerror = () => {
-        setIsConnected(false);
-        setConnectionError('WebSocket connection failed');
-      };
-      ws.onclose = () => {
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => {
-          if (apiBaseRef.current) {
-            connectWebSocket(apiBaseRef.current);
-          }
-        }, 5000);
-      };
-      wsRef.current = ws;
-    } catch {}
+  // The WS lifecycle now lives on the app-level engineBus (one
+  // singleton socket per engine topic, opened by RigGlobals at boot).
+  // This tab just subscribes to the two topics it actually cares
+  // about: /ws/control for state events and /ws/viz for the deck's
+  // preview strip. The audio analyser's /ws/signals and /ws/params
+  // are intentionally NOT subscribed here — the deck doesn't render
+  // any audio meters and shouldn't pay for parsing those frames.
+  useEffect(() => {
+    const unsubControl = engineControlBus.subscribe((msg) => {
+      // Defensive: legacy engineEvents.emit was the broadcast catchall
+      // here, but engineBus already mirrors into engineEvents itself.
+      // No second emit needed — that would double-fire every consumer.
+      if (msg.type === 'deck') {
+        // The deck channel arrives on its own event (post channel
+        // split) — see `serializeDeckState` in
+        // marsin_engine/lib/api_server.js. The mixer event is
+        // explicitly ignored by the deck tab; it carries overlay
+        // channels that the deck doesn't render.
+        setDeckChannel((msg as any).channel || null);
+      } else if (msg.type === 'autopilot') {
+        // The engine broadcasts every autopilot transition (so any
+        // writer — this UI, PortWatch over LoRa, an HTTP script —
+        // ends up rendered the same way). Mirror it into local state
+        // so the toggle/picker on this tab tracks remote flips
+        // without having to re-fetch on a timer.
+        const m = msg as any;
+        if (typeof m.active === 'boolean') setPlaylistActive(m.active);
+        if (typeof m.delay_s === 'string' && m.delay_s.length) {
+          setPlaylistDelayStr(m.delay_s);
+        }
+        if (typeof m.shuffle === 'boolean') setIsShuffle(m.shuffle);
+      } else if (msg.type === 'deckTransitionConfig') {
+        const m = msg as any;
+        setDeckTxConfig((prev) => ({
+          enabled: typeof m.enabled === 'boolean' ? m.enabled : prev.enabled,
+          mode: typeof m.mode === 'string' ? m.mode : prev.mode,
+          durationMs: typeof m.durationMs === 'number' ? m.durationMs : prev.durationMs,
+          shuffle: typeof m.shuffle === 'boolean' ? m.shuffle : prev.shuffle,
+        }));
+      } else if (msg.type === 'deckSwapStarted') {
+        // Engine just kicked off a soft-swap. Lock the playlist so
+        // operator taps during the fade are silently ignored (the
+        // server will also reject with 409, but locking the UI
+        // gives clear visual feedback that we're mid-transition).
+        setDeckSwapInFlight(true);
+      } else if (msg.type === 'deckSwapComplete') {
+        setDeckSwapInFlight(false);
+      }
+    });
+    const unsubViz = engineVizBus.subscribe((msg) => {
+      if (msg.type !== 'vis') return;
+      visDataRef.current = ((msg as any).vis as { [k: string]: string | null }) || {};
+      // Throttle UI updates to ~5fps (200ms). The engine throttles
+      // upstream too (vis.broadcastHz config), but this is a belt-and-
+      // braces guard against rates >5 Hz.
+      const now = Date.now();
+      if (now - lastVisUpdateRef.current > 200) {
+        lastVisUpdateRef.current = now;
+        setVisVersion((v) => v + 1);
+      }
+    });
+    // Reflect the singleton control socket's connect status into the
+    // local "engine offline" UI. The bus auto-reconnects every 5 s, so
+    // this poll converges to truth without a per-tab WS.
+    const conPoll = setInterval(() => {
+      const ok = isControlConnected();
+      setIsConnected((prev) => (prev === ok ? prev : ok));
+      if (ok) setConnectionError('');
+    }, 1000);
+    return () => {
+      unsubControl();
+      unsubViz();
+      clearInterval(conPoll);
+    };
   }, []);
 
   // ── Boot: wait for resolved API base, then connect ──────────────────
@@ -236,8 +226,9 @@ export default function ControlDeckScreen() {
     setIsConnected(conn.ok);
     setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
 
-    // Always start WebSocket so the 5s auto-reconnect loop can run
-    connectWebSocket(base);
+    // WS lifecycle is owned by the app-level engineBus (see RigGlobals
+    // useEffect) — nothing per-tab to start here. The bus subscriptions
+    // above are already active.
 
     if (!conn.ok) return;
 
@@ -262,7 +253,7 @@ export default function ControlDeckScreen() {
     if (deckRes.ok && deckRes.data) {
       setDeckChannel(deckRes.data.channel || null);
     }
-  }, [connectWebSocket]);
+  }, []);
 
   // Patch the deck transition config (optimistic local update + POST).
   // The server broadcasts `deckTransitionConfig` on success which we
@@ -285,7 +276,6 @@ export default function ControlDeckScreen() {
 
     return () => {
       sub.remove();
-      if (wsRef.current) wsRef.current.close();
     };
   }, [connectToEngine]);
 
@@ -301,7 +291,7 @@ export default function ControlDeckScreen() {
       {/* Top bar: title + connection status + master fader. Matches the
           Marsin Mixer header layout, minus channel-add buttons. */}
       <DeckTopBar isConnected={isConnected} />
-      <CPCControls wsRef={wsRef} />
+      <CPCControls />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
