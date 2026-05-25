@@ -4,12 +4,22 @@
 // docs/27_[todo]_mixer_layer_view_selection.md §6.1:
 //   - default startup outputs the mixerBuffer (viewFader = 1.0)
 //   - viewFader=0 outputs deck; viewFader=1 outputs mixer; 0.5 is linear
-//   - base channel SEEDS mixerBuffer (background-stacking)
-//   - muted/disabled base does NOT seed mixerBuffer
+//   - first mixer overlay seeds mixerBuffer (background stacking)
+//   - muted/disabled background mixer overlay does NOT paint into mixerBuffer
 //   - per-layer masked commit: blue on "Wall" leaves rest red
 //   - PFL/deck blackout: unselected pixels in deck go to black
 //   - API payload validator rejects malformed shapes (400)
 //   - pixel-array alignment guard throws at construction
+//
+// Architecture note (post slot 6 channel_isolation merge):
+//   The mixer no longer treats one of `channels[]` as a "base" — the
+//   deck channel lives in `this.deckChannel` (rendered into deckBuffer)
+//   and the mixer overlay stack lives in `this.mixerChannels[]`
+//   (composited bottom-to-top into mixerBuffer). To preserve the
+//   "background wash + masked overlay" tests we wire up BOTH a red
+//   deck channel (so viewFader=0 tests still see red in deckBuffer)
+//   AND a red first mixer overlay (so the masked-overlay tests still
+//   have a non-black background to preserve under the mask).
 //
 // Run:  cd marsin_engine && node --test tests/pattern_mixer_masking.test.js
 
@@ -77,8 +87,9 @@ function makeTestPixels() {
   ];
 }
 
-// Build a mixer with two channels: a base painting RED full-rig, and an
-// overlay painting BLUE full-rig (overlay's mask is set per-test).
+// Build a mixer with a red deck channel, a red first mixer overlay
+// (background), and a blue second mixer overlay (whose mask is set
+// per-test). See the architecture note at the top of the file.
 function makeMixerWithRedBase(maxChannels = 3) {
   const wasmHost = makeFakeWasmHost();
   const pixels = makeTestPixels();
@@ -90,17 +101,25 @@ function makeMixerWithRedBase(maxChannels = 3) {
   mixer.blendHandles['blend_screen'] = { fake: true };
   mixer.blendHandles['blend_normal'] = { fake: true };
 
-  const redBase = {
+  const redPainter = {
     fillFn: (buf) => { for (let i = 0; i < 4; i++) setPixel(buf, i, 255, 0, 0); },
   };
   const blueOverlay = {
     fillFn: (buf) => { for (let i = 0; i < 4; i++) setPixel(buf, i, 0, 0, 255); },
   };
-  mixer.addChannel({
-    id: 'ch_base', name: 'Base', pattern: 'red',
-    handle: redBase, mode: 'blend_screen', fader: 1.0, enabled: true,
+  // Deck slot — drives deckBuffer for viewFader=0 / PFL tests.
+  mixer.setDeckChannel({
+    id: 'ch_deck', name: 'Deck', pattern: 'red',
+    handle: redPainter, mode: 'blend_screen', fader: 1.0, enabled: true,
   });
-  mixer.addChannel({
+  // First mixer overlay — the background wash (legacy "base") that
+  // seeds mixerBuffer so masked overlays have something to preserve.
+  mixer.addMixerChannel({
+    id: 'ch_base', name: 'Base', pattern: 'red',
+    handle: redPainter, mode: 'blend_screen', fader: 1.0, enabled: true,
+  });
+  // Masked overlay under test.
+  mixer.addMixerChannel({
     id: 'ch_overlay', name: 'Blue', pattern: 'blue',
     handle: blueOverlay, mode: 'blend_screen', fader: 1.0, enabled: true,
   });

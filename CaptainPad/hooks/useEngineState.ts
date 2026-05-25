@@ -44,7 +44,7 @@
 
 import { useEffect, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
-import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema } from '@/utils/api';
+import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel } from '@/utils/api';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -163,7 +163,20 @@ export interface EngineLiveState {
    * still re-renders cheaply when the field changes.
    */
   liveParams: LiveParams | null;
+  /**
+   * Mixer overlay channels ONLY. Post-channel-split (May 2026) the
+   * deck channel lives in its own field (`deckChannel`) below — it is
+   * NOT included in this array and never will be. UIs that want "the
+   * deck slot" must read `deckChannel`; UIs that want "the overlays"
+   * read this.
+   */
   mixerChannels: MixerChannel[];
+  /**
+   * Singleton deck channel (PFL preview). Sourced from the engine's
+   * `deck` WS event (and the REST `/deck/channel` seed). Null while
+   * the WS is establishing or if the engine has no deck channel.
+   */
+  deckChannel: MixerChannel | null;
   blackout: boolean;
   /**
    * Global mixer master fader (0..1). Sourced from the same `mixer`
@@ -201,6 +214,7 @@ const EMPTY_STATE: EngineLiveState = {
   sharedParams: null,
   liveParams: null,
   mixerChannels: [],
+  deckChannel: null,
   blackout: false,
   master: 1.0,
   oscStats: null,
@@ -276,15 +290,28 @@ function _onMessage(msg: EngineMessage) {
   } else if (msg.type === 'mixer') {
     // The mixer broadcast carries every channel's exports with live
     // v0/v1/v2 — see serializeMixerState() in
-    // marsin_engine/lib/api_server.js. Forwarding the array as-is
-    // lets the deck card's GlobalParams (variant="deck") and the
-    // mixer tab's CPCControls share the same live source.
+    // marsin_engine/lib/api_server.js. Post-channel-split the deck
+    // channel is NOT included here; it arrives on its own `deck`
+    // event below.
     const rawChannels = (msg.channels as MixerChannel[] | undefined) ?? [];
     const blackout = msg.blackout === true;
     const master = typeof msg.master === 'number' ? msg.master : _cached.master;
     _emit({
       ..._cached,
       mixerChannels: rawChannels,
+      blackout,
+      master,
+    });
+  } else if (msg.type === 'deck') {
+    // Singleton deck channel — counterpart to the mixer broadcast.
+    // The engine fires this whenever deck state changes (and
+    // back-to-back with the mixer event after any saveAllState).
+    const rawDeck = (msg.channel as MixerChannel | null | undefined) ?? null;
+    const blackout = msg.blackout === true;
+    const master = typeof msg.master === 'number' ? msg.master : _cached.master;
+    _emit({
+      ..._cached,
+      deckChannel: rawDeck,
       blackout,
       master,
     });
@@ -405,6 +432,19 @@ function _ensureInitialized() {
       });
     })
     .catch(() => undefined);
+
+  fetchDeckChannel()
+    .then((r) => {
+      if (!r.ok || !r.data) return;
+      const data = r.data as { channel?: MixerChannel | null; blackout?: boolean; master?: number };
+      _emit({
+        ..._cached,
+        deckChannel: data.channel ?? null,
+        blackout: data.blackout === true,
+        master: typeof data.master === 'number' ? data.master : _cached.master,
+      });
+    })
+    .catch(() => undefined);
 }
 
 /**
@@ -511,8 +551,15 @@ export function useParamRange(key: string, fallback: [number, number] = [0, 1]):
 }
 
 export function useChannelExports(channelId: string | undefined): MixerChannelExport[] {
-  const { mixerChannels } = useEngineState();
+  const { mixerChannels, deckChannel } = useEngineState();
   if (!channelId) return [];
+  // Look up across both deck and mixer collections. The deck channel
+  // is intentionally NOT in `mixerChannels` post-split, but consumers
+  // that want "this channel's live exports" don't usually know or
+  // care which role it plays — they just have an id.
+  if (deckChannel && deckChannel.id === channelId) {
+    return deckChannel.exports ?? [];
+  }
   const ch = mixerChannels.find((c) => c.id === channelId);
   return ch?.exports ?? [];
 }

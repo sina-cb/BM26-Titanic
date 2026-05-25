@@ -15,7 +15,7 @@ import { useFocusEffect } from 'expo-router';
 import {
   getApiBaseAsync,
   getAutopilot, setAutopilot, testConnection,
-  fetchMixerState, setMixerChannelControl,
+  fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   type DeckTransitionConfig,
@@ -89,16 +89,16 @@ const OfflineBanner = ({ error }: { error: string }) => (
 );
 
 export default function ControlDeckScreen() {
-  const [mixerChannels, setMixerChannels] = useState<any[]>([]);
+  const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
 
-  // The deck is always bound to its base channel — `mixerChannels[0]`.
-  // The "TARGET CHANNEL" picker that used to let the operator preview
-  // mixer channels from the deck was removed in May 2026; switching
-  // between channels now happens via the active playlist instead.
-  // See docs/16_captain_pad.md §"Target channel removal".
-  const deckChannel = mixerChannels[0] ?? null;
+  // Post-channel-split (May 2026): the deck channel comes from its
+  // own /deck/channel endpoint and the WS `deck` event. The mixer's
+  // `channels[]` array NEVER contains the deck channel anymore — that
+  // was the source of countless "deck shows a mixer overlay's
+  // exports" bugs. See docs/16_captain_pad.md and
+  // marsin_engine/lib/pattern_mixer.js (channel-split note).
   const deckChannelId: string | null = deckChannel?.id ?? null;
 
   // Autopilot state (cycles through the active playlist on a timer)
@@ -164,8 +164,13 @@ export default function ControlDeckScreen() {
           // Fan out to subscribers (PlaylistPanel, etc.) before any local
           // handling. Listeners only react to types they care about.
           engineEvents.emit(msg);
-          if (msg.type === 'mixer') {
-            setMixerChannels(msg.channels || []);
+          if (msg.type === 'deck') {
+            // The deck channel arrives on its own event (post channel
+            // split) — see `serializeDeckState` in
+            // marsin_engine/lib/api_server.js. The mixer event is
+            // explicitly ignored by the deck tab; it carries overlay
+            // channels that the deck doesn't render.
+            setDeckChannel(msg.channel || null);
           } else if (msg.type === 'autopilot') {
             // The engine broadcasts every autopilot transition (so any
             // writer — this UI, PortWatch over LoRa, an HTTP script —
@@ -250,10 +255,12 @@ export default function ControlDeckScreen() {
       setDeckTxConfig(dtRes.data);
     }
 
-    // Load initial mixer state
-    const mixerRes = await fetchMixerState();
-    if (mixerRes.ok && mixerRes.data) {
-      setMixerChannels(mixerRes.data.channels || []);
+    // Load initial deck channel state. We deliberately do NOT
+    // call /mixer here — the deck tab has no business surfacing
+    // overlay channels.
+    const deckRes = await fetchDeckChannel();
+    if (deckRes.ok && deckRes.data) {
+      setDeckChannel(deckRes.data.channel || null);
     }
   }, [connectWebSocket]);
 
@@ -282,8 +289,11 @@ export default function ControlDeckScreen() {
     };
   }, [connectToEngine]);
 
-  const triggerChannelControl = (channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
-    setMixerChannelControl(channelId, id, v0, v1, v2);
+  const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
+    // Deck tab only ever writes to the deck channel — there's a single
+    // dedicated route for that now. We ignore the channelId arg (kept
+    // for API compatibility with the previous mixer-routed call).
+    setDeckChannelControl(id, v0, v1, v2);
   };
 
   return (

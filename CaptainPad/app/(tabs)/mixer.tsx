@@ -863,8 +863,13 @@ export default function MixerScreen() {
       </View>
 
       {/* ── Channel Strips ─────────────────────────────────────────── */}
+      {/* Post-channel-split: /mixer.channels[] contains ONLY mixer
+          overlays (the deck channel lives on /deck/channel). We
+          iterate the array directly — no `.slice(1)` skip-the-deck
+          dance. The engine's HIL test (hil_channel_isolation_test)
+          guards this invariant. */}
       <ScrollView horizontal scrollEnabled={false} contentContainerStyle={{ padding: 16, gap: 16, flexGrow: 1 }} style={{ flex: 1 }}>
-        {channels.slice(1).map((channel, idx) => {
+        {channels.map((channel, idx) => {
           const isSoloActive = soloRef.current === channel.id;
           return (
             <ChannelStrip
