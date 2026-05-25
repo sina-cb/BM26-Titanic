@@ -447,8 +447,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // intentional bump here so a busted script doesn't silently roulette.
     const TRANSITION_OPTIONS = [
       'trans_crossfade', 'trans_flash', 'trans_dissolve',
-      'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_up', 'trans_wipe_down',
-      'trans_iris',
+      'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_down',
+      'trans_iris', 'trans_iris_close',
+      'trans_diagonal_wipe', 'trans_diamond_wipe',
+      'trans_ripple_in', 'trans_color_burst',
+      'trans_split_horizontal', 'trans_split_vertical',
+      'trans_wave_sweep', 'trans_morse_blink',
     ];
     return TRANSITION_OPTIONS[Math.floor(Math.random() * TRANSITION_OPTIONS.length)];
   }
