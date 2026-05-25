@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { engineEvents } from './engineEvents';
 
 const defaultConfigsRaw: any = require('@/config.yaml');
 const defaultConfigs = defaultConfigsRaw?.default || defaultConfigsRaw || {};
@@ -187,15 +188,43 @@ export async function sendControl(id: number, v0: number, v1?: number, v2?: numb
   }
 }
 
+// In-flight + short-TTL cache for fetchPatterns. The pattern list is
+// engine-global; when the user adds N mixer channels in quick
+// succession, N PlaylistPanels mount at once and each one fires its
+// own /list-patterns GET. With N=3-4 that's enough parallel requests
+// (alongside per-channel /playlist + global /playlists) to push some
+// requests past the 8 s timeout and leave their panels stuck in
+// "loading" forever. The dedupe collapses those parallel fetches
+// into ONE request; the cache stops the next batch of mounts from
+// hitting the network at all.
+let _patternsCache: { data: string[]; at: number } | null = null;
+let _patternsInflight: Promise<ApiResult<string[]>> | null = null;
+const PATTERNS_CACHE_MS = 5_000;
+
 export async function fetchPatterns(): Promise<ApiResult<string[]>> {
-  try {
-    const res = await fetchWithTimeout(`${api_base}/list-patterns`);
-    const data = await res.json();
-    return { ok: true, data: Array.isArray(data) ? data : [] };
-  } catch (err: any) {
-    warnThrottled('Fetch patterns failed:', 'Fetch patterns failed:', err);
-    return { ok: false, error: err.message, data: [] };
+  if (_patternsCache && Date.now() - _patternsCache.at < PATTERNS_CACHE_MS) {
+    return { ok: true, data: _patternsCache.data };
   }
+  if (_patternsInflight) return _patternsInflight;
+  _patternsInflight = (async () => {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/list-patterns`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : [];
+      _patternsCache = { data: list, at: Date.now() };
+      return { ok: true as const, data: list };
+    } catch (err: any) {
+      warnThrottled('Fetch patterns failed:', 'Fetch patterns failed:', err);
+      return { ok: false as const, error: err.message, data: [] };
+    } finally {
+      _patternsInflight = null;
+    }
+  })();
+  return _patternsInflight;
+}
+
+export function invalidatePatternsCache() {
+  _patternsCache = null;
 }
 
 export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
@@ -733,26 +762,132 @@ export interface PlaylistAssignment {
   autopilot?: { active: boolean; delay_s: number; shuffle: boolean };
 }
 
+// Same dedupe + cache shape as fetchPatterns above. The playlist
+// library is engine-global so N PlaylistPanels mounting at once now
+// share a single GET /playlists instead of issuing N of them.
+let _playlistsCache: { data: string[]; at: number } | null = null;
+let _playlistsInflight: Promise<ApiResult<string[]>> | null = null;
+const PLAYLISTS_CACHE_MS = 5_000;
+
 export async function fetchPlaylists(): Promise<ApiResult<string[]>> {
-  try {
-    const res = await fetchWithTimeout(`${api_base}/playlists`);
-    const data = await res.json();
-    return { ok: true, data: Array.isArray(data) ? data : [] };
-  } catch (err: any) {
-    return { ok: false, error: err.message, data: [] };
+  if (_playlistsCache && Date.now() - _playlistsCache.at < PLAYLISTS_CACHE_MS) {
+    return { ok: true, data: _playlistsCache.data };
   }
+  if (_playlistsInflight) return _playlistsInflight;
+  _playlistsInflight = (async () => {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/playlists`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : [];
+      _playlistsCache = { data: list, at: Date.now() };
+      return { ok: true as const, data: list };
+    } catch (err: any) {
+      return { ok: false as const, error: err.message, data: [] };
+    } finally {
+      _playlistsInflight = null;
+    }
+  })();
+  return _playlistsInflight;
 }
 
-export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistData>> {
-  try {
-    const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`);
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const data = await res.json();
-    return { ok: true, data };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
-  }
+export function invalidatePlaylistsCache() {
+  _playlistsCache = null;
 }
+
+// Per-name dedupe + short-TTL cache for fetchPlaylist. The mixer
+// scenario that motivated this: adding a 3rd channel kicks off
+// 3 PlaylistPanels each fetching /playlists/default in parallel.
+// The engine handles them serially behind sync fs.readFileSync
+// calls, and under load (broadcastMixerState, vis flood) one of
+// them can blow past the 8 s timeout — leaving the panel forever
+// "loading". Dedupe collapses concurrent fetches for the SAME
+// playlist name onto one promise; the TTL means a sibling panel
+// mounted 100ms later doesn't even hit the network.
+const _playlistCache = new Map<string, { data: PlaylistData; at: number }>();
+const _playlistInflight = new Map<string, Promise<ApiResult<PlaylistData>>>();
+const PLAYLIST_CACHE_MS = 5_000;
+
+export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistData>> {
+  const cached = _playlistCache.get(name);
+  if (cached && Date.now() - cached.at < PLAYLIST_CACHE_MS) {
+    return { ok: true, data: cached.data };
+  }
+  const inflight = _playlistInflight.get(name);
+  if (inflight) return inflight;
+  const p = (async () => {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`);
+      if (!res.ok) return { ok: false as const, error: `HTTP ${res.status}` };
+      const data = await res.json();
+      _playlistCache.set(name, { data: data as PlaylistData, at: Date.now() });
+      return { ok: true as const, data: data as PlaylistData };
+    } catch (err: any) {
+      return { ok: false as const, error: err.message };
+    } finally {
+      _playlistInflight.delete(name);
+    }
+  })();
+  _playlistInflight.set(name, p);
+  return p;
+}
+
+export function invalidatePlaylistCache(name?: string) {
+  if (name) _playlistCache.delete(name);
+  else _playlistCache.clear();
+}
+
+/**
+ * Seed the per-name playlist cache with data that came inline on
+ * another response (e.g. POST /mixer/channels now returns the full
+ * playlist alongside the new channel). Lets the next PlaylistPanel
+ * to call fetchPlaylist(name) hit the cache instantly instead of
+ * racing the network — the only reliable way to stop the
+ * "panel stuck on Loading" bug when many channels are added in a
+ * burst.
+ */
+export function primePlaylistCache(name: string, data: PlaylistData) {
+  if (!name || !data) return;
+  _playlistCache.set(name, { data, at: Date.now() });
+}
+
+// ── Global cache-prime listener ───────────────────────────────────────
+// Subscribe ONCE at module load to the engineEvents bus so EVERY
+// `channelPlaylistData` WS event primes the per-name cache,
+// regardless of whether a PlaylistPanel for that channel has mounted
+// yet. This is the critical guarantee that fixes the rapid-add bug:
+// the engine emits this event BEFORE the mixer broadcast that
+// announces the new channel, so by the time React mounts the new
+// PlaylistPanel and it calls fetchPlaylist(name), the cache already
+// has the data — no slow GET, no race, no "stuck on Loading".
+//
+// Static import (NOT dynamic) so the listener is registered
+// SYNCHRONOUSLY on module load. The previous dynamic-import
+// version had a window of ~1 tick where the listener wasn't yet
+// installed; for the user's 3rd-channel-add scenario the
+// channelPlaylistData WS event could fire DURING that window and
+// the cache would never be primed, leaving the new PlaylistPanel
+// to fall back to a slow GET. engineEvents.ts has no api imports,
+// so there's no circular-dep concern with a static import.
+engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
+  if (msg && msg.type === 'channelPlaylistData') {
+    const pd = msg.playlistData as PlaylistData | undefined;
+    if (pd && typeof pd === 'object' && typeof pd.name === 'string') {
+      primePlaylistCache(pd.name, pd);
+    }
+  } else if (msg && msg.type === 'playlistSaved') {
+    // Some tab saved a playlist; if the broadcast carries the
+    // full data (current engine behaviour) prime us with it.
+    const pd = msg.playlist as PlaylistData | undefined;
+    if (pd && typeof pd === 'object' && typeof pd.name === 'string') {
+      primePlaylistCache(pd.name, pd);
+    }
+  } else if (msg && msg.type === 'playlistDeleted' && typeof msg.name === 'string') {
+    invalidatePlaylistCache(msg.name);
+    invalidatePlaylistsCache();
+  } else if (msg && msg.type === 'playlistLibrary') {
+    invalidatePlaylistsCache();
+  }
+});
 
 export async function savePlaylist(playlist: { name: string; entries: PlaylistEntry[] }): Promise<ApiResult<any>> {
   try {
@@ -762,6 +897,8 @@ export async function savePlaylist(playlist: { name: string; entries: PlaylistEn
       body: JSON.stringify(playlist),
     });
     const data = await res.json();
+    invalidatePlaylistCache(playlist.name);
+    invalidatePlaylistsCache();
     return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -772,6 +909,8 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
     const data = await res.json();
+    invalidatePlaylistCache(name);
+    invalidatePlaylistsCache();
     return { ok: res.ok, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -802,6 +941,14 @@ export async function setMixerChannelPlaylist(channelId: string, name: string | 
       body: JSON.stringify({ name }),
     });
     const data = await res.json();
+    // The engine now bundles the FULL playlist data inline in this
+    // response. Seed the per-name cache with it so the next consumer
+    // (PlaylistPanel rendering the entry list, deck/mixer rendering
+    // their own labels) hits the cache instead of issuing a slow
+    // GET /playlists/<name>. See engine_inline_playlist in api_server.js.
+    if (res.ok && data && data.playlistData && data.playlistData.name) {
+      primePlaylistCache(data.playlistData.name, data.playlistData as PlaylistData);
+    }
     return { ok: res.ok, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -852,7 +999,7 @@ export async function discardMixerChannelDefaults(channelId: string): Promise<Ap
   }
 }
 
-export async function addMixerChannel(opts: { playlist?: string; playlistEntryId?: string; pattern?: string; name?: string; mode?: string; fader?: number }): Promise<ApiResult<{ channelId: string; pattern: string; playlist: PlaylistAssignment | null }>> {
+export async function addMixerChannel(opts: { playlist?: string; playlistEntryId?: string; pattern?: string; name?: string; mode?: string; fader?: number }): Promise<ApiResult<{ channelId: string; pattern: string; playlist: PlaylistAssignment | null; playlistData?: PlaylistData | null }>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels`, {
       method: 'POST',
@@ -860,6 +1007,15 @@ export async function addMixerChannel(opts: { playlist?: string; playlistEntryId
       body: JSON.stringify(opts),
     });
     const data = await res.json();
+    // Engine response carries the full playlist content inline. Seed
+    // the cache so the brand-new channel's PlaylistPanel renders the
+    // entry list from the in-memory cache on first mount instead of
+    // racing a follow-up GET /playlists/<name>. THIS IS THE FIX for
+    // the "stuck on Loading" bug when adding multiple channels
+    // quickly. See api_server.js (POST /mixer/channels handler).
+    if (res.ok && data && data.playlistData && data.playlistData.name) {
+      primePlaylistCache(data.playlistData.name, data.playlistData as PlaylistData);
+    }
     return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
   } catch (err: any) {
     return { ok: false, error: err.message };

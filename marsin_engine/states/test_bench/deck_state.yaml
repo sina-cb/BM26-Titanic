@@ -4,26 +4,26 @@ channel:
   pattern: 00_golden_hour_wash
   mode: blend_screen
   fader: 1
-  enabled: true
+  enabled: false
   localControls:
     '682166867':
-      v0: 0
+      v0: 0.43
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.39
+      v0: 0.56
       v1: 0
       v2: 0
   playlist:
-    name: default
-    activeEntryId: e_default_0_00_golden_hour_wash
+    name: fast
+    activeEntryId: e_1779704961785_8455
     cursor: 0
     autopilot:
       active: false
       delay_s: 1
       shuffle: false
 transitionConfig:
-  enabled: false
+  enabled: true
   mode: trans_crossfade
   durationMs: 500
   shuffle: false

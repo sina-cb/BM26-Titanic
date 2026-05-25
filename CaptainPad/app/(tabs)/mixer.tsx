@@ -116,6 +116,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             channelLabel={isDeck ? 'DECK MAIN' : `CH ${index}`}
             compact
             locked={locked}
+            initialAssignment={channel.playlist || null}
           />
         </View>
 
@@ -280,6 +281,30 @@ export default function MixerScreen() {
             });
             for (const ch of incoming) {
               if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
+            }
+            // ── WS-driven add button clear ──────────────────────────
+            // If we're waiting on an in-flight add, check if the
+            // broadcast contains an id we DIDN'T know about when
+            // the user tapped. That id IS the newly-added channel
+            // — the engine has confirmed the add, so the "ADDING…"
+            // label can flip back to "+ DEFAULT" immediately
+            // (typically before the HTTP POST response even
+            // finishes parsing). This is what makes the button
+            // feel instant under load.
+            const pending = pendingAddRef.current;
+            if (pending) {
+              let newlyAdded = false;
+              for (const ch of incoming) {
+                if (ch.id && !pending.knownIds.has(ch.id)) {
+                  newlyAdded = true;
+                  break;
+                }
+              }
+              if (newlyAdded) {
+                pendingAddRef.current = null;
+                addBusyRef.current = false;
+                setAddBusy(false);
+              }
             }
           } else if (msg.type === 'vis') {
             visDataRef.current = msg.vis || {};
@@ -521,13 +546,42 @@ export default function MixerScreen() {
   // always "+ DEFAULT" for the fastest possible add.
   const [addPickerOpen, setAddPickerOpen] = useState(false);
   const [addPickerPlaylists, setAddPickerPlaylists] = useState<string[]>([]);
-  // addBusyRef guards both add buttons against rapid taps that used to
-  // queue up 5 POST /mixer/channels at once (the user reported "one
-  // time it added like 5 layers"). A ref instead of state because
-  // setState is async — between two quick taps the state hasn't
-  // updated yet so the guard would miss. Ref mutates synchronously.
+  // ── "ADDING…" button state machine ───────────────────────────────────
+  //
+  // The previous design awaited the HTTP POST response before
+  // clearing addBusy. That was correct in theory (try/finally always
+  // runs) but visually broken: under heavy WS load the iPad's JS
+  // thread is starved processing 10 Hz mixer + vis broadcasts, so
+  // the fetch promise's continuation can sit in the microtask queue
+  // for hundreds of ms behind those broadcasts. The button felt
+  // stuck even though the engine had already created the channel.
+  //
+  // The fix: decouple the button state from HTTP timing. The button
+  // is cleared by whichever signal arrives first —
+  //
+  //   A. The WS `mixer` broadcast that lists the NEW channel id
+  //      (~10ms after the engine's POST handler runs; sometimes
+  //      arrives BEFORE the HTTP response is fully parsed).
+  //   B. The HTTP response itself (POST result, OK or error).
+  //
+  // Both paths clear the same single source of truth. The button is
+  // therefore guaranteed to be released as soon as the engine
+  // confirms the channel exists, regardless of which transport the
+  // confirmation arrives on. No watchdog needed.
+  //
+  // pendingAddRef holds the ids we knew about at the moment the
+  // user tapped — when a mixer broadcast arrives with a channel
+  // whose id is NOT in that set, we know the add succeeded. We use
+  // an id-set (not a counter) so concurrent remove+add operations
+  // can't confuse the matcher.
   const addBusyRef = useRef(false);
   const [addBusy, setAddBusy] = useState(false);
+  const pendingAddRef = useRef<{ knownIds: Set<string> } | null>(null);
+  const clearAddBusy = useCallback(() => {
+    pendingAddRef.current = null;
+    addBusyRef.current = false;
+    setAddBusy(false);
+  }, []);
 
   const openAddChannelPicker = async () => {
     if (addBusyRef.current) return;
@@ -543,49 +597,55 @@ export default function MixerScreen() {
     }
   };
 
-  const handleAddChannelWithPlaylist = async (playlistName: string) => {
+  const handleAddChannelWithPlaylist = (playlistName: string) => {
     if (addBusyRef.current) return;
     addBusyRef.current = true;
     setAddBusy(true);
     setAddPickerOpen(false);
-    try {
-      const res = await addMixerChannel({
-        playlist: playlistName,
-        name: playlistName === 'default' ? 'New Layer' : playlistName,
-        mode: 'blend_screen',
-        fader: 1.0,
-      });
-      if (!res.ok) {
-        // Surface a real error instead of silently leaving the UI in
-        // the "ADDING…" state. The user reported "it says adding, but
-        // didn't do it" — almost always a transient engine/WS hiccup
-        // that we now explicitly recover from with a refetch + alert.
+
+    // Snapshot the channel ids we know about right NOW. The WS
+    // handler in connectWebSocket() above will spot the newly-added
+    // id when the engine's mixer broadcast lands and call
+    // clearAddBusy().
+    pendingAddRef.current = {
+      knownIds: new Set(channelsRef.current.map((c) => c.id as string)),
+    };
+
+    // Fire the POST as fire-and-forget. The button is decoupled
+    // from this promise's resolution — clearAddBusy() will fire
+    // from the WS handler the moment the engine confirms the add,
+    // typically faster than the HTTP response parses on the iPad.
+    // We still observe the response so we can show an alert if the
+    // engine rejected the add (over capacity, playlist missing,
+    // etc.); that path also calls clearAddBusy() defensively.
+    //
+    // Both transports use fetchWithTimeout (8s AbortController) /
+    // the WS connection's own keepalive, so there is NO codepath
+    // where addBusy can remain set indefinitely. Worst case (WS
+    // dropped a frame AND HTTP timed out): clearAddBusy fires from
+    // the timeout-induced rejection. No watchdog needed.
+    void addMixerChannel({
+      playlist: playlistName,
+      name: playlistName === 'default' ? 'New Layer' : playlistName,
+      mode: 'blend_screen',
+      fader: 1.0,
+    }).then((result) => {
+      if (!result.ok) {
+        clearAddBusy();
         Alert.alert(
           'Add channel failed',
-          res.error || 'Engine did not accept the new channel. Check that the engine is running and reachable, then try again.',
+          result.error || 'Engine did not accept the new channel. Check that the engine is running and reachable, then try again.',
         );
+      } else {
+        // Idempotent clear — the WS handler probably already
+        // cleared addBusy by the time this HTTP continuation runs,
+        // but if not, this is the second guaranteed clear path.
+        clearAddBusy();
       }
-      // ALWAYS refetch the canonical mixer state from the engine after an
-      // add. WS broadcast is async and not guaranteed to land before the
-      // user's next tap; an explicit GET /mixer is the source of truth
-      // and makes the new channel show up immediately in the UI.
-      const mRes = await fetchMixerState();
-      if (mRes.ok && mRes.data) {
-        setChannels(mRes.data.channels || []);
-        for (const ch of (mRes.data.channels || [])) {
-          if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) {
-            savedModesRef.current[ch.id] = ch.mode;
-          }
-        }
-      }
-    } catch (err: any) {
+    }).catch((err) => {
+      clearAddBusy();
       Alert.alert('Add channel failed', err?.message || String(err));
-    } finally {
-      // Ref + state both cleared in finally so a thrown error can never
-      // strand the UI in a permanently-busy state (the original bug).
-      addBusyRef.current = false;
-      setAddBusy(false);
-    }
+    });
   };
 
   const handleMasterChange = async (val: number) => {

@@ -5,8 +5,8 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.39
-      sliderNoiseScale: 0
+      sliderLocalSpeed: 0.27
+      sliderNoiseScale: 0.69
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
@@ -116,9 +116,9 @@ entries:
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderLocalSpeed: 0.71
-      sliderSparkleSpeedTrim: 0.27
-      sliderSparkleDensity: 0.54
+      sliderLocalSpeed: 0.1
+      sliderSparkleSpeedTrim: 0.81
+      sliderSparkleDensity: 0.69
     notes: null
   - id: e_default_14_14_lunar_current
     pattern: 14_lunar_current
@@ -186,7 +186,11 @@ entries:
   - id: e_default_22_22_abyssal_sway_garden
     pattern: 22_abyssal_sway_garden
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0
+      sliderStalkCount: 0
+      sliderCausticScale: 0.79
+      sliderSoftness: 0
     notes: null
   - id: e_default_23_23_prismatic_strange_attractors
     pattern: 23_prismatic_strange_attractors

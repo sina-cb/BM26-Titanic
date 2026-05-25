@@ -1,21 +1,21 @@
 master: 1
 channels:
-  - id: ch_1779705193366_7
+  - id: ch_1779708202890_85
     name: New Layer
     pattern: 00_golden_hour_wash
     mode: blend_screen
     fader: 1
-    enabled: true
+    enabled: false
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
       '682166867':
-        v0: 0
+        v0: 0.69
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.39
+        v0: 0.27
         v1: 0
         v2: 0
     playlist:
@@ -26,36 +26,54 @@ channels:
         active: false
         delay_s: 30
         shuffle: false
-  - id: ch_1779705193371_8
+  - id: ch_1779708512771_3
     name: New Layer
-    pattern: 01_cylon_sweep
+    pattern: 00_golden_hour_wash
     mode: blend_screen
-    fader: 0
+    fader: 1
     enabled: true
     locked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
+      '682166867':
+        v0: 0.69
+        v1: 0
+        v2: 0
       '1037917937':
-        v0: 0.78
-        v1: 0
-        v2: 0
-      '1278139614':
-        v0: 0.22
-        v1: 0
-        v2: 0
-      '2571730692':
-        v0: 0.73
-        v1: 0
-        v2: 0
-      '3994789032':
-        v0: 0.67
+        v0: 0.27
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_1_01_cylon_sweep
-      cursor: 1
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+  - id: ch_1779708514066_4
+    name: New Layer
+    pattern: 00_golden_hour_wash
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    locked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '682166867':
+        v0: 0.69
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.27
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
       autopilot:
         active: false
         delay_s: 30

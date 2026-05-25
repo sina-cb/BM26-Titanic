@@ -315,6 +315,7 @@ export default function ControlDeckScreen() {
                 channelId={deckChannelId}
                 channelLabel="DECK MAIN"
                 locked={!!deckChannel?.locked}
+                initialAssignment={deckChannel?.playlist || null}
                 // During a deck pattern soft-swap we grey out the list +
                 // disable taps. The engine also rejects taps server-side
                 // with 409 — this is just the UX layer of the contract.

@@ -7,6 +7,7 @@ import {
   fetchMixerChannelPlaylist, setMixerChannelPlaylist, setMixerChannelPlaylistEntry,
   fetchPatterns,
   getApiBaseAsync,
+  invalidatePlaylistCache, invalidatePlaylistsCache, primePlaylistCache,
   PlaylistData, PlaylistEntry, PlaylistAssignment,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
@@ -45,6 +46,15 @@ interface Props {
    *  the lock visible (and avoids the operator hearing the "switch
    *  failed" alert spam if they tap repeatedly). */
   disabled?: boolean;
+  /** Pre-known playlist assignment from the parent (mixer.tsx, which
+   *  already has it from the engine's mixer broadcast). When provided,
+   *  the panel renders the dropdown label immediately instead of
+   *  flashing "LOAD…" while waiting for its own
+   *  /mixer/channels/<id>/playlist GET to come back. Important during
+   *  rapid-add scenarios where N panels mount together — without this
+   *  hint the engine sees N parallel GETs and some can stall past the
+   *  8 s fetch timeout. */
+  initialAssignment?: PlaylistAssignment | null;
 }
 
 function genEntryId() {
@@ -55,9 +65,12 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled, initialAssignment }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
-  const [assignment, setAssignment] = useState<PlaylistAssignment | null>(null);
+  // Seed assignment from parent immediately so the dropdown shows the
+  // playlist name on first render — no "LOAD…" flash while the panel
+  // races its own /mixer/channels/<id>/playlist GET to land.
+  const [assignment, setAssignment] = useState<PlaylistAssignment | null>(initialAssignment ?? null);
   const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
   const [busy, setBusyRaw] = useState(false);
@@ -158,21 +171,55 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     if (!channelId) return;
     try {
       await getApiBaseAsync();
-      const [lib, a, ps] = await Promise.all([
+      // Use whatever assignment hint we already have to KICK OFF the
+      // playlist-content fetch in parallel with the global library +
+      // patterns fetches. Without this hint we had to wait for the
+      // /mixer/channels/<id>/playlist GET to come back before we even
+      // started /playlists/<name>. Under load that serial second hop
+      // is what left newly-added panels stranded on "loading"
+      // forever — the canonical refresh would finish, the assignment
+      // would land, but the second fetch could already be wedged.
+      const knownName = assignmentRef.current?.name ?? null;
+      const [lib, a, ps, plHint] = await Promise.all([
         fetchPlaylists(),
         fetchMixerChannelPlaylist(channelId),
         fetchPatterns(),
+        knownName ? fetchPlaylist(knownName) : Promise.resolve(null),
       ]);
       const anyFailed = !lib.ok || !a.ok || !ps.ok;
       if (lib.ok && lib.data) setPlaylists(lib.data);
+      // If we have an existing assignment (from initialAssignment or
+      // a prior WS broadcast) and the GET returned null, that's
+      // almost always a transient state on the engine — the new
+      // channel was just created and its playlist field hadn't
+      // populated yet when the iPad's GET landed. Keep what we have
+      // rather than clearing the dropdown back to "LOAD…", and
+      // schedule a retry so we re-converge to the real engine state.
+      // Without this guard, a brand-new channel whose GET races the
+      // engine's loadPlaylistEntry would flip the panel from
+      // "default" back to "LOAD…" and the entries would never show.
       const nextAssign = a.ok ? (a.data || null) : null;
-      setAssignment(nextAssign);
-      if (nextAssign?.name) {
-        const pl = await fetchPlaylist(nextAssign.name);
-        if (pl.ok && pl.data) setPlaylist(pl.data);
-        else if (!pl.ok) scheduleRetry();
+      const effectiveAssign = nextAssign || assignmentRef.current || null;
+      setAssignment(effectiveAssign);
+      if (a.ok && !nextAssign && assignmentRef.current) scheduleRetry();
+
+      // If our hint was right (same name the engine reports), the
+      // optimistic fetchPlaylist we kicked off above is already
+      // resolved — adopt it immediately. Otherwise issue a fresh fetch
+      // for the real name; the dedupe cache in api.ts means concurrent
+      // panels won't pile up.
+      const targetName = effectiveAssign?.name || null;
+      if (targetName) {
+        if (knownName === targetName && plHint && plHint.ok && plHint.data) {
+          setPlaylist(plHint.data);
+        } else {
+          const pl = await fetchPlaylist(targetName);
+          if (pl.ok && pl.data) setPlaylist(pl.data);
+          else if (!pl.ok) scheduleRetry();
+        }
       } else if (a.ok) {
-        // a.ok with no assignment is a real "no playlist" state.
+        // a.ok with no assignment AND no prior assignment = real
+        // "no playlist" state. Safe to clear.
         setPlaylist(null);
       }
       if (ps.ok && ps.data) setAllPatterns(ps.data);
@@ -229,12 +276,38 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
           (local?.name ?? null) !== (next?.name ?? null) ||
           (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
         if (changed) refresh();
+      } else if (msg.type === 'channelPlaylistData') {
+        // Engine emits this whenever a channel's playlist is set or
+        // swapped (before the mixer event that announces the
+        // change). It carries the FULL playlist content inline so we
+        // can prime the per-name cache — when this channel's
+        // PlaylistPanel mounts and tries to fetchPlaylist(name),
+        // it hits the primed cache instead of issuing a slow GET that
+        // might race the broadcast.
+        if (msg.playlistData && typeof msg.playlistData === 'object' && 'name' in msg.playlistData) {
+          const pd = msg.playlistData as PlaylistData;
+          primePlaylistCache(pd.name, pd);
+          // If the event targets US specifically, adopt the playlist
+          // data immediately so the entry list renders without
+          // waiting for refresh().
+          if (msg.channelId === channelId) {
+            setPlaylist(pd);
+            if (msg.playlist && typeof msg.playlist === 'object') {
+              setAssignment(msg.playlist as PlaylistAssignment);
+            }
+          }
+        }
       } else if (msg.type === 'playlistLibrary') {
+        // The set of playlist names changed; the shared cache in
+        // api.ts is now stale — drop it so the next fetchPlaylists
+        // re-hits the engine instead of returning the old list.
+        invalidatePlaylistsCache();
         setPlaylists(Array.isArray(msg.names) ? (msg.names as string[]) : []);
       } else if (msg.type === 'playlistSaved') {
         // Some tab (this one or a sibling) just saved a playlist. If it's
         // the one we're showing, swap in the new content directly — no
         // extra fetch needed since the broadcast carries it.
+        if (typeof msg.name === 'string') invalidatePlaylistCache(msg.name);
         const cur = playlistRef.current;
         if (cur && msg.name === cur.name && msg.playlist) {
           setPlaylist(msg.playlist as PlaylistData);
@@ -242,6 +315,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         }
       } else if (msg.type === 'playlistDeleted') {
         // The currently-loaded playlist was deleted out from under us.
+        if (typeof msg.name === 'string') invalidatePlaylistCache(msg.name);
+        invalidatePlaylistsCache();
         const cur = playlistRef.current;
         if (cur && msg.name === cur.name) refresh();
       } else if (msg.type === 'playlistEntryCaptured') {
@@ -250,6 +325,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         if (msg.channelId === channelId) flashSaved();
         const cur = playlistRef.current;
         if (cur && msg.playlist === cur.name) {
+          if (typeof msg.playlist === 'string') invalidatePlaylistCache(msg.playlist);
           refresh();
         }
       }

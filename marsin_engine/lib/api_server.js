@@ -770,6 +770,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastWs(serializeMixerState());
   }
 
+  // Push the FULL playlist content (entries + defaults) for a channel
+  // out over WS as a dedicated event, so every connected client can
+  // prime its per-name playlist cache without having to issue a
+  // follow-up GET /playlists/<name>. Called on channel add and on
+  // playlist swap — both right BEFORE broadcastMixerState() so the
+  // iPad processes the cache-prime BEFORE it mounts the new
+  // PlaylistPanel off the mixer event. Without this ordering,
+  // the panel would race the POST response and risk timing out
+  // on the entries fetch.
+  function broadcastChannelPlaylistData(channel) {
+    try {
+      if (!channel || !channel.playlist || !channel.playlist.name) return;
+      const pl = playlistManager.load(channel.playlist.name);
+      if (!pl) return;
+      broadcastWs({
+        type: 'channelPlaylistData',
+        channelId: channel.id,
+        playlist: channel.playlist,
+        playlistData: pl,
+      });
+    } catch (e) {
+      console.warn('[api_server] broadcastChannelPlaylistData failed:', e.message);
+    }
+  }
+
   // ── Server-driven group transitions ───────────────────────────────────
   // The mixer's updateTransitions() runs once per render tick (40 Hz) and
   // calls back to us whenever a transition is making progress. We throttle
@@ -1518,8 +1543,37 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
         finalizeCpcValues(channel);
         saveAllState();
+        // Emit playlist content on WS BEFORE the mixer broadcast so
+        // every client primes its playlist cache before mounting the
+        // new PlaylistPanel off the mixer event. See
+        // broadcastChannelPlaylistData() for the why.
+        broadcastChannelPlaylistData(channel);
         broadcastMixerState();
-        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: channel.id, pattern: channel.pattern, playlist: channel.playlist }));
+        // Bundle the FULL playlist data (entries, defaults) inline in
+        // the response so the iPad's brand-new PlaylistPanel for this
+        // channel never has to do a follow-up
+        // GET /playlists/<name>. That follow-up was the bottleneck
+        // under rapid-add load — the engine was busy broadcasting
+        // mixer + vis, the GET would queue behind, and panels would
+        // stall on "still loading" past their 8s fetch timeout. Now
+        // the panel gets everything it needs to render the entry list
+        // from this single response. See PlaylistPanel.tsx
+        // initialPlaylist prop and CaptainPad/utils/api.ts
+        // primePlaylistCache for the iPad side.
+        let inlinePlaylistData = null;
+        try {
+          if (channel.playlist && channel.playlist.name) {
+            const pl = playlistManager.load(channel.playlist.name);
+            if (pl) inlinePlaylistData = pl;
+          }
+        } catch (_) {}
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          channelId: channel.id,
+          pattern: channel.pattern,
+          playlist: channel.playlist,
+          playlistData: inlinePlaylistData,
+        }));
       });
     } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
       const id = req.url.split('/')[3];
@@ -2131,7 +2185,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (data.name === null) {
             ch.playlist = null;
             saveAllState();
-            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null }));
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null, playlistData: null }));
             broadcastMixerState(); return;
           }
           const pl = playlistManager.load(data.name);
@@ -2140,12 +2194,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!firstEntry) {
             ch.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
             saveAllState();
-            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist }));
+            // Empty-but-named playlist: send the (empty) data inline
+            // so the panel can still render "Empty playlist" without
+            // hitting the network.
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, playlistData: pl }));
+            broadcastChannelPlaylistData(ch);
             broadcastMixerState(); return;
           }
           loadPlaylistEntry(ch, pl.name, firstEntry.id);
           saveAllState();
-          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist }));
+          // playlistData mirrors POST /mixer/channels — entries are
+          // included inline so the panel never needs to GET
+          // /playlists/<name> for this swap. See engine_inline_playlist
+          // todo in the assistant transcript for context.
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, playlistData: pl }));
+          // Prime every connected client's cache for the NEW playlist
+          // before the mixer broadcast tells them the channel changed.
+          broadcastChannelPlaylistData(ch);
           broadcastMixerState();
         } catch (e) {
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
