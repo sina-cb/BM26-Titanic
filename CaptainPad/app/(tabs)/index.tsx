@@ -329,6 +329,7 @@ export default function ControlDeckScreen() {
             <View key={deckChannelId} style={{ flex: 1, minHeight: 0 }}>
               <PlaylistPanel
                 channelId={deckChannelId}
+                role="deck"
                 channelLabel="DECK MAIN"
                 locked={!!deckChannel?.locked}
                 initialAssignment={deckChannel?.playlist || null}

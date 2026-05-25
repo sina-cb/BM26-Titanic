@@ -5,11 +5,12 @@ import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
-  fetchMixerChannelPlaylist, setMixerChannelPlaylist, setMixerChannelPlaylistEntry,
+  fetchChannelPlaylist, setChannelPlaylist, setChannelPlaylistEntry,
   fetchPatterns,
   getApiBaseAsync,
   invalidatePlaylistCache, invalidatePlaylistsCache, primePlaylistCache,
   PlaylistData, PlaylistEntry, PlaylistAssignment,
+  type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 
@@ -33,6 +34,12 @@ const C = Colors.light;
 //     side changes things. `useFocusEffect` also refreshes on tab focus.
 interface Props {
   channelId: string;
+  /** Role decides which API endpoint backs this panel. Post slot 6
+   *  channel_isolation, /mixer/channels/:id/* and /deck/* are strict
+   *  about role — hitting the wrong one returns HTTP 400 WRONG_ROLE
+   *  and the panel will retry-loop forever showing "failed to load".
+   *  Deck tab MUST pass 'deck'; mixer strips default to 'mixer'. */
+  role?: ChannelRole;
   /** Section header text. Falls back to "PLAYLIST". */
   channelLabel?: string;
   /** Tight padding/font, capped list height — for mixer strips. */
@@ -73,7 +80,7 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, onRefreshConnection }) => {
   const [playlists, setPlaylists] = useState<string[]>([]);
   // Seed assignment from parent immediately so the dropdown shows the
   // playlist name on first render — no "LOAD…" flash while the panel
@@ -185,7 +192,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
       const knownName = assignmentRef.current?.name ?? null;
       const [lib, a, ps, plHint] = await Promise.all([
         fetchPlaylists(),
-        fetchMixerChannelPlaylist(channelId),
+        fetchChannelPlaylist(role, channelId),
         fetchPatterns(),
         knownName ? fetchPlaylist(knownName) : Promise.resolve(null),
       ]);
@@ -237,7 +244,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         refresh();
       }, 1500);
     }
-  }, [channelId]);
+  }, [role, channelId]);
 
   useEffect(() => {
     refresh();
@@ -263,16 +270,31 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
 
   // Subscribe to engine WS broadcasts via the global bus. The screen-level
   // ws.onmessage forwards every parsed message here.
+  //
+  // Post slot 6 channel_isolation, the engine emits TWO state events:
+  //   - `mixer` carries the mixer overlay array (`channels[]`)
+  //   - `deck`  carries the deck channel as a single `channel` field
+  // A PlaylistPanel only listens to the event matching its role so it
+  // doesn't react to a sibling channel's swap.
   useEffect(() => {
     return engineEvents.subscribe((msg: EngineMessage) => {
-      if (msg.type === 'mixer') {
-        // The deck/mixer broadcasts a fresh mixer state on every mutation.
+      if (role === 'mixer' && msg.type === 'mixer') {
         // If our channel's playlist assignment changed under us (because a
         // sibling tab swapped playlists, or autopilot stepped to a new
         // entry), pick that up.
-        const channels = (msg.channels as Array<{ id: string; playlist?: PlaylistAssignment | null }>) || [];
+        const channels = (msg.channels as { id: string; playlist?: PlaylistAssignment | null }[]) || [];
         const ch = channels.find((c) => c.id === channelId);
         if (!ch) return;
+        const local = assignmentRef.current;
+        const next = ch.playlist || null;
+        const changed =
+          (local?.name ?? null) !== (next?.name ?? null) ||
+          (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
+        if (changed) refresh();
+      } else if (role === 'deck' && msg.type === 'deck') {
+        // Deck event: `channel` is a single object (or null), not an array.
+        const ch = msg.channel as { id?: string; playlist?: PlaylistAssignment | null } | null | undefined;
+        if (!ch || ch.id !== channelId) return;
         const local = assignmentRef.current;
         const next = ch.playlist || null;
         const changed =
@@ -333,7 +355,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
         }
       }
     });
-  }, [channelId, refresh, flashSaved]);
+  }, [role, channelId, refresh, flashSaved]);
 
   // ── Actions ─────────────────────────────────────────────────────────
   // Switch this channel to a different playlist.
@@ -369,7 +391,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     });
     setPlaylist(null);
     try {
-      const res = await setMixerChannelPlaylist(channelId, name);
+      const res = await setChannelPlaylist(role, channelId, name);
       // If a newer swap started while we were awaiting, the engine's
       // WS broadcast has already (or will shortly) reconcile state
       // for the latest pick. Don't clobber it with our stale result.
@@ -397,7 +419,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     // entries / patterns library / etc. Any failure is handled by
     // refresh()'s own scheduleRetry().
     refresh();
-  }, [channelId, flashSaved, refresh]);
+  }, [role, channelId, flashSaved, refresh]);
 
   const handleEntryTap = useCallback(async (entryId: string) => {
     if (disabled) return;                                  // tap-during-transition lock
@@ -412,7 +434,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
     const prev = assignment;
     setAssignment({ ...assignment, activeEntryId: entryId });
     try {
-      const res = await setMixerChannelPlaylistEntry(channelId, entryId);
+      const res = await setChannelPlaylistEntry(role, channelId, entryId);
       if (!res.ok) {
         setAssignment(prev);   // roll back optimistic flip
         // 409 = "swap already in flight" (engine rejects taps during
@@ -431,7 +453,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, channelLabel, compac
       setAssignment(prev);
       Alert.alert('Switch failed', (e as Error)?.message || 'Network error');
     }
-  }, [assignment, channelId, disabled, refresh]);
+  }, [role, assignment, channelId, disabled, refresh]);
 
   // Add a pattern and persist immediately — no manual SAVE step. The user
   // never has to think "did I save?".

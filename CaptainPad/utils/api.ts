@@ -988,11 +988,85 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
   }
 }
 
-// NOTE: There used to be deck-specific playlist helpers
-// (fetchDeckPlaylist/setDeckPlaylist/captureDeckDefaults/setDeckPlaylistAutopilot)
-// but the deck's "base" channel is just another mixer channel, so we use
-// `/mixer/channels/:id/playlist*` for both deck and mixer. The /deck/playlist
-// endpoints in the engine remain as thin aliases for back-compat.
+// Post slot 6 channel_isolation (May 2026): the deck channel is now
+// structurally separate from mixer overlays. /mixer/channels/:id/* and
+// /deck/* routes reject the wrong role with HTTP 400 `WRONG_ROLE`. The
+// PlaylistPanel UI component is shared between the deck tab and the
+// mixer tab, so it accepts a `role` prop and we dispatch the playlist
+// API call to the matching endpoint here.
+
+export type ChannelRole = 'deck' | 'mixer';
+
+// Polymorphic playlist GET. Use this instead of fetchMixerChannelPlaylist
+// from any consumer that may be wired to the deck channel.
+export async function fetchChannelPlaylist(
+  role: ChannelRole,
+  channelId: string,
+): Promise<ApiResult<PlaylistAssignment | null>> {
+  if (role === 'deck') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist`);
+      const data = await res.json();
+      return { ok: res.ok, data: data ?? null };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  return fetchMixerChannelPlaylist(channelId);
+}
+
+// Polymorphic playlist POST (assign a playlist to the channel). The
+// mixer response carries `playlistData` inline so we can prime the
+// per-name cache; the deck response currently only carries
+// `{ status, playlist }` so we do NOT prime from it (a follow-up
+// fetchPlaylist call will handle that).
+export async function setChannelPlaylist(
+  role: ChannelRole,
+  channelId: string,
+  name: string | null,
+): Promise<ApiResult<any>> {
+  if (role === 'deck') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  return setMixerChannelPlaylist(channelId, name);
+}
+
+// Polymorphic playlist entry switch. Same EBUSY (409) contract for
+// both roles (deck soft-swaps return 409 mid-transition; mixer
+// instant-swaps don't but the helper still surfaces `code` consistently).
+export async function setChannelPlaylistEntry(
+  role: ChannelRole,
+  channelId: string,
+  entryId: string,
+): Promise<ApiResult<any> & { code?: string }> {
+  if (role === 'deck') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist/entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId }),
+      });
+      const data = await res.json();
+      const code = !res.ok && data && data.code
+        ? String(data.code)
+        : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+      return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  return setMixerChannelPlaylistEntry(channelId, entryId);
+}
 
 export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {
   try {
