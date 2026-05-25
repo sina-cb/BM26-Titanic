@@ -71,7 +71,7 @@ export function TimerPillBar({
       {label ? (
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
-          color: C.icon, marginBottom: 6, textTransform: 'uppercase',
+          color: C.icon, marginBottom: 3, textTransform: 'uppercase',
         }}>
           {label}
         </Text>
@@ -274,86 +274,99 @@ export function DeckTransitionControls({
 }) {
   const styleDisabled = shuffle; // when shuffle is on, the picked mode is ignored
 
+  // Card-internal header — moved INSIDE the card (May 2026 compaction)
+  // to reclaim the vertical space the freestanding label used to occupy
+  // above the card. Reuses the same SpaceGrotesk_700Bold / secondary /
+  // uppercase recipe that `labelCaps` codifies elsewhere in the UI; the
+  // value is duplicated inline (no new style export) to keep the
+  // component self-contained.
   return (
-    <View>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-        color: C.secondary, marginBottom: 8,
-      }}>
-        DECK TRANSITIONS
-      </Text>
-      <View style={{
-        padding: 12, borderRadius: 8, gap: 12,
-        backgroundColor: C.surfaceContainerHigh,
-        ...globalStyles.ghostBorder,
-        marginBottom: 32,
-      }}>
-        {/* Row 1: ON/OFF + Style picker */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity
-            onPress={() => onChange({ enabled: !enabled })}
-            accessibilityRole="switch"
-            accessibilityLabel={enabled ? 'Disable deck transitions' : 'Enable deck transitions'}
-            style={{
-              flexDirection: 'row', alignItems: 'center', gap: 6,
-              paddingHorizontal: 12, paddingVertical: 10, borderRadius: 6,
-              borderWidth: 1,
-              borderColor: enabled ? 'transparent' : C.ghostBorder,
-              backgroundColor: enabled ? C.primary : 'transparent',
-              minWidth: 78,
-            }}
-          >
-            <IconSymbol
-              name={enabled ? 'checkmark.circle.fill' : 'circle'}
-              size={14}
-              color={enabled ? '#FFF' : C.icon}
-            />
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-              color: enabled ? '#FFF' : C.text, letterSpacing: 0.5,
-            }}>
-              {enabled ? 'ON' : 'OFF'}
-            </Text>
-          </TouchableOpacity>
-          <TransitionStylePicker
-            current={mode}
-            onSelect={(m) => onChange({ mode: m })}
-            disabled={styleDisabled || !enabled}
-          />
-        </View>
-
-        {/* Row 2: duration pill-bar */}
-        <View style={{ opacity: enabled ? 1 : 0.5 }} pointerEvents={enabled ? 'auto' : 'none'}>
-          <TimerPillBar
-            label="DURATION"
-            presets={TRANSITION_DURATION_PRESETS_MS}
-            value={durationMs}
-            onChange={(v) => onChange({ durationMs: v })}
-            formatter={formatMs}
-          />
-        </View>
-
-        {/* Row 3: shuffle style */}
+    <View style={{
+      paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8,
+      borderRadius: 8, gap: 6,
+      backgroundColor: C.surfaceContainerHigh,
+      ...globalStyles.ghostBorder,
+      marginBottom: 16,
+    }}>
+      {/* Row 1: header label + ON/OFF + Style picker on the same line.
+          Hoisting the "DECK TRANSITIONS" label onto the controls row
+          (May 2026 compaction) eliminates the dedicated header row's
+          ~24px and lets the card breathe horizontally instead. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+          letterSpacing: 1.2, color: C.secondary,
+          textTransform: 'uppercase',
+        }}>
+          DECK TX
+        </Text>
         <TouchableOpacity
-          onPress={() => enabled && onChange({ shuffle: !shuffle })}
-          disabled={!enabled}
+          onPress={() => onChange({ enabled: !enabled })}
           accessibilityRole="switch"
-          accessibilityLabel={shuffle ? 'Disable transition style shuffle' : 'Enable transition style shuffle'}
+          accessibilityLabel={enabled ? 'Disable deck transitions' : 'Enable deck transitions'}
           style={{
-            flexDirection: 'row', alignItems: 'center', gap: 8,
-            paddingHorizontal: 8, paddingVertical: 6,
-            opacity: enabled ? 1 : 0.5,
+            flexDirection: 'row', alignItems: 'center', gap: 6,
+            paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6,
+            borderWidth: 1,
+            borderColor: enabled ? 'transparent' : C.ghostBorder,
+            backgroundColor: enabled ? C.primary : 'transparent',
+            minWidth: 70,
           }}
         >
-          <IconSymbol name="shuffle" size={14} color={shuffle ? C.primary : C.icon} />
+          <IconSymbol
+            name={enabled ? 'checkmark.circle.fill' : 'circle'}
+            size={14}
+            color={enabled ? '#FFF' : C.icon}
+          />
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: shuffle ? C.primary : C.icon, letterSpacing: 0.5,
+            color: enabled ? '#FFF' : C.text, letterSpacing: 0.5,
           }}>
-            SHUFFLE STYLE — RANDOMIZE EACH SWAP
+            {enabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
+        <TransitionStylePicker
+          current={mode}
+          onSelect={(m) => onChange({ mode: m })}
+          disabled={styleDisabled || !enabled}
+        />
       </View>
+
+      {/* Row 2: duration pill-bar */}
+      <View style={{ opacity: enabled ? 1 : 0.5 }} pointerEvents={enabled ? 'auto' : 'none'}>
+        <TimerPillBar
+          label="DURATION"
+          presets={TRANSITION_DURATION_PRESETS_MS}
+          value={durationMs}
+          onChange={(v) => onChange({ durationMs: v })}
+          formatter={formatMs}
+        />
+      </View>
+
+      {/* Row 3: shuffle style — paddingVertical 6 is the original spec.
+          The IconSymbol + label together stand ~24pt tall; the surrounding
+          TouchableOpacity's hit-slop in RN expands the actual touch
+          target. We accept the visual height in service of compaction. */}
+      <TouchableOpacity
+        onPress={() => enabled && onChange({ shuffle: !shuffle })}
+        disabled={!enabled}
+        accessibilityRole="switch"
+        accessibilityLabel={shuffle ? 'Disable transition style shuffle' : 'Enable transition style shuffle'}
+        style={{
+          flexDirection: 'row', alignItems: 'center', gap: 8,
+          paddingHorizontal: 8, paddingVertical: 6,
+          opacity: enabled ? 1 : 0.5,
+        }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <IconSymbol name="shuffle" size={14} color={shuffle ? C.primary : C.icon} />
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          color: shuffle ? C.primary : C.icon, letterSpacing: 0.5,
+        }}>
+          SHUFFLE STYLE — RANDOMIZE EACH SWAP
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }
