@@ -891,7 +891,25 @@ export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistDat
     return { ok: true, data: cached.data };
   }
   const inflight = _playlistInflight.get(name);
-  if (inflight) return inflight;
+  if (inflight) {
+    // Wait for the shared in-flight result. But if a primePlaylistCache
+    // call from a WS `channelPlaylistData` event populated the cache
+    // WHILE the inflight was running, prefer the cached data over a
+    // potentially-stale {ok:false} from the original fetch. This is the
+    // critical guard for the rapid-add-3-channels scenario: panel 1's
+    // fetch could time out or transient-fail, and without this guard
+    // panels 2/3 sharing that same promise would also see ok:false and
+    // never render — even though the engine's channelPlaylistData WS
+    // event has already primed the cache with the right data.
+    const res = await inflight;
+    if (!res.ok) {
+      const c2 = _playlistCache.get(name);
+      if (c2 && Date.now() - c2.at < PLAYLIST_CACHE_MS) {
+        return { ok: true, data: c2.data };
+      }
+    }
+    return res;
+  }
   const p = (async () => {
     try {
       const res = await fetchWithTimeout(`${api_base}/playlists/${encodeURIComponent(name)}`);
@@ -900,6 +918,12 @@ export async function fetchPlaylist(name: string): Promise<ApiResult<PlaylistDat
       _playlistCache.set(name, { data: data as PlaylistData, at: Date.now() });
       return { ok: true as const, data: data as PlaylistData };
     } catch (err: any) {
+      // Last-chance cache check: a WS prime could have landed between
+      // the fetch starting and erroring out. Same rationale as above.
+      const c2 = _playlistCache.get(name);
+      if (c2 && Date.now() - c2.at < PLAYLIST_CACHE_MS) {
+        return { ok: true as const, data: c2.data };
+      }
       return { ok: false as const, error: err.message };
     } finally {
       _playlistInflight.delete(name);
