@@ -35,7 +35,10 @@ function makePixels(n = 4) {
 
 test('default slot config validates against v1 library', () => {
   assert.doesNotThrow(() => validateSlotsConfig(DEFAULT_SLOT_CONFIG));
-  assert.equal(DEFAULT_SLOT_CONFIG.length, 6);
+  // Slots 1..6 are the docs/28 §4.3 originals. Slots 7..10 (May 2026)
+  // are the migrated legacy rig-globals. Future expansions land at
+  // 11+ so existing operator muscle memory stays valid.
+  assert.ok(DEFAULT_SLOT_CONFIG.length >= 6, `default slot config must keep slots 1..6 (got ${DEFAULT_SLOT_CONFIG.length})`);
 });
 
 test('no default slot references a future/unimplemented effect', () => {
@@ -88,9 +91,15 @@ test('validateColor6 rejects wrong shape and out-of-range', () => {
   assert.doesNotThrow(() => validateColor6([0, 0.5, 1, 0.2, 0.1, 0]));
 });
 
-test('validateSlotsConfig rejects wrong length, duplicate slotIds', () => {
-  assert.throws(() => validateSlotsConfig(DEFAULT_SLOT_CONFIG.slice(0, 5)),
-    /exactly 6 entries/);
+test('validateSlotsConfig rejects empty / too-large arrays + duplicate slotIds', () => {
+  assert.throws(() => validateSlotsConfig([]),
+    /between/);
+  // Too many — current MAX_SLOTS = 16, so 17 must fail.
+  const tooMany = [];
+  for (let i = 1; i <= 17; i++) {
+    tooMany.push({ slotId: i, enabled: false, label: `x${i}`, effectId: 'strobe', presetId: 'sync_4hz', behavior: 'toggle', paramsOverride: {} });
+  }
+  assert.throws(() => validateSlotsConfig(tooMany), /between/);
   const dup = JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG));
   dup[1].slotId = 1;
   assert.throws(() => validateSlotsConfig(dup), /Duplicate slotId/);
@@ -376,8 +385,10 @@ test('panic stop clears strobe + drop hits + trails but leaves slots + wash', ()
   assert.equal(ctrl.strobeActive, false);
   assert.equal(ctrl.dropHits.length, 0);
   assert.equal(ctrl.feedbackTrailsConfig.enabled, false);
-  // Color wash is intentionally left enabled per §5.3.
-  assert.equal(ctrl.colorWashConfig.enabled, true);
+  // Color wash is now ALSO killed by panic stop (May 2026): the
+  // unified e-stop semantics require one hard "everything off"
+  // switch, so the old §5.3 carve-out for color wash was removed.
+  assert.equal(ctrl.colorWashConfig.enabled, false);
   // Slot config unchanged.
   assert.equal(JSON.stringify(mgr.getSlots()), slotsBefore);
 });
@@ -389,7 +400,10 @@ test('slot manager getStatus includes active boolean per slot', () => {
   const mgr = new GlobalEffectSlotManager(ctrl);
   mgr.dispatchSlotAction({ slotId: 3, action: 'activate', frameIndex: 0, nowMs: 0 });
   const status = mgr.getStatus();
-  assert.equal(status.length, 6);
+  // Slot count grew from 6 → 10 in May 2026 when legacy rig-globals
+  // were migrated into the GEM grid. Assert the *contract* (length
+  // matches DEFAULT_SLOT_CONFIG) instead of the literal old number.
+  assert.equal(status.length, DEFAULT_SLOT_CONFIG.length);
   const slot3 = status.find(s => s.slotId === 3);
   assert.equal(slot3.active, true);
   const slot1 = status.find(s => s.slotId === 1);

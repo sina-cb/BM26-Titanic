@@ -147,12 +147,19 @@ export class GlobalEffectsController {
     }
   }
 
-  applyDmx(dmxBuffers) {
+  applyDmx(dmxBuffers, { blackout = false } = {}) {
+    // Hard e-stop: when blackout is set we force every DMX-only
+    // fixture (fogger, horn, fire) OFF so the rig truly goes silent.
+    // Without this the IntensityController would zero the pixel
+    // buffer but the fogger/horn DMX writes here would still fire.
+    const foggerActive = !blackout && this.effects.fogger;
+    const hornActive   = !blackout && this.effects.horn;
+    const fireActive   = !blackout && this.effects.fire;
     for (const fogger of this.foggers) {
       const frame = dmxBuffers[fogger.universe];
       if (!frame) continue;
       const isChauvet = fogger.fixtureType === 'ChauvetHaze4D';
-      if (this.effects.fogger) {
+      if (foggerActive) {
         if (isChauvet) { frame[fogger.address - 1] = 255; frame[fogger.address] = 255; }
         else { frame[fogger.address - 1] = 255; }
       } else {
@@ -163,12 +170,12 @@ export class GlobalEffectsController {
     for (const horn of this.horns) {
       const frame = dmxBuffers[horn.universe];
       if (!frame) continue;
-      frame[horn.address - 1] = this.effects.horn ? 255 : 0;
+      frame[horn.address - 1] = hornActive ? 255 : 0;
     }
     for (const fire of this.fires) {
       const frame = dmxBuffers[fire.universe];
       if (!frame) continue;
-      frame[fire.address - 1] = this.effects.fire ? 255 : 0;
+      frame[fire.address - 1] = fireActive ? 255 : 0;
     }
   }
 
@@ -401,6 +408,10 @@ export class GlobalEffectsController {
         active: this.dropHitActive,
         count: this.dropHits.length,
       },
+      // Legacy rig-globals state surfaced here too so CaptainPad's
+      // RigContext consumers (dimmer_rack bypass checkboxes) can
+      // mirror engine-side changes without a separate /globals poll.
+      effects: { ...this.effects },
     };
   }
 
@@ -415,6 +426,19 @@ export class GlobalEffectsController {
     this.stopStrobe();
     this.dropHits.length = 0;
     this.setFeedbackTrails(false);
+    // Legacy rig-globals are now slot effects too — kill them when
+    // panic-stopping the unified macro grid. Color wash and fogger
+    // stay panic-stopped as well so blackout/e-stop really is
+    // "everything off" (color wash WAS previously left on by design
+    // per docs/28 §5.3 but for the unified e-stop flow we want one
+    // hard kill switch).
+    for (const k of [
+      'vintageWhite', 'blastWhite', 'uvBlast', 'fogger',
+      'vintageWhiteBypassDimmer', 'blastWhiteBypassDimmer', 'uvBlastBypassDimmer',
+    ]) {
+      this.setEffect(k, false);
+    }
+    this.setColorWash(false);
   }
 }
 

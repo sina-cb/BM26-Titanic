@@ -16,15 +16,33 @@ import {
   validateParams,
 } from './global_effect_library.js';
 
-/** Default 6-slot layout from docs/28 §4.3. */
+/**
+ * Default slot layout. Expanded to 10 slots in May 2026 so the migrated
+ * legacy rig-globals (Vintage Wht / Blast Wht / UV Blast / Fogger) sit
+ * inside the unified Global Effect Macros grid instead of a separate
+ * RigGlobals strip. Slot count is no longer fixed at 6 — see
+ * MIN_SLOTS / MAX_SLOTS below.
+ */
 export const DEFAULT_SLOT_CONFIG = [
-  { slotId: 1, enabled: true, label: '4 Hz Sync',      effectId: 'strobe',         presetId: 'sync_4hz',        behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 2, enabled: true, label: 'White Drop',     effectId: 'dropHit',        presetId: 'white_drop',      behavior: 'trigger', paramsOverride: {} },
-  { slotId: 3, enabled: true, label: 'Ocean Wash',     effectId: 'colorWash',      presetId: 'ocean_blue',      behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 4, enabled: true, label: 'Ghost Trails',   effectId: 'feedbackTrails', presetId: 'ghost_ship',      behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 5, enabled: true, label: 'Iceberg Flash',  effectId: 'dropHit',        presetId: 'iceberg_flash',   behavior: 'trigger', paramsOverride: {} },
-  { slotId: 6, enabled: true, label: '20 Hz Burst',    effectId: 'strobe',         presetId: 'max_20hz',        behavior: 'burst',   paramsOverride: { durationMs: 1000 } },
+  // Slots 1..6 — unchanged from docs/28 §4.3 (pre-existing tests +
+  // operator muscle memory depend on these indices).
+  { slotId: 1,  enabled: true, label: '4 Hz Sync',      effectId: 'strobe',         presetId: 'sync_4hz',        behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 2,  enabled: true, label: 'White Drop',     effectId: 'dropHit',        presetId: 'white_drop',      behavior: 'trigger', paramsOverride: {} },
+  { slotId: 3,  enabled: true, label: 'Ocean Wash',     effectId: 'colorWash',      presetId: 'ocean_blue',      behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 4,  enabled: true, label: 'Ghost Trails',   effectId: 'feedbackTrails', presetId: 'ghost_ship',      behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 5,  enabled: true, label: 'Iceberg Flash',  effectId: 'dropHit',        presetId: 'iceberg_flash',   behavior: 'trigger', paramsOverride: {} },
+  { slotId: 6,  enabled: true, label: '20 Hz Burst',    effectId: 'strobe',         presetId: 'max_20hz',        behavior: 'burst',   paramsOverride: { durationMs: 1000 } },
+  // Slots 7..10 — legacy RigGlobals migrated into the GEM grid
+  // (May 2026). These route through controller.setEffect(...) so the
+  // existing dimmer-aware pixel + DMX paths keep working.
+  { slotId: 7,  enabled: true, label: 'Vintage Wht',    effectId: 'vintageWhite',   presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 8,  enabled: true, label: 'Blast Wht',      effectId: 'blastWhite',     presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 9,  enabled: true, label: 'UV Blast',       effectId: 'uvBlast',        presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 10, enabled: true, label: 'Fogger',         effectId: 'fogger',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
 ];
+
+export const MIN_SLOTS = 1;
+export const MAX_SLOTS = 16;
 
 /**
  * Validate that a slot points at a real (effectId, presetId) pair
@@ -96,13 +114,13 @@ export function validateSlotsConfig(slotsConfig, library = GLOBAL_EFFECT_LIBRARY
   if (!Array.isArray(slotsConfig)) {
     throw new Error('slotsConfig must be an array');
   }
-  if (slotsConfig.length !== 6) {
-    throw new Error(`slotsConfig must have exactly 6 entries (got ${slotsConfig.length})`);
+  if (slotsConfig.length < MIN_SLOTS || slotsConfig.length > MAX_SLOTS) {
+    throw new Error(`slotsConfig must have between ${MIN_SLOTS} and ${MAX_SLOTS} entries (got ${slotsConfig.length})`);
   }
   const seenIds = new Set();
   for (const slot of slotsConfig) {
-    if (!Number.isInteger(slot.slotId) || slot.slotId < 1 || slot.slotId > 6) {
-      throw new Error(`Invalid slotId: ${slot.slotId} (must be 1..6)`);
+    if (!Number.isInteger(slot.slotId) || slot.slotId < 1 || slot.slotId > MAX_SLOTS) {
+      throw new Error(`Invalid slotId: ${slot.slotId} (must be 1..${MAX_SLOTS})`);
     }
     if (seenIds.has(slot.slotId)) {
       throw new Error(`Duplicate slotId: ${slot.slotId}`);
@@ -193,6 +211,17 @@ export class GlobalEffectSlotManager {
         return !!c.feedbackTrailsConfig.enabled && c.feedbackTrailsConfig.preset === slot.presetId;
       case 'dropHit':
         return c.dropHitActive;
+      // Legacy effects: just look up the boolean toggle on
+      // controller.effects, since they're singletons (no preset
+      // distinction in the legacy path beyond the bypassDimmer twin).
+      case 'vintageWhite':
+        return !!c.effects.vintageWhite;
+      case 'blastWhite':
+        return !!c.effects.blastWhite;
+      case 'uvBlast':
+        return !!c.effects.uvBlast;
+      case 'fogger':
+        return !!c.effects.fogger;
       default:
         return false;
     }
@@ -234,12 +263,42 @@ export class GlobalEffectSlotManager {
       case 'feedbackTrails':
         this._dispatchFeedbackTrails({ resolved, action });
         return;
+      // Legacy rig-globals (migrated May 2026): the slot dispatcher
+      // routes through `controller.setEffect(...)` so the existing
+      // dimmer-aware pixel pipeline / DMX writers keep working.
+      case 'vintageWhite':
+      case 'blastWhite':
+      case 'uvBlast':
+      case 'fogger':
+        this._dispatchLegacy({ resolved, action });
+        return;
       default:
         this.controller.triggerGenericMacro({
           effectId: resolved.effectId,
           params: resolved.params,
           action, frameIndex, nowMs,
         });
+    }
+  }
+
+  _dispatchLegacy({ resolved, action }) {
+    const c = this.controller;
+    const effectId = resolved.effectId;
+    const isOn = !!c.effects[effectId];
+    let next;
+    if (action === 'deactivate' || action === 'up') next = false;
+    else if (action === 'activate' || action === 'down' || action === 'trigger') next = true;
+    else if (action === 'toggle' || action === undefined) next = !isOn;
+    else next = !isOn;
+    c.setEffect(effectId, next);
+    // bypassDimmer is a per-preset twin (e.g. blast_white vs
+    // blast_white bypass). Mirror it onto the matching legacy
+    // `<effect>BypassDimmer` flag whenever we activate.
+    if (next && typeof resolved.params.bypassDimmer === 'boolean') {
+      c.setEffect(`${effectId}BypassDimmer`, resolved.params.bypassDimmer);
+    }
+    if (!next) {
+      c.setEffect(`${effectId}BypassDimmer`, false);
     }
   }
 

@@ -1621,6 +1621,40 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok' }));
+
+    // E-stop. Unified blackout endpoint that:
+    //   1. Sets the IntensityController blackout flag (pixel-level kill).
+    //   2. Kills every active macro / legacy global effect (panic stop)
+    //      so when blackout is released the rig wakes up to a clean
+    //      slate instead of resuming the strobe/wash/etc. that was
+    //      running at e-stop time. This is the operator's expectation
+    //      from the "e-stop" framing.
+    //   3. Persists globalsState.blackout so the next boot honours it.
+    //
+    // Body: { enabled: boolean }. Returns the resolved blackout flag.
+    } else if (req.method === 'POST' && req.url === '/global-effect-macros/blackout') {
+      readBody(data => {
+        if (typeof data.enabled !== 'boolean') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'enabled boolean required' }));
+        }
+        if (intensityController) intensityController.setBlackout(data.enabled);
+        globalsState.blackout = data.enabled;
+        // E-stop also clears the macro/legacy state when ENABLING so a
+        // release leaves the rig dark instead of resuming whatever
+        // strobe/wash was running at e-stop time.
+        if (data.enabled && globalEffectsController && globalEffectsController.panicStop) {
+          globalEffectsController.panicStop();
+        }
+        stateManager.saveGlobalsState(globalsState);
+        broadcastMixerState();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+          slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+          blackout: data.enabled,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', blackout: data.enabled }));
+      });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
