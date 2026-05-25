@@ -8,6 +8,7 @@ import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
+import { topicForType, TOPICS } from './ws_topic_routing.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -122,10 +123,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
+  // Topic-aware broadcaster. Picks the right WebSocketServer based on
+  // the message `type` (see lib/ws_topic_routing.js for the full
+  // routing table). The four sockets (`/ws/control`, `/ws/params`,
+  // `/ws/signals`, `/ws/viz`) are created in `wssByTopic` below; this
+  // function is a no-op until that map is populated, which makes it
+  // safe to call during early boot before listen() has bound.
+  //
+  // A missing classification throws — see ws_topic_routing.js — so a
+  // typo in a payload `type` fails loud at the broadcast site instead
+  // of silently disappearing or leaking onto every socket.
   function broadcastWs(msgObj) {
-    if (!global.wss) return;
+    if (!msgObj || typeof msgObj !== 'object') return;
+    const topic = topicForType(msgObj.type);
+    const wssForTopic = global.wssByTopic && global.wssByTopic[topic];
+    if (!wssForTopic) return;
     const msg = JSON.stringify(msgObj);
-    global.wss.clients.forEach(c => {
+    wssForTopic.clients.forEach(c => {
       if (c.readyState === 1) c.send(msg);
     });
   }
@@ -1517,12 +1531,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           finalizeCpcValues(newChannel);
           saveAllState();
 
-          const broadcast = JSON.stringify({ type: 'pattern', name: patternName });
-          if (global.wss) {
-            global.wss.clients.forEach(c => {
-              if (c.readyState === 1) c.send(broadcast);
-            });
-          }
+          broadcastWs({ type: 'pattern', name: patternName });
           broadcastMixerState();
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2802,13 +2811,89 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   });
 
-  const wss = new WebSocketServer({ server });
-  
-  wss.on('error', (e) => {
-    // catch wss errors to prevent crash
-    console.warn('WebSocketServer error:', e.message);
+  // ── Topic-split WS topology ───────────────────────────────────────────
+  //
+  // Pre-split, the engine ran a single WebSocketServer at `/` and every
+  // broadcast went to every client. With the audio analyser running and
+  // 3 mixer channels, that meant the iPad's onmessage handler was
+  // parsing ~50 messages/sec just to figure out which 1-2 of them it
+  // actually cared about — enough to starve the JS thread and leave the
+  // audio config tab spinning for 30+ s after mount.
+  //
+  // Each WSS uses `noServer: true` and we route the HTTP upgrade
+  // request by path. The legacy root path `/` is intentionally NOT
+  // exposed — clients MUST pick a topic. See lib/ws_topic_routing.js
+  // for the routing table.
+  const wssControl = new WebSocketServer({ noServer: true });
+  const wssParams  = new WebSocketServer({ noServer: true });
+  const wssSignals = new WebSocketServer({ noServer: true });
+  const wssViz     = new WebSocketServer({ noServer: true });
+
+  const wssByTopic = {
+    [TOPICS.CONTROL]: wssControl,
+    [TOPICS.PARAMS]:  wssParams,
+    [TOPICS.SIGNALS]: wssSignals,
+    [TOPICS.VIZ]:     wssViz,
+  };
+
+  // Expose the map BEFORE we wire any handlers — broadcastWs() reads
+  // global.wssByTopic on every call and will no-op until this assignment
+  // runs. Done early so any synchronous broadcasts during the WS
+  // connect handlers (e.g. autopilot.start emitting a state event) find
+  // the right socket already registered.
+  global.wssByTopic = wssByTopic;
+  // Back-compat shim — exported tests + a couple of legacy call sites
+  // still reach for `global.wss`. Point it at the control socket so any
+  // straggler that broadcasts via the old shape lands on something
+  // sensible. New code should never use this.
+  global.wss = wssControl;
+
+  for (const [topicName, wssInst] of Object.entries(wssByTopic)) {
+    wssInst.on('error', (e) => {
+      console.warn(`WebSocketServer[${topicName}] error:`, e.message);
+    });
+  }
+
+  // Manual upgrade routing.
+  //
+  // Path → topic mapping. The four `/ws/<topic>` paths are the
+  // canonical, post-split topology. The root path `/` is a TRANSITIONAL
+  // alias for `/ws/control` so unmigrated clients (in-flight branches
+  // that subscribe to the old root socket) still see the UI/state
+  // events they need to function. It deliberately does NOT route vis
+  // frames or live audio signals — the whole point of the split is
+  // that those high-volume streams must not land on `/` anymore. Once
+  // every CaptainPad call site is on engineBus topics this alias
+  // should be removed.
+  const WS_PATH_TO_TOPIC = {
+    '/':           TOPICS.CONTROL,
+    '/ws/control': TOPICS.CONTROL,
+    '/ws/params':  TOPICS.PARAMS,
+    '/ws/signals': TOPICS.SIGNALS,
+    '/ws/viz':     TOPICS.VIZ,
+  };
+
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '/';
+    try {
+      pathname = new URL(req.url, 'http://localhost').pathname;
+    } catch (_) {
+      pathname = '/';
+    }
+    const topic = WS_PATH_TO_TOPIC[pathname];
+    if (!topic) {
+      // Unknown path. Refuse the upgrade with an explicit 400 so the
+      // client sees a real failure instead of a silently-empty socket.
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const wssForTopic = wssByTopic[topic];
+    wssForTopic.handleUpgrade(req, socket, head, (ws) => {
+      wssForTopic.emit('connection', ws, req);
+    });
   });
-  
+
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       console.error(`\n  ❌ Port ${opts.port} is already in use by another process.`);
@@ -2817,19 +2902,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
-  global.wss = wss; 
   autopilot.start();
 
-  wss.on('connection', ws => {
+  // ── Per-topic replay-on-connect ──────────────────────────────────────
+  // Each socket only replays the cached payloads it owns. A fresh
+  // /ws/control connection gets mixer + deck + autopilot + viewOverride
+  // + oscStats + audioStatus — not sharedParams, not vis, not
+  // liveParams. The audio tab opens /ws/control AND /ws/signals so it
+  // still gets a warm liveParams replay below.
+
+  wssControl.on('connection', ws => {
     // Send full state on connect — uses shared serializers. Both deck
     // and mixer go out so a fresh CaptainPad sees both surfaces
     // without having to GET them separately.
-    ws.send(JSON.stringify(serializeMixerState()));
-    ws.send(JSON.stringify(serializeDeckState()));
-
-    if (paramCenter) {
-      ws.send(JSON.stringify({ type: 'sharedParams', ...paramCenter.getCanonicalState() }));
-    }
+    try { ws.send(JSON.stringify(serializeMixerState())); } catch (e) {}
+    try { ws.send(JSON.stringify(serializeDeckState())); } catch (e) {}
 
     // Push the current autopilot + view-override state on connect so
     // late joiners (e.g. CaptainPad after a foreground/background cycle)
@@ -2864,20 +2951,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // ignore
     }
 
-    // Replay cached OSC stats so the pill in CaptainPad paints the
-    // correct state immediately on connect rather than waiting up
-    // to one second for the next stats tick (docs/24 §10.1).
-    // Also replay the latest liveParams snapshot so a fresh audio
-    // tab gets warm audio meter values without having to wait up to
-    // one whole audio-hop interval for the next analyser tick. The
-    // full CPC doc still comes through the seeded `/param-center`
-    // REST call in useEngineState, but liveParams isn't a REST shape
-    // anywhere, so the WS replay is the only path that gets the
-    // audio tab to the live state on cold reconnect.
+    // Replay cached telemetry so the pills paint immediately on
+    // connect rather than waiting up to one second for the next stats
+    // tick (docs/24 §10.1, docs/25 §6.3).
     try {
       if (lastOscStats)    ws.send(JSON.stringify(lastOscStats));
       if (lastAudioStatus) ws.send(JSON.stringify(lastAudioStatus));
-      if (lastLiveParams)  ws.send(JSON.stringify(lastLiveParams));
     } catch (e) {
       // ignore
     }
@@ -3025,21 +3104,61 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     });
   });
 
+  // /ws/params — sharedParams replay. CPC writes are quiet by default
+  // (only operator knob turns emit), so without the replay a fresh
+  // CaptainPad would have stale colour/speed values until the next
+  // operator touch. The REST seed in useEngineState catches this for
+  // the steady CPC doc, but the WS replay keeps the contracts symmetric
+  // with the other sockets — one cached payload, replayed on connect.
+  wssParams.on('connection', ws => {
+    try {
+      if (paramCenter) {
+        ws.send(JSON.stringify({
+          type: 'sharedParams',
+          ...paramCenter.getCanonicalState(),
+        }));
+      }
+    } catch (e) {
+      // ignore
+    }
+  });
+
+  // /ws/signals — liveParams replay so audio meters / BPM badge paint
+  // warm values on cold reconnect without waiting one whole audio-hop
+  // interval. Only the latest payload is replayed; the bus keeps
+  // ticking from there.
+  wssSignals.on('connection', ws => {
+    try {
+      if (lastLiveParams) ws.send(JSON.stringify(lastLiveParams));
+    } catch (e) {
+      // ignore
+    }
+  });
+
+  // /ws/viz — no replay. Vis frames are stateless 6ch base64 buffers
+  // and the next broadcast (≤100 ms away at the default 10 Hz) will
+  // paint a fresh frame anyway. Keeping the cold-connect cost at zero
+  // is more important than the one-frame visual delay.
+  wssViz.on('connection', () => {
+    // no-op — frames arrive on the next render-loop tick
+  });
+
   server.listen(opts.port, () => {
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
   });
 
   publishStatsRef.publish = (data) => {
-    // Three message shapes flow through this hook:
-    //   - { type: 'vis', ...}     → vis frame, passed verbatim.
-    //   - { type: 'oscStats', ...}→ OSC listener telemetry per docs/24 §10.
-    //                               Cached for late-joining WS clients so a
-    //                               freshly-opened CaptainPad sees the
-    //                               current pill state inside a single
-    //                               render frame instead of waiting up to
-    //                               one second for the next stats tick.
-    //   - everything else         → engine frame stats, wrapped in
-    //                               { type: 'stats', ...} for legacy clients.
+    // Four message shapes flow through this hook. Each is classified
+    // to one topic via broadcastWs (lib/ws_topic_routing.js):
+    //   - { type: 'vis', ...}     → /ws/viz       (high-volume frames)
+    //   - { type: 'oscStats', ...}→ /ws/control   (1 Hz pill telemetry)
+    //   - { type: 'audioStatus' } → /ws/control   (1 Hz pill telemetry)
+    //   - everything else         → /ws/control   ({ type: 'stats',...})
+    //
+    // oscStats + audioStatus are cached for late-joining WS clients so
+    // a freshly-opened CaptainPad sees the right pill state inside a
+    // single render frame instead of waiting up to one second for the
+    // next stats tick.
     let payload;
     if (data && data.type === 'vis') {
       payload = data;
@@ -3052,10 +3171,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else {
       payload = { type: 'stats', ...data };
     }
-    const msg = JSON.stringify(payload);
-    wss.clients.forEach(c => {
-      if (c.readyState === 1) c.send(msg);
-    });
+    broadcastWs(payload);
   };
 
   return server;
