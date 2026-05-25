@@ -15,9 +15,15 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   // …) flow through to the UI without depending on per-tab WS state.
   // The `exports` prop is kept as a fallback for callers that don't
   // know the channelId yet (transient UI states during channel add).
-  const { mixerChannels } = useEngineState();
+  //
+  // Post-channel-split (May 2026): the deck channel is no longer
+  // sneakily indexed off `mixerChannels[0]` — it has its own field
+  // on the engine-state hook. The BASE PARAMS strip in the mixer
+  // variant reads from `deckChannel` directly so we can't
+  // accidentally show a mixer overlay's exports there.
+  const { deckChannel } = useEngineState();
   const liveDeckExports = useChannelExports(channelId);
-  const baseChannelId = mixerChannels[0]?.id;
+  const baseChannelId = deckChannel?.id;
   const liveBaseExports = useChannelExports(baseChannelId);
 
   if (variant === 'mixer') {

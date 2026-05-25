@@ -6,14 +6,36 @@ export class PatternMixer {
   constructor({ wasmHost, pixelCount, maxChannels }) {
     this.wasmHost = wasmHost;
     this.pixelCount = pixelCount;
-    this.channels = [];
+    // ── Channel split (May 2026) ─────────────────────────────────────
+    // Pre-split: a single `this.channels[]` held the deck channel at
+    // index 0 followed by the mixer overlays. That coupling caused
+    // a continuous stream of bugs where mixer-side code paths leaked
+    // the deck channel into the mixer view (and vice versa) every
+    // time someone forgot to filter on `baseChannelId`.
+    //
+    // Post-split: the deck channel and the mixer overlay stack are
+    // explicitly separate fields with their own APIs:
+    //
+    //   - `deckChannel` (singleton) — the PFL preview channel that
+    //     drives the deck buffer. Owned by /deck/* routes.
+    //   - `mixerChannels[]` — the live composition stack. Owned by
+    //     /mixer/* routes.
+    //
+    // Compatibility getters (`channels`, `baseChannelId`) are kept
+    // around so legacy iteration / vis code keeps working while we
+    // migrate call sites. The legacy `addChannel`/`removeChannel`/
+    // `getChannel` facades route to the correct collection based on
+    // current state (first add becomes the deck channel; later adds
+    // become mixer channels) so internal callers don't break.
+    this.deckChannel = null;
+    this.mixerChannels = [];
     this.master = 1.0;
-    this.baseChannelId = null;
-    this.deckFocusChannelId = null; // When set, deck view renders this channel instead of baseChannelId
+    this.deckFocusChannelId = null; // When set, deck view renders this channel instead of the deck channel
     // maxChannels comes from config.yaml `mixer.maxChannels`. Default 3 — the
     // CaptainPad iPad strip layout doesn't fit more than that without
-    // horizontal scroll / clipping. Keep total channel count (incl. the
-    // base deck channel) ≤ this value.
+    // horizontal scroll / clipping. Caps `mixerChannels.length` only —
+    // the deck channel does NOT count toward this limit, since it is
+    // owned by a separate route tree.
     this.maxChannels = Number.isFinite(maxChannels) && maxChannels >= 1
       ? Math.floor(maxChannels)
       : 3;
@@ -64,33 +86,151 @@ export class PatternMixer {
     this.onDeckSwapComplete = null; // Callback: ({ pattern, transitionId }) => void
   }
 
-  getChannel(channelId) {
-    return this.channels.find(c => c.id === channelId);
+  // ── Channel split: canonical accessors ─────────────────────────────
+  // Use these. `channels`/`addChannel`/`removeChannel`/`getChannel`
+  // are kept below as compatibility facades for legacy code paths.
+
+  /** Compatibility getter: deck id (or null). Replaces the old field. */
+  get baseChannelId() {
+    return this.deckChannel ? this.deckChannel.id : null;
+  }
+  set baseChannelId(id) {
+    // The only legitimate legacy writer is updateTransitions promoting
+    // a transitioned overlay onto the deck. If `id` already names the
+    // deck channel this is a no-op. Otherwise we re-home the matching
+    // mixer overlay onto the deck slot — that's what the pre-split
+    // behaviour did.
+    if (!id || (this.deckChannel && this.deckChannel.id === id)) return;
+    const idx = this.mixerChannels.findIndex(c => c.id === id);
+    if (idx === -1) {
+      console.warn(`[Mixer] baseChannelId set to '${id}' which is neither deck nor a mixer channel; ignoring`);
+      return;
+    }
+    const promoted = this.mixerChannels.splice(idx, 1)[0];
+    const demoted = this.deckChannel;
+    this.deckChannel = promoted;
+    if (demoted) {
+      // Demote the old deck back into the mixer stack so we don't lose
+      // its handle. Operators who hit this path are mid-transition.
+      this.mixerChannels.unshift(demoted);
+    }
   }
 
-  addChannel(channelConfig) {
-    if (this.channels.length >= this.maxChannels) {
-      throw new Error(`Maximum of ${this.maxChannels} channels allowed`);
-    }
+  /**
+   * Compatibility getter: combined view of [deckChannel, ...mixerChannels].
+   * Internal rendering / vis code reads this. External callers should
+   * prefer `getDeckChannel()` + `getMixerChannels()` so the deck-vs-
+   * mixer intent is explicit at the call site.
+   */
+  get channels() {
+    if (this.deckChannel) return [this.deckChannel, ...this.mixerChannels];
+    return [...this.mixerChannels];
+  }
+
+  /** Direct accessor for the deck channel (or null). */
+  getDeckChannel() {
+    return this.deckChannel;
+  }
+
+  /** Returns the LIVE mixer overlay array. Do not mutate; use add/remove APIs. */
+  getMixerChannels() {
+    return this.mixerChannels;
+  }
+
+  /** Get a mixer overlay by id. Rejects the deck channel id explicitly. */
+  getMixerChannel(channelId) {
+    if (this.deckChannel && channelId === this.deckChannel.id) return null;
+    return this.mixerChannels.find(c => c.id === channelId);
+  }
+
+  /**
+   * Install (or replace) the deck channel. The deck does NOT count
+   * toward `maxChannels`. If a deck channel already exists, the caller
+   * is responsible for destroying its WASM handle BEFORE invoking this
+   * — the mixer doesn't free it for them, because most callers want
+   * to keep using the same handle and only swap metadata.
+   */
+  setDeckChannel(channelConfig) {
     const channel = new PatternChannel(channelConfig);
-    this.channels.push(channel);
-    if (!this.baseChannelId) {
-      this.baseChannelId = channel.id;
-    }
+    this.deckChannel = channel;
     return channel;
   }
 
-  removeChannel(channelId) {
-    const index = this.channels.findIndex(c => c.id === channelId);
-    if (index !== -1) {
-      const channel = this.channels[index];
-      if (this.onChannelRemoved) this.onChannelRemoved(channelId);
-      channel.destroy(this.wasmHost);
-      this.channels.splice(index, 1);
-      if (this.baseChannelId === channelId) {
-        this.baseChannelId = this.channels.length > 0 ? this.channels[0].id : null;
-      }
+  /**
+   * Add a mixer overlay. Throws `MixerCapacityError` if the cap is
+   * reached. Refuses to use the deck channel's id (defensive — the
+   * API layer should be enforcing this, but the mixer enforces it too
+   * so a buggy callsite can't sneak a duplicate id through).
+   */
+  addMixerChannel(channelConfig) {
+    if (this.mixerChannels.length >= this.maxChannels) {
+      throw new Error(`Maximum of ${this.maxChannels} mixer channels allowed`);
     }
+    if (this.deckChannel && channelConfig && channelConfig.id === this.deckChannel.id) {
+      throw new Error(`Channel id '${channelConfig.id}' is reserved for the deck channel`);
+    }
+    const channel = new PatternChannel(channelConfig);
+    this.mixerChannels.push(channel);
+    return channel;
+  }
+
+  /** Remove a mixer overlay by id. Returns true iff something was removed. */
+  removeMixerChannel(channelId) {
+    if (this.deckChannel && channelId === this.deckChannel.id) {
+      console.warn(`[Mixer] refusing to remove deck channel via removeMixerChannel('${channelId}')`);
+      return false;
+    }
+    const index = this.mixerChannels.findIndex(c => c.id === channelId);
+    if (index === -1) return false;
+    const channel = this.mixerChannels[index];
+    if (this.onChannelRemoved) this.onChannelRemoved(channelId);
+    channel.destroy(this.wasmHost);
+    this.mixerChannels.splice(index, 1);
+    return true;
+  }
+
+  /** Destroy the deck channel's WASM handle and clear the slot. */
+  removeDeckChannel() {
+    if (!this.deckChannel) return false;
+    const id = this.deckChannel.id;
+    if (this.onChannelRemoved) this.onChannelRemoved(id);
+    this.deckChannel.destroy(this.wasmHost);
+    this.deckChannel = null;
+    return true;
+  }
+
+  // ── Legacy facades ─────────────────────────────────────────────────
+  // Existing code paths (api_server.js, engine.js boot, HIL tests)
+  // call these. They route by current state: first add becomes the
+  // deck channel; subsequent adds become mixer channels. Look up by
+  // id checks both collections.
+
+  getChannel(channelId) {
+    if (this.deckChannel && this.deckChannel.id === channelId) return this.deckChannel;
+    return this.mixerChannels.find(c => c.id === channelId);
+  }
+
+  addChannel(channelConfig) {
+    if (!this.deckChannel) {
+      return this.setDeckChannel(channelConfig);
+    }
+    return this.addMixerChannel(channelConfig);
+  }
+
+  removeChannel(channelId) {
+    if (this.deckChannel && this.deckChannel.id === channelId) {
+      this.removeDeckChannel();
+      // Pre-split behaviour: when the deck went away we promoted the
+      // first remaining overlay onto the deck slot. Preserve that so
+      // legacy callers that do `removeChannel(baseChannelId)` and then
+      // expect a new base to exist still work.
+      if (this.mixerChannels.length > 0) {
+        const promoted = this.mixerChannels.shift();
+        this.deckChannel = promoted;
+      }
+      return;
+    }
+    this.removeMixerChannel(channelId);
   }
 
   setMaster(value) {
@@ -229,7 +369,10 @@ export class PatternMixer {
       console.warn(`[Mixer] Unsupported mixer transition mode: ${mode}`);
       return null;
     }
-    const overlays = this.channels.filter(c => c.id !== this.baseChannelId);
+    // Mixer transitions only affect the overlay stack — the deck
+    // channel is never touched (this is enforced both here and by the
+    // /mixer routes that reject deck-channel ids upstream).
+    const overlays = this.mixerChannels;
     if (overlays.length === 0) return null;
     if (!overlays.find(c => c.id === targetChannelId)) return null;
 
@@ -358,7 +501,7 @@ export class PatternMixer {
     onComplete = null,
   } = {}) {
     if (!newHandle) return null;
-    if (!this.baseChannelId || !this.getChannel(this.baseChannelId)) {
+    if (!this.deckChannel) {
       // No deck to swap onto — refuse and destroy the incoming handle
       // so the caller doesn't leak the freshly compiled VM.
       try { this.wasmHost.destroy(newHandle); } catch (_) {}
@@ -490,7 +633,7 @@ export class PatternMixer {
     if (linear >= 1) {
       // Snap exactly so floating-point drift can't strand us at 0.9999.
       this._swapChannel.fader = 1.0;
-      const base = this.getChannel(this.baseChannelId);
+      const base = this.deckChannel;
       const finishedId = t.id;
       const finishedCb = t.onComplete;
       const finishedPattern = this._swapChannel.pattern;
@@ -580,6 +723,8 @@ export class PatternMixer {
           this.removeChannel(t.channelId);
         }
         if (t.isBaseTransition && t.newBaseId) {
+          // Re-home a mixer overlay onto the deck slot — see
+          // `set baseChannelId` for the migration semantics.
           this.baseChannelId = t.newBaseId;
         }
         this.transitions.splice(i, 1);
@@ -619,8 +764,10 @@ export class PatternMixer {
     // Deck-swap shadow runs on the same clock so its fader animation
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
-    for (const channel of this.channels) {
-      // Always tick all channels so muted patterns keep animating (for vis)
+    // Tick both deck and mixer overlays — muted patterns still need to
+    // advance their internal time so vis previews stay live.
+    if (this.deckChannel) this.deckChannel.beginFrame(this.wasmHost, elapsedSeconds, true);
+    for (const channel of this.mixerChannels) {
       channel.beginFrame(this.wasmHost, elapsedSeconds, true);
     }
     // Tick the shadow too so its pattern advances time alongside the
@@ -680,20 +827,30 @@ export class PatternMixer {
     //    vis on vis-broadcast frames). Skipped on non-broadcast frames per
     //    the OPTIMIZATION note above.
     if (wantVis) {
-      for (const channel of this.channels) {
+      if (this.deckChannel) {
+        this.channelBuffer.fill(0);
+        this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
+        this._visData[this.deckChannel.id] = this._extractVis(this.channelBuffer);
+      }
+      for (const channel of this.mixerChannels) {
         this.channelBuffer.fill(0);
         channel.renderInto(this.wasmHost, this.channelBuffer, true);
         this._visData[channel.id] = this._extractVis(this.channelBuffer);
       }
     }
 
-    // 2. Render Deck (focused channel or base channel → deckBuffer)
-    const deckChannelId = this.deckFocusChannelId || this.baseChannelId;
-    const deck = this.getChannel(deckChannelId);
+    // 2. Render Deck (focused channel or deck channel → deckBuffer)
+    //
+    // `deckFocusChannelId` is a debug/preview affordance — if set, the
+    // deck buffer renders THAT channel instead of the canonical deck
+    // channel. It can reference EITHER a mixer overlay or the deck
+    // itself; getChannel() handles both. With nothing set, we render
+    // the deck channel as PFL (Pre-Fade Listen, always 100%).
+    const deck = this.deckFocusChannelId
+      ? this.getChannel(this.deckFocusChannelId)
+      : this.deckChannel;
     if (deck) {
       this.channelBuffer.fill(0);
-      // Deck preview acts like a PFL (Pre-Fade Listen) — always output at 100%
-      // ignoring the channel's live mixer mute or fader state.
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
     }
 
@@ -729,29 +886,32 @@ export class PatternMixer {
       }
     }
 
-    // 3. Render Mixer layers (all enabled channels, composited bottom-to-top → mixerBuffer)
+    // 3. Render Mixer layers (all enabled mixer overlays, composited
+    //    bottom-to-top → mixerBuffer). The deck channel is NEVER part
+    //    of this loop — it lives in `this.deckChannel`, outside the
+    //    overlay stack. That structural separation is what makes the
+    //    deck-vs-mixer isolation bulletproof: there's no `if (id ===
+    //    baseChannelId) continue` to forget anymore.
     //
-    // When a scripted transition is in flight, promote the target channel
-    // to render LAST. Its `mode` has been temporarily swapped to a
-    // trans_* blend script (e.g. trans_flash) whose visual must overlay
-    // every other (fading-out) overlay. Without this promotion, a loser
-    // later in the channels[] array would composite ON TOP of the flash
-    // and obscure it. The natural order is restored as soon as the
-    // transition completes (scriptedTransitionTargetId is cleared in
-    // updateTransitions).
-    let renderOrder = this.channels;
+    // When a scripted transition is in flight, promote the target
+    // channel to render LAST. Its `mode` has been temporarily swapped
+    // to a trans_* blend script (e.g. trans_flash) whose visual must
+    // overlay every other (fading-out) overlay. Without this promotion,
+    // a loser later in the mixerChannels[] array would composite ON TOP
+    // of the flash and obscure it. The natural order is restored as
+    // soon as the transition completes (scriptedTransitionTargetId is
+    // cleared in updateTransitions).
+    let renderOrder = this.mixerChannels;
     if (this.scriptedTransitionTargetId) {
       const tid = this.scriptedTransitionTargetId;
-      const idx = this.channels.findIndex(c => c.id === tid);
-      if (idx !== -1 && idx !== this.channels.length - 1) {
-        renderOrder = [...this.channels.filter(c => c.id !== tid), this.channels[idx]];
+      const idx = this.mixerChannels.findIndex(c => c.id === tid);
+      if (idx !== -1 && idx !== this.mixerChannels.length - 1) {
+        renderOrder = [...this.mixerChannels.filter(c => c.id !== tid), this.mixerChannels[idx]];
       }
     }
 
     let firstLayer = true;
     for (const channel of renderOrder) {
-      // Deck channel (baseChannelId) is isolated — only rendered into deckBuffer
-      if (channel.id === this.baseChannelId) continue;
       // Skip dark channels EXCEPT the scripted-transition target, whose
       // blend script must run on every frame (its progress arg is the
       // channel.fader, and at the very start of a fade the value can sit
@@ -838,7 +998,8 @@ export class PatternMixer {
   }
 
   destroy() {
-    for (const channel of this.channels) {
+    if (this.deckChannel) this.deckChannel.destroy(this.wasmHost);
+    for (const channel of this.mixerChannels) {
       channel.destroy(this.wasmHost);
     }
     // Clean up the hidden deck-swap shadow too — without this an
@@ -853,7 +1014,8 @@ export class PatternMixer {
       if (handle) this.wasmHost.destroy(handle);
     }
     this.blendHandles = {};
-    this.channels = [];
+    this.deckChannel = null;
+    this.mixerChannels = [];
   }
 
   getBlendHandle(blendName) {

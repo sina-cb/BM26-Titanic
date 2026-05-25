@@ -31,8 +31,33 @@ export class StateManager {
     }
   }
 
+  /**
+   * Load mixer (overlay-only) state.
+   *
+   * Migration (May 2026): pre-channel-split files might have stored the
+   * deck channel in `mixer_state.yaml.channels[0]` because the previous
+   * `PatternMixer` kept a single `channels[]` array. We detect that
+   * shape and split it out so the deck channel is loaded from
+   * `deck_state.yaml` (canonical) instead of leaking into the mixer
+   * overlay stack.
+   *
+   * The migration is one-way (we emit a one-time log so the operator
+   * knows it happened) and idempotent: subsequent boots that re-read
+   * the already-split files don't trigger it.
+   */
   loadMixerState() {
-    return this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {} });
+    const raw = this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {} });
+    if (!Array.isArray(raw.channels) || raw.channels.length === 0) return raw;
+
+    // Heuristic: in the legacy combined format the first channel was
+    // ALWAYS the deck (id starts with `ch_base`). Newer split files
+    // never contain such an entry — saveMixerState filters them out.
+    const first = raw.channels[0];
+    if (first && typeof first.id === 'string' && first.id.startsWith('ch_base')) {
+      console.warn(`[StateManager] mixer_state.yaml contained legacy deck entry '${first.id}' — splitting it out. Future saves will write deck_state.yaml only.`);
+      raw.channels = raw.channels.slice(1);
+    }
+    return raw;
   }
 
   loadDeckState() {
@@ -70,9 +95,16 @@ export class StateManager {
   }
 
   saveMixerState(mixer) {
+    // Mixer state file contains ONLY overlay channels. The deck channel
+    // lives in deck_state.yaml — they are persisted separately, just as
+    // they are owned separately at runtime. See the channel-split note
+    // in pattern_mixer.js for context.
+    const overlays = typeof mixer.getMixerChannels === 'function'
+      ? mixer.getMixerChannels()
+      : mixer.channels.filter(c => c.id !== mixer.baseChannelId);
     const state = {
       master: mixer.master,
-      channels: mixer.channels.filter(c => c.id !== mixer.baseChannelId).map(c => ({
+      channels: overlays.map(c => ({
         id: c.id,
         name: c.name,
         pattern: c.pattern,
@@ -99,7 +131,9 @@ export class StateManager {
    *                         settings.
    */
   saveDeckState(mixer, extras = null) {
-    const baseCh = mixer.getChannel(mixer.baseChannelId);
+    const baseCh = typeof mixer.getDeckChannel === 'function'
+      ? mixer.getDeckChannel()
+      : mixer.getChannel(mixer.baseChannelId);
     if (!baseCh) return;
     const state = {
       channel: {

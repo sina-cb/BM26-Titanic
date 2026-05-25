@@ -628,7 +628,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     };
   }
 
-  function restoreChannel(saved) {
+  function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
     try {
       const src = loadPattern(patternsDir, saved.pattern);
       const comp = wasmHost.compile(src);
@@ -636,15 +636,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         console.warn(`Failed to compile saved channel ${saved.pattern}:`, comp.error);
         return;
       }
-      const ch = mixer.addChannel({
+      const config = {
         id: saved.id,
         name: saved.name,
         pattern: saved.pattern,
         handle: comp.handle,
         mode: saved.mode,
         fader: saved.fader,
-        enabled: saved.enabled
-      });
+        enabled: saved.enabled,
+      };
+      const ch = role === 'deck'
+        ? mixer.setDeckChannel(config)
+        : mixer.addMixerChannel(config);
       if (saved.playlist) ch.playlist = saved.playlist;
       onChannelCompiled(ch);
 
@@ -674,15 +677,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const hasMixer = mixerState.channels && mixerState.channels.length > 0;
 
   if (hasDeck || hasMixer) {
-    const existingIds = mixer.channels.map(c => c.id);
-    for (const id of existingIds) {
-      const ch = mixer.getChannel(id);
-      if (ch) ch.destroy(wasmHost);
-      mixer.removeChannel(id);
+    // Tear down whatever the engine boot created and rebuild from saved
+    // state. Boot installs a single deck channel; we destroy it
+    // explicitly because the replacement may use the same id (`ch_base`)
+    // and we don't want a duplicate handle to leak.
+    if (mixer.getDeckChannel()) mixer.removeDeckChannel();
+    for (const overlay of [...mixer.getMixerChannels()]) {
+      mixer.removeMixerChannel(overlay.id);
     }
-    
+
     if (hasDeck) {
-      restoreChannel(deckState.channel);
+      restoreChannel(deckState.channel, 'deck');
     } else {
       restoreChannel({
         id: 'ch_base',
@@ -691,29 +696,101 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         mode: 'blend_screen',
         fader: 1.0,
         enabled: true
-      });
+      }, 'deck');
     }
 
     if (hasMixer) {
       for (const saved of mixerState.channels) {
-        if (!saved.id.startsWith('ch_base_')) {
-          restoreChannel(saved);
-        }
+        // Defensive: skip any leaked deck-shaped id. The state_manager
+        // migration also strips these on load, this is belt-and-braces.
+        if (saved.id && saved.id.startsWith('ch_base')) continue;
+        restoreChannel(saved, 'mixer');
       }
     }
-    
+
     if (mixerState.master !== undefined) {
       mixer.setMaster(mixerState.master);
     }
-    
-    const base = mixer.getChannel(mixer.baseChannelId);
+
+    const base = mixer.getDeckChannel();
     if (base) opts.pattern = base.pattern;
   } else {
-    mixer.channels.forEach(ch => { finalizeCpcValues(ch); });
+    if (mixer.getDeckChannel()) finalizeCpcValues(mixer.getDeckChannel());
+    for (const ch of mixer.getMixerChannels()) finalizeCpcValues(ch);
+  }
+
+  // ── Channel serialization (post-split) ────────────────────────────
+  //
+  // After the May 2026 channel split, /mixer surfaces ONLY overlay
+  // channels and /deck/channel surfaces the deck channel. The two
+  // payloads use the same per-channel shape (so the iPad's renderer
+  // doesn't have to fork). The deck channel is intentionally NOT
+  // returned in the mixer broadcast — a regression test
+  // (hil_channel_isolation_test.mjs) asserts this invariant on every
+  // engine boot.
+  function serializeChannel(c) {
+    return {
+      id: c.id,
+      name: c.name,
+      pattern: c.pattern,
+      mode: c.mode.startsWith('trans_') ? 'blend_screen' : c.mode,
+      fader: c.fader,
+      enabled: c.enabled,
+      locked: !!c.locked,
+      // `dirty` is true iff the operator changed a param *while this
+      // channel was locked*. Drives the unlock-time save-or-discard
+      // prompt on the client. Cleared on lock toggle / capture /
+      // discard / entry swap (see markChannelDirtyIfLocked +
+      // clearChannelDirty).
+      dirty: !!c._dirty,
+      transitionMode: c.transitionMode || 'trans_crossfade',
+      transitionTime: c.transitionTime || 1.0,
+      playlist: c.playlist || null,
+      // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
+      // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
+      // badge instead of silently hiding them — see notes in the
+      // pre-split serializer for the May 2026 reasoning.
+      exports: wasmHost.getExports(c.handle)
+        .filter(e => localControlKinds.has(e.kind))
+        .map(e => {
+          const cv = c.localControls[e.id];
+          if (cv) { e.v0 = cv.v0; e.v1 = cv.v1; e.v2 = cv.v2; }
+          const owned = paramCenter ? paramCenter.cpcKeyForExport(c.id, e) : null;
+          if (owned) {
+            e.cpcOwned = true;
+            e.cpcKey = owned.key;
+            e.cpcLabel = owned.label;
+          }
+          return e;
+        })
+    };
+  }
+
+  function serializeDeckChannel() {
+    const deck = mixer.getDeckChannel();
+    return deck ? serializeChannel(deck) : null;
+  }
+
+  function serializeDeckState() {
+    return {
+      type: 'deck',
+      blackout: globalsState.blackout,
+      master: mixer.master,
+      channel: serializeDeckChannel(),
+    };
+  }
+
+  function broadcastDeckState() {
+    broadcastWs(serializeDeckState());
   }
 
   // Single source of truth for serializing mixer state — used by
   // GET /mixer, broadcastMixerState(), and WS connect.
+  //
+  // Post-split: `channels` contains ONLY mixer overlays. The deck
+  // channel goes through serializeDeckChannel(). `baseChannelId` is
+  // surfaced for legacy clients that still want to display the deck's
+  // id, but the deck channel itself is no longer in `channels`.
   function serializeMixerState() {
     return {
       type: 'mixer',
@@ -721,7 +798,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       master: mixer.master,
       maxChannels: mixer.maxChannels,
       baseChannelId: mixer.baseChannelId,
-      channels: mixer.channels.map(c => ({
+      channels: mixer.getMixerChannels().map(c => ({
         id: c.id,
         name: c.name,
         pattern: c.pattern,
@@ -767,7 +844,53 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   function broadcastMixerState() {
+    // Post-split: every "mixer changed" event also implicitly carries
+    // deck-state implications (e.g. master changed; blackout flipped;
+    // playlist entries fired CPC writes that the deck cares about).
+    // Broadcast BOTH events back-to-back so subscribers only have to
+    // pick the message type they care about. Deck-only changes have
+    // their own callers that fire just `broadcastDeckState()`.
     broadcastWs(serializeMixerState());
+    broadcastWs(serializeDeckState());
+  }
+
+  // ── Channel-id role enforcement ─────────────────────────────────────
+  //
+  // Bullet-proofs the deck-vs-mixer isolation at the API boundary. The
+  // mixer routes (`/mixer/channels/:id/...`) must NEVER accept the
+  // deck channel's id; the deck routes (`/deck/...`) must never accept
+  // a mixer overlay's id.
+  //
+  //   - returns null if `id` is appropriate for the given role
+  //   - returns a `{ status, body }` triple the route handler should
+  //     send back to the client otherwise
+  function rejectIfWrongRole(id, role /* 'mixer' | 'deck' */) {
+    if (role === 'mixer') {
+      if (mixer.deckChannel && id === mixer.deckChannel.id) {
+        return {
+          status: 400,
+          body: {
+            error: 'deck channel cannot be addressed via /mixer routes',
+            code: 'WRONG_ROLE',
+            channelId: id,
+            useInstead: '/deck/channel',
+          },
+        };
+      }
+    } else if (role === 'deck') {
+      if (mixer.deckChannel && id !== mixer.deckChannel.id) {
+        return {
+          status: 400,
+          body: {
+            error: 'this id is not the deck channel',
+            code: 'WRONG_ROLE',
+            channelId: id,
+            useInstead: `/mixer/channels/${encodeURIComponent(id)}`,
+          },
+        };
+      }
+    }
+    return null;
   }
 
   // Push the FULL playlist content (entries + defaults) for a channel
@@ -996,11 +1119,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     listPatterns,
     patternsDir,
     () => {
-      const baseCh = mixer.getChannel(mixer.baseChannelId);
+      const baseCh = mixer.getDeckChannel();
       return baseCh && baseCh.playlist ? baseCh.playlist.activeEntryId : null;
     },
     async () => {
-      const baseCh = mixer.getChannel(mixer.baseChannelId);
+      const baseCh = mixer.getDeckChannel();
       if (!baseCh || !baseCh.playlist || !baseCh.playlist.name) return;
       try {
         const pl = playlistManager.load(baseCh.playlist.name);
@@ -1112,7 +1235,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      const baseChannel = mixer.getChannel(mixer.baseChannelId);
+      const baseChannel = mixer.getDeckChannel();
       if (!baseChannel) {
         res.end('[]'); return;
       }
@@ -1150,7 +1273,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fs.writeFileSync(filePath, data.code, 'utf8');
         
         const patternName = safeName.replace('.js', '');
-        mixer.channels.forEach(ch => {
+        const allChannels = [
+          ...(mixer.getDeckChannel() ? [mixer.getDeckChannel()] : []),
+          ...mixer.getMixerChannels(),
+        ];
+        allChannels.forEach(ch => {
           if (ch.pattern === patternName) {
             const compNew = wasmHost.compile(data.code);
             if (compNew.ok) {
@@ -1201,58 +1328,36 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
           }
 
-          // Legacy set-pattern replaces the base channel. Preserve the
-          // playlist assignment so we stay in playlist mode.
-          //
-          // Order matters: we add the new channel BEFORE destroying
-          // the old one so the renderer never sees a frame with no
-          // deck channel (which would render as a black deck buffer
-          // and was the most-likely cause of the brief blackouts that
-          // PortWatch operators were seeing on every pattern switch).
-          const oldBase = mixer.getChannel(mixer.baseChannelId);
+          // Legacy /set-pattern replaces the deck channel's WASM handle
+          // with the freshly compiled pattern. Post-channel-split this
+          // is dramatically simpler: the deck slot is its own field, so
+          // we don't have to dance around mixer overlay slots or do the
+          // "below cap / at cap" two-branch swap that the old combined
+          // array required. The deck id stays STABLE (we just swap the
+          // handle in place) so CaptainPad's PlaylistPanel keeps its
+          // /mixer/channels/<id>/playlist fetches valid.
+          const oldBase = mixer.getDeckChannel();
           const oldPlaylist = oldBase ? oldBase.playlist : null;
-          const oldBaseId = mixer.baseChannelId;
+          const oldBaseId = oldBase ? oldBase.id : null;
+          const oldHandle = oldBase ? oldBase.handle : null;
 
-          // Cap-aware add: if we're already at maxChannels we have no
-          // room to add-then-remove, so we have to do the legacy
-          // destroy-first dance. In practice the deck always leaves
-          // at least one slot free.
-          //
-          // KEY INVARIANT: the deck channel's `id` must stay STABLE
-          // across pattern switches. CaptainPad's TARGET CHANNEL pills
-          // remember the id the operator tapped (`selectedDeckChannel`
-          // in app/(tabs)/index.tsx) and the PlaylistPanel keys its
-          // entire data fetch off `/mixer/channels/<id>/playlist`. If
-          // we issue a fresh `ch_base_<Date.now()>` here, the panel
-          // then 404s and the operator sees "No playlist loaded"
-          // until they tap the pill again. So:
-          //   - At-cap path: remove first, then add with the same id.
-          //   - Below-cap path: add under a guaranteed-unique temp id
-          //     (so the renderer never sees a frame without an active
-          //     deck channel), destroy + remove old, THEN rename the
-          //     new channel back to the old base id.
-          const atCap = mixer.channels.length >= mixer.maxChannels;
           let newChannel;
-          if (atCap) {
-            if (oldBase) oldBase.destroy(wasmHost);
-            mixer.removeChannel(oldBaseId);
-            newChannel = mixer.addChannel({
-              id: oldBaseId || ('ch_base_' + Date.now()),
-              name: 'Base',
-              pattern: patternName,
-              handle: comp.handle,
-              mode: 'blend_screen',
-              fader: 1.0,
-              enabled: true,
-            });
+          if (oldBase) {
+            // In-place handle swap on the existing deck channel —
+            // preserves id, faders, exports list, etc.
+            oldBase.handle = comp.handle;
+            oldBase.pattern = patternName;
+            oldBase.mode = 'blend_screen';
+            oldBase.fader = 1.0;
+            oldBase.enabled = true;
+            oldBase.localControls = {};
+            newChannel = oldBase;
+            if (oldHandle && oldHandle !== comp.handle) {
+              try { wasmHost.destroy(oldHandle); } catch (_) {}
+            }
           } else {
-            // Add first; promote to base; THEN tear down the old one.
-            // The temp id is purely internal — it never escapes this
-            // function because we rename below before broadcasting.
-            const tempId = 'ch_base_pending_' + Date.now() + '_' +
-              Math.random().toString(36).slice(2, 8);
-            newChannel = mixer.addChannel({
-              id: tempId,
+            newChannel = mixer.setDeckChannel({
+              id: 'ch_base_' + Date.now(),
               name: 'Base',
               pattern: patternName,
               handle: comp.handle,
@@ -1260,25 +1365,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               fader: 1.0,
               enabled: true,
             });
-            mixer.baseChannelId = newChannel.id;
-            if (oldBase) {
-              oldBase.destroy(wasmHost);
-              mixer.removeChannel(oldBaseId);
-            }
-            // Old channel is gone — safe to rename without collision.
-            if (oldBaseId) {
-              newChannel.id = oldBaseId;
-            }
           }
-
-          // Keep deck channel at the front of the stack so any
-          // bottom-up code paths still find it deterministically.
-          const newIdx = mixer.channels.indexOf(newChannel);
-          if (newIdx > 0) {
-            mixer.channels.splice(newIdx, 1);
-            mixer.channels.unshift(newChannel);
-          }
-          mixer.baseChannelId = newChannel.id;
           if (oldPlaylist) {
             // Re-attach the playlist, but pick the first entry whose
             // pattern matches the one we just loaded so the panel in
@@ -1428,7 +1515,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // `baseCh.playlist.autopilot.shuffle === false` and keep
         // walking the playlist sequentially. Fixed May 2026.
         try {
-          const baseCh = mixer.getChannel(mixer.baseChannelId);
+          const baseCh = mixer.getDeckChannel();
           if (baseCh) {
             baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
             const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
@@ -1512,7 +1599,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // nothing happened" bug so hard to diagnose.
         let channel;
         try {
-          channel = mixer.addChannel({
+          channel = mixer.addMixerChannel({
             id: 'ch_' + Date.now() + '_' + (channelIdCounter++),
             name: data.name || 'New Layer',
             pattern: patternName,
@@ -1578,7 +1665,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
       const id = req.url.split('/')[3];
       readBody(data => {
-        const channel = mixer.getChannel(id);
+        const reject = rejectIfWrongRole(id, 'mixer');
+        if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+        const channel = mixer.getMixerChannel(id);
         if (!channel) { res.writeHead(404); return res.end(); }
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
@@ -1639,13 +1728,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
       const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       if (paramCenter) paramCenter.unregisterChannel(id);
-      mixer.removeChannel(id);
+      mixer.removeMixerChannel(id);
       saveAllState();
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/control$/)) {
       const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       readBody(data => {
         if (data.id === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
@@ -2037,14 +2130,74 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     }
+    // ── DECK CHANNEL (post-split) ────────────────────────────────────────
+    // Replaces the deck-via-/mixer/channels/<baseId>/... access pattern.
+    // The deck is a singleton (no id needed in the URL) and these routes
+    // refuse to surface mixer overlay channels.
+    else if (req.method === 'GET' && req.url === '/deck/channel') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        master: mixer.master,
+        blackout: globalsState.blackout,
+        channel: serializeDeckChannel(),
+      }));
+    } else if (req.method === 'PATCH' && req.url === '/deck/channel') {
+      // PATCH the deck channel — same fields as the mixer's PATCH but
+      // routed through the deck slot. The legacy `/mixer/channels/<deckId>`
+      // PATCH no longer accepts the deck id (returns WRONG_ROLE).
+      readBody(data => {
+        const channel = mixer.getDeckChannel();
+        if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        if (data.name !== undefined) channel.name = data.name;
+        if (data.mode !== undefined) {
+          if (channel._savedMode) delete channel._savedMode;
+          mixer.cancelChannelTransition(channel.id);
+          channel.mode = data.mode;
+          mixer.getBlendHandle(data.mode);
+        }
+        if (data.fader !== undefined) {
+          mixer.cancelChannelTransition(channel.id);
+          channel.fader = data.fader;
+        }
+        if (data.enabled !== undefined) channel.enabled = data.enabled;
+        if (data.locked !== undefined) {
+          const becameLocked = !channel.locked && !!data.locked;
+          channel.locked = !!data.locked;
+          if (becameLocked) {
+            const pending = captureTimers.get(channel.id);
+            if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
+          }
+          clearChannelDirty(channel);
+        }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'POST' && req.url === '/deck/channel/control') {
+      // Per-control write targeting the deck channel. Mirrors
+      // `POST /mixer/channels/:id/control` for the deck role.
+      readBody(data => {
+        const channel = mixer.getDeckChannel();
+        if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        if (data.id === undefined) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
+        }
+        paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        scheduleEntryCapture(channel.id);
+        markChannelDirtyIfLocked(channel.id);
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    }
     // ── DECK PLAYLIST ASSIGNMENT ─────────────────────────────────────────
     else if (req.method === 'GET' && req.url === '/deck/playlist') {
-      const baseCh = mixer.getChannel(mixer.baseChannelId);
+      const baseCh = mixer.getDeckChannel();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(baseCh && baseCh.playlist ? baseCh.playlist : null));
     } else if (req.method === 'POST' && req.url === '/deck/playlist') {
       readBody(data => {
-        const baseCh = mixer.getChannel(mixer.baseChannelId);
+        const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         try {
           if (data.name === null) {
@@ -2080,7 +2233,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/entry') {
       readBody(data => {
-        const baseCh = mixer.getChannel(mixer.baseChannelId);
+        const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         if (!baseCh.playlist || !baseCh.playlist.name) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
@@ -2120,7 +2273,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
-      const baseCh = mixer.getChannel(mixer.baseChannelId);
+      const baseCh = mixer.getDeckChannel();
       if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
       try {
         const captured = captureActiveEntryDefaults(baseCh);
@@ -2133,7 +2286,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     } else if (req.method === 'POST' && req.url === '/deck/playlist/autopilot') {
       readBody(data => {
-        const baseCh = mixer.getChannel(mixer.baseChannelId);
+        const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
         const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
@@ -2172,14 +2325,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // ── MIXER CHANNEL PLAYLIST ASSIGNMENT ────────────────────────────────
     else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
       const id = req.url.split('/')[3];
-      const ch = mixer.getChannel(id);
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
       if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(ch.playlist || null));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
       const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       readBody(data => {
-        const ch = mixer.getChannel(id);
+        const ch = mixer.getMixerChannel(id);
         if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
         try {
           if (data.name === null) {
@@ -2218,8 +2375,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/entry$/)) {
       const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       readBody(data => {
-        const ch = mixer.getChannel(id);
+        const ch = mixer.getMixerChannel(id);
         if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
         if (!ch.playlist || !ch.playlist.name) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
@@ -2228,33 +2387,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
         }
         try {
-          // The deck tab's PlaylistPanel uses THIS endpoint for entry
-          // taps. When the target is the deck base channel, route
-          // through the soft-swap helper so manual operator taps
-          // honour `deckTransitionConfig` exactly like autopilot does
-          // — otherwise taps would always be instant cuts (ignoring
-          // the operator's "5s crossfade" setting). For mixer overlay
-          // channels we still use the instant load path, since they
-          // have their own per-channel transition machinery.
-          if (id === mixer.baseChannelId) {
-            const r = loadPlaylistEntryWithTransition(
-              ch, ch.playlist.name, data.entryId, deckTransitionConfig,
-            );
-            res.writeHead(200); res.end(JSON.stringify({
-              status: 'ok',
-              playlist: ch.playlist,
-              pattern: ch.pattern,
-              transitionId: r && r.transitionId ? r.transitionId : null,
-            }));
-            // loadPlaylistEntryWithTransition broadcasts mixer state
-            // both on instant-load and on swap completion; no extra
-            // broadcast needed here.
-          } else {
-            loadPlaylistEntry(ch, ch.playlist.name, data.entryId);
-            saveAllState();
-            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, pattern: ch.pattern }));
-            broadcastMixerState();
-          }
+          // Mixer overlay entry swap = instant load (no deck transition
+          // machinery on this path). The deck-side soft-swap branch
+          // that used to live here moved to /deck/playlist/entry now
+          // that mixer/deck routes are isolated.
+          loadPlaylistEntry(ch, ch.playlist.name, data.entryId);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, pattern: ch.pattern }));
+          broadcastMixerState();
         } catch (e) {
           if (e && e.code === 'EBUSY') {
             res.writeHead(409); res.end(JSON.stringify({
@@ -2267,7 +2407,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
       const id = req.url.split('/')[3];
-      const ch = mixer.getChannel(id);
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
       if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
       try {
         const captured = captureActiveEntryDefaults(ch);
@@ -2289,7 +2431,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // playlist entry defaults. Used by the "Load from playlist" branch of
       // the unlock-dirty prompt.
       const id = req.url.split('/')[3];
-      const ch = mixer.getChannel(id);
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
       if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
       if (!ch.playlist || !ch.playlist.name || !ch.playlist.activeEntryId) {
         res.writeHead(400); return res.end(JSON.stringify({ error: 'no active playlist entry' }));
@@ -2344,8 +2488,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   autopilot.start();
 
   wss.on('connection', ws => {
-    // Send full state on connect — uses shared serializer
+    // Send full state on connect — uses shared serializers. Both deck
+    // and mixer go out so a fresh CaptainPad sees both surfaces
+    // without having to GET them separately.
     ws.send(JSON.stringify(serializeMixerState()));
+    ws.send(JSON.stringify(serializeDeckState()));
 
     if (paramCenter) {
       ws.send(JSON.stringify({ type: 'sharedParams', ...paramCenter.getCanonicalState() }));

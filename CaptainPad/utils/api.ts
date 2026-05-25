@@ -700,6 +700,54 @@ export async function fetchMixerState(): Promise<ApiResult<any>> {
   }
 }
 
+// Post-channel-split (May 2026): the deck channel is no longer in
+// /mixer.channels — it lives on its own /deck/channel route. The
+// deck tab reads this; useEngineState seeds from it on cold boot.
+export async function fetchDeckChannel(): Promise<ApiResult<{ master: number; blackout: boolean; channel: any | null }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/channel`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the deck channel. Mirrors updateMixerChannel for the deck
+// role (mute toggle, fader drag, lock toggle, blend mode pick).
+export async function updateDeckChannel(updates: any): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/channel`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// POST a per-control write to the deck channel. Mirrors
+// setMixerChannelControl for the deck role.
+export async function setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
+  try {
+    const payload: any = { id, v0 };
+    if (v1 !== undefined) payload.v1 = v1;
+    if (v2 !== undefined) payload.v2 = v2;
+    const res = await fetchWithTimeout(`${api_base}/deck/channel/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function updateMixerChannel(id: string, updates: any): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, {
