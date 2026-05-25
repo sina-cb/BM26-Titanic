@@ -5,9 +5,11 @@ entries:
     pattern: 13_sparkle
     label: Slow Sparkle
     defaults: {}
+    modulations: []
     notes: null
   - id: e_fast
     pattern: 13_sparkle
     label: Fast Sparkle
     defaults: {}
+    modulations: []
     notes: null

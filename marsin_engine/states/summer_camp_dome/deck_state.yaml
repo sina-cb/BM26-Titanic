@@ -5,6 +5,8 @@ channel:
   mode: blend_screen
   fader: 1
   enabled: true
+  locked: false
+  faderLocked: false
   localControls: {}
   playlist:
     name: twin_show
@@ -14,3 +16,12 @@ channel:
       active: false
       delay_s: 30
       shuffle: false
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+transitionConfig:
+  enabled: false
+  mode: trans_crossfade
+  durationMs: 1000
+  shuffle: false

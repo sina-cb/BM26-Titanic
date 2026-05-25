@@ -127,6 +127,21 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   takeSnapshot();
 
   try {
+    // Arrange: the trimmed (operator-facing) global_effect_slots.yaml
+    // ships only 6 slots and slot 3 may or may not be Ocean Wash
+    // depending on what the operator last saved. Bind it explicitly
+    // before TEST 1 so this test pins behaviour, not config. The
+    // snapshot/restore around this block puts everything back.
+    console.log('\n[ARRANGE] bind slot 3 → colorWash/ocean_blue');
+    {
+      const r = await httpJson('PATCH', '/global-effect-slots/3', {
+        effectId: 'colorWash', presetId: 'ocean_blue',
+        behavior: 'toggle', label: 'Ocean Wash', paramsOverride: {}, enabled: true,
+      });
+      check(r.status === 200, 'arrange: bind slot 3 → 200',
+        'arrange failed', JSON.stringify(r.body).slice(0, 200));
+    }
+
     // ── TEST 1: activate Ocean Wash (slot 3) and verify it lights up
     console.log('\n[TEST 1] activate slot 3 (Ocean Wash)');
     {
@@ -185,11 +200,29 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     // ── TEST 4: legacy effects routed through slot dispatcher
     console.log('\n[TEST 4] legacy effect slot (slot 7 = Vintage Wht) toggles via dispatcher');
     {
-      // First read status to find the slot for vintageWhite (default config has it at slot 7).
-      const before = await httpJson('GET', '/global-effect-slots/status');
-      const vintage = before.body.slots.find(s => s.effectId === 'vintageWhite');
+      // May 2026: the operator-visible slot count was capped at 6 and
+      // the legacy migrated effects (vintageWhite/blastWhite/uvBlast/
+      // fogger) are no longer bound by default — they're available in
+      // the engine library and an operator binds them via the swap
+      // sheet. To keep this regression test honest we ARRANGE the
+      // binding ourselves: PATCH slot 1 to vintageWhite, run the
+      // toggle assertion, then leave the slot as-is (the cleanup
+      // restores the original YAML so the next test boot starts
+      // clean).
+      let before = await httpJson('GET', '/global-effect-slots/status');
+      let vintage = before.body.slots.find(s => s.effectId === 'vintageWhite');
       if (!vintage) {
-        fail('no vintageWhite slot in config', 'slot manager missing migrated legacy effect');
+        const targetSlot = before.body.slots[0]?.slotId ?? 1;
+        const patch = await httpJson('PATCH', `/global-effect-slots/${targetSlot}`, {
+          effectId: 'vintageWhite', presetId: 'default',
+          behavior: 'toggle', label: 'Vintage Wht', paramsOverride: {}, enabled: true,
+        });
+        check(patch.status === 200, `arrange: bind vintageWhite to slot ${targetSlot} → 200`);
+        before = await httpJson('GET', '/global-effect-slots/status');
+        vintage = before.body.slots.find(s => s.effectId === 'vintageWhite');
+      }
+      if (!vintage) {
+        fail('no vintageWhite slot in config after PATCH', 'slot manager refused legacy effect bind');
       } else {
         const r1 = await httpJson('POST', `/global-effect-slots/${vintage.slotId}/activate`);
         check(r1.status === 200, `activate slot ${vintage.slotId} (vintageWhite) → 200`);

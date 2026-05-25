@@ -220,6 +220,13 @@ export class PatternMixer {
     // to crossfade down to the PFL preview.
     this.viewFader = 1.0;
     this.targetViewFader = 1.0;
+    // Time-based crossfade ramp (units per second). 1.0/s = a full
+    // deck↔mixer swap in 1 second, matching the iPad operator's
+    // mental model when they swipe between tabs (May 2026 task 5).
+    // Frame-rate independent so changing config.fps doesn't break
+    // the perceived ramp duration.
+    this.viewFaderRampPerSec = 1.0;
+    this._lastViewFaderTickMs = null;
 
     // Buffer for compositing output
     this.outputBuffer = new Uint8Array(this.pixelCount * 6);
@@ -1217,11 +1224,23 @@ export class PatternMixer {
     const wantVis = this.wantVisThisFrame !== false;
     if (wantVis) this._visData = {};
 
-    // Smooth view crossfade (0 = deck, 1 = mixer)
-    if (this.viewFader < this.targetViewFader) {
-      this.viewFader = Math.min(this.targetViewFader, this.viewFader + 0.05);
-    } else if (this.viewFader > this.targetViewFader) {
-      this.viewFader = Math.max(this.targetViewFader, this.viewFader - 0.05);
+    // Smooth view crossfade (0 = deck, 1 = mixer). Time-based ramp so
+    // the perceived duration stays at viewFaderRampPerSec regardless
+    // of the engine's render fps. dt is clamped so a frame stall
+    // (GC pause, sACN backpressure) doesn't fast-forward the fade.
+    {
+      const nowMs = Date.now();
+      const last = this._lastViewFaderTickMs;
+      this._lastViewFaderTickMs = nowMs;
+      if (this.viewFader !== this.targetViewFader && last !== null) {
+        const dt = Math.max(0, Math.min(0.25, (nowMs - last) / 1000));
+        const step = this.viewFaderRampPerSec * dt;
+        if (this.viewFader < this.targetViewFader) {
+          this.viewFader = Math.min(this.targetViewFader, this.viewFader + step);
+        } else {
+          this.viewFader = Math.max(this.targetViewFader, this.viewFader - step);
+        }
+      }
     }
 
     // 1. Render ALL channels for vis data (every channel always gets fresh
@@ -1275,20 +1294,41 @@ export class PatternMixer {
     if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle && this._inactiveDeckChannel.fader > 0.001) {
       this.channelBuffer.fill(0);
       this._inactiveDeckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
-      const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
-      if (blendHandle) {
-        const result = this.wasmHost.renderBlend6ch(
-          blendHandle, this.pixelCount,
-          this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader
-        );
-        this.deckBuffer.set(result);
+      // Operator review May 2026 #15 — TRANSITION END FLICKER.
+      // For the default 'trans_crossfade' path (steadyMode='blend_screen')
+      // the OLD pattern (deckBuffer) was always rendered at full
+      // strength and the NEW pattern (channelBuffer) was screen-blended
+      // on top scaled by fader. As fader → 1 the visible output is
+      // `1 - (1-old)*(1-new)` — OLD still contributes at the last
+      // mid-transition frame. Then handle-swap fires on the next
+      // beginFrame() and the renderer cuts to `deckBuffer = new
+      // pattern alone`. That's the visible "pop" at the tail.
+      //
+      // Fix: in the LAST ~3% of the transition force a direct replace
+      // (deckBuffer := channelBuffer). The new pattern is already at
+      // full opacity, so this is visually identical to the screen-
+      // blended version EXCEPT without the old pattern's residual
+      // contribution. Post-swap renders are pixel-identical to this
+      // tail window — zero discontinuity.
+      const TAIL_REPLACE_THRESHOLD = 0.97;
+      if (this._inactiveDeckChannel.fader >= TAIL_REPLACE_THRESHOLD) {
+        this.deckBuffer.set(this.channelBuffer);
       } else {
-        // Last-resort linear crossfade if the blend script can't load.
-        // Keeps the swap visible-but-ugly rather than invisible.
-        const f = this._inactiveDeckChannel.fader;
-        const iv = 1 - f;
-        for (let i = 0; i < this.deckBuffer.length; i++) {
-          this.deckBuffer[i] = Math.round(this.deckBuffer[i] * iv + this.channelBuffer[i] * f);
+        const blendHandle = this.getBlendHandle(this._inactiveDeckChannel.mode);
+        if (blendHandle) {
+          const result = this.wasmHost.renderBlend6ch(
+            blendHandle, this.pixelCount,
+            this.deckBuffer, this.channelBuffer, this._inactiveDeckChannel.fader
+          );
+          this.deckBuffer.set(result);
+        } else {
+          // Last-resort linear crossfade if the blend script can't load.
+          // Keeps the swap visible-but-ugly rather than invisible.
+          const f = this._inactiveDeckChannel.fader;
+          const iv = 1 - f;
+          for (let i = 0; i < this.deckBuffer.length; i++) {
+            this.deckBuffer[i] = Math.round(this.deckBuffer[i] * iv + this.channelBuffer[i] * f);
+          }
         }
       }
       // Expose the inactive channel's vis under a stable id so anyone

@@ -851,16 +851,56 @@ export async function fetchPlaylists(): Promise<ApiResult<string[]>> {
   if (_playlistsCache && Date.now() - _playlistsCache.at < PLAYLISTS_CACHE_MS) {
     return { ok: true, data: _playlistsCache.data };
   }
-  if (_playlistsInflight) return _playlistsInflight;
+  if (_playlistsInflight) {
+    // Mirror the per-name fetchPlaylist guard: if the shared in-flight
+    // promise resolves with ok:false BUT a fresher cache entry has
+    // landed since (e.g. via a sibling success or a WS playlistLibrary
+    // prime), prefer the cache. This is the third-channel-add safety
+    // net: panel 3 dedupes onto panel 1's promise, panel 1 errors
+    // transiently, panel 2 has already cached good data via its own
+    // chain — without this guard panel 3 sees ok:false and renders
+    // "no playlists yet" until the 1.5s retry.
+    const inflight = _playlistsInflight;
+    const res = await inflight;
+    if (!res.ok) {
+      const c = _playlistsCache;
+      if (c && Date.now() - c.at < PLAYLISTS_CACHE_MS) {
+        return { ok: true, data: c.data };
+      }
+    }
+    return res;
+  }
   _playlistsInflight = (async () => {
     try {
       const res = await fetchWithTimeout(`${api_base}/playlists`);
+      // The pre-May-2026 version skipped this check and treated a
+      // non-2xx response as success. A 500 with JSON body
+      // `{ error: '...' }` would set _playlistsCache.data to [], the
+      // dropdown would render "no playlists yet", and the cache TTL
+      // would lock the bad state in for 5 s. Hard-fail on non-ok
+      // status instead — the caller's scheduleRetry path takes over.
+      if (!res.ok) {
+        return { ok: false as const, error: `HTTP ${res.status}` };
+      }
       const data = await res.json();
-      const list = Array.isArray(data) ? data : [];
-      _playlistsCache = { data: list, at: Date.now() };
-      return { ok: true as const, data: list };
+      // Empty list could be legit (fresh install with no playlists)
+      // but is far more often a transient mishap from the engine
+      // serving a sync fs read under load. Either way we DON'T
+      // poison the cache with [] when we previously had a populated
+      // list — that's the operator-visible "no playlists yet" bug
+      // on the 3rd added channel. We still return the empty list
+      // (so a truly-empty engine renders correctly on cold boot),
+      // but only CACHE non-empty lists so the next call hits the
+      // network and re-converges fast.
+      if (!Array.isArray(data)) {
+        return { ok: false as const, error: 'unexpected payload shape' };
+      }
+      if (data.length > 0) {
+        _playlistsCache = { data, at: Date.now() };
+      }
+      return { ok: true as const, data };
     } catch (err: any) {
-      return { ok: false as const, error: err.message, data: [] };
+      return { ok: false as const, error: err.message };
     } finally {
       _playlistsInflight = null;
     }
@@ -987,7 +1027,16 @@ engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
     invalidatePlaylistCache(msg.name);
     invalidatePlaylistsCache();
   } else if (msg && msg.type === 'playlistLibrary') {
-    invalidatePlaylistsCache();
+    // Engine broadcasts the latest names list on save / delete.
+    // Prime the cache from the broadcast so the next fetchPlaylists
+    // is an instant hit instead of a re-fetch; only fall back to
+    // invalidation if the broadcast didn't carry names (older engine).
+    const names = Array.isArray(msg.names) ? (msg.names as string[]) : null;
+    if (names && names.length > 0) {
+      _playlistsCache = { data: names, at: Date.now() };
+    } else {
+      invalidatePlaylistsCache();
+    }
   }
 });
 

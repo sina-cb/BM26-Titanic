@@ -181,13 +181,13 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 2.4678
-    'y': 12.4961
-    z: -23.3589
+    x: -5.2255
+    'y': 1.334
+    z: 6.8497
   target:
-    x: -2.1027
-    'y': -0.2501
-    z: -1.096
+    x: 0.8877
+    'y': -0.1256
+    z: 2.1522
 _patternEditor:
   x: 0
   'y': 0

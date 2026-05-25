@@ -1,3 +1,17 @@
 schemaVersion: 1
 name: fast
-entries: []
+entries:
+  - id: e_1779731669961_5520
+    pattern: 00_golden_hour_wash
+    label: Test
+    defaults:
+      sliderLocalSpeed: 0.83
+      sliderNoiseScale: 0
+    notes: null
+  - id: e_1779731672148_6328
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.11
+      sliderNoiseScale: 0
+    notes: null

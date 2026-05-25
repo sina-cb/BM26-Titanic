@@ -26,12 +26,105 @@ export const SAFETY_TIERS = Object.freeze({
 /** Max single-burst duration accepted by the safety clamp (§5.2). */
 export const MAX_BURST_MS = 2000;
 
+// Library iteration order is operator-facing: the swap sheet in
+// CaptainPad shows effects in this order, top to bottom. Operator
+// review May 2026 asked for the original rig globals (vintage white,
+// blast white, uv blast, fogger) to sit at the TOP so the most-used
+// legacy cues are one tap away from the bottom of the swap list.
+// Bypass-dimmer behavior is owned by the dimmer rack's
+// BypassCheckbox (sets controller.effects.<effectId>BypassDimmer)
+// — there is exactly ONE preset per legacy effect now (previously
+// each had `default` + `bypass_dimmer` which confused the slot
+// active-state logic and produced duplicate library entries).
 export const GLOBAL_EFFECT_LIBRARY = {
+  // ── Legacy rig-globals (operator favourites, listed first) ────────
+  vintageWhite: {
+    id: 'vintageWhite',
+    name: 'Vintage White Boost',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'vintageWhite',
+    presets: {
+      default: {
+        label: 'Vintage White',
+        // No bypassDimmer override — that flag is owned by the
+        // dimmer-rack BypassCheckbox now. See _dispatchLegacy.
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: vintageWhiteEffect.apply,
+  },
+
+  blastWhite: {
+    id: 'blastWhite',
+    name: 'Blast White',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'blastWhite',
+    presets: {
+      default: {
+        label: 'Blast White',
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: blastWhiteEffect.apply,
+  },
+
+  uvBlast: {
+    id: 'uvBlast',
+    name: 'UV Blast',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'uvBlast',
+    presets: {
+      default: {
+        label: 'UV Blast',
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: uvBlastEffect.apply,
+  },
+
+  fogger: {
+    id: 'fogger',
+    name: 'Fogger / Haze',
+    category: 'legacy',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    legacyEffectId: 'fogger',
+    presets: {
+      default: {
+        label: 'Fogger',
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+    apply: foggerEffect.apply,
+  },
+
+  // ── Modern macro effects ─────────────────────────────────────────
   strobe: {
     id: 'strobe',
     name: 'Software Sync Strobe',
     category: 'gate',
-    behaviorTypes: ['toggle', 'hold', 'burst'],
+    // Operator review May 2026 #10: all strobes are toggle-only now.
+    // `hold` is removed across the entire library (hardware hold-to-
+    // fire doesn't work on this rig), and operators want explicit
+    // on/off control even for the fast presets — no auto-expiring
+    // bursts. Safety tiers are kept for the corner pip but the
+    // HOLD_ONLY / EXPERT_BURST behavior gates are dropped from the
+    // dispatcher (see global_effect_slot_manager.js).
+    behaviorTypes: ['toggle'],
     singleton: true,
     safetySensitive: true,
     presets: {
@@ -56,14 +149,18 @@ export const GLOBAL_EFFECT_LIBRARY = {
       hard_10hz: {
         label: '10 Hz Hard',
         params: { hz: 10, duty: 0.5, intensity: 1.0 },
-        defaultBehavior: 'hold',
-        safetyTier: SAFETY_TIERS.HOLD_ONLY,
+        defaultBehavior: 'toggle',
+        // Demoted from HOLD_ONLY to WARNING — the operator-side hold
+        // gesture isn't reliable and they want toggle-only operation.
+        safetyTier: SAFETY_TIERS.WARNING,
       },
       max_20hz: {
         label: '20 Hz Max',
-        params: { hz: 20, duty: 0.5, intensity: 1.0, durationMs: 1000 },
-        defaultBehavior: 'burst',
-        safetyTier: SAFETY_TIERS.EXPERT_BURST,
+        params: { hz: 20, duty: 0.5, intensity: 1.0 },
+        defaultBehavior: 'toggle',
+        // Demoted from EXPERT_BURST: the dispatcher no longer enforces
+        // burst-only on this preset. Operators tap it on, tap it off.
+        safetyTier: SAFETY_TIERS.WARNING,
       },
     },
     apply: strobeEffect.apply,
@@ -185,98 +282,6 @@ export const GLOBAL_EFFECT_LIBRARY = {
     apply: feedbackTrailsEffect.apply,
   },
 
-  // ── Legacy RigGlobals effects, migrated into the GEM library ─────
-  // These four route through `controller.setEffect(effectId, bool)` so
-  // the existing dimmer-aware applyPixels / DMX paths in
-  // GlobalEffectsController stay intact. The `legacyEffectId` field is
-  // the cue the slot dispatcher uses to take the legacy path instead of
-  // dispatching into the pixel-buffer macro pipeline.
-  vintageWhite: {
-    id: 'vintageWhite',
-    name: 'Vintage White Boost',
-    category: 'legacy',
-    behaviorTypes: ['toggle'],
-    singleton: true,
-    safetySensitive: false,
-    legacyEffectId: 'vintageWhite',
-    presets: {
-      default: {
-        label: 'Vintage White',
-        params: { bypassDimmer: false },
-        defaultBehavior: 'toggle',
-      },
-      bypass_dimmer: {
-        label: 'Vintage White (Bypass Dimmer)',
-        params: { bypassDimmer: true },
-        defaultBehavior: 'toggle',
-      },
-    },
-    apply: vintageWhiteEffect.apply,
-  },
-
-  blastWhite: {
-    id: 'blastWhite',
-    name: 'Blast White',
-    category: 'legacy',
-    behaviorTypes: ['toggle'],
-    singleton: true,
-    safetySensitive: false,
-    legacyEffectId: 'blastWhite',
-    presets: {
-      default: {
-        label: 'Blast White',
-        params: { bypassDimmer: false },
-        defaultBehavior: 'toggle',
-      },
-      bypass_dimmer: {
-        label: 'Blast White (Bypass Dimmer)',
-        params: { bypassDimmer: true },
-        defaultBehavior: 'toggle',
-      },
-    },
-    apply: blastWhiteEffect.apply,
-  },
-
-  uvBlast: {
-    id: 'uvBlast',
-    name: 'UV Blast',
-    category: 'legacy',
-    behaviorTypes: ['toggle'],
-    singleton: true,
-    safetySensitive: false,
-    legacyEffectId: 'uvBlast',
-    presets: {
-      default: {
-        label: 'UV Blast',
-        params: { bypassDimmer: false },
-        defaultBehavior: 'toggle',
-      },
-      bypass_dimmer: {
-        label: 'UV Blast (Bypass Dimmer)',
-        params: { bypassDimmer: true },
-        defaultBehavior: 'toggle',
-      },
-    },
-    apply: uvBlastEffect.apply,
-  },
-
-  fogger: {
-    id: 'fogger',
-    name: 'Fogger / Haze',
-    category: 'legacy',
-    behaviorTypes: ['toggle'],
-    singleton: true,
-    safetySensitive: false,
-    legacyEffectId: 'fogger',
-    presets: {
-      default: {
-        label: 'Fogger',
-        params: {},
-        defaultBehavior: 'toggle',
-      },
-    },
-    apply: foggerEffect.apply,
-  },
 };
 /**
  * Serializable description of the registry (no fn refs) for

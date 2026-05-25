@@ -108,7 +108,7 @@ parLights:
     max: 1
     step: 0.05
   maxSpotlights:
-    value: 150
+    value: 60
     label: Max Spotlights
     min: 1
     max: 200
@@ -208,9 +208,9 @@ parLights:
       x: 0.07203133767327397
       'y': 1.5
       z: 1
-      rotX: 34.99999999999999
+      rotX: -55
       rotY: -180
-      rotZ: 1.5491111098427209e-15
+      rotZ: -1.0684148232492667e-14
     - group: BarLights
       name: Bar Right
       fixtureType: ShehdsBar
@@ -221,9 +221,9 @@ parLights:
       x: 1.147796471297927
       'y': 1.5
       z: 1
-      rotX: 35
+      rotX: -55.00000000000003
       rotY: -180
-      rotZ: 1.5491111098427229e-15
+      rotZ: -1.0684148232492675e-14
     - group: SpecialEffects
       name: ChauvetHaze4D 10
       fixtureType: ChauvetHaze4D

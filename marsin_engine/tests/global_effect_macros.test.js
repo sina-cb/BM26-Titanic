@@ -61,8 +61,16 @@ test('describeLibrary returns serializable metadata for all v1 effects', () => {
   const round = JSON.parse(JSON.stringify(desc));
   assert.deepEqual(round, desc);
   // Spot-check presets
-  assert.equal(desc.strobe.presets.max_20hz.safetyTier, SAFETY_TIERS.EXPERT_BURST);
-  assert.equal(desc.strobe.presets.hard_10hz.safetyTier, SAFETY_TIERS.HOLD_ONLY);
+  // Operator review May 2026 #10: hold + burst gestures aren't
+  // supported in the UI anymore, so the EXPERT_BURST / HOLD_ONLY
+  // tiers were demoted to WARNING. The dot is no longer rendered
+  // either — see GEM `safetyDotColor` (removed). The library still
+  // surfaces safetyTier strings via /global-effect-library for any
+  // future operator-side telemetry.
+  assert.equal(desc.strobe.presets.max_20hz.safetyTier, SAFETY_TIERS.WARNING);
+  assert.equal(desc.strobe.presets.hard_10hz.safetyTier, SAFETY_TIERS.WARNING);
+  // Strobe is toggle-only — hold + burst gone from behaviorTypes.
+  assert.deepEqual(desc.strobe.behaviorTypes, ['toggle']);
 });
 
 test('validateParams rejects unknown effectId', () => {
@@ -105,33 +113,46 @@ test('validateSlotsConfig rejects empty / too-large arrays + duplicate slotIds',
   assert.throws(() => validateSlotsConfig(dup), /Duplicate slotId/);
 });
 
-// ── Safety enforcement ──────────────────────────────────────────────
+// ── Behavior contract: strobe is toggle-only ────────────────────────
+// (Operator review May 2026 #10 — hold + burst removed from the strobe
+// behaviorTypes; the EXPERT_BURST / HOLD_ONLY safety gates were dropped
+// from validateSlotsConfig at the same time.)
 
-test('expert_burst preset (max_20hz) rejects toggle and hold behaviors in slot config', () => {
-  const bad = JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG));
-  // Slot 6 is the burst; flip it to toggle.
-  bad[5].behavior = 'toggle';
-  assert.throws(() => validateSlotsConfig(bad), /expert_burst/);
-  bad[5].behavior = 'hold';
-  assert.throws(() => validateSlotsConfig(bad), /expert_burst/);
+test('strobe presets all accept toggle behavior (no per-preset safety gate)', () => {
+  const cfg = JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG));
+  cfg[5].behavior = 'toggle';
+  assert.doesNotThrow(() => validateSlotsConfig(cfg),
+    '20Hz max under toggle should validate (was EXPERT_BURST gated)');
+  cfg[0].presetId = 'hard_10hz';
+  cfg[0].behavior = 'toggle';
+  assert.doesNotThrow(() => validateSlotsConfig(cfg),
+    '10Hz hard under toggle should validate (was HOLD_ONLY gated)');
 });
 
-test('hold_only preset (hard_10hz) rejects toggle behavior', () => {
+test('strobe rejects `hold` behavior (removed from behaviorTypes)', () => {
   const bad = JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG));
-  bad[0].effectId = 'strobe';
-  bad[0].presetId = 'hard_10hz';
-  bad[0].behavior = 'toggle';
-  assert.throws(() => validateSlotsConfig(bad), /hold_only/);
+  bad[0].behavior = 'hold';
+  assert.throws(() => validateSlotsConfig(bad),
+    /does not support behavior 'hold'/);
 });
 
-test('expert_burst slot rejects toggle dispatch action at runtime', () => {
+test('strobe rejects `burst` behavior (removed from behaviorTypes)', () => {
+  const bad = JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG));
+  bad[5].behavior = 'burst';
+  assert.throws(() => validateSlotsConfig(bad),
+    /does not support behavior 'burst'/);
+});
+
+test('slot 6 (max_20hz) accepts toggle dispatch at runtime', () => {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
-  // Slot 6 (max_20hz, burst).
-  assert.throws(
+  // Slot 6 default config is now toggle (was burst).
+  assert.doesNotThrow(
     () => mgr.dispatchSlotAction({ slotId: 6, action: 'toggle', frameIndex: 0, nowMs: 0 }),
-    /expert_burst/,
   );
+  assert.equal(ctrl.strobeActive, true);
+  mgr.dispatchSlotAction({ slotId: 6, action: 'toggle', frameIndex: 1, nowMs: 0 });
+  assert.equal(ctrl.strobeActive, false);
 });
 
 // ── Boot transient cleanliness ──────────────────────────────────────
@@ -230,17 +251,15 @@ test('color wash replace mode pushes pixels toward target color', () => {
   assert.equal(pixels[0].g, 0);
 });
 
-// ── Hold behaviour ──────────────────────────────────────────────────
+// ── Hold removed (operator review May 2026 #10) ─────────────────────
 
-test('hold action: down activates strobe, up stops it', () => {
+test('patchSlot refuses to bind `hold` behavior on any strobe preset', () => {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
-  // Slot 1 = strobe sync_4hz, default behavior toggle. Override to hold.
-  mgr.patchSlot(1, { presetId: 'hard_10hz', behavior: 'hold' });
-  mgr.dispatchSlotAction({ slotId: 1, action: 'down', frameIndex: 0, nowMs: 0 });
-  assert.equal(ctrl.strobeActive, true);
-  mgr.dispatchSlotAction({ slotId: 1, action: 'up', frameIndex: 10, nowMs: 0 });
-  assert.equal(ctrl.strobeActive, false);
+  assert.throws(
+    () => mgr.patchSlot(1, { presetId: 'hard_10hz', behavior: 'hold' }),
+    /does not support behavior 'hold'/,
+  );
 });
 
 // ── Preset-aware switching ──────────────────────────────────────────
@@ -281,21 +300,11 @@ test('toggling same strobe preset twice turns it off', () => {
 });
 
 // ── Burst / expiry ──────────────────────────────────────────────────
-
-test('slot 6 burst behavior expires after duration frames', () => {
-  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
-  const mgr = new GlobalEffectSlotManager(ctrl);
-  mgr.dispatchSlotAction({ slotId: 6, action: 'trigger', frameIndex: 0, nowMs: 0 });
-  assert.equal(ctrl.strobeActive, true);
-  // 1000ms @ 40fps → 40 frames.
-  // Advance loop a few frames, still active.
-  const pixels = makePixels(2);
-  ctrl.applyMacros({ pixels, frameIndex: 10, nowMs: 250 });
-  assert.equal(ctrl.strobeActive, true);
-  // Past the burst end: should auto-stop.
-  ctrl.applyMacros({ pixels, frameIndex: 60, nowMs: 1500 });
-  assert.equal(ctrl.strobeActive, false);
-});
+// Operator review May 2026 #10: the slot dispatcher path is toggle-only
+// now. The internal triggerStrobeBurst() still exists for any future
+// programmatic caller (autopilot cues, OSC bursts) and the auto-stop
+// math is exercised below — it just doesn't get reached from the iPad
+// any more.
 
 test('triggerStrobeBurst clamps durationMs above MAX_BURST_MS', () => {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });

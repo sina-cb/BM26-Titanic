@@ -233,3 +233,55 @@ export const pixels = [
   { i: 220, type: 'dmx', fixtureType: 'UkingPar', name: 'Redwoods3 5 - rgbwau_1', group: 'Redwoods3', x: 18.5, y: 2.5, z: 18.402, nx: 0.8636, ny: 0.3885, nz: 0.7798, cId: 0, sId: 0, fId: 0, vMask: 0, patch: null, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
   { i: 221, type: 'dmx', fixtureType: 'UkingPar', name: 'Redwoods3 6 - rgbwau_1', group: 'Redwoods3', x: 21.5, y: 2.5, z: 18.402, nx: 0.9545, ny: 0.3885, nz: 0.7798, cId: 0, sId: 0, fId: 0, vMask: 0, patch: null, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
 ];
+
+// Helper to generate index ranges
+function range(start, end) {
+  const arr = [];
+  for (let i = start; i <= end; i++) {
+    arr.push(i);
+  }
+  return arr;
+}
+
+export const viewMasks = [
+  {
+    name: 'TowerBars',
+    bit: 0x0001,
+    pixelIndices: range(0, 143),
+  },
+  {
+    name: 'TowerVintageLights',
+    bit: 0x0002,
+    pixelIndices: range(144, 167),
+  },
+  {
+    name: 'WallVintageLights',
+    bit: 0x0004,
+    pixelIndices: range(168, 203),
+  },
+  {
+    name: 'Redwoods1',
+    bit: 0x0008,
+    pixelIndices: range(204, 209),
+  },
+  {
+    name: 'Redwoods2',
+    bit: 0x0010,
+    pixelIndices: range(210, 215),
+  },
+  {
+    name: 'Redwoods3',
+    bit: 0x0020,
+    pixelIndices: range(216, 221),
+  },
+  {
+    name: 'RedwoodPARs',
+    bit: 0x0040,
+    pixelIndices: range(204, 221),
+  },
+  {
+    name: 'VintageOnly',
+    bit: 0x0080,
+    pixelIndices: range(144, 203),
+  },
+];

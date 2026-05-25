@@ -30,7 +30,6 @@ import React, { useState, createContext, useEffect } from 'react';
 import { View } from 'react-native';
 import { setGlobalEffect, fetchGlobals, setGlobalEffectBlackout, getApiBaseAsync } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { initEngineBuses } from '@/utils/engineBus';
 import { GlobalEffectMacros } from '@/components/GlobalEffectMacros';
 
 interface RigState {
@@ -67,19 +66,14 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
       if (res.data.blackout !== undefined) setBlackout(res.data.blackout);
     });
 
-    // This provider mounts at the (tabs) layout level and stays alive
-    // for the whole app session. It owns the singleton engineBus that
-    // opens all four topic sockets (/ws/control, /ws/params,
-    // /ws/signals, /ws/viz). Each bus also mirrors into engineEvents
-    // (the legacy unified bus useEngineState / useLiveParams subscribe
-    // to) so existing consumers keep working unchanged. Per-tab
-    // components (deck/mixer preview strips) subscribe to engineVizBus
-    // directly to avoid paying for vis frames on tabs that don't render
-    // a preview strip.
-    getApiBaseAsync().then(apiBase => {
-      if (!alive) return;
-      initEngineBuses(apiBase);
-    });
+    // The singleton topic buses (engineEvents → /ws/control,
+    // engineParamsEvents → /ws/params, engineVizEvents → /ws/viz)
+    // auto-connect lazily on first subscribe and self-heal on close,
+    // so we don't pre-init them here. We do nudge engineEvents into
+    // discovering the API base early — the subscribe() below opens
+    // /ws/control which calls getApiBaseAsync internally on first
+    // open. Warm the resolver so that path is cached.
+    getApiBaseAsync().catch(() => { /* swallow — bus will retry */ });
 
     const unsub = engineEvents.subscribe((data: any) => {
       if (!alive || !data) return;
@@ -95,9 +89,6 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
       }
     });
 
-    // engineBus sockets live for the app's lifetime — we deliberately
-    // do NOT tear them down when this provider unmounts (it doesn't
-    // unmount in practice; the (tabs) layout is the root of the app).
     return () => { alive = false; unsub(); };
   }, []);
 
@@ -120,22 +111,36 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
 /**
  * RigGlobals — the unified rig control surface for both the deck and
  * mixer tabs. Renders the engine-side GEM grid plus a compact BLACKOUT
- * e-stop. `variant` is preserved as an API for backwards-compat with
- * callers (mixer/deck) but currently both render the same grid; we
- * found no need for two layouts after the unification.
+ * e-stop.
+ *
+ * `variant` selects the layout:
+ *   - 'deck'  → 2-row grid, 44 px buttons so slot labels fit cleanly
+ *     in portrait (operator feedback May 2026).
+ *   - 'mixer' → single-row full-width strip (52 px buttons), designed
+ *     to be pinned to the bottom of the mixer surface where the
+ *     operator's thumb naturally lands.
  */
-export const RigGlobals = ({ variant: _variant = 'deck' }: { variant?: 'deck' | 'mixer' } = {}) => {
+export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' } = {}) => {
   // RigGlobals binds the unified GEM component to the RigContext's
   // blackout state so the dimmer rack's RESTORE RIG button and the
   // deck/mixer BLACKOUT button stay in lockstep (single source of
   // truth on the engine, mirrored via WS).
+  const gemVariant = variant === 'mixer' ? 'mixer-strip' : 'deck';
+  // CRITICAL: in mixer-strip mode the wrapper MUST be flex:1 so the
+  // inner GEM (which is also flex:1) actually stretches to fill the
+  // parent globalRigBar width. Without this the inner View collapses
+  // to its intrinsic content width and the row floats left of the
+  // viewport. Deck mode keeps the natural width — the deck right
+  // column is already constrained.
+  const isStrip = gemVariant === 'mixer-strip';
   return (
     <RigContextBridge>
       {({ blackout, setBlackout }) => (
-        <View style={{ paddingTop: 6 }}>
+        <View style={isStrip ? { flex: 1, paddingTop: 6 } : { paddingTop: 6 }}>
           <GlobalEffectMacros
             blackout={blackout}
             onBlackoutChange={setBlackout}
+            variant={gemVariant}
           />
         </View>
       )}
@@ -147,10 +152,23 @@ const RigContextBridge: React.FC<{
   children: (args: { blackout: boolean; setBlackout: (v: boolean) => void }) => React.ReactElement;
 }> = ({ children }) => {
   const ctx = React.useContext(RigContext);
-  // Important: this setter must NOT re-fire the API call. GEM owns
-  // the POST /global-effect-macros/blackout round trip; this setter
-  // exists purely to keep the cached RigContext.blackout in sync
-  // with the WS-derived value GEM hands us back.
-  const setBlackout = (next: boolean) => _setBlackoutNoCall.current(next);
+  // Operator review May 2026 #15 — TOGGLE BUTTON FLICKER ROOT CAUSE.
+  // Pre-fix this was a fresh closure on every render:
+  //     const setBlackout = (next) => _setBlackoutNoCall.current(next);
+  // GEM consumes onBlackoutChange in a useEffect dep array. Each
+  // RigContext mutation (every blackout / effects WS event) re-rendered
+  // the bridge, which handed GEM a NEW function reference, which tore
+  // GEM's main useEffect down and re-fired its boot sequence —
+  // `fetchGlobalEffectSlots()` first sets every slot to active:false
+  // (because it's the base layout call without status), then refresh()
+  // restores the real active flags. That two-step is exactly the
+  // "off → on" flicker operators kept reporting. Memoising the
+  // setter so it has a STABLE ref across renders kills the tear-
+  // down loop entirely. The underlying setter still routes through
+  // `_setBlackoutNoCall.current` which is mutated in place by
+  // RigProvider, so we never end up with a stale closure.
+  const setBlackout = React.useCallback((next: boolean) => {
+    _setBlackoutNoCall.current(next);
+  }, []);
   return children({ blackout: ctx.blackout, setBlackout });
 };

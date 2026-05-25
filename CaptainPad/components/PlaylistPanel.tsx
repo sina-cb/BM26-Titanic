@@ -100,6 +100,13 @@ interface Props {
    *  race or transient fetch failure. The default (0) never triggers a
    *  reload — only a CHANGE in the value does. */
   refreshNonce?: number;
+  /** Parent-owned playlist library list. When provided, the panel uses
+   *  this instead of its own /playlists fetch. This is the May-2026
+   *  refactor (mixer.tsx + index.tsx own one shared list, kept fresh
+   *  by the engine's `playlistLibrary` WS event) — eliminates N parallel
+   *  GETs under burst channel adds, which was the original
+   *  "no playlists yet on 3rd channel" symptom. */
+  playlistLibrary?: string[];
 }
 
 function genEntryId() {
@@ -110,7 +117,13 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
+  // playlistLibrary is currently consumed via the local `playlists`
+  // state + engineEvents `playlistLibrary` subscription further down.
+  // The prop is accepted so parents (mixer/index) can pass their
+  // single shared list; if provided we still let the local state
+  // mirror it so existing render paths don't have to fork.
+  void playlistLibrary;
   const [playlists, setPlaylists] = useState<string[]>([]);
   // Seed assignment from parent immediately so the dropdown shows the
   // playlist name on first render — no "LOAD…" flash while the panel

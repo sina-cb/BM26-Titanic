@@ -120,14 +120,37 @@ test('legacy effect toggle round-trip via slot manager mirrors controller.effect
   assert.equal(status.active, false);
 });
 
-test('bypass_dimmer preset variant mirrors the *BypassDimmer flag', () => {
+test('slot dispatcher does NOT touch *BypassDimmer flag (dimmer rack owns it)', () => {
+  // Operator review May 2026: the old `bypass_dimmer` preset twin
+  // produced a second-source-of-truth for the bypass flag. The slot
+  // dispatcher used to stamp it on activate / deactivate, fighting
+  // the dimmer-rack BypassCheckbox. The library now has ONE preset
+  // per legacy effect and the dispatcher leaves the bypass flag
+  // exactly where the dimmer rack last put it. This test pins that
+  // invariant so a future regression yells loudly.
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
-  mgr.patchSlot(7, { presetId: 'bypass_dimmer' });
+
+  // Dimmer rack pre-sets the bypass flag on (as if the operator
+  // ticked the checkbox in the rack tab).
+  ctrl.setEffect('vintageWhiteBypassDimmer', true);
+
+  // Activate the legacy slot — the flag must stay where the rack
+  // put it, ie. on.
   mgr.dispatchSlotAction({ slotId: 7, action: 'activate', frameIndex: 0, nowMs: 0 });
   assert.equal(ctrl.effects.vintageWhite, true);
-  assert.equal(ctrl.effects.vintageWhiteBypassDimmer, true);
+  assert.equal(ctrl.effects.vintageWhiteBypassDimmer, true,
+    'activate must not stomp the rack-owned bypass flag');
+
+  // Deactivate — flag still stays where the rack put it.
   mgr.dispatchSlotAction({ slotId: 7, action: 'deactivate', frameIndex: 0, nowMs: 0 });
   assert.equal(ctrl.effects.vintageWhite, false);
-  assert.equal(ctrl.effects.vintageWhiteBypassDimmer, false);
+  assert.equal(ctrl.effects.vintageWhiteBypassDimmer, true,
+    'deactivate must not clear the rack-owned bypass flag');
+
+  // And panicStop (e-stop) clears EVERYTHING including the bypass
+  // flag, as before.
+  ctrl.panicStop();
+  assert.equal(ctrl.effects.vintageWhiteBypassDimmer, false,
+    'panicStop still clears the bypass flag as part of total reset');
 });

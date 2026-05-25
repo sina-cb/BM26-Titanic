@@ -4,23 +4,23 @@ effects:
   uvBlast: false
   vintageWhite: false
   blastWhite: false
-  blastWhiteBypassDimmer: false
+  blastWhiteBypassDimmer: true
   vintageWhiteBypassDimmer: false
-  uvBlastBypassDimmer: false
+  uvBlastBypassDimmer: true
 params:
-  revision: 241431
+  revision: 31406
   sourceLock: null
   params:
     speed:
-      value: 0.5
+      value: 0.22
       lastSource: init
       lastOrigin: init
       lastRevision: 1
     size:
       value: 0.5
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 241347
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 2
     rotate:
       value: 1
       lastSource: init
@@ -33,15 +33,15 @@ params:
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 241345
+      lastRevision: 31325
     colorPalette2:
       value:
-        h: 0.5
+        h: 0.13
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 241346
+      lastRevision: 31326
     audioReactivity:
       value: 0.5
       lastSource: init
@@ -78,30 +78,30 @@ params:
       lastOrigin: init
       lastRevision: 12
     tempoBpm:
-      value: 127.6500015258789
+      value: 129.27000427246094
       lastSource: init
       lastOrigin: init
       lastRevision: 13
     micLow:
-      value: 0.016217199693830606
+      value: 0.008014760160083133
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 241428
+      lastRevision: 31403
     micMid:
-      value: 0.025954676524896962
+      value: 0.012045729283342075
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 241429
+      lastRevision: 31404
     micHigh:
-      value: 0.16710805477978166
+      value: 0.004710903622622687
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 241430
+      lastRevision: 31405
     micKick:
-      value: 1
+      value: 0.4186381653554382
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 241431
+      lastRevision: 31406
     micLowGain:
       value: 1
       lastSource: init

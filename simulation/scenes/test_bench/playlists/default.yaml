@@ -21,7 +21,7 @@ entries:
     pattern: 02_phase_cathedral
     label: null
     defaults:
-      sliderLocalSpeed: 0.44
+      sliderLocalSpeed: 0.01
       sliderCount: 0.71
       sliderSharpness: 0.15
       sliderDirection: 0.77
@@ -85,7 +85,7 @@ entries:
     defaults:
       sliderLocalSpeed: 0.5
       sliderDensity: 0.74
-      sliderParticleSize: 0.65
+      sliderParticleSize: 0.2
     notes: null
   - id: e_default_10_10_chasers
     pattern: 10_chasers
@@ -108,9 +108,9 @@ entries:
     pattern: 12_breathing
     label: null
     defaults:
-      sliderLocalSpeed: 0.7
-      sliderRipple: 0.8
-      sliderSharpness: 0.28
+      sliderLocalSpeed: 0.44
+      sliderRipple: 0.14
+      sliderSharpness: 0.42
     notes: null
   - id: e_default_13_13_sparkle
     pattern: 13_sparkle
@@ -118,7 +118,7 @@ entries:
     defaults:
       sliderLocalSpeed: 0.1
       sliderSparkleSpeedTrim: 0.81
-      sliderSparkleDensity: 0.69
+      sliderSparkleDensity: 0.36
     notes: null
   - id: e_default_14_14_lunar_current
     pattern: 14_lunar_current

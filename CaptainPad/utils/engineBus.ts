@@ -1,264 +1,230 @@
-// engineBus — singleton WebSocket clients, one per engine topic.
+// Engine WebSocket singleton bus factory.
 //
-// Why this exists:
-//   Pre-split, every tab + the RigGlobals provider each opened its own
-//   `ws://host:port/` connection. The engine sent every broadcast to
-//   every socket, so the iPad's JS thread paid for parsing every
-//   audio-analyser tick (15–30 Hz × ~1.5 KB CPC snapshot) and every
-//   vis frame (10 Hz × N channels × pixel buffer) just to decide it
-//   didn't care about most of them.
+// One singleton bus per WS topic (control / params / viz). Each owns
+// ONE WebSocket connection to the engine for the lifetime of the
+// app. Tabs and components subscribe to whichever bus they need
+// instead of opening their own raw sockets — the cost of JSON.parse
+// is paid once per topic per app, regardless of how many tabs are
+// listening.
 //
-//   With three mixer channels seeded that added up to enough JSON.parse
-//   + React setState churn that the Audio Analysis tab couldn't load
-//   its config for 30+ s after mount — the REST `/audio/config`
-//   response was sitting in the event loop waiting for the WS handler
-//   to finish.
+// Why singletons:
+//   Pre-May-2026 the iPad opened a separate WS per tab (mixer, deck,
+//   audio, monitor) AND another from the RigContextBridge provider.
+//   Every connection received the full firehose (mixer + vis + params
+//   + …) and parsed each base64 vis frame independently. During a
+//   burst channel add, the main thread queued so many parses that
+//   control events (`channelPlaylistData`, `playlistLibrary`) couldn't
+//   land in time and operators saw "no playlists yet" on the 3rd
+//   added channel.
 //
-// Topic split (matches marsin_engine/lib/ws_topic_routing.js):
+//   The fix has two parts: split outbound by topic on the engine
+//   (lib/api_server.js), and split inbound by topic on the iPad
+//   (these singletons + the new tabs that subscribe instead of
+//   opening their own socket).
 //
-//   /ws/control — low-volume UI/state. Mixer, deck, autopilot, GEM,
-//                 playlist library, audioStatus, oscStats, blackout.
-//                 Every tab needs at least one consumer here.
-//
-//   /ws/params  — sharedParams. CPC steady keys (colors, speed,
-//                 gains). Quiet by default; only emits when an
-//                 operator turn a knob.
-//
-//   /ws/signals — liveParams. Audio analyser meters + tempoBpm.
-//                 15–30 Hz when the mic is hot. ONLY the audio tab and
-//                 the deck BPM badge need this.
-//
-//   /ws/viz     — vis frames + vis-broadcast-stats. By FAR the highest
-//                 volume. ONLY the deck/mixer preview strips subscribe.
-//
-// Architecture:
-//   - One singleton bus per topic, module-level (lives for the app's
-//     lifetime). Each bus owns its own WebSocket, auto-reconnects, and
-//     fans out parsed messages to its subscribers.
-//   - A consumer that needs multiple topics subscribes to each bus
-//     individually. There's no "subscribe to all" path on purpose —
-//     the whole point of the split is that consumers opt INTO the
-//     traffic they want.
-//   - `engineEvents` (the legacy unified bus in engineEvents.ts) is
-//     also fed by every topic so existing consumers (useEngineState's
-//     _onMessage, GlobalEffectMacros, dimmer-rack effects, etc.) keep
-//     working without changes. New code should prefer the per-topic
-//     buses below — they cost one less hop and one fewer place to
-//     filter by `msg.type`.
-//
-// Lifecycle:
-//   `initEngineBuses(apiBase)` must be called once at app boot (the
-//   (tabs)/_layout.tsx invokes it via the RigGlobals provider's
-//   useEffect). Subsequent calls with the same base are no-ops; calls
-//   with a different base tear down and reopen all four sockets (used
-//   when the operator switches engine IP in the Config tab).
+// Reconnect / lifecycle:
+//   - Lazy connect on first subscribe or first send.
+//   - Exponential backoff (250 ms → 5 s) on close / error.
+//   - Reconnect on AppState 'active' if currently disconnected.
+//   - Outbound queue (cap 64) buffers sends while connecting so a tap
+//     immediately after app foreground doesn't drop.
+//   - `reconnect(newBase?)` forces a clean re-open after the API base
+//     detector finds a different engine IP.
 
-import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { AppState, Platform } from 'react-native';
+import { getApiBaseAsync } from './api';
 
-export type EngineTopic = 'control' | 'params' | 'signals' | 'viz';
-
-const TOPIC_PATHS: Record<EngineTopic, string> = {
-  control: '/ws/control',
-  params:  '/ws/params',
-  signals: '/ws/signals',
-  viz:     '/ws/viz',
+export type EngineMessage = {
+  type: string;
+  [key: string]: unknown;
 };
 
 type Listener = (msg: EngineMessage) => void;
 
-interface TopicBus {
-  topic: EngineTopic;
-  subscribe(l: Listener): () => void;
-  /** True once the socket has been seen open at least once. */
-  isOpen(): boolean;
+export interface BusStatus {
+  connected: boolean;
+  lastError?: string;
 }
 
-interface InternalBus extends TopicBus {
-  listeners: Set<Listener>;
-  ws: WebSocket | null;
-  open: boolean;
-  reconnectTimer: ReturnType<typeof setTimeout> | null;
-  base: string | null;
-  closedByUs: boolean;
+type StatusListener = (s: BusStatus) => void;
+
+export interface EngineBus {
+  /** Returns an unsubscribe function. Calls connect() lazily on first subscribe. */
+  subscribe: (l: Listener) => () => void;
+  /** Status push (connected / error). Listener is called immediately with the current status. */
+  subscribeStatus: (l: StatusListener) => () => void;
+  /** Read-only snapshot of current status. */
+  getStatus: () => BusStatus;
+  /** Send a JSON-serialisable message. Queued (cap 64) if not yet open. */
+  send: (obj: unknown) => boolean;
+  /** Force reconnect (e.g. after API base discovery rediscovers a new IP). */
+  reconnect: () => void;
 }
 
-// Reconnect cadence — matches the legacy per-tab WS code. Long enough
-// that a real engine restart doesn't hammer the network; short enough
-// that the operator doesn't see a "connection lost" UI lingering for
-// more than a few seconds.
-const RECONNECT_MS = 5_000;
+export function createBus(pathSegment: string): EngineBus {
+  let ws: WebSocket | null = null;
+  let alive = true;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let backoffMs = 250;
+  const MAX_BACKOFF_MS = 5_000;
+  const MAX_QUEUE = 64;
+  let outboundQueue: string[] = [];
+  const listeners: Set<Listener> = new Set();
+  const statusListeners: Set<StatusListener> = new Set();
+  let status: BusStatus = { connected: false };
 
-function buildWsUrl(base: string, path: string): string {
-  // base looks like `http://10.0.0.42:31168` or `http://localhost:6968`
-  // We strip the protocol prefix, keep the host:port intact, and stick
-  // the topic path on the end. Never reuse base.split('/') because that
-  // would lose the port if the base ever uses a default-port URL.
-  const trimmed = base.replace(/\/+$/, '');
-  const wsBase = trimmed.replace(/^https?:\/\//, 'ws://').replace(/^wss?:\/\//, 'ws://');
-  return `${wsBase}${path}`;
-}
+  function notifyStatus() {
+    statusListeners.forEach((l) => {
+      try { l(status); } catch { /* a buggy listener must never break the bus */ }
+    });
+  }
 
-function makeBus(topic: EngineTopic): InternalBus {
-  const bus: InternalBus = {
-    topic,
-    listeners: new Set<Listener>(),
-    ws: null,
-    open: false,
-    reconnectTimer: null,
-    base: null,
-    closedByUs: false,
-    subscribe(l: Listener) {
-      this.listeners.add(l);
-      return () => { this.listeners.delete(l); };
+  function clearReconnectTimer() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function scheduleReconnect() {
+    clearReconnectTimer();
+    if (!alive) return;
+    const wait = backoffMs;
+    backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+    reconnectTimer = setTimeout(connect, wait);
+  }
+
+  // Detach handlers from a (probably about-to-close) socket so its
+  // late-firing onclose can't kick the bus into a reconnect storm. We
+  // do this whenever we deliberately replace `ws` (connect/reconnect),
+  // because keeping the handler attached would race the new socket's
+  // onopen with the old socket's reconnect-on-close path.
+  function detachAndClose(socket: WebSocket | null) {
+    if (!socket) return;
+    try {
+      socket.onopen = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+    } catch { /* ignore */ }
+    try { socket.close(); } catch { /* ignore */ }
+  }
+
+  function connect() {
+    clearReconnectTimer();
+    if (!alive) return;
+    // If there's already a live or in-flight socket, don't open a
+    // second one. The existing socket's onclose handler will trigger
+    // a reconnect if it really dies.
+    if (ws && (ws.readyState === 0 /* CONNECTING */ || ws.readyState === 1 /* OPEN */)) {
+      return;
+    }
+    getApiBaseAsync()
+      .then((base) => {
+        if (!alive) return;
+        const wsUrl = base.replace(/^http/, 'ws') + pathSegment;
+        // Belt-and-braces: detach any stale predecessor before we
+        // allocate. Without the detach, the about-to-close socket's
+        // onclose would race the new socket's onopen and storm.
+        detachAndClose(ws);
+        try {
+          ws = new WebSocket(wsUrl);
+        } catch {
+          scheduleReconnect();
+          return;
+        }
+        ws.onopen = () => {
+          backoffMs = 250;
+          status = { connected: true };
+          notifyStatus();
+          const drained = outboundQueue;
+          outboundQueue = [];
+          for (const m of drained) {
+            try { ws!.send(m); } catch { /* ignore */ }
+          }
+        };
+        ws.onclose = () => {
+          status = { connected: false };
+          notifyStatus();
+          scheduleReconnect();
+        };
+        ws.onerror = (e: WebSocketMessageEvent | Event) => {
+          status = {
+            connected: false,
+            lastError: (e && (e as { message?: string }).message) || 'ws error',
+          };
+          notifyStatus();
+          // onclose follows naturally and triggers scheduleReconnect.
+        };
+        ws.onmessage = (e: WebSocketMessageEvent) => {
+          let m: EngineMessage | null = null;
+          try {
+            m = JSON.parse(typeof e.data === 'string' ? e.data : '');
+          } catch {
+            return;
+          }
+          if (!m) return;
+          listeners.forEach((l) => {
+            try { l(m as EngineMessage); } catch { /* swallow */ }
+          });
+        };
+      })
+      .catch(() => scheduleReconnect());
+  }
+
+  function ensureConnected() {
+    if (!ws && !reconnectTimer) connect();
+  }
+
+  function send(obj: unknown): boolean {
+    let str: string;
+    try { str = JSON.stringify(obj); } catch { return false; }
+    if (ws && ws.readyState === 1 /* OPEN */) {
+      try { ws.send(str); return true; } catch { return false; }
+    }
+    if (outboundQueue.length < MAX_QUEUE) outboundQueue.push(str);
+    ensureConnected();
+    return false;
+  }
+
+  // Reconnect on app foreground. Some sockets can survive a long
+  // background and reappear OK; many die silently. Forcing a re-open
+  // on resume is the simplest way to guarantee a fresh stream.
+  if (Platform.OS !== 'web') {
+    AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        if (!ws || ws.readyState >= 2 /* CLOSING|CLOSED */) {
+          backoffMs = 250;
+          connect();
+        }
+      }
+    });
+  }
+
+  return {
+    subscribe(l) {
+      ensureConnected();
+      listeners.add(l);
+      return () => listeners.delete(l);
     },
-    isOpen() { return this.open; },
+    subscribeStatus(l) {
+      try { l(status); } catch { /* ignore */ }
+      statusListeners.add(l);
+      return () => statusListeners.delete(l);
+    },
+    getStatus() {
+      return status;
+    },
+    send,
+    reconnect() {
+      backoffMs = 250;
+      // Detach handlers first so the old socket's onclose can't
+      // schedule a competing reconnect after we already started one.
+      detachAndClose(ws);
+      ws = null;
+      status = { connected: false };
+      notifyStatus();
+      connect();
+    },
   };
-  return bus;
-}
-
-const buses: Record<EngineTopic, InternalBus> = {
-  control: makeBus('control'),
-  params:  makeBus('params'),
-  signals: makeBus('signals'),
-  viz:     makeBus('viz'),
-};
-
-function fanout(bus: InternalBus, msg: EngineMessage) {
-  // Per-topic subscribers first.
-  bus.listeners.forEach((cb) => {
-    try { cb(msg); }
-    // A buggy subscriber must never break the WS pipeline.
-    catch { /* swallow */ }
-  });
-  // Legacy unified bus — keep feeding so existing consumers
-  // (useEngineState._onMessage etc.) don't have to migrate today.
-  // engineEvents.emit() already isolates listener errors.
-  try { engineEvents.emit(msg); }
-  catch { /* swallow */ }
-}
-
-function connect(bus: InternalBus) {
-  if (!bus.base) return;
-  if (bus.ws) {
-    try { bus.ws.close(); } catch { /* swallow */ }
-    bus.ws = null;
-  }
-  bus.closedByUs = false;
-  const url = buildWsUrl(bus.base, TOPIC_PATHS[bus.topic]);
-  let ws: WebSocket;
-  try {
-    ws = new WebSocket(url);
-  } catch {
-    // URL construction can't really fail here, but we still schedule a
-    // reconnect so an unreachable base eventually heals when the engine
-    // comes back.
-    scheduleReconnect(bus);
-    return;
-  }
-  bus.ws = ws;
-  ws.onopen = () => {
-    bus.open = true;
-  };
-  ws.onmessage = (event: MessageEvent<unknown>) => {
-    if (typeof event.data !== 'string') return;
-    let msg: EngineMessage;
-    try { msg = JSON.parse(event.data) as EngineMessage; }
-    catch { return; }
-    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
-    fanout(bus, msg);
-  };
-  ws.onerror = () => {
-    // onerror fires before onclose; do nothing here, let onclose drive
-    // the reconnect loop so we don't double-schedule.
-  };
-  ws.onclose = () => {
-    bus.open = false;
-    bus.ws = null;
-    if (bus.closedByUs) return;
-    scheduleReconnect(bus);
-  };
-}
-
-function scheduleReconnect(bus: InternalBus) {
-  if (bus.reconnectTimer) return;
-  bus.reconnectTimer = setTimeout(() => {
-    bus.reconnectTimer = null;
-    connect(bus);
-  }, RECONNECT_MS);
-}
-
-let _currentBase: string | null = null;
-
-/**
- * Open (or re-open) all four engine sockets against `apiBase`.
- *
- * Idempotent: calling with the same base twice is a no-op. Calling
- * with a new base tears down the previous sockets and opens fresh
- * ones against the new endpoint.
- *
- * Returns the catchall unsubscribe used to cleanly tear down every
- * bus — useful for tests; in production the buses live for the
- * app's lifetime.
- */
-export function initEngineBuses(apiBase: string): () => void {
-  if (!apiBase || typeof apiBase !== 'string') {
-    throw new Error('initEngineBuses: apiBase is required');
-  }
-  if (_currentBase === apiBase) {
-    // Already wired up for this base. Re-arm any bus whose socket
-    // closed without a reconnect timer (defensive: should never
-    // happen, but cheap insurance).
-    for (const topic of Object.keys(buses) as EngineTopic[]) {
-      const bus = buses[topic];
-      if (!bus.ws && !bus.reconnectTimer) connect(bus);
-    }
-    return () => teardownAll();
-  }
-  // Base changed: close everything, reset state, open against the
-  // new endpoint. This is hit when the operator switches engine IP
-  // in the Config tab.
-  teardownAll();
-  _currentBase = apiBase;
-  for (const topic of Object.keys(buses) as EngineTopic[]) {
-    const bus = buses[topic];
-    bus.base = apiBase;
-    connect(bus);
-  }
-  return () => teardownAll();
-}
-
-function teardownAll() {
-  for (const topic of Object.keys(buses) as EngineTopic[]) {
-    const bus = buses[topic];
-    bus.closedByUs = true;
-    if (bus.reconnectTimer) {
-      clearTimeout(bus.reconnectTimer);
-      bus.reconnectTimer = null;
-    }
-    if (bus.ws) {
-      try { bus.ws.close(); } catch { /* swallow */ }
-      bus.ws = null;
-    }
-    bus.open = false;
-  }
-  _currentBase = null;
-}
-
-/**
- * Per-topic bus. Subscribe to get every message that the engine
- * routes to that topic. The subscriber receives parsed JSON; the
- * legacy `engineEvents` bus still fires for every message too.
- */
-export const engineControlBus: TopicBus = buses.control;
-export const engineParamsBus:  TopicBus = buses.params;
-export const engineSignalsBus: TopicBus = buses.signals;
-export const engineVizBus:     TopicBus = buses.viz;
-
-/**
- * True when the control socket has connected at least once. Useful for
- * the "engine offline" pill — control is the canonical "is the engine
- * reachable?" signal because every tab needs it.
- */
-export function isControlConnected(): boolean {
-  return buses.control.isOpen();
 }

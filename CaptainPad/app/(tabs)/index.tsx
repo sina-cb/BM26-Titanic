@@ -18,9 +18,11 @@ import {
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
+  fetchPlaylists,
   type DeckTransitionConfig,
 } from '@/utils/api';
-import { engineControlBus, engineVizBus, isControlConnected } from '@/utils/engineBus';
+import { engineEvents } from '@/utils/engineEvents';
+import { engineVizEvents } from '@/utils/engineVizEvents';
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -124,6 +126,19 @@ export default function ControlDeckScreen() {
   // come back this flag is stale by definition.
   const [deckSwapInFlight, setDeckSwapInFlight] = useState(false);
 
+  // Parent-owned playlist library (May 2026 refactor — see mixer.tsx
+  // for the full rationale). Fetched once on mount, then refreshed
+  // from the engine's `playlistLibrary` WS event. Passed down to the
+  // single PlaylistPanel below so it doesn't have to do its own
+  // /playlists GET — which under load could race and return an empty
+  // list, causing the "no playlists yet" symptom on the 3rd channel
+  // (in the mixer; same fetch path here for consistency).
+  const [playlistLibrary, setPlaylistLibrary] = useState<string[]>([]);
+
+  // Pre-May-2026 the deck tab owned its own WS. The topic split
+  // moved that into singleton buses (utils/engineEvents +
+  // utils/engineVizEvents). This tab now just subscribes — no per-tab
+  // socket, no double-parse of the mixer / vis firehose.
   const apiBaseRef = useRef<string>('');
   const visDataRef = useRef<{ [key: string]: string | null }>({});
   const [, setVisVersion] = useState(0);
@@ -140,83 +155,53 @@ export default function ControlDeckScreen() {
     }, [])
   );
 
-  // The WS lifecycle now lives on the app-level engineBus (one
-  // singleton socket per engine topic, opened by RigGlobals at boot).
-  // This tab just subscribes to the two topics it actually cares
-  // about: /ws/control for state events and /ws/viz for the deck's
-  // preview strip. The audio analyser's /ws/signals and /ws/params
-  // are intentionally NOT subscribed here — the deck doesn't render
-  // any audio meters and shouldn't pay for parsing those frames.
-  useEffect(() => {
-    const unsubControl = engineControlBus.subscribe((msg) => {
-      // Defensive: legacy engineEvents.emit was the broadcast catchall
-      // here, but engineBus already mirrors into engineEvents itself.
-      // No second emit needed — that would double-fire every consumer.
+  const subscribeBuses = useCallback(() => {
+    // Control plane: deck channel state, autopilot, deck-transition
+    // config, soft-swap lifecycle markers.
+    const unsubControl = engineEvents.subscribe((msg) => {
+      if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
+        setPlaylistLibrary(msg.names as string[]);
+      }
       if (msg.type === 'deck') {
-        // The deck channel arrives on its own event (post channel
-        // split) — see `serializeDeckState` in
-        // marsin_engine/lib/api_server.js. The mixer event is
-        // explicitly ignored by the deck tab; it carries overlay
-        // channels that the deck doesn't render.
-        setDeckChannel((msg as any).channel || null);
+        setDeckChannel((msg.channel as any) || null);
       } else if (msg.type === 'autopilot') {
-        // The engine broadcasts every autopilot transition (so any
-        // writer — this UI, PortWatch over LoRa, an HTTP script —
-        // ends up rendered the same way). Mirror it into local state
-        // so the toggle/picker on this tab tracks remote flips
-        // without having to re-fetch on a timer.
-        const m = msg as any;
-        if (typeof m.active === 'boolean') setPlaylistActive(m.active);
-        if (typeof m.delay_s === 'string' && m.delay_s.length) {
-          setPlaylistDelayStr(m.delay_s);
+        if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
+        if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
+          setPlaylistDelayStr(msg.delay_s as string);
         }
-        if (typeof m.shuffle === 'boolean') setIsShuffle(m.shuffle);
+        if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
       } else if (msg.type === 'deckTransitionConfig') {
-        const m = msg as any;
         setDeckTxConfig((prev) => ({
-          enabled: typeof m.enabled === 'boolean' ? m.enabled : prev.enabled,
-          mode: typeof m.mode === 'string' ? m.mode : prev.mode,
-          durationMs: typeof m.durationMs === 'number' ? m.durationMs : prev.durationMs,
-          shuffle: typeof m.shuffle === 'boolean' ? m.shuffle : prev.shuffle,
+          enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
+          mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
+          durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
+          shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
         }));
       } else if (msg.type === 'deckSwapStarted') {
-        // Engine just kicked off a soft-swap. Lock the playlist so
-        // operator taps during the fade are silently ignored (the
-        // server will also reject with 409, but locking the UI
-        // gives clear visual feedback that we're mid-transition).
         setDeckSwapInFlight(true);
       } else if (msg.type === 'deckSwapComplete') {
         setDeckSwapInFlight(false);
       }
     });
-    const unsubViz = engineVizBus.subscribe((msg) => {
-      if (msg.type !== 'vis') return;
-      visDataRef.current = ((msg as any).vis as { [k: string]: string | null }) || {};
-      // Throttle UI updates to ~5fps (200ms). The engine throttles
-      // upstream too (vis.broadcastHz config), but this is a belt-and-
-      // braces guard against rates >5 Hz.
-      const now = Date.now();
-      if (now - lastVisUpdateRef.current > 200) {
-        lastVisUpdateRef.current = now;
-        setVisVersion((v) => v + 1);
+    const unsubStatus = engineEvents.subscribeStatus((s) => {
+      setIsConnected(!!s.connected);
+      setConnectionError(s.connected ? '' : (s.lastError || ''));
+    });
+    // Viz plane: master strip lives on the deck tab too.
+    const unsubViz = engineVizEvents.subscribe((msg) => {
+      if (msg.type === 'vis') {
+        visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
+        const now = Date.now();
+        if (now - lastVisUpdateRef.current > 200) {
+          lastVisUpdateRef.current = now;
+          setVisVersion(v => v + 1);
+        }
       }
     });
-    // Reflect the singleton control socket's connect status into the
-    // local "engine offline" UI. The bus auto-reconnects every 5 s, so
-    // this poll converges to truth without a per-tab WS.
-    const conPoll = setInterval(() => {
-      const ok = isControlConnected();
-      setIsConnected((prev) => (prev === ok ? prev : ok));
-      if (ok) setConnectionError('');
-    }, 1000);
-    return () => {
-      unsubControl();
-      unsubViz();
-      clearInterval(conPoll);
-    };
+    return () => { unsubControl(); unsubStatus(); unsubViz(); };
   }, []);
 
-  // ── Boot: wait for resolved API base, then connect ──────────────────
+  // ── Boot: warm REST seeds + nudge singleton buses to reconnect ─────
   const connectToEngine = useCallback(async () => {
     const base = await getApiBaseAsync();
     apiBaseRef.current = base;
@@ -226,9 +211,13 @@ export default function ControlDeckScreen() {
     setIsConnected(conn.ok);
     setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
 
-    // WS lifecycle is owned by the app-level engineBus (see RigGlobals
-    // useEffect) — nothing per-tab to start here. The bus subscriptions
-    // above are already active.
+    // Only nudge the singleton buses if they're actually down — a
+    // forced reconnect on every tab focus tears the live socket apart
+    // and surfaces as the "Engine Offline" flash. The buses already
+    // self-heal on AppState 'active' and on the engine closing the
+    // socket, so this is purely a safety net.
+    if (!engineEvents.getStatus().connected) engineEvents.reconnect();
+    if (!engineVizEvents.getStatus().connected) engineVizEvents.reconnect();
 
     if (!conn.ok) return;
 
@@ -253,6 +242,11 @@ export default function ControlDeckScreen() {
     if (deckRes.ok && deckRes.data) {
       setDeckChannel(deckRes.data.channel || null);
     }
+
+    // Seed the parent-owned playlist library (see comment on the
+    // state declaration). Engine returns the cached in-memory list.
+    const pLib = await fetchPlaylists();
+    if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
   }, []);
 
   // Patch the deck transition config (optimistic local update + POST).
@@ -266,8 +260,11 @@ export default function ControlDeckScreen() {
 
   useEffect(() => {
     connectToEngine();
+    const teardown = subscribeBuses();
 
-    // Reconnect when app comes to foreground
+    // Reconnect REST seeds when app comes to foreground. The
+    // singleton buses also auto-reconnect on AppState 'active'
+    // (utils/engineBus.ts), so we don't duplicate the WS work here.
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         connectToEngine();
@@ -276,8 +273,9 @@ export default function ControlDeckScreen() {
 
     return () => {
       sub.remove();
+      teardown();
     };
-  }, [connectToEngine]);
+  }, [connectToEngine, subscribeBuses]);
 
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
     // Deck tab only ever writes to the deck channel — there's a single
@@ -328,6 +326,7 @@ export default function ControlDeckScreen() {
                 // with 409 — this is just the UX layer of the contract.
                 disabled={deckSwapInFlight}
                 onRefreshConnection={connectToEngine}
+                playlistLibrary={playlistLibrary}
               />
             </View>
           ) : (

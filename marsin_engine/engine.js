@@ -516,6 +516,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 // ── Main ──────────────────────────────────────────────────────────────────
 async function main() {
   const opts = parseArgs();
+  const engineConfig = loadConfig();
 
   // ── Audio CLI flags (mic discovery / selection) ─────────────────────────
   // Handled BEFORE the engine boots so --list_mics / --choose_mic /
@@ -549,17 +550,18 @@ async function main() {
   ╚══════════════════════════════════════════╝
 `);
 
-  // Kill existing ports
-  const engineConfig = loadConfig();
-  const portsToKill = [];
-  if (engineConfig.server && engineConfig.server.port) portsToKill.push(engineConfig.server.port);
-  if (engineConfig.client && engineConfig.client.web && engineConfig.client.web.port) portsToKill.push(engineConfig.client.web.port);
-  
-  if (portsToKill.length > 0) {
-    try {
-      execSync(`npx -y kill-port ${portsToKill.join(' ')}`, { stdio: 'ignore', shell: process.platform === 'win32' });
-    } catch (e) {
-      // Ignore errors if ports are already free
+  if (!opts.dryRun) {
+    // Kill existing ports
+    const portsToKill = [];
+    if (engineConfig.server && engineConfig.server.port) portsToKill.push(engineConfig.server.port);
+    if (engineConfig.client && engineConfig.client.web && engineConfig.client.web.port) portsToKill.push(engineConfig.client.web.port);
+    
+    if (portsToKill.length > 0) {
+      try {
+        execSync(`npx -y kill-port ${portsToKill.join(' ')}`, { stdio: 'ignore', shell: process.platform === 'win32' });
+      } catch (e) {
+        // Ignore errors if ports are already free
+      }
     }
   }
 
@@ -972,23 +974,32 @@ async function main() {
   audioState.resetToDefaults = function resetToDefaults() {
     const defaults = audioState.defaults || {};
     // Rebuild the live snapshot as if no scene-state override existed
-    // for bands / kick / etc. Keep capture.* from the current config
-    // so the running mic doesn't get pulled out from under the engine.
+    // for bands / kick / etc. Keep capture.* AND the master enabled
+    // flag from the current config so the running mic doesn't get
+    // pulled out from under the engine (operator review May 2026 #12
+    // — "make the defaults not change the on/off state of the audio
+    // analysis, but the BPM mapping is fair game"). Only the tunable
+    // analyzer numbers (bands, kick, fft size) snap back to the
+    // baseline.
     const next = mergeAudioConfig(defaults, {
       capture: audioState.config?.capture,
+      enabled: audioState.config?.enabled,
     });
     if (audioState.analyzer) {
       audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
     }
     audioState.config = next;
     try {
-      // Strip the live-tunable subset off disk and keep ONLY capture.*.
-      // This way a future `audio.lowMaxHz = 222` change in config.yaml
-      // actually wins next boot, instead of being shadowed by a stale
-      // operator-tuned scene file.
+      // Strip the live-tunable subset off disk and keep capture.* and
+      // enabled. (See May 2026 #12 above — enabled is sticky across
+      // reset so the operator's mic stays whatever it was.) A future
+      // `audio.lowMaxHz = 222` change in config.yaml still wins next
+      // boot for the tunable analyzer settings.
       const onDisk = loadSceneAudio(audioState.sceneDir);
       const stripped = {};
       if (onDisk?.capture) stripped.capture = onDisk.capture;
+      if (typeof onDisk?.enabled === 'boolean') stripped.enabled = onDisk.enabled;
+      else if (typeof audioState.config?.enabled === 'boolean') stripped.enabled = audioState.config.enabled;
       saveSceneAudio(audioState.sceneDir, stripped);
     } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });

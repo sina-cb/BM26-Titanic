@@ -1,43 +1,46 @@
-// Tiny pub/sub for engine WebSocket messages.
+// engineEvents — singleton control-plane WS bus.
 //
-// Why this exists:
-//   The deck and mixer tabs each own their own WS connection. Components
-//   nested below them (PlaylistPanel, future playlist sidebar, …) need to
-//   react to engine broadcasts (`mixer`, `playlistLibrary`,
-//   `playlistEntryCaptured`, …) without taking over the socket's onmessage
-//   handler. A module-level event bus lets the screen forward every parsed
-//   message here, and any number of subscribers can listen for whatever
-//   they care about.
+// Owns the iPad's ONE connection to /ws/control (engine topic split,
+// May 2026). Tabs and components subscribe here for mixer / deck /
+// playlist / GEM / autopilot / oscStats / audioStatus events. Prior
+// to May 2026, every tab opened its own raw WebSocket and N sockets
+// each parsed the full firehose; that doubled-up parsing was what
+// starved the 3rd-channel-add path under load. Now there is exactly
+// one parse per topic per app, regardless of how many tabs listen.
 //
-// Why not Context: Context would require restructuring routes/_layout.tsx
-// to wrap both tabs. A module bus has the same call-site ergonomics
-// (`engineEvents.subscribe(msg => …)`) with one fewer abstraction.
+// Migration notes for callers:
+//   - subscribe(fn) is unchanged from the pre-split pub/sub.
+//   - emit(msg) is retained as a no-op shim for backwards-compat with
+//     any test that pretended to be the WS. New code MUST NOT call
+//     emit — messages come from the engine over the socket.
+//   - To SEND a control message to the engine (formerly
+//     `wsRef.current.send(...)`), call engineEvents.send({...}). The
+//     queue is bounded so a tap right after foreground doesn't get
+//     dropped; if not connected, the message is enqueued and flushed
+//     on the next open.
+//   - To force a reconnect (e.g. after the API base detector finds a
+//     new IP), call engineEvents.reconnect().
+//   - To watch connection state for a status pill, use
+//     subscribeStatus((s) => …).
+//
+// The other two topic buses live in their own files:
+//   - engineParamsEvents → /ws/params  (sharedParams + liveParams)
+//   - engineVizEvents    → /ws/viz     (vis frames + 1Hz stats)
 
-export type EngineMessage = {
-  type: string;
-  [key: string]: unknown;
-};
+import { createBus, type EngineMessage, type BusStatus } from './engineBus';
 
-type Listener = (msg: EngineMessage) => void;
+export type { EngineMessage, BusStatus };
 
-const listeners: Set<Listener> = new Set();
+const bus = createBus('/ws/control');
 
 export const engineEvents = {
-  /** Called by the deck / mixer tab whenever the WS receives a message. */
-  emit(msg: EngineMessage) {
-    listeners.forEach((l) => {
-      try {
-        l(msg);
-      } catch {
-        // A buggy listener must never break the WS pipeline.
-      }
-    });
-  },
-  /** Returns an unsubscribe function. */
-  subscribe(l: Listener): () => void {
-    listeners.add(l);
-    return () => {
-      listeners.delete(l);
-    };
-  },
+  subscribe: bus.subscribe,
+  subscribeStatus: bus.subscribeStatus,
+  getStatus: bus.getStatus,
+  send: bus.send,
+  reconnect: bus.reconnect,
+  /** No-op shim kept for legacy call sites and a couple of tests that
+   *  used to inject synthetic messages into the bus. Messages now
+   *  arrive over the WebSocket; nothing else should be emitting. */
+  emit(_msg: EngineMessage) { /* no-op */ },
 };

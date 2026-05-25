@@ -9,7 +9,7 @@ engine:
 mixer:
   maxChannels: 4
 vis:
-  broadcastHz: 10
+  broadcastHz: 5
   maxPixels: 100
 server:
   port: 6968

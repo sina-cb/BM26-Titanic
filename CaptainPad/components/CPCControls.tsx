@@ -6,6 +6,7 @@ import { MiniFader } from '@/components/ui/MiniFader';
 import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, DualSwatch } from '@/components/ColorPickerModal';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 const C = Colors.light;
 // BPM-sync "auto-driven" accent (green). Lives here as a local
@@ -14,12 +15,11 @@ const C = Colors.light;
 // constants/theme.ts → Colors.light.tertiary.
 const ACCENT_AUTO = '#1b9e77';
 
-// Note: the `wsRef` prop is accepted for backward-compat with the
-// existing tab files but no longer required — live state now flows
-// through the module-level `useEngineState` subscription, which means
-// PortWatch / scripts / any future external writer ends up reflected
-// here automatically.
-export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
+// Live state flows through the module-level `useEngineState`
+// subscription, so this component has no props. Pre-split it took
+// a `wsRef` prop for sending sharedParam writes; that's now
+// `engineEvents.send(...)` via `updateParamCenter`.
+export const CPCControls = () => {
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const defaultParams = useMemo(() => ({
@@ -74,6 +74,16 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
   // hue-only writes, atomic dual apply, presets sourced from
   // config.yaml. We only track open/closed here.
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  // Collapsible Global Params + Audio Reactivity rows (operator review
+  // May 2026): the top strip eats 2× the vertical space the pattern
+  // selection actually needs, especially in landscape on the iPad
+  // Pro 11". The collapse keeps the OSC pill / BPM / a glance-at
+  // SPEED & REACT value visible so a quick check at the edge of the
+  // venue still reads at a glance. State is client-side only; it
+  // resets on app cold-boot which matches the operator's expectation
+  // (they want to start every show with the full picture).
+  const [globalsCollapsed, setGlobalsCollapsed] = useState(false);
+  const [audioCollapsed, setAudioCollapsed] = useState(false);
 
   // Writers post to /param-center. The engine's POST handler
   // broadcasts a fresh sharedParams to every subscriber (including us),
@@ -141,43 +151,64 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
           starting there. */}
       {/* Row labels share `labelWidth` so the first slider in each row
           starts at the same x. Tweaking one number keeps the two rows
-          glued together. */}
+          glued together. The label cell also doubles as the
+          collapse-toggle hit target (operator review May 2026 — they
+          asked for a one-tap "give me back the vertical space" so
+          taller iPads can squeeze in more pattern rows). */}
       <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center' }}>
-        <View style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center' }}>
+        <TouchableOpacity
+          onPress={() => setGlobalsCollapsed(c => !c)}
+          accessibilityLabel={globalsCollapsed ? 'Expand global parameters' : 'Collapse global parameters'}
+          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+        >
+          <IconSymbol name={globalsCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
-        </View>
+        </TouchableOpacity>
 
-        <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
-          <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-            <MiniFader
-              label="SPEED"
-              value={speedDisplay}
-              fillColor={speedFill}
-              badge={speedBadge}
-              onChange={(v) => update('speed', v)}
-            />
-          </View>
-
-          <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-            <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
-          </View>
-
-          {/* Single COLORS button. Tapping opens the tabbed picker
-              (Presets · Manual) — see ColorPickerModal. We render both
-              hues as a split-circle swatch so the operator can see the
-              current pair at a glance without opening the modal. */}
-          <ColorPairButton
+        {globalsCollapsed ? (
+          <CollapsedGlobalsSummary
+            speed={speedDisplay}
+            speedBadge={speedBadge}
+            speedFill={speedFill}
+            size={params.size ?? 0.5}
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
-            onPress={() => setColorPickerOpen(true)}
+            bpm={params.tempoBpm ?? 0}
+            onEditColors={() => setColorPickerOpen(true)}
           />
+        ) : (
+          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
+            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
+              <MiniFader
+                label="SPEED"
+                value={speedDisplay}
+                fillColor={speedFill}
+                badge={speedBadge}
+                onChange={(v) => update('speed', v)}
+              />
+            </View>
 
-          {/* BPM tile sits just before the OSC pill — a "tempo + source
-              health" cluster at the end of the row. */}
-          <BpmTile bpm={params.tempoBpm ?? 0} isPortrait={isPortrait} synced={bpmSyncOn} />
+            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
+              <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
+            </View>
 
-          <OscStatusPill compact={isPortrait} />
-        </View>
+            {/* Single COLORS button. Tapping opens the tabbed picker
+                (Presets · Manual) — see ColorPickerModal. We render both
+                hues as a split-circle swatch so the operator can see the
+                current pair at a glance without opening the modal. */}
+            <ColorPairButton
+              h1={params.colorPalette1?.h ?? 0}
+              h2={params.colorPalette2?.h ?? 0.5}
+              onPress={() => setColorPickerOpen(true)}
+            />
+
+            {/* BPM tile sits just before the OSC pill — a "tempo + source
+                health" cluster at the end of the row. */}
+            <BpmTile bpm={params.tempoBpm ?? 0} isPortrait={isPortrait} synced={bpmSyncOn} />
+
+            <OscStatusPill compact={isPortrait} />
+          </View>
+        )}
       </View>
 
       {/* ── Row 2: audio — REACT + compact live-only meter columns ──────
@@ -190,44 +221,59 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
        */}
       <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 6 : 8 }}>
         {/* Same labelWidth + labelGap as row 1 so REACT lines up
-            directly under SPEED — no white-space gap. */}
-        <View style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center' }}>
+            directly under SPEED — no white-space gap. The label
+            cell also doubles as the collapse-toggle hit target. */}
+        <TouchableOpacity
+          onPress={() => setAudioCollapsed(c => !c)}
+          accessibilityLabel={audioCollapsed ? 'Expand audio reactivity' : 'Collapse audio reactivity'}
+          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+        >
+          <IconSymbol name={audioCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO REACTIVITY'}</Text>
-        </View>
+        </TouchableOpacity>
 
-        {/* Master REACT — same shape (flex:1, maxWidth: faderMaxWidth)
-            as every fader in row 1, so it sits in the SPEED column. */}
-        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12 }}>
-          <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-            <MiniFader
-              label={isPortrait ? 'REACT' : 'REACTIVITY'}
-              value={master}
-              onChange={(v) => update('audioReactivity', v)}
-            />
-          </View>
+        {audioCollapsed ? (
+          <CollapsedAudioSummary
+            isPortrait={isPortrait}
+            react={master}
+            bass={(params.stemsBass ?? 0) * (params.stemsBassGain ?? 1)}
+            drums={(params.stemsDrums ?? 0) * (params.stemsDrumsGain ?? 1)}
+            vocals={(params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1)}
+            kick={(params.micKick ?? 0) * (params.micKickGain ?? 1)}
+          />
+        ) : (
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12 }}>
+            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
+              <MiniFader
+                label={isPortrait ? 'REACT' : 'REACTIVITY'}
+                value={master}
+                onChange={(v) => update('audioReactivity', v)}
+              />
+            </View>
 
-          <View style={{ flex: 1, flexDirection: 'row', gap: isPortrait ? 6 : 10 }}>
-            <LiveMeterColumn
-              isPortrait={isPortrait}
-              top={{ label: 'BASS',   value: (params.stemsBass   ?? 0) * (params.stemsBassGain   ?? 1) }}
-              bot={{ label: 'DRUMS',  value: (params.stemsDrums  ?? 0) * (params.stemsDrumsGain  ?? 1) }}
-            />
-            <LiveMeterColumn
-              isPortrait={isPortrait}
-              top={{ label: 'VOCALS', value: (params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1) }}
-              bot={{ label: 'LOW',    value: (params.micLow      ?? 0) * (params.micLowGain      ?? 1) }}
-            />
-            <LiveMeterColumn
-              isPortrait={isPortrait}
-              top={{ label: 'MID',    value: (params.micMid      ?? 0) * (params.micMidGain      ?? 1) }}
-              bot={{ label: 'HIGH',   value: (params.micHigh     ?? 0) * (params.micHighGain     ?? 1) }}
-            />
-            <LiveMeterColumn
-              isPortrait={isPortrait}
-              top={{ label: 'KICK',   value: (params.micKick     ?? 0) * (params.micKickGain     ?? 1), accent: true }}
-            />
+            <View style={{ flex: 1, flexDirection: 'row', gap: isPortrait ? 6 : 10 }}>
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'BASS',   value: (params.stemsBass   ?? 0) * (params.stemsBassGain   ?? 1) }}
+                bot={{ label: 'DRUMS',  value: (params.stemsDrums  ?? 0) * (params.stemsDrumsGain  ?? 1) }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'VOCALS', value: (params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1) }}
+                bot={{ label: 'LOW',    value: (params.micLow      ?? 0) * (params.micLowGain      ?? 1) }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'MID',    value: (params.micMid      ?? 0) * (params.micMidGain      ?? 1) }}
+                bot={{ label: 'HIGH',   value: (params.micHigh     ?? 0) * (params.micHighGain     ?? 1) }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'KICK',   value: (params.micKick     ?? 0) * (params.micKickGain     ?? 1), accent: true }}
+              />
+            </View>
           </View>
-        </View>
+        )}
       </View>
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
@@ -392,6 +438,80 @@ function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean
       }}>
         {hasSignal ? Math.round(bpm) : '—'}
       </Text>
+    </View>
+  );
+}
+
+// ── Collapsed-row summaries ────────────────────────────────────────────
+//
+// One-line read-only snapshots for the GLOBAL PARAMS and AUDIO
+// REACTIVITY rows. The label cell's chevron toggles between these
+// summaries and the full editor rows above. Operator-perceptible
+// data only — SPEED %, SIZE %, the dual-hue swatch, BPM readout for
+// globals; REACT % + four micro-meters (BASS / DRUMS / VOX / KICK)
+// for audio. Sized so the row fits in ~24px regardless of orientation.
+
+function CollapsedGlobalsSummary({
+  speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
+}: {
+  speed: number; speedBadge?: string; speedFill?: string;
+  size: number; h1: number; h2: number; bpm: number;
+  onEditColors: () => void;
+}) {
+  return (
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
+      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} accent={speedFill} badge={speedBadge} />
+      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} />
+      <TouchableOpacity onPress={onEditColors} accessibilityLabel="Open colour picker" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <DualSwatch h1={h1} h2={h2} size={18} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
+      </TouchableOpacity>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+        BPM <Text style={{ color: bpm > 0 ? C.text : C.icon }}>{bpm > 0 ? Math.round(bpm) : '—'}</Text>
+      </Text>
+      <View style={{ flex: 1 }} />
+      <OscStatusPill compact />
+    </View>
+  );
+}
+
+function CollapsedAudioSummary({
+  isPortrait, react, bass, drums, vocals, kick,
+}: {
+  isPortrait: boolean;
+  react: number; bass: number; drums: number; vocals: number; kick: number;
+}) {
+  return (
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
+      <CollapsedReadout label="REACT" value={Math.round(react * 100)} />
+      <CollapsedMeter label="BAS" value={bass} />
+      <CollapsedMeter label="DRM" value={drums} />
+      <CollapsedMeter label="VOX" value={vocals} />
+      <CollapsedMeter label="KCK" value={kick} accent />
+    </View>
+  );
+}
+
+function CollapsedReadout({ label, value, accent, badge }: { label: string; value: number; accent?: string; badge?: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>{value}</Text>
+      {badge ? (
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: accent || C.secondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>{badge}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function CollapsedMeter({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <View style={{ flex: 1, minWidth: 36, maxWidth: 70, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Text>
+      <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.surfaceContainerHigh, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${v * 100}%`, backgroundColor: accent ? C.primaryContainer : C.primary }} />
+      </View>
     </View>
   );
 }

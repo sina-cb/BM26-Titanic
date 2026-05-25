@@ -31,7 +31,7 @@ export const DEFAULT_SLOT_CONFIG = [
   { slotId: 3,  enabled: true, label: 'Ocean Wash',     effectId: 'colorWash',      presetId: 'ocean_blue',      behavior: 'toggle',  paramsOverride: {} },
   { slotId: 4,  enabled: true, label: 'Ghost Trails',   effectId: 'feedbackTrails', presetId: 'ghost_ship',      behavior: 'toggle',  paramsOverride: {} },
   { slotId: 5,  enabled: true, label: 'Iceberg Flash',  effectId: 'dropHit',        presetId: 'iceberg_flash',   behavior: 'trigger', paramsOverride: {} },
-  { slotId: 6,  enabled: true, label: '20 Hz Burst',    effectId: 'strobe',         presetId: 'max_20hz',        behavior: 'burst',   paramsOverride: { durationMs: 1000 } },
+  { slotId: 6,  enabled: true, label: '20 Hz Max',      effectId: 'strobe',         presetId: 'max_20hz',        behavior: 'toggle',  paramsOverride: {} },
   // Slots 7..10 — legacy RigGlobals migrated into the GEM grid
   // (May 2026). These route through controller.setEffect(...) so the
   // existing dimmer-aware pixel + DMX paths keep working.
@@ -65,9 +65,26 @@ export function resolveSlotBinding({ slot, library = GLOBAL_EFFECT_LIBRARY }) {
   if (!effect) {
     throw new Error(`Unknown effectId: ${slot.effectId}`);
   }
-  const preset = effect.presets && effect.presets[slot.presetId];
+  let preset = effect.presets && effect.presets[slot.presetId];
   if (!preset) {
-    throw new Error(`Unknown presetId '${slot.presetId}' for effect '${slot.effectId}'`);
+    // Forward-compat: presets removed between engine versions (e.g.
+    // the May 2026 legacy-effect collapse that dropped `bypass_dimmer`)
+    // should not brick the saved YAML. Fall back to `default` if the
+    // effect has one; otherwise pick the first declared preset. Warn
+    // so the operator notices and re-binds via the swap sheet.
+    const fallbackId = effect.presets && effect.presets.default
+      ? 'default'
+      : (effect.presets ? Object.keys(effect.presets)[0] : null);
+    if (fallbackId) {
+      console.warn(
+        `[GEM] slot ${slot.slotId}: preset '${slot.presetId}' missing from effect '${slot.effectId}'; ` +
+        `falling back to '${fallbackId}'. Re-bind via the swap sheet to silence this.`
+      );
+      preset = effect.presets[fallbackId];
+      slot.presetId = fallbackId; // canonicalize so the next save persists the right id
+    } else {
+      throw new Error(`Unknown presetId '${slot.presetId}' for effect '${slot.effectId}'`);
+    }
   }
 
   const overrides = slot.paramsOverride || {};
@@ -82,18 +99,12 @@ export function resolveSlotBinding({ slot, library = GLOBAL_EFFECT_LIBRARY }) {
 
   const safetyTier = preset.safetyTier || SAFETY_TIERS.NORMAL;
 
-  // Server-side safety: expert_burst (max_20hz) refuses toggle / hold.
-  if (safetyTier === SAFETY_TIERS.EXPERT_BURST && (behavior === 'toggle' || behavior === 'hold')) {
-    throw new Error(
-      `Preset '${slot.presetId}' is safety tier 'expert_burst'; only 'burst' behavior is allowed`
-    );
-  }
-  // hold_only presets must not be configured as toggle.
-  if (safetyTier === SAFETY_TIERS.HOLD_ONLY && behavior === 'toggle') {
-    throw new Error(
-      `Preset '${slot.presetId}' is safety tier 'hold_only'; 'toggle' behavior is not allowed`
-    );
-  }
+  // Operator review May 2026 #10: the legacy HOLD_ONLY / EXPERT_BURST
+  // behavior gates are dropped. Hold isn't supported anywhere in the
+  // app and operators want toggle-only operation even for the fast
+  // strobes. The safety tier is still surfaced via the slot status'
+  // `safetyTier` field (used by HIL tests + telemetry); the UI
+  // intentionally no longer renders any per-tier badge.
 
   return {
     slotId: slot.slotId,
@@ -291,15 +302,15 @@ export class GlobalEffectSlotManager {
     else if (action === 'toggle' || action === undefined) next = !isOn;
     else next = !isOn;
     c.setEffect(effectId, next);
-    // bypassDimmer is a per-preset twin (e.g. blast_white vs
-    // blast_white bypass). Mirror it onto the matching legacy
-    // `<effect>BypassDimmer` flag whenever we activate.
-    if (next && typeof resolved.params.bypassDimmer === 'boolean') {
-      c.setEffect(`${effectId}BypassDimmer`, resolved.params.bypassDimmer);
-    }
-    if (!next) {
-      c.setEffect(`${effectId}BypassDimmer`, false);
-    }
+    // bypassDimmer is OWNED by the dimmer rack's BypassCheckbox now
+    // (operator review May 2026). Pre-May-2026 each legacy effect
+    // had two presets (`default` + `bypass_dimmer`) which set this
+    // flag at slot-dispatch time and stomped over the dimmer rack's
+    // setting. That double-source-of-truth caused operators to find
+    // their bypass flag flipping unexpectedly when they activated
+    // a slot. Now: the slot dispatcher TOUCHES THE EFFECT TOGGLE
+    // ONLY. The bypass flag stays exactly where the dimmer rack
+    // last put it.
   }
 
   _dispatchStrobe({ resolved, action, frameIndex }) {

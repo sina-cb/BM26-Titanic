@@ -1,27 +1,23 @@
-# Global Effect Macro slot bindings (docs/28 §4.3).
-# Slots 1..6 are the original docs/28 layout. Slots 7..10 are the
-# legacy rig-globals (vintageWhite / blastWhite / uvBlast / fogger)
-# migrated into the unified GEM grid in May 2026.
 slots:
   - slotId: 1
     enabled: true
-    label: 4 Hz Sync
+    label: 5 Hz Punch
     effectId: strobe
-    presetId: sync_4hz
+    presetId: punch_5hz
     behavior: toggle
     paramsOverride: {}
   - slotId: 2
     enabled: true
-    label: White Drop
-    effectId: dropHit
-    presetId: white_drop
-    behavior: trigger
+    label: Vintage White
+    effectId: vintageWhite
+    presetId: default
+    behavior: toggle
     paramsOverride: {}
   - slotId: 3
     enabled: true
-    label: Ocean Wash
-    effectId: colorWash
-    presetId: ocean_blue
+    label: Fogger
+    effectId: fogger
+    presetId: default
     behavior: toggle
     paramsOverride: {}
   - slotId: 4
@@ -33,44 +29,15 @@ slots:
     paramsOverride: {}
   - slotId: 5
     enabled: true
-    label: Iceberg Flash
-    effectId: dropHit
-    presetId: iceberg_flash
-    behavior: trigger
-    paramsOverride: {}
-  - slotId: 6
-    enabled: true
-    label: 20 Hz Burst
-    effectId: strobe
-    presetId: max_20hz
-    behavior: burst
-    paramsOverride:
-      durationMs: 1000
-  - slotId: 7
-    enabled: true
-    label: Vintage Wht
-    effectId: vintageWhite
-    presetId: default
-    behavior: toggle
-    paramsOverride: {}
-  - slotId: 8
-    enabled: true
-    label: Blast Wht
-    effectId: blastWhite
-    presetId: default
-    behavior: toggle
-    paramsOverride: {}
-  - slotId: 9
-    enabled: true
     label: UV Blast
     effectId: uvBlast
     presetId: default
     behavior: toggle
     paramsOverride: {}
-  - slotId: 10
+  - slotId: 6
     enabled: true
-    label: Fogger
-    effectId: fogger
-    presetId: default
-    behavior: toggle
+    label: Iceberg Flash
+    effectId: dropHit
+    presetId: iceberg_flash
+    behavior: trigger
     paramsOverride: {}

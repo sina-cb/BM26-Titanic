@@ -44,6 +44,7 @@
 
 import { useEffect, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel } from '@/utils/api';
 
 export interface SharedParamValue {
@@ -362,7 +363,14 @@ function _ensureInitialized() {
   if (_initialized) return;
   _initialized = true;
 
+  // Control plane: mixer, oscStats, audioStatus, and the ONE-SHOT
+  // sharedParams warm-up the engine sends on /ws/control connect.
   engineEvents.subscribe(_onMessage);
+  // Params plane (post-May-2026 topic split): the canonical CPC
+  // updates (sharedParams) and analyser meters (liveParams) only
+  // arrive here. Without this subscribe the audio meters would be
+  // frozen at the warm-up snapshot for the lifetime of the app.
+  engineParamsEvents.subscribe(_onMessage);
 
   // Seed from REST so the first paint is already correct even before
   // the first WS message lands. Both endpoints fail silently — the WS
