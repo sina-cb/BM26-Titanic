@@ -11,7 +11,7 @@ import {
   fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
   addMixerChannel, updateMixerMaster,
   fetchChannelBlends, fetchTransitions, setMixerView,
-  fetchPlaylists,
+  fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
@@ -52,12 +52,21 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 // as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
 // inside the panel add or remove entries; SAVE persists. No parallel "all
 // patterns" column anymore.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, onViewSelectionChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
+  const [showViewPicker, setShowViewPicker] = useState(false);
   const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
   const locked = !!channel.locked;
+
+  // View-selection state read straight from the channel (engine is the
+  // source of truth — broadcasts overwrite local state on every mixer
+  // event). v1 supports ALL vs one named GROUP per docs/27 §1.
+  const viewSel = channel.viewSelection || { type: 'all', target: null, invert: false };
+  const viewSelLabel = viewSel.type === 'all'
+    ? 'ALL'
+    : (viewSel.type === 'group' ? String(viewSel.target || '').toUpperCase() : viewSel.type.toUpperCase());
   return (
     <View style={[styles.channelCard, locked && styles.channelCardLocked]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
@@ -154,6 +163,48 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           onPress={() => onSoloToggle(channel.id)}>
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>Solo</Text>
         </TouchableOpacity>
+
+        {/* View-selection picker (v1: ALL vs GROUP). Tap to cycle ALL →
+            each group → ALL. Full group/section/fixture picker UI is a
+            follow-up; this is the minimum operator-flippable cut per
+            the slot brief. */}
+        {!locked && onViewSelectionChange && (
+          <>
+            <TouchableOpacity
+              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }]}
+              onPress={() => setShowViewPicker(true)}>
+              <Text style={[styles.labelCaps, viewSel.type !== 'all' && { color: '#FFF' }, { fontSize: 9 }]}>
+                VIEW: {viewSelLabel}
+              </Text>
+            </TouchableOpacity>
+            <Modal transparent visible={showViewPicker} animationType="fade" onRequestClose={() => setShowViewPicker(false)}>
+              <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowViewPicker(false)}>
+                <View style={styles.modalContent}>
+                  <Text style={[styles.labelCaps, { marginBottom: 12 }]}>VIEW SELECTION</Text>
+                  <TouchableOpacity
+                    style={[styles.modalRow, viewSel.type === 'all' && styles.modalRowActive]}
+                    onPress={() => { onViewSelectionChange(channel.id, { type: 'all', target: null, invert: false }); setShowViewPicker(false); }}>
+                    <Text style={[styles.valueReadout, viewSel.type === 'all' && { color: C.primary }]}>ALL PIXELS</Text>
+                  </TouchableOpacity>
+                  {(viewSelectionGroups || []).map((g: string) => {
+                    const active = viewSel.type === 'group' && viewSel.target === g;
+                    return (
+                      <TouchableOpacity
+                        key={g}
+                        style={[styles.modalRow, active && styles.modalRowActive]}
+                        onPress={() => { onViewSelectionChange(channel.id, { type: 'group', target: g, invert: false }); setShowViewPicker(false); }}>
+                        <Text style={[styles.valueReadout, active && { color: C.primary }]}>GROUP · {g.toUpperCase()}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {(viewSelectionGroups || []).length === 0 && (
+                    <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO GROUPS IN MODEL</Text>
+                  )}
+                </View>
+              </TouchableOpacity>
+            </Modal>
+          </>
+        )}
       </View>
 
       {!isDeck && (
@@ -197,6 +248,11 @@ export default function MixerScreen() {
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
+  // Available view-selection groups (from /model/view-selection-options).
+  // Used by the channel-strip view-selection picker. Sections / fixtures
+  // / viewMask targets are deferred to a follow-up — v1 ships ALL vs
+  // GROUP as the minimum operator-flippable cut. See docs/27 §1.
+  const [viewSelectionGroups, setViewSelectionGroups] = useState<string[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const apiBaseRef = useRef('');
@@ -344,6 +400,12 @@ export default function MixerScreen() {
 
     const tRes = await fetchTransitions();
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
+
+    // Cache view-selection options (groups only for v1). Failure is
+    // non-fatal: the strip falls back to a disabled picker that just
+    // shows "ALL" if the engine can't enumerate.
+    const vsRes = await fetchViewSelectionOptions();
+    if (vsRes.ok && vsRes.data) setViewSelectionGroups(vsRes.data.groups || []);
 
     const mRes = await fetchMixerState();
     if (mRes.ok && mRes.data) {
@@ -665,6 +727,15 @@ export default function MixerScreen() {
     updateMixerChannel(channelId, updates);
   }, []);
 
+  // Per-channel view-selection update. Optimistic local apply + PATCH;
+  // the engine validates and broadcasts a fresh `mixer` event with the
+  // committed value, so a rejected PATCH (e.g. unknown group) is
+  // visually corrected on the next broadcast. v1 ships ALL vs GROUP.
+  const handleViewSelectionChange = useCallback((channelId: string, viewSelection: any) => {
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, viewSelection } : c));
+    updateMixerChannel(channelId, { viewSelection }).catch(() => {});
+  }, []);
+
   // ─────────────────────────────────────────────────────────────────────
   // handleTransition — server-driven (May 2026, third rewrite)
   //
@@ -814,6 +885,8 @@ export default function MixerScreen() {
               onLockToggle={handleLockToggle}
               onTransition={handleTransition}
               onTransitionSettingsChange={handleTransitionSettingsChange}
+              viewSelectionGroups={viewSelectionGroups}
+              onViewSelectionChange={handleViewSelectionChange}
             />
           );
         })}

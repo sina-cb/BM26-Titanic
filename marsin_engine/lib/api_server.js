@@ -7,6 +7,61 @@ import { Autopilot } from './autopilot.js';
 import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
 
+/**
+ * Validate a `viewSelection` payload before it reaches the mixer.
+ * Per docs/27_[todo]_mixer_layer_view_selection.md §3.1 the API MUST
+ * reject malformed shapes with 400 — silently coercing them would let
+ * a typo brick the render loop into "everything masked to black".
+ *
+ * Returns { ok: true, value } on success (value is the normalized
+ * object suitable for handing to mixer.setChannelViewSelection), or
+ * { ok: false, error } on failure (error is a human-readable string
+ * suitable for the 400 response body).
+ */
+export function validateViewSelection(vs) {
+  if (vs === null || vs === undefined) {
+    return { ok: true, value: { type: 'all', target: null, invert: false } };
+  }
+  if (typeof vs !== 'object' || Array.isArray(vs)) {
+    return { ok: false, error: 'viewSelection must be an object' };
+  }
+  const type = vs.type;
+  const target = vs.target;
+  const invert = !!vs.invert;
+  if (typeof type !== 'string') {
+    return { ok: false, error: 'viewSelection.type must be a string' };
+  }
+  switch (type) {
+    case 'all':
+      if (target !== null && target !== undefined) {
+        return { ok: false, error: "viewSelection.target must be null or omitted when type === 'all'" };
+      }
+      return { ok: true, value: { type: 'all', target: null, invert } };
+    case 'group':
+      if (typeof target !== 'string' || target.length === 0) {
+        return { ok: false, error: "viewSelection.target must be a non-empty string when type === 'group'" };
+      }
+      return { ok: true, value: { type: 'group', target, invert } };
+    case 'section':
+      if (!Number.isInteger(target)) {
+        return { ok: false, error: "viewSelection.target must be an integer when type === 'section'" };
+      }
+      return { ok: true, value: { type: 'section', target, invert } };
+    case 'fixture':
+      if (!Number.isInteger(target)) {
+        return { ok: false, error: "viewSelection.target must be an integer when type === 'fixture'" };
+      }
+      return { ok: true, value: { type: 'fixture', target, invert } };
+    case 'viewMask':
+      if (!Number.isInteger(target) || target <= 0) {
+        return { ok: false, error: "viewSelection.target must be a positive integer bitmask when type === 'viewMask'" };
+      }
+      return { ok: true, value: { type: 'viewMask', target, invert } };
+    default:
+      return { ok: false, error: `Unknown viewSelection.type '${type}' (expected: all | group | section | fixture | viewMask)` };
+  }
+}
+
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
   return fs.readdirSync(patternsDir)
@@ -643,7 +698,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         handle: comp.handle,
         mode: saved.mode,
         fader: saved.fader,
-        enabled: saved.enabled
+        enabled: saved.enabled,
+        // Restore view-selection so a mask-restricted channel survives
+        // engine restart. addChannel will compile the mask immediately
+        // via recompileChannelMask (no extra call needed here).
+        viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false }
       });
       if (saved.playlist) ch.playlist = saved.playlist;
       onChannelCompiled(ch);
@@ -736,6 +795,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         dirty: !!c._dirty,
         transitionMode: c.transitionMode || 'trans_crossfade',
         transitionTime: c.transitionTime || 1.0,
+        // View-selection: per-channel masking config (which group/section/
+        // fixture/viewMask the channel paints). Broadcast so CaptainPad
+        // can show / set the selection per channel strip. See
+        // docs/27_[todo]_mixer_layer_view_selection.md.
+        viewSelection: c.viewSelection || { type: 'all', target: null, invert: false },
         // Playlist assignment is the "where am I right now in this slot"
         // pointer. Broadcasting it lets the deck and mixer panels detect
         // cross-tab swaps without polling.
@@ -1450,6 +1514,36 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastAutopilot();
       });
     }
+    // ---- MODEL METADATA ----
+    // Lightweight enumeration of the model's view-selection targets
+    // (groups, sections, fixtures, and the union of viewMask bits the
+    // model actually uses). Consumed by the CaptainPad mixer strip so
+    // it can populate the view-selection picker WITHOUT having to ship
+    // the full pixel list. Pure read; safe to hit at panel mount time.
+    else if (req.method === 'GET' && req.url === '/model/view-selection-options') {
+      const pixels = (model && Array.isArray(model.pixels)) ? model.pixels : [];
+      const groups = new Set();
+      const sections = new Set();
+      const fixtures = new Set();
+      let viewMaskUnion = 0;
+      for (const px of pixels) {
+        if (typeof px.group === 'string' && px.group.length > 0) groups.add(px.group);
+        const sId = px.sId ?? px.sectionId;
+        if (Number.isInteger(sId)) sections.add(sId);
+        const fId = px.fId ?? px.fixtureId;
+        if (Number.isInteger(fId)) fixtures.add(fId);
+        const vMask = px.vMask ?? px.viewMask;
+        if (Number.isInteger(vMask)) viewMaskUnion |= vMask;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        groups: [...groups].sort(),
+        sections: [...sections].sort((a, b) => a - b),
+        fixtures: [...fixtures].sort((a, b) => a - b),
+        viewMaskUnion,
+        pixelCount: pixels.length,
+      }));
+    }
     // ---- MIXER API ----
     else if (req.method === 'GET' && req.url === '/mixer') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1500,6 +1594,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!comp.ok) {
           res.writeHead(400); return res.end(JSON.stringify({ error: comp.error }));
         }
+        // Validate (optional) initial view-selection before we burn a
+        // WASM handle. Invalid payloads MUST 400 so the operator sees
+        // the typo instead of getting a silently-defaulted channel.
+        let initialViewSelection = { type: 'all', target: null, invert: false };
+        if (data.viewSelection !== undefined) {
+          const v = validateViewSelection(data.viewSelection);
+          if (!v.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: v.error }));
+          }
+          initialViewSelection = v.value;
+        }
         // Channel ids combined Date.now() + a per-process monotonic counter
         // so two POSTs in the same millisecond can never collide. The old
         // pure-Date.now() id caused the second-and-later rapid adds to
@@ -1519,7 +1625,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             handle: comp.handle,
             mode: data.mode || 'blend_screen',
             fader: data.fader !== undefined ? data.fader : 1.0,
-            enabled: true
+            enabled: true,
+            viewSelection: initialViewSelection
           });
         } catch (addErr) {
           res.writeHead(400);
@@ -1599,6 +1706,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.enabled !== undefined) channel.enabled = data.enabled;
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
+        // View-selection update: validate first so a typo can't brick
+        // the render loop. The mixer recompiles the channel's
+        // compiledPixelMask synchronously; the next frame composites
+        // through the new mask.
+        if (data.viewSelection !== undefined) {
+          const v = validateViewSelection(data.viewSelection);
+          if (!v.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: v.error }));
+          }
+          mixer.setChannelViewSelection(id, v.value);
+        }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;

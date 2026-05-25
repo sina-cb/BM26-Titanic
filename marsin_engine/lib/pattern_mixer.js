@@ -2,8 +2,129 @@ import { PatternChannel } from './pattern_channel.js';
 import fs from 'fs';
 import path from 'path';
 
+// ── View-selection masking ─────────────────────────────────────────────
+// See docs/27_[todo]_mixer_layer_view_selection.md §4.
+//
+// `compileViewSelectionMask` turns the per-channel viewSelection config
+// into a fast Uint8Array lookup: mask[i] === 1 means "this channel's
+// output may be committed to pixel i", 0 means "ignore". We return null
+// as the cheap-path sentinel meaning "ALL pixels selected", so the hot
+// render loop can short-circuit the per-pixel check entirely.
+//
+// IMPORTANT: callers MUST validate viewSelection shape (see
+// validateViewSelection in api_server.js) before passing it in here.
+// This function does not throw on bad shapes — it logs and returns null
+// (fall back to ALL) so the render loop never hangs on a malformed
+// config, but the upstream API path should refuse the write so the
+// operator sees the error immediately.
+export function compileViewSelectionMask({ pixels, pixelCount, viewSelection }) {
+  if (!viewSelection || viewSelection.type === 'all') return null;
+  if (!Array.isArray(pixels) || pixels.length === 0) return null;
+
+  const mask = new Uint8Array(pixelCount);
+  const target = viewSelection.target;
+  const invert = !!viewSelection.invert;
+
+  for (let i = 0; i < pixelCount; i++) {
+    const px = pixels[i] || {};
+    let match = false;
+    switch (viewSelection.type) {
+      case 'group':
+        match = px.group === target;
+        break;
+      case 'section': {
+        const sectionId = px.sId ?? px.sectionId;
+        match = sectionId === target;
+        break;
+      }
+      case 'fixture': {
+        const fixtureId = px.fId ?? px.fixtureId;
+        match = fixtureId === target;
+        break;
+      }
+      case 'viewMask': {
+        const viewMask = px.vMask ?? px.viewMask ?? 0;
+        match = (viewMask & target) !== 0;
+        break;
+      }
+      default:
+        // Unknown type: surface noise once and treat as ALL so we never
+        // silently mask the whole rig to black. The API validator should
+        // have caught this; if we got here something is wrong upstream.
+        console.warn(`[PatternMixer] Unknown viewSelection type '${viewSelection.type}'; treating as ALL`);
+        return null;
+    }
+    mask[i] = invert ? (match ? 0 : 1) : (match ? 1 : 0);
+  }
+  return mask;
+}
+
+// Copy one 6ch pixel (RGBWAU) from src into dst at the given index.
+// Inlined-by-hand on purpose — V8 won't inline through Uint8Array views
+// reliably at 40 Hz × ~50–5000 pixel counts, and a tight 6-byte copy
+// avoids the overhead of Uint8Array.prototype.set sliced views.
+function copyPixel6(dst, src, pixelIndex) {
+  const o = pixelIndex * 6;
+  dst[o + 0] = src[o + 0];
+  dst[o + 1] = src[o + 1];
+  dst[o + 2] = src[o + 2];
+  dst[o + 3] = src[o + 3];
+  dst[o + 4] = src[o + 4];
+  dst[o + 5] = src[o + 5];
+}
+
+// Commit a blended-layer result onto mixerBuffer ONLY at selected pixels.
+// The unselected pixels keep whatever the previous layer painted, which
+// is the whole point of view-selection: it lets a sparkle pattern on
+// CH2 (masked to "Wall") overlay on top of a bioluminescence wash on
+// the base channel without zeroing out the rest of the ship.
+function commitBlendedLayerWithMask(mixerBuffer, blendedBuffer, pixelMask, pixelCount) {
+  if (!pixelMask) {
+    // Fast path: "all pixels selected" — straight buffer set, no per-pixel
+    // branch. This is also the only path when viewSelection.type === 'all'.
+    mixerBuffer.set(blendedBuffer);
+    return;
+  }
+  for (let i = 0; i < pixelCount; i++) {
+    if (pixelMask[i]) copyPixel6(mixerBuffer, blendedBuffer, i);
+  }
+}
+
+// Zero out unselected pixels in the deck/PFL preview buffer. PFL is a
+// strict "show me what THIS channel covers" view, so unselected pixels
+// must read as black. (Mixer overlays do the opposite — they preserve
+// the background; see commitBlendedLayerWithMask above.)
+function applyPreviewMaskBlackout(buffer, pixelMask, pixelCount) {
+  if (!pixelMask) return;
+  for (let i = 0; i < pixelCount; i++) {
+    if (!pixelMask[i]) {
+      const o = i * 6;
+      buffer[o + 0] = 0;
+      buffer[o + 1] = 0;
+      buffer[o + 2] = 0;
+      buffer[o + 3] = 0;
+      buffer[o + 4] = 0;
+      buffer[o + 5] = 0;
+    }
+  }
+}
+
+// Scale `foreground` over an implicit black background using a fader,
+// writing into a caller-owned scratch buffer to avoid per-frame
+// allocation (this runs at 40 Hz). Returns the scratch buffer.
+function blendNormalOrScaleOverBlack(foreground, fader, scratchBuffer) {
+  if (fader >= 0.999) {
+    scratchBuffer.set(foreground);
+  } else {
+    for (let i = 0; i < foreground.length; i++) {
+      scratchBuffer[i] = Math.round(foreground[i] * fader);
+    }
+  }
+  return scratchBuffer;
+}
+
 export class PatternMixer {
-  constructor({ wasmHost, pixelCount, maxChannels }) {
+  constructor({ wasmHost, pixelCount, maxChannels, pixels = [] }) {
     this.wasmHost = wasmHost;
     this.pixelCount = pixelCount;
     this.channels = [];
@@ -18,14 +139,44 @@ export class PatternMixer {
       ? Math.floor(maxChannels)
       : 3;
 
-    // View crossfade state (0.0 = deck exclusively, 1.0 = mixer exclusively)
-    this.viewFader = 0.0;
-    this.targetViewFader = 0.0;
+    // Model pixel mapping reference. Required for view-selection mask
+    // compilation. Guarded by an alignment check: if pixels[i].i is set,
+    // it MUST equal i. Out-of-order or missing indices would silently
+    // mis-map the mask and paint the wrong fixtures, so we fail loudly
+    // at boot rather than at first paint. See docs/27 §5 "Rigorous
+    // Index Validation".
+    this.pixels = Array.isArray(pixels) ? pixels : [];
+    if (this.pixels.length > 0) {
+      if (this.pixels.length !== this.pixelCount) {
+        throw new Error(`[PatternMixer] pixels length (${this.pixels.length}) must match pixelCount (${this.pixelCount})`);
+      }
+      for (let i = 0; i < this.pixels.length; i++) {
+        const idx = this.pixels[i] && this.pixels[i].i;
+        if (idx !== undefined && idx !== i) {
+          throw new Error(`[PatternMixer] Model pixel index alignment corrupted: pixels[${i}].i = ${idx}, expected ${i}`);
+        }
+      }
+    }
+
+    // View crossfade state (0.0 = deck exclusively, 1.0 = mixer exclusively).
+    // Default to mixer view per docs/27 §2 — at engine startup the live output
+    // is the composed mixerBuffer; the CaptainPad Deck tab POSTs view='deck'
+    // to crossfade down to the PFL preview.
+    this.viewFader = 1.0;
+    this.targetViewFader = 1.0;
 
     // Buffer for compositing output
     this.outputBuffer = new Uint8Array(this.pixelCount * 6);
     // Buffer for individual channel output
     this.channelBuffer = new Uint8Array(this.pixelCount * 6);
+    // Reusable scratch buffers for view-selection masked layer commits.
+    // Pre-allocated once here so the 40 Hz render loop never triggers
+    // GC for new Uint8Arrays. `blendedScratch` holds the result of a
+    // host-side blend fallback (or a WASM blend copy if we ever needed
+    // to mutate it); `baseBlendScratch` holds the base-channel "scale
+    // over black" result before commit. See docs/27 §4.2.
+    this.blendedScratch = new Uint8Array(this.pixelCount * 6);
+    this.baseBlendScratch = new Uint8Array(this.pixelCount * 6);
     
     this.transitions = []; // Active per-channel fader transitions
     this.blendHandles = {}; // Cache: blendName -> WASM handle
@@ -77,7 +228,43 @@ export class PatternMixer {
     if (!this.baseChannelId) {
       this.baseChannelId = channel.id;
     }
+    // Compile the initial view-selection mask. addChannel callers can
+    // pass `viewSelection` in the config; the default {type:'all'} compiles
+    // to null (full-rig fast path), so the common case stays zero-cost.
+    this.recompileChannelMask(channel);
     return channel;
+  }
+
+  /**
+   * Recompile a channel's view-selection mask from its current
+   * `channel.viewSelection`. Call this whenever viewSelection is set
+   * or replaced — the API handler (PATCH /mixer/channels/:id) does
+   * this when an operator changes the channel's view selection.
+   *
+   * Cheap: O(pixelCount) once at config time. The 40 Hz render loop
+   * only reads `channel.compiledPixelMask` and never recomputes.
+   */
+  recompileChannelMask(channel) {
+    if (!channel) return;
+    channel.compiledPixelMask = compileViewSelectionMask({
+      pixels: this.pixels,
+      pixelCount: this.pixelCount,
+      viewSelection: channel.viewSelection,
+    });
+  }
+
+  /**
+   * Replace a channel's view selection and recompile its mask. Returns
+   * true on success, false on unknown channel id. The viewSelection
+   * shape MUST be pre-validated by the API layer (validateViewSelection
+   * in api_server.js) before reaching this method.
+   */
+  setChannelViewSelection(channelId, viewSelection) {
+    const channel = this.getChannel(channelId);
+    if (!channel) return false;
+    channel.viewSelection = viewSelection || { type: 'all', target: null, invert: false };
+    this.recompileChannelMask(channel);
+    return true;
   }
 
   removeChannel(channelId) {
@@ -695,6 +882,16 @@ export class PatternMixer {
       // Deck preview acts like a PFL (Pre-Fade Listen) — always output at 100%
       // ignoring the channel's live mixer mute or fader state.
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
+
+      // View-selection blackout for the deck preview. PFL means "show
+      // me exactly what THIS channel covers" — unselected pixels go
+      // black so the operator can see at a glance which fixtures the
+      // channel will affect. (Live mixer overlays do the opposite —
+      // they preserve the background; see the mixer compositing loop.)
+      // See docs/27 §2 / §4.2 applyPreviewMaskBlackout.
+      if (deck.compiledPixelMask) {
+        applyPreviewMaskBlackout(this.deckBuffer, deck.compiledPixelMask, this.pixelCount);
+      }
     }
 
     // 2b. Deck pattern-swap shadow — composite ON TOP of deck buffer
@@ -729,8 +926,45 @@ export class PatternMixer {
       }
     }
 
-    // 3. Render Mixer layers (all enabled channels, composited bottom-to-top → mixerBuffer)
+    // 3. Render Mixer layers per docs/27 §2 / §4.3.
     //
+    //    Step A: SEED mixerBuffer with the base channel's output. The
+    //    base channel is no longer "deck-only" — it provides the live
+    //    composition background so overlay channels can paint on top
+    //    of a real wash (a bioluminescence base + sparkle overlay on
+    //    a wall, etc.) instead of on top of black. If the base is
+    //    muted/disabled/at 0, mixerBuffer stays cleared and overlays
+    //    paint onto black, matching the legacy behaviour.
+    //
+    //    Step B: For each overlay channel (in order, skipping the base):
+    //    render → blend with mixerBuffer → commit via the channel's
+    //    view-selection mask. The commit step is what enables layer
+    //    masking: unselected pixels keep whatever the previous layer
+    //    painted, so a "blue on Wall" overlay doesn't zero out the
+    //    rest of the rig under normal/multiply blend modes.
+    //
+    //    When a scripted transition is in flight, promote the target
+    //    channel to render LAST (see comment below).
+
+    // ── Step A: base seeds mixerBuffer ─────────────────────────────
+    const base = this.getChannel(this.baseChannelId);
+    if (base && base.enabled && base.fader > 0.001 && base.handle) {
+      this.channelBuffer.fill(0);
+      base.renderInto(this.wasmHost, this.channelBuffer, true);
+
+      const baseMask = base.compiledPixelMask;
+      if (base.fader >= 0.999 && !baseMask) {
+        // Cheap path: full-strength, full-rig — straight copy.
+        this.mixerBuffer.set(this.channelBuffer);
+      } else {
+        // Scale base over black into the scratch, then commit via
+        // mask (no-op-fast when mask is null).
+        const scaled = blendNormalOrScaleOverBlack(this.channelBuffer, base.fader, this.baseBlendScratch);
+        commitBlendedLayerWithMask(this.mixerBuffer, scaled, baseMask, this.pixelCount);
+      }
+    }
+
+    // ── Step B: overlay channels composite on top ──────────────────
     // When a scripted transition is in flight, promote the target channel
     // to render LAST. Its `mode` has been temporarily swapped to a
     // trans_* blend script (e.g. trans_flash) whose visual must overlay
@@ -748,9 +982,8 @@ export class PatternMixer {
       }
     }
 
-    let firstLayer = true;
     for (const channel of renderOrder) {
-      // Deck channel (baseChannelId) is isolated — only rendered into deckBuffer
+      // Base channel is already seeded into mixerBuffer above. Skip.
       if (channel.id === this.baseChannelId) continue;
       // Skip dark channels EXCEPT the scripted-transition target, whose
       // blend script must run on every frame (its progress arg is the
@@ -763,33 +996,36 @@ export class PatternMixer {
       if (!channel.enabled) continue;
       if (!isScriptedTarget && channel.fader <= 0.001) continue;
 
-      // Re-render into channelBuffer for blend compositing
+      // Re-render into channelBuffer for blend compositing.
       this.channelBuffer.fill(0);
       channel.renderInto(this.wasmHost, this.channelBuffer, true);
 
-      if (firstLayer) {
-        const blendHandle = this.getBlendHandle(channel.mode);
-        if (blendHandle) {
-          const result = this.wasmHost.renderBlend6ch(
-            blendHandle, this.pixelCount,
-            this.mixerBuffer, this.channelBuffer, channel.fader
-          );
-          this.mixerBuffer.set(result);
-        } else {
-          this.mixerBuffer.set(this.channelBuffer);
-          if (channel.fader < 1.0) this.applyMaster(this.mixerBuffer, channel.fader);
-        }
-        firstLayer = false;
+      // Blend (mixerBuffer + channelBuffer) → blended. We blend the
+      // WHOLE buffer (no mask) so the blend mode sees the existing
+      // background on unselected pixels too — this matters when the
+      // blend mode is `multiply` or anything else that depends on the
+      // bg value. The mask is applied at COMMIT time, not blend time;
+      // unselected pixels of the blended result are discarded and the
+      // existing mixerBuffer (background) is preserved.
+      let blended;
+      const blendHandle = this.getBlendHandle(channel.mode);
+      if (blendHandle) {
+        blended = this.wasmHost.renderBlend6ch(
+          blendHandle, this.pixelCount,
+          this.mixerBuffer, this.channelBuffer, channel.fader
+        );
       } else {
-        const blendHandle = this.getBlendHandle(channel.mode);
-        if (blendHandle) {
-          const result = this.wasmHost.renderBlend6ch(
-            blendHandle, this.pixelCount,
-            this.mixerBuffer, this.channelBuffer, channel.fader
-          );
-          this.mixerBuffer.set(result);
+        // Fallback: lerp(bg, fg, fader) into the pre-allocated scratch
+        // buffer (no GC allocation). Mirrors the math the WASM
+        // blend_normal script would produce so unknown blends still
+        // composite sanely.
+        blended = this.blendedScratch;
+        for (let i = 0; i < blended.length; i++) {
+          blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * channel.fader);
         }
       }
+
+      commitBlendedLayerWithMask(this.mixerBuffer, blended, channel.compiledPixelMask, this.pixelCount);
     }
 
     // 3. Output: crossfade between deck and mixer based on viewFader

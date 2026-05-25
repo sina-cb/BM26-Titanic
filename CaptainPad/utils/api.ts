@@ -700,6 +700,29 @@ export async function fetchMixerState(): Promise<ApiResult<any>> {
   }
 }
 
+/**
+ * Fetch the model's available view-selection targets (groups, sections,
+ * fixtures, and the union of viewMask bits actually used). Consumed by
+ * the mixer channel strip so it can populate the per-channel
+ * view-selection picker without having to ship the whole pixel list.
+ * Pure read — safe to hit on mount.
+ */
+export async function fetchViewSelectionOptions(): Promise<ApiResult<{
+  groups: string[];
+  sections: number[];
+  fixtures: number[];
+  viewMaskUnion: number;
+  pixelCount: number;
+}>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/model/view-selection-options`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function updateMixerChannel(id: string, updates: any): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, {
