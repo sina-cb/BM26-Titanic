@@ -137,14 +137,22 @@ export function AutopilotTimerPills({ value, onChange }: { value: number; onChan
 // it doesn't recognise (falls back to crossfade), so adding a name here
 // without engine support is safe.
 const TRANSITION_OPTIONS: { id: string; label: string; hint: string }[] = [
-  { id: 'trans_crossfade', label: 'CROSSFADE', hint: 'Smooth blend (default)' },
-  { id: 'trans_flash',     label: 'FLASH',     hint: 'Full-white pop at midpoint' },
-  { id: 'trans_dissolve',  label: 'DISSOLVE',  hint: 'Per-pixel random A or B' },
-  { id: 'trans_wipe_right',label: 'WIPE →',    hint: 'Reveal from left to right' },
-  { id: 'trans_wipe_left', label: 'WIPE ←',    hint: 'Reveal from right to left' },
-  { id: 'trans_wipe_up',   label: 'WIPE ↑',    hint: 'Reveal from bottom to top' },
-  { id: 'trans_wipe_down', label: 'WIPE ↓',    hint: 'Reveal from top to bottom' },
-  { id: 'trans_iris',      label: 'IRIS',      hint: 'Circular reveal from center' },
+  { id: 'trans_crossfade',       label: 'CROSSFADE', hint: 'Smooth blend (default)' },
+  { id: 'trans_flash',           label: 'FLASH',     hint: 'Full-white pop at midpoint' },
+  { id: 'trans_color_burst',     label: 'BURST',     hint: 'Bursts through a saturated color' },
+  { id: 'trans_dissolve',        label: 'DISSOLVE',  hint: 'Per-pixel random A or B' },
+  { id: 'trans_wipe_right',      label: 'WIPE →',    hint: 'Reveal from left to right' },
+  { id: 'trans_wipe_left',       label: 'WIPE ←',    hint: 'Reveal from right to left' },
+  { id: 'trans_wipe_down',       label: 'WIPE ↓',    hint: 'Reveal from top to bottom' },
+  { id: 'trans_diagonal_wipe',   label: 'DIAGONAL',  hint: 'Sweep from bottom-left to top-right' },
+  { id: 'trans_wave_sweep',      label: 'WAVE',      hint: 'Wavy edge sweeping across' },
+  { id: 'trans_iris',            label: 'IRIS OPEN', hint: 'Circular reveal from center' },
+  { id: 'trans_iris_close',      label: 'IRIS CLOSE',hint: 'Circular reveal collapsing inward' },
+  { id: 'trans_diamond_wipe',    label: 'DIAMOND',   hint: 'Diamond expanding from center' },
+  { id: 'trans_split_horizontal',label: 'BAY DOORS', hint: 'Opens from horizontal centerline' },
+  { id: 'trans_split_vertical',  label: 'CURTAIN',   hint: 'Opens from vertical centerline' },
+  { id: 'trans_ripple_in',       label: 'RIPPLE',    hint: 'Concentric water rings' },
+  { id: 'trans_morse_blink',     label: 'SOS',       hint: 'Morse SOS blink reveal' },
 ];
 
 export function TransitionStylePicker({
