@@ -6,6 +6,8 @@ import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
+import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
+import { validateSlotsConfig } from './global_effect_slot_manager.js';
 
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
@@ -115,6 +117,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     stateManager.applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController);
   } catch (err) {
     console.warn('Failed to apply loaded state:', err);
+  }
+
+  // Restore Global Effect Macro slot bindings (docs/28 §8 — persistent).
+  // The slot manager is created at engine boot with the in-code default
+  // config; if a persisted file exists AND validates we overlay it.
+  // If validation throws (e.g. old yaml references a removed effect),
+  // we leave the defaults in place and log — never silently fall back.
+  const globalEffectSlotManager = engineCore.globalEffectSlotManager || null;
+  if (globalEffectSlotManager) {
+    const persistedSlots = stateManager.loadGlobalEffectSlots();
+    if (persistedSlots && Array.isArray(persistedSlots.slots)) {
+      try {
+        validateSlotsConfig(persistedSlots.slots);
+        globalEffectSlotManager.setSlots(persistedSlots.slots);
+        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk`);
+      } catch (e) {
+        console.warn(`[GlobalEffectSlots] persisted config invalid, keeping defaults: ${e.message}`);
+      }
+    }
   }
 
   // After loading saved CPC values, push them to all boot-created channels.
@@ -1399,6 +1420,92 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
       });
+
+    // ── Global Effect Macros (docs/28 §5) ────────────────────────────
+    } else if (req.method === 'GET' && req.url === '/global-effect-library') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ effects: describeLibrary() }));
+    } else if (req.method === 'GET' && req.url === '/global-effect-slots') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
+    } else if (req.method === 'GET' && req.url === '/global-effect-slots/status') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        slots: globalEffectSlotManager.getStatus(),
+        controller: globalEffectsController && globalEffectsController.getStatus
+          ? globalEffectsController.getStatus()
+          : null,
+      }));
+    } else if (req.method === 'PATCH' && req.url === '/global-effect-slots') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          if (!Array.isArray(data.slots)) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include slots: array' }));
+          }
+          globalEffectSlotManager.setSlots(data.slots);
+          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/global-effect-macros/panic-stop') {
+      if (!globalEffectsController || !globalEffectsController.panicStop) {
+        res.writeHead(503); return res.end(JSON.stringify({ error: 'macros controller not initialized' }));
+      }
+      globalEffectsController.panicStop();
+      broadcastWs({ type: 'globalEffectMacroStatus',
+        controller: globalEffectsController.getStatus(),
+        slots: globalEffectSlotManager ? globalEffectSlotManager.getStatus() : [],
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+    } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
+      // PATCH /global-effect-slots/:slotId
+      const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
+      if (!m) { res.writeHead(404); return res.end('Not Found'); }
+      const slotId = parseInt(m[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const slot = globalEffectSlotManager.patchSlot(slotId, data || {});
+          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ slot }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url.startsWith('/global-effect-slots/')) {
+      // POST /global-effect-slots/:slotId/{activate,deactivate,trigger}
+      const m = req.url.match(/^\/global-effect-slots\/(\d+)\/(activate|deactivate|trigger|toggle|down|up)$/);
+      if (!m) { res.writeHead(404); return res.end('Not Found'); }
+      const slotId = parseInt(m[1], 10);
+      const action = m[2];
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        globalEffectSlotManager.dispatchSlotAction({ slotId, action, frameIndex, nowMs });
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController.getStatus(),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          slotId, action,
+          controller: globalEffectsController.getStatus(),
+        }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
