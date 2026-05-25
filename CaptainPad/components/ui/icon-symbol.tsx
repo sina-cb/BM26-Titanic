@@ -29,6 +29,12 @@ const MAPPING = {
   'slider.horizontal.3': 'tune',
   'lock.fill': 'lock',
   'lock.open.fill': 'lock-open',
+  // Fader-lock (slot 5): distinct icon so operators can tell the
+  // playlist/pattern lock (`lock.fill`) and the fader lock apart at
+  // a glance. `pin.fill` reads as "pin this value" / "hold the fader
+  // in place".
+  'pin.fill': 'push-pin',
+  'pin.slash.fill': 'location-off',
   'waveform': 'graphic-eq',
   'waveform.path.ecg': 'monitor-heart',
   'mic': 'mic',

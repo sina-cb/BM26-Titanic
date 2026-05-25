@@ -135,6 +135,10 @@ export class StateManager {
         fader: c.fader,
         enabled: c.enabled,
         locked: !!c.locked,
+        // Fader-lock (slot 5): independent of `locked`. Persisted so an
+        // engine restart preserves the operator's frozen-fader
+        // decision. See PatternChannel.faderLocked for semantics.
+        faderLocked: !!c.faderLocked,
         transitionMode: c.transitionMode || 'trans_crossfade',
         transitionTime: c.transitionTime || 1.0,
         localControls: c.localControls,
@@ -170,6 +174,13 @@ export class StateManager {
         mode: baseCh.mode,
         fader: baseCh.fader,
         enabled: baseCh.enabled,
+        // Lock flags (slot 5): mirror the mixer-side persistence so
+        // the deck channel also survives restart in the same lock
+        // state. `locked` was previously omitted from the deck save
+        // path; including it alongside `faderLocked` so both round-
+        // trip cleanly.
+        locked: !!baseCh.locked,
+        faderLocked: !!baseCh.faderLocked,
         localControls: baseCh.localControls,
         playlist: baseCh.playlist || null,
         viewSelection: baseCh.viewSelection || { type: 'all', target: null, invert: false }
