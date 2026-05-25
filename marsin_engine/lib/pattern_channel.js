@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0 }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -10,6 +10,22 @@ export class PatternChannel {
     this.locked = locked;
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
+
+    // Engine-side view selection: restricts which model pixels this
+    // channel paints into the composed mixerBuffer / deckBuffer. See
+    // docs/27_[todo]_mixer_layer_view_selection.md for the full design.
+    //
+    //   viewSelection.type   : 'all' | 'group' | 'section' | 'fixture' | 'viewMask'
+    //   viewSelection.target : null (for 'all'), string (for 'group'),
+    //                          integer (section/fixture/viewMask)
+    //   viewSelection.invert : optional bool; if true, mask is negated
+    //                          ("paint everything EXCEPT the target").
+    //
+    // `compiledPixelMask` is the transient Uint8Array lookup the render
+    // loop reads each frame. `null` means "all pixels selected" — the
+    // fast path skips per-pixel mask checks entirely.
+    this.viewSelection = viewSelection || { type: 'all', target: null, invert: false };
+    this.compiledPixelMask = null;
     
     // Exports from WASM
     this.localExports = [];

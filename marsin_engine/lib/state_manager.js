@@ -106,7 +106,11 @@ export class StateManager {
         transitionMode: c.transitionMode || 'trans_crossfade',
         transitionTime: c.transitionTime || 1.0,
         localControls: c.localControls,
-        playlist: c.playlist || null
+        playlist: c.playlist || null,
+        // Persist the per-channel view-selection so the engine boots
+        // back into the exact mixer layout the operator left it in.
+        // See docs/27_[todo]_mixer_layer_view_selection.md.
+        viewSelection: c.viewSelection || { type: 'all', target: null, invert: false }
       }))
     };
     this.save('mixer_state.yaml', state);
@@ -133,7 +137,8 @@ export class StateManager {
         fader: baseCh.fader,
         enabled: baseCh.enabled,
         localControls: baseCh.localControls,
-        playlist: baseCh.playlist || null
+        playlist: baseCh.playlist || null,
+        viewSelection: baseCh.viewSelection || { type: 'all', target: null, invert: false }
       }
     };
     if (extras && typeof extras === 'object') {

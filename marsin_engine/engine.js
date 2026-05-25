@@ -585,6 +585,11 @@ async function main() {
     // Default 3 to match CaptainPad iPad layout — overridable in
     // config.yaml `mixer.maxChannels`.
     maxChannels: engineConfig?.mixer?.maxChannels ?? 3,
+    // Model pixels are required for view-selection mask compilation
+    // (per-channel `viewSelection` → `compiledPixelMask`). PatternMixer
+    // validates length + index alignment at construction; corrupted
+    // pixel ordering would silently mis-map masks, so we fail at boot.
+    pixels: model.pixels,
   });
   mixer.patternsDir = path.join(__dirname, 'patterns');
   mixer.onChannelRemoved = (channelId) => paramCenter.unregisterChannel(channelId);
