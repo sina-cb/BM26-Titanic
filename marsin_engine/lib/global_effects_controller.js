@@ -1,12 +1,36 @@
 /**
  * GlobalEffectsController
  *
- * Implements isolated active scene modifiers for "full-rig" hardware actions.
- * Operates alongside the IntensityController but specifically targets non-dimming
- * overrides (like UV logic, Fogger DMX bypassing, or Vintage LED Glow forcing)
+ * Two coexisting subsystems live in this class:
+ *
+ * 1. LEGACY rig-level DMX overrides (Vintage White boost, UV blast,
+ *    fogger, horn, fire) — applied either to pixel structures
+ *    (`applyPixels`) or directly to outgoing DMX universes
+ *    (`applyDmx`). These remain unchanged so existing CaptainPad
+ *    buttons (`vintageWhite`, `blastWhite`, `uvBlast`, `fogger`)
+ *    keep working through the existing POST /global-effect route.
+ *
+ * 2. NEW Global Effect Macros (docs/28) — engine-side modular
+ *    effects applied to the post-mixer pixel buffer before the
+ *    intensity / blackout / sACN encoding pipeline. Runtime state
+ *    for these (active strobe config, drop hit envelopes, color
+ *    wash, feedback trail buffer) lives here; the apply functions
+ *    themselves are stateless and imported from ../effects/*.
  */
+import {
+  GLOBAL_EFFECT_LIBRARY,
+  SAFETY_TIERS,
+  MAX_BURST_MS,
+  validateParams,
+} from './global_effect_library.js';
+import { strobeEffect } from '../effects/strobe.js';
+import { dropHitEffect } from '../effects/dropHit.js';
+import { colorWashEffect } from '../effects/colorWash.js';
+import { feedbackTrailsEffect } from '../effects/feedbackTrails.js';
+
 export class GlobalEffectsController {
   constructor(config = {}) {
+    // ── Legacy effect toggles ───────────────────────────────────────
     this.effects = {
       vintageWhite: false,
       fogger: false,
@@ -16,23 +40,55 @@ export class GlobalEffectsController {
       fire: false,
       vintageWhiteBypassDimmer: false,
       uvBlastBypassDimmer: false,
-      blastWhiteBypassDimmer: false
+      blastWhiteBypassDimmer: false,
     };
-    
-    this.foggers = []; // Dynamically populated from the model
+    this.foggers = [];
     this.horns = [];
     this.fires = [];
+
+    // ── Macro runtime state (transient on boot per §8) ──────────────
+    this.frameRate = (config && config.engine && config.engine.fps) || 40;
+
+    // Strobe.
+    this.strobeActive = false;
+    this.strobeConfig = null; // { hz, duty, intensity, presetId, slotId, framesPerCycle, onFrames }
+    this.strobeStartedAtFrame = 0;
+    this.strobeBurstEndFrame = null;
+    this.activeStrobePresetId = null;
+    this.activeStrobeSlotId = null;
+
+    // Drop hit (poly: each trigger pushes a new envelope, multiple
+    // overlapping envelopes are summed via the additive blend mode).
+    this.dropHits = []; // [{ params, triggeredAtMs, durationMs }]
+
+    // Color wash.
+    this.colorWashConfig = {
+      enabled: false,
+      preset: null,
+      color: null,
+      amount: 0,
+      mode: 'tint',
+      slotId: null,
+    };
+
+    // Feedback trails — lazy-allocated when first enabled.
+    this.feedbackTrailsConfig = {
+      enabled: false,
+      preset: null,
+      params: null,
+      slotId: null,
+    };
+    this.feedbackTrailBuffer = null;
+    this.feedbackTrailPixelCount = 0;
   }
 
+  // ── Legacy methods ────────────────────────────────────────────────
   setEffect(effectName, state) {
     if (this.effects.hasOwnProperty(effectName) || effectName.includes('Bypass')) {
       this.effects[effectName] = !!state;
     }
   }
 
-  // Scan the model pixels to find exported Global Effect fixtures.
-  // These fixtures are exported from the simulation with `channels: null` to bypass the WASM pattern mapper,
-  // but they carry full DMX patch info so this controller can inject raw DMX overrides below.
   initFromModel(effectsArray) {
     this.foggers = [];
     this.horns = [];
@@ -41,15 +97,14 @@ export class GlobalEffectsController {
     for (let i = 0; i < effectsArray.length; i++) {
       const fx = effectsArray[i];
       if (!fx.patch || !fx.patch.universe || !fx.patch.addr) continue;
-
       const patchInfo = {
         fixtureType: fx.fixtureType || fx.type,
         universe: fx.patch.universe,
         address: fx.patch.addr,
-        kind: fx.kind || ''
+        kind: fx.kind || '',
       };
-
-      if (patchInfo.kind === 'fog' || patchInfo.kind === 'haze' || (patchInfo.fixtureType && (patchInfo.fixtureType.includes('Fog') || patchInfo.fixtureType === 'ChauvetHaze4D'))) {
+      if (patchInfo.kind === 'fog' || patchInfo.kind === 'haze' ||
+        (patchInfo.fixtureType && (patchInfo.fixtureType.includes('Fog') || patchInfo.fixtureType === 'ChauvetHaze4D'))) {
         this.foggers.push(patchInfo);
       } else if (patchInfo.kind === 'horn' || (patchInfo.fixtureType && patchInfo.fixtureType.includes('Horn'))) {
         this.horns.push(patchInfo);
@@ -59,8 +114,6 @@ export class GlobalEffectsController {
     }
   }
 
-  // Applies physical pixel metadata mutations *after* WASM processing
-  // Modifies .w (White) on Vintage, or .u (UV) across everything
   applyPixels(pixels) {
     for (let i = 0; i < pixels.length; i++) {
       const px = pixels[i];
@@ -70,25 +123,20 @@ export class GlobalEffectsController {
       px.ignoreDimmerForU = false;
 
       if (this.effects.vintageWhite) {
-        if (px.fixtureType === 'VintageLed' && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
+        if (px.fixtureType === 'VintageLed' && px.name && px.name.includes('head_') && px.channels && px.channels.w !== undefined) {
           px.w = 1.0;
           if (this.effects.vintageWhiteBypassDimmer) px.ignoreDimmerForW = true;
         }
       }
-
       if (this.effects.uvBlast && px.channels && px.channels.u !== undefined) {
         px.u = 1.0;
         if (this.effects.uvBlastBypassDimmer) px.ignoreDimmerForU = true;
       }
-
       if (this.effects.blastWhite) {
         if (px.channels) {
-          px.r = 1.0;
-          px.g = 1.0;
-          px.b = 1.0;
+          px.r = 1.0; px.g = 1.0; px.b = 1.0;
           if (px.channels.w !== undefined) px.w = 1.0;
           if (px.channels.a !== undefined) px.a = 1.0;
-          
           if (this.effects.blastWhiteBypassDimmer) {
             px.ignoreDimmerForRGB = true;
             px.ignoreDimmerForW = true;
@@ -99,44 +147,276 @@ export class GlobalEffectsController {
     }
   }
 
-  // Intended to bypass pixel structures entirely, directly injecting raw DMX channels
-  // Operates *after* mapPixelsToSacn builds the outgoing frame!
   applyDmx(dmxBuffers) {
     for (const fogger of this.foggers) {
       const frame = dmxBuffers[fogger.universe];
-      if (!frame) continue; // Universe not initialized
-
+      if (!frame) continue;
       const isChauvet = fogger.fixtureType === 'ChauvetHaze4D';
-
       if (this.effects.fogger) {
-        if (isChauvet) {
-          // Chauvet Haze 4D: Ch1 = Fan (255), Ch2 = Haze Volume (255)
-          frame[fogger.address - 1] = 255;
-          frame[fogger.address] = 255;
-        } else {
-          // TE Fog Machine: Ch1 = Fog Output (255)
-          frame[fogger.address - 1] = 255;
-        }
+        if (isChauvet) { frame[fogger.address - 1] = 255; frame[fogger.address] = 255; }
+        else { frame[fogger.address - 1] = 255; }
       } else {
-        if (isChauvet) {
-          frame[fogger.address - 1] = 0;
-          frame[fogger.address] = 0;
-        } else {
-          frame[fogger.address - 1] = 0;
-        }
+        if (isChauvet) { frame[fogger.address - 1] = 0; frame[fogger.address] = 0; }
+        else { frame[fogger.address - 1] = 0; }
       }
     }
-
     for (const horn of this.horns) {
       const frame = dmxBuffers[horn.universe];
       if (!frame) continue;
       frame[horn.address - 1] = this.effects.horn ? 255 : 0;
     }
-
     for (const fire of this.fires) {
       const frame = dmxBuffers[fire.universe];
       if (!frame) continue;
       frame[fire.address - 1] = this.effects.fire ? 255 : 0;
     }
   }
+
+  // ── NEW Global Effect Macros ──────────────────────────────────────
+
+  /**
+   * Per-frame entry point for the new macros. Called by engine.js
+   * BEFORE intensity / blackout / sACN encoding (pipeline §2.2).
+   *
+   * @param {object} args
+   * @param {Array}  args.pixels      Post-mixer model.pixels.
+   * @param {number} args.frameIndex  Monotonic frame counter.
+   * @param {number} args.nowMs       performance.now() in ms.
+   */
+  applyMacros({ pixels, frameIndex, nowMs }) {
+    // Order per design §2.2 + ordering note:
+    //   1. Color Wash (preset takeover)
+    //   2. Feedback Trails (captures wash output, so trails are
+    //      colored consistently)
+    //   3. Drop Hit (transient envelope flash; runs AFTER feedback so
+    //      momentary whiteouts don't contaminate trail history)
+    //   4. Strobe (final ON/OFF gate)
+    if (this.colorWashConfig.enabled && this.colorWashConfig.color) {
+      colorWashEffect.apply({
+        pixels,
+        color6: this.colorWashConfig.color,
+        amount: this.colorWashConfig.amount,
+        mode: this.colorWashConfig.mode,
+      });
+    }
+
+    if (this.feedbackTrailsConfig.enabled) {
+      this._ensureFeedbackBuffer(pixels.length);
+      const p = this.feedbackTrailsConfig.params;
+      feedbackTrailsEffect.apply({
+        pixels,
+        trailBuffer: this.feedbackTrailBuffer,
+        decay: p.decay,
+        injection: p.injection,
+        mix: p.mix,
+        blendMode: p.blendMode,
+        colorBleed: p.colorBleed || 0,
+      });
+    }
+
+    if (this.dropHits.length > 0) {
+      // Walk backwards so we can splice expired envelopes in place.
+      for (let i = this.dropHits.length - 1; i >= 0; i--) {
+        const e = this.dropHits[i];
+        const elapsed = nowMs - e.triggeredAtMs;
+        if (elapsed >= e.durationMs) {
+          this.dropHits.splice(i, 1);
+          continue;
+        }
+        const env = dropHitEffect.envelopeValue({
+          elapsedMs: elapsed,
+          attackMs: e.params.attackMs,
+          holdMs: e.params.holdMs,
+          releaseMs: e.params.releaseMs,
+        });
+        const intensity = e.params.intensity ?? 1.0;
+        dropHitEffect.apply({
+          pixels,
+          color6: e.params.color,
+          amount: env * intensity,
+          blendMode: e.params.blendMode || 'add',
+        });
+      }
+    }
+
+    if (this.strobeActive && this.strobeConfig) {
+      if (this.strobeBurstEndFrame !== null && frameIndex >= this.strobeBurstEndFrame) {
+        this.stopStrobe();
+      } else {
+        const gate = strobeEffect.getGate({
+          frameIndex,
+          startedAtFrame: this.strobeStartedAtFrame,
+          framesPerCycle: this.strobeConfig.framesPerCycle,
+          onFrames: this.strobeConfig.onFrames,
+        });
+        strobeEffect.apply({
+          pixels,
+          gate,
+          intensity: this.strobeConfig.intensity,
+        });
+      }
+    }
+  }
+
+  get dropHitActive() { return this.dropHits.length > 0; }
+
+  // ── Strobe control ────────────────────────────────────────────────
+  setStrobe(active, hz, duty, intensity, frameIndex, meta = {}) {
+    if (!active) {
+      this.stopStrobe();
+      return;
+    }
+    const timing = strobeEffect.getTiming({ hz, duty, frameRate: this.frameRate });
+    this.strobeConfig = {
+      hz, duty, intensity,
+      framesPerCycle: timing.framesPerCycle,
+      onFrames: timing.onFrames,
+      actualHz: timing.actualHz,
+      presetId: meta.presetId || null,
+      slotId: meta.slotId || null,
+    };
+    this.strobeStartedAtFrame = frameIndex;
+    this.strobeBurstEndFrame = null;
+    this.strobeActive = true;
+    this.activeStrobePresetId = meta.presetId || null;
+    this.activeStrobeSlotId = meta.slotId || null;
+  }
+
+  triggerStrobeBurst(hz, durationMs, frameIndex, meta = {}) {
+    const clamped = Math.min(MAX_BURST_MS, Math.max(0, durationMs));
+    this.setStrobe(true, hz, 0.5, 1.0, frameIndex, meta);
+    const frames = Math.max(1, Math.round((clamped / 1000) * this.frameRate));
+    this.strobeBurstEndFrame = frameIndex + frames;
+  }
+
+  stopStrobe() {
+    this.strobeActive = false;
+    this.strobeConfig = null;
+    this.strobeBurstEndFrame = null;
+    this.activeStrobePresetId = null;
+    this.activeStrobeSlotId = null;
+  }
+
+  // ── Drop hit ──────────────────────────────────────────────────────
+  triggerDropHit(params, nowMs) {
+    const duration = dropHitEffect.envelopeDurationMs({
+      attackMs: params.attackMs,
+      holdMs: params.holdMs,
+      releaseMs: params.releaseMs,
+    });
+    this.dropHits.push({
+      params: { ...params },
+      triggeredAtMs: nowMs,
+      durationMs: duration,
+    });
+  }
+
+  // ── Color wash ────────────────────────────────────────────────────
+  setColorWash(enabled, presetId = null, amount = 0, mode = 'tint', meta = {}) {
+    if (!enabled) {
+      this.colorWashConfig = {
+        enabled: false, preset: null, color: null, amount: 0, mode: 'tint', slotId: null,
+      };
+      return;
+    }
+    const fx = GLOBAL_EFFECT_LIBRARY.colorWash;
+    const preset = presetId && fx.presets[presetId];
+    if (!preset) {
+      throw new Error(`Unknown colorWash preset: ${presetId}`);
+    }
+    this.colorWashConfig = {
+      enabled: true,
+      preset: presetId,
+      color: [...preset.params.color],
+      amount: amount,
+      mode: mode,
+      slotId: meta.slotId || null,
+    };
+  }
+
+  // ── Feedback trails ───────────────────────────────────────────────
+  setFeedbackTrails(enabled, presetId = null, paramsOverride = {}, meta = {}) {
+    if (!enabled) {
+      this.feedbackTrailsConfig = {
+        enabled: false, preset: null, params: null, slotId: null,
+      };
+      // Free the buffer so a future enable starts from a clean slate
+      // (also covers the "buffer cleared on disable" test assertion).
+      this.feedbackTrailBuffer = null;
+      this.feedbackTrailPixelCount = 0;
+      return;
+    }
+    const fx = GLOBAL_EFFECT_LIBRARY.feedbackTrails;
+    const preset = presetId && fx.presets[presetId];
+    if (!preset) {
+      throw new Error(`Unknown feedbackTrails preset: ${presetId}`);
+    }
+    const merged = { ...preset.params, ...paramsOverride };
+    this.feedbackTrailsConfig = {
+      enabled: true,
+      preset: presetId,
+      params: merged,
+      slotId: meta.slotId || null,
+    };
+    if (merged.resetOnEnable && this.feedbackTrailBuffer) {
+      this.feedbackTrailBuffer.fill(0);
+    }
+  }
+
+  _ensureFeedbackBuffer(pixelCount) {
+    if (!this.feedbackTrailBuffer || this.feedbackTrailPixelCount !== pixelCount) {
+      this.feedbackTrailBuffer = new Float32Array(pixelCount * 6);
+      this.feedbackTrailPixelCount = pixelCount;
+    }
+  }
+
+  // ── Generic dispatcher fallback ───────────────────────────────────
+  // Only used when the SlotManager dispatches an effectId not covered
+  // by the dedicated dispatch* helpers. Today this is unused (all v1
+  // effects have dedicated paths) — future macros (sectionChase,
+  // sparkleOverlay, etc.) will plug in here.
+  triggerGenericMacro(_args) {
+    throw new Error(`triggerGenericMacro: not implemented for effect '${_args.effectId}'`);
+  }
+
+  // ── Status snapshot ───────────────────────────────────────────────
+  getStatus() {
+    return {
+      strobe: {
+        active: this.strobeActive,
+        presetId: this.activeStrobePresetId,
+        slotId: this.activeStrobeSlotId,
+        config: this.strobeConfig ? { ...this.strobeConfig } : null,
+        burstEndFrame: this.strobeBurstEndFrame,
+      },
+      colorWash: { ...this.colorWashConfig },
+      feedbackTrails: {
+        enabled: this.feedbackTrailsConfig.enabled,
+        preset: this.feedbackTrailsConfig.preset,
+        slotId: this.feedbackTrailsConfig.slotId,
+        params: this.feedbackTrailsConfig.params ? { ...this.feedbackTrailsConfig.params } : null,
+        bufferAllocated: !!this.feedbackTrailBuffer,
+      },
+      dropHit: {
+        active: this.dropHitActive,
+        count: this.dropHits.length,
+      },
+    };
+  }
+
+  /**
+   * Panic stop (§5.3). Stops every active macro action but leaves
+   * configuration (slot bindings, color wash settings) alone. Color
+   * wash is intentionally NOT disabled here — operators use the
+   * dedicated wash toggle for that. Blackout remains the harder
+   * safety net.
+   */
+  panicStop() {
+    this.stopStrobe();
+    this.dropHits.length = 0;
+    this.setFeedbackTrails(false);
+  }
 }
+
+// Re-export for convenience.
+export { GLOBAL_EFFECT_LIBRARY, SAFETY_TIERS, MAX_BURST_MS, validateParams };

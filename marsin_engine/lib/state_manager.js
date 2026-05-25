@@ -43,6 +43,29 @@ export class StateManager {
     return this.load('globals_state.yaml', { blackout: false, effects: {}, params: {}, dimmers: {} });
   }
 
+  /**
+   * Global Effect Macro slot bindings (docs/28 §4.3).
+   * Returns `null` when the file is missing so the caller can fall
+   * back to the in-memory default config. Returning `null` rather
+   * than a fake default keeps the "no slot references a future
+   * effect" rule enforced at boot — the default config lives in code,
+   * not on disk.
+   */
+  loadGlobalEffectSlots() {
+    const filePath = path.join(this.stateDir, 'global_effect_slots.yaml');
+    if (!fs.existsSync(filePath)) return null;
+    try {
+      return yaml.load(fs.readFileSync(filePath, 'utf8')) || null;
+    } catch (err) {
+      console.warn('Failed to load global_effect_slots.yaml:', err);
+      return null;
+    }
+  }
+
+  saveGlobalEffectSlots(slotsConfig) {
+    this.save('global_effect_slots.yaml', { slots: slotsConfig });
+  }
+
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
     if (paramCenter && globalsState.params) {
       // The saved canonical state is { revision, sourceLock, params: { speed: { value }, ... } }

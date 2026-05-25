@@ -4,6 +4,7 @@ import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
 import { setGlobalEffect, setGlobalBlackout, fetchGlobals } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { GlobalEffectMacros } from '@/components/GlobalEffectMacros';
 
 interface RigState {
   effects: Record<string, boolean>;
@@ -173,6 +174,10 @@ export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' })
         <BlackoutButton variant="deck" />
         <GlobalEffectButton variant="deck" effectId="placeholder2" label="---" disabled={true} />
       </View>
+      {/* New 2x3 performance grid for engine-side Global Effect Macros
+          (docs/28). Rendered below the legacy rig globals so existing
+          buttons stay where the operator expects them. */}
+      <GlobalEffectMacros />
     </View>
   );
 };

@@ -4,6 +4,55 @@
  */
 
 /**
+ * Native strobe channel suppression — see docs/28_global_effect_macros.md §2.1.
+ *
+ * Engine-side software macros (Software Sync Strobe etc.) need
+ * deterministic frame-locked control over fixture intensity. Every
+ * supported fixture model has an internal native strobe oscillator
+ * driven from a single DMX channel that, if left at a non-zero value,
+ * runs in parallel with the software gate and produces beat-frequency
+ * artefacts. The fix is to force those channels to 0 here, after
+ * mapPixelsToSacn has filled the rest of each fixture's footprint.
+ *
+ * Map of fixtureType → list of relative strobe channels (1-indexed
+ * from the fixture's start address). Kept narrow to the rig's actual
+ * v1 fixtures so unrelated DMX devices on the same universe are
+ * unaffected.
+ */
+const NATIVE_STROBE_CHANNELS = {
+  UkingPar: [8],         // CH8 = Total Strobe
+  VintageLed: [2],       // CH2 = Total Strobe
+  ShehdsBar: [],         // Per docs/09 — no global strobe oscillator
+  EndyshowBar: [129, 130], // RGB Strobe + ACW Strobe
+};
+
+export function suppressNativeStrobes(list, dmxRouter) {
+  if (!list || !dmxRouter) return;
+  const seenFixtures = new Set();
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry.patch || !entry.fixtureType) continue;
+    const strobeChs = NATIVE_STROBE_CHANNELS[entry.fixtureType];
+    if (!strobeChs || strobeChs.length === 0) continue;
+    // Many entries (e.g. each VintageLed sub-pixel) share the same
+    // patch address. Dedupe per (universe, addr) so we don't waste
+    // cycles writing the same byte 33 times per frame.
+    const key = `${entry.patch.universe}:${entry.patch.addr}`;
+    if (seenFixtures.has(key)) continue;
+    seenFixtures.add(key);
+    const frame = dmxRouter.getFullFrame(entry.patch.universe);
+    if (!frame) continue;
+    const baseAddr = entry.patch.addr - 1; // 0-indexed
+    for (const relCh of strobeChs) {
+      const offset = baseAddr + relCh - 1;
+      if (offset >= 0 && offset < frame.length) {
+        frame[offset] = 0;
+      }
+    }
+  }
+}
+
+/**
  * Demaps a DMX frame back into simulation pixel colors (for sacn_in)
  * @param {Object} list - The batch render list containing pixels
  * @param {Object} dmxRouter - The router containing DMX universes

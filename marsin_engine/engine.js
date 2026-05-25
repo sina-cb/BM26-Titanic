@@ -19,6 +19,7 @@ import { ChannelParamRouter } from './lib/channel_param_router.js';
 import { startApiServer } from './lib/api_server.js';
 import { IntensityController } from './lib/intensity_controller.js';
 import { GlobalEffectsController } from './lib/global_effects_controller.js';
+import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
 import { AudioCapture } from './lib/audio_capture.js';
@@ -31,7 +32,7 @@ import {
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
-import { mapPixelsToSacn } from '../simulation/src/dmx/sacn_mapper.js';
+import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
 import http from 'http';
@@ -322,11 +323,27 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // Apply global DMX-override level effects (Vintage .w boost, UV boost)
     if (globalEffectsController) globalEffectsController.applyPixels(model.pixels);
 
+    // NEW: Apply Global Effect Macros (color wash, feedback trails,
+    // drop hit envelopes, software sync strobe). Runs before
+    // intensity / blackout per docs/28 §2.2 so master dimmers and
+    // safety blackout always have the final say.
+    if (globalEffectsController && globalEffectsController.applyMacros) {
+      globalEffectsController.applyMacros({
+        pixels: model.pixels,
+        frameIndex: frameCount,
+        nowMs: now,
+      });
+    }
+
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
 
     // Map to DMX (writes directly into dmxRouter's _read buffer via getFullFrame)
     mapPixelsToSacn(model.pixels, dmxRouter);
+
+    // NEW: Suppress native strobe channels per docs/28 §2.1 so the
+    // physical fixture's oscillators don't fight our software strobe.
+    suppressNativeStrobes(model.pixels, dmxRouter);
 
     // Collect sACN outbound buffer
     const dmxBuffers = {};
@@ -665,8 +682,18 @@ async function main() {
   // 7. Start API Server & Render Loop
   const broadcastStatsRef = { publish: () => {} };
   const intensityController = new IntensityController();
-  const globalEffectsController = new GlobalEffectsController(loadConfig());
+  // Pass fps so the macro controller can quantize strobe timing to
+  // the engine's actual frame grid.
+  const globalEffectsController = new GlobalEffectsController({
+    engine: { fps: opts.fps },
+  });
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
+  // Slot manager owns the 6 performance-slot bindings. Default config
+  // satisfies the boot validation rule from docs/28 §4.3.
+  const globalEffectSlotManager = new GlobalEffectSlotManager(
+    globalEffectsController,
+    DEFAULT_SLOT_CONFIG,
+  );
   
   // 7a. Audio analysis state (filled below). Passed by reference into
   //     engineCore so api_server's /audio routes can reach the live
@@ -681,6 +708,11 @@ async function main() {
 
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
+    globalEffectSlotManager,
+    // Expose the live frame counter as a getter so API routes can
+    // pass the engine's true frame index to dispatchSlotAction
+    // (strobe phase needs that to start at the right cycle).
+    getFrameIndex: () => 0,
     // Curated color-pair presets surfaced by GET /color-palettes →
     // CaptainPad's COLORS picker (Presets tab). Curated in config.yaml
     // under `colorPalettes:` so the operator can edit the rig's house
@@ -692,6 +724,10 @@ async function main() {
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {});
+  // Now that the loop exists, give engineCore a way to read the live
+  // frame counter (used by /global-effect-slots/:id/activate so the
+  // strobe phase anchors to the right frame).
+  engineCore.getFrameIndex = () => loop.frameCount;
   console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
 
   loop.start();

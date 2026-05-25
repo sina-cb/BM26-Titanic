@@ -1038,3 +1038,73 @@ export async function setMixerChannelControl(channelId: string, id: number, v0: 
     return { ok: false, error: err.message };
   }
 }
+
+// ── Global Effect Macros (docs/28) ─────────────────────────────────
+export type GlobalEffectSlot = {
+  slotId: number;
+  enabled: boolean;
+  label: string;
+  effectId: string;
+  presetId: string;
+  behavior: string;
+  paramsOverride: Record<string, any>;
+};
+
+export type GlobalEffectSlotStatus = GlobalEffectSlot & {
+  active: boolean;
+  safetyTier: string | null;
+  resolveError: string | null;
+};
+
+export async function fetchGlobalEffectSlots(): Promise<ApiResult<{ slots: GlobalEffectSlot[] }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-global-effect-slots', 'Failed to fetch global effect slots:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchGlobalEffectSlotsStatus(): Promise<ApiResult<{ slots: GlobalEffectSlotStatus[]; controller: any }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/status`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-global-effect-slots-status', 'Failed to fetch global effect slot status:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function dispatchGlobalEffectSlotAction(
+  slotId: number,
+  action: 'activate' | 'deactivate' | 'trigger' | 'toggle' | 'down' | 'up',
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/${action}`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-${action}`, `Failed to ${action} slot ${slotId}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function panicStopGlobalEffectMacros(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-macros/panic-stop`, {
+      method: 'POST',
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
