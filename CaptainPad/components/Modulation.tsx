@@ -20,8 +20,9 @@ import {
 import { Colors } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
+import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
-  deleteModulation, fetchPlaylistByName, ModulationCurve, ModulationMapping,
+  deleteModulation, fetchPlaylist, ModulationCurve, ModulationMapping,
   ModulationMode, ModulationPolarity, ModulationSourceKey, patchModulation, putModulation,
 } from '@/utils/api';
 
@@ -29,8 +30,14 @@ const C = Colors.light;
 
 // ── modulationState frame subscription ──────────────────────────────
 //
-// engineEvents broadcasts every WS message. We filter for
-// `modulationState` and keep the most recent per-target snapshot.
+// `modulationState` rides /ws/params alongside sharedParams (it's a
+// "values changing live" delta, not a UI/state event). The ws_topic
+// routing table pins this — keep this subscription on
+// `engineParamsEvents` or the deck's ghost-slider overlay goes dark.
+// Subscribing to engineEvents (the /ws/control bus) here was the May
+// 2026 regression that made "Save" feel like a no-op: the engine WAS
+// modulating the pattern, but the ghost never animated because the
+// frames were on a different socket.
 
 type ModulationParamLive = {
   base: number;
@@ -42,8 +49,13 @@ type ModulationParamLive = {
 export function useModulationState(): Record<string, ModulationParamLive> {
   const [state, setState] = useState<Record<string, ModulationParamLive>>({});
   useEffect(() => {
-    return engineEvents.subscribe((m) => {
+    return engineParamsEvents.subscribe((m) => {
       if (m && m.type === 'modulationState' && m.parameters && typeof m.parameters === 'object') {
+        // Engine emits a final empty-parameters frame the instant a
+        // mapping is deleted (modulation_controller's >0 → 0
+        // transition gate), so adopting whole-state-replacement here
+        // is enough to clear the green ghost without any local
+        // bookkeeping.
         setState(m.parameters as Record<string, ModulationParamLive>);
       }
     });
@@ -64,13 +76,18 @@ export function useEntryModulations(
   useEffect(() => {
     if (!playlistName || !entryId) { setMappings([]); return; }
     let cancelled = false;
-    fetchPlaylistByName(playlistName).then((r) => {
+    // Use the cached `fetchPlaylist` (5 s TTL, deduped, primed by
+    // engine WS broadcasts) — `useEntryModulations` may be called
+    // from N mixer channel strips simultaneously, so an uncached
+    // fetch per strip would hammer the engine on channel-add bursts.
+    fetchPlaylist(playlistName).then((r) => {
       if (cancelled) return;
       if (!r.ok || !r.data) { setMappings([]); return; }
-      const entry = Array.isArray(r.data.entries)
-        ? r.data.entries.find((e: any) => e && e.id === entryId)
+      const entries = r.data.entries as { id?: string; modulations?: ModulationMapping[] }[] | undefined;
+      const entry = Array.isArray(entries)
+        ? entries.find((e) => e && e.id === entryId)
         : null;
-      setMappings(Array.isArray(entry?.modulations) ? entry.modulations : []);
+      setMappings(Array.isArray(entry?.modulations) ? entry!.modulations! : []);
     });
     return () => { cancelled = true; };
   }, [playlistName, entryId, tick]);
@@ -99,7 +116,131 @@ function prettySliderName(name: string): string {
     .substring(0, 15);
 }
 
-// ── ModulatedSlider — drop-in wrapper ───────────────────────────────
+// Single green accent used everywhere modulation is "live" — matches
+// the "✓ SAVED" pill in PlaylistPanel so the operator sees one
+// recurring "engine is doing the right thing" color rather than the
+// blue primary which also means "interactive control".
+const MOD_GREEN = '#00a86b';
+// Subtle wash for surfaces that need to read as "mapped" without
+// fighting the slider track for attention.
+const MOD_GREEN_SOFT = 'rgba(0,168,107,0.12)';
+
+// Clamp to [-1, 1] — engine schema range. We pre-clamp on the popover
+// so a typo'd 99 in the range box becomes 1 instead of bouncing the
+// whole save with a 400 from validateModulationMapping.
+function clamp01Signed(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < -1) return -1;
+  if (x > 1) return 1;
+  return x;
+}
+
+// ── ModulationBadges — shared ◎ON / ✕ button row ────────────────────
+//
+// Both the deck (interactive) and mixer (readonly) variants render
+// the same green pill so the operator scans for "mapped" the same
+// way on both surfaces. `onEdit` / `onClear` are only wired on the
+// deck — the mixer passes nothing and the buttons collapse to a
+// static badge.
+
+function ModulationBadges({
+  hasMapping, editable, showAddHint, onEdit, onClear,
+}: {
+  hasMapping: boolean;
+  // `editable` means the operator can OPEN the popover (deck only).
+  // The badge itself is always rendered at full opacity when there's
+  // a mapping — the green ◎ ON pill must read as "live signal" even
+  // on read-only surfaces like the mixer.
+  editable: boolean;
+  // Whether to render the empty `◎` add-hint when no mapping exists.
+  // The deck shows it; the mixer hides it so unmapped sliders aren't
+  // cluttered with an affordance the operator can't act on there.
+  showAddHint: boolean;
+  onEdit?: () => void;
+  onClear?: () => void;
+}) {
+  if (!hasMapping && !showAddHint) return null;
+  const canEdit = editable && !!onEdit;
+  const canClear = hasMapping && editable && !!onClear;
+  const bgColor = hasMapping ? MOD_GREEN : 'transparent';
+  const bColor = hasMapping ? MOD_GREEN : C.ghostBorder;
+  const fgColor = hasMapping ? '#fff' : C.secondary;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      <TouchableOpacity
+        onPress={canEdit ? onEdit : undefined}
+        disabled={!canEdit}
+        style={{
+          paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
+          backgroundColor: bgColor,
+          borderWidth: 1, borderColor: bColor,
+          // Stable colour: no fade animation while React rerenders
+          // (the toggle would otherwise look "flashy" on a live deck).
+          transitionDuration: '0s' as any,
+        }}
+        activeOpacity={canEdit ? 0.7 : 1}
+        accessibilityLabel={hasMapping ? (canEdit ? 'Edit modulation' : 'Modulation active') : 'Add modulation'}
+      >
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: fgColor, letterSpacing: 0.5,
+        }}>
+          {hasMapping ? '◎ ON' : '◎'}
+        </Text>
+      </TouchableOpacity>
+      {canClear ? (
+        <TouchableOpacity
+          onPress={onClear}
+          // Same size as the ◎ pill so the row reads as a paired
+          // {edit, clear} control. Outlined-green to signal
+          // "destructive but reversible" without screaming red.
+          style={{
+            paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
+            backgroundColor: 'transparent',
+            borderWidth: 1, borderColor: MOD_GREEN,
+            transitionDuration: '0s' as any,
+          }}
+          activeOpacity={0.7}
+          accessibilityLabel="Clear modulation"
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: MOD_GREEN, letterSpacing: 0.5,
+          }}>
+            ✕
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
+// ── shared ghost-overlay marker on a slider track ──────────────────
+function GhostMarker({ ghost }: { ghost: number | null }) {
+  if (ghost === null) return null;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: `${Math.min(100, Math.max(0, ghost * 100))}%`,
+        top: 0, bottom: 0,
+        width: 3,
+        marginLeft: -1.5,
+        backgroundColor: MOD_GREEN,
+        borderRadius: 2,
+        opacity: 0.95,
+        // Soft glow under the ghost line so it pops against the
+        // primary slider fill at any color palette.
+        shadowColor: MOD_GREEN,
+        shadowOpacity: 0.6, shadowRadius: 4,
+        shadowOffset: { width: 0, height: 0 },
+      }}
+    />
+  );
+}
+
+// ── ModulatedSlider — drop-in wrapper (DECK, interactive) ────────────
 
 type ModulatedSliderProps = {
   exportItem: { id: number; name: string; v0?: number };
@@ -126,31 +267,39 @@ export function ModulatedSlider({
   const hasMapping = !!mapping;
   const enabled = !!(playlistName && entryId);
 
+  const clearMapping = useCallback(async () => {
+    if (!mapping || !playlistName || !entryId) return;
+    const r = await deleteModulation(playlistName, entryId, mapping.id);
+    if (r.ok) onChanged();
+  }, [mapping, playlistName, entryId, onChanged]);
+
+  // Delta from base — useful for the operator to read at a glance
+  // ("LOCAL SPEED 0.30 → 0.52 (+0.22)" tells them how much audio
+  // is currently pushing the value).
+  const deltaText = useMemo(() => {
+    if (ghost === null) return null;
+    const d = ghost - base;
+    const sign = d >= 0 ? '+' : '';
+    return `${sign}${d.toFixed(2)}`;
+  }, [ghost, base]);
+
   return (
     <View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
-          <TouchableOpacity
-            onPress={() => enabled && setPopoverOpen(true)}
-            disabled={!enabled}
-            style={{
-              paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
-              backgroundColor: hasMapping ? C.primary : 'transparent',
-              borderWidth: 1, borderColor: hasMapping ? C.primary : C.ghostBorder,
-              opacity: enabled ? 1 : 0.4,
-            }}
-            accessibilityLabel={hasMapping ? 'Edit modulation' : 'Add modulation'}
-          >
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: hasMapping ? C.surfaceContainerLowest : C.secondary, letterSpacing: 0.5 }}>
-              {hasMapping ? '◎ ON' : '◎'}
-            </Text>
-          </TouchableOpacity>
+          <ModulationBadges
+            hasMapping={hasMapping}
+            editable={enabled}
+            showAddHint={true}
+            onEdit={() => setPopoverOpen(true)}
+            onClear={clearMapping}
+          />
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
           {ghost !== null ? (
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.primary }}>
-              →{ghost.toFixed(2)}
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: MOD_GREEN }}>
+              →{ghost.toFixed(2)}{deltaText ? `  ${deltaText}` : ''}
             </Text>
           ) : null}
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{base.toFixed(2)}</Text>
@@ -160,24 +309,15 @@ export function ModulatedSlider({
         <HorizontalFader
           value={base}
           onChange={onChangeBase}
-          trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12, justifyContent: 'center' }}
+          trackStyle={{
+            height: 24,
+            backgroundColor: hasMapping ? MOD_GREEN_SOFT : C.surfaceContainerHigh,
+            borderRadius: 12,
+            justifyContent: 'center',
+          }}
           fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 12 }}
         />
-        {ghost !== null ? (
-          <View
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: `${Math.min(100, Math.max(0, ghost * 100))}%`,
-              top: 0, bottom: 0,
-              width: 3,
-              marginLeft: -1.5,
-              backgroundColor: C.primaryFixedDim,
-              borderRadius: 2,
-              opacity: 0.85,
-            }}
-          />
-        ) : null}
+        <GhostMarker ghost={ghost} />
       </View>
       {popoverOpen && enabled ? (
         <ModulationPopover
@@ -194,13 +334,45 @@ export function ModulatedSlider({
   );
 }
 
+// ── ModulationReadonlyBadge — for the MIXER (no popover, no clear) ──
+//
+// The mixer renders its own MiniFader-based channel strip; we don't
+// want to replace that with the deck's full HorizontalFader. Instead
+// the mixer drops this badge into the strip header so the operator
+// can see "this slider has a modulation defined on its active
+// playlist entry" without leaving the mixer. Editing the mapping
+// stays on the deck per design (one source of truth for modulation
+// CRUD — the deck's currently-active entry).
+export function ModulationReadonlyBadge({ hasMapping }: { hasMapping: boolean }) {
+  return (
+    <ModulationBadges
+      hasMapping={hasMapping}
+      editable={false}
+      showAddHint={false}
+    />
+  );
+}
+
+// Export the ghost marker + green so the mixer's MiniFader can paint
+// a matching overlay/badge without re-deriving the look.
+export { GhostMarker, MOD_GREEN, MOD_GREEN_SOFT };
+
 // ── ModulationPopover — editor ──────────────────────────────────────
 
+// Two source groups so the picker reads as `MIC <band>` and
+// `STEM <track>`. The OSC stem keys are zero when the OSC pipeline
+// is OFF (resolveModulationSources defaults missing keys to 0) —
+// so picking a stem with OSC disabled simply leaves the parameter
+// at base, which matches the operator's "default behavior is no
+// change" requirement.
 const SOURCE_OPTIONS: { key: ModulationSourceKey; label: string }[] = [
   { key: 'micLow', label: 'MIC LOW' },
   { key: 'micMid', label: 'MIC MID' },
   { key: 'micHigh', label: 'MIC HIGH' },
   { key: 'micKick', label: 'MIC KICK' },
+  { key: 'stemsBass', label: 'STEM BASS' },
+  { key: 'stemsDrums', label: 'STEM DRUMS' },
+  { key: 'stemsVocals', label: 'STEM VOCALS' },
 ];
 const CURVE_OPTIONS: ModulationCurve[] = ['linear', 'easeIn', 'easeOut', 'exp'];
 
@@ -227,12 +399,34 @@ function ModulationPopover({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Stable id strategy:
+  //
+  //   - NEW mapping  → derive from target+source so two different
+  //                    sources on the same param produce distinct ids.
+  //   - EXISTING     → ALWAYS keep the on-disk id, even if the
+  //                    operator changes the source (PATCH semantics).
+  //
+  // Operator-reported bug: changing source from MIC LOW → MIC MID
+  // on an existing mapping used to make the save round-trip succeed
+  // BUT a transient network glitch could leave the popover thinking
+  // the save failed (and locked out subsequent edits). The fix here
+  // is to keep `mappingId` STABLE across the popover lifetime — the
+  // server-side merge already replaces source.key from the request
+  // body, so the URL path never needs to track the new key.
+  //
+  // We capture existing.id ONCE at mount so a parent re-render that
+  // briefly nulls `existing` (e.g. while the cache refreshes after a
+  // playlistSaved broadcast) can't strip our handle out from under
+  // the live PATCH.
+  const initialIdRef = React.useRef<string | null>(existing?.id ?? null);
   const mappingId = useMemo(
-    () => existing?.id ?? `mod_${targetParameter}_${source}`,
-    [existing, targetParameter, source],
+    () => initialIdRef.current ?? `mod_${targetParameter}_${source}`,
+    [targetParameter, source],
   );
+  const isExisting = initialIdRef.current !== null;
 
   const save = async () => {
+    if (busy) return; // double-tap guard
     setBusy(true); setError(null);
     const mapping: ModulationMapping = {
       id: mappingId,
@@ -241,26 +435,67 @@ function ModulationPopover({
       source: { scope: 'cpc', key: source },
       target: { scope: 'pattern', parameter: targetParameter },
       mode, polarity,
-      range: [Number(rangeMin) || 0, Number(rangeMax) || 0],
+      // Defensive parse: `Number('foo')` is NaN, NaN || 0 = 0. The
+      // engine validates -1 ≤ value ≤ 1 strictly; clamp here so the
+      // operator gets immediate visual feedback instead of a 400.
+      range: [
+        clamp01Signed(Number(rangeMin) || 0),
+        clamp01Signed(Number(rangeMax) || 0),
+      ],
       curve,
     };
-    const r = existing
-      ? await patchModulation(playlistName, entryId, mappingId, mapping)
-      : await putModulation(playlistName, entryId, mapping);
-    setBusy(false);
-    if (!r.ok) { setError(r.error || 'unknown error'); return; }
-    onChanged();
-    onClose();
+    try {
+      const r = isExisting
+        ? await patchModulation(playlistName, entryId, mappingId, mapping)
+        : await putModulation(playlistName, entryId, mapping);
+      if (!r.ok) {
+        setError(r.error || 'unknown error');
+        return;
+      }
+      // Server accepted — now "existing" semantics apply for the
+      // rest of this popover lifetime (subsequent saves use PATCH
+      // against the same id).
+      initialIdRef.current = mappingId;
+      onChanged();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      // ALWAYS clear busy — even on thrown errors — so the operator
+      // can retry without hard-reloading the popover. This is the
+      // root cause of the "I cannot even delete or edit it anymore"
+      // report: a previously thrown error left busy=true on the
+      // happy-path setBusy(false), making the SAVE/REMOVE buttons
+      // permanently disabled.
+      setBusy(false);
+    }
   };
 
   const remove = async () => {
-    if (!existing) { onClose(); return; }
+    if (busy) return; // double-tap guard
+    // REMOVE is always allowed when there's a server-side mapping
+    // even if a prior SAVE failed — fall back to the captured id so
+    // the operator can always recover from a half-edited state.
+    const idToDelete = initialIdRef.current ?? existing?.id;
+    if (!idToDelete) { onClose(); return; }
     setBusy(true); setError(null);
-    const r = await deleteModulation(playlistName, entryId, existing.id);
-    setBusy(false);
-    if (!r.ok) { setError(r.error || 'unknown error'); return; }
-    onChanged();
-    onClose();
+    try {
+      const r = await deleteModulation(playlistName, entryId, idToDelete);
+      if (!r.ok) {
+        setError(r.error || 'unknown error');
+        return;
+      }
+      // Engine's modulation_controller will emit a final empty
+      // modulationState frame on the >0 → 0 transition gate, which
+      // clears the green ghost overlay automatically. No need to
+      // poke modulationLive locally.
+      onChanged();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -329,7 +564,7 @@ function ModulationPopover({
           ) : null}
 
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            {existing ? (
+            {isExisting ? (
               <TouchableOpacity
                 onPress={remove}
                 disabled={busy}

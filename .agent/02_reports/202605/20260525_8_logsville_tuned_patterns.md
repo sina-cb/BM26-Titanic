@@ -259,27 +259,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w = whiteIntensity * rareForestSparkle`
 * **Metadata Block:**
   ```yaml
-  pattern: forest_canopy_reveal
-  mood: cinematic / mysterious / suspenseful
-  primaryChannels:
-    rgb: cp1-cp2 deep forest gradient (dim)
-    white: tiny high-altitude canopy sparkles
-    amber: glowing lookout cabin windows & campfire glow
-    uv: redwood underlight canopy reveal
-  localParameters:
-    canopyReveal:
-      default: 0.5
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the breathing brightness of the redwood canopy.
-    lanternGlow:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the amber filament warmth of the tower and wall lanterns.
-    canopySparkle:
-      default: 0.2
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls faint white sparkles drifting on the canopy fixture pixels.
-  ```
+pattern: forest_canopy_reveal
+mood: cinematic / mysterious / suspenseful
+primaryChannels:
+  rgb: cp1-cp2 deep forest gradient (dim)
+  white: tiny high-altitude canopy sparkles
+  amber: glowing lookout cabin windows & campfire glow
+  uv: redwood underlight canopy reveal
+localParameters:
+  canopyReveal:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the brightness of the redwood canopy reveal.
+  lanternGlow:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Controls the amber window warmth of the tower cabin.
+  canopySparkle:
+    default: 0.2
+    suggestedAudio: highs
+    purpose: Controls the white leaf sparkle intensity.
+```
 
 #### 2. `redwood_aurora`
 * **Concept:** Saturated RGB color curtains drift slowly up the height of the three redwood clusters. UV provides a mystical forest floor backing, and white adds cold wind-shimmer highlights through the leaves.
@@ -289,27 +289,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Faint leaf wind-shimmers
 * **Metadata Block:**
   ```yaml
-  pattern: redwood_aurora
-  mood: ambient / cold / ethereal
-  primaryChannels:
-    rgb: cp1-cp2 slow vertical sweeps on redwood crowns
-    white: cold wind-shimmer highlights in the foliage
-    amber: dim, cabin window backups
-    uv: forest canopy edge glow
-  localParameters:
-    auroraHeight:
-      default: 0.6
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the vertical height and density of the tree color sweeps.
-    windShimmer:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the frequency of the white leaf shimmers.
-    cabinWarmth:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Adjusts the amber intensity on the tower vintage lamps.
-  ```
+pattern: redwood_aurora
+mood: ambient / cold / ethereal
+primaryChannels:
+  rgb: cp1-cp2 slow vertical sweeps on redwood crowns
+  white: cold wind-shimmer highlights in the foliage
+  amber: dim, cabin window backups
+  uv: forest canopy edge glow
+localParameters:
+  auroraHeight:
+    default: 0.6
+    suggestedAudio: lows
+    purpose: Controls the vertical height of the color sweeps.
+  windShimmer:
+    default: 0.25
+    suggestedAudio: highs
+    purpose: Controls the frequency of white canopy shimmers.
+  cabinWarmth:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Controls the tower cabin light intensity.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 3. `outpost_campfire`
 * **Concept:** The front wall and lookout tower vintage fixtures flicker in coordinated amber, simulating a warm campfire at the outpost. The background redwood trees remain in deep, static cool washes to emphasize isolation.
@@ -319,27 +323,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `u` = low-intensity redwood shadow accents
 * **Metadata Block:**
   ```yaml
-  pattern: outpost_campfire
-  mood: warm / organic / cozy
-  primaryChannels:
-    rgb: cp1-cp2 static deep forest backing wash
-    white: occasional ember crackle flashes on the wall
-    amber: flickering campfire filaments
-    uv: low-intensity redwood shadows
-  localParameters:
-    flickerSpeed:
-      default: 0.4
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls the flame flicker frequency.
-    campfireHeat:
-      default: 0.5
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the amber campfire brightness.
-    woodSparkle:
-      default: 0.2
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Triggers white ember sparkles on the wall vintage lamps.
-  ```
+pattern: outpost_campfire
+mood: warm / organic / cozy
+primaryChannels:
+  rgb: cp1-cp2 static deep forest backing wash
+  white: occasional ember crackle flashes on the wall
+  amber: flickering campfire filaments
+  uv: low-intensity redwood shadows
+localParameters:
+  flickerSpeed:
+    default: 0.4
+    suggestedAudio: mids
+    purpose: Controls the flicker speed of the campfire.
+  campfireHeat:
+    default: 0.5
+    suggestedAudio: vocals
+    purpose: Controls the amber warmth of the campfire.
+  woodSparkle:
+    default: 0.2
+    suggestedAudio: highs
+    purpose: Controls high-frequency white wood sparkles.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 4. `redwood_shadow_breath`
 * **Concept:** A slow, dark UV/RGB breathing pattern across the redwood groups and tower base. The front wall stays mostly dim, while subtle white glints appear on tower corners and RedwoodPARs. The pattern creates the feeling of a deep valley without relying on mist or haze.
@@ -349,27 +357,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Subtle white glints on tower corners and canopy PARs
 * **Metadata Block:**
   ```yaml
-  pattern: redwood_shadow_breath
-  mood: deep / minimalist / slow
-  primaryChannels:
-    rgb: cp1-cp2 slow rising color swells in redwoods
-    white: subtle white glints on tower and canopy accents
-    amber: dim backing window embers
-    uv: deep redwood background shadow
-  localParameters:
-    shadowDepth:
-      default: 0.5
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls how dark and deep the redwood background feels.
-    canopySwell:
-      default: 0.4
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls slow rising RGB/UV movement across the redwood groups.
-    edgeShimmer:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls tiny white/UV glints on tower corners and canopy accents.
-  ```
+pattern: redwood_shadow_breath
+mood: deep / minimalist / slow
+primaryChannels:
+  rgb: cp1-cp2 slow rising color swells in redwoods
+  white: subtle white glints on tower and canopy accents
+  amber: dim backing window embers
+  uv: deep redwood background shadow
+localParameters:
+  shadowDepth:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the depth of the forest shadow wash.
+  canopySwell:
+    default: 0.4
+    suggestedAudio: mids
+    purpose: Controls the slow canopy swell intensity.
+  edgeShimmer:
+    default: 0.25
+    suggestedAudio: highs
+    purpose: Controls the white leaf edge shimmer.
+```
 
 ---
 
@@ -383,27 +391,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Constant, stabilizing outpost glow
 * **Metadata Block:**
   ```yaml
-  pattern: lookout_gyro_vortex
-  mood: driving / hypnotic / rotational
-  primaryChannels:
-    rgb: cp1-cp2 counter-rotating stage washes
-    white: bright directional sweeps on tower bars
-    amber: warm cabin window stabilizing glow
-    uv: UV afterimage trails on redwood and tower pixels
-  localParameters:
-    vortexSpeed:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the rotation pace.
-    sweepImpact:
-      default: 0.3
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Triggers white directional hits on beat.
-    outpostGlow:
-      default: 0.35
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Adjusts the vintage amber backing level.
-  ```
+pattern: lookout_gyro_vortex
+mood: driving / hypnotic / rotational
+primaryChannels:
+  rgb: cp1-cp2 counter-rotating stage washes
+  white: bright directional sweeps on tower bars
+  amber: warm cabin window stabilizing glow
+  uv: UV afterimage trails on redwood and tower pixels
+localParameters:
+  vortexSpeed:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the rotation speed of the stage vortex.
+  sweepImpact:
+    default: 0.3
+    suggestedAudio: kick
+    purpose: Controls the brightness of the vortex sweeps.
+  outpostGlow:
+    default: 0.35
+    suggestedAudio: vocals
+    purpose: Controls the baseline amber outpost brightness.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 6. `timber_mill_clockwork`
 * **Concept:** Mechanical, industrial rhythm. The tower bars step sequentially like rotating gears. The vintage lights on the tower and wall tick like clock hands in amber and white on beat transients.
@@ -413,27 +425,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Beat-triggered gear impact flashes
 * **Metadata Block:**
   ```yaml
-  pattern: timber_mill_clockwork
-  mood: industrial / mechanical / driving
-  primaryChannels:
-    rgb: cp1-cp2 stepping mechanical gear pulses
-    white: high-impact transient machinery flashes
-    amber: sequential ticking filament lamps
-    uv: low forest shadow accents on RedwoodPARs
-  localParameters:
-    gearSpeed:
-      default: 0.5
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Controls the stepping chaser speed.
-    tickSharpness:
-      default: 0.45
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the decay sharpness of the ticks.
-    boilerHeat:
-      default: 0.35
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Scales the amber filament brightness.
-  ```
+pattern: timber_mill_clockwork
+mood: industrial / mechanical / driving
+primaryChannels:
+  rgb: cp1-cp2 stepping mechanical gear pulses
+  white: high-impact transient machinery flashes
+  amber: sequential ticking filament lamps
+  uv: low forest shadow accents on RedwoodPARs
+localParameters:
+  gearSpeed:
+    default: 0.5
+    suggestedAudio: drums
+    purpose: Controls the rotation speed of the gears.
+  tickSharpness:
+    default: 0.45
+    suggestedAudio: kick
+    purpose: Controls the decay speed of ticks.
+  boilerHeat:
+    default: 0.35
+    suggestedAudio: bass
+    purpose: Controls the amber filament warmth of the mill.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 7. `outpost_lockdown`
 * **Concept:** Coordinated vertical steps. Saturated blue and UV bars shut down sequentially from the top of the tower, down to the vintage lights, and finally to the wall base, mimicking a structural lockdown.
@@ -442,27 +458,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Sudden white flash when all tiers hit the bottom
 * **Metadata Block:**
   ```yaml
-  pattern: outpost_lockdown
-  mood: heavy / industrial / rhythmic
-  primaryChannels:
-    rgb: cp1-cp2 vertical closing boundaries
-    white: transient impact flash on closure
-    amber: low emergency cabin warmth
-    uv: structural containment glow
-  localParameters:
-    doorPressure:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the speed and weight of the downward closing waves.
-    slamImpact:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the brightness of the white impact flash.
-    amberMemory:
-      default: 0.25
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the decay time of the vintage lights between slams.
-  ```
+pattern: outpost_lockdown
+mood: heavy / industrial / rhythmic
+primaryChannels:
+  rgb: cp1-cp2 vertical closing boundaries
+  white: transient impact flash on closure
+  amber: low emergency cabin warmth
+  uv: structural containment glow
+localParameters:
+  doorPressure:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the downward step sweep speed.
+  slamImpact:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the white slam flash brightness.
+  amberMemory:
+    default: 0.25
+    suggestedAudio: vocals
+    purpose: Controls the amber decay rate between slams.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 8. `tower_canopy_ping`
 * **Concept:** Spatial bouncing. Intense color pulses shoot back and forth between the central lookout tower and the three redwood canopies in the background, passing through the front wall vintage lights on the bounce.
@@ -472,27 +492,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Midpoint filament glows
 * **Metadata Block:**
   ```yaml
-  pattern: tower_canopy_ping
-  mood: punchy / geometric / spatial
-  primaryChannels:
-    rgb: cp1-cp2 radial bounce fields
-    white: sharp target impact flashes
-    amber: warm midpoint filament passes
-    uv: trailing canopy edge glow
-  localParameters:
-    pingSpeed:
-      default: 0.5
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Controls the speed of the bounce cycle.
-    pingImpact:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity at the tower and trees.
-    edgeTrail:
-      default: 0.3
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Adjusts the UV/RGB after-trail on tower and redwood pixels.
-  ```
+pattern: tower_canopy_ping
+mood: punchy / geometric / spatial
+primaryChannels:
+  rgb: cp1-cp2 radial bounce fields
+  white: sharp target impact flashes
+  amber: warm midpoint filament passes
+  uv: trailing canopy edge glow
+localParameters:
+  pingSpeed:
+    default: 0.5
+    suggestedAudio: drums
+    purpose: Controls the ping-pong bounce speed.
+  pingImpact:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the white bounce impact brightness.
+  edgeTrail:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the UV trail length.
+```
 
 ---
 
@@ -506,27 +526,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Vintage lights and redwoods intersecting the sweep
 * **Metadata Block:**
   ```yaml
-  pattern: woodland_trident_sweep
-  mood: high-energy / sweeping / focal
-  primaryChannels:
-    rgb: cp1-cp2 deep forest backing wash
-    white: three intense sweep cores
-    amber: tree/wall filaments intersecting the sweep
-    uv: edge trails on physical pixels
-  localParameters:
-    sweepWidth:
-      default: 0.35
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls the width of the three moving trident sweeps.
-    sweepImpact:
-      default: 0.45
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity of the sweep cores.
-    edgeTrail:
-      default: 0.5
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls UV/RGB after-trails on physical pixels.
-  ```
+pattern: woodland_trident_sweep
+mood: high-energy / sweeping / focal
+primaryChannels:
+  rgb: cp1-cp2 deep forest backing wash
+  white: three intense sweep cores
+  amber: tree/wall filaments intersecting the sweep
+  uv: edge trails on physical pixels
+localParameters:
+  sweepWidth:
+    default: 0.35
+    suggestedAudio: mids
+    purpose: Controls the width of trident sweeps.
+  sweepImpact:
+    default: 0.45
+    suggestedAudio: kick
+    purpose: Controls the white trident core brightness.
+  edgeTrail:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV afterimage trail length.
+```
 
 #### 10. `mill_pressure_release`
 * **Concept:** A heavy bass-driven pressure build. Amber heat blooms on the front wall and tower base. As pressure peaks, white-hot impact bands flash across the TowerBars and RedwoodPARs, followed by a dark UV cooling afterimage.
@@ -536,31 +556,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `u` = Post-release UV cooling afterimage
 * **Metadata Block:**
   ```yaml
-  pattern: mill_pressure_release
-  mood: aggressive / rising / explosive
-  primaryChannels:
-    rgb: cp1-cp2 fiery heat gradient
-    white: white-hot pressure release impact bands
-    amber: dominant filament heat energy
-    uv: trailing cooling afterimage
-  localParameters:
-    pressure:
-      default: 0.4
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls the speed of the pressure build and rotation.
-    heatBloom:
-      default: 0.5
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Scales the amber filament brightness across the rig.
-    ventFlash:
-      default: 0.25
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity during pressure releases.
-    coolingAfterglow:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls the UV cooldown texture after pressure releases.
-  ```
+pattern: mill_pressure_release
+mood: aggressive / rising / explosive
+primaryChannels:
+  rgb: cp1-cp2 fiery heat gradient
+  white: white-hot pressure release impact bands
+  amber: dominant filament heat energy
+  uv: trailing cooling afterimage
+localParameters:
+  pressure:
+    default: 0.4
+    suggestedAudio: bass
+    purpose: Controls the pressure buildup speed.
+  heatBloom:
+    default: 0.5
+    suggestedAudio: mids
+    purpose: Controls the amber mill heat bloom.
+  ventFlash:
+    default: 0.25
+    suggestedAudio: kick
+    purpose: Controls the white steam vent flash brightness.
+  coolingAfterglow:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV cooldown after releases.
+```
 
 #### 11. `canopy_fracture`
 * **Concept:** Blinding white lightning bolts strike down the redwood canopies in the background, fracturing out across the lookout tower bars. The rig remains in deep, cold darkness, flashing only on transients.
@@ -569,27 +589,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Low-intensity warm amber aftershocks
 * **Metadata Block:**
   ```yaml
-  pattern: canopy_fracture
-  mood: sharp / transient / high-contrast
-  primaryChannels:
-    rgb: cp1-cp2 brief, cold blue fractures
-    white: blinding structural crack transients in trees
-    amber: dim, lingering thermal aftershocks
-    uv: structural fracture paths
-  localParameters:
-    fractureAmount:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the frequency and path complexity of the strikes.
-    branchSharpness:
-      default: 0.5
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the decay rate and crispness of white/UV branch-like fractures.
-    aftershock:
-      default: 0.25
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls the warm amber recovery glow.
-  ```
+pattern: canopy_fracture
+mood: sharp / transient / high-contrast
+primaryChannels:
+  rgb: cp1-cp2 brief, cold blue fractures
+  white: blinding structural crack transients in trees
+  amber: dim, lingering thermal aftershocks
+  uv: structural fracture paths
+localParameters:
+  fractureAmount:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the fracture crack density.
+  branchSharpness:
+    default: 0.5
+    suggestedAudio: highs
+    purpose: Controls the decay rate of white branch flashes.
+  aftershock:
+    default: 0.25
+    suggestedAudio: bass
+    purpose: Controls the warm amber aftershock intensity.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 12. `outpost_distress_beacon`
 * **Concept:** The lookout tower sends cold white Morse code signals (`... --- ...`). The background redwoods remain in deep UV darkness, while the front wall vintage lamps flicker amber in response.
@@ -599,27 +623,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Flickering wall response
 * **Metadata Block:**
   ```yaml
-  pattern: outpost_distress_beacon
-  mood: dramatic / rhythmic / storytelling
-  primaryChannels:
-    rgb: cp1-cp2 deep forest backing wash
-    white: cold white Morse code signals (SOS)
-    amber: flickering wall-response signals
-    uv: deep, isolated dark redwood base
-  localParameters:
-    signalStrength:
-      default: 0.7
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Adjusts the intensity of the white Morse signals.
-    responseGlow:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the amber flickering in the wall lamps.
-    forestDarkness:
-      default: 0.6
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Adjusts the intensity of the surrounding dark UV field.
-  ```
+pattern: outpost_distress_beacon
+mood: dramatic / rhythmic / storytelling
+primaryChannels:
+  rgb: cp1-cp2 deep forest backing wash
+  white: cold white Morse code signals (SOS)
+  amber: flickering wall-response signals
+  uv: deep, isolated dark redwood base
+localParameters:
+  signalStrength:
+    default: 0.7
+    suggestedAudio: kick
+    purpose: Controls the white Morse distress signal brightness.
+  responseGlow:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Controls the amber response glow.
+  forestDarkness:
+    default: 0.6
+    suggestedAudio: lows
+    purpose: Controls the background forest wash brightness.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 ---
 
@@ -633,27 +661,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = White crash impact / shear line
 * **Metadata Block:**
   ```yaml
-  pattern: redwood_timber_fall
-  mood: cinematic / shifting / unstable
-  primaryChannels:
-    rgb: cp1-cp2 wood wash vs. felled canopy split
-    white: flashing white timber shear line
-    amber: warm standing outpost filaments
-    uv: cold falling-side canopy edge glow
-  localParameters:
-    tiltAngle:
-      default: 0.45
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls the roll/pitch angle of the timberline division.
-    timberlineSharpness:
-      default: 0.55
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Adjusts the width and crispness of the division line.
-    fallDepth:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the ratio of felled canopy to standing pixels.
-  ```
+pattern: redwood_timber_fall
+mood: cinematic / shifting / unstable
+primaryChannels:
+  rgb: cp1-cp2 wood wash vs. felled canopy split
+  white: flashing white timber shear line
+  amber: warm standing outpost filaments
+  uv: cold falling-side canopy edge glow
+localParameters:
+  tiltAngle:
+    default: 0.45
+    suggestedAudio: mids
+    purpose: Controls the angle of the falling timberline.
+  timberlineSharpness:
+    default: 0.55
+    suggestedAudio: kick
+    purpose: Controls the waterline division sharpness.
+  fallDepth:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the brightness of the felled canopy wash.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 14. `shadow_canopy_eclipse`
 * **Concept:** A deep circular shadow moves across the redwood tree canopy. UV outlines the perimeter of the shadow. As the eclipse passes over, the vintage lamps on the tower bloom into a bright warm-white corona.
@@ -663,27 +695,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a/w` = Corona flare on the tower vintage lights
 * **Metadata Block:**
   ```yaml
-  pattern: shadow_canopy_eclipse
-  mood: dramatic / high-contrast / dark
-  primaryChannels:
-    rgb: cp1-cp2 negative shadow field in tree canopy
-    white: white corona alignment flashes
-    amber: glowing vintage corona rim on tower
-    uv: high-contrast outline rim
-  localParameters:
-    eclipseDepth:
-      default: 0.65
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the size and darkness of the center shadow.
-    coronaBloom:
-      default: 0.4
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the amber/white corona around the vintage lamps.
-    rimShimmer:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the UV outline rim sharpness.
-  ```
+pattern: shadow_canopy_eclipse
+mood: dramatic / high-contrast / dark
+primaryChannels:
+  rgb: cp1-cp2 negative shadow field in tree canopy
+  white: white corona alignment flashes
+  amber: glowing vintage corona rim on tower
+  uv: high-contrast outline rim
+localParameters:
+  eclipseDepth:
+    default: 0.65
+    suggestedAudio: lows
+    purpose: Controls the center shadow size and darkness.
+  coronaBloom:
+    default: 0.4
+    suggestedAudio: vocals
+    purpose: Controls the warm corona ring brightness.
+  rimShimmer:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV outline rim sharpness.
+```
 
 #### 15. `outpost_ember_overdrive`
 * **Concept:** An aggressive ember-and-heat pattern. Fiery amber and red waves crawl up the front wall and tower bars, while RedwoodPARs receive controlled warm edge accents. Beats trigger white-hot heat releases at the tower platform.
@@ -693,27 +725,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `u` = UV cooldown afterimage / cold shadow recovery
 * **Metadata Block:**
   ```yaml
-  pattern: outpost_ember_overdrive
-  mood: aggressive / intense / energetic
-  primaryChannels:
-    rgb: cp1-cp2 roaring ember color field
-    white: white-hot heat release transients
-    amber: dominant ember heat
-    uv: cold shadow recovery after heat bursts
-  localParameters:
-    emberSpeed:
-      default: 0.5
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls the speed and intensity of the ember climb.
-    emberHeight:
-      default: 0.65
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the height of the ember climb.
-    heatFlash:
-      default: 0.3
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Triggers white-hot heat releases on transients.
-  ```
+pattern: outpost_ember_overdrive
+mood: aggressive / intense / energetic
+primaryChannels:
+  rgb: cp1-cp2 roaring ember color field
+  white: white-hot heat release transients
+  amber: dominant ember heat
+  uv: cold shadow recovery after heat bursts
+localParameters:
+  emberSpeed:
+    default: 0.5
+    suggestedAudio: bass
+    purpose: Controls the speed of the ember climb.
+  emberHeight:
+    default: 0.65
+    suggestedAudio: lows
+    purpose: Controls the vertical height of the ember wave.
+  heatFlash:
+    default: 0.3
+    suggestedAudio: kick
+    purpose: Controls the frequency of white heat releases.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 16. `redwood_starry_canopy`
 * **Concept:** The show's climax. The three redwood trees light up with brilliant white and amber stars (flashing PARs). In sync, the lookout tower bars rotate with high-energy RGB color sweeps, and the wall vintage lights pulse on downbeats.
@@ -723,27 +759,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Wall downbeat hits
 * **Metadata Block:**
   ```yaml
-  pattern: redwood_starry_canopy
-  mood: euphoric / energetic / triumphant
-  primaryChannels:
-    rgb: cp1-cp2 high-energy tower bar rotations
-    white: brilliant starry flashes in redwood canopy
-    amber: flashing wall downbeat accents
-    uv: high-energy canopy edge glow
-  localParameters:
-    starBrightness:
-      default: 0.6
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Scales the intensity of the white redwood stars.
-    ringEnergy:
-      default: 0.5
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls tower rotation speed and color sweep density.
-    wallHit:
-      default: 0.45
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Scales the amber/white wall downbeat pulses.
-  ```
+pattern: redwood_starry_canopy
+mood: euphoric / energetic / triumphant
+primaryChannels:
+  rgb: cp1-cp2 high-energy tower bar rotations
+  white: brilliant starry flashes in redwood canopy
+  amber: flashing wall downbeat accents
+  uv: high-energy canopy edge glow
+localParameters:
+  starBrightness:
+    default: 0.6
+    suggestedAudio: kick
+    purpose: Controls the white starry flash brightness.
+  ringEnergy:
+    default: 0.5
+    suggestedAudio: bass
+    purpose: Controls the tower sweep speed.
+  wallHit:
+    default: 0.45
+    suggestedAudio: drums
+    purpose: Controls the amber wall downbeat intensity.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 ---
 

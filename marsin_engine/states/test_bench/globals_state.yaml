@@ -8,14 +8,14 @@ effects:
   vintageWhiteBypassDimmer: false
   uvBlastBypassDimmer: true
 params:
-  revision: 64508
+  revision: 144
   sourceLock: null
   params:
     speed:
-      value: 0.5136936634510487
+      value: 0.5418017963031391
       lastSource: bpm-sync
       lastOrigin: bpm-sync:auto
-      lastRevision: 64416
+      lastRevision: 124
     size:
       value: 0.39
       lastSource: init
@@ -28,7 +28,7 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.03
+        h: 0.62
         s: 1
         v: 1
       lastSource: init
@@ -36,7 +36,7 @@ params:
       lastRevision: 4
     colorPalette2:
       value:
-        h: 0.5
+        h: 0.48
         s: 1
         v: 1
       lastSource: init
@@ -58,45 +58,45 @@ params:
       lastOrigin: init
       lastRevision: 8
     stemsVocals:
-      value: 0.21070627868175507
+      value: 0.1897527426481247
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 64500
+      lastRevision: 144
     stemsBass:
-      value: 0
+      value: 0.4410295784473419
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 64499
+      lastRevision: 142
     stemsDrums:
-      value: 0
+      value: 0.16962182521820068
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 64115
+      lastRevision: 143
     tempoBpm:
-      value: 126.0199966430664
+      value: 129.13999938964844
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 64415
+      lastRevision: 123
     micLow:
-      value: 0.020764183949835292
+      value: 0.004753125081194295
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 64505
+      lastRevision: 138
     micMid:
-      value: 0.03112995851577506
+      value: 0.001961052989250256
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 64506
+      lastRevision: 139
     micHigh:
-      value: 0.03317765339009326
+      value: 0.0025942260597255676
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 64507
+      lastRevision: 140
     micKick:
-      value: 0.3800326494469854
+      value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 64508
+      lastRevision: 141
     micLowGain:
       value: 1
       lastSource: init

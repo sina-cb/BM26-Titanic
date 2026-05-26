@@ -23,6 +23,10 @@ import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { PixelStrip } from '@/components/ui/PixelStrip';
+import {
+  ModulationReadonlyBadge, useEntryModulations, useModulationState,
+  GhostMarker,
+} from '@/components/Modulation';
 
 const C = Colors.light;
 
@@ -49,6 +53,98 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
     </Modal>
   );
 };
+
+// ── Mixer local-params (read-only modulation badge + live ghost) ───────
+//
+// Per-channel renderer for the LOCAL PARAMS card on a mixer strip.
+// Pulls the active entry's modulations once (cached, deduped via
+// fetchPlaylist) and overlays:
+//
+//   - a green ◎ ON badge next to any slider that has a saved mapping
+//     on the channel's currently-active playlist entry. Read-only on
+//     the mixer per design — edits stay on the deck so there's one
+//     source of truth for modulation CRUD.
+//   - a thin green vertical line on the slider track when the engine
+//     is actively writing a modulated value for this target THIS
+//     frame. Frames only arrive for the deck-active pattern, so this
+//     overlay lights up when the mixer channel happens to be hosting
+//     the same pattern the deck is playing.
+function MixerLocalParams({ channel, onControlChange }: {
+  channel: { id: string; exports?: any[]; playlist?: { name?: string; activeEntryId?: string } | null };
+  onControlChange: (channelId: string, controlId: number, value: number) => void;
+}) {
+  const playlistName = channel.playlist?.name ?? null;
+  const entryId = channel.playlist?.activeEntryId ?? null;
+  const { mappings } = useEntryModulations(playlistName, entryId);
+  const modulationLive = useModulationState();
+  const mappingByTarget = React.useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const x of mappings) m[x.target.parameter] = x;
+    return m;
+  }, [mappings]);
+
+  const exps = channel.exports || [];
+  if (exps.length === 0) {
+    return <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>;
+  }
+  return (
+    <View style={{ gap: 4 }}>
+      {exps.map((exp: any) => {
+        const matched = !!exp.cpcOwned;
+        const niceLabel = exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12);
+        const hasMapping = !matched && !!mappingByTarget[exp.name];
+        const live = !matched ? modulationLive[exp.name] : null;
+        const base = exp.v0 !== undefined ? exp.v0 : 0.5;
+        const ghost = live && live.modulated !== undefined && live.modulated !== base
+          ? live.modulated : null;
+        return (
+          <View key={exp.id}>
+            {/* When mapped, render the ◎ ON pill inline above the
+                MiniFader so the slider row reads the same way on the
+                deck and mixer. CPC-matched sliders still use the
+                MiniFader's own `badge` prop because that's a
+                different concept ("the global owns this"). */}
+            {hasMapping ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+                <ModulationReadonlyBadge hasMapping={true} />
+                {ghost !== null ? (
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
+                    →{ghost.toFixed(2)}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <View style={{ position: 'relative' }}>
+              <MiniFader
+                label={niceLabel}
+                value={base}
+                onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
+                disabled={matched}
+                badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
+                fillColor={hasMapping ? undefined : undefined}
+              />
+              {/* Live modulation overlay — only paints when the engine
+                  is currently writing a modulated value for this
+                  slider on the deck-active pattern. */}
+              {ghost !== null ? (
+                <View style={{
+                  position: 'absolute',
+                  left: 0, right: 0,
+                  // MiniFader track starts after the label row (~14 px
+                  // total of label + 2 px margin). The track is 16 px
+                  // tall. Position the marker over the track.
+                  top: 14, height: 16,
+                }} pointerEvents="none">
+                  <GhostMarker ghost={ghost} />
+                </View>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
 
 // ── Channel Strip ──────────────────────────────────────────────────────
 // "1 list to rule them all": the strip's body shows the channel's PlaylistPanel
@@ -223,32 +319,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
 
         {/* Right column = live parameter sliders only. Mute/Solo and the
             transition controls have moved to full-column-width rows BELOW
-            this body so they stretch the full strip width (item 1). */}
+            this body so they stretch the full strip width (item 1).
+            The list is now wrapped in a bordered card so each channel's
+            local params read as a discrete cluster (operator feedback
+            2026-05-26: bare list felt visually merged with the strip
+            chrome). The card also makes the "modulation active" green
+            ring on individual rows pop against a neutral container. */}
         <View style={styles.paramsPanel}>
           <ScrollView nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
-            <View style={{ gap: 4 }}>
-              {(channel.exports || []).map((exp: any) => {
-                // CPC-matched local exports are shown disabled with a
-                // BADGE so operators can see what the pattern declares
-                // without writing to a slider that the next CPC tick
-                // would just clobber. Matches the deck's GlobalParams
-                // treatment for consistency.
-                const matched = !!exp.cpcOwned;
-                const niceLabel = exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12);
-                return (
-                  <MiniFader
-                    key={exp.id}
-                    label={niceLabel}
-                    value={exp.v0 !== undefined ? exp.v0 : 0.5}
-                    onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                    disabled={matched}
-                    badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
-                  />
-                );
-              })}
-              {(!channel.exports || channel.exports.length === 0) && (
-                <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>
-              )}
+            <View style={styles.localParamsCard}>
+              <Text style={[styles.labelCaps, { marginBottom: 6, fontSize: 9, color: C.secondary }]}>LOCAL PARAMS</Text>
+              <MixerLocalParams channel={channel} onControlChange={onControlChange} />
             </View>
           </ScrollView>
         </View>
@@ -1469,6 +1550,17 @@ const styles = StyleSheet.create({
   paramsPanel: {
     width: '40%',
     padding: 8,
+  },
+  // Bordered "LOCAL PARAMS" card inside the right column. Gives each
+  // channel's local sliders a distinct visual cluster so the strip
+  // reads as { left: playlist column · right: tuned local knobs }
+  // rather than one long undifferentiated rail.
+  localParamsCard: {
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: C.surfaceContainerLowest,
   },
   // Mute / Solo span the full strip width below the body.
   muteSoloRow: {

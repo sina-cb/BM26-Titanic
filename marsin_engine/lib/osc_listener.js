@@ -294,7 +294,15 @@ export class OscListener {
 
   start() {
     if (this._socket) return;
-    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: false });
+    // `reuseAddr: true` lets us take the port back immediately after a
+    // previous engine instance dies. Without it the OS holds the UDP
+    // socket in a brief grace period and a fresh restart races into
+    // EADDRINUSE — exactly the failure the operator saw across hot
+    // restarts ("force kill the port and make sure we can attach to
+    // it for OSC"). SO_REUSEADDR on UDP is safe: a previously-bound
+    // socket from the SAME process still has priority, and a stale
+    // socket from a dead process is already gone.
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
     socket.on('message', (buf, rinfo) => this._onPacket(buf, rinfo));
     socket.on('error', (err) => {
       console.error('[OSC] socket error:', err && err.message);
@@ -304,6 +312,41 @@ export class OscListener {
     this._statsTimer = setInterval(() => this._publishStats(), 1000);
     // Don't keep the event loop alive just for the stats timer —
     // engine lifecycle owns shutdown.
+    if (this._statsTimer.unref) this._statsTimer.unref();
+  }
+
+  /**
+   * Same as start() but returns a promise that resolves once the
+   * socket is actually bound, or rejects with the bind error (e.g.
+   * EADDRINUSE). Lets engine.js retry-with-backoff cleanly when a
+   * stale process is releasing the port slowly.
+   *
+   * @returns {Promise<void>}
+   */
+  async startAsync() {
+    if (this._socket) return;
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    socket.on('message', (buf, rinfo) => this._onPacket(buf, rinfo));
+    await new Promise((resolve, reject) => {
+      const onBindError = (err) => {
+        socket.removeListener('listening', onListening);
+        try { socket.close(); } catch (_) { /* ignore */ }
+        reject(err);
+      };
+      const onListening = () => {
+        socket.removeListener('error', onBindError);
+        // Swap to the steady-state error logger.
+        socket.on('error', (err) => {
+          console.error('[OSC] socket error:', err && err.message);
+        });
+        resolve();
+      };
+      socket.once('error', onBindError);
+      socket.once('listening', onListening);
+      socket.bind(this.port, this.host);
+    });
+    this._socket = socket;
+    this._statsTimer = setInterval(() => this._publishStats(), 1000);
     if (this._statsTimer.unref) this._statsTimer.unref();
   }
 

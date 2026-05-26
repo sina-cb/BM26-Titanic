@@ -74,9 +74,13 @@ function httpJson(method, urlPath, body = null) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function openWs() {
+function openWs(path = '/') {
+  // Post-topic-split: `modulationState` rides /ws/params (see
+  // lib/ws_topic_routing.js). The bare `/` socket maps to /ws/control
+  // as a back-compat alias and will NOT receive modulationState
+  // frames. Callers that need them must pass `/ws/params` explicitly.
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(WS_URL + path);
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
@@ -263,7 +267,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     await httpJson('POST', '/param-center/source-lock', {
       mode: 'per-param', leases: { micLow: 'api' },
     });
-    const ws = await openWs();
+    // modulationState lives on /ws/params after the topic split — the
+    // bare `/` socket only sees /ws/control traffic.
+    const ws = await openWs('/ws/params');
     const events = [];
     ws.on('message', raw => {
       try {
@@ -319,7 +325,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     // restores base ONE-SHOT, then no more modulationState frames carry
     // this target. micLow stays at 0.5 from previous test.
     await sleep(300);
-    const ws = await openWs();
+    const ws = await openWs('/ws/params');
     const events = [];
     ws.on('message', raw => {
       try {
@@ -358,15 +364,92 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
       `body=${JSON.stringify(r.body).slice(0, 200)}`);
   }
 
-  // ── TEST 6: DELETE removes mapping ───────────────────────────────
-  console.log('\n[TEST 6] DELETE removes mapping');
+  // ── TEST 6: PATCH source change (operator-reported bulletproof) ──
+  console.log('\n[TEST 6] PATCH source: micLow → micMid round-trips');
   {
+    // First re-enable + reset the mapping to a known state — TEST 4
+    // left it `enabled: false`. This is the exact flow the operator
+    // hits: open popover, change SOURCE chip, hit SAVE.
+    const r = await httpJson(
+      'PATCH',
+      `/api/playlists/${TEST_PLAYLIST}/items/${TEST_ENTRY_ID}/modulations/${TEST_MAPPING_ID}`,
+      {
+        id: TEST_MAPPING_ID,
+        type: 'continuous', enabled: true,
+        source: { scope: 'cpc', key: 'micMid' },
+        target: { scope: 'pattern', parameter: TARGET_PARAM },
+        mode: 'offset', polarity: 'unipolar',
+        range: [0, 0.4], curve: 'linear',
+      },
+    );
+    check(r.status === 200, `PATCH source-change 200 (got ${r.status})`,
+      'PATCH source-change failed',
+      `body=${JSON.stringify(r.body).slice(0, 300)}`);
+    const disk = await httpJson('GET', `/playlists/${TEST_PLAYLIST}`);
+    const entry = disk.body && disk.body.entries && disk.body.entries.find(e => e.id === TEST_ENTRY_ID);
+    const m = entry && entry.modulations && entry.modulations[0];
+    check(m && m.source && m.source.key === 'micMid',
+      'disk shows source.key = micMid',
+      'source.key did not flip',
+      `m=${JSON.stringify(m).slice(0, 300)}`);
+    // The id MUST be preserved across a source-change PATCH so the
+    // operator's subsequent DELETE (which still targets the original
+    // url) finds the mapping.
+    check(m && m.id === TEST_MAPPING_ID,
+      'mapping.id preserved across source change',
+      'id changed',
+      `m=${JSON.stringify(m).slice(0, 300)}`);
+  }
+
+  // ── TEST 7: DELETE emits final empty modulationState (ghost clear) ─
+  console.log('\n[TEST 7] DELETE emits one final empty modulationState frame');
+  {
+    // Open WS BEFORE the delete so we can observe the clearing frame.
+    // Pin the source again so the controller actually has a stream
+    // to lock onto before we yank the mapping.
+    await httpJson('POST', '/param-center/source-lock', {
+      mode: 'per-param', leases: { micMid: 'api' },
+    });
+    for (let i = 0; i < 4; i++) {
+      await httpJson('POST', '/param-center', { micMid: 0.5 });
+      await sleep(50);
+    }
+    const ws = await openWs('/ws/params');
+    const frames = [];
+    ws.on('message', raw => {
+      try {
+        const m = JSON.parse(raw);
+        if (m.type === 'modulationState') frames.push(m);
+      } catch {}
+    });
+    // Wait for at least one non-empty frame so the >0 → 0 transition
+    // is observable on this subscriber.
+    const t0 = Date.now();
+    while (frames.length === 0 && (Date.now() - t0) < 1500) await sleep(50);
+    const sawNonEmptyBefore = frames.some(f =>
+      f.parameters && Object.keys(f.parameters).length > 0);
+    // Now delete.
     const r = await httpJson(
       'DELETE',
       `/api/playlists/${TEST_PLAYLIST}/items/${TEST_ENTRY_ID}/modulations/${TEST_MAPPING_ID}`,
     );
     check(r.status === 200, `DELETE 200 (got ${r.status})`, 'DELETE failed',
       `body=${JSON.stringify(r.body).slice(0, 200)}`);
+    // Give the engine ~250 ms to emit the clearing frame.
+    await sleep(400);
+    ws.close();
+    await httpJson('POST', '/param-center/source-lock', null);
+    check(sawNonEmptyBefore,
+      'observed at least one non-empty modulationState before DELETE',
+      'never saw a pre-delete modulation frame — test setup race?');
+    const lastFrame = frames[frames.length - 1];
+    const lastIsEmpty = lastFrame
+      && lastFrame.parameters
+      && Object.keys(lastFrame.parameters).length === 0;
+    check(!!lastIsEmpty,
+      'last modulationState frame after DELETE has empty parameters',
+      'ghost-clearing frame not emitted — slider ghost would linger',
+      `lastFrame=${JSON.stringify(lastFrame).slice(0, 300)}`);
     const disk = await httpJson('GET', `/playlists/${TEST_PLAYLIST}`);
     const entry = disk.body && disk.body.entries && disk.body.entries.find(e => e.id === TEST_ENTRY_ID);
     check(entry && (!entry.modulations || entry.modulations.length === 0),

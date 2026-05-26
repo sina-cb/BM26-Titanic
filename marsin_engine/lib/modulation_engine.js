@@ -27,7 +27,8 @@
  *
  * @typedef {Object} ModulationSource
  * @property {ModulationSourceScope} scope
- * @property {string} key                One of: micLow, micMid, micHigh, micKick.
+ * @property {string} key                One of: micLow, micMid, micHigh, micKick,
+ *                                       stemsBass, stemsDrums, stemsVocals.
  * @property {string} [label]            UI hint only, never used for routing.
  *
  * @typedef {('pattern')} ModulationTargetScope
@@ -68,7 +69,18 @@
  * @property {Record<string, ModulationStateParam>} parameters
  */
 
-const VALID_SOURCE_KEYS = new Set(['micLow', 'micMid', 'micHigh', 'micKick']);
+// Mic-band keys are populated by the AudioCapture pipeline (when audio
+// analysis is ENABLED). OSC stems keys are populated by the OscListener
+// from external `/marsin/stems/*` packets (when OSC is ENABLED). When
+// either pipeline is disabled, the corresponding key is simply absent
+// from the ParamCenter snapshot — `resolveModulationSources` defaults
+// the missing key to 0, which makes the modulation a no-op (operator-
+// requested behavior: "default behavior is no change" with the source
+// pipeline dark, rather than spuriously moving the slider).
+const VALID_SOURCE_KEYS = new Set([
+  'micLow', 'micMid', 'micHigh', 'micKick',
+  'stemsBass', 'stemsDrums', 'stemsVocals',
+]);
 const VALID_TYPES = new Set(['continuous']);
 const VALID_SOURCE_SCOPES = new Set(['cpc']);
 const VALID_TARGET_SCOPES = new Set(['pattern']);
@@ -130,11 +142,16 @@ export function applyContinuousModulation({
 
 /**
  * Pull active modulation source values from a CPC snapshot. Missing keys
- * resolve to 0 (a disabled source MUST NOT crash a render frame).
+ * resolve to 0 (a disabled source MUST NOT crash a render frame; the
+ * mapping evaluates as a no-op which is exactly the operator-requested
+ * behavior when the audio or OSC pipeline is OFF).
  * @param {{ paramCenterSnapshot: Record<string, number> }} args
  */
 export function resolveModulationSources({ paramCenterSnapshot }) {
-  const sources = { micLow: 0, micMid: 0, micHigh: 0, micKick: 0 };
+  const sources = {
+    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
+    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
+  };
   if (!paramCenterSnapshot) return sources;
   for (const key of VALID_SOURCE_KEYS) {
     const v = paramCenterSnapshot[key];

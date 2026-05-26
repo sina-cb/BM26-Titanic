@@ -42,6 +42,13 @@ export class ModulationController {
     // Negative sentinel so the first applyFrame() call after boot
     // always passes the throttle gate.
     this._lastBroadcastMs = -this.broadcastIntervalMs;
+    // Tracks whether the last broadcast frame carried any parameters.
+    // We use this to fire ONE final "empty" frame the moment a deletion
+    // takes the parameter count to zero — otherwise the iPad's ghost
+    // overlay never clears (the throttled steady-state branch below
+    // skips emit when `parameters` is empty). Operator-visible symptom:
+    // tap ✕ on a mapping → green dot lingers on the slider forever.
+    this._lastBroadcastHadParams = false;
   }
 
   /**
@@ -123,10 +130,9 @@ export class ModulationController {
     }
     this._lastWrittenTargets = newlyWritten;
 
-    // Throttled broadcast. Skip emit when there's nothing to ghost.
-    if (nowMs - this._lastBroadcastMs < this.broadcastIntervalMs) return;
-    this._lastBroadcastMs = nowMs;
-
+    // Build the broadcast payload BEFORE the throttle check so we can
+    // detect the >0 → 0 transition and fire a single "clearing" frame
+    // even when the throttle would otherwise gate emission.
     const parameters = {};
     for (const [name, v] of Object.entries(result.values)) {
       if (v.mappingId === undefined) continue;
@@ -137,7 +143,18 @@ export class ModulationController {
         mappingId: v.mappingId,
       };
     }
-    if (Object.keys(parameters).length === 0) return;
+    const hasParams = Object.keys(parameters).length > 0;
+
+    // Transition gate:
+    //   1. has params + steady-state throttle hit       → emit
+    //   2. zero params + last frame HAD params          → emit ONCE
+    //      (so the iPad's ghost overlay clears
+    //       immediately after the operator hits ✕)
+    //   3. zero params + last frame was already empty   → skip
+    if (!hasParams && !this._lastBroadcastHadParams) return;
+    if (hasParams && nowMs - this._lastBroadcastMs < this.broadcastIntervalMs) return;
+    this._lastBroadcastMs = nowMs;
+    this._lastBroadcastHadParams = hasParams;
 
     this.broadcast({
       type: 'modulationState',

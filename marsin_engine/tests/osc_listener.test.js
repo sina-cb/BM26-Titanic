@@ -405,6 +405,50 @@ test('stats publish emits oscStats and resets counters', () => {
 // send a real OSC packet to a real OscListener on an ephemeral
 // loopback port — if the lib's wire shape changes, dispatch fails.
 
+test('startAsync rejects with EADDRINUSE when port is already bound', async () => {
+  // Hot-restart scenario: an old engine still has the UDP port. The
+  // new engine.js's retry loop relies on startAsync() actually
+  // surfacing the bind error (instead of swallowing it the way the
+  // synchronous start() does), so it knows when to back off and
+  // retry / force-kill.
+  const pc = makeMockParamCenter();
+  const port = 38000 + Math.floor(Math.random() * 1500);
+  // Hold the port with a vanilla dgram socket so we don't rely on
+  // OscListener's own constructor to do the squat.
+  const squatter = dgram.createSocket('udp4');
+  await new Promise((res) => squatter.bind(port, '127.0.0.1', res));
+  try {
+    const listener = new OscListener({
+      port, host: '127.0.0.1', paramCenter: pc,
+    });
+    let caught = null;
+    try { await listener.startAsync(); }
+    catch (err) { caught = err; }
+    assert.ok(caught, 'expected startAsync to reject');
+    assert.ok(
+      caught.code === 'EADDRINUSE' || /EADDRINUSE/.test(caught.message || ''),
+      `expected EADDRINUSE-flavoured error, got: ${caught && caught.message}`
+    );
+    // And start() / stop() must NOT have left a half-open socket
+    // around; calling stop() should be a no-op.
+    listener.stop();
+  } finally {
+    await new Promise((res) => squatter.close(res));
+  }
+});
+
+test('startAsync resolves cleanly when port is free (reuseAddr=true)', async () => {
+  const pc = makeMockParamCenter();
+  const port = 39000 + Math.floor(Math.random() * 1500);
+  const listener = new OscListener({ port, host: '127.0.0.1', paramCenter: pc });
+  await listener.startAsync();
+  try {
+    assert.ok(listener._socket, 'socket installed after startAsync resolves');
+  } finally {
+    listener.stop();
+  }
+});
+
 test('real-UDP integration: local sender → local listener → mock CPC', async () => {
   const pc = makeMockParamCenter();
   const sock = dgram.createSocket('udp4');

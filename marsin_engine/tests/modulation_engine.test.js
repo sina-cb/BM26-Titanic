@@ -95,6 +95,26 @@ test('clamps output to [0, 1]', () => {
   approx(low, 0);
 });
 
+test('resolveModulationSources: OSC stems are first-class alongside mic bands', () => {
+  // When OSC is OFF the stem keys are absent from the snapshot, so
+  // they default to 0 → mapping evaluates as no-op (matches operator
+  // requirement: "default behavior is no change" when source is dark).
+  const offOsc = resolveModulationSources({
+    paramCenterSnapshot: { micLow: 0.5 },
+  });
+  approx(offOsc.stemsBass, 0);
+  approx(offOsc.stemsDrums, 0);
+  approx(offOsc.stemsVocals, 0);
+
+  // When OSC IS feeding stems, they pass through unchanged.
+  const onOsc = resolveModulationSources({
+    paramCenterSnapshot: { stemsBass: 0.6, stemsDrums: 0.3, stemsVocals: 0.9 },
+  });
+  approx(onOsc.stemsBass, 0.6);
+  approx(onOsc.stemsDrums, 0.3);
+  approx(onOsc.stemsVocals, 0.9);
+});
+
 test('resolveModulationSources: missing keys default to 0', () => {
   const out = resolveModulationSources({ paramCenterSnapshot: { micLow: 0.7 } });
   approx(out.micLow, 0.7);
@@ -222,6 +242,12 @@ test('validateModulationMapping: rejects bad fields with specific messages', () 
   assert.throws(() => validateModulationMapping({ ...base, enabled: 'yes' }), /enabled must be boolean/);
   assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'lfo', key: 'micLow' } }), /source\.scope/);
   assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: 'tempoBpm' } }), /source\.key/);
+  // Stems are valid source keys (added round-4): both validator and
+  // runtime applyModulations must accept them.
+  for (const k of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
+    const ok = validateModulationMapping({ ...base, source: { scope: 'cpc', key: k } });
+    assert.equal(ok.source.key, k);
+  }
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'global', parameter: 'size' } }), /target\.scope/);
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'pattern', parameter: '' } }), /target\.parameter/);
   assert.throws(() => validateModulationMapping({ ...base, mode: 'add' }), /mode must be 'offset' or 'scale'/);

@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { setMixerChannelControl, sendControl } from '@/utils/api';
+import { setDeckChannelControl, sendControl } from '@/utils/api';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useEngineState, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState } from '@/components/Modulation';
+import { engineEvents } from '@/utils/engineEvents';
 
 const C = Colors.light;
 
@@ -79,12 +80,29 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   const triggers = exps.filter((e: MixerChannelExport) => e.kind === 3);
   const colorPickers = exps.filter((e: MixerChannelExport) => e.kind === 6);
 
+  // Deck local-control writes MUST route through `/deck/channel/control`,
+  // not `/mixer/channels/<deckId>/control`. Post-channel-split the
+  // engine returns 400 WRONG_ROLE for the latter, so writes silently
+  // fail — which is why playlist `defaults` stayed `{}` no matter how
+  // much an operator tuned a slider. See `rejectIfWrongRole` in
+  // api_server.js.
+  const writeLocal = (controlId: number, v0: number, v1?: number, v2?: number) => {
+    setDeckChannelControl(controlId, v0, v1, v2);
+  };
+
   if (exps.length === 0) return (
     <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10 }}>NO EXPORTS</Text>
   );
 
   return (
     <View style={{ gap: 12 }}>
+      {/* Saved indicator local to the deck params panel. The
+          PlaylistPanel on the left also flashes one, but operators
+          working in the right-pane params row don't see that — this
+          mirror keeps the "engine wrote your value to disk" signal
+          in the operator's foveal view. Fires on `playlistEntryCaptured`
+          for our deck channel (engine auto-capture + explicit save). */}
+      <DeckSavedFlash deckChannelId={baseChannelId} />
       {sliders.map((e: any) => {
         // CPC-matched local exports were hidden through May 2026 — now
         // they're surfaced as disabled with a "MATCHED · LABEL" badge
@@ -118,7 +136,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           <View key={`slider-${e.id}`}>
             <ModulatedSlider
               exportItem={{ id: e.id, name: e.name, v0: e.v0 }}
-              onChangeBase={(val: number) => channelId && setMixerChannelControl(channelId, e.id, val)}
+              onChangeBase={(val: number) => writeLocal(e.id, val)}
               playlistName={deckPlaylistName}
               entryId={deckEntryId}
               mapping={mappingByTarget[e.name] ?? null}
@@ -141,7 +159,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
             </View>
             <HorizontalFader
               value={e.v0 ?? 0}
-              onChange={matched ? (() => {}) : ((val: number) => channelId && setMixerChannelControl(channelId, e.id, val, e.v1, e.v2))}
+              onChange={matched ? (() => {}) : ((val: number) => writeLocal(e.id, val, e.v1, e.v2))}
               trackStyle={{ height: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 4, justifyContent: 'center' }}
               fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 4 }}
               thumbStyle={{ position: 'absolute', width: 14, height: 18, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -7 }] }}
@@ -153,12 +171,12 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         {toggles.map((e: any) => (
           e.cpcOwned
             ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
+            : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => writeLocal(id, v)} />
         ))}
         {triggers.map((e: any) => (
           e.cpcOwned
             ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => channelId && setMixerChannelControl(channelId, id, v)} />
+            : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => writeLocal(id, v)} />
         ))}
       </View>
     </View>
@@ -187,6 +205,50 @@ function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
         color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.5,
       }} numberOfLines={1}>
         MATCHED{cpcLabel ? ` · ${cpcLabel}` : ''}
+      </Text>
+    </View>
+  );
+}
+
+// ── Saved flash (deck-only) ─────────────────────────────────────────
+//
+// Tiny ✓ SAVED pill that briefly appears whenever the engine auto-
+// captures the deck's current params into the active playlist entry
+// (debounced ~600 ms after the last slider tweak). Mirrors the
+// "✓ SAVED" badge in PlaylistPanel so operators get the same signal
+// no matter which pane they were watching.
+
+function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (!deckChannelId) return;
+    return engineEvents.subscribe((m) => {
+      if (m && m.type === 'playlistEntryCaptured' && m.channelId === deckChannelId) {
+        setSavedAt(Date.now());
+      }
+    });
+  }, [deckChannelId]);
+  useEffect(() => {
+    if (savedAt === null) return;
+    const t = setTimeout(() => setSavedAt(null), 1400);
+    return () => clearTimeout(t);
+  }, [savedAt]);
+  if (savedAt === null) return null;
+  return (
+    <View
+      style={{
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 4,
+        backgroundColor: 'rgba(0,168,107,0.15)',
+      }}
+    >
+      <Text style={{ color: '#00a86b', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6 }}>
+        ✓ SAVED
       </Text>
     </View>
   );

@@ -1018,10 +1018,18 @@ engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
     }
   } else if (msg && msg.type === 'playlistSaved') {
     // Some tab saved a playlist; if the broadcast carries the
-    // full data (current engine behaviour) prime us with it.
+    // full data (most engine paths do) prime us with it.
     const pd = msg.playlist as PlaylistData | undefined;
     if (pd && typeof pd === 'object' && typeof pd.name === 'string') {
       primePlaylistCache(pd.name, pd);
+    } else if (typeof msg.name === 'string') {
+      // Some engine paths (notably the modulation CRUD endpoints'
+      // DELETE / PUT / PATCH) broadcast just { type, name } without
+      // the full playlist payload. We MUST invalidate the cache in
+      // that case so the next fetchPlaylist doesn't return stale
+      // mapping data — otherwise the deck's ◎ ON badge would linger
+      // after the operator hit the ✕ clear button.
+      invalidatePlaylistCache(msg.name);
     }
   } else if (msg && msg.type === 'playlistDeleted' && typeof msg.name === 'string') {
     invalidatePlaylistCache(msg.name);
@@ -1399,7 +1407,14 @@ export async function fetchGlobalEffectLibrary(): Promise<ApiResult<{ effects: R
 // validation lives in the engine; these wrappers surface 4xx errors as
 // `{ ok: false, error }`.
 
-export type ModulationSourceKey = 'micLow' | 'micMid' | 'micHigh' | 'micKick';
+// Mic-band sources are populated by the engine's audio analysis
+// pipeline; stems* are populated by the OSC listener from
+// `/marsin/stems/*` packets. When the matching pipeline is OFF the
+// value defaults to 0 and the mapping evaluates as a no-op (so the
+// operator's "no change when source disabled" expectation holds).
+export type ModulationSourceKey =
+  | 'micLow' | 'micMid' | 'micHigh' | 'micKick'
+  | 'stemsBass' | 'stemsDrums' | 'stemsVocals';
 export type ModulationMode = 'offset' | 'scale';
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';

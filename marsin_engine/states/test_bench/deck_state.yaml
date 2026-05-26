@@ -1,21 +1,18 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 05_orbital_attractor_field
+  pattern: 13_sparkle
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
-  localControls: {}
-  playlist:
-    name: default
-    activeEntryId: e_1779753680005_0105
-    cursor: 8
-    autopilot:
-      active: false
-      delay_s: 5
-      shuffle: true
+  localControls:
+    '1037917937':
+      v0: 0.3
+      v1: 0
+      v2: 0
+  playlist: null
   viewSelection:
     type: all
     target: null

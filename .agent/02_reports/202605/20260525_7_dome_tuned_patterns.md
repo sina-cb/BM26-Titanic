@@ -248,27 +248,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `u = uvIntensity * ghostMask`
 * **Metadata Block:**
   ```yaml
-  pattern: ghost_ship_reveal
-  mood: cinematic / mysterious / suspenseful
-  primaryChannels:
-    rgb: cp1-cp2 deep blue gradient
-    white: tiny spectral masthead sparkles
-    amber: flickering vintage oil lanterns
-    uv: structural UV outline
-  localParameters:
-    uvReveal:
-      default: 0.4
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the density and visibility of the UV structure on the physical dome pixels.
-    lanternGlow:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the amber warmth of the vintage filament lamps.
-    spectralSparkle:
-      default: 0.2
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls high-frequency white sparkles on the apex.
-  ```
+pattern: ghost_ship_reveal
+mood: cinematic / mysterious / suspenseful
+primaryChannels:
+  rgb: cp1-cp2 deep blue gradient
+  white: tiny spectral masthead sparkles
+  amber: flickering vintage oil lanterns
+  uv: structural UV outline
+localParameters:
+  uvReveal:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the density and visibility of the UV structure on the physical dome pixels.
+  lanternGlow:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Controls the amber warmth of the vintage Led lamps.
+  spectralSparkle:
+    default: 0.2
+    suggestedAudio: highs
+    purpose: Controls high-frequency white sparkles on the apex.
+```
 
 #### 2. `ghost_aurora` (formerly `apex_aurora_drift`)
 * **Concept:** Saturated RGB curtains drift slowly across the high central triangle ($y > 2.2\text{m}$) and sweep down to the vintage lights. UV provides the underlying glowing field, while white adds a subtle, cold ice-shimmer.
@@ -278,27 +278,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Faint high-altitude shimmer
 * **Metadata Block:**
   ```yaml
-  pattern: ghost_aurora
-  mood: ambient / cold / ethereal
-  primaryChannels:
-    rgb: cp1-cp2 slow vertical color sheets
-    white: cold ice-shimmer highlights
-    amber: dim, constant backing glow
-    uv: main upper-dome UV field
-  localParameters:
-    auroraDepth:
-      default: 0.5
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the vertical span and density of the color sheets.
-    rimShimmer:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls the brightness of the white/UV ice shimmer.
-    humanWarmth:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Adjusts the amber intensity of the vintage lights.
-  ```
+pattern: ghost_aurora
+mood: ambient / cold / ethereal
+primaryChannels:
+  rgb: cp1-cp2 slow vertical color sheets
+  white: cold ice-shimmer highlights
+  amber: dim, constant backing glow
+  uv: main upper-dome UV field
+localParameters:
+  auroraDepth:
+    default: 0.5
+    suggestedAudio: lows
+    purpose: Controls the vertical span and density of the color sheets.
+  rimShimmer:
+    default: 0.25
+    suggestedAudio: highs
+    purpose: Controls the brightness of the white/UV ice shimmer.
+  humanWarmth:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Adjusts the amber intensity of the vintage lights.
+  uvIntensity:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the baseline UV intensity of the aurora.
+```
 
 #### 3. `lanterns_in_the_dark`
 * **Concept:** A minimalist dark scene built around negative space. The VintageLights behave like isolated amber lanterns suspended inside the dome. The BarLights stay mostly dark with faint UV/blue edge pulses, while the TriangleEdges hold a dim cold outline.
@@ -308,27 +312,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = dim triangle outline or occasional white glint
 * **Metadata Block:**
   ```yaml
-  pattern: lanterns_in_the_dark
-  mood: dark / minimalist / tense
-  primaryChannels:
-    rgb: mostly black with faint cp1-cp2 edge movement
-    white: dim outline on the triangle structure
-    amber: slow, organic lantern glow on VintageLights
-    uv: faint edge glow on BarLights and TriangleEdges
-  localParameters:
-    shadowDepth:
-      default: 0.6
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls how much negative space remains in the scene.
-    lanternFlicker:
-      default: 0.35
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the brightness and flicker speed of the vintage lamps.
-    coldOutline:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the visibility of the white triangle frame.
-  ```
+pattern: lanterns_in_the_dark
+mood: dark / minimalist / tense
+primaryChannels:
+  rgb: mostly black with faint cp1-cp2 edge movement
+  white: dim outline on the triangle structure
+  amber: slow, organic lantern glow on VintageLights
+  uv: faint edge glow on BarLights and TriangleEdges
+localParameters:
+  fireFlicker:
+    default: 0.5
+    suggestedAudio: highs
+    purpose: Controls the flicker speed of the boiler fire.
+  boilerHeat:
+    default: 0.5
+    suggestedAudio: vocals
+    purpose: Controls the intensity of the warm amber glow.
+  valvePressure:
+    default: 0.3
+    suggestedAudio: kick
+    purpose: Controls the frequency of the white steam valve releases.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 4. `underwater_afterglow`
 * **Concept:** The visual space representing the post-collision "sinking." Saturated RGB is replaced by slow, low-intensity blue-violet currents. UV waves roll over the perimeter wash, white mimics tiny physical white particle points drifting across fixture pixels (representing marine snow), and amber acts as dying embers fading in the deep.
@@ -338,27 +346,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = High-frequency drifting particle noise on pixels
 * **Metadata Block:**
   ```yaml
-  pattern: underwater_afterglow
-  mood: deep / melancholic / slow
-  primaryChannels:
-    rgb: cp1-cp2 slow, dark blue-purple current
-    white: tiny physical white particle points drifting across fixture pixels
-    amber: dying filament embers in the vintage ring
-    uv: deep, pressurized water layer
-  localParameters:
-    waveDepth:
-      default: 0.5
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the wavelength and speed of the UV water waves.
-    emberSurvival:
-      default: 0.2
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the decay rate and brightness of the dying filaments.
-    particleDrift:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the speed and density of the white particle drift.
-  ```
+pattern: underwater_afterglow
+mood: deep / melancholic / slow
+primaryChannels:
+  rgb: cp1-cp2 slow, dark blue-purple current
+  white: tiny physical white particle points drifting across fixture pixels
+  amber: dying filament embers in the vintage ring
+  uv: deep, pressurized water layer
+localParameters:
+  shadowDepth:
+    default: 0.5
+    suggestedAudio: lows
+    purpose: Controls the width of the moving sea floor shadow.
+  abyssalSwell:
+    default: 0.4
+    suggestedAudio: vocals
+    purpose: Controls the breathing speed of the deep current.
+  edgeShimmer:
+    default: 0.25
+    suggestedAudio: highs
+    purpose: Controls high-frequency white water shimmers.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 ---
 
@@ -372,27 +384,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Constant, warm filament background
 * **Metadata Block:**
   ```yaml
-  pattern: titanic_gyro_vortex
-  mood: driving / hypnotic / rotational
-  primaryChannels:
-    rgb: cp1-cp2 counter-rotating fields
-    white: bright, compass-like directional strobes
-    amber: warm, stabilizing backing glow
-    uv: trace trails behind color sweeps
-  localParameters:
-    vortexTension:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the rotation speed and shear force.
-    compassFlash:
-      default: 0.25
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Adjusts the frequency and intensity of the white strobes.
-    instrumentGlow:
-      default: 0.35
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the vintage amber filament brightness.
-  ```
+pattern: titanic_gyro_vortex
+mood: driving / hypnotic / rotational
+primaryChannels:
+  rgb: cp1-cp2 counter-rotating fields
+  white: bright, compass-like directional strobes
+  amber: warm, stabilizing backing glow
+  uv: trace trails behind color sweeps
+localParameters:
+  vortexSpeed:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the rotation speed of the apex vortex.
+  sweepImpact:
+    default: 0.3
+    suggestedAudio: kick
+    purpose: Controls the intensity of white vortex sweeps.
+  hullGlow:
+    default: 0.35
+    suggestedAudio: vocals
+    purpose: Controls the background RGB wash brightness.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 6. `engine_room_clockwork` (formerly `radial_clockwork`)
 * **Concept:** Mechanical, industrial ticking. The vintage lamps tick sequentially in amber, the perimeter wash bars pulse like heavy pistons, and the apex triangle acts as a central dial. Beats trigger sudden mechanical pauses followed by a white-hot pressure release.
@@ -402,27 +418,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Beat-triggered piston flashes
 * **Metadata Block:**
   ```yaml
-  pattern: engine_room_clockwork
-  mood: industrial / mechanical / driving
-  primaryChannels:
-    rgb: cp1-cp2 stepping piston pulses
-    white: high-impact transient mechanical flashes
-    amber: sequential ticking filament lamps
-    uv: underlying metallic machinery glow
-  localParameters:
-    tickSharpness:
-      default: 0.5
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Controls the transient decay speed of the steps.
-    gearMotion:
-      default: 0.4
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Adjusts the rotational complexity and direction shifts.
-    filamentHeat:
-      default: 0.35
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Scales the amber intensity of the ticking vintage lamps.
-  ```
+pattern: engine_room_clockwork
+mood: industrial / mechanical / driving
+primaryChannels:
+  rgb: cp1-cp2 stepping piston pulses
+  white: high-impact transient mechanical flashes
+  amber: sequential ticking filament lamps
+  uv: underlying metallic machinery glow
+localParameters:
+  gearSpeed:
+    default: 0.5
+    suggestedAudio: drums
+    purpose: Controls the rotation speed of the mechanical gear chasers.
+  tickSharpness:
+    default: 0.45
+    suggestedAudio: kick
+    purpose: Controls the sharp decay of clockwork ticks.
+  boilerHeat:
+    default: 0.35
+    suggestedAudio: bass
+    purpose: Controls the amber filament warmth of the machinery.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 7. `watertight_doors` (formerly `dome_shutter_step`)
 * **Concept:** Heavy, vertical step closures. Saturated blue and UV bars cascade down from the triangle, through the vintage ring, to the perimeter. Drop impacts slam all tiers together in a white flash, followed by a sudden blackout.
@@ -431,27 +451,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = Sudden white flash when all segments align
 * **Metadata Block:**
   ```yaml
-  pattern: watertight_doors
-  mood: heavy / industrial / rhythmic
-  primaryChannels:
-    rgb: cp1-cp2 vertical closing boundaries
-    white: transient impact flash on closure
-    amber: low emergency warmth
-    uv: structural containment glow
-  localParameters:
-    doorPressure:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the speed and weight of the downward closing waves.
-    slamImpact:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the brightness of the white impact flash.
-    amberMemory:
-      default: 0.25
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the decay time of the vintage lights between slams.
-  ```
+pattern: watertight_doors
+mood: heavy / industrial / rhythmic
+primaryChannels:
+  rgb: cp1-cp2 vertical closing boundaries
+  white: transient impact flash on closure
+  amber: low emergency warmth
+  uv: structural containment glow
+localParameters:
+  doorPressure:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the speed and weight of the downward closing waves.
+  slamImpact:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the brightness of the white impact flash.
+  amberMemory:
+    default: 0.25
+    suggestedAudio: vocals
+    purpose: Controls the decay time of the vintage lights between slams.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 8. `triangle_perimeter_ping`
 * **Concept:** Spatial bouncing. Intense pulses of light ping back and forth between the central apex triangle and the outer perimeter wash ring, passing through the vintage lights.
@@ -461,27 +485,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Filament illumination at the midpoint
 * **Metadata Block:**
   ```yaml
-  pattern: triangle_perimeter_ping
-  mood: punchy / geometric / spatial
-  primaryChannels:
-    rgb: cp1-cp2 radial bounce fields
-    white: sharp target impact flashes
-    amber: warm midpoint filament passes
-    uv: trailing UV afterimage trail
-  localParameters:
-    pingSpeed:
-      default: 0.5
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Controls the speed of the bounce cycle.
-    pingImpact:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity at the apex and perimeter.
-    uvTrail:
-      default: 0.3
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Adjusts the ambient UV trail length.
-  ```
+pattern: triangle_perimeter_ping
+mood: punchy / geometric / spatial
+primaryChannels:
+  rgb: cp1-cp2 radial bounce fields
+  white: sharp target impact flashes
+  amber: warm midpoint filament passes
+  uv: trailing UV afterimage trail
+localParameters:
+  pingSpeed:
+    default: 0.5
+    suggestedAudio: drums
+    purpose: Controls the speed of the bounce cycle.
+  pingImpact:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the white intensity at bounce targets.
+  uvTrail:
+    default: 1
+    suggestedAudio: lows
+    purpose: Adjusts the ambient UV trail length.
+```
 
 ---
 
@@ -495,27 +519,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Vintage filament intersection hits
 * **Metadata Block:**
   ```yaml
-  pattern: poseidon_trident_sweep
-  mood: high-energy / sweeping / focal
-  primaryChannels:
-    rgb: cp1-cp2 deep water backing wash
-    white: three intense sweep cores
-    amber: vintage lamps intersecting the sweep
-    uv: edge trails on physical pixels
-  localParameters:
-    sweepWidth:
-      default: 0.35
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls the width of the three moving trident sweeps.
-    sweepImpact:
-      default: 0.45
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity of the sweep cores.
-    edgeTrail:
-      default: 0.5
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls UV/RGB after-trails on physical pixels.
-  ```
+pattern: poseidon_trident_sweep
+mood: high-energy / sweeping / focal
+primaryChannels:
+  rgb: cp1-cp2 deep water backing wash
+  white: three intense sweep cores
+  amber: vintage lamps intersecting the sweep
+  uv: edge trails on physical pixels
+localParameters:
+  sweepWidth:
+    default: 0.35
+    suggestedAudio: mids
+    purpose: Controls the width of the searchlight sweeps.
+  sweepImpact:
+    default: 0.45
+    suggestedAudio: kick
+    purpose: Controls the white intensity of the searchlight beam.
+  edgeTrail:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV afterimage trail length.
+```
 
 #### 10. `boiler_pressure_release`
 * **Concept:** The rig simulates building pressure. Amber heat climbs, RGB color sweep speeds increase, and small white spikes flare up. At peak, the entire dome vents in a massive white and amber burst, followed by cooling UV afterglow.
@@ -525,31 +549,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `u` = Post-release UV cooling afterglow
 * **Metadata Block:**
   ```yaml
-  pattern: boiler_pressure_release
-  mood: aggressive / rising / explosive
-  primaryChannels:
-    rgb: cp1-cp2 fiery heat gradient
-    white: white-hot steam release transients
-    amber: dominant filament heat energy
-    uv: trailing cooling afterglow
-  localParameters:
-    pressure:
-      default: 0.4
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls the speed of the pressure build and rotation.
-    heatBloom:
-      default: 0.5
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Scales the amber filament brightness across the rig.
-    ventFlash:
-      default: 0.25
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the white intensity during pressure releases.
-    coolingAfterglow:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Controls the UV cooldown texture after pressure releases.
-  ```
+pattern: boiler_pressure_release
+mood: aggressive / rising / explosive
+primaryChannels:
+  rgb: cp1-cp2 fiery heat gradient
+  white: white-hot steam release transients
+  amber: dominant filament heat energy
+  uv: trailing cooling afterglow
+localParameters:
+  pressure:
+    default: 0.4
+    suggestedAudio: bass
+    purpose: Controls the pressure build up speed.
+  heatBloom:
+    default: 0.5
+    suggestedAudio: mids
+    purpose: Controls the amber filament heat bloom.
+  ventFlash:
+    default: 0.25
+    suggestedAudio: kick
+    purpose: Controls the white-hot vent release flash.
+  coolingAfterglow:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV cooldown after releases.
+```
 
 #### 11. `iceberg_fracture` (formerly `geodesic_lightning`)
 * **Concept:** Rhythmic white and UV fractures branch outward from the apex triangle, traveling down specific structural paths (bars) to the perimeter. The rig remains in deep, cold darkness, flashing only on transients.
@@ -558,27 +582,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Low-intensity warm amber aftershocks
 * **Metadata Block:**
   ```yaml
-  pattern: iceberg_fracture
-  mood: sharp / transient / high-contrast
-  primaryChannels:
-    rgb: cp1-cp2 brief, cold blue fractures
-    white: blinding structural crack transients
-    amber: dim, lingering thermal aftershocks
-    uv: structural fracture paths
-  localParameters:
-    fractureAmount:
-      default: 0.4
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the frequency and path complexity of the strikes.
-    iceSharpness:
-      default: 0.5
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the decay rate of the white/UV strikes.
-    aftershock:
-      default: 0.25
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls the warm amber recovery glow.
-  ```
+pattern: iceberg_fracture
+mood: sharp / transient / high-contrast
+primaryChannels:
+  rgb: cp1-cp2 brief, cold blue fractures
+  white: blinding structural crack transients
+  amber: dim, lingering thermal aftershocks
+  uv: structural fracture paths
+localParameters:
+  fractureAmount:
+    default: 0.4
+    suggestedAudio: kick
+    purpose: Controls the density of the iceberg cracks.
+  branchSharpness:
+    default: 0.5
+    suggestedAudio: highs
+    purpose: Controls the decay speed of the white strikes.
+  aftershock:
+    default: 0.25
+    suggestedAudio: bass
+    purpose: Controls the warm amber recovery glow.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 12. `sos_morse_burst`
 * **Concept:** The central triangle flashes cold white Morse code signals (`... --- ...`). The perimeter remains in deep UV darkness, while the vintage lamps flicker amber in response.
@@ -588,27 +616,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Flickering vintage response
 * **Metadata Block:**
   ```yaml
-  pattern: sos_morse_burst
-  mood: dramatic / rhythmic / storytelling
-  primaryChannels:
-    rgb: cp1-cp2 deep water backing wash
-    white: cold white Morse code signals (SOS)
-    amber: flickering human-response signals
-    uv: deep, isolated dark ocean base
-  localParameters:
-    signalStrength:
-      default: 0.7
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Adjusts the intensity of the white Morse signals.
-    responseGlow:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the amber flickering in the vintage lamps.
-    oceanDarkness:
-      default: 0.6
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Adjusts the intensity of the surrounding dark UV field.
-  ```
+pattern: sos_morse_burst
+mood: dramatic / rhythmic / storytelling
+primaryChannels:
+  rgb: cp1-cp2 deep water backing wash
+  white: cold white Morse code signals (SOS)
+  amber: flickering human-response signals
+  uv: deep, isolated dark ocean base
+localParameters:
+  signalStrength:
+    default: 0.7
+    suggestedAudio: kick
+    purpose: Controls the brightness of the white Morse signal.
+  responseGlow:
+    default: 0.3
+    suggestedAudio: vocals
+    purpose: Controls the amber response glow.
+  abyssalDarkness:
+    default: 0.6
+    suggestedAudio: lows
+    purpose: Controls the background black space intensity.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 ---
 
@@ -622,27 +654,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Retreating warm filament safety glow
 * **Metadata Block:**
   ```yaml
-  pattern: iceberg_dead_ahead
-  mood: cinematic / cold / dangerous
-  primaryChannels:
-    rgb: cp1-cp2 deep water wash
-    white: bright ice wall face and impact cracks
-    amber: surviving warmth in vintage lamps
-    uv: advancing ice edge and structural reveal
-  localParameters:
-    iceWallIntensity:
-      default: 0.5
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the speed and scale of the approaching wall.
-    fractureAmount:
-      default: 0.25
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Controls the brightness of the white/UV collision cracks.
-    warmthSurvival:
-      default: 0.3
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Controls the amber decay of the retreating filaments.
-  ```
+pattern: iceberg_dead_ahead
+mood: cinematic / cold / dangerous
+primaryChannels:
+  rgb: cp1-cp2 deep water wash
+  white: bright ice wall face and impact cracks
+  amber: surviving warmth in vintage lamps
+  uv: advancing ice edge and structural reveal
+localParameters:
+  fireSpeed:
+    default: 0.5
+    suggestedAudio: lows
+    purpose: Controls the speed of the flame wave.
+  flameHeight:
+    default: 0.65
+    suggestedAudio: vocals
+    purpose: Controls the vertical height of the fire wave.
+  heatFlash:
+    default: 0.3
+    suggestedAudio: kick
+    purpose: Controls the frequency of white heat flashes.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 14. `black_sun_corona` (formerly `dome_eclipse`)
 * **Concept:** A deep, empty circular shadow moves across the dome. UV outlines the perimeter of the shadow, amber filaments bloom as the eclipse passes over, and a white corona flashes at alignment.
@@ -652,27 +688,27 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a/w` = Corona flare on the vintage ring
 * **Metadata Block:**
   ```yaml
-  pattern: black_sun_corona
-  mood: dramatic / high-contrast / dark
-  primaryChannels:
-    rgb: cp1-cp2 negative shadow field
-    white: white corona alignment flashes
-    amber: glowing vintage corona rim
-    uv: high-contrast outline rim
-  localParameters:
-    eclipseDepth:
-      default: 0.65
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the size and darkness of the center shadow.
-    coronaBloom:
-      default: 0.4
-      suggestedAudio: vocals # optional mapping suggestion
-      purpose: Scales the amber/white corona around the vintage lamps.
-    rimShimmer:
-      default: 0.25
-      suggestedAudio: highs # optional mapping suggestion
-      purpose: Adjusts the UV outline rim sharpness.
-  ```
+pattern: black_sun_corona
+mood: dramatic / high-contrast / dark
+primaryChannels:
+  rgb: cp1-cp2 negative shadow field
+  white: white corona alignment flashes
+  amber: glowing vintage corona rim
+  uv: high-contrast outline rim
+localParameters:
+  eclipseDepth:
+    default: 0.65
+    suggestedAudio: lows
+    purpose: Controls the darkness and size of the center shadow.
+  coronaBloom:
+    default: 0.4
+    suggestedAudio: vocals
+    purpose: Controls the brightness of the warm corona ring.
+  rimShimmer:
+    default: 1
+    suggestedAudio: highs
+    purpose: Controls the UV outline rim sharpness.
+```
 
 #### 15. `deck_tilt`
 * **Concept:** A diagonal waterline tilts across the dome, simulating the sinking ship. One side remains warm amber; the other side becomes blue and UV water. The waterline slowly rotates and climbs higher.
@@ -682,27 +718,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `w` = White water line foam
 * **Metadata Block:**
   ```yaml
-  pattern: deck_tilt
-  mood: cinematic / shifting / unstable
-  primaryChannels:
-    rgb: cp1-cp2 water wash vs. dry hull split
-    white: foaming white waterline divider
-    amber: warm dry cabin filaments
-    uv: cold submerged cabin glow
-  localParameters:
-    tiltAngle:
-      default: 0.45
-      suggestedAudio: mids # optional mapping suggestion
-      purpose: Controls the roll/pitch angle of the water line.
-    waterlineSharpness:
-      default: 0.55
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Adjusts the width and crispness of the division line.
-    submergeDepth:
-      default: 0.45
-      suggestedAudio: lows # optional mapping suggestion
-      purpose: Controls the ratio of underwater to above-water pixels.
-  ```
+pattern: deck_tilt
+mood: cinematic / shifting / unstable
+primaryChannels:
+  rgb: cp1-cp2 water wash vs. dry hull split
+  white: foaming white waterline divider
+  amber: warm dry cabin filaments
+  uv: cold submerged cabin glow
+localParameters:
+  tiltAngle:
+    default: 0.45
+    suggestedAudio: mids
+    purpose: Controls the angle of the deck tilt division.
+  shearSharpness:
+    default: 0.55
+    suggestedAudio: kick
+    purpose: Controls the sharpness of the white waterline divider.
+  shearDepth:
+    default: 0.45
+    suggestedAudio: lows
+    purpose: Controls the brightness of the submerged wash.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 #### 16. `white_star_finale`
 * **Concept:** The show's climax. The central apex triangle lights up as a blinding white star. The perimeter wash bars rotate through energetic color gradients, and the vintage lamps pulse in white/amber on heavy downbeats.
@@ -712,27 +752,31 @@ The `suggestedAudio` field listed in the pattern blocks below is only a live-app
   - `a` = Vintage downbeat hits
 * **Metadata Block:**
   ```yaml
-  pattern: white_star_finale
-  mood: euphoric / energetic / triumphant
-  primaryChannels:
-    rgb: cp1-cp2 high-energy perimeter rotation
-    white: blinding white star apex core
-    amber: flashing vintage downbeat accents
-    uv: high-energy backdrop glow
-  localParameters:
-    starBrightness:
-      default: 0.6
-      suggestedAudio: kick # optional mapping suggestion
-      purpose: Scales the intensity of the white apex star.
-    ringEnergy:
-      default: 0.5
-      suggestedAudio: bass # optional mapping suggestion
-      purpose: Controls rotation speed and color sweep density.
-    vintageHit:
-      default: 0.45
-      suggestedAudio: drums # optional mapping suggestion
-      purpose: Scales the amber/white vintage downbeat pulses.
-  ```
+pattern: white_star_finale
+mood: euphoric / energetic / triumphant
+primaryChannels:
+  rgb: cp1-cp2 high-energy perimeter rotation
+  white: blinding white star apex core
+  amber: flashing vintage downbeat accents
+  uv: high-energy backdrop glow
+localParameters:
+  starBrightness:
+    default: 0.6
+    suggestedAudio: kick
+    purpose: Controls the star sparkle brightness.
+  ringEnergy:
+    default: 0.5
+    suggestedAudio: bass
+    purpose: Controls the sweep rotation speed.
+  wallHit:
+    default: 0.45
+    suggestedAudio: drums
+    purpose: Controls the amber perimeter sweep intensity.
+  uvIntensity:
+    default: 1
+    suggestedAudio: lows
+    purpose: Controls the baseline UV intensity.
+```
 
 ---
 

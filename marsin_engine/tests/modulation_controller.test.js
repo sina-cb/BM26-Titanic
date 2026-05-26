@@ -166,3 +166,77 @@ test('does not broadcast when there are no active mappings', () => {
   assert.equal(broadcasts.length, 0);
   assert.equal(mixer._writes.length, 0);
 });
+
+test('emits ONE final empty frame on >0 → 0 mapping transition (ghost clear)', () => {
+  // Operator-reported regression: after tapping ✕ to remove a
+  // mapping, the iPad's green slider-ghost overlay never cleared
+  // because the throttled broadcast skipped emit when there were no
+  // mappings. The fix: emit ONE empty-parameters frame on the
+  // >0 → 0 transition so the client adopts an empty state.
+  const mixer = makeFakeMixer({
+    exports: [{ id: 101, name: 'noiseScale', kind: SLIDER, v0: 0.3 }],
+    baseValues: { noiseScale: 0.3 },
+  });
+  const broadcasts = [];
+  const ctrl = new ModulationController({
+    mixer,
+    paramCenter: makeFakePc({ micLow: 1 }),
+    broadcast: (m) => broadcasts.push(m),
+    broadcastHz: 20,
+  });
+  ctrl.setActiveEntry({
+    playlistName: 'default', entryId: 'e1', pattern: 'p_test',
+    mappings: [{
+      id: 'm1', type: 'continuous', enabled: true,
+      source: { scope: 'cpc', key: 'micLow' },
+      target: { scope: 'pattern', parameter: 'noiseScale' },
+      mode: 'offset', polarity: 'unipolar', range: [0, 0.4], curve: 'linear',
+    }],
+  });
+  ctrl.applyFrame(0);
+  assert.equal(broadcasts.length, 1, 'first frame with mapping → 1 broadcast');
+  assert.ok(broadcasts[0].parameters.noiseScale, 'first broadcast carries the mapping');
+
+  // Operator deletes the mapping.
+  ctrl.setActiveEntry({
+    playlistName: 'default', entryId: 'e1', pattern: 'p_test', mappings: [],
+  });
+  ctrl.applyFrame(100);
+  assert.equal(broadcasts.length, 2, 'transition >0 → 0 fires the clearing frame');
+  assert.deepEqual(broadcasts[1].parameters, {}, 'clearing frame has empty parameters');
+
+  // Subsequent zero-mapping frames must NOT keep emitting.
+  ctrl.applyFrame(200);
+  ctrl.applyFrame(300);
+  assert.equal(broadcasts.length, 2, 'steady-state empty does not keep emitting');
+});
+
+test('OSC stem sources fire modulation just like mic bands', () => {
+  // The popover lets the operator pick stemsBass/Drums/Vocals as the
+  // mod source — verify the controller actually consumes them from
+  // the CPC snapshot (where the OscListener writes them).
+  const mixer = makeFakeMixer({
+    exports: [{ id: 101, name: 'noiseScale', kind: SLIDER, v0: 0.2 }],
+    baseValues: { noiseScale: 0.2 },
+  });
+  const broadcasts = [];
+  const ctrl = new ModulationController({
+    mixer,
+    paramCenter: makeFakePc({ stemsBass: 0.75 }),
+    broadcast: (m) => broadcasts.push(m),
+  });
+  ctrl.setActiveEntry({
+    playlistName: 'default', entryId: 'e1', pattern: 'p_test',
+    mappings: [{
+      id: 'm_stem', type: 'continuous', enabled: true,
+      source: { scope: 'cpc', key: 'stemsBass' },
+      target: { scope: 'pattern', parameter: 'noiseScale' },
+      mode: 'offset', polarity: 'unipolar', range: [0, 0.4], curve: 'linear',
+    }],
+  });
+  ctrl.applyFrame(0);
+  // 0.2 base + 0.75 * 0.4 = 0.5
+  assert.equal(mixer._writes.length, 1);
+  assert.ok(Math.abs(mixer._writes[0].v0 - 0.5) < 1e-9, `expected 0.5, got ${mixer._writes[0].v0}`);
+  assert.equal(broadcasts[0].parameters.noiseScale.source, 'stemsBass');
+});

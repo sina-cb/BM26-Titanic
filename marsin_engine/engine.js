@@ -9,6 +9,7 @@
  *   node engine.js --pattern rainbow [--fps 40] [--priority 100]
  *   node engine.js --list
  *   node engine.js --pattern fire --dry-run
+ *   node engine.js --pattern fire --force-osc-port
  */
 
 import fs from 'fs';
@@ -1094,8 +1095,56 @@ async function main() {
     });
   }
 
-  function startOscListener(cfg) {
+  // CLI override: --force-osc-port kills any process holding the UDP
+  // port at startup so the new engine can bind cleanly. Off by default
+  // because killing other processes is a footgun if the operator has
+  // another OSC service intentionally co-resident. Logged loudly when
+  // it does fire.
+  const forceOscPort = process.argv.includes('--force-osc-port');
+
+  /**
+   * Best-effort: find any PIDs holding the UDP port via `lsof` and
+   * send them SIGKILL. Synchronous + bounded; if `lsof` isn't
+   * installed (Windows, minimal Linux) we just bail. Returns the list
+   * of killed PIDs for logging.
+   */
+  function forceKillUdpPort(port) {
     try {
+      // `lsof -nP -iUDP:<port> -t` lists process ids using the port
+      // without DNS lookup. We exclude the current engine pid in case
+      // `lsof` happens to see our own socket race.
+      const raw = execSync(`lsof -nP -iUDP:${port} -t || true`, {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+        encoding: 'utf8',
+      }).trim();
+      if (!raw) return [];
+      const pids = raw.split(/\s+/)
+        .map(s => parseInt(s, 10))
+        .filter(p => Number.isInteger(p) && p > 0 && p !== process.pid);
+      if (pids.length === 0) return [];
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGKILL'); } catch (_) { /* already dead */ }
+      }
+      return pids;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /**
+   * Bind the OSC listener with bounded retry. Most "port already in
+   * use" cases on hot-restart resolve in < 500 ms because the kernel
+   * releases the UDP socket as soon as the prior process exits — but
+   * if the previous engine crashed in a state where the FD lingered,
+   * the retry loop gives the OS a chance to GC before we surrender.
+   *
+   * With `--force-osc-port` we additionally invoke `forceKillUdpPort`
+   * on the second attempt onwards.
+   */
+  async function startOscListenerWithRetry(cfg, { attempts = 4, baseDelayMs = 250 } = {}) {
+    let lastErr = null;
+    for (let i = 0; i < attempts; i++) {
       const listener = new OscListener({
         port:           cfg.port,
         host:           cfg.host || '0.0.0.0',
@@ -1104,16 +1153,69 @@ async function main() {
         paramCenter,
         onStats:        (s) => broadcastStatsRef.publish(s),
       });
-      listener.start();
-      console.log(`  📡 OSC listener on ${listener.host}:${listener.port} ` +
-        `(${listener._bindingsCount} binding(s), ${listener._allowedCount} allowedSender(s))`);
-      broadcastStatsRef.publish({ type: 'oscStats', ...listener.getStatus() });
-      return listener;
+      try {
+        await listener.startAsync();
+        console.log(`  📡 OSC listener on ${listener.host}:${listener.port} ` +
+          `(${listener._bindingsCount} binding(s), ${listener._allowedCount} allowedSender(s))`);
+        broadcastStatsRef.publish({ type: 'oscStats', ...listener.getStatus() });
+        return listener;
+      } catch (err) {
+        lastErr = err;
+        const isAddrInUse = err && (err.code === 'EADDRINUSE' || /EADDRINUSE/.test(err.message || ''));
+        if (!isAddrInUse) break; // anything else is a real config error
+        if (i === 0) {
+          console.warn(`  ⚠️  OSC port ${cfg.port} busy — retrying (attempt ${i + 1}/${attempts})…`);
+        }
+        if (forceOscPort && i >= 1) {
+          const killed = forceKillUdpPort(cfg.port);
+          if (killed.length > 0) {
+            console.warn(`  ☠️  --force-osc-port killed stale PIDs holding ${cfg.port}: ${killed.join(', ')}`);
+          }
+        }
+        await new Promise(r => setTimeout(r, baseDelayMs * (i + 1)));
+      }
+    }
+    console.error(`  ⚠️  OSC disabled after ${attempts} attempts: ${lastErr ? lastErr.message : 'unknown'}`);
+    if (!forceOscPort) {
+      console.error(`     (rerun with --force-osc-port to SIGKILL stale processes on ${cfg.port})`);
+    }
+    publishOscDisabled(cfg);
+    return null;
+  }
+
+  // Synchronous façade kept for callers that don't care about the
+  // async lifecycle (REST /osc/config PATCH path below). Internally
+  // it kicks off the retry loop and returns the listener once it
+  // settles; the boot path awaits it directly.
+  function startOscListener(cfg) {
+    try {
+      // Config-error path (bad bindings, invalid port) throws from
+      // the constructor — surface that as "disabled" immediately
+      // without spinning the retry loop on a misconfig.
+      new OscListener({
+        port:           cfg.port,
+        host:           cfg.host || '0.0.0.0',
+        bindings:       cfg.bindings || {},
+        allowedSenders: cfg.allowedSenders || [],
+        paramCenter,
+        onStats:        (s) => broadcastStatsRef.publish(s),
+      });
     } catch (err) {
       console.error(`  ⚠️  OSC disabled: ${err.message}`);
       publishOscDisabled(cfg);
       return null;
     }
+    // Kick off retry-bind in the background and adopt the resulting
+    // listener (or null) into oscState.listener so REST /osc/config
+    // callers see the eventual outcome.
+    startOscListenerWithRetry(cfg).then((l) => {
+      if (l) oscState.listener = l;
+    });
+    // Return a placeholder so the caller's
+    // `oscState.listener = startOscListener(...)` write doesn't blow
+    // away whatever the async settle assigns. The actual handle is
+    // installed by the .then above.
+    return null;
   }
 
   oscState.restart = function restart(nextCfg) {
@@ -1125,7 +1227,7 @@ async function main() {
       oscState.listener = null;
     }
     if (oscState.config.enabled) {
-      oscState.listener = startOscListener(oscState.config);
+      startOscListener(oscState.config);
     } else {
       publishOscDisabled(oscState.config);
     }
@@ -1133,20 +1235,16 @@ async function main() {
   };
 
   if (oscState.config.enabled) {
-    oscState.listener = startOscListener(oscState.config);
+    startOscListener(oscState.config);
   } else {
     publishOscDisabled(oscState.config);
   }
-  // Legacy local alias so the rest of this function (shutdown handler
-  // below) keeps reading `oscListener` without a wider refactor.
-  let oscListener = oscState.listener;
-  // Keep the alias in sync when /osc/config PATCH respawns it.
-  const _origRestart = oscState.restart;
-  oscState.restart = function patchedRestart(nextCfg) {
-    const r = _origRestart(nextCfg);
-    oscListener = oscState.listener;
-    return r;
-  };
+  // Helper: read the LIVE listener handle out of oscState every time
+  // we need it. The async retry-bind path can install the handle long
+  // after this boot block finishes, so a stale local `let` would
+  // strand the shutdown handler (UDP socket leaks into the next
+  // engine restart and causes the EADDRINUSE the operator saw).
+  const getOscListener = () => oscState.listener;
 
   // 8. Graceful shutdown
   function shutdown() {
@@ -1158,8 +1256,9 @@ async function main() {
     if (audioState.capture) {
       try { audioState.capture.stop(); } catch (_) { /* ignore */ }
     }
-    if (oscListener) {
-      try { oscListener.stop(); } catch (_) { /* ignore */ }
+    const lOsc = getOscListener();
+    if (lOsc) {
+      try { lOsc.stop(); } catch (_) { /* ignore */ }
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
     loop.stop();

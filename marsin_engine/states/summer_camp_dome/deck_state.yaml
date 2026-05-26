@@ -7,7 +7,19 @@ channel:
   enabled: true
   locked: false
   faderLocked: false
-  localControls: {}
+  localControls:
+    '1037917937':
+      v0: 0.1
+      v1: 0
+      v2: 0
+    '2393603498':
+      v0: 0
+      v1: 0
+      v2: 0
+    '2524999969':
+      v0: 0.15
+      v1: 0
+      v2: 0
   playlist:
     name: twin_show
     activeEntryId: e_slow
