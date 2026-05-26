@@ -125,18 +125,27 @@ export const AllModulationsPanel: React.FC<Props> = ({
     });
   }, [visible, playlistName, refresh]);
 
+  // Hide playlist entries that have no modulations — operator wants the
+  // panel to be a focused index of what's actually wired up, not a
+  // mirror of the whole playlist. Footer totals reflect this filtered
+  // view so the count matches what's on screen.
+  const visibleEntries = useMemo(
+    () => entries.filter((e) => Array.isArray(e.modulations) && e.modulations.length > 0),
+    [entries],
+  );
+
   const totals = useMemo(() => {
     let mappings = 0;
     let live = 0;
-    for (const e of entries) {
+    for (const e of visibleEntries) {
       const mods = e.modulations || [];
       mappings += mods.length;
       if (e.id === activeEntryId && liveActive) {
         live += mods.filter((m) => m.enabled).length;
       }
     }
-    return { entries: entries.length, mappings, live };
-  }, [entries, activeEntryId, liveActive]);
+    return { entries: visibleEntries.length, mappings, live };
+  }, [visibleEntries, activeEntryId, liveActive]);
 
   const navigateToEntry = useCallback(async (entryId: string) => {
     if (!playlistName) return;
@@ -218,35 +227,28 @@ export const AllModulationsPanel: React.FC<Props> = ({
               width: 8, height: 8, borderRadius: 4, backgroundColor: MOD_GREEN,
             }} />
           ) : null}
-          {mods.length > 0 ? (
-            <TouchableOpacity
-              onPress={() => handleClearAll(entry.id, mods)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
-              style={{
-                paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
-                borderWidth: 1, borderColor: C.error,
-                backgroundColor: 'transparent',
-              }}
-            >
-              <Text style={{
-                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.error,
-                letterSpacing: 0.6,
-              }}>
-                CLEAR ALL
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          {/* CLEAR ALL is always shown for visible entries — the panel
+              filter upstream guarantees mods.length > 0 here. */}
+          <TouchableOpacity
+            onPress={() => handleClearAll(entry.id, mods)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
+            style={{
+              paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
+              borderWidth: 1, borderColor: C.error,
+              backgroundColor: 'transparent',
+            }}
+          >
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.error,
+              letterSpacing: 0.6,
+            }}>
+              CLEAR ALL
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        {mods.length === 0 ? (
-          <Text style={{
-            fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary,
-            fontStyle: 'italic', paddingVertical: 4,
-          }}>
-            (no modulations)
-          </Text>
-        ) : mods.map((m) => (
+        {mods.map((m) => (
           <ModulationRow
             key={m.id}
             mapping={m}
@@ -330,7 +332,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
                 No playlist loaded on the deck.
               </Text>
             </View>
-          ) : entries.length === 0 || totals.mappings === 0 ? (
+          ) : totals.mappings === 0 ? (
             <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
               <Text style={{
                 fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
@@ -347,7 +349,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
             </View>
           ) : (
             <FlatList
-              data={entries}
+              data={visibleEntries}
               keyExtractor={(item) => item.id}
               renderItem={renderEntry}
               // `flex: 1` is load-bearing: the outer panel is sized via
