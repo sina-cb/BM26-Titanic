@@ -1,4 +1,5 @@
 import http from 'http';
+import os from 'os';
 import { WebSocketServer } from 'ws';
 import fs from 'fs';
 import path from 'path';
@@ -92,6 +93,47 @@ function loadPattern(patternsDir, name) {
     throw new Error(`Pattern not found: ${filePath}`);
   }
   return fs.readFileSync(filePath, 'utf8');
+}
+
+/**
+ * Enumerate every non-internal IPv4 URL the engine is reachable on,
+ * for the boot-time "Reachable on:" block.
+ *
+ * Loopback (127.0.0.1) is always first — useful for the local browser
+ * dev case even on a quiet box. Then RFC1918 private addresses
+ * (10.x, 192.168.x, 172.16-31.x) — those are the "real" LAN URLs the
+ * operator usually wants for CaptainPad's Config tab fallback when
+ * discovery is flaky. Then everything else (link-local 169.254.x,
+ * VPN tunnels, etc.) at the bottom.
+ *
+ * One pass at boot — we don't re-enumerate on interface changes.
+ */
+function reachableUrls(port) {
+  const isPrivate = (ip) => {
+    if (ip.startsWith('10.')) return true;
+    if (ip.startsWith('192.168.')) return true;
+    if (ip.startsWith('172.')) {
+      const second = parseInt(ip.split('.')[1], 10);
+      return second >= 16 && second <= 31;
+    }
+    return false;
+  };
+  const ips = ['127.0.0.1'];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const info of ifaces[name] || []) {
+      if (info.family !== 'IPv4') continue;
+      if (info.internal) continue;
+      if (!ips.includes(info.address)) ips.push(info.address);
+    }
+  }
+  const rank = (ip) => {
+    if (ip === '127.0.0.1') return 0;
+    if (isPrivate(ip)) return 1;
+    return 2;
+  };
+  ips.sort((a, b) => rank(a) - rank(b));
+  return ips.map(ip => `http://${ip}:${port}`);
 }
 
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
@@ -3386,6 +3428,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   server.listen(opts.port, () => {
     console.log(`\n  🌐 Output Server listening on HTTP/WS port ${opts.port}`);
+    console.log(`     Reachable on:`);
+    for (const url of reachableUrls(opts.port)) {
+      console.log(`       ${url}`);
+    }
   });
 
   publishStatsRef.publish = (data) => {
