@@ -56,6 +56,9 @@ export class GlobalEffectsController {
     this.strobeBurstEndFrame = null;
     this.activeStrobePresetId = null;
     this.activeStrobeSlotId = null;
+    this.strobeFadingOut = false;
+    this.strobeFadeStartMs = 0;
+    this.strobeFadeDurationMs = 0;
 
     // Drop hit (poly: each trigger pushes a new envelope, multiple
     // overlapping envelopes are summed via the additive blend mode).
@@ -69,6 +72,10 @@ export class GlobalEffectsController {
       amount: 0,
       mode: 'tint',
       slotId: null,
+      fadingOut: false,
+      fadeStartMs: 0,
+      fadeDurationMs: 0,
+      fadeStartAmount: 0,
     };
 
     // Feedback trails — lazy-allocated when first enabled.
@@ -77,6 +84,10 @@ export class GlobalEffectsController {
       preset: null,
       params: null,
       slotId: null,
+      fadingOut: false,
+      fadeStartMs: 0,
+      fadeDurationMs: 0,
+      fadeStartMix: 0,
     };
     this.feedbackTrailBuffer = null;
     this.feedbackTrailPixelCount = 0;
@@ -198,27 +209,61 @@ export class GlobalEffectsController {
     //   3. Drop Hit (transient envelope flash; runs AFTER feedback so
     //      momentary whiteouts don't contaminate trail history)
     //   4. Strobe (final ON/OFF gate)
-    if (this.colorWashConfig.enabled && this.colorWashConfig.color) {
-      colorWashEffect.apply({
-        pixels,
-        color6: this.colorWashConfig.color,
-        amount: this.colorWashConfig.amount,
-        mode: this.colorWashConfig.mode,
-      });
+    if ((this.colorWashConfig.enabled || this.colorWashConfig.fadingOut) && this.colorWashConfig.color) {
+      let amount = this.colorWashConfig.amount;
+      if (this.colorWashConfig.fadingOut) {
+        const elapsed = nowMs - this.colorWashConfig.fadeStartMs;
+        if (elapsed >= this.colorWashConfig.fadeDurationMs) {
+          this.colorWashConfig.fadingOut = false;
+          this.colorWashConfig.color = null;
+          this.colorWashConfig.preset = null;
+          amount = 0;
+        } else {
+          const ratio = 1 - (elapsed / this.colorWashConfig.fadeDurationMs);
+          amount = this.colorWashConfig.fadeStartAmount * ratio;
+        }
+      }
+      if (amount > 0 && this.colorWashConfig.color) {
+        colorWashEffect.apply({
+          pixels,
+          color6: this.colorWashConfig.color,
+          amount,
+          mode: this.colorWashConfig.mode,
+        });
+      }
     }
 
-    if (this.feedbackTrailsConfig.enabled) {
+    if (this.feedbackTrailsConfig.enabled || this.feedbackTrailsConfig.fadingOut) {
       this._ensureFeedbackBuffer(pixels.length);
       const p = this.feedbackTrailsConfig.params;
-      feedbackTrailsEffect.apply({
-        pixels,
-        trailBuffer: this.feedbackTrailBuffer,
-        decay: p.decay,
-        injection: p.injection,
-        mix: p.mix,
-        blendMode: p.blendMode,
-        colorBleed: p.colorBleed || 0,
-      });
+      let mix = p.mix;
+      let injection = p.injection;
+      if (this.feedbackTrailsConfig.fadingOut) {
+        const elapsed = nowMs - this.feedbackTrailsConfig.fadeStartMs;
+        if (elapsed >= this.feedbackTrailsConfig.fadeDurationMs) {
+          this.feedbackTrailsConfig.fadingOut = false;
+          this.feedbackTrailsConfig.preset = null;
+          this.feedbackTrailsConfig.params = null;
+          this.feedbackTrailBuffer = null;
+          this.feedbackTrailPixelCount = 0;
+          mix = 0;
+        } else {
+          const ratio = 1 - (elapsed / this.feedbackTrailsConfig.fadeDurationMs);
+          mix = this.feedbackTrailsConfig.fadeStartMix * ratio;
+          injection = 0; // stop injection during fade out
+        }
+      }
+      if (mix > 0 && this.feedbackTrailBuffer) {
+        feedbackTrailsEffect.apply({
+          pixels,
+          trailBuffer: this.feedbackTrailBuffer,
+          decay: p.decay,
+          injection,
+          mix,
+          blendMode: p.blendMode,
+          colorBleed: p.colorBleed || 0,
+        });
+      }
     }
 
     if (this.dropHits.length > 0) {
@@ -246,20 +291,41 @@ export class GlobalEffectsController {
       }
     }
 
-    if (this.strobeActive && this.strobeConfig) {
-      if (this.strobeBurstEndFrame !== null && frameIndex >= this.strobeBurstEndFrame) {
-        this.stopStrobe();
-      } else {
+    if ((this.strobeActive && this.strobeConfig) || this.strobeFadingOut) {
+      if (this.strobeActive && this.strobeBurstEndFrame !== null && frameIndex >= this.strobeBurstEndFrame) {
+        this.stopStrobe({ nowMs });
+      }
+
+      let blend = 1.0;
+      if (this.strobeFadingOut) {
+        const elapsed = nowMs - this.strobeFadeStartMs;
+        if (elapsed >= this.strobeFadeDurationMs) {
+          this.strobeFadingOut = false;
+          this.strobeConfig = null;
+          this.strobeBurstEndFrame = null;
+          blend = 0.0;
+        } else {
+          blend = 1.0 - (elapsed / this.strobeFadeDurationMs);
+        }
+      }
+
+      if (blend > 0 && this.strobeConfig) {
         const gate = strobeEffect.getGate({
           frameIndex,
           startedAtFrame: this.strobeStartedAtFrame,
           framesPerCycle: this.strobeConfig.framesPerCycle,
           onFrames: this.strobeConfig.onFrames,
         });
+        
+        // apply blended strobe: scale = (gateScale * blend) + 1.0 * (1 - blend)
+        const intensity = this.strobeConfig.intensity ?? 1.0;
+        const gateScale = gate > 0 ? intensity : 0.0;
+        const scale = gateScale * blend + (1.0 - blend);
+
         strobeEffect.apply({
           pixels,
-          gate,
-          intensity: this.strobeConfig.intensity,
+          gate: 1, // force gate parameter to 1 since we handle gating scale manually
+          intensity: scale,
         });
       }
     }
@@ -270,7 +336,7 @@ export class GlobalEffectsController {
   // ── Strobe control ────────────────────────────────────────────────
   setStrobe(active, hz, duty, intensity, frameIndex, meta = {}) {
     if (!active) {
-      this.stopStrobe();
+      this.stopStrobe({ nowMs: meta.nowMs });
       return;
     }
     const timing = strobeEffect.getTiming({ hz, duty, frameRate: this.frameRate });
@@ -281,10 +347,12 @@ export class GlobalEffectsController {
       actualHz: timing.actualHz,
       presetId: meta.presetId || null,
       slotId: meta.slotId || null,
+      fadeOutMs: meta.fadeOutMs,
     };
     this.strobeStartedAtFrame = frameIndex;
     this.strobeBurstEndFrame = null;
     this.strobeActive = true;
+    this.strobeFadingOut = false;
     this.activeStrobePresetId = meta.presetId || null;
     this.activeStrobeSlotId = meta.slotId || null;
   }
@@ -296,10 +364,19 @@ export class GlobalEffectsController {
     this.strobeBurstEndFrame = frameIndex + frames;
   }
 
-  stopStrobe() {
+  stopStrobe({ immediate = false, nowMs = null } = {}) {
+    const time = nowMs ?? performance.now();
+    if (!immediate && this.strobeActive && this.strobeConfig) {
+      this.strobeFadingOut = true;
+      this.strobeFadeStartMs = time;
+      const fadeMs = this.strobeConfig.fadeOutMs ?? 1000;
+      this.strobeFadeDurationMs = fadeMs;
+    } else if (immediate || !this.strobeFadingOut) {
+      this.strobeFadingOut = false;
+      this.strobeConfig = null;
+      this.strobeBurstEndFrame = null;
+    }
     this.strobeActive = false;
-    this.strobeConfig = null;
-    this.strobeBurstEndFrame = null;
     this.activeStrobePresetId = null;
     this.activeStrobeSlotId = null;
   }
@@ -321,9 +398,22 @@ export class GlobalEffectsController {
   // ── Color wash ────────────────────────────────────────────────────
   setColorWash(enabled, presetId = null, amount = 0, mode = 'tint', meta = {}) {
     if (!enabled) {
-      this.colorWashConfig = {
-        enabled: false, preset: null, color: null, amount: 0, mode: 'tint', slotId: null,
-      };
+      const immediate = meta && meta.immediate;
+      const nowMs = meta && meta.nowMs;
+      if (!immediate && this.colorWashConfig.enabled) {
+        this.colorWashConfig.fadingOut = true;
+        this.colorWashConfig.fadeStartMs = nowMs ?? performance.now();
+        const params = this.colorWashConfig.preset && GLOBAL_EFFECT_LIBRARY.colorWash.presets[this.colorWashConfig.preset]?.params;
+        const fadeMs = params?.fadeOutMs ?? 1000;
+        this.colorWashConfig.fadeDurationMs = fadeMs;
+        this.colorWashConfig.fadeStartAmount = this.colorWashConfig.amount;
+      } else if (immediate || !this.colorWashConfig.fadingOut) {
+        this.colorWashConfig = {
+          enabled: false, preset: null, color: null, amount: 0, mode: 'tint', slotId: null,
+          fadingOut: false, fadeStartMs: 0, fadeDurationMs: 0, fadeStartAmount: 0,
+        };
+      }
+      this.colorWashConfig.enabled = false;
       return;
     }
     const fx = GLOBAL_EFFECT_LIBRARY.colorWash;
@@ -338,19 +428,36 @@ export class GlobalEffectsController {
       amount: amount,
       mode: mode,
       slotId: meta.slotId || null,
+      fadingOut: false,
+      fadeStartMs: 0,
+      fadeDurationMs: 0,
+      fadeStartAmount: 0,
     };
   }
 
   // ── Feedback trails ───────────────────────────────────────────────
   setFeedbackTrails(enabled, presetId = null, paramsOverride = {}, meta = {}) {
     if (!enabled) {
-      this.feedbackTrailsConfig = {
-        enabled: false, preset: null, params: null, slotId: null,
-      };
-      // Free the buffer so a future enable starts from a clean slate
-      // (also covers the "buffer cleared on disable" test assertion).
-      this.feedbackTrailBuffer = null;
-      this.feedbackTrailPixelCount = 0;
+      const immediate = meta && meta.immediate;
+      const nowMs = meta && meta.nowMs;
+      if (!immediate && this.feedbackTrailsConfig.enabled) {
+        this.feedbackTrailsConfig.fadingOut = true;
+        this.feedbackTrailsConfig.fadeStartMs = nowMs ?? performance.now();
+        const p = this.feedbackTrailsConfig.params;
+        const fadeMs = p?.fadeOutMs ?? 1000;
+        this.feedbackTrailsConfig.fadeDurationMs = fadeMs;
+        this.feedbackTrailsConfig.fadeStartMix = p?.mix ?? 0.5;
+      } else if (immediate || !this.feedbackTrailsConfig.fadingOut) {
+        this.feedbackTrailsConfig = {
+          enabled: false, preset: null, params: null, slotId: null,
+          fadingOut: false, fadeStartMs: 0, fadeDurationMs: 0, fadeStartMix: 0,
+        };
+        // Free the buffer so a future enable starts from a clean slate
+        // (also covers the "buffer cleared on disable" test assertion).
+        this.feedbackTrailBuffer = null;
+        this.feedbackTrailPixelCount = 0;
+      }
+      this.feedbackTrailsConfig.enabled = false;
       return;
     }
     const fx = GLOBAL_EFFECT_LIBRARY.feedbackTrails;
@@ -364,6 +471,10 @@ export class GlobalEffectsController {
       preset: presetId,
       params: merged,
       slotId: meta.slotId || null,
+      fadingOut: false,
+      fadeStartMs: 0,
+      fadeDurationMs: 0,
+      fadeStartMix: 0,
     };
     if (merged.resetOnEnable && this.feedbackTrailBuffer) {
       this.feedbackTrailBuffer.fill(0);
@@ -423,9 +534,9 @@ export class GlobalEffectsController {
    * safety net.
    */
   panicStop() {
-    this.stopStrobe();
+    this.stopStrobe({ immediate: true });
     this.dropHits.length = 0;
-    this.setFeedbackTrails(false);
+    this.setFeedbackTrails(false, null, {}, { immediate: true });
     // Legacy rig-globals are now slot effects too — kill them when
     // panic-stopping the unified macro grid. Color wash and fogger
     // stay panic-stopped as well so blackout/e-stop really is
@@ -438,7 +549,7 @@ export class GlobalEffectsController {
     ]) {
       this.setEffect(k, false);
     }
-    this.setColorWash(false);
+    this.setColorWash(false, null, 0, 'tint', { immediate: true });
   }
 }
 

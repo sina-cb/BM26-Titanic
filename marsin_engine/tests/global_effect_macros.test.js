@@ -326,9 +326,14 @@ test('enabling feedback trails allocates buffer; disabling clears it', () => {
   ctrl.applyMacros({ pixels, frameIndex: 0, nowMs: 0 });
   assert.ok(ctrl.feedbackTrailBuffer instanceof Float32Array);
   assert.equal(ctrl.feedbackTrailBuffer.length, 8 * 6);
-  // Disable → buffer cleared.
+  // Disable → starts fading out.
   mgr.dispatchSlotAction({ slotId: 4, action: 'deactivate', frameIndex: 0, nowMs: 0 });
   assert.equal(ctrl.feedbackTrailsConfig.enabled, false);
+  assert.equal(ctrl.feedbackTrailsConfig.fadingOut, true);
+  assert.notEqual(ctrl.feedbackTrailBuffer, null);
+  // Complete the fade out
+  ctrl.applyMacros({ pixels, frameIndex: 40, nowMs: 1000 });
+  assert.equal(ctrl.feedbackTrailsConfig.fadingOut, false);
   assert.equal(ctrl.feedbackTrailBuffer, null);
 });
 
@@ -392,12 +397,15 @@ test('panic stop clears strobe + drop hits + trails but leaves slots + wash', ()
   ctrl.panicStop();
 
   assert.equal(ctrl.strobeActive, false);
+  assert.equal(ctrl.strobeFadingOut, false);
   assert.equal(ctrl.dropHits.length, 0);
   assert.equal(ctrl.feedbackTrailsConfig.enabled, false);
+  assert.equal(ctrl.feedbackTrailsConfig.fadingOut, false);
   // Color wash is now ALSO killed by panic stop (May 2026): the
   // unified e-stop semantics require one hard "everything off"
   // switch, so the old §5.3 carve-out for color wash was removed.
   assert.equal(ctrl.colorWashConfig.enabled, false);
+  assert.equal(ctrl.colorWashConfig.fadingOut, false);
   // Slot config unchanged.
   assert.equal(JSON.stringify(mgr.getSlots()), slotsBefore);
 });
@@ -418,3 +426,129 @@ test('slot manager getStatus includes active boolean per slot', () => {
   const slot1 = status.find(s => s.slotId === 1);
   assert.equal(slot1.active, false);
 });
+
+// ── Smooth Disable Tests ─────────────────────────────────────────────
+
+test('strobe smooth disable transitions output from gating to solid', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  // Start strobe: 4Hz (10 frames per cycle, 5 on / 5 off)
+  ctrl.setStrobe(true, 4, 0.5, 1.0, 0, { fadeOutMs: 500 });
+  assert.equal(ctrl.strobeActive, true);
+
+  const pixels = makePixels(1);
+  // Frame 5: gate is OFF, so pixels are gated to 0 normally
+  ctrl.applyMacros({ pixels, frameIndex: 5, nowMs: 125 });
+  assert.equal(pixels[0].r, 0);
+
+  // Disable strobe at t = 200ms
+  ctrl.stopStrobe({ nowMs: 200 });
+  assert.equal(ctrl.strobeActive, false);
+  assert.equal(ctrl.strobeFadingOut, true);
+
+  // At t = 325ms (125ms elapsed of 500ms fade), blend is 1 - 125/500 = 0.75
+  // Frame 15: gate is OFF.
+  // scale = (0.0) * 0.75 + 1.0 * (1 - 0.75) = 0.25
+  const pixels2 = makePixels(1);
+  ctrl.applyMacros({ pixels: pixels2, frameIndex: 15, nowMs: 325 });
+  assert.ok(Math.abs(pixels2[0].r - 0.5 * 0.25) < 0.01);
+
+  // At t = 700ms (500ms elapsed), fade completes, strobeConfig cleared
+  const pixels3 = makePixels(1);
+  ctrl.applyMacros({ pixels: pixels3, frameIndex: 30, nowMs: 700 });
+  assert.equal(ctrl.strobeFadingOut, false);
+  assert.equal(ctrl.strobeConfig, null);
+  // Solid/ungated output (0.5)
+  assert.equal(pixels3[0].r, 0.5);
+});
+
+test('color wash smooth disable transitions amount to 0', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setColorWash(true, 'ocean_blue', 1.0, 'replace');
+  assert.equal(ctrl.colorWashConfig.enabled, true);
+
+  const pixels = makePixels(1);
+  ctrl.applyMacros({ pixels, frameIndex: 0, nowMs: 0 });
+  // Fully replaced to ocean_blue [0.05, 0.20, 1.00, 0.00, 0.00, 0.15]
+  assert.ok(Math.abs(pixels[0].r - 0.05) < 0.01);
+
+  // Disable with 1000ms fade
+  ctrl.setColorWash(false, null, 0, 'tint', { nowMs: 100 });
+  assert.equal(ctrl.colorWashConfig.enabled, false);
+  assert.equal(ctrl.colorWashConfig.fadingOut, true);
+
+  // At t = 600ms (500ms elapsed, 50% ratio)
+  // amount should be 1.0 * 0.5 = 0.5
+  const pixels2 = makePixels(1);
+  pixels2[0].r = 0; pixels2[0].g = 0; pixels2[0].b = 0;
+  ctrl.applyMacros({ pixels: pixels2, frameIndex: 20, nowMs: 600 });
+  // replace mode with amount = 0.5: px = px * 0.5 + color6 * 0.5 = 0 * 0.5 + 0.05 * 0.5 = 0.025
+  assert.ok(Math.abs(pixels2[0].r - 0.025) < 0.01);
+
+  // At t = 1100ms (1000ms elapsed), fade out is complete
+  const pixels3 = makePixels(1);
+  pixels3[0].r = 0.5;
+  ctrl.applyMacros({ pixels: pixels3, frameIndex: 40, nowMs: 1100 });
+  assert.equal(ctrl.colorWashConfig.fadingOut, false);
+  assert.equal(pixels3[0].r, 0.5);
+});
+
+test('feedback trails smooth disable stops injection and transitions mix to 0', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setFeedbackTrails(true, 'soft_afterimage', { mix: 0.8, injection: 0.5, decay: 0.9, colorBleed: 0 });
+
+  const pixels = makePixels(1);
+  pixels[0].r = 1.0;
+  // Frame 0: allocate and run trails
+  ctrl.applyMacros({ pixels, frameIndex: 0, nowMs: 0 });
+  // trail = 0 * 0.9 + 1.0 * 0.5 = 0.5
+  // output px = 1.0 + 0.5 * 0.8 = 1.4 (clamped to 1.0)
+  assert.equal(ctrl.feedbackTrailBuffer[0], 0.5);
+
+  // Disable with 1000ms fade
+  ctrl.setFeedbackTrails(false, null, {}, { nowMs: 100 });
+  assert.equal(ctrl.feedbackTrailsConfig.enabled, false);
+  assert.equal(ctrl.feedbackTrailsConfig.fadingOut, true);
+
+  // At t = 600ms (500ms elapsed, 50% ratio): mix = 0.8 * 0.5 = 0.4.
+  // injection is forced to 0.
+  // trail buffer decays: trail = 0.5 * 0.9 = 0.45 (injection was 0)
+  // output mix: px = px + trail * mix = 1.0 + 0.45 * 0.4 = 1.18
+  const pixels2 = makePixels(1);
+  pixels2[0].r = 1.0;
+  ctrl.applyMacros({ pixels: pixels2, frameIndex: 20, nowMs: 600 });
+  assert.ok(Math.abs(ctrl.feedbackTrailBuffer[0] - 0.45) < 0.01);
+  assert.equal(pixels2[0].r, 1.0);
+
+  // At t = 1100ms, completed
+  const pixels3 = makePixels(1);
+  ctrl.applyMacros({ pixels: pixels3, frameIndex: 40, nowMs: 1100 });
+  assert.equal(ctrl.feedbackTrailsConfig.fadingOut, false);
+  assert.equal(ctrl.feedbackTrailBuffer, null);
+});
+
+test('interrupted fade-out cancels deactivation and restores active state', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setColorWash(true, 'ocean_blue', 1.0, 'replace');
+
+  // Disable it
+  ctrl.setColorWash(false, null, 0, 'tint', { nowMs: 0 });
+  assert.equal(ctrl.colorWashConfig.enabled, false);
+  assert.equal(ctrl.colorWashConfig.fadingOut, true);
+
+  // Apply a frame during fade
+  const pixels = makePixels(1);
+  ctrl.applyMacros({ pixels, frameIndex: 5, nowMs: 200 }); // 200ms elapsed of 1000ms
+
+  // Reactivate it (say, with a different preset or same)
+  ctrl.setColorWash(true, 'emergency_red', 1.0, 'replace');
+  assert.equal(ctrl.colorWashConfig.enabled, true);
+  assert.equal(ctrl.colorWashConfig.fadingOut, false);
+});
+
+test('validateParams supports and validates fadeOutMs parameter', () => {
+  assert.throws(() => validateParams('strobe', { fadeOutMs: -50 }), /must be a non-negative number/);
+  assert.throws(() => validateParams('strobe', { fadeOutMs: 'abc' }), /must be a non-negative number/);
+  const out = validateParams('strobe', { fadeOutMs: 250 });
+  assert.equal(out.fadeOutMs, 250);
+});
+

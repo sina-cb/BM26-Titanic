@@ -8,7 +8,7 @@ effects:
   vintageWhiteBypassDimmer: true
   blastWhiteBypassDimmer: false
 params:
-  revision: 378024
+  revision: 158832
   sourceLock: null
   params:
     speed:
@@ -17,7 +17,7 @@ params:
       lastOrigin: init
       lastRevision: 1
     size:
-      value: 0.43
+      value: 0.28
       lastSource: init
       lastOrigin: init
       lastRevision: 2
@@ -28,20 +28,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.64
+        h: 0.62
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 377851
+      lastRevision: 158831
     colorPalette2:
       value:
-        h: 0.9
+        h: 0.48
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 377852
+      lastRevision: 158832
     stemsVocalsGain:
       value: 1
       lastSource: init
@@ -59,19 +59,19 @@ params:
       lastRevision: 8
     stemsVocals:
       value: 2.802596928649634e-45
-      lastSource: osc
-      lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 110959
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 9
     stemsBass:
       value: 0
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 213508
+      lastRevision: 61658
     stemsDrums:
       value: 0
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 212251
+      lastRevision: 60392
     tempoBpm:
       value: 109.37999725341797
       lastSource: init
@@ -81,22 +81,22 @@ params:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 378021
+      lastRevision: 158827
     micMid:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 378022
+      lastRevision: 158828
     micHigh:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 378023
+      lastRevision: 158829
     micKick:
       value: 0.4186381653554382
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 378024
+      lastRevision: 158830
     micLowGain:
       value: 1
       lastSource: init

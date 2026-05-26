@@ -278,6 +278,22 @@ export const GLOBAL_EFFECT_LIBRARY = {
         },
         defaultBehavior: 'toggle',
       },
+      long_afterimage: {
+        label: 'Long Afterimage',
+        params: {
+          decay: 0.96, injection: 0.35, mix: 0.45,
+          blendMode: 'add', colorBleed: 0.02, resetOnEnable: true,
+        },
+        defaultBehavior: 'toggle',
+      },
+      cosmic_trails: {
+        label: 'Cosmic Trails',
+        params: {
+          decay: 0.93, injection: 0.40, mix: 0.55,
+          blendMode: 'max', colorBleed: 0.08, resetOnEnable: true,
+        },
+        defaultBehavior: 'toggle',
+      },
     },
     apply: feedbackTrailsEffect.apply,
   },
@@ -366,6 +382,11 @@ export function validateParams(effectId, params = {}) {
         }
         if (out.durationMs > MAX_BURST_MS) out.durationMs = MAX_BURST_MS;
       }
+      if (out.fadeOutMs !== undefined) {
+        if (!isFiniteNumber(out.fadeOutMs) || out.fadeOutMs < 0) {
+          throw new Error(`strobe.fadeOutMs=${out.fadeOutMs} must be a non-negative number`);
+        }
+      }
       break;
     }
     case 'dropHit': {
@@ -396,6 +417,11 @@ export function validateParams(effectId, params = {}) {
       if (out.mode !== undefined && !['tint', 'replace', 'multiply', 'max'].includes(out.mode)) {
         throw new Error(`colorWash.mode='${out.mode}' must be one of tint|replace|multiply|max`);
       }
+      if (out.fadeOutMs !== undefined) {
+        if (!isFiniteNumber(out.fadeOutMs) || out.fadeOutMs < 0) {
+          throw new Error(`colorWash.fadeOutMs=${out.fadeOutMs} must be a non-negative number`);
+        }
+      }
       break;
     }
     case 'feedbackTrails': {
@@ -408,6 +434,11 @@ export function validateParams(effectId, params = {}) {
       }
       if (out.blendMode !== undefined && !['add', 'replace', 'max'].includes(out.blendMode)) {
         throw new Error(`feedbackTrails.blendMode='${out.blendMode}' must be one of add|replace|max`);
+      }
+      if (out.fadeOutMs !== undefined) {
+        if (!isFiniteNumber(out.fadeOutMs) || out.fadeOutMs < 0) {
+          throw new Error(`feedbackTrails.fadeOutMs=${out.fadeOutMs} must be a non-negative number`);
+        }
       }
       break;
     }

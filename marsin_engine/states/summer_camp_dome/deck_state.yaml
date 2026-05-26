@@ -1,17 +1,53 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 43_sea_floor_shadow
+  pattern: 56_stage_mirror_axis
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
-  localControls: {}
+  localControls:
+    '59398866':
+      v0: 0
+      v1: 0
+      v2: 0
+    '350269276':
+      v0: 0.42
+      v1: 0
+      v2: 0
+    '583375773':
+      v0: 0.64
+      v1: 0
+      v2: 0
+    '885956130':
+      v0: 0.62
+      v1: 0
+      v2: 0
+    '1037917937':
+      v0: 0.62
+      v1: 0
+      v2: 0
+    '2171668893':
+      v0: 0.32
+      v1: 0
+      v2: 0
+    '2485957880':
+      v0: 0.32
+      v1: 0
+      v2: 0
+    '2946606159':
+      v0: 0.36
+      v1: 0
+      v2: 0
+    '3672202131':
+      v0: 0.74
+      v1: 0
+      v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_29_43_sea_floor_shadow
-    cursor: 29
+    activeEntryId: e_default_42_56_stage_mirror_axis
+    cursor: 42
     autopilot:
       active: false
       delay_s: 30

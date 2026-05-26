@@ -204,25 +204,55 @@ entries:
   - id: e_default_29_43_sea_floor_shadow
     pattern: 43_sea_floor_shadow
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.42
+      sliderShadowWidth: 0.64
+      sliderShadowDrift: 0.6
+      sliderAbyssalSwell: 0.77
+      sliderEdgeFoam: 0.51
+      sliderBlackoutDepth: 0.8
+      sliderTriangleSilhouette: 0.7
     modulations: []
     notes: null
   - id: e_default_30_44_apex_gyro_vortex
     pattern: 44_apex_gyro_vortex
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.71
+      sliderVortexSpeed: 0.12
+      sliderSweepImpact: 0.91
+      sliderHullGlow: 0.21
+      sliderUvIntensity: 0.8
+      sliderVortexWidth: 0.09
     modulations: []
     notes: null
   - id: e_default_31_45_engine_room_clockwork
     pattern: 45_engine_room_clockwork
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderGearTeeth: 0.62
+      sliderTickDecay: 0.84
+      sliderPistonStroke: 0.75
+      sliderBoilerHeat: 0.82
+      sliderPauseAmount: 0.88
+      sliderTriangleDial: 0.81
     modulations: []
     notes: null
   - id: e_default_32_46_dome_lockdown
     pattern: 46_dome_lockdown
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.73
+      sliderTierDelay: 0.21
+      sliderDoorWidth: 0.82
+      sliderOpenImpact: 0
+      sliderHoldBlackout: 0.06
+      sliderEdgeUv: 0.83
+      sliderTriangleLead: 0.44
+      sliderSpinSpeed: 0
+      sliderSpinDirection: 0.75
+      sliderDoorOpenSoftness: 0.12
     modulations: []
     notes: null
   - id: e_default_33_47_apex_perimeter_ping
@@ -234,7 +264,14 @@ entries:
   - id: e_default_34_48_titanic_sos_beacon
     pattern: 48_titanic_sos_beacon
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.37
+      sliderSignalStrength: 0.42
+      sliderSignalSpeed: 0.19
+      sliderEchoDelay: 0.63
+      sliderEchoWidth: 0
+      sliderResponseGlow: 0
+      sliderAbyssalDarkness: 0
     modulations: []
     notes: null
   - id: e_default_35_49_boiler_pressure_release
@@ -246,25 +283,51 @@ entries:
   - id: e_default_36_50_iceberg_fracture
     pattern: 50_iceberg_fracture
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderFractureDensity: 0.35
+      sliderBranchSpread: 0.78
+      sliderStrikeDecay: 0.22
+      sliderAftershockWarmth: 0.72
+      sliderLaneCount: 0.23
+      sliderBlackoutDepth: 0.77
     modulations: []
     notes: null
   - id: e_default_37_51_abyssal_searchlight
     pattern: 51_abyssal_searchlight
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.21
+      sliderBeamCount: 0.53
+      sliderSweepWidth: 0.16
+      sliderGimbalDrift: 0.49
+      sliderSweepImpact: 0.48
+      sliderTrailLength: 0.47
+      sliderBlackoutDepth: 0.48
+      sliderSweepDirection: 0.29
     modulations: []
     notes: null
   - id: e_default_38_52_iceberg_shear_line
     pattern: 52_iceberg_shear_line
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.61
+      sliderShearAngle: 0.17
+      sliderShearWidth: 0.75
+      sliderAdvance: 0.21
+      sliderSubmergeDepth: 0
+      sliderWarmthRetreat: 0
+      sliderTriangleBlade: 0
     modulations: []
     notes: null
   - id: e_default_39_53_shadow_eclipse
     pattern: 53_shadow_eclipse
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.62
+      sliderEclipseDepth: 0.19
+      sliderCoronaBloom: 0.21
+      sliderRimShimmer: 0.15
     modulations: []
     notes: null
   - id: e_default_40_54_boiler_fire_overdrive
@@ -277,6 +340,21 @@ entries:
     pattern: 55_stardust_dome
     label: null
     defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_42_56_stage_mirror_axis
+    pattern: 56_stage_mirror_axis
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.62
+      sliderCenter: 0.62
+      sliderMirrorWidth: 0.32
+      sliderOrbitSpeed: 0.42
+      sliderParticleDensity: 0.36
+      sliderStageFocus: 0.64
+      sliderBlackoutDepth: 0.74
+      sliderUvEdge: 0.32
+      sliderCenterGuide: 0
     modulations: []
     notes: null
   - id: e_default_42_70_forest_canopy_reveal

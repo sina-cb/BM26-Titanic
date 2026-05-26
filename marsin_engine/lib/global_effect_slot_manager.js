@@ -39,6 +39,8 @@ export const DEFAULT_SLOT_CONFIG = [
   { slotId: 8,  enabled: true, label: 'Blast Wht',      effectId: 'blastWhite',     presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
   { slotId: 9,  enabled: true, label: 'UV Blast',       effectId: 'uvBlast',        presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
   { slotId: 10, enabled: true, label: 'Fogger',         effectId: 'fogger',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 11, enabled: true, label: 'Long Trails',    effectId: 'feedbackTrails', presetId: 'long_afterimage', behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 12, enabled: true, label: 'Cosmic Trails',  effectId: 'feedbackTrails', presetId: 'cosmic_trails',   behavior: 'toggle',  paramsOverride: {} },
 ];
 
 export const MIN_SLOTS = 1;
@@ -261,7 +263,7 @@ export class GlobalEffectSlotManager {
 
     switch (resolved.effectId) {
       case 'strobe':
-        this._dispatchStrobe({ resolved, action, frameIndex });
+        this._dispatchStrobe({ resolved, action, frameIndex, nowMs });
         return;
       case 'dropHit':
         if (['trigger', 'activate', 'down'].includes(action)) {
@@ -269,10 +271,10 @@ export class GlobalEffectSlotManager {
         }
         return;
       case 'colorWash':
-        this._dispatchColorWash({ resolved, action });
+        this._dispatchColorWash({ resolved, action, nowMs });
         return;
       case 'feedbackTrails':
-        this._dispatchFeedbackTrails({ resolved, action });
+        this._dispatchFeedbackTrails({ resolved, action, nowMs });
         return;
       // Legacy rig-globals (migrated May 2026): the slot dispatcher
       // routes through `controller.setEffect(...)` so the existing
@@ -313,52 +315,52 @@ export class GlobalEffectSlotManager {
     // last put it.
   }
 
-  _dispatchStrobe({ resolved, action, frameIndex }) {
+  _dispatchStrobe({ resolved, action, frameIndex, nowMs }) {
     const p = resolved.params;
     if (resolved.behavior === 'burst') {
       const dur = Math.min(MAX_BURST_MS, Math.max(0, p.durationMs ?? 1000));
       this.controller.triggerStrobeBurst(p.hz, dur, frameIndex, {
-        presetId: resolved.presetId, slotId: resolved.slotId,
+        presetId: resolved.presetId, slotId: resolved.slotId, fadeOutMs: p.fadeOutMs,
       });
       return;
     }
     if (resolved.behavior === 'hold') {
       if (action === 'down' || action === 'activate') {
         this.controller.setStrobe(true, p.hz, p.duty, p.intensity, frameIndex, {
-          presetId: resolved.presetId, slotId: resolved.slotId,
+          presetId: resolved.presetId, slotId: resolved.slotId, fadeOutMs: p.fadeOutMs,
         });
       } else if (action === 'up' || action === 'deactivate') {
-        this.controller.stopStrobe();
+        this.controller.stopStrobe({ nowMs });
       }
       return;
     }
     // toggle
     if (action === 'deactivate' || action === 'up') {
-      this.controller.stopStrobe();
+      this.controller.stopStrobe({ nowMs });
       return;
     }
     const sameStrobe = this.controller.strobeActive &&
       this.controller.activeStrobePresetId === resolved.presetId;
     if (sameStrobe && (action === 'toggle' || action === undefined)) {
-      this.controller.stopStrobe();
+      this.controller.stopStrobe({ nowMs });
     } else {
       this.controller.setStrobe(true, p.hz, p.duty, p.intensity, frameIndex, {
-        presetId: resolved.presetId, slotId: resolved.slotId,
+        presetId: resolved.presetId, slotId: resolved.slotId, fadeOutMs: p.fadeOutMs,
       });
     }
   }
 
-  _dispatchColorWash({ resolved, action }) {
+  _dispatchColorWash({ resolved, action, nowMs }) {
     const p = resolved.params;
     if (action === 'deactivate' || action === 'up') {
-      this.controller.setColorWash(false);
+      this.controller.setColorWash(false, null, 0, 'tint', { nowMs });
       return;
     }
     if (resolved.behavior === 'toggle') {
       const sameWash = this.controller.colorWashConfig.enabled &&
         this.controller.colorWashConfig.preset === resolved.presetId;
       if (sameWash && (action === 'toggle' || action === undefined)) {
-        this.controller.setColorWash(false);
+        this.controller.setColorWash(false, null, 0, 'tint', { nowMs });
       } else {
         this.controller.setColorWash(true, resolved.presetId, p.amount, p.mode, {
           slotId: resolved.slotId,
@@ -371,15 +373,15 @@ export class GlobalEffectSlotManager {
     }
   }
 
-  _dispatchFeedbackTrails({ resolved, action }) {
+  _dispatchFeedbackTrails({ resolved, action, nowMs }) {
     if (action === 'deactivate' || action === 'up') {
-      this.controller.setFeedbackTrails(false);
+      this.controller.setFeedbackTrails(false, null, {}, { nowMs });
       return;
     }
     const same = this.controller.feedbackTrailsConfig.enabled &&
       this.controller.feedbackTrailsConfig.preset === resolved.presetId;
     if (same && (action === 'toggle' || action === undefined)) {
-      this.controller.setFeedbackTrails(false);
+      this.controller.setFeedbackTrails(false, null, {}, { nowMs });
     } else {
       this.controller.setFeedbackTrails(true, resolved.presetId, resolved.params, {
         slotId: resolved.slotId,

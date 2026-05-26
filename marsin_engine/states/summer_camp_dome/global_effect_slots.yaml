@@ -15,9 +15,9 @@ slots:
     paramsOverride: {}
   - slotId: 3
     enabled: true
-    label: Vintage Amber
-    effectId: colorWash
-    presetId: vintage_amber
+    label: Fogger
+    effectId: fogger
+    presetId: default
     behavior: toggle
     paramsOverride: {}
   - slotId: 4
