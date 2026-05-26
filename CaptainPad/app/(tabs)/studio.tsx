@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvo
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern } from '@/utils/api';
+import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
 
 export default function StudioScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
@@ -26,12 +26,24 @@ export default function StudioScreen() {
   }, []);
 
   const loadPatterns = async () => {
+    // Operator bug May 26 2026: studio tab loaded blank on a cold app
+    // start because fetchPatterns() runs against the module-level
+    // api_base which is still the YAML default until getApiBaseAsync
+    // resolves AsyncStorage. Other tabs (deck/mixer) await this in
+    // their connectToEngine paths; studio never did, so its first
+    // GET went to the wrong host. Awaiting here makes the studio
+    // self-sufficient — no dependency on tab-mount ordering.
+    await getApiBaseAsync().catch(() => undefined);
     const result = await fetchPatterns();
     if (result.ok && result.data && Array.isArray(result.data)) {
       setPatterns(result.data);
       if (result.data.length > 0 && !activeFile) {
         handleSelectFile(result.data[0]);
+      } else if (result.data.length === 0) {
+        setLogs('> No pattern files found. Check engine connectivity.');
       }
+    } else {
+      setLogs(`> Error loading pattern list: ${result.error || 'unknown'}`);
     }
   };
 

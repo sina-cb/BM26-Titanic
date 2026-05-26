@@ -85,10 +85,22 @@ export function ColorPickerModal({
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      const next = await warmColorPalettesCache({ force: presets.length === 0 });
+      // Sync from the latest cache first — if the boot warm finished
+      // AFTER this component mounted (e.g. opened deck before cache
+      // settled, then opened the picker), useState's initial value
+      // would still be the empty snapshot we captured at mount.
+      // Operator bug May 26 2026: deck color picker showed Manual
+      // tab only while the mixer (mounted later) showed presets.
+      const cached = getCachedColorPalettes();
+      if (cached.length > 0 && presets.length === 0 && !cancelled) {
+        setPresets(cached);
+      }
+      const next = await warmColorPalettesCache({ force: presets.length === 0 && cached.length === 0 });
       if (cancelled) return;
-      if (Array.isArray(next) && next.length > 0 && next !== presets) {
-        setPresets(next);
+      if (Array.isArray(next) && next.length > 0) {
+        // Set unconditionally when we have items — comparing by reference
+        // could miss an in-place cache refresh. The render below is cheap.
+        if (presets.length === 0 || next !== presets) setPresets(next);
       }
     })();
     return () => { cancelled = true; };

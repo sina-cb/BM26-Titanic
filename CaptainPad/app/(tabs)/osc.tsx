@@ -227,11 +227,19 @@ export default function OscConfigScreen() {
     portDraft !== String(cfg.port ?? '') || (hostDraft ?? '') !== (cfg.host ?? '')
   );
 
+  // useOscStatus returns { state, label, stats } per OscPillState.
+  // The throughput counters and lastSender live on `stats`, not at the
+  // top level — earlier code accessed them as liveStatus.rxMessagesPerSec
+  // etc. (always undefined → 0), so the OSC tab silently showed 0/0/0/0
+  // even when the deck/mixer status pill correctly reported live
+  // traffic. Operator bug May 26 2026.
   const pillState = liveStatus?.state ?? null;
+  const oscStats = liveStatus?.stats ?? null;
   const pillColor =
-    pillState === 'live'   ? ACCENT_AUTO :
-    pillState === 'stale'  ? C.error :
-    pillState === 'off'    ? C.icon :
+    pillState === 'live'      ? ACCENT_AUTO :
+    pillState === 'unmapped'  ? C.error :
+    pillState === 'idle'      ? C.error :
+    pillState === 'off'       ? C.icon :
     C.icon;
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -300,19 +308,19 @@ export default function OscConfigScreen() {
               {cfg.running ? `${cfg.host}:${cfg.port}` : '—'}
             </Text>
           </View>
-          {liveStatus?.lastSender ? (
+          {oscStats?.lastSender ? (
             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon }}>
-              Last sender: <Text style={{ color: C.text }}>{liveStatus.lastSender}</Text>
+              Last sender: <Text style={{ color: C.text }}>{oscStats.lastSender}</Text>
             </Text>
           ) : null}
           <View style={SUB_CARD}>
             <SubHeader title="THROUGHPUT (PER SEC)" />
             <View style={{ flexDirection: 'row', gap: 24 }}>
               {([
-                { label: 'RX',      value: liveStatus?.rxMessagesPerSec ?? 0,      color: C.text },
-                { label: 'MAPPED',  value: liveStatus?.mappedMessagesPerSec ?? 0,  color: ACCENT_AUTO },
-                { label: 'DROPPED', value: liveStatus?.droppedMessagesPerSec ?? 0, color: C.error },
-                { label: 'INVALID', value: liveStatus?.invalidMessagesPerSec ?? 0, color: C.error },
+                { label: 'RX',      value: oscStats?.rxMessagesPerSec ?? 0,      color: C.text },
+                { label: 'MAPPED',  value: oscStats?.mappedMessagesPerSec ?? 0,  color: ACCENT_AUTO },
+                { label: 'DROPPED', value: oscStats?.droppedMessagesPerSec ?? 0, color: C.error },
+                { label: 'INVALID', value: oscStats?.invalidMessagesPerSec ?? 0, color: C.error },
               ] as const).map(({ label, value, color }) => (
                 <View key={label}>
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>

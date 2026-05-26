@@ -45,6 +45,7 @@
 import { useEffect, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
+import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel } from '@/utils/api';
 
 export interface SharedParamValue {
@@ -367,10 +368,18 @@ function _ensureInitialized() {
   // sharedParams warm-up the engine sends on /ws/control connect.
   engineEvents.subscribe(_onMessage);
   // Params plane (post-May-2026 topic split): the canonical CPC
-  // updates (sharedParams) and analyser meters (liveParams) only
-  // arrive here. Without this subscribe the audio meters would be
-  // frozen at the warm-up snapshot for the lifetime of the app.
+  // updates (sharedParams) arrive here when operators turn knobs.
+  // Without this subscribe sharedParams would be frozen at the
+  // warm-up snapshot for the lifetime of the app.
   engineParamsEvents.subscribe(_onMessage);
+  // Signals plane: liveParams (mic*, stems*, tempoBpm) at the
+  // analyser's 15-30 Hz cadence. Per ws_topic_routing.js this is
+  // the ONLY topic that carries liveParams — without this subscribe
+  // the Audio Analysis tab meters and the deck BPM badge never
+  // update. Operator-reported bug May 26 2026: "audio analysis is
+  // not detecting the mic" — the engine WAS detecting fine, the
+  // iPad was just listening on the wrong bus.
+  engineSignalsEvents.subscribe(_onMessage);
 
   // Seed from REST so the first paint is already correct even before
   // the first WS message lands. Both endpoints fail silently — the WS
