@@ -123,14 +123,26 @@ export function applyContinuousModulation({
   curve = 'linear',
 }) {
   const baseClamped = clamp01(baseNorm);
-  const sCurved = applyCurve(clamp01(sourceNorm), curve);
+  const sClamped = clamp01(sourceNorm);
   const [minDelta, maxDelta] = range;
 
   let delta;
   if (polarity === 'bipolar') {
-    const bipolarS = (sCurved - 0.5) * 2.0;
-    delta = bipolarS * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
+    // Bipolar uses a symmetric-curve formulation: compute the
+    // signed deviation from the source's neutral point (0.5)
+    // FIRST, then apply the curve to the magnitude only, then
+    // re-attach the sign. This preserves the "source=0.5 → no
+    // movement" invariant for every curve (otherwise easeIn/exp
+    // would shift the no-move point off 0.5, surprising the
+    // operator). The scale factor `2 * max(|min|, |max|)` is the
+    // peak swing; the magnitude-only curve shapes the response
+    // toward the peak without breaking symmetry.
+    const bipolarS = (sClamped - 0.5) * 2.0;
+    const sign = bipolarS < 0 ? -1 : 1;
+    const curvedMag = applyCurve(Math.abs(bipolarS), curve);
+    delta = sign * curvedMag * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
   } else {
+    const sCurved = applyCurve(sClamped, curve);
     delta = minDelta + sCurved * (maxDelta - minDelta);
   }
 

@@ -11,6 +11,7 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import { AutopilotTimerPills, DeckTransitionControls } from '@/components/DeckTransitionControls';
+import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
   getApiBaseAsync,
@@ -94,6 +95,10 @@ export default function ControlDeckScreen() {
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
+  // D6: floating ALL MODULATIONS overlay state. Placed at the screen
+  // level so the panel can layer above every card on the deck without
+  // borrowing the deck channel card's clipping context.
+  const [showAllMods, setShowAllMods] = useState(false);
 
   // Post-channel-split (May 2026): the deck channel comes from its
   // own /deck/channel endpoint and the WS `deck` event. The mixer's
@@ -429,14 +434,41 @@ export default function ControlDeckScreen() {
 
                 return (
                   <View key={channel.id} style={{ width: '100%', backgroundColor: Colors.light.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-                    {/* Renaming the active playlist entry: tap the title and type.
-                        Auto-saves on blur; the PlaylistPanel listens for the same
-                        `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
-                    <EntryLabelEditor
-                      channelId={channel.id}
-                      channelLabel={channelTitle}
-                      locked={!!channel.locked}
-                    />
+                    {/* D6 trigger: ◎ ALL pill next to the entry label.
+                        Disabled when no deck playlist is loaded — the
+                        AllModulationsPanel renders an empty state in
+                        that case but the disabled affordance is a
+                        clearer signal up-front. */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <View style={{ flex: 1 }}>
+                        {/* Renaming the active playlist entry: tap the title and type.
+                            Auto-saves on blur; the PlaylistPanel listens for the same
+                            `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
+                        <EntryLabelEditor
+                          channelId={channel.id}
+                          channelLabel={channelTitle}
+                          locked={!!channel.locked}
+                        />
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => setShowAllMods(true)}
+                        disabled={!channel.playlist?.name}
+                        accessibilityLabel="Open all modulations panel"
+                        style={{
+                          paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                          borderWidth: 1, borderColor: '#00a86b',
+                          backgroundColor: 'transparent',
+                          opacity: channel.playlist?.name ? 1 : 0.4,
+                        }}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+                          color: '#00a86b', letterSpacing: 0.5,
+                        }}>
+                          ◎ ALL
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
 
                     <View style={{ marginBottom: 16 }}>
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
@@ -458,6 +490,14 @@ export default function ControlDeckScreen() {
           </ScrollView>
         </View>
       </View>
+      {/* D6: floating ALL MODULATIONS overlay — rendered at the screen
+          level so it draws above every card. */}
+      <AllModulationsPanel
+        visible={showAllMods}
+        onClose={() => setShowAllMods(false)}
+        playlistName={deckChannel?.playlist?.name ?? null}
+        activeEntryId={deckChannel?.playlist?.activeEntryId ?? null}
+      />
     </View>
   );
 }

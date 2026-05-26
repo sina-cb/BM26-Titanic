@@ -215,26 +215,96 @@ function ModulationBadges({
   );
 }
 
-// ── shared ghost-overlay marker on a slider track ──────────────────
+// ── shared ghost-overlay handle on a slider track ──────────────────
+//
+// Replaced the original 3 px vertical line ghost (May 2026: operator
+// reported "green line on green wash" was unreadable) with a hollow
+// handle shaped like the primary fader thumb. The hollow stroke +
+// MOD_GREEN colour reads as "modulation is pushing the value HERE"
+// while leaving the track / fill visible behind it. No glow — the
+// glow washed the primary fill out at small sizes.
 function GhostMarker({ ghost }: { ghost: number | null }) {
   if (ghost === null) return null;
+  const GHOST_W = 14;
+  const GHOST_H = 18;
   return (
     <View
       pointerEvents="none"
       style={{
         position: 'absolute',
         left: `${Math.min(100, Math.max(0, ghost * 100))}%`,
+        top: 3,
+        height: GHOST_H,
+        width: GHOST_W,
+        marginLeft: -GHOST_W / 2,
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        borderColor: MOD_GREEN,
+        borderRadius: 4,
+        opacity: 0.85,
+      }}
+    />
+  );
+}
+
+// ── range-envelope band — visualises the modulation swing ─────────
+//
+// Faint translucent band on the slider track showing the range a
+// modulation can sweep, in the SAME normalised space as the
+// modulationState frame. The ghost handle (above) rides inside
+// this band. Maths must mirror modulation_engine.js
+// applyContinuousModulation so what the operator sees matches what
+// the engine fires.
+function modulationBandRange(
+  base: number,
+  mode: 'offset' | 'scale',
+  polarity: 'unipolar' | 'bipolar',
+  range: [number, number],
+): { lo: number; hi: number } {
+  const clamp = (x: number) => Math.min(1, Math.max(0, x));
+  const [minD, maxD] = range;
+  if (polarity === 'bipolar') {
+    const peak = Math.max(Math.abs(minD), Math.abs(maxD));
+    if (mode === 'scale') {
+      return { lo: clamp(base * (1 - peak)), hi: clamp(base * (1 + peak)) };
+    }
+    return { lo: clamp(base - peak), hi: clamp(base + peak) };
+  }
+  // unipolar
+  if (mode === 'scale') {
+    const a = clamp(base * (1 + minD));
+    const b = clamp(base * (1 + maxD));
+    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  }
+  const a = clamp(base + minD);
+  const b = clamp(base + maxD);
+  return { lo: Math.min(a, b), hi: Math.max(a, b) };
+}
+
+function ModulationRangeBand({
+  base, mode, polarity, range,
+}: {
+  base: number;
+  mode: 'offset' | 'scale';
+  polarity: 'unipolar' | 'bipolar';
+  range: [number, number];
+}) {
+  const { lo, hi } = modulationBandRange(base, mode, polarity, range);
+  const width = Math.max(0, hi - lo);
+  // Don't paint a hairline / zero-width band — looks like a glitch.
+  if (width < 0.005) return null;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: `${lo * 100}%`,
+        width: `${width * 100}%`,
         top: 0, bottom: 0,
-        width: 3,
-        marginLeft: -1.5,
-        backgroundColor: MOD_GREEN,
-        borderRadius: 2,
-        opacity: 0.95,
-        // Soft glow under the ghost line so it pops against the
-        // primary slider fill at any color palette.
-        shadowColor: MOD_GREEN,
-        shadowOpacity: 0.6, shadowRadius: 4,
-        shadowOffset: { width: 0, height: 0 },
+        backgroundColor: 'rgba(0,168,107,0.18)',
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: 'rgba(0,168,107,0.4)',
       }}
     />
   );
@@ -255,15 +325,24 @@ type ModulatedSliderProps = {
   onChanged: () => void;
 };
 
-export function ModulatedSlider({
+function ModulatedSliderImpl({
   exportItem, onChangeBase, playlistName, entryId, mapping, live, onChanged,
 }: ModulatedSliderProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const niceName = prettySliderName(exportItem.name);
   const base = exportItem.v0 ?? 0.5;
   // Ghost only when there's a live modulationState frame for this
-  // target — i.e. mapping is enabled and engine is actively writing.
-  const ghost = live && live.modulated !== undefined && live.modulated !== base ? live.modulated : null;
+  // target AND the divergence from base is at least 0.01 (kills
+  // sub-pixel jitter that would otherwise make the hollow-handle
+  // ghost flicker on/off every render). The mapping's enabled state
+  // is enforced server-side — the engine omits disabled mappings
+  // from the modulationState frame, so an enabled-only mapping
+  // satisfies the `live && diff` predicate here implicitly.
+  const ghost = live
+    && live.modulated !== undefined
+    && Math.abs(live.modulated - base) >= 0.01
+    ? live.modulated
+    : null;
   const hasMapping = !!mapping;
   const enabled = !!(playlistName && entryId);
 
@@ -305,18 +384,30 @@ export function ModulatedSlider({
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{base.toFixed(2)}</Text>
         </View>
       </View>
+      {/* D3 (May 2026): track keeps the standard surfaceContainerHigh
+          colour even when mapped — the full-track green wash competed
+          with the D2 range-envelope band. The ◎ ON badge + the band
+          itself communicate "this slider is mapped." */}
       <View style={{ position: 'relative' }}>
         <HorizontalFader
           value={base}
           onChange={onChangeBase}
           trackStyle={{
             height: 24,
-            backgroundColor: hasMapping ? MOD_GREEN_SOFT : C.surfaceContainerHigh,
+            backgroundColor: C.surfaceContainerHigh,
             borderRadius: 12,
             justifyContent: 'center',
           }}
           fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 12 }}
         />
+        {hasMapping && mapping ? (
+          <ModulationRangeBand
+            base={base}
+            mode={mapping.mode}
+            polarity={mapping.polarity}
+            range={mapping.range}
+          />
+        ) : null}
         <GhostMarker ghost={ghost} />
       </View>
       {popoverOpen && enabled ? (
@@ -333,6 +424,33 @@ export function ModulatedSlider({
     </View>
   );
 }
+
+// D7: React.memo with a custom equality check. With 20+ mapped
+// sliders any modulationState frame previously re-rendered every
+// ModulatedSlider on the page; we now skip re-render when neither
+// the export's id/v0, the mapping shape, nor this target's live
+// modulated value changed.
+export const ModulatedSlider = React.memo(
+  ModulatedSliderImpl,
+  (prev, next) => (
+    prev.exportItem.id === next.exportItem.id
+    && prev.exportItem.v0 === next.exportItem.v0
+    && prev.exportItem.name === next.exportItem.name
+    && prev.playlistName === next.playlistName
+    && prev.entryId === next.entryId
+    && (prev.mapping?.id ?? null) === (next.mapping?.id ?? null)
+    && (prev.mapping?.enabled ?? null) === (next.mapping?.enabled ?? null)
+    && (prev.mapping?.range[0] ?? null) === (next.mapping?.range[0] ?? null)
+    && (prev.mapping?.range[1] ?? null) === (next.mapping?.range[1] ?? null)
+    && (prev.mapping?.mode ?? null) === (next.mapping?.mode ?? null)
+    && (prev.mapping?.polarity ?? null) === (next.mapping?.polarity ?? null)
+    && (prev.mapping?.curve ?? null) === (next.mapping?.curve ?? null)
+    && (prev.mapping?.source.key ?? null) === (next.mapping?.source.key ?? null)
+    && (prev.live?.modulated ?? null) === (next.live?.modulated ?? null)
+    && prev.onChangeBase === next.onChangeBase
+    && prev.onChanged === next.onChanged
+  ),
+);
 
 // ── ModulationReadonlyBadge — for the MIXER (no popover, no clear) ──
 //
@@ -386,7 +504,7 @@ type PopoverProps = {
   onChanged: () => void;
 };
 
-function ModulationPopover({
+export function ModulationPopover({
   paramName, targetParameter, playlistName, entryId, existing, onClose, onChanged,
 }: PopoverProps) {
   const [source, setSource] = useState<ModulationSourceKey>(existing?.source.key ?? 'micLow');
@@ -394,6 +512,15 @@ function ModulationPopover({
   const [polarity, setPolarity] = useState<ModulationPolarity>(existing?.polarity ?? 'unipolar');
   const [rangeMin, setRangeMin] = useState<string>(String(existing?.range[0] ?? 0));
   const [rangeMax, setRangeMax] = useState<string>(String(existing?.range[1] ?? 0.35));
+  // SWING ± magnitude for bipolar mode. Initialised from the existing
+  // mapping (max(|min|, |max|) — what the engine collapses to) so the
+  // popover round-trips cleanly. Kept separate from rangeMin/rangeMax
+  // so swapping unipolar ↔ bipolar restores the operator's previous
+  // unipolar values without losing them.
+  const initialSwing = existing && existing.polarity === 'bipolar'
+    ? String(Math.max(Math.abs(existing.range[0]), Math.abs(existing.range[1])))
+    : '0.25';
+  const [swing, setSwing] = useState<string>(initialSwing);
   const [curve, setCurve] = useState<ModulationCurve>(existing?.curve ?? 'linear');
   const [enabled, setEnabled] = useState<boolean>(existing?.enabled ?? true);
   const [busy, setBusy] = useState(false);
@@ -428,6 +555,19 @@ function ModulationPopover({
   const save = async () => {
     if (busy) return; // double-tap guard
     setBusy(true); setError(null);
+    // Bipolar uses a single SWING ± magnitude — collapse it into a
+    // symmetric range so the engine's `max(|min|, |max|)` resolves to
+    // exactly the magnitude the operator typed (no silent sign loss).
+    // Unipolar keeps independent min/max as before.
+    const finalRange: [number, number] = polarity === 'bipolar'
+      ? (() => {
+          const mag = Math.abs(clamp01Signed(Number(swing) || 0));
+          return [-mag, mag];
+        })()
+      : [
+          clamp01Signed(Number(rangeMin) || 0),
+          clamp01Signed(Number(rangeMax) || 0),
+        ];
     const mapping: ModulationMapping = {
       id: mappingId,
       type: 'continuous',
@@ -438,10 +578,7 @@ function ModulationPopover({
       // Defensive parse: `Number('foo')` is NaN, NaN || 0 = 0. The
       // engine validates -1 ≤ value ≤ 1 strictly; clamp here so the
       // operator gets immediate visual feedback instead of a 400.
-      range: [
-        clamp01Signed(Number(rangeMin) || 0),
-        clamp01Signed(Number(rangeMax) || 0),
-      ],
+      range: finalRange,
       curve,
     };
     try {
@@ -534,16 +671,57 @@ function ModulationPopover({
           </PickerRow>
 
           <PickerRow label="POLARITY">
-            <Chip active={polarity === 'unipolar'} onPress={() => setPolarity('unipolar')}>UNIPOLAR</Chip>
-            <Chip active={polarity === 'bipolar'} onPress={() => setPolarity('bipolar')}>BIPOLAR</Chip>
+            <Chip
+              active={polarity === 'unipolar'}
+              onPress={() => {
+                if (polarity === 'unipolar') return;
+                // bipolar → unipolar: seed min=0, max from current
+                // swing magnitude so the operator's amplitude
+                // intent carries across.
+                const mag = Math.abs(Number(swing) || 0);
+                setRangeMin('0');
+                setRangeMax(String(mag || 0.35));
+                setPolarity('unipolar');
+              }}
+            >UNIPOLAR</Chip>
+            <Chip
+              active={polarity === 'bipolar'}
+              onPress={() => {
+                if (polarity === 'bipolar') return;
+                // unipolar → bipolar: seed swing from the larger
+                // |min|, |max| so the visible band stays roughly the
+                // same width across the toggle.
+                const mag = Math.max(
+                  Math.abs(Number(rangeMin) || 0),
+                  Math.abs(Number(rangeMax) || 0),
+                );
+                setSwing(String(mag || 0.25));
+                setPolarity('bipolar');
+              }}
+            >BIPOLAR</Chip>
           </PickerRow>
 
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
-            <NumberInput value={rangeMin} onChange={setRangeMin} placeholder="min" />
-            <Text style={{ color: C.secondary }}>→</Text>
-            <NumberInput value={rangeMax} onChange={setRangeMax} placeholder="max" />
-          </View>
+          {polarity === 'bipolar' ? (
+            // D4a: bipolar collapses to a single SWING ± magnitude.
+            // The engine's bipolar math already does
+            // `max(|min|, |max|)` on the saved range, so showing min
+            // → max separately silently discarded the sign of one
+            // value. One field makes that explicit.
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>SWING ±</Text>
+              <NumberInput value={swing} onChange={setSwing} placeholder="0.25" />
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, flex: 1 }}>
+                ± from base (centred on 0.5 source)
+              </Text>
+            </View>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
+              <NumberInput value={rangeMin} onChange={setRangeMin} placeholder="min" />
+              <Text style={{ color: C.secondary }}>→</Text>
+              <NumberInput value={rangeMax} onChange={setRangeMax} placeholder="max" />
+            </View>
+          )}
 
           <PickerRow label="CURVE">
             {CURVE_OPTIONS.map((c) => (

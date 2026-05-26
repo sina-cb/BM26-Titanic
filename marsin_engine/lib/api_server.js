@@ -2779,6 +2779,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         try {
           if (data.name === null) {
             baseCh.playlist = null;
+            // Modulation context must be cleared here too — otherwise
+            // the last entry's mappings keep firing until a new
+            // pattern lands. setActiveEntry handles the
+            // null-playlist case (empty mappings → _lastWrittenTargets
+            // clears + base restore fires on the next frame).
+            pushActiveEntryToModulation();
             saveAllState();
             res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null }));
             broadcastMixerState();

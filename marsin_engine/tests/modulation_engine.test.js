@@ -52,6 +52,75 @@ test('offset + bipolar: source 0.5 → no movement', () => {
   approx(out, base);
 });
 
+test('bipolar + easeIn: source 0.5 still produces no movement (symmetric-curve formulation)', () => {
+  // The symmetric-curve formulation curves the magnitude of the
+  // deviation, not the raw 0..1 value. This keeps source=0.5 as the
+  // "neutral" point regardless of curve choice — otherwise easeIn
+  // squashes 0.5 → 0.25 BEFORE the bipolar subtract, so the no-move
+  // point shifts off 0.5 (operator-surprising).
+  const base = 0.6;
+  const out = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0.5, mode: 'offset', polarity: 'bipolar',
+    range: [-0.3, 0.3], curve: 'easeIn',
+  });
+  approx(out, base);
+});
+
+test('bipolar + easeIn: source=1 still hits +max swing', () => {
+  // Curve(|1.0 - 0.5| * 2) = curve(1) = 1 for easeIn/easeOut/exp at
+  // the endpoints, so the peak swing is reached exactly.
+  const base = 0.5;
+  const out = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 1, mode: 'offset', polarity: 'bipolar',
+    range: [-0.2, 0.2], curve: 'easeIn',
+  });
+  approx(out, 0.7);
+});
+
+test('bipolar + easeIn: source=0 still hits -max swing', () => {
+  const base = 0.5;
+  const out = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0, mode: 'offset', polarity: 'bipolar',
+    range: [-0.2, 0.2], curve: 'easeIn',
+  });
+  approx(out, 0.3);
+});
+
+test('bipolar + easeIn: midway sources are curve-saturated (move LESS than linear)', () => {
+  // sourceNorm=0.75 → bipolarS = 0.5 → easeIn(0.5) = 0.25.
+  // Magnitude = 0.25 × max(|range|) = 0.25 × 0.4 = 0.1.
+  // So modulated = 0.5 + 0.1 = 0.6, which is LESS than half of the
+  // peak (0.5 + 0.2 = 0.7) — the curve saturates the deviation as
+  // the source approaches 0.5 from either side.
+  const base = 0.5;
+  const out = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0.75, mode: 'offset', polarity: 'bipolar',
+    range: [-0.4, 0.4], curve: 'easeIn',
+  });
+  approx(out, 0.6);
+  // Sanity: must be strictly less than the linear midpoint (0.5 + 0.2 = 0.7).
+  assert.ok(out < 0.7, `easeIn should saturate the deviation, got ${out}`);
+});
+
+test('bipolar + easeOut: source=0.5 → no movement; source=0.75 moves MORE than linear', () => {
+  // easeOut(0.5) = 0.75 → magnitude = 0.75 × 0.4 = 0.3, modulated = 0.8.
+  // Linear midpoint would be 0.7, so easeOut moves more aggressively
+  // for small deviations from neutral (expected operator behavior:
+  // "small bumps in source punch through fast").
+  const base = 0.5;
+  const neutral = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0.5, mode: 'offset', polarity: 'bipolar',
+    range: [-0.4, 0.4], curve: 'easeOut',
+  });
+  approx(neutral, base);
+  const upMid = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0.75, mode: 'offset', polarity: 'bipolar',
+    range: [-0.4, 0.4], curve: 'easeOut',
+  });
+  approx(upMid, 0.8);
+  assert.ok(upMid > 0.7, `easeOut should accelerate, got ${upMid}`);
+});
+
 test('offset + bipolar: source 0 and 1 move symmetrically', () => {
   const base = 0.5;
   const down = applyContinuousModulation({
