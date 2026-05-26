@@ -5,7 +5,7 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { setDeckChannelControl, sendControl } from '@/utils/api';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { useChannelExports, useEngineState, MixerChannelExport } from '@/hooks/useEngineState';
+import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState } from '@/components/Modulation';
 import { engineEvents } from '@/utils/engineEvents';
 
@@ -23,7 +23,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   // on the engine-state hook. The BASE PARAMS strip in the mixer
   // variant reads from `deckChannel` directly so we can't
   // accidentally show a mixer overlay's exports there.
-  const { deckChannel } = useEngineState();
+  const deckChannel = useDeckChannel();
   const liveDeckExports = useChannelExports(channelId);
   const baseChannelId = deckChannel?.id;
   const liveBaseExports = useChannelExports(baseChannelId);
