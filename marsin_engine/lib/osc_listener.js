@@ -20,29 +20,23 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
-// Per-band operator gain is applied AT THE SOURCE before writing to
-// CPC, so every downstream consumer (patterns, modulation, iPad
-// meters, OSC echo) reads one authoritative value. This mirrors the
-// mic-side contract in audio_analyzer.js — when stems arrive over
-// OSC we multiply by the matching `<key>Gain` CPC param and clamp
-// to [0, 1] (live-key space is normalized). Pre-2026-05-26 the gain
-// was multiplied client-side in CaptainPad's <BandMeter> for display
-// only; patterns still saw the un-gained value. See operator brief
-// 2026-05-26 "live signals must show data after gain".
+import { GAIN_BY_KEY, processSignal } from './audio_post_processing.js';
+
+// Per-signal post-processing is applied AT THE SOURCE before writing
+// to CPC, so every downstream consumer (patterns, modulation, iPad
+// meters, OSC echo) reads one authoritative post-processed value. The
+// math + the signalKey→gainKey map live in
+// `lib/audio_post_processing.js` so the analyzer (mic side) and this
+// listener (stems side) run the EXACT same code path — no risk of
+// subtle behavioral diffs (operator brief 2026-05-26 "make sure the
+// gain and post-processing pipeline is the exact same for stems and
+// mic signals"). When V2 of the chain (docs/29 — Gain → LPF →
+// Schmitt → Hold → Compressor → …) lands, BOTH call sites pick up
+// the new ops for free.
 //
-// Codex P0: this map is intentionally fixed. Adding a new gainable
-// live key means adding it here AND in PARAM_REGISTRY — there is no
-// auto-discovery, because silent miss = "gain knob does nothing"
-// which is exactly the bug we're fixing.
-export const GAIN_BY_KEY = Object.freeze({
-  stemsBass:   'stemsBassGain',
-  stemsDrums:  'stemsDrumsGain',
-  stemsVocals: 'stemsVocalsGain',
-  micLow:      'micLowGain',
-  micMid:      'micMidGain',
-  micHigh:     'micHighGain',
-  micKick:     'micKickGain',
-});
+// Re-export GAIN_BY_KEY for back-compat with existing importers — the
+// post-processing module is the source of truth now.
+export { GAIN_BY_KEY };
 
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 
@@ -313,7 +307,16 @@ export class OscListener {
     // would silently fall back to "no gain" for that band and the
     // operator's knob would do nothing (the exact bug this whole
     // refactor fixes). Codex P0 — fail at boot, not at first packet.
+    //
+    // We ALSO record an optional `<liveKey>Raw` mirror — when the
+    // matching registry entry exists, the dispatcher writes the
+    // PRE-gain value to it alongside the post-gain value. CaptainPad
+    // SIGNAL DIAGNOSTICS reads these mirrors to show raw vs post.
+    // No error if the *Raw key is missing (e.g. a deployment with an
+    // older registry); raw publishing is a UI-only enhancement, the
+    // gain pipeline stays intact either way.
     this._gainByKey = {};
+    this._rawMirrorByKey = {};
     for (const [liveKey, gainKey] of Object.entries(GAIN_BY_KEY)) {
       if (!registryByKey[liveKey]) continue;
       if (!registryByKey[gainKey]) {
@@ -323,6 +326,8 @@ export class OscListener {
         );
       }
       this._gainByKey[liveKey] = gainKey;
+      const rawKey = `${liveKey}Raw`;
+      if (registryByKey[rawKey]) this._rawMirrorByKey[liveKey] = rawKey;
     }
 
     // Stats state. Counters are per-second snapshots, reset on
@@ -523,22 +528,32 @@ export class OscListener {
         continue;
       }
       if (b.kind === 'scalar') {
-        // Source-side gain: if this live key has a gain partner
-        // (stems*, mic*), multiply and clamp to [0, 1] BEFORE the
-        // value lands in CPC. Every downstream consumer sees the
-        // gained value — one truth. See GAIN_BY_KEY comment.
-        let outValue = value;
-        const gainKey = this._gainByKey[b.key];
-        if (gainKey !== undefined) {
-          // paramCenter.get throws on unknown keys (Codex P0). We
-          // validated each (liveKey, gainKey) pair at construction,
-          // so a throw here means someone tore down a gain key at
-          // runtime — let it surface, don't paper over it.
-          const g = this.paramCenter.get(gainKey);
-          const gained = value * g;
-          outValue = gained < 0 ? 0 : (gained > 1 ? 1 : gained);
-        }
+        // Source-side post-processing: if this live key has a gain
+        // partner (stems*, mic*), push it through the shared
+        // post-processing framework BEFORE it lands in CPC. Every
+        // downstream consumer sees the post-processed value — one
+        // truth. Same framework the analyzer uses for the mic side
+        // (lib/audio_post_processing.js), so any future op (LPF /
+        // Schmitt / Hold / Compressor per docs/29) lands here
+        // automatically.
+        const hasGain = this._gainByKey[b.key] !== undefined;
+        const outValue = hasGain
+          ? processSignal(this.paramCenter, b.key, value)
+          : value;
         writes.push({ kind: 'scalar', key: b.key, value: outValue });
+        // RAW mirror: when the registry has a `<liveKey>Raw` entry
+        // (e.g. stemsBassRaw), publish the PRE-processing value to it
+        // in the same setMany batch. CaptainPad SIGNAL DIAGNOSTICS
+        // uses these to show raw vs post side-by-side without having
+        // to reconstruct raw from `post / gain` (which can't recover
+        // clipped post=1.0 cases). The raw value is clamped to [0, 1]
+        // to match the live-key contract — a malformed OSC sender
+        // shouldn't put a denormal on the wire.
+        const rawKey = this._rawMirrorByKey[b.key];
+        if (rawKey !== undefined) {
+          const clamped = value < 0 ? 0 : (value > 1 ? 1 : value);
+          writes.push({ kind: 'scalar', key: rawKey, value: clamped });
+        }
       } else {
         const field = b.kind.slice(4);  // 'h'|'s'|'v'
         writes.push({ kind: 'hsv', key: b.key, field, value });

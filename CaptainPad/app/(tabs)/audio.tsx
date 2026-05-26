@@ -20,6 +20,8 @@
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -621,6 +623,325 @@ function MicLiveCard({ audioStatus }: { audioStatus: AudioStatus | null }) {
   );
 }
 
+// ── Signal diagnostics (raw vs post + shared-time trails) ──────────────
+//
+// Operator brief 2026-05-26 — "Add a row (only in the audio tab) to
+// show the raw signals, and below that the post-processed signals,
+// and then below each of those add the trails (with a common time
+// frame for the trail plots)."
+//
+// Layout:
+//   RAW : 4 mic bars + 3 stems bars  →  trail strip (one row per
+//                                       signal, shared X = last N s)
+//   POST: 4 mic bars + 3 stems bars  →  trail strip (same X axis)
+//
+// Both trails share ONE viewport-wide time window so the operator can
+// compare gain's effect at a glance — raw envelope vs post envelope.
+// The window is operator-selectable {5, 10, 15, 30 s} and persists to
+// AsyncStorage. Buffer lives in memory only.
+//
+// Lifecycle: the sample timer only runs while the audio tab is
+// focused (useFocusEffect). With ~7×2 signals × max 90 samples × 4 B
+// ≈ 5 KB of memory, the cost is dominated by the sample timer, which
+// is gated to focus.
+//
+// Subscription scope: this component owns its own
+// useLiveParamValues({raw + post keys}) — the bars re-render on every
+// live tick, but the rest of the AUDIO body never reads these keys
+// so it stays still. Preserves the spinner-hang perf fix
+// (commit dd69649, "useLiveParamValues per-key short-circuit").
+
+const SIGNAL_WINDOW_KEY = '@CaptainPad:audioTrailWindowS';
+const WINDOW_OPTIONS_S = [5, 10, 15, 30] as const;
+const DEFAULT_WINDOW_S = 10;
+const TRAIL_SAMPLE_HZ = 3;             // 3 Hz visual cadence — well under the 20 Hz WS rate
+const TRAIL_SAMPLE_MS = 1000 / TRAIL_SAMPLE_HZ;
+const MAX_TRAIL_S = WINDOW_OPTIONS_S[WINDOW_OPTIONS_S.length - 1];
+const MAX_BUFFER_LEN = MAX_TRAIL_S * TRAIL_SAMPLE_HZ;
+
+// The 7 signal slots rendered per row. `rawKey` reads from the
+// engine-published `<liveKey>Raw` mirror; `postKey` is the gained
+// `<liveKey>`. Order matches the pinned strip above so the operator's
+// eye-tracking stays consistent: mic L/M/H/K first, then stems V/B/D.
+type SignalSlot = {
+  label: string;
+  rawKey: string;
+  postKey: string;
+  accent: string;
+};
+
+// Module-scope to keep array identity stable across renders (avoids
+// useEffect / useMemo dep churn that would resize the ring buffer
+// every render). Same pattern as the pinned-strip's hard-coded MIC /
+// STEMS labels.
+const MIC_SIGNALS = [
+  { label: 'LOW',  rawKey: 'micLowRaw',  postKey: 'micLow',  accent: ACCENT_AUTO },
+  { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: ACCENT_AUTO },
+  { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: ACCENT_AUTO },
+  { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: C.error },
+] as const satisfies readonly SignalSlot[];
+
+const STEMS_SIGNALS = [
+  { label: 'VOC', rawKey: 'stemsVocalsRaw', postKey: 'stemsVocals', accent: C.primary },
+  { label: 'BAS', rawKey: 'stemsBassRaw',   postKey: 'stemsBass',   accent: C.primary },
+  { label: 'DRM', rawKey: 'stemsDrumsRaw',  postKey: 'stemsDrums',  accent: C.primary },
+] as const satisfies readonly SignalSlot[];
+
+const ALL_SIGNALS: readonly SignalSlot[] = [...MIC_SIGNALS, ...STEMS_SIGNALS];
+
+// Build the defaults snapshot once at module scope — useLiveParamValues
+// pins keys from the FIRST call's defaults so any per-render literal
+// would be wasted work and a hazard for the pinned-key set.
+const DIAGNOSTICS_DEFAULTS: Record<string, number> = (() => {
+  const acc: Record<string, number> = {};
+  for (const s of ALL_SIGNALS) { acc[s.rawKey] = 0; acc[s.postKey] = 0; }
+  return acc;
+})();
+
+// Compact bar — narrower than <BandMeter> because we render 7 of them
+// across a single row. Same colour + scale conventions so raw vs post
+// reads at a glance.
+function DiagBar({ label, value, accent }: { label: string; value: number; accent: string }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <View style={{ flex: 1, marginHorizontal: 3 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary,
+          textTransform: 'uppercase', letterSpacing: 0.4,
+        }}>{label}</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text,
+        }}>{v.toFixed(2)}</Text>
+      </View>
+      <View style={{
+        height: 10, borderRadius: 5,
+        backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden',
+      }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0,
+                       width: `${v * 100}%`, backgroundColor: accent }} />
+      </View>
+    </View>
+  );
+}
+
+// Per-row sparkline rendered as <View> bars — no SVG dependency
+// (operator constraint: do NOT add react-native-svg). Each bar is one
+// sampled value scaled to row height. Older samples LEFT, newest
+// RIGHT. We always render MAX_BUFFER_LEN bar slots so layout stays
+// stable across window changes; only the last `bufferLen` slots are
+// filled (window picker controls how many we draw).
+const TRAIL_ROW_HEIGHT = 22;
+
+function TrailRow({ label, samples, bufferLen, accent }: {
+  label: string; samples: readonly number[]; bufferLen: number; accent: string;
+}) {
+  // Last `bufferLen` samples, padded LEFT with empty so the newest
+  // sample always sits at the right edge regardless of how full the
+  // ring is. This is what makes the time axis read left-to-right with
+  // "now" anchored at the right edge.
+  const padded: (number | null)[] = useMemo(() => {
+    const out: (number | null)[] = new Array(bufferLen).fill(null);
+    const take = Math.min(samples.length, bufferLen);
+    for (let i = 0; i < take; i++) {
+      out[bufferLen - take + i] = samples[samples.length - take + i];
+    }
+    return out;
+  }, [samples, bufferLen]);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+      <Text style={{
+        width: 36, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+        color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.4,
+      }}>{label}</Text>
+      <View style={{
+        flex: 1, flexDirection: 'row', alignItems: 'flex-end',
+        height: TRAIL_ROW_HEIGHT, backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 3,
+        paddingHorizontal: 1, paddingVertical: 1, overflow: 'hidden',
+      }}>
+        {padded.map((s, idx) => {
+          const filled = s !== null;
+          const h = filled ? Math.max(1, (s as number) * (TRAIL_ROW_HEIGHT - 2)) : 0;
+          return (
+            <View key={idx} style={{
+              flex: 1, marginHorizontal: 0.5,
+              height: h, backgroundColor: filled ? accent : 'transparent',
+            }} />
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function WindowPicker({ value, onChange }: {
+  value: number; onChange: (s: number) => void;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      {WINDOW_OPTIONS_S.map(s => {
+        const active = s === value;
+        return (
+          <TouchableOpacity
+            key={s}
+            onPress={() => onChange(s)}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+              backgroundColor: active ? C.primary : C.surfaceContainerLowest,
+              borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+            }}
+          >
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+              color: active ? '#fff' : C.secondary, letterSpacing: 0.6,
+            }}>{s}s</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+function SignalDiagnostics() {
+  // Live subscription — per-key short-circuit means this re-renders
+  // only when one of the 14 listed keys actually ticks. Module-scope
+  // `DIAGNOSTICS_DEFAULTS` keeps the key set pinned across renders.
+  const live = useLiveParamValues(DIAGNOSTICS_DEFAULTS) as Record<string, number>;
+
+  // Operator-tunable trail window — persisted across launches.
+  const [windowS, setWindowS] = useState<number>(DEFAULT_WINDOW_S);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(SIGNAL_WINDOW_KEY).then(raw => {
+      if (!alive || !raw) return;
+      const parsed = parseInt(raw, 10);
+      if (WINDOW_OPTIONS_S.includes(parsed as typeof WINDOW_OPTIONS_S[number])) {
+        setWindowS(parsed);
+      }
+    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
+    return () => { alive = false; };
+  }, []);
+  const setWindow = useCallback((s: number) => {
+    setWindowS(s);
+    AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s))
+      .catch(() => { /* benign — persistence is best-effort */ });
+  }, []);
+
+  // Ring buffer state — one number[] per (slot, raw|post) pair. Using
+  // useState with array IDENTITY changes so <TrailRow>'s useMemo
+  // recomputes the padded view. The buffer is bounded at MAX_BUFFER_LEN
+  // regardless of selected window (we always keep enough for the
+  // largest window, then slice the tail for rendering).
+  const [trails, setTrails] = useState<{ raw: number[][]; post: number[][] }>(() => ({
+    raw:  ALL_SIGNALS.map(() => []),
+    post: ALL_SIGNALS.map(() => []),
+  }));
+
+  // Always read the latest live values from a ref so the sample timer
+  // callback (started once per focus) doesn't need `live` in its deps.
+  // The component re-renders on every live tick, which updates the
+  // ref; the timer pulls from the ref at TRAIL_SAMPLE_HZ.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+
+  // Sample timer — runs ONLY while the audio tab is focused. Pushes
+  // one frame into every ring buffer at TRAIL_SAMPLE_HZ. Tab blur
+  // clears the timer so we don't burn cycles on background tabs.
+  useFocusEffect(useCallback(() => {
+    const interval = setInterval(() => {
+      const snap = liveRef.current;
+      setTrails(prev => {
+        const nextRaw  = prev.raw.map((buf, i) => {
+          const v = snap[ALL_SIGNALS[i].rawKey] ?? 0;
+          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
+          out.push(v);
+          return out;
+        });
+        const nextPost = prev.post.map((buf, i) => {
+          const v = snap[ALL_SIGNALS[i].postKey] ?? 0;
+          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
+          out.push(v);
+          return out;
+        });
+        return { raw: nextRaw, post: nextPost };
+      });
+    }, TRAIL_SAMPLE_MS);
+    return () => clearInterval(interval);
+  }, []));
+
+  const bufferLen = windowS * TRAIL_SAMPLE_HZ;
+
+  return (
+    <View style={CARD}>
+      <SectionHeader
+        icon="waveform.path.ecg.rectangle"
+        title="SIGNAL DIAGNOSTICS"
+        hint="Raw (pre-gain) vs post (gained) for every audio signal, with a shared-time trail."
+        right={<WindowPicker value={windowS} onChange={setWindow} />}
+      />
+
+      {/* ── RAW row ───────────────────────────────────────────────── */}
+      <SubHeader title="RAW (PRE-GAIN)" />
+      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+        <View style={{ flex: 4, flexDirection: 'row', alignItems: 'flex-end' }}>
+          {MIC_SIGNALS.map(s => (
+            <DiagBar key={s.rawKey} label={s.label}
+                     value={live[s.rawKey] ?? 0} accent={s.accent} />
+          ))}
+        </View>
+        <View style={{ width: 1, backgroundColor: C.ghostBorder, marginHorizontal: 8 }} />
+        <View style={{ flex: 3, flexDirection: 'row', alignItems: 'flex-end' }}>
+          {STEMS_SIGNALS.map(s => (
+            <DiagBar key={s.rawKey} label={s.label}
+                     value={live[s.rawKey] ?? 0} accent={s.accent} />
+          ))}
+        </View>
+      </View>
+      <View style={{ marginBottom: 12 }}>
+        {ALL_SIGNALS.map((s, i) => (
+          <TrailRow key={`raw-${s.rawKey}`} label={s.label}
+                    samples={trails.raw[i]} bufferLen={bufferLen}
+                    accent={s.accent} />
+        ))}
+      </View>
+
+      {/* ── POST row ──────────────────────────────────────────────── */}
+      <SubHeader title="POST (GAINED)" />
+      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+        <View style={{ flex: 4, flexDirection: 'row', alignItems: 'flex-end' }}>
+          {MIC_SIGNALS.map(s => (
+            <DiagBar key={s.postKey} label={s.label}
+                     value={live[s.postKey] ?? 0} accent={s.accent} />
+          ))}
+        </View>
+        <View style={{ width: 1, backgroundColor: C.ghostBorder, marginHorizontal: 8 }} />
+        <View style={{ flex: 3, flexDirection: 'row', alignItems: 'flex-end' }}>
+          {STEMS_SIGNALS.map(s => (
+            <DiagBar key={s.postKey} label={s.label}
+                     value={live[s.postKey] ?? 0} accent={s.accent} />
+          ))}
+        </View>
+      </View>
+      <View>
+        {ALL_SIGNALS.map((s, i) => (
+          <TrailRow key={`post-${s.postKey}`} label={s.label}
+                    samples={trails.post[i]} bufferLen={bufferLen}
+                    accent={s.accent} />
+        ))}
+      </View>
+
+      <Text style={{
+        fontFamily: 'Inter_400Regular', fontSize: 10,
+        color: C.icon, marginTop: 8,
+      }}>
+        Both trails share the same {windowS}s window — compare raw envelope vs gained envelope at a glance.
+      </Text>
+    </View>
+  );
+}
+
 // ── Screen ──────────────────────────────────────────────────────────────
 
 // ── Mount strategy ────────────────────────────────────────────────────────
@@ -845,6 +1166,13 @@ function AudioConfigBody({
             <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 12 }}>{patchError}</Text>
           </View>
         ) : null}
+
+        {/* ── SIGNAL DIAGNOSTICS (raw vs post + shared-time trail) ──────
+            Lives above the tuning cards so the operator's eye lands on
+            "what is the rig actually seeing right now?" before any
+            knob adjustments. Owns its own live subscription so the
+            tuning sliders below stay decoupled from analyser ticks. */}
+        <SignalDiagnostics />
 
         {/* ── 1. MASTER ENABLE / DISABLE ────────────────────────────── */}
         <View style={CARD}>

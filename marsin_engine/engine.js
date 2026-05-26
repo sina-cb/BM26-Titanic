@@ -934,24 +934,37 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        // Per-band gain is applied INSIDE the analyzer (see header
-        // comment in audio_analyzer.js). The values we receive here
-        // are already gained + clamped to [0, 1] — the authoritative
-        // read every downstream consumer will see.
+        // Per-band gain (and any future post-processing op) is applied
+        // INSIDE the analyzer via the shared `audio_post_processing.js`
+        // framework — see header comment. We hand the analyzer the CPC
+        // SIGNAL keys (`micLow`, `micMid`, …); the framework derives
+        // each gain key from GAIN_BY_KEY and pulls the live value from
+        // `paramCenter`. The values we receive here are the
+        // post-processed (gained + clamped) bands plus their raw
+        // counterparts — both are written to CPC so the iPad can show
+        // raw vs post side-by-side.
         paramCenter,
-        gainKeys: {
-          low:  'micLowGain',
-          mid:  'micMidGain',
-          high: 'micHighGain',
-          kick: 'micKickGain',
+        signalKeys: {
+          low:  'micLow',
+          mid:  'micMid',
+          high: 'micHigh',
+          kick: 'micKick',
         },
-        onAnalysis: ({ low, mid, high, kick }) => {
+        onAnalysis: ({ low, mid, high, kick, lowRaw, midRaw, highRaw, kickRaw }) => {
           if (kick > 0.95) audioState.lastKickAt = Date.now();
+          // Single setMany so the downstream onChange fan-out fires
+          // ONCE per hop for the full 8-key bundle (post + raw), not
+          // twice. CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys
+          // to render the raw row of the diagnostics strip.
           paramCenter.setMany([
-            { kind: 'scalar', key: 'micLow',  value: low  },
-            { kind: 'scalar', key: 'micMid',  value: mid  },
-            { kind: 'scalar', key: 'micHigh', value: high },
-            { kind: 'scalar', key: 'micKick', value: kick },
+            { kind: 'scalar', key: 'micLow',     value: low     },
+            { kind: 'scalar', key: 'micMid',     value: mid     },
+            { kind: 'scalar', key: 'micHigh',    value: high    },
+            { kind: 'scalar', key: 'micKick',    value: kick    },
+            { kind: 'scalar', key: 'micLowRaw',  value: lowRaw  },
+            { kind: 'scalar', key: 'micMidRaw',  value: midRaw  },
+            { kind: 'scalar', key: 'micHighRaw', value: highRaw },
+            { kind: 'scalar', key: 'micKickRaw', value: kickRaw },
           ], 'audio', 'audio:mic');
         },
       });

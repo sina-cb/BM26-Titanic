@@ -316,6 +316,79 @@ test('bad arg type increments invalid', () => {
   assert.equal(l.getStatus().invalidMessagesPerSec, 1);
 });
 
+// ── Raw + Post pair publishing (single-hop atomic fan-out) ────────────────
+//
+// When a stems/mic OSC binding fires AND the registry has the matching
+// `<liveKey>Raw` twin, the listener writes BOTH the raw value and the
+// post-processed value to CPC in ONE setMany batch — same hop, same
+// timestamp, atomic from the subscriber's POV. iPad relies on this for
+// trail/instant plots; patterns/modulation read the post-processed key.
+
+test('raw + post pair: gain=2 doubles post but raw passes through, in one setMany', () => {
+  // Register the *Raw twin so _rawMirrorByKey picks it up. Without the
+  // twin in the schema the listener still publishes the post-only
+  // value (back-compat with deployments missing the raw keys).
+  const pc = makeMockParamCenter([
+    { key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
+      range: [0, 1], default: 0,
+      live: true, broadcastHz: 15, persist: false, portWatch: false },
+  ]);
+  // Twist the gain knob to 2× so post ≠ raw and we can tell them apart.
+  pc.set('stemsVocalsGain', 2.0, 'api');
+  const l = new OscListener({ port: 6970, paramCenter: pc });
+  // Drain the .set() bookkeeping call so we can assert on the dispatch
+  // batch in isolation.
+  pc.calls.length = 0;
+  dispatchPacket(l, '/marsin/stems/vocals', [0.3]);
+  assert.equal(pc.calls.length, 1, 'one packet → one setMany call');
+  const writes = pc.calls[0].writes;
+  // Two writes in the SAME batch: post first, raw second (order matches
+  // the dispatch impl). Both must be scalar kind, both for the same hop.
+  assert.equal(writes.length, 2, 'raw + post = 2 writes in one batch');
+  const postWrite = writes.find(w => w.key === 'stemsVocals');
+  const rawWrite  = writes.find(w => w.key === 'stemsVocalsRaw');
+  assert.ok(postWrite, 'post key written');
+  assert.ok(rawWrite,  'raw key written');
+  // Float32 round-trip on the wire — same tolerance the other tests use.
+  assert.ok(Math.abs(rawWrite.value  - 0.3) < FLOAT_TOL, `raw was ${rawWrite.value}`);
+  assert.ok(Math.abs(postWrite.value - 0.6) < FLOAT_TOL, `post was ${postWrite.value}`);
+});
+
+test('raw + post pair: post saturates at 1.0 while raw passes through unclamped (within [0,1])', () => {
+  // Gain 4× × raw 0.5 = post 2.0 → clamps to 1.0. Raw should still be
+  // exactly the OSC input value (0.5). Lets the iPad show the operator
+  // "the post is saturated but the raw signal is at 0.5".
+  const pc = makeMockParamCenter([
+    { key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
+      range: [0, 1], default: 0,
+      live: true, broadcastHz: 15, persist: false, portWatch: false },
+  ]);
+  pc.set('stemsVocalsGain', 4.0, 'api');
+  const l = new OscListener({ port: 6970, paramCenter: pc });
+  pc.calls.length = 0;
+  dispatchPacket(l, '/marsin/stems/vocals', [0.5]);
+  const writes = pc.calls[0].writes;
+  const postWrite = writes.find(w => w.key === 'stemsVocals');
+  const rawWrite  = writes.find(w => w.key === 'stemsVocalsRaw');
+  assert.ok(Math.abs(rawWrite.value - 0.5) < FLOAT_TOL, `raw was ${rawWrite.value}`);
+  assert.equal(postWrite.value, 1.0, `post must clamp to 1.0; got ${postWrite.value}`);
+});
+
+test('raw + post pair: absent *Raw registry entry → post-only (back-compat)', () => {
+  // The mock schema has stemsVocals + stemsVocalsGain but NO
+  // stemsVocalsRaw. The listener must still dispatch the post value;
+  // raw publishing is a UI-only enhancement, not a contract for the
+  // post pipeline.
+  const pc = makeMockParamCenter();  // no extras
+  pc.set('stemsVocalsGain', 2.0, 'api');
+  const l = new OscListener({ port: 6970, paramCenter: pc });
+  pc.calls.length = 0;
+  dispatchPacket(l, '/marsin/stems/vocals', [0.3]);
+  assert.equal(pc.calls[0].writes.length, 1, 'no raw entry → 1 write only');
+  assert.equal(pc.calls[0].writes[0].key, 'stemsVocals');
+  assert.ok(Math.abs(pc.calls[0].writes[0].value - 0.6) < FLOAT_TOL);
+});
+
 // ── Allowlist (with IP normalization) ──────────────────────────────────────
 
 test('allowlist allows configured IP, drops unknown', () => {

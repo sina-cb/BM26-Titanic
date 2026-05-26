@@ -1,8 +1,21 @@
 /**
- * AudioAnalyzer — FFT, band energy + kick detection.
+ * AudioAnalyzer — FFT, band energy + kick detection. PURE DATA SOURCE.
  *
  * Reads Int16 PCM frames via `pushSamples(int16)` and emits per-hop
- * analysis results to `onAnalysis({ low, mid, high, kick })`.
+ * analysis results to `onAnalysis({ low, lowRaw, mid, midRaw, high,
+ * highRaw, kick, kickRaw })` — both the raw post-envelope band value
+ * AND the post-processed value (gain × clamp today, future: filter /
+ * smoothing / schmitt per docs/29) for every band. The engine then
+ * publishes BOTH to CPC so consumers (patterns, modulation, iPad
+ * trail/instant plots) can read either.
+ *
+ * Architectural rationale (operator brief, 2026-05-26): the analyzer
+ * is a data source; all post-processing math lives in
+ * `lib/audio_post_processing.js` so the mic side (this file) and
+ * the stems side (`lib/osc_listener.js`) run the EXACT same
+ * pipeline. Single source of truth — when V2 of the pipeline (LPF
+ * / Schmitt / Hold / Compressor per docs/29) lands, both call sites
+ * pick it up for free with zero divergence risk.
  *
  * Design: docs/25_marsin_audio_analysis.md §4. Summary:
  *
@@ -15,24 +28,14 @@
  *     indices at construction / reconfigure. Per-band sum-of-magnitudes.
  *   - Soft compression `x / (1 + x)` plus a pre-clamp gain so quiet
  *     rooms still produce visible movement. The per-band operator
- *     gain (`mic*Gain` CPC params) is applied HERE, in the analyzer,
- *     immediately before the post-envelope band value is written to
- *     CPC. This makes the CPC band value the single authoritative
- *     read for every downstream consumer (patterns, modulation
- *     controller, CaptainPad meters, OSC echo) — one truth. The
- *     gained value is clamped to [0, 1] so the live-key contract
- *     (normalized) is preserved even when an operator pushes the
- *     gain above 1×.
- *
- *     Architectural rationale (2026-05-26 — operator brief
- *     "live signals must show data after gain"): before this change
- *     gain was multiplied client-side in CaptainPad's <BandMeter>
- *     for display only — the raw value was still on the wire, so
- *     patterns / modulation / OSC saw the un-gained value while the
- *     operator's meter showed something else. That's a fiction the
- *     UI is selling. Gain at the SOURCE means the knob actually
- *     moves what the rig responds to, and the meter shows what the
- *     rig sees.
+ *     gain (`mic*Gain` CPC params) is applied via the shared
+ *     post-processing framework (`lib/audio_post_processing.js`)
+ *     immediately after the envelope, before the value is emitted.
+ *     The framework is called with the live signal key (`micLow`,
+ *     `micMid`, etc.); it derives the gain key, multiplies, and
+ *     clamps to [0, 1]. The engine writes BOTH the raw post-envelope
+ *     value AND the post-processed value to CPC so the iPad can
+ *     visualize the pre/post pair without guessing.
  *   - Per-band asymmetric attack/release envelope (VU-meter
  *     convention): fast attack so peaks register, slow release so
  *     visuals don't flicker. Configurable via `bands.attackMs` /
@@ -68,6 +71,8 @@
  */
 
 import FFT from 'fft.js';
+
+import { processSignal } from './audio_post_processing.js';
 
 // Maps the FFT magnitude scale (post sum-of-magnitudes / fftSize, where
 // a single tone at amplitude A lands around A/2) into something useful
@@ -110,17 +115,26 @@ export class AudioAnalyzer {
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
-   * @param {(r: {low, mid, high, kick}) => void} opts.onAnalysis
-   * @param {object} [opts.paramCenter] — CPC instance; required when `gainKeys` is set. Used to read per-band gains every hop.
-   * @param {{low:string, mid:string, high:string, kick:string}} [opts.gainKeys]
-   *        — CPC keys for the per-band operator gains. When set, the
-   *          analyzer multiplies each post-envelope band value by the
-   *          current gain and clamps to [0, 1] before emitting. When
-   *          omitted (e.g. unit tests that don't care about gain) the
-   *          analyzer behaves as before — raw post-envelope values.
-   *          Codex P0: if `gainKeys` is set, every listed key must
-   *          resolve via `paramCenter.get(key)` at construction or
-   *          construction throws — no silent zero-gain fallbacks.
+   * @param {(r: {low, lowRaw, mid, midRaw, high, highRaw, kick, kickRaw}) => void} opts.onAnalysis
+   *        Each callback gets BOTH the raw post-envelope value and
+   *        the post-processed value for every band. When the analyzer
+   *        is constructed without `signalKeys` (test-only path) the
+   *        raw and post are identical (no post-processing applied).
+   * @param {object} [opts.paramCenter] — CPC instance; required when `signalKeys` is set. Passed to the post-processing framework for per-hop gain reads.
+   * @param {{low:string, mid:string, high:string, kick:string}} [opts.signalKeys]
+   *        — CPC live signal keys for each band (e.g. `micLow`,
+   *          `micMid`). When set, the analyzer pushes each post-
+   *          envelope band value through the shared post-processing
+   *          framework (`lib/audio_post_processing.js`) and emits
+   *          both the raw and the post-processed value. The framework
+   *          derives the gain key from the signal key via GAIN_BY_KEY.
+   *          When omitted (e.g. unit tests that don't care about
+   *          gain) the analyzer emits raw post-envelope values as
+   *          both raw and post — no post-processing applied.
+   *          Codex P0: if `signalKeys` is set, every listed signal
+   *          key must be known to the framework AND its derived gain
+   *          key must resolve via `paramCenter.get` at construction
+   *          or construction throws — no silent zero-gain fallbacks.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -141,43 +155,49 @@ export class AudioAnalyzer {
     this._onAnalysis = opts.onAnalysis;
     this._nowFn      = opts.nowFn || (() => Date.now());
 
-    // Per-band gain hookup. Either both `paramCenter` AND `gainKeys`
-    // are present (production / gain-aware tests) or both absent
-    // (analyzer-only unit tests for FFT correctness). Half-configured
-    // is a programmer error — fail loud at construction.
-    if (opts.gainKeys || opts.paramCenter) {
-      if (!opts.gainKeys || typeof opts.gainKeys !== 'object') {
-        throw new TypeError('AudioAnalyzer: gainKeys required when paramCenter is provided');
+    // Post-processing hookup. Either both `paramCenter` AND
+    // `signalKeys` are present (production / gain-aware tests) or
+    // both absent (analyzer-only unit tests for FFT correctness).
+    // Half-configured is a programmer error — fail loud at
+    // construction. The framework (audio_post_processing.js) derives
+    // each gain key from the signal key via GAIN_BY_KEY; we probe
+    // the gain via processSignal() at construction so any missing
+    // entry in GAIN_BY_KEY or the CPC registry surfaces as a
+    // boot-time crash, never as "knob does nothing" at runtime.
+    if (opts.signalKeys || opts.paramCenter) {
+      if (!opts.signalKeys || typeof opts.signalKeys !== 'object') {
+        throw new TypeError('AudioAnalyzer: signalKeys required when paramCenter is provided');
       }
       if (!opts.paramCenter || typeof opts.paramCenter.get !== 'function') {
-        throw new TypeError('AudioAnalyzer: paramCenter with .get(key) required when gainKeys is provided');
+        throw new TypeError('AudioAnalyzer: paramCenter with .get(key) required when signalKeys is provided');
       }
       const required = ['low', 'mid', 'high', 'kick'];
       for (const band of required) {
-        const key = opts.gainKeys[band];
+        const key = opts.signalKeys[band];
         if (typeof key !== 'string' || key.length === 0) {
-          throw new TypeError(`AudioAnalyzer: gainKeys.${band} must be a non-empty CPC key`);
+          throw new TypeError(`AudioAnalyzer: signalKeys.${band} must be a non-empty CPC live signal key`);
         }
-        // Probe — paramCenter.get throws on unknown keys (Codex P0).
-        // This converts a future "phantom gain key" bug at runtime
-        // into a boot-time crash.
-        const probe = opts.paramCenter.get(key);
+        // Probe — processSignal() throws on unknown signalKey (via
+        // GAIN_BY_KEY) AND on unknown derived gainKey (via
+        // paramCenter.get). Codex P0: convert "phantom signal /
+        // missing gain partner" runtime bugs into a boot-time crash.
+        const probe = processSignal(opts.paramCenter, key, 0);
         if (typeof probe !== 'number') {
           throw new TypeError(
-            `AudioAnalyzer: paramCenter.get(${key}) returned ${typeof probe}; expected number`,
+            `AudioAnalyzer: processSignal(${key}) returned ${typeof probe}; expected number`,
           );
         }
       }
       this._paramCenter = opts.paramCenter;
-      this._gainKeys = {
-        low:  opts.gainKeys.low,
-        mid:  opts.gainKeys.mid,
-        high: opts.gainKeys.high,
-        kick: opts.gainKeys.kick,
+      this._signalKeys = {
+        low:  opts.signalKeys.low,
+        mid:  opts.signalKeys.mid,
+        high: opts.signalKeys.high,
+        kick: opts.signalKeys.kick,
       };
     } else {
       this._paramCenter = null;
-      this._gainKeys = null;
+      this._signalKeys = null;
     }
 
     this._fft = new FFT(fftSize);
@@ -460,35 +480,56 @@ export class AudioAnalyzer {
       if (this._kickValue < 1e-3) this._kickValue = 0;
     }
 
-    // Apply per-band operator gain at the source so every downstream
-    // consumer sees one consistent value. See the header comment for
-    // the architectural rationale. When the analyzer was constructed
-    // without paramCenter+gainKeys (test-only path) gains are 1.0 —
-    // the raw envelope values flow through unchanged.
-    let lowOut  = low;
-    let midOut  = mid;
-    let highOut = high;
-    let kickOut = this._kickValue;
-    if (this._gainKeys) {
-      // paramCenter.get() throws on unknown keys (Codex P0). We
-      // validated all four at construction, so misses here would mean
-      // someone unregistered a gain key at runtime — let it throw.
-      const gLow  = this._paramCenter.get(this._gainKeys.low);
-      const gMid  = this._paramCenter.get(this._gainKeys.mid);
-      const gHigh = this._paramCenter.get(this._gainKeys.high);
-      const gKick = this._paramCenter.get(this._gainKeys.kick);
-      lowOut  *= gLow;
-      midOut  *= gMid;
-      highOut *= gHigh;
-      kickOut *= gKick;
+    // RAW (pre-gain) values: same envelope / compression / noise-gate
+    // path as the post-gain values, just BEFORE the operator gain is
+    // applied. Emitted alongside the gained values so engine.js can
+    // publish them to `*Raw` CPC mirrors (see param_center.js). Lets
+    // CaptainPad SIGNAL DIAGNOSTICS show raw vs post side-by-side; we
+    // can't derive raw client-side from `post / gain` because that
+    // can't recover clipped post=1.0 cases. Operator brief 2026-05-26
+    // "show raw + post" + scope clarification "RAW = pre-gain,
+    // pre-post-processing analyzer output".
+    const lowRaw  = clamp01(low);
+    const midRaw  = clamp01(mid);
+    const highRaw = clamp01(high);
+    const kickRaw = clamp01(this._kickValue);
+
+    // Push each post-envelope band through the shared post-processing
+    // framework. The framework (lib/audio_post_processing.js) is the
+    // single source of truth for the pipeline — same module the OSC
+    // listener uses for stems, so future ops added there (LPF /
+    // Schmitt / Hold / Compressor per docs/29) land here automatically.
+    // When the analyzer was constructed without paramCenter+signalKeys
+    // (test-only path) we emit raw values as both raw and post — no
+    // pipeline applied.
+    //
+    // Codex P0: processSignal reads via paramCenter.get() which throws
+    // on unknown keys. We probed all four at construction, so any
+    // throw here means someone tore down a gain key at runtime — let
+    // it surface, don't paper over it.
+    let lowOut, midOut, highOut, kickOut;
+    if (this._signalKeys) {
+      lowOut  = processSignal(this._paramCenter, this._signalKeys.low,  lowRaw);
+      midOut  = processSignal(this._paramCenter, this._signalKeys.mid,  midRaw);
+      highOut = processSignal(this._paramCenter, this._signalKeys.high, highRaw);
+      kickOut = processSignal(this._paramCenter, this._signalKeys.kick, kickRaw);
+    } else {
+      lowOut  = lowRaw;
+      midOut  = midRaw;
+      highOut = highRaw;
+      kickOut = kickRaw;
     }
 
     try {
       this._onAnalysis({
-        low:  clamp01(lowOut),
-        mid:  clamp01(midOut),
-        high: clamp01(highOut),
-        kick: clamp01(kickOut),
+        low:  lowOut,
+        mid:  midOut,
+        high: highOut,
+        kick: kickOut,
+        lowRaw,
+        midRaw,
+        highRaw,
+        kickRaw,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

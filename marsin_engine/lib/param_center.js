@@ -117,6 +117,32 @@ const PARAM_REGISTRY = [
     persist: false, live: true, broadcastHz: 15, portWatch: false,
     oscAddress: '/marsin/stems/drums', sharedFnName: 'stemsDrums',
   },
+  // ── RAW (pre-gain) stems live keys ──────────────────────────────────────
+  // Same envelope/compression path as the gained `stems*` keys, but BEFORE
+  // the per-stem operator gain is applied. Published in parallel by
+  // osc_listener.js so the CaptainPad SIGNAL DIAGNOSTICS row can show
+  // raw vs post side-by-side without reconstructing from `value / gain`
+  // (which can't recover clipped post=1.0 cases). No OSC inbound binding —
+  // these are engine-internal mirrors. No portWatch (operator surface
+  // only). See docs/29 + operator brief 2026-05-26 "show raw + post".
+  {
+    key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'stemsVocalsRaw',
+  },
+  {
+    key: 'stemsBassRaw', label: 'Stems · Bass (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'stemsBassRaw',
+  },
+  {
+    key: 'stemsDrumsRaw', label: 'Stems · Drums (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'stemsDrumsRaw',
+  },
   {
     key: 'tempoBpm', label: 'Tempo · BPM', type: 'float',
     default: 0.0, range: [0, 300], clamp: true,
@@ -156,6 +182,38 @@ const PARAM_REGISTRY = [
     default: 0.0, range: [0, 1], clamp: true,
     persist: false, live: true, broadcastHz: 30, portWatch: false,
     oscAddress: '/marsin/mic/kick', sharedFnName: 'micKick',
+  },
+
+  // ── RAW (pre-gain) mic-derived live keys ───────────────────────────────
+  // Mirror of the `mic*` live keys above, but published BEFORE the per-band
+  // operator gain is applied in the analyzer. Same envelope/compression/
+  // noise-gate path — the only thing that differs is the gain multiplier.
+  // Lets CaptainPad SIGNAL DIAGNOSTICS show raw vs post side-by-side
+  // (operator brief 2026-05-26 "show raw + post"). No OSC inbound binding
+  // — these are engine-internal mirrors.
+  {
+    key: 'micLowRaw', label: 'Mic · Low (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'micLowRaw',
+  },
+  {
+    key: 'micMidRaw', label: 'Mic · Mid (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'micMidRaw',
+  },
+  {
+    key: 'micHighRaw', label: 'Mic · High (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'micHighRaw',
+  },
+  {
+    key: 'micKickRaw', label: 'Mic · Kick (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 30, portWatch: false,
+    sharedFnName: 'micKickRaw',
   },
 
   // ── Per-band mic gains (operator-tunable, persistent) ──────────────────

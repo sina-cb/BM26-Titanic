@@ -405,29 +405,29 @@ function makeGainAnalyzer(paramCenter, overrides = {}, results, nowFn) {
     },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80, ...(kickOverrides || {}) },
     paramCenter,
-    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    signalKeys: { low: 'micLow', mid: 'micMid', high: 'micHigh', kick: 'micKick' },
     onAnalysis: (r) => results.push(r),
     nowFn,
     ...rest,
   });
 }
 
-test('throws when paramCenter passed without gainKeys (half-configured)', () => {
+test('throws when paramCenter passed without signalKeys (half-configured)', () => {
   assert.throws(() => new AudioAnalyzer({
     sampleRate: SR, fftSize: 1024, hopSize: 512,
     bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
     paramCenter: makeGainParamCenter(),
     onAnalysis: () => {},
-  }), /gainKeys required/);
+  }), /signalKeys required/);
 });
 
-test('throws when gainKeys passed without paramCenter (half-configured)', () => {
+test('throws when signalKeys passed without paramCenter (half-configured)', () => {
   assert.throws(() => new AudioAnalyzer({
     sampleRate: SR, fftSize: 1024, hopSize: 512,
     bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
-    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    signalKeys: { low: 'micLow', mid: 'micMid', high: 'micHigh', kick: 'micKick' },
     onAnalysis: () => {},
   }), /paramCenter.*required/);
 });
@@ -443,7 +443,7 @@ test('throws at construction when a gainKey is missing from paramCenter (Codex P
     bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
     paramCenter: pc,
-    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    signalKeys: { low: 'micLow', mid: 'micMid', high: 'micHigh', kick: 'micKick' },
     onAnalysis: () => {},
   }), /unknown key micKickGain/);
 });
