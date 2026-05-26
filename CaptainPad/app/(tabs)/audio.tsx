@@ -336,15 +336,21 @@ function MeterBar({ label, value, accent = ACCENT_AUTO }: {
 }) {
   const v = Math.max(0, Math.min(1, value));
   return (
-    <View style={{ flex: 1, marginHorizontal: 3 }}>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
-        color: C.secondary, textTransform: 'uppercase',
-        letterSpacing: 0.4, marginBottom: 2, textAlign: 'center',
-      }}>{label}</Text>
+    <View style={{ flex: 1, marginHorizontal: 4 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          color: C.secondary, textTransform: 'uppercase',
+          letterSpacing: 0.6,
+        }}>{label}</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
+          color: C.text,
+        }}>{v.toFixed(2)}</Text>
+      </View>
       <View style={{
-        height: 10, borderRadius: 5,
-        backgroundColor: C.surfaceContainerHigh,
+        height: 18, borderRadius: 9,
+        backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
         overflow: 'hidden',
       }}>
@@ -364,13 +370,13 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
                       { bg: C.surfaceContainerHigh, fg: C.secondary,   border: C.ghostBorder };
   return (
     <View style={{
-      paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8,
+      paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
       backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border,
-      marginRight: 6,
+      marginRight: 8,
     }}>
       <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-        color: palette.fg, textTransform: 'uppercase', letterSpacing: 0.6,
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+        color: palette.fg, textTransform: 'uppercase', letterSpacing: 0.8,
       }}>{label}</Text>
     </View>
   );
@@ -417,44 +423,65 @@ function PinnedAudioMeters({
 
   return (
     <View style={{
-      paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8,
-      backgroundColor: C.surfaceContainerLowest,
+      alignSelf: 'stretch',
+      paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16,
+      backgroundColor: C.surfaceContainerHigh,
       borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
       ...globalStyles.ambientShadow,
       zIndex: 10,
     }}>
-      {/* Status pills row */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+      {/* Status pills row — full width, left aligned */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
         <StatusPill label={micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF'} tone={micTone} />
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
       </View>
-      {/* Meters row */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+      {/* Meters row — two equal halves split by a vertical divider */}
+      <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
         {/* LEFT half: MIC bands */}
-        <View style={{ flex: 1, flexDirection: 'row', paddingRight: 8, borderRightWidth: 1, borderRightColor: C.ghostBorder }}>
-          <MeterBar label="MIC LOW"  value={live.micLow}  accent={ACCENT_AUTO} />
-          <MeterBar label="MIC MID"  value={live.micMid}  accent={ACCENT_AUTO} />
-          <MeterBar label="MIC HIGH" value={live.micHigh} accent={ACCENT_AUTO} />
-          <MeterBar label="MIC KICK" value={live.micKick} accent={C.error} />
+        <View style={{ flex: 1, paddingRight: 16 }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+            color: C.secondary, textTransform: 'uppercase',
+            letterSpacing: 1, marginBottom: 8,
+          }}>MIC</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+            <MeterBar label="LOW"  value={live.micLow}  accent={ACCENT_AUTO} />
+            <MeterBar label="MID"  value={live.micMid}  accent={ACCENT_AUTO} />
+            <MeterBar label="HIGH" value={live.micHigh} accent={ACCENT_AUTO} />
+            <MeterBar label="KICK" value={live.micKick} accent={C.error} />
+          </View>
         </View>
+        {/* Vertical divider */}
+        <View style={{ width: 1, backgroundColor: C.ghostBorder, marginHorizontal: 0 }} />
         {/* RIGHT half: stems + BPM */}
-        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', paddingLeft: 8 }}>
-          <MeterBar label="VOCALS" value={live.stemsVocals} accent={C.primary} />
-          <MeterBar label="BASS"   value={live.stemsBass}   accent={C.primary} />
-          <MeterBar label="DRUMS"  value={live.stemsDrums}  accent={C.primary} />
-          <View style={{
-            marginLeft: 8, paddingHorizontal: 8, paddingVertical: 4,
-            borderRadius: 8, backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerHigh,
-            borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
-            minWidth: 56, alignItems: 'center',
-          }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, letterSpacing: 0.6 }}>
-              BPM
-            </Text>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: bpm ? '#003a44' : C.icon }}>
-              {bpm ?? '—'}
-            </Text>
+        <View style={{ flex: 1, paddingLeft: 16 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+              color: C.secondary, textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}>STEMS</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+            <MeterBar label="VOCALS" value={live.stemsVocals} accent={C.primary} />
+            <MeterBar label="BASS"   value={live.stemsBass}   accent={C.primary} />
+            <MeterBar label="DRUMS"  value={live.stemsDrums}  accent={C.primary} />
+            {/* BPM pill — biggest single number on the strip */}
+            <View style={{
+              marginLeft: 12, paddingHorizontal: 12, paddingVertical: 4,
+              borderRadius: 10,
+              backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
+              borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
+              minWidth: 72, alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
+                BPM
+              </Text>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
+                {bpm ?? '—'}
+              </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -762,8 +789,15 @@ function AudioConfigBody({
   const oscMissing = bpmSyncOn && oscState !== 'live';
 
   // ── Render ─────────────────────────────────────────────────────────
+  //
+  // NB: globalStyles.container is `flexDirection: 'row'` (used by other
+  // tabs to layout sidebars). For AUDIO we want the pinned strip
+  // STACKED ABOVE the scrolling body, full viewport width, so the
+  // outer wrapper here is an explicit COLUMN. The strip sits at the
+  // top edge as its own "rig" piece; the page title + cards scroll
+  // below it.
   return (
-    <View style={globalStyles.container}>
+    <View style={{ flex: 1, flexDirection: 'column', backgroundColor: C.background }}>
       {/* Pinned live meters strip — sibling of the ScrollView so it
           stays anchored at the top regardless of scroll position.
           Mounted only after cfg loads (we're already inside that
