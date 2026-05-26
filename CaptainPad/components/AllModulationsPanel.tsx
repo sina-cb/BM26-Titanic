@@ -240,7 +240,12 @@ export const AllModulationsPanel: React.FC<Props> = ({
           style={{
             width: 700,
             maxWidth: '95%',
-            maxHeight: '80%',
+            // Definite height (not maxHeight) so the body FlatList has
+            // a measurable parent to `flex: 1` into. With only maxHeight,
+            // the column shrinks to fit its children and a flex:1 child
+            // collapses to ~0px — visible as "the list is empty even
+            // though entries exist".
+            height: '80%',
             backgroundColor: C.surfaceContainerLowest,
             borderRadius: 12,
             borderWidth: 1,
