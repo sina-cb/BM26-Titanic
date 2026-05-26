@@ -23,7 +23,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  FlatList, Modal, Pressable, Text, TouchableOpacity, View,
+  FlatList, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -170,6 +170,19 @@ export const AllModulationsPanel: React.FC<Props> = ({
     refresh();
   }, [playlistName, refresh]);
 
+  // Bulk-clear all mappings on an entry. The engine exposes no bulk
+  // DELETE endpoint (see api_server.js: only /modulations/:mappingId
+  // is wired), so we fan out one DELETE per mapping in parallel.
+  // Same no-confirm convention as handleDelete — accidentally clearing
+  // is recoverable by tapping the per-slider ◎ to recreate.
+  const handleClearAll = useCallback(async (entryId: string, mappings: ModulationMapping[]) => {
+    if (!playlistName || mappings.length === 0) return;
+    await Promise.all(
+      mappings.map((m) => deleteModulation(playlistName, entryId, m.id)),
+    );
+    refresh();
+  }, [playlistName, refresh]);
+
   const renderEntry = useCallback(({ item: entry }: { item: Entry }) => {
     const mods = entry.modulations || [];
     const isActive = entry.id === activeEntryId;
@@ -205,6 +218,25 @@ export const AllModulationsPanel: React.FC<Props> = ({
               width: 8, height: 8, borderRadius: 4, backgroundColor: MOD_GREEN,
             }} />
           ) : null}
+          {mods.length > 0 ? (
+            <TouchableOpacity
+              onPress={() => handleClearAll(entry.id, mods)}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
+              style={{
+                paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
+                borderWidth: 1, borderColor: C.error,
+                backgroundColor: 'transparent',
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.error,
+                letterSpacing: 0.6,
+              }}>
+                CLEAR ALL
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {mods.length === 0 ? (
@@ -225,18 +257,28 @@ export const AllModulationsPanel: React.FC<Props> = ({
         ))}
       </View>
     );
-  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete]);
+  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete, handleClearAll]);
 
   if (!visible) return null;
 
   return (
     <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-      <Pressable
+      <View
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
-        onPress={onClose}
       >
+        {/* Backdrop layer — sibling, BEHIND the panel via render order.
+            Tapping anywhere outside the panel closes the modal. Tapping
+            on the panel View doesn't reach this because the panel is a
+            later sibling drawn on top and is opaque. Keeping the panel
+            as a plain View (not Pressable) avoids RN's Pressable
+            claiming the responder up-front and starving the inner
+            FlatList of pan-scroll gestures. */}
         <Pressable
-          onPress={(e) => e.stopPropagation()}
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityLabel="Close all-modulations panel (backdrop)"
+        />
+        <View
           style={{
             width: 700,
             maxWidth: '95%',
@@ -319,6 +361,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
               maxToRenderPerBatch={12}
               windowSize={7}
               removeClippedSubviews
+              nestedScrollEnabled
             />
           )}
 
@@ -336,8 +379,8 @@ export const AllModulationsPanel: React.FC<Props> = ({
               {totals.entries} ENTRIES · {totals.mappings} MAPPINGS · {totals.live} LIVE
             </Text>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
 
       {/* Nested popover when editing a row. Re-uses the same component
           as the deck so behaviour stays in lock-step. */}
