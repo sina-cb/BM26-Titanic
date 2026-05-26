@@ -4,7 +4,7 @@ import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
-import { GlobalParams } from '@/components/GlobalParams';
+import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
@@ -450,6 +450,11 @@ export default function ControlDeckScreen() {
                           locked={!!channel.locked}
                         />
                       </View>
+                      {/* SAVED flash moved up here from inside GlobalParams
+                          so it never reflows the slider stack. The component
+                          always reserves the same width/height — the inner
+                          pill only fades in/out. */}
+                      <DeckSavedFlash deckChannelId={channel.id} />
                       <TouchableOpacity
                         onPress={() => setShowAllMods(true)}
                         disabled={!channel.playlist?.name}

@@ -96,13 +96,10 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 
   return (
     <View style={{ gap: 12 }}>
-      {/* Saved indicator local to the deck params panel. The
-          PlaylistPanel on the left also flashes one, but operators
-          working in the right-pane params row don't see that — this
-          mirror keeps the "engine wrote your value to disk" signal
-          in the operator's foveal view. Fires on `playlistEntryCaptured`
-          for our deck channel (engine auto-capture + explicit save). */}
-      <DeckSavedFlash deckChannelId={baseChannelId} />
+      {/* Saved indicator moved to the deck channel card header (next
+          to the ◎ ALL pill) in `app/(tabs)/index.tsx` so it never
+          reflows the slider stack when it appears/disappears. The
+          `DeckSavedFlash` component is exported from this file. */}
       {sliders.map((e: any) => {
         // CPC-matched local exports were hidden through May 2026 — now
         // they're surfaced as disabled with a "MATCHED · LABEL" badge
@@ -218,7 +215,7 @@ function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
 // "✓ SAVED" badge in PlaylistPanel so operators get the same signal
 // no matter which pane they were watching.
 
-function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
+export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   useEffect(() => {
     if (!deckChannelId) return;
@@ -233,23 +230,36 @@ function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
     const t = setTimeout(() => setSavedAt(null), 1400);
     return () => clearTimeout(t);
   }, [savedAt]);
-  if (savedAt === null) return null;
+  // Always render the same outer shape so siblings (EntryLabelEditor,
+  // ◎ ALL pill) never re-flow when the flash toggles. The inner pill
+  // is hidden via opacity rather than conditional render — same DOM,
+  // same measured width/height regardless of state.
+  const visible = savedAt !== null;
   return (
     <View
       style={{
-        alignSelf: 'flex-start',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 4,
-        backgroundColor: 'rgba(0,168,107,0.15)',
+        minWidth: 70,
+        minHeight: 22,
+        justifyContent: 'center',
+        alignItems: 'flex-start',
       }}
     >
-      <Text style={{ color: '#00a86b', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6 }}>
-        ✓ SAVED
-      </Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 4,
+          paddingHorizontal: 8,
+          paddingVertical: 2,
+          borderRadius: 4,
+          backgroundColor: 'rgba(0,168,107,0.15)',
+          opacity: visible ? 1 : 0,
+        }}
+      >
+        <Text style={{ color: '#00a86b', fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6 }}>
+          ✓ SAVED
+        </Text>
+      </View>
     </View>
   );
 }
