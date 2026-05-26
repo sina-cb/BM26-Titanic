@@ -138,8 +138,44 @@ export class AudioAnalyzer {
     // like right now"; we compare the instant read against it. To
     // avoid a phantom kick at boot before EMA has settled, we seed
     // it from the first 50 hops' running mean.
+    //
+    // Asymmetric attack/release + slow-trailing ceiling clamp
+    // (hot-fix per .agent/02_reports/202605/20260526_1_audio_analysis_report.md
+    // Concern 5, "BLOCKER for the playa"):
+    //
+    //   Symptom — under sustained loud kick-band content (e.g. a
+    //   continuous loud bassline for 30+ s) the original symmetric
+    //   EMA tracks the loud baseline UP toward instant level. The
+    //   fire test `instant > ema * threshold` requires an extra
+    //   1.5–1.8× HEADROOM above whatever the EMA has settled at,
+    //   so once EMA == loud baseline a normal kick transient can't
+    //   clear it and the detector stops firing.
+    //
+    //   Fix #1 (asymmetric one-pole IIR) — the EMA tracks the
+    //   sustained baseline slowly upward (so it lags behind a loud
+    //   bassline and leaves headroom for transients to fire) but
+    //   releases faster downward (so it recovers when the bass
+    //   drops). This is the OPPOSITE of an audio-meter envelope
+    //   (which goes fast-attack/slow-release for visual smoothness);
+    //   for a detection THRESHOLD we want the reference to stay LOW
+    //   relative to peaks. Standard envelope-follower / "leaky
+    //   integrator above peak floor" trick from kick-detection
+    //   literature (cf. Zölzer "DAFX" 2nd ed. §4.3 on adaptive
+    //   thresholds for onset detection).
+    //
+    //   Fix #2 (ceiling clamp, belt-and-suspenders) — a second EMA
+    //   (`_kickEmaTrail`) with very slow tracking is a coarse-time
+    //   baseline. `_kickEma` is clamped to ≤ trail × CEILING_RATIO
+    //   so even pathological sustained loudness can't push the
+    //   operating threshold more than 1.5× above its several-second
+    //   average. Bounds drift regardless of which way the input
+    //   pathology pushes.
     this._kickEma = 0;
-    this._kickEmaAlpha = 0.02;
+    this._kickEmaAlphaUp   = 0.005;  // slow attack — don't chase loud bass
+    this._kickEmaAlphaDown = 0.05;   // faster release — recover quickly
+    this._kickEmaTrail = 0;          // slow-trailing reference for ceiling clamp
+    this._kickEmaTrailAlpha = 0.0005;
+    this._kickEmaCeilingRatio = 1.5; // EMA may not exceed trail × this
     this._kickEmaWarmedUp = false;
     this._kickEmaWarmupSum = 0;
     this._kickEmaWarmupHops = 0;
@@ -242,6 +278,7 @@ export class AudioAnalyzer {
     this._totalSamples = 0;
     this._smoothed.low = this._smoothed.mid = this._smoothed.high = 0;
     this._kickEma = 0;
+    this._kickEmaTrail = 0;
     this._kickEmaWarmedUp = false;
     this._kickEmaWarmupSum = 0;
     this._kickEmaWarmupHops = 0;
@@ -308,15 +345,37 @@ export class AudioAnalyzer {
     // Kick: instant vs slow EMA. The first KICK_WARMUP_HOPS hops are
     // used to seed the EMA so a single loud first frame doesn't fire
     // a phantom kick before we have any context for "normal".
+    //
+    // Asymmetric attack/release prevents the reference from drifting
+    // up under sustained loud bass (see constructor comment for the
+    // diagnosis + citation). Slow attack so the EMA lags loud
+    // baselines; faster release so it recovers quickly. The trailing
+    // EMA + ceiling clamp is a second line of defense: even if the
+    // asymmetric coefficients get retuned, the threshold can never
+    // sit more than CEILING_RATIO × a several-second baseline.
     const instant = kickE;
     if (this._kickEmaWarmedUp) {
-      this._kickEma = this._kickEmaAlpha * instant + (1 - this._kickEmaAlpha) * this._kickEma;
+      const alpha = instant > this._kickEma
+        ? this._kickEmaAlphaUp     // slow attack — lag loud baselines
+        : this._kickEmaAlphaDown;  // faster release — recover in quiet
+      this._kickEma = alpha * instant + (1 - alpha) * this._kickEma;
+      // Slow-trailing reference — always uses the slow alpha so a
+      // brief loud section can't lift the ceiling significantly.
+      this._kickEmaTrail = this._kickEmaTrailAlpha * instant
+                         + (1 - this._kickEmaTrailAlpha) * this._kickEmaTrail;
+      // Ceiling clamp: the operating EMA may not exceed the
+      // slow-trailing reference times the ceiling ratio. Belt-and-
+      // suspenders against pathological sustained loudness.
+      const ceiling = this._kickEmaTrail * this._kickEmaCeilingRatio;
+      if (this._kickEma > ceiling) this._kickEma = ceiling;
     } else {
       // Seed EMA with the running mean of the first warmup hops.
       this._kickEmaWarmupSum += instant;
       this._kickEmaWarmupHops++;
       if (this._kickEmaWarmupHops >= 50) {
-        this._kickEma = this._kickEmaWarmupSum / this._kickEmaWarmupHops;
+        const seed = this._kickEmaWarmupSum / this._kickEmaWarmupHops;
+        this._kickEma = seed;
+        this._kickEmaTrail = seed;
         this._kickEmaWarmedUp = true;
       }
     }

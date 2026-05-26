@@ -252,6 +252,61 @@ test('repeated kick-band impulses fire kicks with refractory respected', () => {
   assert.ok(kicks >= 4 && kicks <= 5, `expected ~5 kick fires, saw ${kicks}`);
 });
 
+test('kick detector survives sustained loud bass without drift', () => {
+  // Regression for the EMA-drift bug documented in
+  // .agent/02_reports/202605/20260526_1_audio_analysis_report.md
+  // Concern 5: under sustained loud kick-band content (a heavy
+  // bassline at high duty cycle) the original symmetric EMA tracked
+  // the loud baseline UP and never decayed. The fire test
+  // (instant > ema * threshold) became unreachable because the
+  // baseline IS roughly the threshold; kicks stopped firing after
+  // ~30 s of consistent loud bass.
+  //
+  // Test signal — high-duty kick-band pulses (250 ms loud + 50 ms
+  // quiet at amplitude 0.85, 60 Hz, in-band for the kick detector,
+  // ~3.3 Hz pulse rate). With the OLD symmetric coefficients +
+  // unbounded EMA this drives the EMA up to ~0.28 within ~10 s and
+  // kicks STOP firing for the remainder of the 60 s window. With
+  // the asymmetric attack/release + ceiling clamp fix, the EMA
+  // stays low enough that pulses continue to fire kicks throughout.
+  const results = [];
+  let now = 0;
+  const an = makeAnalyzer({
+    kick: { threshold: 1.5, refractoryMs: 100, decayMs: 80, minHz: 40, maxHz: 120 },
+  }, results, () => now);
+
+  // 60 seconds of high-duty 60 Hz pulses, bucketed into six 10-sec
+  // windows so we can verify kicks continue firing late in the run.
+  const firesByBucket = [0, 0, 0, 0, 0, 0];
+  let wasHot = false;
+  for (let sec = 0; sec < 60; sec++) {
+    const before = results.length;
+    for (let i = 0; i < 3; i++) {       // ~3.3 pulses per second
+      an.pushSamples(sineInt16(60, 0.25, 0.85));
+      now += 250;
+      an.pushSamples(sineInt16(60, 0.05, 0.05));
+      now += 50;
+    }
+    const bucket = Math.min(5, Math.floor(sec / 10));
+    for (let j = before; j < results.length; j++) {
+      if (results[j].kick > 0.9 && !wasHot) { firesByBucket[bucket]++; wasHot = true; }
+      else if (results[j].kick < 0.5) wasHot = false;
+    }
+  }
+
+  // The last bucket (seconds 50–60) is what matters: with OLD code
+  // it sees 0 fires; with the fix it sees ~30. Require at least 5 to
+  // leave headroom for coefficient retuning.
+  const lateBucket = firesByBucket[5];
+  assert.ok(
+    lateBucket >= 5,
+    `expected continued kick fires in the final 10 s of a 60 s ` +
+    `sustained-bass run, saw ${lateBucket}; per-bucket = ` +
+    `[${firesByBucket.join(', ')}]. EMA-drift regression — see ` +
+    `audio_analysis_report.md Concern 5.`,
+  );
+});
+
 test('kick refractory prevents two fires within refractoryMs', () => {
   const results = [];
   let now = 0;
