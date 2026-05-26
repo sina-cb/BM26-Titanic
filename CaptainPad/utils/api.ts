@@ -519,7 +519,11 @@ export async function fetchAudioConfig(): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/audio/config`);
     const data = await res.json();
-    return { ok: res.ok, data };
+    // Surface the server's `{ error: "..." }` body on non-2xx instead
+    // of swallowing it into a generic "unknown error" upstream. Mirrors
+    // the shape patchAudioConfig / resetAudioConfig already use.
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }

@@ -28,7 +28,7 @@ import {
   fetchAudioConfig, patchAudioConfig, resetAudioConfig,
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, useParamRange } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, useParamRange, type AudioStatus, type OscPillState } from '@/hooks/useEngineState';
 
 const C = Colors.light;
 // "Auto-driven" accent — mirrors Colors.light.tertiary in theme.ts.
@@ -314,6 +314,281 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
   );
 }
 
+// ── Pinned live meters strip ─────────────────────────────────────────────
+//
+// Compact horizontal strip rendered as a SIBLING of the AUDIO tab's
+// ScrollView, so it stays anchored at the top regardless of scroll
+// position (the load-bearing UX win: operator can keep eyes on the
+// meters while tuning sliders further down).
+//
+// Subscribes to ONLY the live audio keys + status hooks — never reads
+// steady params or the AudioConfig blob — so the surrounding body's
+// re-render path is fully decoupled from analyser ticks. See
+// useLiveParamValues per-key short-circuit in hooks/useEngineState.ts.
+//
+// Layout: ~88 px total height.
+//   Top row  : MIC / OSC / SYNC status pills (left-aligned).
+//   Main row : LEFT half = 4 MIC bars (LOW / MID / HIGH / KICK)
+//              RIGHT half = 3 STEMS bars (VOCALS / BASS / DRUMS) + BPM pill.
+
+function MeterBar({ label, value, accent = ACCENT_AUTO }: {
+  label: string; value: number; accent?: string;
+}) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <View style={{ flex: 1, marginHorizontal: 3 }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
+        color: C.secondary, textTransform: 'uppercase',
+        letterSpacing: 0.4, marginBottom: 2, textAlign: 'center',
+      }}>{label}</Text>
+      <View style={{
+        height: 10, borderRadius: 5,
+        backgroundColor: C.surfaceContainerHigh,
+        borderWidth: 1, borderColor: C.ghostBorder,
+        overflow: 'hidden',
+      }}>
+        <View style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: `${v * 100}%`, backgroundColor: accent,
+        }} />
+      </View>
+    </View>
+  );
+}
+
+function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn' }) {
+  const palette =
+    tone === 'on'   ? { bg: ACCENT_AUTO,            fg: '#000',        border: ACCENT_AUTO } :
+    tone === 'warn' ? { bg: '#f8d7da',              fg: '#842029',     border: C.error } :
+                      { bg: C.surfaceContainerHigh, fg: C.secondary,   border: C.ghostBorder };
+  return (
+    <View style={{
+      paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8,
+      backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border,
+      marginRight: 6,
+    }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+        color: palette.fg, textTransform: 'uppercase', letterSpacing: 0.6,
+      }}>{label}</Text>
+    </View>
+  );
+}
+
+function PinnedAudioMeters({
+  audioStatus, oscStatus,
+}: {
+  audioStatus: AudioStatus | null;
+  oscStatus: OscPillState | null;
+}) {
+  // Per-key live subscription. Only the four mic keys + three stem
+  // keys + tempoBpm participate in the equality check, so this strip
+  // re-renders only when one of THESE values actually ticks. The body
+  // below never re-renders on liveParams.
+  const live = useLiveParamValues({
+    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
+    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
+    tempoBpm: 0,
+  } as Record<string, number>) as Record<string, number>;
+  // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
+  // changes only when operator toggles it.
+  const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
+
+  const micOn       = audioStatus?.enabled === true;
+  const micPhase    = audioStatus?.phase ?? (micOn ? 'unknown' : 'off');
+  const micTone: 'on' | 'off' | 'warn' =
+    !micOn                      ? 'off'  :
+    micPhase === 'error'        ? 'warn' :
+    micPhase === 'restarting'   ? 'warn' :
+                                  'on';
+  const oscState  = oscStatus?.state ?? null;
+  const oscTone: 'on' | 'off' | 'warn' =
+    oscState === 'live'     ? 'on'   :
+    oscState === 'unmapped' ? 'warn' :
+                              'off';
+  const oscLabel  = oscState ? `OSC ${oscState.toUpperCase()}` : 'OSC …';
+  const syncOn    = (steady.bpmSpeedSync ?? 0) >= 0.5;
+  const syncTone: 'on' | 'off' | 'warn' =
+    syncOn && oscState !== 'live' ? 'warn' :
+    syncOn                        ? 'on'   :
+                                    'off';
+  const bpm = live.tempoBpm > 0 ? Math.round(live.tempoBpm) : null;
+
+  return (
+    <View style={{
+      paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8,
+      backgroundColor: C.surfaceContainerLowest,
+      borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
+      ...globalStyles.ambientShadow,
+      zIndex: 10,
+    }}>
+      {/* Status pills row */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+        <StatusPill label={micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF'} tone={micTone} />
+        <StatusPill label={oscLabel} tone={oscTone} />
+        <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
+      </View>
+      {/* Meters row */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
+        {/* LEFT half: MIC bands */}
+        <View style={{ flex: 1, flexDirection: 'row', paddingRight: 8, borderRightWidth: 1, borderRightColor: C.ghostBorder }}>
+          <MeterBar label="MIC LOW"  value={live.micLow}  accent={ACCENT_AUTO} />
+          <MeterBar label="MIC MID"  value={live.micMid}  accent={ACCENT_AUTO} />
+          <MeterBar label="MIC HIGH" value={live.micHigh} accent={ACCENT_AUTO} />
+          <MeterBar label="MIC KICK" value={live.micKick} accent={C.error} />
+        </View>
+        {/* RIGHT half: stems + BPM */}
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', paddingLeft: 8 }}>
+          <MeterBar label="VOCALS" value={live.stemsVocals} accent={C.primary} />
+          <MeterBar label="BASS"   value={live.stemsBass}   accent={C.primary} />
+          <MeterBar label="DRUMS"  value={live.stemsDrums}  accent={C.primary} />
+          <View style={{
+            marginLeft: 8, paddingHorizontal: 8, paddingVertical: 4,
+            borderRadius: 8, backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerHigh,
+            borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
+            minWidth: 56, alignItems: 'center',
+          }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, letterSpacing: 0.6 }}>
+              BPM
+            </Text>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: bpm ? '#003a44' : C.icon }}>
+              {bpm ?? '—'}
+            </Text>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ── BPM live read-outs ───────────────────────────────────────────────────
+//
+// Tiny live-only siblings of the BPM-sync MasterToggle. Pulled out so
+// the surrounding card (which renders steady-state sliders + the
+// toggle) never re-renders just because tempoBpm ticked.
+
+function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
+  bpmSyncOn: boolean; oscMissing: boolean; oscState: string | null;
+}) {
+  // Steady-only render path when SYNC is OFF (nothing to warn about).
+  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  if (!bpmSyncOn) return null;
+  const bpmStale = !live.tempoBpm || live.tempoBpm <= 0;
+  if (!oscMissing && !bpmStale) return null;
+  return (
+    <View style={{
+      borderRadius: 8, borderWidth: 1, borderColor: C.error,
+      padding: 10, marginBottom: 12,
+      backgroundColor: 'rgba(255,80,80,0.08)',
+    }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 11, marginBottom: 2 }}>
+        ⚠ NO BPM SIGNAL
+      </Text>
+      <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
+        {oscMissing
+          ? `OSC listener is ${oscState ?? 'unknown'}; nothing is feeding /lx/tempo/bpm. Speed will not move.`
+          : 'OSC is live but no tempoBpm has arrived yet. Confirm LX Studio is sending /lx/tempo/bpm.'}
+      </Text>
+    </View>
+  );
+}
+
+function BpmTempoLine() {
+  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
+  const bpm = live.tempoBpm;
+  const mapped = useMemo(() => {
+    if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
+    return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));
+  }, [bpm, steady.bpmSpeedMin, steady.bpmSpeedMax]);
+  return (
+    <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 8 }}>
+      {bpm > 0
+        ? `tempo ${Math.round(bpm)} BPM${mapped !== null ? ` → speed ${mapped.toFixed(2)}` : ''}`
+        : 'No tempo signal yet.'}
+    </Text>
+  );
+}
+
+// ── Stems live card ──────────────────────────────────────────────────────
+//
+// Owns the OSC-driven stems meters + per-stem gain sub-card. Subscribes
+// to ONLY {stemsBass, stemsDrums, stemsVocals} live keys + the matching
+// gain steady keys, so this card re-renders independently of the rest
+// of the page (mic meters, tuning sliders, mic picker).
+
+function StemsLiveCard() {
+  const live = useLiveParamValues({
+    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
+  } as Record<string, number>) as Record<string, number>;
+  const steady = useSharedParamValues({
+    stemsVocalsGain: 1, stemsBassGain: 1, stemsDrumsGain: 1,
+  } as Record<string, number>) as Record<string, number>;
+  return (
+    <View style={CARD}>
+      <SectionHeader
+        icon="dot.radiowaves.left.and.right"
+        title="STEMS — LIVE (OSC)"
+        hint="Vocals / Bass / Drums streamed from the external analyser. Independent of mic toggle."
+      />
+      <BandMeter label="VOCALS" value={live.stemsVocals ?? 0} gain={steady.stemsVocalsGain ?? 1} accent={C.primary} />
+      <BandMeter label="BASS"   value={live.stemsBass   ?? 0} gain={steady.stemsBassGain   ?? 1} accent={C.primary} />
+      <BandMeter label="DRUMS"  value={live.stemsDrums  ?? 0} gain={steady.stemsDrumsGain  ?? 1} accent={C.primary} />
+      <View style={SUB_CARD}>
+        <SubHeader title="PER-STEM GAIN" />
+        <GainRow label="VOCALS" paramKey="stemsVocalsGain" value={steady.stemsVocalsGain ?? 1} />
+        <GainRow label="BASS"   paramKey="stemsBassGain"   value={steady.stemsBassGain   ?? 1} />
+        <GainRow label="DRUMS"  paramKey="stemsDrumsGain"  value={steady.stemsDrumsGain  ?? 1} />
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 6 }}>
+          The deck&apos;s master REACT slider multiplies all of these.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ── Mic live card ────────────────────────────────────────────────────────
+//
+// Owns the mic-band + kick meters, the "last kick" hint, and the
+// PER-BAND GAIN sub-card. Subscribes to ONLY {micLow, micMid, micHigh,
+// micKick} live keys + the four micGain steady keys.
+//
+// audioStatus is passed in (instead of read via useAudioStatus here) so
+// we share the parent's subscription — no need to open a second slice
+// listener for the same audioStatus object.
+
+function MicLiveCard({ audioStatus }: { audioStatus: AudioStatus | null }) {
+  const live = useLiveParamValues({
+    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
+  } as Record<string, number>) as Record<string, number>;
+  const steady = useSharedParamValues({
+    micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1,
+  } as Record<string, number>) as Record<string, number>;
+  // "Last kick" is wall-clock dependent — recompute on each render.
+  // The card already re-renders at the live tick rate, so this is free.
+  const lastKickAgo = audioStatus?.lastKickMs ? Math.max(0, Date.now() - audioStatus.lastKickMs) : null;
+  return (
+    <>
+      <BandMeter label="LOW"  value={live.micLow}  gain={steady.micLowGain  ?? 1} accent={ACCENT_AUTO} />
+      <BandMeter label="MID"  value={live.micMid}  gain={steady.micMidGain  ?? 1} accent={ACCENT_AUTO} />
+      <BandMeter label="HIGH" value={live.micHigh} gain={steady.micHighGain ?? 1} accent={ACCENT_AUTO} />
+      <BandMeter label="KICK" value={live.micKick} gain={steady.micKickGain ?? 1} accent={C.error} />
+      <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 2, marginBottom: 4 }}>
+        {lastKickAgo === null ? 'Last kick hit: never' : `Last kick hit: ${lastKickAgo < 10_000 ? `${(lastKickAgo / 1000).toFixed(1)} s` : '>10 s'} ago`}
+      </Text>
+
+      <View style={SUB_CARD}>
+        <SubHeader title="PER-BAND GAIN" />
+        <GainRow label="MIC LOW"  paramKey="micLowGain"  value={steady.micLowGain  ?? 1} />
+        <GainRow label="MIC MID"  paramKey="micMidGain"  value={steady.micMidGain  ?? 1} />
+        <GainRow label="MIC HIGH" paramKey="micHighGain" value={steady.micHighGain ?? 1} />
+        <GainRow label="MIC KICK" paramKey="micKickGain" value={steady.micKickGain ?? 1} />
+      </View>
+    </>
+  );
+}
+
 // ── Screen ──────────────────────────────────────────────────────────────
 
 // ── Mount strategy ────────────────────────────────────────────────────────
@@ -402,27 +677,24 @@ function AudioConfigBody({
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Live (high-rate) param values for the in-tab meters + BPM badge.
-  // Sourced from the dedicated `liveParams` WS message so only this
-  // tab pays the 15-30 Hz re-render cost (see useLiveParams in
-  // useEngineState.ts).
-  const live = useLiveParamValues({
-    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
-    tempoBpm: 0,
-    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
-  } as Record<string, number>) as Record<string, number>;
   // Steady (operator-tuned, persistent) params — sliders, sync
   // toggles, gain knobs. These are quiet by default; only redrawn
   // when the operator turns a knob.
-  const steady = useSharedParamValues({
+  //
+  // NB: this body deliberately does NOT subscribe to `useLiveParamValues`.
+  // Live high-rate keys (micLow/Mid/High/Kick, stems*, tempoBpm) re-render
+  // at 15-30 Hz; folding them in here re-rendered the ENTIRE config
+  // body — every FaderRow, mic picker, BPM range slider — at that
+  // cadence. Live meters now live in their own components
+  // (<PinnedAudioMeters />, <StemsLiveCard />, <MicLiveCard />,
+  // <BpmTempoLine />) which each subscribe to ONLY the live keys they
+  // need. See useLiveParamValues per-key short-circuit in
+  // hooks/useEngineState.ts.
+  const sp = useSharedParamValues({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 180, speed: 0,
     micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1,
     stemsVocalsGain: 1, stemsBassGain: 1, stemsDrumsGain: 1,
   } as Record<string, number>) as Record<string, number>;
-  // Flatten back to the single `sp` view the rest of the tab reads
-  // from — keeps the audio meter render path identical to before
-  // the split landed.
-  const sp: Record<string, number> = { ...steady, ...live };
 
   const loadDevices = useCallback(async () => {
     setDevicesLoading(true);
@@ -488,17 +760,16 @@ function AudioConfigBody({
   const bpmSyncOn  = (sp.bpmSpeedSync ?? 0) >= 0.5;
   const oscState   = oscStatus?.state ?? null;
   const oscMissing = bpmSyncOn && oscState !== 'live';
-  const bpmStale   = bpmSyncOn && (!sp.tempoBpm || sp.tempoBpm <= 0);
-  const lastKickAgo = status?.lastKickMs ? Math.max(0, Date.now() - status.lastKickMs) : null;
-  const bpmMappedSpeed = useMemo(() => {
-    const min = sp.bpmSpeedMin, max = sp.bpmSpeedMax, bpm = sp.tempoBpm;
-    if (!min || !max || min === max || !bpm) return null;
-    return Math.max(0, Math.min(1, (bpm - min) / (max - min)));
-  }, [sp.bpmSpeedMin, sp.bpmSpeedMax, sp.tempoBpm]);
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
     <View style={globalStyles.container}>
+      {/* Pinned live meters strip — sibling of the ScrollView so it
+          stays anchored at the top regardless of scroll position.
+          Mounted only after cfg loads (we're already inside that
+          gate). All live-data subscriptions live INSIDE this
+          component — the body below never reads liveParams. */}
+      <PinnedAudioMeters audioStatus={status} oscStatus={oscStatus} />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 32, paddingBottom: 80 }}
@@ -566,32 +837,17 @@ function AudioConfigBody({
             title="BPM → SPEED SYNC"
             hint="Drive the global SPEED param from live tempo (OSC /lx/tempo/bpm)."
           />
-          {oscMissing || bpmStale ? (
-            <View style={{
-              borderRadius: 8, borderWidth: 1, borderColor: C.error,
-              padding: 10, marginBottom: 12,
-              backgroundColor: 'rgba(255,80,80,0.08)',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 11, marginBottom: 2 }}>
-                ⚠ NO BPM SIGNAL
-              </Text>
-              <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
-                {oscMissing
-                  ? `OSC listener is ${oscState ?? 'unknown'}; nothing is feeding /lx/tempo/bpm. Speed will not move.`
-                  : 'OSC is live but no tempoBpm has arrived yet. Confirm LX Studio is sending /lx/tempo/bpm.'}
-              </Text>
-            </View>
-          ) : null}
+          <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
           <MasterToggle
             on={bpmSyncOn}
             onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
             label={bpmSyncOn ? '● SYNC ON · SPEED DRIVEN BY BPM' : 'SYNC OFF · SPEED MANUAL'}
-            subtitle={
-              sp.tempoBpm > 0
-                ? `tempo ${Math.round(sp.tempoBpm)} BPM${bpmMappedSpeed !== null ? ` → speed ${bpmMappedSpeed.toFixed(2)}` : ''}`
-                : 'No tempo signal yet'
-            }
+            subtitle={bpmSyncOn ? 'Live tempo / mapped speed shown below.' : 'Tap to drive SPEED from live BPM.'}
           />
+          {/* Live tempo + mapped speed read-out. Subscribes ONLY to
+              tempoBpm + bpmSpeedMin/Max so the rest of the BPM card
+              stays still while it ticks. */}
+          {bpmSyncOn ? <BpmTempoLine /> : null}
           <View style={SUB_CARD}>
             <SubHeader title={`BPM MAPPING (${BPM_MIN_ABS}–${BPM_MAX_ABS} BPM)`} />
             {/* Min slider caps at (max - 1); max slider floors at (min + 1).
@@ -701,25 +957,11 @@ function AudioConfigBody({
         </View>
 
         {/* ── 4. LIVE DATA — STEMS (OSC) ───────────────────────────── */}
-        <View style={CARD}>
-          <SectionHeader
-            icon="dot.radiowaves.left.and.right"
-            title="STEMS — LIVE (OSC)"
-            hint="Vocals / Bass / Drums streamed from the external analyser. Independent of mic toggle."
-          />
-          <BandMeter label="VOCALS" value={sp.stemsVocals ?? 0} gain={sp.stemsVocalsGain ?? 1} accent={C.primary} />
-          <BandMeter label="BASS"   value={sp.stemsBass   ?? 0} gain={sp.stemsBassGain   ?? 1} accent={C.primary} />
-          <BandMeter label="DRUMS"  value={sp.stemsDrums  ?? 0} gain={sp.stemsDrumsGain  ?? 1} accent={C.primary} />
-          <View style={SUB_CARD}>
-            <SubHeader title="PER-STEM GAIN" />
-            <GainRow label="VOCALS" paramKey="stemsVocalsGain" value={sp.stemsVocalsGain ?? 1} />
-            <GainRow label="BASS"   paramKey="stemsBassGain"   value={sp.stemsBassGain   ?? 1} />
-            <GainRow label="DRUMS"  paramKey="stemsDrumsGain"  value={sp.stemsDrumsGain  ?? 1} />
-            <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 6 }}>
-              The deck's master REACT slider multiplies all of these.
-            </Text>
-          </View>
-        </View>
+        {/* Live meters extracted into <StemsLiveCard /> — it owns its
+            own useLiveParamValues({stemsBass, stemsDrums, stemsVocals})
+            subscription so the surrounding tuning UI doesn't re-render
+            at the OSC stem cadence. */}
+        <StemsLiveCard />
 
         {/* ── 5. LIVE DATA — MIC ANALYSIS ──────────────────────────── */}
         <View style={CARD}>
@@ -728,21 +970,10 @@ function AudioConfigBody({
             title="MIC — LIVE ANALYSIS"
             hint="Bands + kick from the mic. Tuning sliders nested below."
           />
-          <BandMeter label="LOW"  value={sp.micLow}  gain={sp.micLowGain}  accent={ACCENT_AUTO} />
-          <BandMeter label="MID"  value={sp.micMid}  gain={sp.micMidGain}  accent={ACCENT_AUTO} />
-          <BandMeter label="HIGH" value={sp.micHigh} gain={sp.micHighGain} accent={ACCENT_AUTO} />
-          <BandMeter label="KICK" value={sp.micKick} gain={sp.micKickGain} accent={C.error} />
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 2, marginBottom: 4 }}>
-            {lastKickAgo === null ? 'Last kick hit: never' : `Last kick hit: ${lastKickAgo < 10_000 ? `${(lastKickAgo / 1000).toFixed(1)} s` : '>10 s'} ago`}
-          </Text>
-
-          <View style={SUB_CARD}>
-            <SubHeader title="PER-BAND GAIN" />
-            <GainRow label="MIC LOW"  paramKey="micLowGain"  value={sp.micLowGain  ?? 1} />
-            <GainRow label="MIC MID"  paramKey="micMidGain"  value={sp.micMidGain  ?? 1} />
-            <GainRow label="MIC HIGH" paramKey="micHighGain" value={sp.micHighGain ?? 1} />
-            <GainRow label="MIC KICK" paramKey="micKickGain" value={sp.micKickGain ?? 1} />
-          </View>
+          {/* Live mic-band + kick meters + "last kick" hint. Subscribes
+              to ONLY {micLow, micMid, micHigh, micKick} live keys; the
+              surrounding tuning sliders below stay still. */}
+          <MicLiveCard audioStatus={status} />
 
           <View style={SUB_CARD}>
             <SubHeader title="BANDS — CROSSOVERS" />
