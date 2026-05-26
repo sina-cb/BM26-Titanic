@@ -1,7 +1,7 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 13_sparkle
+  pattern: 11_bioluminescence
   mode: blend_screen
   fader: 1
   enabled: true
@@ -9,10 +9,29 @@ channel:
   faderLocked: false
   localControls:
     '1037917937':
-      v0: 0.3
+      v0: 0.5
       v1: 0
       v2: 0
-  playlist: null
+    '1391556809':
+      v0: 1
+      v1: 0
+      v2: 0
+    '1969168382':
+      v0: 0
+      v1: 0
+      v2: 0
+    '3680310977':
+      v0: 0.5
+      v1: 0
+      v2: 0
+  playlist:
+    name: default
+    activeEntryId: e_default_11_11_bioluminescence
+    cursor: 11
+    autopilot:
+      active: false
+      delay_s: 1
+      shuffle: false
   viewSelection:
     type: all
     target: null

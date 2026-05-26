@@ -9,7 +9,7 @@ channel:
   faderLocked: false
   localControls:
     '1037917937':
-      v0: 0.1
+      v0: 0.9
       v1: 0
       v2: 0
     '2393603498':
@@ -17,17 +17,10 @@ channel:
       v1: 0
       v2: 0
     '2524999969':
-      v0: 0.15
+      v0: 0.95
       v1: 0
       v2: 0
-  playlist:
-    name: twin_show
-    activeEntryId: e_slow
-    cursor: 0
-    autopilot:
-      active: false
-      delay_s: 30
-      shuffle: false
+  playlist: null
   viewSelection:
     type: all
     target: null

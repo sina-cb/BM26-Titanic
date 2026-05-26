@@ -1,28 +1,67 @@
 master: 1
 channels:
-  - id: ch_1779755948088_0
+  - id: ch_1779760873648_1
     name: New Layer
-    pattern: 00_golden_hour_wash
+    pattern: 15_silk_prism_ribbons
     mode: blend_screen
-    fader: 1
+    fader: 0.45
     enabled: true
     locked: false
     faderLocked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '682166867':
-        v0: 0.49
+      '66806020':
+        v0: 0.5
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.4
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '2384393854':
+        v0: 0.5
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_1779753607233_3926
-      cursor: 0
+      activeEntryId: e_default_15_15_silk_prism_ribbons
+      cursor: 15
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+  - id: ch_1779760875817_2
+    name: New Layer
+    pattern: 18_deep_space_lattice
+    mode: blend_over
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '667518146':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.66
+        v1: 0
+        v2: 0
+      '1393164903':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_18_18_deep_space_lattice
+      cursor: 18
       autopilot:
         active: false
         delay_s: 30

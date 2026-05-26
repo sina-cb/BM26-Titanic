@@ -8,14 +8,14 @@ effects:
   vintageWhiteBypassDimmer: false
   uvBlastBypassDimmer: true
 params:
-  revision: 144
+  revision: 359691
   sourceLock: null
   params:
     speed:
-      value: 0.5418017963031391
+      value: 0.514324291332348
       lastSource: bpm-sync
       lastOrigin: bpm-sync:auto
-      lastRevision: 124
+      lastRevision: 359599
     size:
       value: 0.39
       lastSource: init
@@ -28,20 +28,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.62
+        h: 0.66
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 4
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 346658
     colorPalette2:
       value:
-        h: 0.48
+        h: 0.33
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 5
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 346659
     stemsVocalsGain:
       value: 0.84
       lastSource: init
@@ -58,45 +58,45 @@ params:
       lastOrigin: init
       lastRevision: 8
     stemsVocals:
-      value: 0.1897527426481247
+      value: 0.2017783373594284
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 144
+      lastRevision: 359675
     stemsBass:
-      value: 0.4410295784473419
-      lastSource: osc
-      lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 142
-    stemsDrums:
-      value: 0.16962182521820068
-      lastSource: osc
-      lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 143
-    tempoBpm:
-      value: 129.13999938964844
-      lastSource: osc
-      lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 123
-    micLow:
-      value: 0.004753125081194295
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 138
-    micMid:
-      value: 0.001961052989250256
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 139
-    micHigh:
-      value: 0.0025942260597255676
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 140
-    micKick:
       value: 0
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 359674
+    stemsDrums:
+      value: 0
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 358042
+    tempoBpm:
+      value: 126.08999633789062
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 359598
+    micLow:
+      value: 0.0257541567834385
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 141
+      lastRevision: 359688
+    micMid:
+      value: 0.08191678991204557
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 359689
+    micHigh:
+      value: 0.03926515855135915
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 359690
+    micKick:
+      value: 0.3449872147301087
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 359691
     micLowGain:
       value: 1
       lastSource: init
@@ -133,7 +133,7 @@ params:
       lastOrigin: init
       lastRevision: 23
 dimmers:
-  '1': 0.1026785714285714
+  '1': 0.125
   '2': 0.0982142857142857
   '3': 0.0982142857142857
 controlLock: null

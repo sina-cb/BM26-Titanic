@@ -1448,6 +1448,13 @@ export async function putModulation(
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    // Symmetric with savePlaylist (line 1059): drop the cached
+    // playlist immediately so the popover's onChanged → refetch
+    // doesn't race the engine's `playlistSaved` WS broadcast and
+    // return the pre-save snapshot. Without this, the ◎ ON badge
+    // didn't light up until the next WS event invalidated the
+    // cache (or the operator restarted the app).
+    invalidatePlaylistCache(playlistName);
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('put-modulation', `Failed to PUT modulation:`, err);
@@ -1466,6 +1473,7 @@ export async function patchModulation(
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('patch-modulation', `Failed to PATCH modulation:`, err);
@@ -1482,6 +1490,7 @@ export async function deleteModulation(
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('delete-modulation', `Failed to DELETE modulation:`, err);
