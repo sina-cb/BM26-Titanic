@@ -24,8 +24,8 @@ const FULL_CFG = {
   enabled: true,
   capture: { backend: 'ffmpeg', device: ':0', sampleRate: 44100, channels: 1 },
   fftSize: 1024, hopSize: 512,
-  bands:   { lowMaxHz: 250, midMaxHz: 2000, smoothingAlpha: 0.5 },
-  kick:    { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 120 },
+  bands:   { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 },
+  kick:    { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 120 },
 };
 
 test('loadAudioConfig returns {} when the override file is missing', () => {
@@ -77,8 +77,8 @@ test('pickLiveFields keeps scene-level scalars + bands + kick + mic-selection su
     enabled: true,
     fftSize: 1024,
     hopSize: 512,
-    bands: { lowMaxHz: 250, midMaxHz: 2000, smoothingAlpha: 0.5 },
-    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 120 },
+    bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 },
+    kick:  { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 120 },
     capture: {
       platform: 'darwin', inputFormat: 'avfoundation',
       device: ':1', deviceId: 'avfoundation-audio-1', deviceLabel: 'MBP',
@@ -159,8 +159,10 @@ test('validateLivePatch rejects non-object payloads', () => {
 
 test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // Lock in the live-tunable contract; changing this is a doc + UI change.
+  // Bands lost `smoothingAlpha` in favour of asymmetric attack/release
+  // + a noise gate (2026-05-25 retune).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands: ['lowMaxHz', 'midMaxHz', 'smoothingAlpha'],
+    bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
     kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
   });
 });

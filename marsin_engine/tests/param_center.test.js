@@ -99,7 +99,7 @@ test('mic per-band gains are persistent operator knobs with [0,2] range', () => 
   }
 });
 
-test('bpmSpeedSync snaps to {0, 1} and persists; min/max are ints in [30,240]', () => {
+test('bpmSpeedSync snaps to {0, 1} and persists; min/max are ints in [60,180]', () => {
   const pc = new ParamCenter(tmpStatePath());
   const schema = pc.getSchema();
   const sync = schema.find(s => s.key === 'bpmSpeedSync');
@@ -113,7 +113,10 @@ test('bpmSpeedSync snaps to {0, 1} and persists; min/max are ints in [30,240]', 
   const bMin = schema.find(s => s.key === 'bpmSpeedMin');
   const bMax = schema.find(s => s.key === 'bpmSpeedMax');
   assert.equal(bMin.type, 'int');
-  assert.deepEqual(bMin.range, [30, 240]);
+  // BPM-sync range tightened to [60, 180] on 2026-05-25 per operator
+  // brief: musically useful EDM bounds, no values outside this allowed.
+  assert.deepEqual(bMin.range, [60, 180]);
+  assert.deepEqual(bMax.range, [60, 180]);
   assert.equal(bMin.default, 60);
   assert.equal(bMax.default, 180);
 });
