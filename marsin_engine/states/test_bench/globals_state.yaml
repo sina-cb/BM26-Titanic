@@ -1,4 +1,4 @@
-blackout: false
+blackout: true
 effects:
   fogger: false
   uvBlast: false
@@ -8,14 +8,14 @@ effects:
   vintageWhiteBypassDimmer: false
   uvBlastBypassDimmer: true
 params:
-  revision: 359691
+  revision: 265973
   sourceLock: null
   params:
     speed:
-      value: 0.514324291332348
+      value: 0.5344144803983671
       lastSource: bpm-sync
       lastOrigin: bpm-sync:auto
-      lastRevision: 359599
+      lastRevision: 265885
     size:
       value: 0.39
       lastSource: init
@@ -28,20 +28,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.66
+        h: 0.64
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 346658
+      lastRevision: 215096
     colorPalette2:
       value:
-        h: 0.33
+        h: 0.9
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 346659
+      lastRevision: 215097
     stemsVocalsGain:
       value: 0.84
       lastSource: init
@@ -58,45 +58,45 @@ params:
       lastOrigin: init
       lastRevision: 8
     stemsVocals:
-      value: 0.2017783373594284
+      value: 0.020892227068543434
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 359675
+      lastRevision: 265969
     stemsBass:
-      value: 0
+      value: 0.47877922654151917
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 359674
+      lastRevision: 265967
     stemsDrums:
-      value: 0
+      value: 0.10310477018356323
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 358042
+      lastRevision: 265968
     tempoBpm:
-      value: 126.08999633789062
+      value: 128.32000732421875
       lastSource: osc
       lastOrigin: osc:10.1.1.172:58778
-      lastRevision: 359598
+      lastRevision: 265884
     micLow:
-      value: 0.0257541567834385
+      value: 0.002343342770582241
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 359688
+      lastRevision: 265970
     micMid:
-      value: 0.08191678991204557
+      value: 0.114073579260827
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 359689
+      lastRevision: 265971
     micHigh:
-      value: 0.03926515855135915
+      value: 0.058181830493470255
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 359690
+      lastRevision: 265972
     micKick:
-      value: 0.3449872147301087
+      value: 0.3800326494469854
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 359691
+      lastRevision: 265973
     micLowGain:
       value: 1
       lastSource: init

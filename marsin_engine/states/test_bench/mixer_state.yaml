@@ -1,10 +1,10 @@
 master: 1
 channels:
-  - id: ch_1779760873648_1
+  - id: ch_1779762447195_0
     name: New Layer
     pattern: 15_silk_prism_ribbons
     mode: blend_screen
-    fader: 0.45
+    fader: 0
     enabled: true
     locked: false
     faderLocked: false
@@ -35,33 +35,37 @@ channels:
       type: all
       target: null
       invert: false
-  - id: ch_1779760875817_2
+  - id: ch_1779762472447_1
     name: New Layer
-    pattern: 18_deep_space_lattice
-    mode: blend_over
-    fader: 0
+    pattern: 06_neon_elevator
+    mode: blend_screen
+    fader: 1
     enabled: true
     locked: false
     faderLocked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '667518146':
-        v0: 0.5
-        v1: 0
-        v2: 0
       '1037917937':
-        v0: 0.66
+        v0: 0.58
         v1: 0
         v2: 0
-      '1393164903':
-        v0: 0.5
+      '1225222055':
+        v0: 0.17
+        v1: 0
+        v2: 0
+      '1628509418':
+        v0: 0.16
+        v1: 0
+        v2: 0
+      '3772320662':
+        v0: 0.73
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_18_18_deep_space_lattice
-      cursor: 18
+      activeEntryId: e_default_6_06_neon_elevator
+      cursor: 6
       autopilot:
         active: false
         delay_s: 30
@@ -69,4 +73,39 @@ channels:
     viewSelection:
       type: all
       target: null
+      invert: false
+  - id: ch_1779762486476_2
+    name: New Layer
+    pattern: 10_chasers
+    mode: blend_over
+    fader: 1
+    enabled: false
+    locked: false
+    faderLocked: true
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '145792981':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '2058914376':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_10_10_chasers
+      cursor: 10
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: group
+      target: VintageLights
       invert: false

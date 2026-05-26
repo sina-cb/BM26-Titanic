@@ -12,3 +12,17 @@ capture:
   inputFormat: avfoundation
   platform: darwin
 enabled: true
+fftSize: 1024
+hopSize: 512
+bands:
+  lowMaxHz: 200
+  midMaxHz: 4000
+  attackMs: 8
+  releaseMs: 180
+  noiseGate: 0.04
+kick:
+  minHz: 50
+  maxHz: 110
+  threshold: 1.8
+  refractoryMs: 140
+  decayMs: 120

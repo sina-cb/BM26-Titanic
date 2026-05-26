@@ -14,9 +14,9 @@ vis:
 server:
   port: 6968
 playlist:
-  active: false
+  active: true
   delay_s: '1'
-  shuffle: false
+  shuffle: true
 web_client:
   enabled: false
   port: 6967
@@ -44,33 +44,12 @@ audio:
     stderrWarnIntervalMs: 60000
   fftSize: 1024
   hopSize: 512
-  # EDM-tuned defaults (2026-05-25). See lib/audio_analyzer.js header
-  # for rationale.
-  #   lowMaxHz 200 — splits sub/bass (≤200 Hz) from synth/vocal mids;
-  #     keeps kick fundamental and sub-bass synth pulse together in LOW.
-  #   midMaxHz 4000 — covers vocal harmonics + lead synths; hats/air go
-  #     to HIGH.
-  #   attackMs 8 / releaseMs 180 — VU-meter convention: snap up on
-  #     peaks, smooth fall on releases. 180 ms ≈ 1/3 of a quarter note
-  #     at 120 BPM, which makes the release feel musical on a beat grid.
-  #   noiseGate 0.04 — perceptual floor for ambient HVAC + mic
-  #     self-noise; quiet rooms read as quiet on the meter.
   bands:
     lowMaxHz: 200
     midMaxHz: 4000
     attackMs: 8
     releaseMs: 180
     noiseGate: 0.04
-  # Kick window tightened (50–110 Hz) to the EDM-kick fundamental
-  # (50–80 Hz, Bob Katz "Mastering Audio" 3rd ed. ch. 11) plus the
-  # transient click (~100 Hz). Excludes bass-synth body (120 Hz+) so
-  # melodic basslines don't false-fire.
-  # threshold 1.8 ≈ 2.5 dB above EMA — slightly stricter than 1.6 to
-  # suppress hat/cymbal bleed without missing actual kicks.
-  # refractoryMs 140 ms — leaves room for double-kick patterns at
-  # drum'n'bass tempos (174 BPM ≈ 345 ms per beat, so a kick on the
-  # & of 1 is ~172 ms after the downbeat). Lower this in the Audio
-  # tab for grindcore / breakcore where kicks land < 140 ms apart.
   kick:
     minHz: 50
     maxHz: 110

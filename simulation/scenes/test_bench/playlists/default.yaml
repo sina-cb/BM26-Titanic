@@ -122,9 +122,9 @@ entries:
     pattern: 06_neon_elevator
     label: null
     defaults:
-      sliderLocalSpeed: 0.77
+      sliderLocalSpeed: 0.58
       sliderSteps: 0.16
-      sliderThickness: 0.38
+      sliderThickness: 0.17
       sliderBloom: 0.73
     modulations: []
     notes: null
@@ -132,10 +132,10 @@ entries:
     pattern: 07_shimmer
     label: null
     defaults:
-      sliderLocalSpeed: 0.75
-      sliderShimmerSpeedTrim: 0.5
+      sliderLocalSpeed: 0.96
+      sliderShimmerSpeedTrim: 0.74
       sliderDensity: 0.5
-      sliderBreathing: 0.4
+      sliderBreathing: 0.78
     modulations: []
     notes: null
   - id: e_default_8_08_ocean_liner
@@ -170,17 +170,17 @@ entries:
     pattern: 11_bioluminescence
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderDensity: 0.5
-      sliderUvGlow: 1
-      sliderPartyMode: 0
+      sliderLocalSpeed: 0.77
+      sliderDensity: 0.24
+      sliderUvGlow: 0.32
+      sliderPartyMode: 0.28
     modulations: []
     notes: null
   - id: e_default_12_12_breathing
     pattern: 12_breathing
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
+      sliderLocalSpeed: 0.35
       sliderRipple: 0
       sliderSharpness: 0.5
     modulations: []
@@ -217,7 +217,7 @@ entries:
     pattern: 16_ghost_tide_uv
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
+      sliderLocalSpeed: 0.27
       sliderTideWidth: 0.5
       sliderWhiteLevel: 0.85
       sliderUvLevel: 1
@@ -245,12 +245,12 @@ entries:
     pattern: 19_swaying_lattice_ballet
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderFlockReach: 0.5
-      sliderFlockFocus: 0.5
-      sliderFilamentDensity: 0.5
-      sliderContrast: 0.5
-      sliderAfterglow: 0.18
+      sliderLocalSpeed: 0.51
+      sliderFlockReach: 0.56
+      sliderFlockFocus: 0.41
+      sliderFilamentDensity: 0.68
+      sliderContrast: 0.32
+      sliderAfterglow: 0.22
     modulations: []
     notes: null
   - id: e_default_20_20_parametric_sway_field
@@ -304,9 +304,9 @@ entries:
     pattern: 24_chromatic_murmuration
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderFlockReach: 0.5
-      sliderFlockFocus: 0.5
+      sliderLocalSpeed: 0.31
+      sliderFlockReach: 0.76
+      sliderFlockFocus: 0.76
       sliderFilamentDensity: 0.5
       sliderContrast: 0.5
       sliderAfterglow: 0.18
@@ -633,10 +633,10 @@ entries:
     pattern: 80_canopy_fracture
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderFractureAmount: 0.4
-      sliderBranchSharpness: 0.5
-      sliderAftershock: 0.25
+      sliderLocalSpeed: 0.81
+      sliderFractureAmount: 0.43
+      sliderBranchSharpness: 0.48
+      sliderAftershock: 0.81
       sliderUvIntensity: 1
     modulations: []
     notes: null
