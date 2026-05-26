@@ -203,6 +203,24 @@ function GainRow({ label, paramKey, value }: { label: string; paramKey: string; 
   const [draft, setDraft] = useState<number | null>(null);
   const showVal = draft !== null ? draft : value;
   const norm = (showVal - gMin) / span;
+  // Throttled live-drag writer. The operator expects the POST trace to
+  // respond as they drag the slider — release-only writes feel broken.
+  // 33 ms ≈ 30 Hz, comfortably under the engine's analyser hop rate.
+  const lastSentAt = useRef(0);
+  const pendingRef = useRef<number | null>(null);
+  const sendNow = useCallback((v: number) => {
+    lastSentAt.current = Date.now();
+    pendingRef.current = null;
+    updateParamCenter({ [paramKey]: v });
+  }, [paramKey]);
+  const sendThrottled = useCallback((v: number) => {
+    const now = Date.now();
+    if (now - lastSentAt.current >= 33) {
+      sendNow(v);
+    } else {
+      pendingRef.current = v;
+    }
+  }, [sendNow]);
   return (
     <View style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -211,8 +229,18 @@ function GainRow({ label, paramKey, value }: { label: string; paramKey: string; 
       </View>
       <HorizontalFader
         value={Math.max(0, Math.min(1, norm))}
-        onChange={(v: number) => setDraft(gMin + v * span)}
-        onRelease={() => { if (draft !== null) { updateParamCenter({ [paramKey]: draft }); setDraft(null); } }}
+        onChange={(v: number) => {
+          const real = gMin + v * span;
+          setDraft(real);
+          sendThrottled(real);
+        }}
+        onRelease={() => {
+          // Flush any throttled-suppressed final value, then clear draft
+          // so the slider snaps back to the engine-confirmed value.
+          const final = pendingRef.current ?? draft;
+          if (final !== null) sendNow(final);
+          setDraft(null);
+        }}
         trackStyle={{ height: 18, backgroundColor: C.surfaceContainerHigh, borderRadius: 9 }}
         fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 9 }}
       />
@@ -400,48 +428,56 @@ function buildPoints(samples: readonly number[], bufferLen: number): string {
   return parts.join(' ');
 }
 
-// One signal column: [LABEL + VALUE] → [bar] → [trail plot]. The
-// trail's width is matched to the bar via the shared parent column
-// (both children stretch to the column's flex width).
-function SignalColumn({ slot, post, rawSamples, postSamples, bufferLen }: {
+// One signal column: header label, then two stacked sub-rows — RAW
+// (ghost-toned bar + trace) and POST (solid bar + trace). Stacking
+// them (vs overlaying) means the operator can read each separately
+// and verify gain divergence at a glance.
+function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
   slot: SignalSlot;
+  raw: number;
   post: number;
   rawSamples: readonly number[];
   postSamples: readonly number[];
   bufferLen: number;
 }) {
-  const v = Math.max(0, Math.min(1, post));
+  const rv = Math.max(0, Math.min(1, raw));
+  const pv = Math.max(0, Math.min(1, post));
   const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
   const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
-      {/* row 1 — label + post value */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+      {/* header — slot label */}
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+        color: C.secondary, textTransform: 'uppercase',
+        letterSpacing: 0.6, marginBottom: 4,
+      }}>{slot.label}</Text>
+
+      {/* RAW sub-row — tag+value, bar, trace */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: C.secondary, letterSpacing: 0.6, opacity: 0.7,
+        }}>RAW</Text>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: C.secondary, textTransform: 'uppercase',
-          letterSpacing: 0.6,
-        }}>{slot.label}</Text>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-          color: C.text,
-        }}>{v.toFixed(2)}</Text>
+          color: C.text, opacity: 0.7,
+        }}>{rv.toFixed(2)}</Text>
       </View>
-      {/* row 2 — bar */}
       <View style={{
-        height: 18, borderRadius: 9,
+        height: 14, borderRadius: 7,
         backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden',
+        overflow: 'hidden', marginTop: 2,
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${v * 100}%`, backgroundColor: slot.accent,
+          width: `${rv * 100}%`, backgroundColor: slot.accent,
+          opacity: 0.5,
         }} />
       </View>
-      {/* row 3 — SVG trail (RAW ghost + POST solid overlaid) */}
       <View style={{
-        marginTop: 3,
+        marginTop: 2,
         height: TRAIL_HEIGHT,
         backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
@@ -454,18 +490,54 @@ function SignalColumn({ slot, post, rawSamples, postSamples, bufferLen }: {
           viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
           preserveAspectRatio="none"
         >
-          {/* RAW — ghost line behind POST. Thinner + half-opacity so
-              the operator sees POST split off when gain ≠ 1. */}
           {rawPoints ? (
             <Polyline
               points={rawPoints}
               fill="none"
               stroke={slot.accent}
-              strokeOpacity={0.4}
+              strokeOpacity={0.55}
               strokeWidth={1}
             />
           ) : null}
-          {/* POST — solid line over the top. */}
+        </Svg>
+      </View>
+
+      {/* POST sub-row — tag+value, bar, trace */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 8 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: slot.accent, letterSpacing: 0.6,
+        }}>POST</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
+          color: C.text,
+        }}>{pv.toFixed(2)}</Text>
+      </View>
+      <View style={{
+        height: 18, borderRadius: 9,
+        backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder,
+        overflow: 'hidden', marginTop: 2,
+      }}>
+        <View style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: `${pv * 100}%`, backgroundColor: slot.accent,
+        }} />
+      </View>
+      <View style={{
+        marginTop: 2,
+        height: TRAIL_HEIGHT,
+        backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder,
+        borderRadius: 3,
+        overflow: 'hidden',
+      }}>
+        <Svg
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
+          preserveAspectRatio="none"
+        >
           {postPoints ? (
             <Polyline
               points={postPoints}
@@ -665,6 +737,7 @@ function PinnedAudioMeters({
               <SignalColumn
                 key={slot.postKey}
                 slot={slot}
+                raw={live[slot.rawKey] ?? 0}
                 post={live[slot.postKey] ?? 0}
                 rawSamples={trails.raw[i]}
                 postSamples={trails.post[i]}
@@ -690,6 +763,7 @@ function PinnedAudioMeters({
               <SignalColumn
                 key={slot.postKey}
                 slot={slot}
+                raw={live[slot.rawKey] ?? 0}
                 post={live[slot.postKey] ?? 0}
                 rawSamples={trails.raw[MIC_SIGNALS.length + i]}
                 postSamples={trails.post[MIC_SIGNALS.length + i]}

@@ -1,49 +1,25 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 23_prismatic_strange_attractors
+  pattern: 00_golden_hour_wash
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '23515769':
-      v0: 0.5
+    '682166867':
+      v0: 0.15
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.5
-      v1: 0
-      v2: 0
-    '1062689047':
-      v0: 0.5
-      v1: 0
-      v2: 0
-    '1983106279':
-      v0: 1
-      v1: 0
-      v2: 0
-    '2015283531':
-      v0: 0.04
-      v1: 0
-      v2: 0
-    '2077173573':
-      v0: 0.5
-      v1: 0
-      v2: 0
-    '2638258964':
-      v0: 0.5
-      v1: 0
-      v2: 0
-    '2768750841':
-      v0: 0.5
+      v0: 0.33
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_23_23_prismatic_strange_attractors
-    cursor: 23
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 0
     autopilot:
       active: false
       delay_s: 1

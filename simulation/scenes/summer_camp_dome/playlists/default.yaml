@@ -40,11 +40,7 @@ entries:
   - id: e_default_6_06_neon_elevator
     pattern: 06_neon_elevator
     label: null
-    defaults:
-      sliderLocalSpeed: 0.88
-      sliderSteps: 0.03
-      sliderThickness: 0.73
-      sliderBloom: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_7_07_shimmer
@@ -164,95 +160,43 @@ entries:
   - id: e_default_26_40_ghost_ship_reveal
     pattern: 40_ghost_ship_reveal
     label: null
-    defaults:
-      sliderLocalSpeed: 0.71
-      sliderRevealWidth: 0.15
-      sliderOrbitDrift: 0.09
-      sliderBlackoutDepth: 0.2
-      sliderLanternGlow: 0.76
-      sliderBeaconSparkle: 0.84
-      sliderUvTrail: 0.71
-      sliderSpinMotion: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_27_41_ghost_aurora
     pattern: 41_ghost_aurora
     label: null
-    defaults:
-      sliderLocalSpeed: 0.64
-      sliderCurtainWidth: 0.44
-      sliderDriftChaos: 0.26
-      sliderBlackoutDepth: 0.85
-      sliderRimShimmer: 0.25
-      sliderTriangleGain: 0.61
-      sliderHumanWarmth: 0.9
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_28_42_boiler_glow
     pattern: 42_boiler_glow
     label: null
-    defaults:
-      sliderLocalSpeed: 0.57
-      sliderBoilerHeat: 0.63
-      sliderFlickerComplexity: 0.91
-      sliderVentWidth: 0.4
-      sliderSteamFlash: 0.89
-      sliderTriangleRPM: 0.85
-      sliderBlackoutDepth: 0.21
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_29_43_sea_floor_shadow
     pattern: 43_sea_floor_shadow
     label: null
-    defaults:
-      sliderLocalSpeed: 0.42
-      sliderShadowWidth: 0.64
-      sliderShadowDrift: 0.6
-      sliderAbyssalSwell: 0.77
-      sliderEdgeFoam: 0.51
-      sliderBlackoutDepth: 0.8
-      sliderTriangleSilhouette: 0.7
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_30_44_apex_gyro_vortex
     pattern: 44_apex_gyro_vortex
     label: null
-    defaults:
-      sliderLocalSpeed: 0.71
-      sliderVortexSpeed: 0.12
-      sliderSweepImpact: 0.91
-      sliderHullGlow: 0.21
-      sliderUvIntensity: 0.8
-      sliderVortexWidth: 0.09
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_31_45_engine_room_clockwork
     pattern: 45_engine_room_clockwork
     label: null
-    defaults:
-      sliderLocalSpeed: 0.4
-      sliderGearTeeth: 0.62
-      sliderTickDecay: 0.84
-      sliderPistonStroke: 0.75
-      sliderBoilerHeat: 0.82
-      sliderPauseAmount: 0.88
-      sliderTriangleDial: 0.81
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_32_46_dome_lockdown
     pattern: 46_dome_lockdown
     label: null
-    defaults:
-      sliderLocalSpeed: 0.73
-      sliderTierDelay: 0.21
-      sliderDoorWidth: 0.82
-      sliderOpenImpact: 0
-      sliderHoldBlackout: 0.06
-      sliderEdgeUv: 0.83
-      sliderTriangleLead: 0.44
-      sliderSpinSpeed: 0
-      sliderSpinDirection: 0.75
-      sliderDoorOpenSoftness: 0.12
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_33_47_apex_perimeter_ping
@@ -264,14 +208,7 @@ entries:
   - id: e_default_34_48_titanic_sos_beacon
     pattern: 48_titanic_sos_beacon
     label: null
-    defaults:
-      sliderLocalSpeed: 0.37
-      sliderSignalStrength: 0.42
-      sliderSignalSpeed: 0.19
-      sliderEchoDelay: 0.63
-      sliderEchoWidth: 0
-      sliderResponseGlow: 0
-      sliderAbyssalDarkness: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_35_49_boiler_pressure_release
@@ -283,51 +220,25 @@ entries:
   - id: e_default_36_50_iceberg_fracture
     pattern: 50_iceberg_fracture
     label: null
-    defaults:
-      sliderLocalSpeed: 0.48
-      sliderFractureDensity: 0.35
-      sliderBranchSpread: 0.78
-      sliderStrikeDecay: 0.22
-      sliderAftershockWarmth: 0.72
-      sliderLaneCount: 0.23
-      sliderBlackoutDepth: 0.77
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_37_51_abyssal_searchlight
     pattern: 51_abyssal_searchlight
     label: null
-    defaults:
-      sliderLocalSpeed: 0.21
-      sliderBeamCount: 0.53
-      sliderSweepWidth: 0.16
-      sliderGimbalDrift: 0.49
-      sliderSweepImpact: 0.48
-      sliderTrailLength: 0.47
-      sliderBlackoutDepth: 0.48
-      sliderSweepDirection: 0.29
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_38_52_iceberg_shear_line
     pattern: 52_iceberg_shear_line
     label: null
-    defaults:
-      sliderLocalSpeed: 0.61
-      sliderShearAngle: 0.17
-      sliderShearWidth: 0.75
-      sliderAdvance: 0.21
-      sliderSubmergeDepth: 0
-      sliderWarmthRetreat: 0
-      sliderTriangleBlade: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_39_53_shadow_eclipse
     pattern: 53_shadow_eclipse
     label: null
-    defaults:
-      sliderLocalSpeed: 0.62
-      sliderEclipseDepth: 0.19
-      sliderCoronaBloom: 0.21
-      sliderRimShimmer: 0.15
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_40_54_boiler_fire_overdrive
@@ -345,115 +256,106 @@ entries:
   - id: e_default_42_56_stage_mirror_axis
     pattern: 56_stage_mirror_axis
     label: null
-    defaults:
-      sliderLocalSpeed: 0.62
-      sliderCenter: 0.62
-      sliderMirrorWidth: 0.32
-      sliderOrbitSpeed: 0.42
-      sliderParticleDensity: 0.36
-      sliderStageFocus: 0.64
-      sliderBlackoutDepth: 0.74
-      sliderUvEdge: 0.32
-      sliderCenterGuide: 0
+    defaults: {}
     modulations: []
     notes: null
-  - id: e_default_42_70_forest_canopy_reveal
+  - id: e_default_43_70_forest_canopy_reveal
     pattern: 70_forest_canopy_reveal
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_43_71_redwood_aurora
+  - id: e_default_44_71_redwood_aurora
     pattern: 71_redwood_aurora
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_44_72_outpost_campfire
+  - id: e_default_45_72_outpost_campfire
     pattern: 72_outpost_campfire
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_45_73_redwood_shadow_breath
+  - id: e_default_46_73_redwood_shadow_breath
     pattern: 73_redwood_shadow_breath
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_46_74_lookout_gyro_vortex
+  - id: e_default_47_74_lookout_gyro_vortex
     pattern: 74_lookout_gyro_vortex
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_47_75_timber_mill_clockwork
+  - id: e_default_48_75_timber_mill_clockwork
     pattern: 75_timber_mill_clockwork
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_48_76_outpost_lockdown
+  - id: e_default_49_76_outpost_lockdown
     pattern: 76_outpost_lockdown
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_49_77_tower_canopy_ping
+  - id: e_default_50_77_tower_canopy_ping
     pattern: 77_tower_canopy_ping
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_50_78_woodland_trident_sweep
+  - id: e_default_51_78_woodland_trident_sweep
     pattern: 78_woodland_trident_sweep
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_51_79_mill_pressure_release
+  - id: e_default_52_79_mill_pressure_release
     pattern: 79_mill_pressure_release
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_52_80_canopy_fracture
+  - id: e_default_53_80_canopy_fracture
     pattern: 80_canopy_fracture
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_53_81_outpost_distress_beacon
+  - id: e_default_54_81_outpost_distress_beacon
     pattern: 81_outpost_distress_beacon
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_54_82_redwood_timber_fall
+  - id: e_default_55_82_redwood_timber_fall
     pattern: 82_redwood_timber_fall
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_55_83_shadow_canopy_eclipse
+  - id: e_default_56_83_shadow_canopy_eclipse
     pattern: 83_shadow_canopy_eclipse
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_56_84_outpost_ember_overdrive
+  - id: e_default_57_84_outpost_ember_overdrive
     pattern: 84_outpost_ember_overdrive
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_57_85_redwood_starry_canopy
+  - id: e_default_58_85_redwood_starry_canopy
     pattern: 85_redwood_starry_canopy
     label: null
     defaults: {}
     modulations: []
     notes: null
-  - id: e_default_58_rainbow
+  - id: e_default_59_rainbow
     pattern: rainbow
     label: null
     defaults: {}

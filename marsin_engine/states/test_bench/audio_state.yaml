@@ -17,12 +17,12 @@ hopSize: 512
 bands:
   lowMaxHz: 200
   midMaxHz: 4000
-  attackMs: 8
-  releaseMs: 180
-  noiseGate: 0.04
+  attackMs: 20
+  releaseMs: 280
+  noiseGate: 0.025
 kick:
-  minHz: 50
-  maxHz: 110
+  minHz: 25
+  maxHz: 75
   threshold: 1.8
   refractoryMs: 140
   decayMs: 120
