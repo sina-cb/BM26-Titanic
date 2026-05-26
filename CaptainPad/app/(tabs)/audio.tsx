@@ -211,8 +211,14 @@ function GainRow({ label, paramKey, value }: { label: string; paramKey: string; 
   );
 }
 
+// `value` here is the already-post-gain live value (gain is applied at
+// the source in audio_analyzer.js / osc_listener.js before the value
+// reaches CPC — see docs/29). We do NOT multiply by `gain` again or we
+// would double-gain the meter; this is the same value the patterns see.
+// `gain` is still rendered in the label so the operator can confirm the
+// current setting while tuning the GainRow below.
 function BandMeter({ label, value, gain, accent = C.primary }: { label: string; value: number; gain: number; accent?: string }) {
-  const effective = Math.max(0, Math.min(1, value * gain));
+  const effective = Math.max(0, Math.min(1, value));
   return (
     <View style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -226,7 +232,6 @@ function BandMeter({ label, value, gain, accent = C.primary }: { label: string; 
         backgroundColor: C.surfaceContainerHigh,
         borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden',
       }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${value * 100}%`, backgroundColor: C.secondaryContainer }} />
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${effective * 100}%`, backgroundColor: accent }} />
       </View>
     </View>

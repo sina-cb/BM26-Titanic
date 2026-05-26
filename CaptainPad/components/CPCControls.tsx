@@ -251,37 +251,45 @@ export const CPCControls = () => {
         </TouchableOpacity>
 
         {audioCollapsed ? (
+          // Live mic/stem values arrive already post-gain (gain applied
+          // at the source in audio_analyzer.js / osc_listener.js before
+          // the value reaches CPC). Do NOT multiply by *Gain here — that
+          // would double-gain the meter. The patterns receive the same
+          // post-gain values, so what you see here is what the patterns
+          // see. See docs/29 for the architecture.
           <CollapsedAudioSummary
             isPortrait={isPortrait}
-            bass={(params.stemsBass ?? 0) * (params.stemsBassGain ?? 1)}
-            drums={(params.stemsDrums ?? 0) * (params.stemsDrumsGain ?? 1)}
-            vocals={(params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1)}
-            kick={(params.micKick ?? 0) * (params.micKickGain ?? 1)}
+            bass={params.stemsBass ?? 0}
+            drums={params.stemsDrums ?? 0}
+            vocals={params.stemsVocals ?? 0}
+            kick={params.micKick ?? 0}
           />
         ) : (
           // Master REACTIVITY MiniFader was removed 2026-05-26 (operator
           // review): per-stem gains in the Audio Analysis tab are now
           // the only level controls, freeing this row to be all live
           // meters at full width.
+          //
+          // Values below are already post-gain — see comment above.
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10, paddingRight: isPortrait ? 4 : 12 }}>
               <LiveMeterColumn
                 isPortrait={isPortrait}
-                top={{ label: 'BASS',   value: (params.stemsBass   ?? 0) * (params.stemsBassGain   ?? 1) }}
-                bot={{ label: 'DRUMS',  value: (params.stemsDrums  ?? 0) * (params.stemsDrumsGain  ?? 1) }}
+                top={{ label: 'BASS',   value: params.stemsBass   ?? 0 }}
+                bot={{ label: 'DRUMS',  value: params.stemsDrums  ?? 0 }}
               />
               <LiveMeterColumn
                 isPortrait={isPortrait}
-                top={{ label: 'VOCALS', value: (params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1) }}
-                bot={{ label: 'LOW',    value: (params.micLow      ?? 0) * (params.micLowGain      ?? 1) }}
+                top={{ label: 'VOCALS', value: params.stemsVocals ?? 0 }}
+                bot={{ label: 'LOW',    value: params.micLow      ?? 0 }}
               />
               <LiveMeterColumn
                 isPortrait={isPortrait}
-                top={{ label: 'MID',    value: (params.micMid      ?? 0) * (params.micMidGain      ?? 1) }}
-                bot={{ label: 'HIGH',   value: (params.micHigh     ?? 0) * (params.micHighGain     ?? 1) }}
+                top={{ label: 'MID',    value: params.micMid      ?? 0 }}
+                bot={{ label: 'HIGH',   value: params.micHigh     ?? 0 }}
               />
               <LiveMeterColumn
                 isPortrait={isPortrait}
-                top={{ label: 'KICK',   value: (params.micKick     ?? 0) * (params.micKickGain     ?? 1), accent: true }}
+                top={{ label: 'KICK',   value: params.micKick     ?? 0, accent: true }}
               />
           </View>
         )}

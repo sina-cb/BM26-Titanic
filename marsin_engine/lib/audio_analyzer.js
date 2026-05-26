@@ -15,9 +15,24 @@
  *     indices at construction / reconfigure. Per-band sum-of-magnitudes.
  *   - Soft compression `x / (1 + x)` plus a pre-clamp gain so quiet
  *     rooms still produce visible movement. The per-band operator
- *     gain (`mic*Gain` CPC params) is applied client-side (patterns,
- *     CaptainPad) — NOT here — so the raw CPC band value remains the
- *     analyzer's honest read of "what the mic heard".
+ *     gain (`mic*Gain` CPC params) is applied HERE, in the analyzer,
+ *     immediately before the post-envelope band value is written to
+ *     CPC. This makes the CPC band value the single authoritative
+ *     read for every downstream consumer (patterns, modulation
+ *     controller, CaptainPad meters, OSC echo) — one truth. The
+ *     gained value is clamped to [0, 1] so the live-key contract
+ *     (normalized) is preserved even when an operator pushes the
+ *     gain above 1×.
+ *
+ *     Architectural rationale (2026-05-26 — operator brief
+ *     "live signals must show data after gain"): before this change
+ *     gain was multiplied client-side in CaptainPad's <BandMeter>
+ *     for display only — the raw value was still on the wire, so
+ *     patterns / modulation / OSC saw the un-gained value while the
+ *     operator's meter showed something else. That's a fiction the
+ *     UI is selling. Gain at the SOURCE means the knob actually
+ *     moves what the rig responds to, and the meter shows what the
+ *     rig sees.
  *   - Per-band asymmetric attack/release envelope (VU-meter
  *     convention): fast attack so peaks register, slow release so
  *     visuals don't flicker. Configurable via `bands.attackMs` /
@@ -96,6 +111,16 @@ export class AudioAnalyzer {
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
    * @param {(r: {low, mid, high, kick}) => void} opts.onAnalysis
+   * @param {object} [opts.paramCenter] — CPC instance; required when `gainKeys` is set. Used to read per-band gains every hop.
+   * @param {{low:string, mid:string, high:string, kick:string}} [opts.gainKeys]
+   *        — CPC keys for the per-band operator gains. When set, the
+   *          analyzer multiplies each post-envelope band value by the
+   *          current gain and clamps to [0, 1] before emitting. When
+   *          omitted (e.g. unit tests that don't care about gain) the
+   *          analyzer behaves as before — raw post-envelope values.
+   *          Codex P0: if `gainKeys` is set, every listed key must
+   *          resolve via `paramCenter.get(key)` at construction or
+   *          construction throws — no silent zero-gain fallbacks.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -115,6 +140,45 @@ export class AudioAnalyzer {
     this.hopSize     = (opts.hopSize | 0) || (fftSize >> 1);
     this._onAnalysis = opts.onAnalysis;
     this._nowFn      = opts.nowFn || (() => Date.now());
+
+    // Per-band gain hookup. Either both `paramCenter` AND `gainKeys`
+    // are present (production / gain-aware tests) or both absent
+    // (analyzer-only unit tests for FFT correctness). Half-configured
+    // is a programmer error — fail loud at construction.
+    if (opts.gainKeys || opts.paramCenter) {
+      if (!opts.gainKeys || typeof opts.gainKeys !== 'object') {
+        throw new TypeError('AudioAnalyzer: gainKeys required when paramCenter is provided');
+      }
+      if (!opts.paramCenter || typeof opts.paramCenter.get !== 'function') {
+        throw new TypeError('AudioAnalyzer: paramCenter with .get(key) required when gainKeys is provided');
+      }
+      const required = ['low', 'mid', 'high', 'kick'];
+      for (const band of required) {
+        const key = opts.gainKeys[band];
+        if (typeof key !== 'string' || key.length === 0) {
+          throw new TypeError(`AudioAnalyzer: gainKeys.${band} must be a non-empty CPC key`);
+        }
+        // Probe — paramCenter.get throws on unknown keys (Codex P0).
+        // This converts a future "phantom gain key" bug at runtime
+        // into a boot-time crash.
+        const probe = opts.paramCenter.get(key);
+        if (typeof probe !== 'number') {
+          throw new TypeError(
+            `AudioAnalyzer: paramCenter.get(${key}) returned ${typeof probe}; expected number`,
+          );
+        }
+      }
+      this._paramCenter = opts.paramCenter;
+      this._gainKeys = {
+        low:  opts.gainKeys.low,
+        mid:  opts.gainKeys.mid,
+        high: opts.gainKeys.high,
+        kick: opts.gainKeys.kick,
+      };
+    } else {
+      this._paramCenter = null;
+      this._gainKeys = null;
+    }
 
     this._fft = new FFT(fftSize);
     this._window = hannWindow(fftSize);
@@ -396,12 +460,35 @@ export class AudioAnalyzer {
       if (this._kickValue < 1e-3) this._kickValue = 0;
     }
 
+    // Apply per-band operator gain at the source so every downstream
+    // consumer sees one consistent value. See the header comment for
+    // the architectural rationale. When the analyzer was constructed
+    // without paramCenter+gainKeys (test-only path) gains are 1.0 —
+    // the raw envelope values flow through unchanged.
+    let lowOut  = low;
+    let midOut  = mid;
+    let highOut = high;
+    let kickOut = this._kickValue;
+    if (this._gainKeys) {
+      // paramCenter.get() throws on unknown keys (Codex P0). We
+      // validated all four at construction, so misses here would mean
+      // someone unregistered a gain key at runtime — let it throw.
+      const gLow  = this._paramCenter.get(this._gainKeys.low);
+      const gMid  = this._paramCenter.get(this._gainKeys.mid);
+      const gHigh = this._paramCenter.get(this._gainKeys.high);
+      const gKick = this._paramCenter.get(this._gainKeys.kick);
+      lowOut  *= gLow;
+      midOut  *= gMid;
+      highOut *= gHigh;
+      kickOut *= gKick;
+    }
+
     try {
       this._onAnalysis({
-        low:  clamp01(low),
-        mid:  clamp01(mid),
-        high: clamp01(high),
-        kick: clamp01(this._kickValue),
+        low:  clamp01(lowOut),
+        mid:  clamp01(midOut),
+        high: clamp01(highOut),
+        kick: clamp01(kickOut),
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

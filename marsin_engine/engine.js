@@ -934,6 +934,17 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
+        // Per-band gain is applied INSIDE the analyzer (see header
+        // comment in audio_analyzer.js). The values we receive here
+        // are already gained + clamped to [0, 1] — the authoritative
+        // read every downstream consumer will see.
+        paramCenter,
+        gainKeys: {
+          low:  'micLowGain',
+          mid:  'micMidGain',
+          high: 'micHighGain',
+          kick: 'micKickGain',
+        },
         onAnalysis: ({ low, mid, high, kick }) => {
           if (kick > 0.95) audioState.lastKickAt = Date.now();
           paramCenter.setMany([

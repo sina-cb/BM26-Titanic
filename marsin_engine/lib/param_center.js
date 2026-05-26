@@ -505,6 +505,26 @@ export class ParamCenter {
   }
 
   /**
+   * Read a single param value by key. Codex P0 — no fallback behaviors:
+   * an unknown key throws, never silently returns a default. Used by
+   * hot-path consumers that need ONE value per frame (e.g. the
+   * AudioAnalyzer reading per-band gains) and don't want to pay the
+   * cost of `getAll()` deep-copying the entire store every hop.
+   *
+   * Returned value is a deep copy for HSV / object types so callers
+   * cannot mutate the store. Scalars pass through unchanged.
+   *
+   * @param {string} key
+   * @returns {*}
+   * @throws {Error} if `key` is not a registered param
+   */
+  get(key) {
+    const slot = this._store[key];
+    if (!slot) throw new Error(`ParamCenter.get: unknown key ${key}`);
+    return deepCopy(slot.value);
+  }
+
+  /**
    * Flat values for quick reads.
    * @returns {Object} e.g., { speed: 0.7, direction: 1, ... }
    */
