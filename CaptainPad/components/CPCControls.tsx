@@ -67,8 +67,22 @@ export const CPCControls = () => {
   // keeps this component's re-render scope tight (the BpmTile child
   // is the only thing that visibly changes when BPM nudges).
   const steadyParams = useSharedParamValues(defaultParams) as typeof defaultParams;
-  const { tempoBpm } = useLiveParamValues({ tempoBpm: 0 });
-  const params = useMemo(() => ({ ...steadyParams, tempoBpm }), [steadyParams, tempoBpm]);
+  // Live keys all ride /ws/signals at the analyser's broadcastHz (mic*
+  // and stems* are 15-30 Hz; tempoBpm is 5 Hz). Reading them via
+  // useLiveParamValues — instead of via useSharedParamValues like the
+  // rest of CPC — keeps the meters in the deck/mixer chrome ticking
+  // at the engine's actual rate. Pre-fix they were stuck at the boot
+  // sharedParams snapshot because sharedParams only re-broadcasts when
+  // an operator turns a knob, not on every analyser tick.
+  const live = useLiveParamValues({
+    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
+    stemsVocals: 0, stemsBass: 0, stemsDrums: 0,
+    tempoBpm: 0,
+  });
+  const params = useMemo(
+    () => ({ ...steadyParams, ...live }),
+    [steadyParams, live],
+  );
   // The Deck's two old per-colour swatches collapsed into one COLORS
   // button (May 2026). The picker itself lives in ColorPickerModal —
   // hue-only writes, atomic dual apply, presets sourced from
@@ -120,7 +134,14 @@ export const CPCControls = () => {
       : null;
   const speedDisplay  = bpmMapped !== null ? bpmMapped : (params.speed ?? 0.5);
   const speedFill     = bpmSyncOn ? ACCENT_AUTO : undefined;
-  const speedBadge    = bpmSyncOn ? 'BPM' : undefined;
+  // Operator request May 26 2026: when sync is ON, show the live BPM
+  // beside the SPEED %. Format: "BPM 128 · 73%" — the MiniFader
+  // already prints the percent, so the badge carries the BPM half.
+  // Falls back to "BPM —" if the analyser hasn't seen a tempo yet
+  // so the operator knows sync is wired but starving for tempo input.
+  const speedBadge    = bpmSyncOn
+    ? `BPM ${bpm > 0 ? Math.round(bpm) : '—'}`
+    : undefined;
   const bpmSyncStale  = bpmSyncOn && (
     (oscStatus && oscStatus.state !== 'live') || bpm <= 0
   );

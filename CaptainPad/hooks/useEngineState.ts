@@ -42,7 +42,7 @@
 //   - `blackout`: the engine's blackout state, broadcast inside `mixer`
 //     events (engine attaches `blackout: globalsState.blackout`).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
@@ -507,11 +507,20 @@ export function useSharedParamValues<T extends Record<string, unknown>>(
 }
 
 /**
- * Subscribe to the live audio-derived CPC subset. Components that
- * only need a single live key (e.g. the deck's BPM badge) should use
- * useLiveParamValues with just that key in `defaults` so they only
- * re-render on liveParams broadcasts. Mixer / deck chrome should NOT
- * call this — they'd re-render at the analyser's 15-30 Hz cadence.
+ * Subscribe to the live audio-derived CPC subset. Returns the whole
+ * LiveParams document, so every consumer re-renders on every
+ * liveParams broadcast. PREFER `useLiveParamValues({ key: default })`
+ * for everything except code that genuinely needs to walk all live
+ * keys — `useLiveParamValues` short-circuits at the per-key level
+ * and so an audio meter that only reads micLow doesn't re-render
+ * when tempoBpm ticks.
+ *
+ * The deck and mixer CPCControls share the live bus via
+ * useLiveParamValues, but the per-key short-circuit there means
+ * neither pays the 15-30 Hz re-render cost when its own keys are
+ * idle. Audio tab + deck + mixer all subscribe to ONE module-level
+ * cache (a single WS connection + a single JSON.parse per tick), so
+ * there is no duplicated WS bandwidth and no duplicated parse work.
  */
 export function useLiveParams(): LiveParams | null {
   _ensureInitialized();
@@ -533,18 +542,74 @@ export function useLiveParams(): LiveParams | null {
  * Examples:
  *   const { micLow, micMid } = useLiveParamValues({ micLow: 0, micMid: 0 });
  *   const { tempoBpm } = useLiveParamValues({ tempoBpm: 0 });
+ *
+ * Performance contract (May 2026 operator optimisation):
+ *   The returned object is REFERENCE-STABLE across renders when the
+ *   subscribed values haven't changed. This lets downstream useMemo /
+ *   React.memo short-circuit at the 15-30 Hz analyser cadence — only
+ *   the keys the caller actually pulls (via `defaults`) participate
+ *   in the equality check, so a meter strip that only reads micLow
+ *   doesn't re-render when micHigh ticks. Without this, every
+ *   subscriber re-rendered on every liveParams broadcast and the
+ *   Audio tab + deck CPCControls + mixer CPCControls all did the
+ *   same React reconciliation work for the same data.
  */
 export function useLiveParamValues<T extends Record<string, unknown>>(
   defaults: T,
 ): T {
-  const live = useLiveParams();
-  if (!live) return defaults;
-  const flat: Record<string, unknown> = { ...defaults };
-  for (const key in live.params) {
-    const v = live.params[key]?.value;
-    if (v !== undefined) flat[key] = v;
-  }
-  return flat as T;
+  _ensureInitialized();
+  // Pin the keys this caller subscribes to. `defaults` is usually a
+  // fresh object literal on each render; its key SET, not identity,
+  // is what matters for our short-circuit.
+  const keysRef = useRef<readonly string[] | null>(null);
+  if (keysRef.current === null) keysRef.current = Object.keys(defaults);
+  const keys = keysRef.current;
+
+  // Pin the defaults snapshot once for pre-load + per-key fallback.
+  const defaultsRef = useRef<T | null>(null);
+  if (defaultsRef.current === null) defaultsRef.current = { ...defaults };
+
+  // Compute the current slice from the module-level cache. Returns the
+  // SAME reference as `prev` when no subscribed key changed.
+  const buildSlice = (prev: T | null): T => {
+    const src = _liveCached?.params;
+    if (!src) return prev || (defaultsRef.current as T);
+    const prevR = prev as Record<string, unknown> | null;
+    let changed = prevR === null;
+    const next: Record<string, unknown> = {};
+    for (const key of keys) {
+      const slot = src[key];
+      const v = slot && slot.value !== undefined ? slot.value : (defaultsRef.current as Record<string, unknown>)[key];
+      next[key] = v;
+      if (!changed && prevR![key] !== v) changed = true;
+    }
+    return (changed ? (next as T) : (prev as T));
+  };
+
+  const [slice, setSlice] = useState<T>(() => buildSlice(null));
+  const sliceRef = useRef<T>(slice);
+  sliceRef.current = slice;
+
+  useEffect(() => {
+    // Subscribe to the SHARED live bus. The listener computes a
+    // per-key slice and only calls setSlice when one of THIS caller's
+    // keys actually changed. The Audio tab + deck CPCControls + mixer
+    // CPCControls all share one WS, one parse, one module-level
+    // cache — and each component re-renders ONLY when its own keys
+    // tick. A meter strip pulling only micLow doesn't re-render when
+    // tempoBpm nudges, etc.
+    const listener = () => {
+      const next = buildSlice(sliceRef.current);
+      if (next !== sliceRef.current) setSlice(next);
+    };
+    _liveListeners.add(listener);
+    // Resync once — a tick that landed between mount and effect
+    // would otherwise stay invisible until the NEXT broadcast.
+    listener();
+    return () => { _liveListeners.delete(listener); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return slice;
 }
 
 /**
