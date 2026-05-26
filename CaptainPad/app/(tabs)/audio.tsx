@@ -8,15 +8,15 @@
 //      whatever tempoBpm source is live — OSC today, mic-detected
 //      tomorrow)
 //   4. MICROPHONE — status + tap-to-pick device (server-side mic list)
-//   5. LIVE DATA — STEMS (OSC-driven, three meters + per-stem gains)
-//   6. LIVE DATA — MIC ANALYSIS (mic-driven; meters + nested band /
-//      kick tuning sliders)
+//   5. STEMS — per-stem gain (live levels are in the pinned strip up top)
+//   6. MIC — per-band gain + analyser tuning (live levels are in the
+//      pinned strip up top)
 //
 // Important UI note: every interactive sub-component (FaderRow,
-// BandMeter, …) lives at MODULE scope. Defining them inside the
-// screen function would give them a new component identity on every
-// parent state change, which unmounts / remounts the underlying
-// HorizontalFader mid-drag and makes the sliders feel broken.
+// GainRow, …) lives at MODULE scope. Defining them inside the screen
+// function would give them a new component identity on every parent
+// state change, which unmounts / remounts the underlying HorizontalFader
+// mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
@@ -220,32 +220,13 @@ function GainRow({ label, paramKey, value }: { label: string; paramKey: string; 
   );
 }
 
-// `value` here is the already-post-gain live value (gain is applied at
-// the source in audio_analyzer.js / osc_listener.js before the value
-// reaches CPC — see docs/29). We do NOT multiply by `gain` again or we
-// would double-gain the meter; this is the same value the patterns see.
-// `gain` is still rendered in the label so the operator can confirm the
-// current setting while tuning the GainRow below.
-function BandMeter({ label, value, gain, accent = C.primary }: { label: string; value: number; gain: number; accent?: string }) {
-  const effective = Math.max(0, Math.min(1, value));
-  return (
-    <View style={{ marginBottom: 10 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10, textTransform: 'uppercase' }}>{label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10 }}>
-          {(effective * 100).toFixed(0)}%  ·  gain {gain.toFixed(2)}×
-        </Text>
-      </View>
-      <View style={{
-        height: 12, borderRadius: 6,
-        backgroundColor: C.surfaceContainerHigh,
-        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden',
-      }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${effective * 100}%`, backgroundColor: accent }} />
-      </View>
-    </View>
-  );
-}
+// `BandMeter` used to render the per-band level read-out inside the MIC
+// LIVE + STEMS LIVE cards. As of operator brief 2026-05-26 those rows
+// were deleted — they duplicate the bars in the pinned
+// <PinnedAudioMeters /> strip at the top of the AUDIO tab. The component
+// was removed wholesale; if a future card needs a 12-px band meter, lift
+// the bar+label block out of <SignalColumn /> (it shares the same
+// clamp-to-[0,1] + percent label pattern).
 
 // ── Master toggle (large pill, used at top of the page) ─────────────────
 
@@ -795,9 +776,12 @@ function BpmTempoLine() {
 // of the page (mic meters, tuning sliders, mic picker).
 
 function StemsLiveCard() {
-  const live = useLiveParamValues({
-    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
-  } as Record<string, number>) as Record<string, number>;
+  // Per-stem live meters used to live here too, but they're now redundant
+  // with the pinned <PinnedAudioMeters /> strip at the top of the AUDIO
+  // tab (which renders STEMS VOC/BAS/DRM bars + per-signal raw/post trail
+  // plots). Operator brief 2026-05-26: keep the per-stem GAIN sliders
+  // (operator tunes from this card), drop the duplicate level read-out.
+  // No `useLiveParamValues` needed any more.
   const steady = useSharedParamValues({
     stemsVocalsGain: 1, stemsBassGain: 1, stemsDrumsGain: 1,
   } as Record<string, number>) as Record<string, number>;
@@ -805,12 +789,9 @@ function StemsLiveCard() {
     <View style={CARD}>
       <SectionHeader
         icon="dot.radiowaves.left.and.right"
-        title="STEMS — LIVE (OSC)"
-        hint="Vocals / Bass / Drums streamed from the external analyser. Independent of mic toggle."
+        title="STEMS — GAIN (OSC)"
+        hint="Per-stem gain for the external-analyser stems. Live values are in the pinned meter strip at the top of this tab."
       />
-      <BandMeter label="VOCALS" value={live.stemsVocals ?? 0} gain={steady.stemsVocalsGain ?? 1} accent={C.primary} />
-      <BandMeter label="BASS"   value={live.stemsBass   ?? 0} gain={steady.stemsBassGain   ?? 1} accent={C.primary} />
-      <BandMeter label="DRUMS"  value={live.stemsDrums  ?? 0} gain={steady.stemsDrumsGain  ?? 1} accent={C.primary} />
       <View style={SUB_CARD}>
         <SubHeader title="PER-STEM GAIN" />
         <GainRow label="VOCALS" paramKey="stemsVocalsGain" value={steady.stemsVocalsGain ?? 1} />
@@ -826,42 +807,27 @@ function StemsLiveCard() {
 
 // ── Mic live card ────────────────────────────────────────────────────────
 //
-// Owns the mic-band + kick meters, the "last kick" hint, and the
-// PER-BAND GAIN sub-card. Subscribes to ONLY {micLow, micMid, micHigh,
-// micKick} live keys + the four micGain steady keys.
-//
-// audioStatus is passed in (instead of read via useAudioStatus here) so
-// we share the parent's subscription — no need to open a second slice
-// listener for the same audioStatus object.
+// Owns the PER-BAND GAIN sub-card. The per-band live meters used to live
+// here too, but they're now redundant with the pinned <PinnedAudioMeters />
+// strip at the top of the AUDIO tab (which renders MIC LOW/MID/HIGH/KICK
+// bars + per-signal raw/post trail plots). Operator brief 2026-05-26:
+// "Delete redundant per-band meters in MIC LIVE + STEMS LIVE cards" —
+// the gain sliders stay because the operator tunes from these cards;
+// only the duplicate level read-out is gone. Subscribes to the four
+// micGain steady keys only (no live subscription needed any more).
 
-function MicLiveCard({ audioStatus }: { audioStatus: AudioStatus | null }) {
-  const live = useLiveParamValues({
-    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
-  } as Record<string, number>) as Record<string, number>;
+function MicLiveCard() {
   const steady = useSharedParamValues({
     micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1,
   } as Record<string, number>) as Record<string, number>;
-  // "Last kick" is wall-clock dependent — recompute on each render.
-  // The card already re-renders at the live tick rate, so this is free.
-  const lastKickAgo = audioStatus?.lastKickMs ? Math.max(0, Date.now() - audioStatus.lastKickMs) : null;
   return (
-    <>
-      <BandMeter label="LOW"  value={live.micLow}  gain={steady.micLowGain  ?? 1} accent={ACCENT_AUTO} />
-      <BandMeter label="MID"  value={live.micMid}  gain={steady.micMidGain  ?? 1} accent={ACCENT_AUTO} />
-      <BandMeter label="HIGH" value={live.micHigh} gain={steady.micHighGain ?? 1} accent={ACCENT_AUTO} />
-      <BandMeter label="KICK" value={live.micKick} gain={steady.micKickGain ?? 1} accent={C.error} />
-      <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 2, marginBottom: 4 }}>
-        {lastKickAgo === null ? 'Last kick hit: never' : `Last kick hit: ${lastKickAgo < 10_000 ? `${(lastKickAgo / 1000).toFixed(1)} s` : '>10 s'} ago`}
-      </Text>
-
-      <View style={SUB_CARD}>
-        <SubHeader title="PER-BAND GAIN" />
-        <GainRow label="MIC LOW"  paramKey="micLowGain"  value={steady.micLowGain  ?? 1} />
-        <GainRow label="MIC MID"  paramKey="micMidGain"  value={steady.micMidGain  ?? 1} />
-        <GainRow label="MIC HIGH" paramKey="micHighGain" value={steady.micHighGain ?? 1} />
-        <GainRow label="MIC KICK" paramKey="micKickGain" value={steady.micKickGain ?? 1} />
-      </View>
-    </>
+    <View style={SUB_CARD}>
+      <SubHeader title="PER-BAND GAIN" />
+      <GainRow label="MIC LOW"  paramKey="micLowGain"  value={steady.micLowGain  ?? 1} />
+      <GainRow label="MIC MID"  paramKey="micMidGain"  value={steady.micMidGain  ?? 1} />
+      <GainRow label="MIC HIGH" paramKey="micHighGain" value={steady.micHighGain ?? 1} />
+      <GainRow label="MIC KICK" paramKey="micKickGain" value={steady.micKickGain ?? 1} />
+    </View>
   );
 }
 
@@ -1239,24 +1205,22 @@ function AudioConfigBody({
           ) : null}
         </View>
 
-        {/* ── 4. LIVE DATA — STEMS (OSC) ───────────────────────────── */}
-        {/* Live meters extracted into <StemsLiveCard /> — it owns its
-            own useLiveParamValues({stemsBass, stemsDrums, stemsVocals})
-            subscription so the surrounding tuning UI doesn't re-render
-            at the OSC stem cadence. */}
+        {/* ── 4. STEMS — GAIN (OSC) ──────────────────────────────────── */}
+        {/* Per-stem GAIN sub-card. Stem live levels render in the pinned
+            <PinnedAudioMeters /> strip at the top of the tab. */}
         <StemsLiveCard />
 
-        {/* ── 5. LIVE DATA — MIC ANALYSIS ──────────────────────────── */}
+        {/* ── 5. MIC — ANALYSIS ────────────────────────────────────── */}
         <View style={CARD}>
           <SectionHeader
             icon="waveform.path.ecg"
-            title="MIC — LIVE ANALYSIS"
-            hint="Bands + kick from the mic. Tuning sliders nested below."
+            title="MIC — ANALYSIS"
+            hint="Per-band gain + analyser tuning. Live mic levels are in the pinned meter strip at the top of this tab."
           />
-          {/* Live mic-band + kick meters + "last kick" hint. Subscribes
-              to ONLY {micLow, micMid, micHigh, micKick} live keys; the
-              surrounding tuning sliders below stay still. */}
-          <MicLiveCard audioStatus={status} />
+          {/* PER-BAND GAIN sub-card. Live mic meters used to render here
+              too but are now redundant with <PinnedAudioMeters />; only
+              the gain sliders remain. */}
+          <MicLiveCard />
 
           <View style={SUB_CARD}>
             <SubHeader title="BANDS — CROSSOVERS" />
