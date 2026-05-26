@@ -103,8 +103,16 @@ function loadPattern(patternsDir, name) {
  * dev case even on a quiet box. Then RFC1918 private addresses
  * (10.x, 192.168.x, 172.16-31.x) — those are the "real" LAN URLs the
  * operator usually wants for CaptainPad's Config tab fallback when
- * discovery is flaky. Then everything else (link-local 169.254.x,
- * VPN tunnels, etc.) at the bottom.
+ * discovery is flaky. Then any remaining public IPv4 at the bottom.
+ *
+ * Excluded outright (noise that's never reachable from a LAN peer):
+ *   - IPv4 link-local (169.254.0.0/16, APIPA) — only assigned when
+ *     DHCP fails, never useful to hand to a peer.
+ *   - VPN / tunnel virtual interfaces by name prefix: `utun`, `tun`,
+ *     `tap`, `ipsec`. Addresses on these (e.g. 10.254.x from a corp
+ *     VPN) are reachable only via the tunnel endpoint, NOT from a
+ *     peer on the operator's LAN. Printing them clutters the boot log
+ *     and misleads anyone trying to type the URL into a browser.
  *
  * One pass at boot — we don't re-enumerate on interface changes.
  */
@@ -121,9 +129,16 @@ function reachableUrls(port) {
   const ips = ['127.0.0.1'];
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
+    // Drop VPN / tunnel virtual interfaces wholesale — their addresses
+    // only route through the tunnel endpoint, not from a LAN peer.
+    if (name.startsWith('utun') || name.startsWith('tun')
+        || name.startsWith('tap') || name.startsWith('ipsec')) continue;
     for (const info of ifaces[name] || []) {
       if (info.family !== 'IPv4') continue;
       if (info.internal) continue;
+      // Drop IPv4 link-local (APIPA, 169.254.0.0/16) — only assigned
+      // when DHCP fails, never a useful URL to give a peer.
+      if (info.address.startsWith('169.254.')) continue;
       if (!ips.includes(info.address)) ips.push(info.address);
     }
   }
