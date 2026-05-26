@@ -20,6 +20,30 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
+// Per-band operator gain is applied AT THE SOURCE before writing to
+// CPC, so every downstream consumer (patterns, modulation, iPad
+// meters, OSC echo) reads one authoritative value. This mirrors the
+// mic-side contract in audio_analyzer.js — when stems arrive over
+// OSC we multiply by the matching `<key>Gain` CPC param and clamp
+// to [0, 1] (live-key space is normalized). Pre-2026-05-26 the gain
+// was multiplied client-side in CaptainPad's <BandMeter> for display
+// only; patterns still saw the un-gained value. See operator brief
+// 2026-05-26 "live signals must show data after gain".
+//
+// Codex P0: this map is intentionally fixed. Adding a new gainable
+// live key means adding it here AND in PARAM_REGISTRY — there is no
+// auto-discovery, because silent miss = "gain knob does nothing"
+// which is exactly the bug we're fixing.
+export const GAIN_BY_KEY = Object.freeze({
+  stemsBass:   'stemsBassGain',
+  stemsDrums:  'stemsDrumsGain',
+  stemsVocals: 'stemsVocalsGain',
+  micLow:      'micLowGain',
+  micMid:      'micMidGain',
+  micHigh:     'micHighGain',
+  micKick:     'micKickGain',
+});
+
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 
 /**
@@ -263,6 +287,11 @@ export class OscListener {
     if (!paramCenter || typeof paramCenter.setMany !== 'function') {
       throw new Error('OscListener requires a paramCenter with setMany().');
     }
+    if (typeof paramCenter.get !== 'function') {
+      throw new Error(
+        'OscListener requires a paramCenter with .get(key) for source-side gain reads.',
+      );
+    }
 
     this.port = port;
     this.host = host;
@@ -277,6 +306,24 @@ export class OscListener {
     this._bindingsByAddr = buildCanonicalBindings(schema);
     mergeCustomBindings(this._bindingsByAddr, bindings, registryByKey);
     this._allowedByIp = buildAllowedSenders(allowedSenders);
+
+    // Source-side gain validation. For every (liveKey → gainKey) pair
+    // in GAIN_BY_KEY, IF the live key is in the active registry we
+    // require the gain key to be present too — otherwise the listener
+    // would silently fall back to "no gain" for that band and the
+    // operator's knob would do nothing (the exact bug this whole
+    // refactor fixes). Codex P0 — fail at boot, not at first packet.
+    this._gainByKey = {};
+    for (const [liveKey, gainKey] of Object.entries(GAIN_BY_KEY)) {
+      if (!registryByKey[liveKey]) continue;
+      if (!registryByKey[gainKey]) {
+        throw new Error(
+          `OscListener: live key ${liveKey} requires gain key ${gainKey} ` +
+          `in the CPC registry (per GAIN_BY_KEY contract), but it is missing.`,
+        );
+      }
+      this._gainByKey[liveKey] = gainKey;
+    }
 
     // Stats state. Counters are per-second snapshots, reset on
     // every fire (docs/24 §10.1).
@@ -476,7 +523,22 @@ export class OscListener {
         continue;
       }
       if (b.kind === 'scalar') {
-        writes.push({ kind: 'scalar', key: b.key, value });
+        // Source-side gain: if this live key has a gain partner
+        // (stems*, mic*), multiply and clamp to [0, 1] BEFORE the
+        // value lands in CPC. Every downstream consumer sees the
+        // gained value — one truth. See GAIN_BY_KEY comment.
+        let outValue = value;
+        const gainKey = this._gainByKey[b.key];
+        if (gainKey !== undefined) {
+          // paramCenter.get throws on unknown keys (Codex P0). We
+          // validated each (liveKey, gainKey) pair at construction,
+          // so a throw here means someone tore down a gain key at
+          // runtime — let it surface, don't paper over it.
+          const g = this.paramCenter.get(gainKey);
+          const gained = value * g;
+          outValue = gained < 0 ? 0 : (gained > 1 ? 1 : gained);
+        }
+        writes.push({ kind: 'scalar', key: b.key, value: outValue });
       } else {
         const field = b.kind.slice(4);  // 'h'|'s'|'v'
         writes.push({ kind: 'hsv', key: b.key, field, value });

@@ -35,18 +35,41 @@ function makeMockParamCenter(extraEntries = []) {
       oscAddress: '/marsin/param/colorPalette1', live: false, broadcastHz: 30, persist: true, portWatch: true },
     { key: 'stemsVocals', label: 'Stems · Vocals', type: 'float', range: [0, 1], default: 0,
       oscAddress: '/marsin/stems/vocals', live: true, broadcastHz: 15, persist: false, portWatch: false },
+    // Gain partner for stemsVocals — required by OscListener constructor
+    // (source-side gain validation: every live key in GAIN_BY_KEY whose
+    // live key is present must have its gain partner present too).
+    { key: 'stemsVocalsGain', label: 'Vocals Gain', type: 'float', range: [0, 2], default: 1,
+      oscAddress: '/marsin/param/stemsVocalsGain', live: false, broadcastHz: 30, persist: true, portWatch: true },
     ...extraEntries,
   ];
+  // Flat key→value store seeded from schema defaults. .get() throws on
+  // unknown keys, mirroring the real ParamCenter contract (Codex P0 —
+  // no silent fallbacks). The OscListener uses this for source-side
+  // gain reads (e.g. stems → stemsGain) and validates every required
+  // gain key exists at construction.
+  const store = {};
+  for (const e of baseSchema) {
+    store[e.key] = (e.default !== undefined) ? e.default : 0;
+  }
   return {
     calls: [],
+    _store: store,
     getSchema() { return baseSchema; },
-    setMany(writes, source, origin) {
-      this.calls.push({ method: 'setMany', writes, source, origin });
-      return { status: 'ok', changedKeys: writes.map(w => w.key), revision: this.calls.length };
+    get(key) {
+      if (!(key in store)) throw new Error(`ParamCenter.get: unknown key ${key}`);
+      return store[key];
     },
     set(key, value, source, origin) {
       this.calls.push({ method: 'set', key, value, source, origin });
+      store[key] = value;
       return { status: 'ok', revision: this.calls.length };
+    },
+    setMany(writes, source, origin) {
+      this.calls.push({ method: 'setMany', writes, source, origin });
+      for (const w of writes) {
+        if (w && w.key && 'value' in w) store[w.key] = w.value;
+      }
+      return { status: 'ok', changedKeys: writes.map(w => w.key), revision: this.calls.length };
     },
     setHsvField(key, field, value, source, origin) {
       this.calls.push({ method: 'setHsvField', key, field, value, source, origin });

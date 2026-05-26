@@ -362,3 +362,172 @@ test('reconfigure rejects invalid bands', () => {
   const an = makeAnalyzer({}, results);
   assert.throws(() => an.reconfigure({ bands: { lowMaxHz: 5000, midMaxHz: 2000 } }));
 });
+
+// ── Per-band gain (operator's mic*/stems* gain knobs) ───────────────────
+//
+// As of 2026-05-26 the analyzer applies the per-band operator gain at
+// the source — before the value is written to CPC — so every downstream
+// consumer (patterns, modulation, iPad meters, OSC echo) sees one
+// authoritative gained value. Operator brief: "the live signals must
+// show the data after being applied with the gain and all that".
+//
+// These tests pin the contract:
+//   - half-configured paramCenter+gainKeys throws at construction;
+//   - gain of 1.0 is identity (regression for default behavior);
+//   - gain of 2.0 doubles the post-envelope band value;
+//   - gain pushing past 1.0 is clamped to 1.0, never wrapped.
+
+/** Minimal CPC stand-in for the gain hookup. Stores a flat key→value
+ *  map; .get(key) throws on unknown key (Codex P0 — same behavior as
+ *  the real ParamCenter.get). */
+function makeGainParamCenter(initial = {}) {
+  const store = { micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1, ...initial };
+  return {
+    _store: store,
+    get(key) {
+      if (!(key in store)) throw new Error(`ParamCenter.get: unknown key ${key}`);
+      return store[key];
+    },
+    set(key, v) { store[key] = v; },
+  };
+}
+
+function makeGainAnalyzer(paramCenter, overrides = {}, results, nowFn) {
+  const { bands: bandOverrides, kick: kickOverrides, ...rest } = overrides;
+  return new AudioAnalyzer({
+    sampleRate: SR,
+    fftSize: 1024,
+    hopSize: 512,
+    bands: {
+      lowMaxHz: 250, midMaxHz: 2000,
+      attackMs: 5, releaseMs: 30, noiseGate: 0,
+      ...(bandOverrides || {}),
+    },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80, ...(kickOverrides || {}) },
+    paramCenter,
+    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    onAnalysis: (r) => results.push(r),
+    nowFn,
+    ...rest,
+  });
+}
+
+test('throws when paramCenter passed without gainKeys (half-configured)', () => {
+  assert.throws(() => new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    paramCenter: makeGainParamCenter(),
+    onAnalysis: () => {},
+  }), /gainKeys required/);
+});
+
+test('throws when gainKeys passed without paramCenter (half-configured)', () => {
+  assert.throws(() => new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    onAnalysis: () => {},
+  }), /paramCenter.*required/);
+});
+
+test('throws at construction when a gainKey is missing from paramCenter (Codex P0 — no silent fallback)', () => {
+  // Probe-on-construct enforces every gain key exists. A typo or
+  // forgotten registry entry should crash boot, not "do nothing" at
+  // runtime.
+  const pc = makeGainParamCenter();          // micLow/Mid/High/Kick gain present…
+  delete pc._store.micKickGain;              // …but kick gone — bug.
+  assert.throws(() => new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    paramCenter: pc,
+    gainKeys: { low: 'micLowGain', mid: 'micMidGain', high: 'micHighGain', kick: 'micKickGain' },
+    onAnalysis: () => {},
+  }), /unknown key micKickGain/);
+});
+
+test('gain of 1.0 is identity — gained meter matches the no-gain baseline', () => {
+  // Regression: defaults must keep the meter exactly where it was
+  // pre-refactor. Any drift = the migration silently changed the
+  // baseline operator perception of "loud".
+  const baseline = [], gained = [];
+  const aBaseline = makeAnalyzer({}, baseline);  // no paramCenter — raw
+  const aGained = makeGainAnalyzer(makeGainParamCenter(), {}, gained);
+  const sig = sineInt16(100, 1.0);
+  aBaseline.pushSamples(sig);
+  aGained.pushSamples(sig);
+  // Compare the last analysis result. Float exact: same input, same
+  // code path, gain == 1 so the multiplication is the only difference
+  // and that's exact for finite floats.
+  const b = lastResult(baseline);
+  const g = lastResult(gained);
+  assert.equal(g.low,  b.low,  `low identity drift: ${g.low} vs ${b.low}`);
+  assert.equal(g.mid,  b.mid,  `mid identity drift: ${g.mid} vs ${b.mid}`);
+  assert.equal(g.high, b.high, `high identity drift: ${g.high} vs ${b.high}`);
+});
+
+test('gain of 2.0 doubles the post-envelope band value', () => {
+  // Drive a tiny-amplitude 100 Hz sine so the LOW band sits well
+  // below 0.5 — that gives gain=2 room to double without clamping
+  // and makes the doubling the visible part of the test.
+  const baseline = [], gained = [];
+  const aBaseline = makeAnalyzer({}, baseline);
+  const aGained = makeGainAnalyzer(
+    makeGainParamCenter({ micLowGain: 2.0 }), {}, gained,
+  );
+  const sig = sineInt16(100, 1.0, 0.05);   // amplitude 0.05 keeps LOW small
+  aBaseline.pushSamples(sig);
+  aGained.pushSamples(sig);
+  const b = lastResult(baseline).low;
+  const g = lastResult(gained).low;
+  assert.ok(b > 0.05 && b < 0.4, `baseline LOW should be in (0.05, 0.4) for headroom; got ${b}`);
+  // gain=2 → expect g ≈ 2*b, within float tolerance.
+  assert.ok(
+    Math.abs(g - 2 * b) < 1e-6,
+    `gain=2 should double the band value; raw=${b}, gained=${g}, expected=${2 * b}`,
+  );
+  // And the other bands (gain still 1) must match baseline — proves
+  // the multiplication is per-band, not a global scale.
+  assert.equal(lastResult(gained).mid,  lastResult(baseline).mid);
+  assert.equal(lastResult(gained).high, lastResult(baseline).high);
+});
+
+test('gain × raw above 1.0 clamps to 1.0 (no wrap, no overflow)', () => {
+  // Push a loud 100 Hz sine through LOW with a 5× gain — the post-
+  // envelope value is already well above 0.4, so 5× would land in
+  // the 2–4 range without the clamp. The contract is "live key space
+  // is normalized" — clamp to 1.0.
+  const results = [];
+  const an = makeGainAnalyzer(
+    makeGainParamCenter({ micLowGain: 5.0 }), {}, results,
+  );
+  an.pushSamples(sineInt16(100, 1.0, 0.5));
+  const r = lastResult(results);
+  assert.equal(r.low, 1.0, `clamp should pin LOW at 1.0; got ${r.low}`);
+});
+
+test('gain changes take effect on the very next analysis hop (operator twists knob → meter responds)', () => {
+  // The operator's complaint was "the gain doesn't do anything".
+  // Once we apply gain at the source, twisting the knob must visibly
+  // move the meter. Simulate: feed audio, observe meter, change gain
+  // mid-stream, feed more audio, observe meter changed proportionally.
+  const pc = makeGainParamCenter({ micLowGain: 1.0 });
+  const results = [];
+  const an = makeGainAnalyzer(pc, {}, results);
+  // Settle on a sustained quiet 100 Hz at gain=1.
+  an.pushSamples(sineInt16(100, 0.5, 0.08));
+  const beforeKnob = lastResult(results).low;
+  // Operator twists knob to 1.8×.
+  pc.set('micLowGain', 1.8);
+  // Feed the SAME signal again. The envelope is already settled, so
+  // the LOW meter should jump to ~1.8 × beforeKnob (modulo clamp).
+  an.pushSamples(sineInt16(100, 0.5, 0.08));
+  const afterKnob = lastResult(results).low;
+  const expected = Math.min(1, beforeKnob * 1.8);
+  assert.ok(
+    Math.abs(afterKnob - expected) < 0.01,
+    `meter should track gain change; before=${beforeKnob} after=${afterKnob} expected~${expected}`,
+  );
+});
