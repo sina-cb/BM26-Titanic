@@ -291,20 +291,42 @@ function useEngineSlice<T>(selector: (s: EngineLiveState) => T): T {
   return slice;
 }
 
-function _emitLive(next: LiveParams | null) {
+// rAF-coalesced live emit (May 2026 perf). Even with the engine's
+// 20 Hz bucket cap, a busy network can queue multiple liveParams
+// messages between two React render passes. Without coalescing, each
+// triggers its own setState wave through every live subscriber. Here
+// we accumulate into `_pendingLive` and flush once per frame via
+// rAF / setImmediate — so multiple incoming messages collapse into a
+// single setState per consumer per frame, with no perceptual loss
+// (meters can't paint faster than the device's frame rate anyway).
+let _pendingLive: LiveParams | null = null;
+let _flushScheduled = false;
+const _scheduleFlush: (cb: () => void) => void =
+  typeof requestAnimationFrame === 'function'
+    ? (cb) => requestAnimationFrame(() => cb())
+    : (cb) => setTimeout(cb, 16);
+
+function _flushLive() {
+  _flushScheduled = false;
+  const next = _pendingLive;
+  _pendingLive = null;
+  if (next === null) return;
   _liveCached = next;
-  // Mirror onto _cached.liveParams too so an audio-tab cold mount
-  // that reads useEngineState().liveParams sees the latest known
-  // value without having to subscribe via useLiveParams first.
   _cached = { ..._cached, liveParams: next };
   _liveListeners.forEach((cb) => {
     try {
       cb(next);
     } catch {
-      // Same defensive isolation as _emit — a buggy subscriber must
-      // never break the audio meter pipeline.
+      // A buggy subscriber must never break the audio meter pipeline.
     }
   });
+}
+
+function _emitLive(next: LiveParams | null) {
+  _pendingLive = next;
+  if (_flushScheduled) return;
+  _flushScheduled = true;
+  _scheduleFlush(_flushLive);
 }
 
 function _onMessage(msg: EngineMessage) {
@@ -402,6 +424,20 @@ function _onMessage(msg: EngineMessage) {
   }
 }
 
+// Signals-bus subscription is SEPARATE from control/params init
+// (May 2026 perf). The /ws/signals topic carries `liveParams` at
+// ~20 Hz; subscribing pays JSON.parse + dispatch on every message,
+// which on the iPad starves the audio.tsx / osc.tsx HTTP-fetch
+// continuations and produces the ~30s tab-load hang. Only consumers
+// that actually NEED live data (useLiveParamValues, and the deck
+// BPM badge via the same hook) should pay this cost.
+let _signalsInitialized = false;
+function _ensureSignalsInitialized() {
+  if (_signalsInitialized) return;
+  _signalsInitialized = true;
+  engineSignalsEvents.subscribe(_onMessage);
+}
+
 function _ensureInitialized() {
   if (_initialized) return;
   _initialized = true;
@@ -414,14 +450,8 @@ function _ensureInitialized() {
   // Without this subscribe sharedParams would be frozen at the
   // warm-up snapshot for the lifetime of the app.
   engineParamsEvents.subscribe(_onMessage);
-  // Signals plane: liveParams (mic*, stems*, tempoBpm) at the
-  // analyser's 15-30 Hz cadence. Per ws_topic_routing.js this is
-  // the ONLY topic that carries liveParams — without this subscribe
-  // the Audio Analysis tab meters and the deck BPM badge never
-  // update. Operator-reported bug May 26 2026: "audio analysis is
-  // not detecting the mic" — the engine WAS detecting fine, the
-  // iPad was just listening on the wrong bus.
-  engineSignalsEvents.subscribe(_onMessage);
+  // NOTE: signals plane (/ws/signals → liveParams) is opened lazily
+  // by _ensureSignalsInitialized() — see useLiveParamValues below.
 
   // Seed from REST so the first paint is already correct even before
   // the first WS message lands. Both endpoints fail silently — the WS
@@ -597,6 +627,7 @@ export function useSharedParamValues<T extends Record<string, unknown>>(
  */
 export function useLiveParams(): LiveParams | null {
   _ensureInitialized();
+  _ensureSignalsInitialized();
   const [state, setState] = useState<LiveParams | null>(_liveCached);
   useEffect(() => {
     _liveListeners.add(setState);
@@ -631,6 +662,7 @@ export function useLiveParamValues<T extends Record<string, unknown>>(
   defaults: T,
 ): T {
   _ensureInitialized();
+  _ensureSignalsInitialized();
   // Pin the keys this caller subscribes to. `defaults` is usually a
   // fresh object literal on each render; its key SET, not identity,
   // is what matters for our short-circuit.

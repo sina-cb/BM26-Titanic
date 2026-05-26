@@ -296,6 +296,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let lastSharedParams = null;
   let lastLiveParams = null;
   const lastBroadcastMs = {};
+  // Bucket-level emit cap (May 2026 perf). Per-key throttles are too
+  // coarse — with 4 mic bands all flagged 15 Hz but staggered, ANY
+  // band passing its 66ms deadline triggers a broadcast carrying ALL
+  // live keys, so the wire rate climbs to ~4×15 = 60 msg/s. The eye
+  // can't see meter ticks above ~20 Hz, and at 60 msg/s the iPad
+  // JS thread pays JSON.parse + listener fan-out for nothing. Cap the
+  // BUCKET so livePayloads emit at most every 50 ms regardless of how
+  // many per-key deadlines are firing. Per-key Hz values still act as
+  // a CEILING (a key flagged 5 Hz still throttles its own contribution).
+  const LIVE_BUCKET_MIN_INTERVAL_MS = 50; // 20 Hz cap
+  let lastLiveBroadcastMs = 0;
   let hzByKeyCache = null;
   let liveKeysSetCache = null;
   function getHzByKey() {
@@ -372,7 +383,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // ── liveParams: tight payload, only live keys ───────────────────
-    if (liveChanged.length > 0 && pastThrottle(now, 'live', liveChanged, hzByKey)) {
+    // Two gates must both pass: (1) per-key Hz (cheap insurance against
+    // a single key spamming faster than its declared rate) AND (2) the
+    // BUCKET rate cap which keeps total liveParams traffic below 20 Hz
+    // even when multiple keys are evolving in parallel.
+    if (liveChanged.length > 0
+        && (now - lastLiveBroadcastMs) >= LIVE_BUCKET_MIN_INTERVAL_MS
+        && pastThrottle(now, 'live', liveChanged, hzByKey)) {
+      lastLiveBroadcastMs = now;
       stampThrottle(now, 'live', liveChanged);
       const params = {};
       const srcParams = (state && state.params) || {};

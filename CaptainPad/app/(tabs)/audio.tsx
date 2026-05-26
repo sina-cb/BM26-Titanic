@@ -316,11 +316,85 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
 
 // ── Screen ──────────────────────────────────────────────────────────────
 
+// ── Mount strategy ────────────────────────────────────────────────────────
+//
+// The outer screen owns ONLY the static config HTTP load + the cheap
+// control-plane status pills. It deliberately does NOT subscribe to
+// `useLiveParamValues` / `useSharedParamValues` — those fire
+// `_ensureInitialized()` which opens /ws/signals + /ws/params, and
+// /ws/signals starts streaming liveParams at 20 Hz immediately on
+// connect. If those hooks ran at mount, the resulting JSON.parse +
+// listener fan-out work would queue behind the `await fetchAudioConfig`
+// microtask on the iPad's single JS thread — which is the bug that
+// made the spinner sit for 30 s when 1+ mixer channels were active.
+//
+// Once `cfg` is non-null, we mount <AudioConfigLoaded> which IS allowed
+// to subscribe to the live hooks. By that point the HTTP fetch has
+// already returned and the first paint of the static config is on
+// screen, so the operator never sees the spinner stick.
+
 export default function AudioAnalysisScreen() {
   const status = useAudioStatus();
   const oscStatus = useOscStatus();
   const [cfg, setCfg] = useState<AudioConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    await getApiBaseAsync();
+    const r = await fetchAudioConfig();
+    if (r.ok) { setCfg(r.data as AudioConfig); setLoadError(null); }
+    else { setLoadError(r.error || 'unknown error'); }
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  if (loadError) {
+    return (
+      <View style={globalStyles.container}>
+        <ScrollView contentContainerStyle={{ padding: 48 }} style={{ flex: 1 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, marginBottom: 8 }}>
+            AUDIO CONFIG UNAVAILABLE
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.text }}>{loadError}</Text>
+          <TouchableOpacity onPress={reload} style={{ marginTop: 16, padding: 12, backgroundColor: C.primary, borderRadius: 8, alignSelf: 'flex-start' }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#fff' }}>RETRY</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+  if (!cfg) {
+    return (
+      <View style={globalStyles.container}>
+        <ScrollView contentContainerStyle={{ padding: 48, alignItems: 'center' }} style={{ flex: 1 }}>
+          <ActivityIndicator size="large" color={C.primary} />
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, marginTop: 16 }}>Loading audio config…</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return <AudioConfigBody cfg={cfg} setCfg={setCfg} status={status} oscStatus={oscStatus} reload={reload} />;
+}
+
+// ── Loaded body ────────────────────────────────────────────────────────────
+//
+// Mounted ONLY when cfg is non-null. This is where the live-data hooks
+// (useLiveParamValues / useSharedParamValues) live — and therefore the
+// only place where /ws/signals + /ws/params subscriptions get opened.
+// By the time React mounts this component, the parent has already
+// painted the static config once, so the operator never sees a stuck
+// spinner even if /ws/signals is firehose-streaming behind us.
+
+function AudioConfigBody({
+  cfg, setCfg, status, oscStatus, reload,
+}: {
+  cfg: AudioConfig;
+  setCfg: React.Dispatch<React.SetStateAction<AudioConfig | null>>;
+  status: ReturnType<typeof useAudioStatus>;
+  oscStatus: ReturnType<typeof useOscStatus>;
+  reload: () => Promise<void>;
+}) {
   const [patchError, setPatchError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [devices, setDevices] = useState<AudioDevice[] | null>(null);
@@ -349,15 +423,6 @@ export default function AudioAnalysisScreen() {
   // from — keeps the audio meter render path identical to before
   // the split landed.
   const sp: Record<string, number> = { ...steady, ...live };
-
-  const reload = useCallback(async () => {
-    await getApiBaseAsync();
-    const r = await fetchAudioConfig();
-    if (r.ok) { setCfg(r.data as AudioConfig); setLoadError(null); }
-    else { setLoadError(r.error || 'unknown error'); }
-  }, []);
-
-  useEffect(() => { reload(); }, [reload]);
 
   const loadDevices = useCallback(async () => {
     setDevicesLoading(true);
@@ -430,33 +495,6 @@ export default function AudioAnalysisScreen() {
     if (!min || !max || min === max || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - min) / (max - min)));
   }, [sp.bpmSpeedMin, sp.bpmSpeedMax, sp.tempoBpm]);
-
-  // ── Loading / error states ─────────────────────────────────────────
-  if (loadError) {
-    return (
-      <View style={globalStyles.container}>
-        <ScrollView contentContainerStyle={{ padding: 48 }} style={{ flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, marginBottom: 8 }}>
-            AUDIO CONFIG UNAVAILABLE
-          </Text>
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.text }}>{loadError}</Text>
-          <TouchableOpacity onPress={reload} style={{ marginTop: 16, padding: 12, backgroundColor: C.primary, borderRadius: 8, alignSelf: 'flex-start' }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#fff' }}>RETRY</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
-    );
-  }
-  if (!cfg) {
-    return (
-      <View style={globalStyles.container}>
-        <ScrollView contentContainerStyle={{ padding: 48, alignItems: 'center' }} style={{ flex: 1 }}>
-          <ActivityIndicator size="large" color={C.primary} />
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, marginTop: 16 }}>Loading audio config…</Text>
-        </ScrollView>
-      </View>
-    );
-  }
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
