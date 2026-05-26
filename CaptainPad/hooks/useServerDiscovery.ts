@@ -17,8 +17,16 @@ export interface UseServerDiscoveryResult {
   scanning: boolean;
   progress: number; // 0..1
   subnet: string | null;
+  /** IP returned by the OS auto-detect (may differ from `subnet` if the
+   *  operator manually picked a different prefix to scan). Useful for
+   *  showing "detected: 169.254" hint next to a manually-overridden
+   *  scan target. */
+  autoDetectedIp: string | null;
   error: string | null;
-  scan: () => void;
+  /** Scan a /24 subnet. If `subnetOverride` (e.g. "10.1.1") is given it
+   *  takes precedence over OS auto-detection — required when iOS picks
+   *  a link-local interface (169.254.x) instead of the real WiFi. */
+  scan: (subnetOverride?: string | null) => void;
   cancel: () => void;
 }
 
@@ -34,6 +42,23 @@ function getSubnetPrefix(ip: string): string | null {
   const parts = ip.split('.');
   if (parts.length !== 4) return null;
   return parts.slice(0, 3).join('.');
+}
+
+/**
+ * Validate a user-supplied subnet prefix string like "10.1.1".
+ * Returns the normalized prefix (no trailing dot) or null if invalid.
+ */
+export function normalizeSubnetPrefix(input: string): string | null {
+  const trimmed = (input || '').trim().replace(/\.+$/, '');
+  if (!trimmed) return null;
+  const parts = trimmed.split('.');
+  if (parts.length !== 3) return null;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    const n = Number(p);
+    if (n < 0 || n > 255) return null;
+  }
+  return parts.join('.');
 }
 
 /**
@@ -82,10 +107,11 @@ export function useServerDiscovery(): UseServerDiscoveryResult {
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [subnet, setSubnet] = useState<string | null>(null);
+  const [autoDetectedIp, setAutoDetectedIp] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cancelledRef = useRef(false);
 
-  const scan = useCallback(async () => {
+  const scan = useCallback(async (subnetOverride?: string | null) => {
     if (scanning) return;
 
     setScanning(true);
@@ -95,17 +121,33 @@ export function useServerDiscovery(): UseServerDiscoveryResult {
     cancelledRef.current = false;
 
     try {
-      // 1. Get local IP
-      const ipAddress = await Network.getIpAddressAsync();
-      if (!ipAddress || ipAddress === '0.0.0.0') {
-        setError('Could not determine device IP. Are you connected to WiFi?');
-        setScanning(false);
-        return;
+      // Always run OS auto-detect so the UI can show what iOS picked,
+      // even when the operator is overriding it (which they typically
+      // do when iOS chose a link-local interface).
+      let detectedIp: string | null = null;
+      try {
+        detectedIp = await Network.getIpAddressAsync();
+        if (detectedIp === '0.0.0.0') detectedIp = null;
+        setAutoDetectedIp(detectedIp);
+      } catch {
+        setAutoDetectedIp(null);
       }
 
-      const prefix = getSubnetPrefix(ipAddress);
+      // Resolve the prefix to scan: override wins; fall back to detected.
+      let prefix: string | null = null;
+      const override = normalizeSubnetPrefix(subnetOverride || '');
+      if (override) {
+        prefix = override;
+      } else if (detectedIp) {
+        prefix = getSubnetPrefix(detectedIp);
+      }
+
       if (!prefix) {
-        setError(`Invalid IP format: ${ipAddress}`);
+        setError(
+          detectedIp
+            ? `Could not derive /24 subnet from IP ${detectedIp}. Enter the subnet manually (e.g. "10.1.1").`
+            : 'Could not determine device IP. Enter the subnet manually (e.g. "10.1.1").',
+        );
         setScanning(false);
         return;
       }
@@ -152,5 +194,5 @@ export function useServerDiscovery(): UseServerDiscoveryResult {
     cancelledRef.current = true;
   }, []);
 
-  return { servers, scanning, progress, subnet, error, scan, cancel };
+  return { servers, scanning, progress, subnet, autoDetectedIp, error, scan, cancel };
 }
