@@ -23,7 +23,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, FlatList, Modal, Pressable, Text, TouchableOpacity, View,
+  FlatList, Modal, Pressable, Text, TouchableOpacity, View,
 } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -161,23 +161,13 @@ export const AllModulationsPanel: React.FC<Props> = ({
     refresh();
   }, [playlistName, refresh]);
 
-  const handleDelete = useCallback((entryId: string, m: ModulationMapping) => {
+  // No confirmation dialog — operator can quickly trim mappings during
+  // a set. A wrongly-deleted mapping is one tap on the slider's ◎ to
+  // recreate; the friction of a modal dialog was not worth the safety.
+  const handleDelete = useCallback(async (entryId: string, m: ModulationMapping) => {
     if (!playlistName) return;
-    Alert.alert(
-      'Delete modulation?',
-      `${shortTarget(m.target.parameter)} ← ${shortSource(m.source.key)}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteModulation(playlistName, entryId, m.id);
-            refresh();
-          },
-        },
-      ],
-    );
+    await deleteModulation(playlistName, entryId, m.id);
+    refresh();
   }, [playlistName, refresh]);
 
   const renderEntry = useCallback(({ item: entry }: { item: Entry }) => {
@@ -313,6 +303,12 @@ export const AllModulationsPanel: React.FC<Props> = ({
               data={entries}
               keyExtractor={(item) => item.id}
               renderItem={renderEntry}
+              // `flex: 1` is load-bearing: the outer panel is sized via
+              // `maxHeight: '80%'` and `overflow: 'hidden'`, so without
+              // an explicit `flex` on the body the FlatList expands to
+              // its intrinsic content height and gets clipped instead
+              // of scrolling within the panel.
+              style={{ flex: 1 }}
               contentContainerStyle={{ padding: 12 }}
               initialNumToRender={12}
               maxToRenderPerBatch={12}
