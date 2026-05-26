@@ -44,9 +44,21 @@ interface AudioConfig {
   };
   fftSize: number;
   hopSize: number;
-  bands: { lowMaxHz: number; midMaxHz: number; smoothingAlpha: number };
+  // Bands now use an asymmetric attack/release envelope + noise gate
+  // (2026-05-25; see marsin_engine/lib/audio_analyzer.js).
+  bands: {
+    lowMaxHz: number; midMaxHz: number;
+    attackMs: number; releaseMs: number; noiseGate: number;
+  };
   kick:  { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
 }
+
+// BPM-sync absolute bounds. Operator picks min/max inside this band;
+// the UI refuses to let them cross (each slider's bound moves to keep
+// them at least 1 BPM apart). Mirrors the registry range in
+// marsin_engine/lib/param_center.js.
+const BPM_MIN_ABS = 60;
+const BPM_MAX_ABS = 180;
 
 interface AudioDevice {
   id: string;
@@ -543,20 +555,29 @@ export default function AudioAnalysisScreen() {
             }
           />
           <View style={SUB_CARD}>
-            <SubHeader title="BPM MAPPING" />
+            <SubHeader title={`BPM MAPPING (${BPM_MIN_ABS}–${BPM_MAX_ABS} BPM)`} />
+            {/* Min slider caps at (max - 1); max slider floors at (min + 1).
+               Hard absolute bounds [60, 180] mirror the param_center
+               registry. Operator picks the working window inside that. */}
             <FaderRow
-              label="BPM min" min={30} max={Math.max(31, (sp.bpmSpeedMax ?? 180) - 1)} value={sp.bpmSpeedMin ?? 60}
+              label="BPM min"
+              min={BPM_MIN_ABS}
+              max={Math.max(BPM_MIN_ABS + 1, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)}
+              value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS))}
               step={1}
               onDrag={() => { /* commit on release */ }}
-              onCommit={(v) => updateParamCenter({ bpmSpeedMin: v })}
-              hint="BPM value that maps to speed = 0."
+              onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)) })}
+              hint={`BPM value that maps to speed = 0. Hard floor ${BPM_MIN_ABS}; must stay below BPM max.`}
             />
             <FaderRow
-              label="BPM max" min={Math.min(239, (sp.bpmSpeedMin ?? 60) + 1)} max={240} value={sp.bpmSpeedMax ?? 180}
+              label="BPM max"
+              min={Math.min(BPM_MAX_ABS - 1, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)}
+              max={BPM_MAX_ABS}
+              value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS))}
               step={1}
               onDrag={() => { /* commit on release */ }}
-              onCommit={(v) => updateParamCenter({ bpmSpeedMax: v })}
-              hint="BPM value that maps to speed = 1."
+              onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)) })}
+              hint={`BPM value that maps to speed = 1. Hard ceiling ${BPM_MAX_ABS}; must stay above BPM min.`}
             />
           </View>
         </View>
@@ -686,13 +707,13 @@ export default function AudioAnalysisScreen() {
           </View>
 
           <View style={SUB_CARD}>
-            <SubHeader title="BANDS — CROSSOVER & SMOOTHING" />
+            <SubHeader title="BANDS — CROSSOVERS" />
             <FaderRow
               label="Low max" suffix="Hz" min={50} max={Math.max(60, cfg.bands.midMaxHz - 50)} value={cfg.bands.lowMaxHz}
               step={5}
               onDrag={(v) => updateLocal('bands', 'lowMaxHz', v)}
               onCommit={(v) => commitField('bands', 'lowMaxHz', v)}
-              hint="Upper edge of the LOW band."
+              hint="Upper edge of the LOW band. EDM kick + sub-bass live here."
             />
             <FaderRow
               label="Mid max" suffix="Hz" min={cfg.bands.lowMaxHz + 50} max={cfg.capture.sampleRate / 2 - 50} value={cfg.bands.midMaxHz}
@@ -701,12 +722,34 @@ export default function AudioAnalysisScreen() {
               onCommit={(v) => commitField('bands', 'midMaxHz', v)}
               hint="Upper edge of the MID band; everything above goes to HIGH."
             />
+          </View>
+
+          <View style={SUB_CARD}>
+            <SubHeader title="BANDS — ENVELOPE & GATE" />
+            {/* Asymmetric attack/release envelope (VU-meter
+                convention): snap up on peaks, smooth fall on
+                releases. Defaults 8 ms / 180 ms are the EDM-VJ
+                sweet spot — see audio_analyzer.js header. */}
             <FaderRow
-              label="Smoothing" min={0.05} max={1.0} value={cfg.bands.smoothingAlpha}
-              step={0.05}
-              onDrag={(v) => updateLocal('bands', 'smoothingAlpha', v)}
-              onCommit={(v) => commitField('bands', 'smoothingAlpha', v)}
-              hint="Snappy 1.0 ← → 0.05 smooth."
+              label="Attack" suffix="ms" min={1} max={50} value={cfg.bands.attackMs}
+              step={1}
+              onDrag={(v) => updateLocal('bands', 'attackMs', v)}
+              onCommit={(v) => commitField('bands', 'attackMs', v)}
+              hint="How fast a band rises on a peak. 5–20 ms feels musical."
+            />
+            <FaderRow
+              label="Release" suffix="ms" min={20} max={800} value={cfg.bands.releaseMs}
+              step={10}
+              onDrag={(v) => updateLocal('bands', 'releaseMs', v)}
+              onCommit={(v) => commitField('bands', 'releaseMs', v)}
+              hint="How slow a band falls after a peak. 100–300 ms typical."
+            />
+            <FaderRow
+              label="Noise gate" min={0} max={0.2} value={cfg.bands.noiseGate}
+              step={0.005}
+              onDrag={(v) => updateLocal('bands', 'noiseGate', v)}
+              onCommit={(v) => commitField('bands', 'noiseGate', v)}
+              hint="Bands below this floor read as 0. Raise if HVAC keeps meters lit."
             />
           </View>
 
@@ -723,7 +766,7 @@ export default function AudioAnalysisScreen() {
               step={5}
               onDrag={(v) => updateLocal('kick', 'maxHz', v)}
               onCommit={(v) => commitField('kick', 'maxHz', v)}
-              hint="Most kick drums sit between 40–120 Hz."
+              hint="EDM kick fundamental sits 50–80 Hz; the click transient is ~100 Hz."
             />
             <FaderRow
               label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold}

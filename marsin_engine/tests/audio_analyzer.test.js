@@ -30,14 +30,21 @@ function whiteNoiseInt16(durationS, amplitude = 0.3) {
   return out;
 }
 
-/** Default analyzer config — matches docs/25 §7 defaults. */
+/** Default analyzer config — matches the 2026-05-25 EDM-tuned
+ *  config.yaml defaults. Tests can spread overrides to retune.
+ *  Attack/release here are intentionally snappy (5 / 30 ms) so
+ *  step-response tests don't need long sample feeds to settle. */
 function makeAnalyzer(overrides = {}, results, nowFn) {
   const { bands: bandOverrides, kick: kickOverrides, ...rest } = overrides;
   return new AudioAnalyzer({
     sampleRate: SR,
     fftSize: 1024,
     hopSize: 512,
-    bands: { lowMaxHz: 250, midMaxHz: 2000, smoothingAlpha: 0.9, ...(bandOverrides || {}) },
+    bands: {
+      lowMaxHz: 250, midMaxHz: 2000,
+      attackMs: 5, releaseMs: 30, noiseGate: 0,
+      ...(bandOverrides || {}),
+    },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80, ...(kickOverrides || {}) },
     onAnalysis: (r) => results.push(r),
     nowFn,
@@ -54,7 +61,7 @@ function lastResult(results) {
 test('throws on non-power-of-two fftSize', () => {
   assert.throws(() => new AudioAnalyzer({
     sampleRate: SR, fftSize: 1000,
-    bands: { lowMaxHz: 250, midMaxHz: 2000, smoothingAlpha: 0.5 },
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 },
     kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 120 },
     onAnalysis: () => {},
   }));
@@ -65,10 +72,14 @@ test('throws on inverted band edges', () => {
   assert.throws(() => makeAnalyzer({ bands: { lowMaxHz: 3000, midMaxHz: 2000 } }, results));
 });
 
-test('throws on out-of-range smoothingAlpha', () => {
+test('throws on missing or out-of-range attack/release/noiseGate', () => {
   const results = [];
-  assert.throws(() => makeAnalyzer({ bands: { smoothingAlpha: 0 } }, results));
-  assert.throws(() => makeAnalyzer({ bands: { smoothingAlpha: 1.5 } }, results));
+  // No fallbacks: each field must be present and within its range.
+  assert.throws(() => makeAnalyzer({ bands: { attackMs: 0 } }, results));
+  assert.throws(() => makeAnalyzer({ bands: { releaseMs: 0 } }, results));
+  assert.throws(() => makeAnalyzer({ bands: { attackMs: 6000 } }, results));
+  assert.throws(() => makeAnalyzer({ bands: { noiseGate: -0.01 } }, results));
+  assert.throws(() => makeAnalyzer({ bands: { noiseGate: 1.0 } }, results));
 });
 
 test('throws on kick threshold <= 1', () => {
@@ -129,24 +140,75 @@ test('silence keeps all bands at zero', () => {
   assert.equal(r.kick, 0);
 });
 
-// ── Smoothing ────────────────────────────────────────────────────────────
+// ── Envelope (attack / release) ──────────────────────────────────────────
 
-test('lower smoothingAlpha makes transient response slower', () => {
-  // Run two analyzers in parallel: snappy (alpha=0.9) and smooth (alpha=0.1).
-  // Feed quiet → loud transition; the smooth one should still lag below the
-  // snappy one after a short burst.
-  const snappy = [], smooth = [];
-  const aSnappy = makeAnalyzer({ bands: { smoothingAlpha: 0.9 } }, snappy);
-  const aSmooth = makeAnalyzer({ bands: { smoothingAlpha: 0.1 } }, smooth);
+test('shorter attackMs makes the band rise faster on a peak', () => {
+  // Two analyzers, fast vs slow attack. Both have the same long
+  // release so the difference we measure isolates the attack edge.
+  const fast = [], slow = [];
+  const aFast = makeAnalyzer({ bands: { attackMs: 2,  releaseMs: 200 } }, fast);
+  const aSlow = makeAnalyzer({ bands: { attackMs: 50, releaseMs: 200 } }, slow);
   const quiet = new Int16Array(SR / 2);             // 0.5 s silence
   const loud  = sineInt16(100, 0.2, 0.9);           // 0.2 s loud sine
-  aSnappy.pushSamples(quiet); aSmooth.pushSamples(quiet);
-  aSnappy.pushSamples(loud);  aSmooth.pushSamples(loud);
-  // First analysis frame after the transition: snap should be much higher.
-  const firstHopAfterTransition = Math.floor(quiet.length / 512); // index
-  const snappyVal = snappy[firstHopAfterTransition + 1]?.low ?? 0;
-  const smoothVal = smooth[firstHopAfterTransition + 1]?.low ?? 0;
-  assert.ok(snappyVal > smoothVal, `snappy(${snappyVal}) should exceed smooth(${smoothVal})`);
+  aFast.pushSamples(quiet); aSlow.pushSamples(quiet);
+  aFast.pushSamples(loud);  aSlow.pushSamples(loud);
+  // First analysis frame after the transition: fast should be much higher.
+  const firstHopAfterTransition = Math.floor(quiet.length / 512);
+  const fastVal = fast[firstHopAfterTransition + 1]?.low ?? 0;
+  const slowVal = slow[firstHopAfterTransition + 1]?.low ?? 0;
+  assert.ok(fastVal > slowVal, `fast(${fastVal}) should exceed slow(${slowVal})`);
+});
+
+test('longer releaseMs holds the band higher after a peak', () => {
+  // Same attack on both, different release. After the loud sine
+  // ends, the long-release analyzer's LOW should still be above the
+  // short-release one for the first few quiet hops.
+  const longRel  = [], shortRel = [];
+  const aLong  = makeAnalyzer({ bands: { attackMs: 5, releaseMs: 400 } }, longRel);
+  const aShort = makeAnalyzer({ bands: { attackMs: 5, releaseMs: 30  } }, shortRel);
+  const loud   = sineInt16(100, 0.3, 0.9);   // 0.3 s loud sine
+  const quiet  = new Int16Array(Math.floor(SR * 0.1)); // 0.1 s silence
+  aLong.pushSamples(loud);  aShort.pushSamples(loud);
+  aLong.pushSamples(quiet); aShort.pushSamples(quiet);
+  // Sample a hop a couple frames into the quiet section.
+  const sampleIdx = Math.floor((loud.length + 512 * 2) / 512);
+  const longVal  = longRel[sampleIdx]?.low ?? 0;
+  const shortVal = shortRel[sampleIdx]?.low ?? 0;
+  assert.ok(longVal > shortVal,
+    `long-release(${longVal}) should hold above short-release(${shortVal})`);
+});
+
+// ── Noise gate ───────────────────────────────────────────────────────────
+
+test('noiseGate suppresses quiet signals below the floor', () => {
+  // A very low-amplitude 100 Hz sine should land just barely above 0
+  // with no gate, but be fully suppressed with a 0.3 gate. We use
+  // amplitude 0.02 — pre-clamp gain × softCompress yields a band
+  // value < 0.3 but > 0, sitting squarely in the gate window.
+  const noGate = [], withGate = [];
+  const aNoGate   = makeAnalyzer({ bands: { noiseGate: 0.0 } }, noGate);
+  const aWithGate = makeAnalyzer({ bands: { noiseGate: 0.3 } }, withGate);
+  const tiny = sineInt16(100, 0.5, 0.02);
+  aNoGate.pushSamples(tiny);
+  aWithGate.pushSamples(tiny);
+  const ungatedVal = lastResult(noGate).low;
+  const gatedVal   = lastResult(withGate).low;
+  assert.ok(ungatedVal > 0,    `ungated should be > 0; got ${ungatedVal}`);
+  assert.equal(gatedVal,    0, `gated should be 0; got ${gatedVal}`);
+});
+
+test('noiseGate preserves dynamic range above the floor', () => {
+  // Loud input should still produce a non-trivial reading with a
+  // moderate gate; the gate only zeros sub-floor values. Values
+  // above the floor are linearly rescaled into [0, 1] from
+  // [gate, 1], so the meter shouldn't collapse to zero on a loud
+  // signal just because the gate is enabled.
+  const withGate = [];
+  const aWithGate = makeAnalyzer({ bands: { noiseGate: 0.05 } }, withGate);
+  const loud = sineInt16(100, 0.5, 0.4);
+  aWithGate.pushSamples(loud);
+  const gatedVal = lastResult(withGate).low;
+  assert.ok(gatedVal > 0.3, `loud signal with gate should still ride > 0.3; got ${gatedVal}`);
 });
 
 // ── Kick detector ────────────────────────────────────────────────────────
@@ -160,7 +222,7 @@ test('repeated kick-band impulses fire kicks with refractory respected', () => {
   const nowFn = () => now;
   const an = makeAnalyzer({
     kick: { threshold: 1.5, refractoryMs: 200, decayMs: 80, minHz: 40, maxHz: 120 },
-    bands: { smoothingAlpha: 0.9 },
+    // Defaults from makeAnalyzer (snappy 5/30 ms, no gate) work fine.
   }, results, nowFn);
 
   // 5 seconds of quiet 60 Hz bed at low amplitude to establish EMA.
@@ -195,7 +257,7 @@ test('kick refractory prevents two fires within refractoryMs', () => {
   let now = 0;
   const an = makeAnalyzer({
     kick: { threshold: 1.5, refractoryMs: 1000, decayMs: 50, minHz: 40, maxHz: 120 },
-    bands: { smoothingAlpha: 0.9 },
+    // Defaults from makeAnalyzer (snappy 5/30 ms, no gate) work fine.
   }, results, () => now);
   // Long bed to build EMA.
   an.pushSamples(sineInt16(60, 5.0, 0.05));

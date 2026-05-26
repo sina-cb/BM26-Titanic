@@ -34,8 +34,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 
+// `bands` lost `smoothingAlpha` (2026-05-25) in favour of asymmetric
+// `attackMs`/`releaseMs` + a `noiseGate` floor. See audio_analyzer.js
+// header for the engineering rationale. Per codex P0 "no fallback
+// behaviors", the analyzer rejects a `bands` payload that's missing
+// any of these — config.yaml supplies them at boot.
 export const AUDIO_LIVE_FIELDS = Object.freeze({
-  bands: ['lowMaxHz', 'midMaxHz', 'smoothingAlpha'],
+  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
 });
 

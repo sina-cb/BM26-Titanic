@@ -191,14 +191,19 @@ const PARAM_REGISTRY = [
     default: 0.0, range: [0, 1], options: [0, 1], clamp: true, persist: true,
     oscAddress: '/marsin/param/bpmSpeedSync', sharedFnName: 'bpmSpeedSync',
   },
+  // bpmSpeedMin/Max range tightened from [30, 240] to [60, 180] on
+  // 2026-05-25 per operator brief: those are the musically useful
+  // bounds for EDM and "no values outside this allowed in the UI".
+  // The CaptainPad slider also enforces `max > min` (each slider's
+  // bound moves to keep them at least 1 BPM apart).
   {
     key: 'bpmSpeedMin', label: 'BPM Sync Min', type: 'int',
-    default: 60, range: [30, 240], clamp: true, persist: true,
+    default: 60, range: [60, 180], clamp: true, persist: true,
     oscAddress: '/marsin/param/bpmSpeedMin', sharedFnName: 'bpmSpeedMin',
   },
   {
     key: 'bpmSpeedMax', label: 'BPM Sync Max', type: 'int',
-    default: 180, range: [30, 240], clamp: true, persist: true,
+    default: 180, range: [60, 180], clamp: true, persist: true,
     oscAddress: '/marsin/param/bpmSpeedMax', sharedFnName: 'bpmSpeedMax',
   },
 ];

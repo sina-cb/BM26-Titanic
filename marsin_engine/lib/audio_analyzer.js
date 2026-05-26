@@ -12,20 +12,44 @@
  *     run an FFT and emit one analysis result.
  *   - Hann window pre-baked at construction.
  *   - Bands defined as `[loHz, hiHz]` ranges, converted to bin
- *     indices at construction / reconfigure. Per-band RMS over the
- *     bin magnitudes.
- *   - Soft compression `x / (1 + x)` plus a pre-clamp gain (3.0) so
- *     quiet rooms still produce visible movement. The per-band
- *     operator gain on top of this is applied client-side (patterns
- *     and CaptainPad) via the `mic*Gain` CPC params — not here, so
- *     the raw CPC value remains the analyzer's honest read of "what
- *     the mic heard".
- *   - Kick detector: instantaneous RMS in a configurable narrow
- *     band; fires when `instant > ema * threshold` outside the
- *     refractory period. On fire we start an envelope that decays
- *     over `decayMs` and feeds `micKick`.
+ *     indices at construction / reconfigure. Per-band sum-of-magnitudes.
+ *   - Soft compression `x / (1 + x)` plus a pre-clamp gain so quiet
+ *     rooms still produce visible movement. The per-band operator
+ *     gain (`mic*Gain` CPC params) is applied client-side (patterns,
+ *     CaptainPad) — NOT here — so the raw CPC band value remains the
+ *     analyzer's honest read of "what the mic heard".
+ *   - Per-band asymmetric attack/release envelope (VU-meter
+ *     convention): fast attack so peaks register, slow release so
+ *     visuals don't flicker. Configurable via `bands.attackMs` /
+ *     `bands.releaseMs`. Shared across all three bands — one
+ *     envelope primitive parameterized once, per .agent/00_gol/00
+ *     "smallest patch that works".
+ *   - Per-band noise gate (`bands.noiseGate`): post-compression
+ *     floor, below which the band reads as 0. Compensates for
+ *     ambient HVAC / clip-noise so quiet rooms stay quiet on the
+ *     meters. Values above the gate are rescaled to span the
+ *     full [0, 1] range (`(v - gate) / (1 - gate)`).
+ *   - Kick detector: instantaneous magnitude in a configurable
+ *     narrow band; fires when `instant > ema * threshold` outside
+ *     the refractory period. On fire we start an envelope that
+ *     decays over `decayMs` and feeds `micKick`.
  *   - `reconfigure({...})` lets the operator retune at runtime from
  *     CaptainPad without restarting the analyzer.
+ *
+ * EDM-tuned defaults (config.yaml, 2026-05-25 retune):
+ *   - bands: low ≤ 200 Hz, mid ≤ 4000 Hz. Splits sub/bass (≤200 Hz)
+ *     from synth/vocal mids (200 Hz–4 kHz), with hats / air going
+ *     to HIGH. Bob Katz, "Mastering Audio" (3rd ed., 2014, ch. 11)
+ *     treats 50–100 Hz as kick-fundamental territory and 200 Hz
+ *     as the low/low-mid hinge — picking 200 Hz keeps the kick
+ *     and the sub-bass synth pulse together in LOW.
+ *   - kick window 50–110 Hz: tightens around the EDM kick
+ *     fundamental (50–80 Hz) plus the click transient (90–110 Hz);
+ *     excludes the bass synth body (120 Hz+) which used to leak
+ *     false positives into the detector on basslines.
+ *   - attack 8 ms / release 180 ms: VU-meter convention; ~1/3 of a
+ *     quarter note at 120 BPM gives the release a musical anchor.
+ *   - noise gate 0.04: empirical floor for room HVAC + mic self-noise.
  */
 
 import FFT from 'fft.js';
@@ -69,7 +93,7 @@ export class AudioAnalyzer {
    * @param {number} opts.sampleRate
    * @param {number} opts.fftSize       — must be power of two for fft.js
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
-   * @param {object} opts.bands         — { lowMaxHz, midMaxHz, smoothingAlpha }
+   * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
    * @param {(r: {low, mid, high, kick}) => void} opts.onAnalysis
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
@@ -141,14 +165,27 @@ export class AudioAnalyzer {
     const nyquist = this.sampleRate / 2;
     const lowMaxHz = +next.bands.lowMaxHz;
     const midMaxHz = +next.bands.midMaxHz;
-    const smoothingAlpha = +next.bands.smoothingAlpha;
+    const attackMs  = +next.bands.attackMs;
+    const releaseMs = +next.bands.releaseMs;
+    const noiseGate = +next.bands.noiseGate;
     if (!(lowMaxHz > 20 && lowMaxHz < midMaxHz && midMaxHz <= nyquist)) {
       throw new RangeError(
         `bands invalid: require 20 < lowMaxHz (${lowMaxHz}) < midMaxHz (${midMaxHz}) <= nyquist (${nyquist})`,
       );
     }
-    if (!(smoothingAlpha > 0 && smoothingAlpha <= 1)) {
-      throw new RangeError(`bands.smoothingAlpha must be in (0, 1]; got ${smoothingAlpha}`);
+    // No fallback behaviors (codex P0): the merged config must carry
+    // attackMs/releaseMs/noiseGate explicitly. config.yaml seeds them
+    // at boot, so this only fires when someone PATCHes a malformed
+    // bands payload or starts the analyzer without going through the
+    // engine boot path.
+    if (!(attackMs > 0 && attackMs <= 5000)) {
+      throw new RangeError(`bands.attackMs must be in (0, 5000] ms; got ${attackMs}`);
+    }
+    if (!(releaseMs > 0 && releaseMs <= 5000)) {
+      throw new RangeError(`bands.releaseMs must be in (0, 5000] ms; got ${releaseMs}`);
+    }
+    if (!(noiseGate >= 0 && noiseGate < 1)) {
+      throw new RangeError(`bands.noiseGate must be in [0, 1); got ${noiseGate}`);
     }
 
     const kMin = +next.kick.minHz, kMax = +next.kick.maxHz;
@@ -236,11 +273,37 @@ export class AudioAnalyzer {
     const highE = this._bandEnergy(out, this._binHigh);
     const kickE = this._bandEnergy(out, this._binKick);
 
-    // Per-band soft-compression + smoothing.
-    const alpha = this.bands.smoothingAlpha;
-    const low  = (this._smoothed.low  = alpha * softCompress(PRE_CLAMP_GAIN * lowE)  + (1 - alpha) * this._smoothed.low);
-    const mid  = (this._smoothed.mid  = alpha * softCompress(PRE_CLAMP_GAIN * midE)  + (1 - alpha) * this._smoothed.mid);
-    const high = (this._smoothed.high = alpha * softCompress(PRE_CLAMP_GAIN * highE) + (1 - alpha) * this._smoothed.high);
+    // Per-band soft-compression + noise gate + asymmetric envelope.
+    //
+    // The envelope picks `attackMs` when the new sample is louder
+    // than the previous smoothed value, `releaseMs` otherwise. This
+    // gives the classic VU/level-meter feel — snap up on peaks,
+    // smooth fall on releases — without flickering. Same primitive
+    // shared across all three bands (single helper, three calls)
+    // per .agent/00_gol/00 "smallest patch that works".
+    //
+    // The noise gate is applied to the post-compression value (in
+    // [0, 1)), not the raw FFT energy: it's a perceptual floor for
+    // "how visible is this band". Values above the gate are
+    // rescaled so the operator's [0, 1] meter still uses the full
+    // range above the gate (otherwise raising the gate would just
+    // dim the whole band).
+    const frameMs = (this.hopSize * 1000) / this.sampleRate;
+    const gate = this.bands.noiseGate;
+    const gateScale = 1 - gate;
+    const applyGate = (v) => (v <= gate ? 0 : (v - gate) / gateScale);
+    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE));
+    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE));
+    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE));
+    const attackAlpha  = 1 - Math.exp(-frameMs / this.bands.attackMs);
+    const releaseAlpha = 1 - Math.exp(-frameMs / this.bands.releaseMs);
+    const env = (prev, target) => {
+      const a = target > prev ? attackAlpha : releaseAlpha;
+      return a * target + (1 - a) * prev;
+    };
+    const low  = (this._smoothed.low  = env(this._smoothed.low,  lowTarget));
+    const mid  = (this._smoothed.mid  = env(this._smoothed.mid,  midTarget));
+    const high = (this._smoothed.high = env(this._smoothed.high, highTarget));
 
     // Kick: instant vs slow EMA. The first KICK_WARMUP_HOPS hops are
     // used to seed the EMA so a single loud first frame doesn't fire
@@ -267,8 +330,8 @@ export class AudioAnalyzer {
       this._lastKickAt = now;
     } else if (this._kickValue > 0) {
       // Exponential envelope. Per-frame decay factor = exp(-dt / tau).
-      // We treat one analysis frame as hopSize/sampleRate seconds.
-      const frameMs = (this.hopSize * 1000) / this.sampleRate;
+      // We treat one analysis frame as hopSize/sampleRate seconds —
+      // `frameMs` was computed above for the band envelope, reuse it.
       const decay = Math.exp(-frameMs / this.kick.decayMs);
       this._kickValue *= decay;
       if (this._kickValue < 1e-3) this._kickValue = 0;
