@@ -1,5 +1,5 @@
 // Auto-generated Pixelblaze model — do not edit manually
-// Updated: 2026-05-25T01:33:14.418Z
+// Updated: 2026-05-26T03:28:44.553Z
 //
 // Note: Non-light simulation fixtures (Horn, Fire, Foggers) are exported to
 // the companion .effects.js model.
@@ -331,46 +331,4 @@ export const pixels = [
   { i: 318, type: 'dmx', fixtureType: 'VintageLed', name: 'VintageLights 5 - head_4', group: 'VintageLights', x: 2.494, y: 2.287, z: -7.677, nx: 0.6213, ny: 0.3251, nz: 0.1155, cId: 0, sId: 3, fId: 19, vMask: 0, patch: { universe: 5, addr: 252, footprint: 33 }, channels: {"r":25,"g":26,"b":27,"w":6} },
   { i: 319, type: 'dmx', fixtureType: 'VintageLed', name: 'VintageLights 5 - head_5', group: 'VintageLights', x: 2.501, y: 2.215, z: -7.698, nx: 0.6217, ny: 0.2953, nz: 0.1145, cId: 0, sId: 3, fId: 19, vMask: 0, patch: { universe: 5, addr: 252, footprint: 33 }, channels: {"r":28,"g":29,"b":30,"w":7} },
   { i: 320, type: 'dmx', fixtureType: 'VintageLed', name: 'VintageLights 5 - head_6', group: 'VintageLights', x: 2.508, y: 2.144, z: -7.719, nx: 0.622, ny: 0.266, nz: 0.1134, cId: 0, sId: 3, fId: 19, vMask: 0, patch: { universe: 5, addr: 252, footprint: 33 }, channels: {"r":31,"g":32,"b":33,"w":8} },
-];
-
-// Helper to generate index ranges
-function range(start, end) {
-  const arr = [];
-  for (let i = start; i <= end; i++) {
-    arr.push(i);
-  }
-  return arr;
-}
-
-export const viewMasks = [
-  {
-    name: 'TriangleEdges',
-    bit: 0x0001,
-    pixelIndices: range(0, 53),
-  },
-  {
-    name: 'TrianglePars',
-    bit: 0x0002,
-    pixelIndices: range(54, 56),
-  },
-  {
-    name: 'BarLights',
-    bit: 0x0004,
-    pixelIndices: range(57, 290),
-  },
-  {
-    name: 'VintageLights',
-    bit: 0x0008,
-    pixelIndices: range(291, 320),
-  },
-  {
-    name: 'ApexOnly',
-    bit: 0x0010,
-    pixelIndices: range(0, 56),
-  },
-  {
-    name: 'VintageAndBars',
-    bit: 0x0020,
-    pixelIndices: range(57, 320),
-  },
 ];

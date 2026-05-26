@@ -8,60 +8,130 @@ effects:
   vintageWhiteBypassDimmer: false
   blastWhiteBypassDimmer: false
 params:
-  revision: 53021
+  revision: 8
   sourceLock: null
   params:
     speed:
       value: 0.22
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 53005
-    direction:
-      value: 1
       lastSource: init
       lastOrigin: init
-      lastRevision: 2
-    count:
-      value: 0.5
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 3
+      lastRevision: 1
     size:
       value: 0.5
       lastSource: init
       lastOrigin: init
-      lastRevision: 4
+      lastRevision: 2
     rotate:
       value: 0
       lastSource: init
       lastOrigin: init
-      lastRevision: 5
+      lastRevision: 3
     colorPalette1:
       value:
-        h: 0.33
+        h: 0.64
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 6
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 7
     colorPalette2:
       value:
-        h: 0.78
+        h: 0.9
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 7
-    audioLevel:
-      value: 0
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 8
+    stemsVocalsGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    stemsBassGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    stemsDrumsGain:
+      value: 1
       lastSource: null
       lastOrigin: null
       lastRevision: 0
     stemsVocals:
       value: 0.45115333795547485
-      lastSource: osc
-      lastOrigin: osc:10.1.1.172:62625
-      lastRevision: 53021
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 6
+    stemsBass:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    stemsDrums:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    tempoBpm:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micLow:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micMid:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micHigh:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micKick:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micLowGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micMidGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micHighGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    micKickGain:
+      value: 1
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    bpmSpeedSync:
+      value: 0
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    bpmSpeedMin:
+      value: 60
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
+    bpmSpeedMax:
+      value: 180
+      lastSource: null
+      lastOrigin: null
+      lastRevision: 0
 dimmers:
   '2': 0.125
   '3': 0.1696428571428571

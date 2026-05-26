@@ -189,7 +189,7 @@ entries:
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
+      sliderLocalSpeed: 0.31
       sliderSparkleSpeedTrim: 0.5
       sliderSparkleDensity: 0.5
     modulations: []

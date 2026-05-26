@@ -184,7 +184,12 @@ entries:
   - id: e_default_30_44_apex_gyro_vortex
     pattern: 44_apex_gyro_vortex
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.65
+      sliderVortexSpeed: 0.83
+      sliderSweepImpact: 0.13
+      sliderHullGlow: 0
+      sliderUvIntensity: 0
     modulations: []
     notes: null
   - id: e_default_31_45_engine_room_clockwork
@@ -208,7 +213,12 @@ entries:
   - id: e_default_34_48_titanic_sos_beacon
     pattern: 48_titanic_sos_beacon
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.82
+      sliderSignalStrength: 0.07
+      sliderResponseGlow: 0
+      sliderAbyssalDarkness: 0
+      sliderUvIntensity: 0
     modulations: []
     notes: null
   - id: e_default_35_49_boiler_pressure_release
