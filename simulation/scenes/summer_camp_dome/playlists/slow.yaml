@@ -1,0 +1,19 @@
+schemaVersion: 1
+name: slow
+entries:
+  - id: e_1779780351922_3613
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_1779780356009_5547
+    pattern: 01_cylon_sweep
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.58
+      sliderBeamWidth: 0
+      sliderBackgroundGlow: 0
+      sliderDirection: 0.78
+    modulations: []
+    notes: null

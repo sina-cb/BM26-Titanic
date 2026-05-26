@@ -224,17 +224,17 @@ async function main() {
 
     // ─── Test 7: named viewMask preset enumeration ────────────────
     // /model/view-selection-options must enumerate the model's
-    // viewMasks array (from inline export OR `<model>.viewmasks.js`
-    // sidecar) so CaptainPad's picker can list them. The test_bench
-    // sidecar declares at least 'ParsOnly', 'VintageOnly', 'BarsOnly',
-    // 'MainWash' — assert the contract, not the exact list, so a future
-    // operator edit to the sidecar doesn't make this test brittle.
+    // viewMasks array (from sidecar) so CaptainPad's picker
+    // can list them. The test_bench defines composite presets
+    // (like 'ParsAndBars') in its sidecar — assert the contract,
+    // not the exact list, so a future operator edit to the model
+    // doesn't make this test brittle.
     console.log('\n[TEST 7] /model/view-selection-options enumerates named view masks');
     check(Array.isArray(opts.viewMasks),
       `viewMasks is an array (got ${typeof opts.viewMasks})`);
     check((opts.viewMasks || []).length > 0,
       `viewMasks has at least one preset (got ${opts.viewMasks?.length || 0})`,
-      'sidecar test_bench.viewmasks.js may not be loaded');
+      'inline viewMasks export may not be loaded');
     for (const vm of (opts.viewMasks || [])) {
       check(typeof vm.name === 'string' && vm.name.length > 0
             && Number.isInteger(vm.bit) && vm.bit > 0

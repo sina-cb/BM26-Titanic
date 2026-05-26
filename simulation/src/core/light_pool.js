@@ -254,9 +254,11 @@ function getSpotlightIntensityScale(radius) {
 }
 
 function getSafeSpotlightSamplingMode() {
-  return params.spotlightSamplingMode === 'closest_bucket'
-    ? 'closest_bucket'
-    : DEFAULT_SPOTLIGHT_SAMPLING_MODE;
+  const mode = params.spotlightSamplingMode;
+  if (mode === 'closest_bucket' || mode === 'uniform') {
+    return mode;
+  }
+  return DEFAULT_SPOTLIGHT_SAMPLING_MODE;
 }
 
 function getSafeSpotlightSamplingBucketDistance() {
@@ -290,6 +292,9 @@ function selectVisibleRequestsForSampling(visible, camPos, activeLimit) {
   const samplingMode = getSafeSpotlightSamplingMode();
   if (samplingMode === 'closest') {
     return visible.slice(0, activeLimit);
+  }
+  if (samplingMode === 'uniform') {
+    return sampleUniformRequests(visible, activeLimit);
   }
 
   const closestRequest = visible[0];

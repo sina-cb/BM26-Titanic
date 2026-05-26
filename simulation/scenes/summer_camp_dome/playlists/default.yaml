@@ -40,7 +40,11 @@ entries:
   - id: e_default_6_06_neon_elevator
     pattern: 06_neon_elevator
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.88
+      sliderSteps: 0.03
+      sliderThickness: 0.73
+      sliderBloom: 0
     modulations: []
     notes: null
   - id: e_default_7_07_shimmer
@@ -160,19 +164,41 @@ entries:
   - id: e_default_26_40_ghost_ship_reveal
     pattern: 40_ghost_ship_reveal
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.71
+      sliderRevealWidth: 0.15
+      sliderOrbitDrift: 0.09
+      sliderBlackoutDepth: 0.2
+      sliderLanternGlow: 0.76
+      sliderBeaconSparkle: 0.84
+      sliderUvTrail: 0.71
+      sliderSpinMotion: 0
     modulations: []
     notes: null
   - id: e_default_27_41_ghost_aurora
     pattern: 41_ghost_aurora
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.64
+      sliderCurtainWidth: 0.44
+      sliderDriftChaos: 0.26
+      sliderBlackoutDepth: 0.85
+      sliderRimShimmer: 0.25
+      sliderTriangleGain: 0.61
+      sliderHumanWarmth: 0.9
     modulations: []
     notes: null
   - id: e_default_28_42_boiler_glow
     pattern: 42_boiler_glow
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.57
+      sliderBoilerHeat: 0.63
+      sliderFlickerComplexity: 0.91
+      sliderVentWidth: 0.4
+      sliderSteamFlash: 0.89
+      sliderTriangleRPM: 0.85
+      sliderBlackoutDepth: 0.21
     modulations: []
     notes: null
   - id: e_default_29_43_sea_floor_shadow
@@ -184,12 +210,7 @@ entries:
   - id: e_default_30_44_apex_gyro_vortex
     pattern: 44_apex_gyro_vortex
     label: null
-    defaults:
-      sliderLocalSpeed: 0.65
-      sliderVortexSpeed: 0.83
-      sliderSweepImpact: 0.13
-      sliderHullGlow: 0
-      sliderUvIntensity: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_31_45_engine_room_clockwork
@@ -213,12 +234,7 @@ entries:
   - id: e_default_34_48_titanic_sos_beacon
     pattern: 48_titanic_sos_beacon
     label: null
-    defaults:
-      sliderLocalSpeed: 0.82
-      sliderSignalStrength: 0.07
-      sliderResponseGlow: 0
-      sliderAbyssalDarkness: 0
-      sliderUvIntensity: 0
+    defaults: {}
     modulations: []
     notes: null
   - id: e_default_35_49_boiler_pressure_release

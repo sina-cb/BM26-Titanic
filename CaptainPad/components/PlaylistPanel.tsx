@@ -1030,7 +1030,7 @@ const AddPatternModal: React.FC<AddPatternModalProps> = ({
           <Text style={modalStyles.title}>
             ADD PATTERN TO {playlistName?.toUpperCase() || 'PLAYLIST'}
           </Text>
-          <ScrollView>
+          <ScrollView style={{ maxHeight: 400 }}>
             {allPatterns.map((p) => (
               <TouchableOpacity
                 key={p}

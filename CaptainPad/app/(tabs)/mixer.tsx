@@ -353,8 +353,8 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             via the REST API directly — they target by numeric id which
             isn't operator-friendly so we don't surface them in the
             picker. The VIEW MASKS section only appears when the model
-            declared at least one named viewMask preset (model export
-            or `<model>.viewmasks.js` sidecar). */}
+            declared at least one named viewMask preset (via the inline
+            `viewMasks` export). */}
         {!locked && onViewSelectionChange && (
           <>
             <TouchableOpacity
@@ -483,8 +483,8 @@ export default function MixerScreen() {
   // fixtures stay backend-only (they target by numeric id which isn't
   // operator-friendly); view masks ship alongside groups now.
   const [viewSelectionGroups, setViewSelectionGroups] = useState<string[]>([]);
-  // Named view-mask presets the model author declared (via the
-  // `<model>.viewmasks.js` sidecar or an inline `viewMasks` export).
+  // Named view-mask presets the model author declared (via an
+  // inline `viewMasks` export).
   // The picker renders these in a "VIEW MASKS" section under groups;
   // the channel's viewSelection is then `{type:'viewMask', target:<name>}`.
   const [viewSelectionViewMasks, setViewSelectionViewMasks] = useState<{ name: string; bit: number; inUse: boolean }[]>([]);

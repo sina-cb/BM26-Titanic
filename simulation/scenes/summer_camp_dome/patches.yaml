@@ -31,6 +31,14 @@ patches:
     sectionId: 2
     fixtureId: 6
     viewMask: 0
+  TEFogMachine 26:
+    controllerIp: ''
+    dmxUniverse: 1
+    dmxAddress: 512
+    controllerId: 0
+    sectionId: 1
+    fixtureId: 1
+    viewMask: 0
   BarLights 1:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
@@ -174,12 +182,4 @@ patches:
     controllerId: 0
     sectionId: 3
     fixtureId: 19
-    viewMask: 0
-  TEFogMachine 26:
-    controllerIp: ''
-    dmxUniverse: 1
-    dmxAddress: 512
-    controllerId: 0
-    sectionId: 1
-    fixtureId: 1
     viewMask: 0

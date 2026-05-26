@@ -1,0 +1,12 @@
+schemaVersion: 1
+name: apex
+entries:
+  - id: e_1779780093840_1141
+    pattern: 25_heartbeat
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderDormantGlow: 0.57
+      sliderRippleSweep: 0.66
+    modulations: []
+    notes: null

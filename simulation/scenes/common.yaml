@@ -70,7 +70,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: pixel_mapping
     label: 💡 Lighting Profile
     options:
       - edit
@@ -83,6 +83,7 @@ options:
     options:
       - closest
       - closest_bucket
+      - uniform
   spotlightSamplingBucketDistance:
     value: 10
     label: Sim Sampling Bucket (m)
@@ -181,13 +182,13 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -5.2255
-    'y': 1.334
-    z: 6.8497
+    x: -18.9576
+    'y': 4.1131
+    z: -8.4033
   target:
-    x: 0.8877
-    'y': -0.1256
-    z: 2.1522
+    x: -0.9146
+    'y': -0.7445
+    z: -0.2734
 _patternEditor:
   x: 0
   'y': 0

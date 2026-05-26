@@ -902,3 +902,248 @@ export function render3D(index, x, y, z) {
   );
 }
 ```
+
+---
+
+## 10. Implementation Audit: Current Patterns 40-55
+
+Audit target files:
+
+- `marsin_engine/patterns/40_ghost_ship_reveal.js`
+- `marsin_engine/patterns/41_ghost_aurora.js`
+- `marsin_engine/patterns/42_boiler_glow.js`
+- `marsin_engine/patterns/43_sea_floor_shadow.js`
+- `marsin_engine/patterns/44_apex_gyro_vortex.js`
+- `marsin_engine/patterns/45_engine_room_clockwork.js`
+- `marsin_engine/patterns/46_dome_lockdown.js`
+- `marsin_engine/patterns/47_apex_perimeter_ping.js`
+- `marsin_engine/patterns/48_titanic_sos_beacon.js`
+- `marsin_engine/patterns/49_boiler_pressure_release.js`
+- `marsin_engine/patterns/50_iceberg_fracture.js`
+- `marsin_engine/patterns/51_abyssal_searchlight.js`
+- `marsin_engine/patterns/52_iceberg_shear_line.js`
+- `marsin_engine/patterns/53_shadow_eclipse.js`
+- `marsin_engine/patterns/54_boiler_fire_overdrive.js`
+- `marsin_engine/patterns/55_stardust_dome.js`
+
+### 10.1 High-Level Findings
+
+The current files are useful scaffolds, but they are not yet strong Summer Camp Dome show patterns. Most of them read as generic normalized-coordinate Pixelblaze-style sketches with RGBWAU output bolted on. The implementation does have the right basic control pattern: every audited script declares `localSpeed` first, exposes local slider functions, accumulates `tPhase` with delta, and uses the local cp1/cp2 RGB cache. That part is solid.
+
+The visual language is the weak part:
+
+1. **The view-mask logic is currently dead for this scene.** Many scripts use `viewMask & 3` for apex and `viewMask & 8` for vintage. The generated Summer Camp Dome model has `vMask: 0` on every pixel, and there is no `marsin_engine/models/summer_camp_dome.viewmasks.js` sidecar. Result: most apex, vintage, and bar-specific branches never run. In the current engine, pattern code receives numeric `controllerId`, `sectionId`, `fixtureId`, and `viewMask`; it does not receive `groupId` strings. The proposal's `groupId == "TriangleEdges"` template is not runnable as-is in current MarsinScript.
+
+2. **The circular bar geometry is barely used.** Only `44_apex_gyro_vortex` uses a real polar angle from `atan2(z - 0.5, x - 0.5)`. Most other patterns use only `x`, `y`, or `index`, which ignores the 13-bar perimeter ring. The BarLights should be treated as a circular instrument: angular sectors, orbiting gates, radial pulses, rotating dark gaps, and per-bar chases.
+
+3. **TriangleEdges are not being used as the main stage lights.** The 54 pixels in `TriangleEdges` should be the focal instrument for EDM looks: chases, strobes, scanner cores, rotating triangle edge loops, launch points, and impact flashes. Current scripts usually treat the triangle as either a dead `viewMask` branch or just another point in a global wave. The 3 `TrianglePars` can be punctuation, but the 54 TriangleEdges pixels should carry the stage language.
+
+4. **Too many layers are static or always-on.** Several patterns drive `uvIntensity` across the entire rig every frame, often at default `1.0`. This erases negative space and makes white impacts less meaningful. Examples: `42_boiler_glow`, `45_engine_room_clockwork`, and `55_stardust_dome` output full UV everywhere by default. EDM lighting needs darkness, shutters, pulses, hard cuts, and sparse high-contrast motion.
+
+5. **The motion math is too simple and too loop-obvious.** Most movement is a single `wave(tPhase + coordinate)` or a binary threshold. That reads as repetitive. The desired direction should use layered non-commensurate phases, angular coordinates, prime lane counts, drifting shutters, edge chases, spirals, pseudo-random but spatially coherent seeds, and evolving masks. The goal is surprising motion, not random flicker.
+
+6. **Audio mapping is available, but the playlist currently does not use it.** The modulation code supports `micLow`, `micMid`, `micHigh`, `micKick`, `stemsBass`, `stemsDrums`, and `stemsVocals` as source keys. The defaults in `simulation/scenes/summer_camp_dome/playlists/default.yaml` currently have empty `modulations: []` for patterns 40-55. Also, actual modulation targets should match exported slider names such as `sliderLocalSpeed`, `sliderSweepImpact`, or `sliderUvIntensity`, because playlist defaults already address slider exports by those names.
+
+7. **Several names and concepts have drifted from this report.** `42_boiler_glow` is not a minimal lantern-darkness scene; it is a hardcoded boiler fire wash. `51_abyssal_searchlight` is closer to the trident/searchlight idea, but not spatially anchored to the triangle. `54_boiler_fire_overdrive` does not match the `iceberg_dead_ahead` concept described above. This mismatch matters because operators will pick patterns by name.
+
+### 10.2 Blocking Geometry Recommendation
+
+Before rewriting the pattern math, give the scene reliable fixture masks. The fastest path is a sidecar file:
+
+```text
+marsin_engine/models/summer_camp_dome.viewmasks.js
+
+TriangleEdges:  bit 1, pixel indices 0-53
+TrianglePars:   bit 2, pixel indices 54-56
+BarLights:      bit 4, pixel indices 57-290
+VintageLights:  bit 8, pixel indices 291-320
+```
+
+That matches how `engine.js` already OR-merges sidecar `pixelIndices` into `px.vMask` and `px.viewMask` at model load. With these bits, current checks like `(viewMask & 3) != 0` for apex and `(viewMask & 8) != 0` for vintage begin working. For rewrites, prefer explicit local mask names:
+
+```javascript
+var isTriangleEdge = (viewMask & 1) != 0;
+var isTrianglePar = (viewMask & 2) != 0;
+var isApex = (viewMask & 3) != 0;
+var isBar = (viewMask & 4) != 0;
+var isVintage = (viewMask & 8) != 0;
+```
+
+This is better than using `sectionId` alone because this scene currently has overlapping `sectionId` values: `TrianglePars` and `BarLights` both use section `2`. The model's `group` string is available to the host-side mixer view selection, but not to current MarsinScript pattern code.
+
+### 10.3 Shared Rewrite Direction
+
+Every pattern should keep `sliderLocalSpeed` first. Most patterns should expose 5-7 expressive controls total. They do not need identical parameters, but they should leave clean modulation targets:
+
+- `sliderLocalSpeed`: always present; useful for BPM/local trim.
+- A **motion shape** slider: width, lane count, arm count, curtain count, or shutter density.
+- A **motion physics** slider: drift, chaos, acceleration, trail decay, pressure, or sweep tension.
+- A **negative-space** slider: blackout depth, duty cycle, sparse density, or gate.
+- A **triangle/stage** slider: triangle gain, stage focus, apex impact, edge chase, or star core.
+- A **physical channel** slider when relevant: amber warmth, UV afterglow, white impact, sparkle.
+
+Recommended modulation source mapping in current code terms:
+
+- `micLow`: large-scale body movement, pressure, swell, shadow size, reveal depth.
+- `stemsBass`: ring energy, orbit speed, pressure build, vortex size.
+- `micKick`: white impact, triangle hit, shutter slam, fracture strike, vent burst.
+- `stemsDrums`: clockwork ticks, chase stepping, lane advances.
+- `micHigh`: shimmer, sparkles, fracture sharpness, stardust density, ice glints.
+- `stemsVocals`: vintage amber, human warmth, lantern response, filament bloom.
+- `micMid`: motion complexity, gimbal drift, aurora instability, rotation bias.
+
+### 10.4 Pattern-by-Pattern Audit
+
+#### `40_ghost_ship_reveal`
+
+**Current behavior:** Rewritten as a dark-to-structure reveal for `summer_camp_dome`. It now uses `sectionId` plus the scene's actual `y` ranges to separate TriangleEdges, TrianglePars, BarLights, and VintageLights, because `TrianglePars` and `BarLights` both share section `2`. TriangleEdges carry slow mast/rigging scanners, BarLights use polar `atan2(x, z)` angular reveal windows around the real scene origin, VintageLights flicker in sparse amber clusters, and TrianglePars provide occasional masthead punctuation. The global cp1/cp2 field is now a dim moving mist layer instead of a full-rig wash.
+
+**Issues:** The pattern is much closer to the intended direction, but it still needs live scene evaluation. The BarLights spin depends on the physical model coordinates being centered around the real `x,z` origin; if the visualizer or exported model shifts the ring, the angular read can flatten or appear synchronized. The fixture split is also a scene-specific heuristic (`sectionId == 2 && y <= 2.0` for BarLights, `y > 2.0` for TrianglePars), so a future model export could break it. The circular spin should be checked specifically for smooth wrap continuity and for enough visible phase separation between bars.
+
+**Improve it:** Keep the current artistic direction: a ghostly rig reveal with real negative space, not a wash. Next refinements should tune the BarLights angular spin in the actual dome viewer, preserve the first spatial-spin look, and remove any remaining all-at-once moments by adding a slightly stronger per-bar phase offset if needed. Longer term, replace the `sectionId/y` heuristic with reliable fixture masks for `TriangleEdges`, `TrianglePars`, `BarLights`, and `VintageLights`. Current controls are `sliderLocalSpeed`, `sliderRevealWidth`, `sliderOrbitDrift`, `sliderBlackoutDepth`, `sliderLanternGlow`, `sliderBeaconSparkle`, and `sliderUvTrail`. Good modulation: `micLow -> sliderRevealWidth`, `stemsBass -> sliderOrbitDrift`, `stemsVocals -> sliderLanternGlow`, `micHigh -> sliderBeaconSparkle`, `micKick -> sliderBlackoutDepth` inverted or reduced on hits.
+
+#### `41_ghost_aurora`
+
+**Current behavior:** A vertical sine sheet based on `y` blends cp1/cp2 on all pixels; UV is the inverse of that sine. Random white shimmer appears across the rig. Vintage warmth is dead until view masks exist.
+
+**Issues:** It is a global vertical curtain, not an apex-origin aurora. It does not use the BarLights circle, and the UV inverse keeps the rig too continuously lit. The shimmer is random gating rather than coherent ice texture.
+
+**Improve it:** Anchor the aurora in TriangleEdges, then let curtains fall and rotate across the ring using `theta = atan2(z - 0.5, x - 0.5) / PI2`. Layer 2-3 incommensurate curtain phases so the sheets drift without obvious repetition. Gate curtain brightness with a width/density threshold so black gaps remain. Suggested controls: `sliderCurtainCount`, `sliderCurtainWidth`, `sliderDriftChaos`, `sliderRimShimmer`, `sliderTriangleGain`, `sliderUvFloor`. Good modulation: `micLow -> sliderCurtainWidth`, `micMid -> sliderDriftChaos`, `micHigh -> sliderRimShimmer`, `stemsVocals -> human warmth/vintage`.
+
+#### `42_boiler_glow`
+
+**Current behavior:** A hardcoded orange RGB fire flicker runs globally. Amber is intended for vintage but is dead under current view masks. White valve pressure is intended for apex but is also dead. UV is full-on everywhere.
+
+**Issues:** This is one of the most static/full-field patterns. It ignores cp1/cp2 for RGB, ignores circular geometry, and the constant UV destroys the warm boiler contrast. It also does not match the earlier `lanterns_in_the_dark` concept.
+
+**Improve it:** Decide whether this is a boiler-room pattern or a lantern-darkness pattern. If boiler-room, make TriangleEdges the pressure gauge/stage machinery, BarLights the circular vent ring, and Vintage the real amber filaments. Let heat occupy rotating sectors with dark gaps, not the full rig. Suggested controls: `sliderBoilerHeat`, `sliderFlickerComplexity`, `sliderVentWidth`, `sliderSteamFlash`, `sliderTriangleRPM`, `sliderBlackoutDepth`. Good modulation: `micLow/stemsBass -> sliderBoilerHeat`, `micKick -> sliderSteamFlash`, `micHigh -> spark/flicker`.
+
+#### `43_sea_floor_shadow`
+
+**Current behavior:** A binary shadow band moves along `x`; non-apex pixels get dim cp1 and UV, while apex pixels would get a pulse if view masks worked. Random white sparkles run globally.
+
+**Issues:** The shadow is a simple stripe, not an abyssal occlusion moving around the circular rig. Apex behavior is dead, and there is no Vintage/Vessel warmth. `shadowDepth` acts like a threshold, but not like a visually controllable shadow mass.
+
+**Improve it:** Build a moving elliptical shadow or sonar-darkness field in polar space. BarLights should show a circular occlusion moving around the perimeter with sparse UV edge foam. TriangleEdges can be a searchlight silhouette or distant pressure line. Vintage should mostly stay dark, with optional low amber embers. Suggested controls: `sliderShadowWidth`, `sliderShadowDrift`, `sliderAbyssalSwell`, `sliderEdgeFoam`, `sliderBlackoutDepth`, `sliderTriangleSilhouette`. Good modulation: `micLow -> swell/shadow width`, `micHigh -> edge foam`, `stemsVocals -> amber ember`.
+
+#### `44_apex_gyro_vortex`
+
+**Current behavior:** This is the only audited pattern that uses polar angle. It creates an angular sweep from `atan2(z - 0.5, x - 0.5)` and maps cp1/cp2 around it. White hits when the sweep is above a threshold. Vintage amber is dead under current view masks.
+
+**Issues:** Good starting point, but it applies the same vortex to everything. It does not counter-rotate the apex triangle and perimeter, and it leaves UV as a broad complementary fill. There is no arm count, width, trail control, or negative-space duty cycle.
+
+**Improve it:** Make this a flagship EDM pattern. BarLights should carry rotating angular arms around the circle. TriangleEdges should counter-rotate as a 3-edge stage chase. TrianglePars can punch the center on impacts. Add sparse shuttering so the vortex has black gaps. Suggested controls: `sliderArmCount`, `sliderArmWidth`, `sliderCounterSpin`, `sliderTrailLength`, `sliderTriangleFocus`, `sliderSweepImpact`. Good modulation: `stemsBass -> ring energy/vortex speed`, `micKick -> sweep impact`, `micMid/stemsDrums -> counter-spin or arm count`.
+
+#### `45_engine_room_clockwork`
+
+**Current behavior:** Intended bar/vintage branches both depend on `viewMask`, so under current scene metadata the pattern effectively becomes constant UV. The code has a simple `floor(index / 18)` stepping idea but it is not visible until masks work.
+
+**Issues:** This is currently almost static. Even after masks, it would be a binary every-other-fixture step and random white tick, not a layered mechanical clockwork. TriangleEdges are not a dial or stage centerpiece.
+
+**Improve it:** Use BarLights as pistons: each 18-pixel bar gets a stroke traveling along the bar, while the 13 bars advance around the ring. Use TriangleEdges as clock hands/gears, with a rotating bright edge and short blackout pauses. Vintage should tick in amber sequentially. Suggested controls: `sliderGearTeeth`, `sliderTickDecay`, `sliderPistonStroke`, `sliderBoilerHeat`, `sliderPauseAmount`, `sliderBlackoutDepth`, `sliderTriangleDial`. Good modulation: `stemsDrums -> gear stepping`, `micKick -> tick sharpness`, `micLow/stemsBass -> boiler heat`.
+
+#### `46_dome_lockdown`
+
+**Current behavior:** A vertical gate based on `y < wave(tPhase)` turns the lower part of the model on, with a white line near the moving boundary. Vintage amber memory is dead until view masks exist.
+
+**Issues:** It has real motion, but it is a generic vertical wipe. It does not use the circular perimeter as a closing door system, and it does not make TriangleEdges the stage. The default can light too much of the rig at once.
+
+**Improve it:** Turn it into a tiered shutter sequence: TriangleEdges slam first, Vintage ring responds second, BarLights close in angular sectors around the circle. Add a brief blackout hold after each slam so the white hit has weight. Suggested controls: `sliderTierDelay`, `sliderDoorWidth`, `sliderSlamImpact`, `sliderHoldBlackout`, `sliderEdgeUV`, `sliderTriangleLead`. Good modulation: `micKick -> slam impact`, `micLow -> door pressure`, `stemsDrums -> step cadence`.
+
+#### `47_apex_perimeter_ping`
+
+**Current behavior:** A ping moves along normalized `y`. That means it is height-based, not a real apex-to-perimeter distance. It lights a thin band when `abs(y - wavePos) < 0.1`, with inverse UV everywhere else.
+
+**Issues:** The concept is spatial ping-pong, but the implementation does not measure from apex to perimeter and does not use angular lanes. It also keeps UV on in non-ping areas, reducing negative space.
+
+**Improve it:** Compute radial distance from the apex/center and angular lane position. TriangleEdges should visibly launch the pulse; BarLights should catch it at specific angular sectors; Vintage should glow only at the midpoint pass. Use alternating directions and lane counts for less repetition. Suggested controls: `sliderPingWidth`, `sliderLaneCount`, `sliderTrailDecay`, `sliderPingImpact`, `sliderVintageMidpoint`, `sliderDirectionBias`, `sliderBlackoutDepth`. Good modulation: `micKick -> impact`, `stemsDrums -> ping speed`, `micLow -> trail size`.
+
+#### `48_titanic_sos_beacon`
+
+**Current behavior:** SOS timing is implemented as a hardcoded Morse pulse, but the white signal only appears on apex pixels selected by `viewMask`. Since masks are zero, the visible result is mostly a static dark cp1 wash plus UV. Vintage response glow is also dead.
+
+**Issues:** The story is strong, but the current look is static unless view masks are fixed. It does not turn the SOS into a spatial event across the dome, and the Morse loop is mechanically repetitive.
+
+**Improve it:** Put the primary Morse signal on TriangleEdges, not just TrianglePars. Then make BarLights echo each dot/dash as delayed circular wavefronts. Vintage should answer in amber, with slight timing drift so it feels human. Suggested controls: `sliderSignalStrength`, `sliderSignalSpeed`, `sliderEchoDelay`, `sliderEchoWidth`, `sliderResponseGlow`, `sliderAbyssalDarkness`, `sliderGlitch`. Good modulation: `micKick -> signal strength`, `stemsVocals -> response glow`, `micLow -> darkness/echo depth`.
+
+#### `49_boiler_pressure_release`
+
+**Current behavior:** A global pressure phase rises repeatedly, increasing RGB brightness, then flashes white when `phase > 0.95`. Vintage amber is dead until masks exist. UV appears only during early cooldown.
+
+**Issues:** The pressure/release idea is clear, but it is spatially flat. Every pixel participates in the same build and flash. The release is a simple repeating timer, not a stage event with anticipation, spatial vents, and aftermath.
+
+**Improve it:** Make TriangleEdges the visible pressure gauge and stage core. Let pressure propagate around BarLights as rotating vent sectors. At release, flash only selected vents and triangle cores, then go to blackout/cooling UV. Suggested controls: `sliderPressure`, `sliderReleaseThreshold`, `sliderVentWidth`, `sliderHeatBloom`, `sliderVentFlash`, `sliderCoolingAfterglow`, `sliderBlackoutHold`. Good modulation: `micLow/stemsBass -> pressure`, `micKick -> vent flash`, `micHigh -> cooling shimmer`.
+
+#### `50_iceberg_fracture`
+
+**Current behavior:** A global strike gate triggers when a sine wave exceeds a threshold. A simple wave field from `x`, `y`, and `tPhase` becomes the fracture brightness. White, RGB, and UV all use that same `frac`; amber aftershock runs globally.
+
+**Issues:** This has useful negative-space potential, but it is not structural. It does not originate from TriangleEdges, does not travel down the rig, and does not choose crack lanes. The `fractureAmount` range only changes strike duty a little, and the branch pattern is too smooth.
+
+**Improve it:** Make TriangleEdges the fracture origin and brightest stage. Propagate cracks down angular lanes to BarLights with delayed timing. Use sparse branching masks and fast decay. Vintage amber aftershock should be local and delayed. Suggested controls: `sliderFractureDensity`, `sliderBranchSpread`, `sliderStrikeDecay`, `sliderAftershockWarmth`, `sliderLaneCount`, `sliderOriginBias`, `sliderBlackoutDepth`. Good modulation: `micKick -> fracture density/white`, `micHigh -> branch sharpness`, `micLow -> aftershock/body`.
+
+#### `51_abyssal_searchlight`
+
+**Current behavior:** A rectangular sweep moves along `x`; pixels inside the width get cp1 RGB and white, pixels outside get UV. There is no fixture separation.
+
+**Issues:** The sweep is flat and broad. It does not start at TriangleEdges, does not rotate around the perimeter ring, and does not use Vintage intersection hits. `edgeTrail` currently behaves like inverse full-field UV instead of a trail.
+
+**Improve it:** Recast this as the `poseidon_trident_sweep`/searchlight pattern. TriangleEdges should be the source and brightest core. BarLights should receive one, two, or three narrow rotating beams around the circle. Vintage lamps should ignite only when a beam crosses their angular sector. Suggested controls: `sliderBeamCount`, `sliderSweepWidth`, `sliderGimbalDrift`, `sliderSweepImpact`, `sliderTrailLength`, `sliderVintageHit`, `sliderBlackoutDepth`. Good modulation: `micKick -> sweep impact`, `micMid -> gimbal drift`, `micHigh -> edge shimmer`.
+
+#### `52_iceberg_shear_line`
+
+**Current behavior:** A diagonal plane from `x`, `y`, and `tiltAngle` divides the rig into cp1/cp2 sides. A narrow white edge marks the line; UV is full outside the edge.
+
+**Issues:** It creates a clean graphic, but it ignores the dome's circular ring and the apex triangle. Both sides remain lit, so the negative-space impact is weak. `shearSharpness` controls edge brightness, not actual line sharpness.
+
+**Improve it:** Turn the line into a moving ice shear that originates at TriangleEdges and rotates through the BarLights ring. Use polar `theta` for the perimeter and a separate edge-coordinate chase for TriangleEdges. One side should be black/UV water; the other should be a retreating warm/dim world. Suggested controls: `sliderShearAngle`, `sliderShearWidth`, `sliderAdvance`, `sliderSubmergeDepth`, `sliderWarmthRetreat`, `sliderTriangleBlade`, `sliderBlackoutDepth`. Good modulation: `micLow -> submerge depth/advance`, `micKick -> white edge`, `stemsVocals -> warmth retreat`.
+
+#### `53_shadow_eclipse`
+
+**Current behavior:** A circular shadow center moves in normalized `x/y`. Pixels inside are dimmed to 10%; rim pixels get white and UV. Vintage amber rim is dead until masks exist.
+
+**Issues:** This should be a circular/corona pattern, but it uses `x/y`, not the BarLights' horizontal `x/z` circle. With `eclipseDepth = 0.65`, much of the rig is shadowed most of the time, but not in an intentional ring-centered way. TriangleEdges do not carry the corona.
+
+**Improve it:** Use horizontal polar geometry for the ring. Let a black body or dark sector cross the circular BarLights, with only a thin UV/white rim. TriangleEdges should become the corona/stage flare at alignment. Vintage should bloom amber only on rim intersection. Suggested controls: `sliderShadowSize`, `sliderRimWidth`, `sliderOrbitEccentricity`, `sliderCoronaPulse`, `sliderVintageBloom`, `sliderTriangleCorona`, `sliderBlackoutDepth`. Good modulation: `micLow -> shadow size`, `micHigh -> rim shimmer`, `micKick -> corona flash`.
+
+#### `54_boiler_fire_overdrive`
+
+**Current behavior:** A hardcoded orange flame wave moves vertically with `y * flameHeight - tPhase * fireSpeed * 2.0`. Amber follows flame everywhere, UV is inverse flame everywhere, and white heat flashes are random.
+
+**Issues:** This is a boiler/fire pattern, not the `iceberg_dead_ahead` concept described above. It is full-field, warm, and non-spatial. It does not use BarLights as a ring or TriangleEdges as a stage. The random white flash is not tied to geometry or music.
+
+**Improve it:** If kept as boiler overdrive, make it a drop look: BarLights become rotating flame tongues around the ring, TriangleEdges become white-hot stage bars, Vintage becomes controlled amber filament heat, and UV appears only in dark cooling gaps. If this slot is supposed to be `iceberg_dead_ahead`, rename/rewrite it completely as a cold advancing wall. Suggested boiler controls: `sliderFlameHeight`, `sliderTongueCount`, `sliderSwirl`, `sliderHeatFlash`, `sliderAmberBias`, `sliderStageOverdrive`, `sliderBlackoutDepth`. Good modulation: `stemsBass -> flame energy`, `micKick -> heat flash`, `micHigh -> sparks`.
+
+#### `55_stardust_dome`
+
+**Current behavior:** The apex star branch depends on `viewMask`, so it is dead under current metadata. Everything else gets a broad cp1/cp2 sweep based on `x`, an amber pulse, and full UV.
+
+**Issues:** The finale currently has no apex star, no stardust, no circular orbit, and no negative space. Full UV makes it flat. The pattern should be the most spatial and stage-aware of the set, but it behaves like a generic wash.
+
+**Improve it:** Make TriangleEdges the main white star and TrianglePars the core punches. BarLights should carry sparse orbiting particles and angular color waves with dark gaps. Vintage should hit amber/white on downbeats, not pulse constantly. Suggested controls: `sliderStarCore`, `sliderParticleDensity`, `sliderOrbitSpeed`, `sliderRingWidth`, `sliderWallHit`, `sliderSparkleDecay`, `sliderBlackoutDepth`. Good modulation: `micKick -> star core/wall hit`, `stemsBass -> ring energy`, `micHigh -> particle density`, `stemsVocals -> amber bloom`.
+
+### 10.5 Priority Order for Improvement
+
+1. **Fix fixture masks first.** Add `summer_camp_dome.viewmasks.js` or equivalent metadata so TriangleEdges, TrianglePars, BarLights, and VintageLights can be addressed reliably in pattern code. Without this, many current artistic branches are no-ops.
+
+2. **Rewrite 44, 47, 51, and 55 first as the EDM core set.** These should become the ring-vortex, spatial ping, trident/searchlight, and finale patterns. They best match the user's stated goals: motion, circular BarLights, TriangleEdges as stage lights, and audio-friendly controls.
+
+3. **Rewrite 45 and 46 next as rhythm tools.** Clockwork and lockdown can become strong drum/kick patterns if they use stepped chases, blackout holds, and triangle-stage hits.
+
+4. **Rewrite 40, 41, 43, and 53 as dark transition looks.** These should focus on negative space, slow sophisticated motion, and sparse structure reveals rather than full-field ambience.
+
+5. **Reconcile the concept/name drift in 42 and 54.** Decide whether those slots are boiler/fire patterns or whether they should match `lanterns_in_the_dark` and `iceberg_dead_ahead` from the proposal.
+
+### 10.6 Acceptance Criteria for the Next Pattern Pass
+
+A rewritten pattern should pass these checks:
+
+- It has `sliderLocalSpeed` as the first slider.
+- It uses TriangleEdges as a visible stage/focal layer, not only as an occasional accent.
+- It uses the BarLights circular layout with angular or radial math in any pattern where the perimeter is active.
+- It leaves intentional negative space by default; UV/white/amber are not full-field permanent fills.
+- It exposes 4-7 useful local sliders with audio-agnostic names.
+- It can be modulated using the current source keys: `micLow`, `micMid`, `micHigh`, `micKick`, `stemsBass`, `stemsDrums`, `stemsVocals`.
+- Its playlist modulation targets use exported slider names such as `sliderLocalSpeed`, `sliderSweepImpact`, or `sliderBlackoutDepth`.
+- It avoids obvious single-sine repetition by layering at least two spatial/temporal components or using a coherent nonrepeating phase model.
+- Its RGB stays mostly on the cp1/cp2 palette line, while white, amber, and UV remain physical-channel effects.

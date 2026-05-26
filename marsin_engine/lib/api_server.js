@@ -989,6 +989,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       transitionMode: c.transitionMode || 'trans_crossfade',
       transitionTime: c.transitionTime || 1.0,
       playlist: c.playlist || null,
+      viewSelection: c.viewSelection || { type: 'all', target: null, invert: false },
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -2736,6 +2737,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
           }
           clearChannelDirty(channel);
+        }
+        if (data.viewSelection !== undefined) {
+          const v = validateViewSelection(data.viewSelection);
+          if (!v.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: v.error }));
+          }
+          mixer.setChannelViewSelection(channel.id, v.value);
         }
         saveAllState();
         broadcastMixerState();

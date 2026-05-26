@@ -363,7 +363,141 @@ This is fundamentally different from `controllerId` (physical), `sectionId` (gro
 
 ---
 
+### 4.5 View Mask Declarations (Sidecar `*.viewmasks.js` Files & Auto-Mapping)
+
+#### 4.5.1 Design & Auto-Mapping System
+
+Model files (`*.js`) in `marsin_engine/models/` are **auto-generated** by the simulator's model export. Every regeneration clobbers any hand-edited pixel properties, resetting all `vMask` / `viewMask` fields to `0`. 
+
+To maintain creative control and custom view definitions without having to hand-edit individual pixel coordinate definitions in the generator, the system uses companion **sidecar files** named `<modelName>.viewmasks.js`.
+
+At load time, the engine first assigns base group bits to pixels automatically using a static mapping `GROUP_TO_BIT` based on the pixel's `group` property (e.g., `TriangleEdges` -> `0x01`, `TrianglePars` -> `0x02`, `BarLights` -> `0x04`, `VintageLights` -> `0x08`, etc.). This ensures that individual base bits are always set on the pixels and available to patterns, even if they aren't declared anywhere in the sidecar file.
+
+Next, the engine loads the sidecar file `<modelName>.viewmasks.js` (if it exists) and **OR-merges** each entry's `pixelIndices` into the loaded pixels' `vMask` and `viewMask` fields.
+
+#### 4.5.2 Why Base Groups are Excluded from Sidecars
+
+Because individual base groups (e.g. `TriangleEdges`, `TowerBars`) are already parsed from the model and available in the UI's group selection dropdown, they are **excluded** from the sidecar files. This avoids redundant representation in the "View Masks" selection dropdown in CaptainPad. The sidecar files are strictly reserved for **composite presets** (unions of multiple base groups, like `Apex`, `RedwoodPARs`, or `AllFixtures`).
+
+#### 4.5.3 Sidecar File Format & Examples
+
+Sidecar files are located in `marsin_engine/models/` and export a single `viewMasks` array. A helper function `range()` is commonly defined inside the sidecar for convenience:
+
+##### `summer_camp_dome.viewmasks.js`
+```javascript
+// View-mask sidecar for the Summer Camp Dome model.
+function range(start, end) {
+  const arr = [];
+  for (let i = start; i <= end; i++) arr.push(i);
+  return arr;
+}
+
+export const viewMasks = [
+  {
+    name:  'Apex',
+    bit:   0x03,                       // TriangleEdges | TrianglePars
+    pixelIndices: range(0, 56),
+  },
+  {
+    name:  'ApexAndBars',
+    bit:   0x07,                       // Apex | BarLights
+    pixelIndices: [...range(0, 56), ...range(57, 290)],
+  },
+];
+```
+
+> [!NOTE]
+> Composite presets like `AllFixtures` are not needed in the sidecar files because the UI/engine already provides a default "ALL" option (which maps to the fast-path selection of all pixels).
+
+Each entry in the `viewMasks` array requires three fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Human-readable preset name (shown in the CaptainPad picker) |
+| `bit` | `integer` | Bitmask value to OR into matching pixels |
+| `pixelIndices` | `number[]` | Array of pixel indices (0-based) that receive this bit |
+
+#### 4.5.4 OR-Merge Mechanics
+
+At load time, the engine processes the imported array:
+
+```javascript
+for (const entry of viewMasks) {
+  if (!entry || !Number.isInteger(entry.bit) || !Array.isArray(entry.pixelIndices)) continue;
+  // Skip composite presets (which combine multiple bits) when OR-merging into pixel.vMask
+  // to avoid bit pollution. Base groups have exactly one bit set (are powers of 2).
+  if ((entry.bit & (entry.bit - 1)) !== 0) continue;
+
+  for (const idx of entry.pixelIndices) {
+    if (idx < 0 || idx >= pixels.length) continue;
+    const cur = (pixels[idx].vMask ?? 0) | entry.bit;
+    pixels[idx].vMask    = cur;
+    pixels[idx].viewMask = cur;
+  }
+}
+```
+
+This means:
+- A pixel can accumulate **multiple bits** from different entries.
+- Composite presets (e.g. `Apex`) are **not** OR-merged into the pixel's boot-time `vMask` to prevent bit pollution. Instead, they are resolved dynamically at query time by checking `(vMask & resolvedViewMaskBit) !== 0`.
+- The merge is **additive only** — it never clears existing bits.
+
+#### 4.5.5 Pattern Usage
+
+Patterns read `viewMask` as a built-in variable and use bitwise AND to test membership:
+
+```javascript
+// Test specific groups
+var isApex    = (viewMask & 3) != 0;   // bit 0x01 | 0x02
+var isBar     = (viewMask & 4) != 0;   // bit 0x04
+var isVintage = (viewMask & 8) != 0;   // bit 0x08
+
+// Conditional rendering
+if (isApex) {
+  // Apex-specific animation
+} else if (isVintage) {
+  // Warm amber glow for vintage fixtures
+}
+```
+
+#### 4.5.6 Model Declarations (Composite Presets Only)
+
+##### `test_bench.viewmasks.js`
+
+| Name | Bit | Pixels | Count |
+|---|---|---|---|
+| `ParsAndBars` | `0x05` | 0–3, 16–51 | 40 |
+
+##### `summer_camp_dome.viewmasks.js`
+
+| Name | Bit | Pixels | Count |
+|---|---|---|---|
+| `Apex` | `0x03` | 0–56 | 57 |
+| `AllButApex` | `0x0C` | 57–320 | 264 |
+
+##### `summer_camp_logsville.viewmasks.js`
+
+| Name | Bit | Pixels | Count |
+|---|---|---|---|
+| `RedwoodPARs` | `0x0040` | 204–221 | 18 |
+| `VintageOnly` | `0x0080` | 144–203 | 60 |
+
+#### 4.5.7 Bit Assignment Conventions
+
+> [!TIP]
+> When designing bit assignments for a new model, follow these conventions so patterns written for one model render meaningfully on others:
+>
+> - **Bit 0x01** — Primary stage lights (apex / PARs / tower bars)
+> - **Bit 0x02** — Secondary stage lights (par punctuation / tower vintage)
+> - **Bit 0x04** — Perimeter / bar lights
+> - **Bit 0x08** — Vintage / ambient fixtures
+> - **Bits 0x10+** — Scene-specific groups (redwoods, walls, etc.)
+> - **High bits (composites)** — Named unions for convenience (e.g., `RedwoodPARs`, `VintageOnly`)
+
+---
+
 ## 5. Performance Speedup: Batch Cache Optimization
+
 
 ### 5.1 Current Bottleneck
 

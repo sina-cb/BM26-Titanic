@@ -1,15 +1,28 @@
-# Per-scene audio tuning for summer_camp_dome. See
-# marsin_engine/config.yaml's `audio:` block for the field reference.
-enabled: false
+# Auto-written by MarsinEngine — per-scene audio state.
+# Contains:
+#   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
+#   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
+# Written by `engine.js --choose_mic --model <scene>` (mic) and by
+# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
+# the engine is running.
+enabled: true
 fftSize: 1024
 hopSize: 512
 bands:
   lowMaxHz: 250
   midMaxHz: 2000
-  smoothingAlpha: 0.5
+  attackMs: 8
+  releaseMs: 180
+  noiseGate: 0.18
 kick:
   minHz: 40
   maxHz: 120
   threshold: 1.6
   refractoryMs: 200
   decayMs: 120
+capture:
+  device: audio=Microphone Array (Realtek(R) Audio)
+  deviceLabel: Microphone Array (Realtek(R) Audio)
+  deviceId: dshow-audio-Microphone Array (Realtek(R) Audio)
+  inputFormat: dshow
+  platform: win32

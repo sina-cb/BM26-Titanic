@@ -174,42 +174,72 @@ async function loadModel(modelName) {
   // declared either source get an empty array — view-mask selections
   // by name then no-op and CaptainPad hides the "VIEW MASKS" section
   // of the picker. See docs/27 §3.1 and docs/13 §4.
-  let viewMasks = Array.isArray(mod.viewMasks) ? mod.viewMasks : [];
+  const GROUP_TO_BIT = {
+    'TriangleEdges': 0x01,
+    'ParLights': 0x01,
+    'TowerBars': 0x01,
+    'TrianglePars': 0x02,
+    'TowerVintageLights': 0x02,
+    'BarLights': 0x04,
+    'WallVintageLights': 0x04,
+    'VintageLights': 0x08,
+    'Redwoods1': 0x08,
+    'Redwoods2': 0x10,
+    'Redwoods3': 0x20,
+  };
 
+  for (const px of mod.pixels) {
+    if (!px) continue;
+    px.vMask = px.vMask ?? 0;
+    px.viewMask = px.viewMask ?? 0;
+    if (px.group && GROUP_TO_BIT[px.group] !== undefined) {
+      const bit = GROUP_TO_BIT[px.group];
+      px.vMask |= bit;
+      px.viewMask |= bit;
+    }
+  }
+
+  let viewMasks = [];
   const viewMasksPath = path.join(__dirname, 'models', `${modelName}.viewmasks.js`);
-  if (viewMasks.length === 0 && fs.existsSync(viewMasksPath)) {
+  if (fs.existsSync(viewMasksPath)) {
     try {
       const vmUrl = 'file://' + viewMasksPath;
       const vmMod = await import(vmUrl);
       if (Array.isArray(vmMod.viewMasks)) {
         viewMasks = vmMod.viewMasks;
-        // OR-merge each entry's pixelIndices into the pixel's existing
-        // vMask. Cheap O(sum(pixelIndices)). Done in-place because the
-        // pixels array is the model's source of truth for the rest of
-        // the engine (mapPixelsToSacn, vis, etc.) and the merge is
-        // additive (never zeroes a bit).
-        for (const entry of viewMasks) {
-          if (!entry || !Number.isInteger(entry.bit) || !Array.isArray(entry.pixelIndices)) continue;
-          for (const idx of entry.pixelIndices) {
-            if (!Number.isInteger(idx) || idx < 0 || idx >= mod.pixels.length) continue;
-            const px = mod.pixels[idx];
-            if (!px) continue;
-            // Mirror both the abbrev (vMask) and full (viewMask) keys —
-            // the rest of the engine reads vMask, but pattern code may
-            // still read viewMask per docs/13.
-            const cur = (px.vMask ?? px.viewMask ?? 0) | entry.bit;
-            px.vMask = cur;
-            px.viewMask = cur;
-          }
-        }
         console.log(`[Model] Loaded ${viewMasks.length} view-mask preset(s) from ${path.basename(viewMasksPath)}`);
       }
     } catch (err) {
-      // Sidecar is optional. A load failure (syntax error, etc.) is
-      // surfaced but not fatal — the engine still boots with whatever
-      // viewMasks the model file declared (likely none). The CaptainPad
-      // picker then hides the section, mirroring the no-sidecar case.
       console.warn(`[Model] Failed to load viewmasks sidecar ${viewMasksPath}: ${err.message}`);
+    }
+  } else if (Array.isArray(mod.viewMasks)) {
+    viewMasks = mod.viewMasks;
+  }
+
+  // OR-merge each entry's pixelIndices into the pixel's existing
+  // vMask. Cheap O(sum(pixelIndices)). Done in-place because the
+  // pixels array is the model's source of truth for the rest of
+  // the engine (mapPixelsToSacn, vis, etc.) and the merge is
+  // additive (never zeroes a bit). Works for both inline viewMasks
+  // and loaded sidecar presets.
+  if (viewMasks.length > 0) {
+    for (const entry of viewMasks) {
+      if (!entry || !Number.isInteger(entry.bit) || entry.bit <= 0 || !Array.isArray(entry.pixelIndices)) continue;
+      // Skip composite presets (which combine multiple bits) when OR-merging into pixel.vMask.
+      // Base groups have exactly one bit set (are powers of 2).
+      if ((entry.bit & (entry.bit - 1)) !== 0) continue;
+
+      for (const idx of entry.pixelIndices) {
+        if (!Number.isInteger(idx) || idx < 0 || idx >= mod.pixels.length) continue;
+        const px = mod.pixels[idx];
+        if (!px) continue;
+        // Mirror both the abbrev (vMask) and full (viewMask) keys —
+        // the rest of the engine reads vMask, but pattern code may
+        // still read viewMask per docs/13.
+        const cur = (px.vMask ?? px.viewMask ?? 0) | entry.bit;
+        px.vMask = cur;
+        px.viewMask = cur;
+      }
     }
   }
 
