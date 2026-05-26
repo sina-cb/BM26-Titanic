@@ -682,31 +682,36 @@ export default function MixerScreen() {
     setIsConnected(conn.ok);
     if (!conn.ok) return;
 
-    const bRes = await fetchChannelBlends();
+    // Pre-May-2026 this was a 5-fetch serial waterfall — each request
+    // waited on the previous, so the mixer's first paint after a tab
+    // switch took ~5× the slowest hop. The fetches are independent
+    // (different endpoints, no shared state), so Promise.all collapses
+    // the wall-clock cost to max(hop_i) instead of sum(hop_i).
+    const [bRes, tRes, vsRes, pLib, mRes] = await Promise.all([
+      fetchChannelBlends(),
+      fetchTransitions(),
+      // View-selection options. Failure is non-fatal: the strip
+      // falls back to a disabled picker that just shows "ALL" if the
+      // engine can't enumerate. We pull both groups and named view-mask
+      // presets — sections / fixtures stay backend-only (operator-
+      // unfriendly numeric ids).
+      fetchViewSelectionOptions(),
+      // Parent-owned playlist library. The engine returns the current
+      // names from its in-memory cache (cheap, deterministic). After
+      // this, the library is kept in sync via the WS `playlistLibrary`
+      // event the engine emits on every save/delete.
+      fetchPlaylists(),
+      fetchMixerState(),
+    ]);
+
     if (bRes.ok && bRes.data) setBlends(bRes.data);
-
-    const tRes = await fetchTransitions();
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
-
-    // Cache view-selection options. Failure is non-fatal: the strip
-    // falls back to a disabled picker that just shows "ALL" if the
-    // engine can't enumerate. We pull both groups and named view-mask
-    // presets — sections / fixtures stay backend-only (operator-
-    // unfriendly numeric ids).
-    const vsRes = await fetchViewSelectionOptions();
     if (vsRes.ok && vsRes.data) {
       setViewSelectionGroups(vsRes.data.groups || []);
       setViewSelectionViewMasks(vsRes.data.viewMasks || []);
     }
-
-    // Seed the parent-owned playlist library. The engine returns the
-    // current names from its in-memory cache (cheap, deterministic).
-    // After this, the library is kept in sync purely via the WS
-    // `playlistLibrary` event the engine emits on every save/delete.
-    const pLib = await fetchPlaylists();
     if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
 
-    const mRes = await fetchMixerState();
     if (mRes.ok && mRes.data) {
       setMaster(mRes.data.master);
       if (mRes.data.baseChannelId) baseChannelIdRef.current = mRes.data.baseChannelId;
@@ -740,7 +745,17 @@ export default function MixerScreen() {
   //  to /mixer/channels/:id/playlist/entry directly. No more "swap pattern"
   //  button — every pattern lives in a playlist entry.)
 
-  const handleFaderChange = async (channelId: string, level: number) => {
+  // All ChannelStrip-bound handlers are useCallback'd with empty deps
+  // so React.memo() on ChannelStrip can actually short-circuit on a
+  // MixerScreen re-render. Pre-fix (May 2026) every MixerScreen render
+  // — including the 5 Hz `setVisVersion` ticks below — created fresh
+  // handler identities, bypassing memo and reconciling every strip
+  // along with its CPC sliders, PixelStrip, and playlist panel. That
+  // was a large chunk of the "mixer feels laggy with 3 channels"
+  // operator complaint. Bodies reference only refs + module-level
+  // event buses + the setState callbacks (which React guarantees are
+  // stable), so the empty dep array is correct.
+  const handleFaderChange = useCallback(async (channelId: string, level: number) => {
     // Stamp BEFORE the WS send so any racing broadcast that arrives
     // during the round-trip is held off the slider's last finger position.
     localFaderWriteRef.current[channelId] = Date.now();
@@ -759,9 +774,9 @@ export default function MixerScreen() {
         updateMixerChannel(channelId, { fader: level }).catch(()=>{});
       }
     }
-  };
+  }, []);
 
-  const handleMuteToggle = async (channelId: string, enabled: boolean) => {
+  const handleMuteToggle = useCallback(async (channelId: string, enabled: boolean) => {
     // Mute remains interactive at all times — the operator must always be
     // able to drop a channel even during a transition. "Transitions take
     // precedence over mute/solo" is enforced at *transition start* time
@@ -774,14 +789,14 @@ export default function MixerScreen() {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, enabled } : c));
     engineEvents.send({ type: 'setChannelEnabled', channelId, enabled });
     updateMixerChannel(channelId, { enabled }).catch(() => {});
-  };
+  }, []);
 
   // Track which channel is solo'd (null = no solo)
   const soloRef = useRef<string | null>(null);
   // Track pre-solo state (enabled + fader) so we can restore
   const preSoloStateRef = useRef<{ [id: string]: { enabled: boolean; fader: number } }>({});
 
-  const handleSoloToggle = async (channelId: string) => {
+  const handleSoloToggle = useCallback(async (channelId: string) => {
     // Solo remains interactive at all times (see handleMuteToggle).
     //
     // Fader-lock (slot 5) interaction: solo is implemented entirely
@@ -850,14 +865,14 @@ export default function MixerScreen() {
         updateMixerChannel(c.id, { enabled, ...(c.id === channelId ? { fader: 1.0 } : {}) }).catch(() => {});
       }
     }
-  };
+  }, []);
 
-  const handleModeChange = async (channelId: string, newMode: string) => {
+  const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, mode: newMode } : c));
     // Update canonical modes — this is a user-initiated change
     savedModesRef.current[channelId] = newMode;
     await updateMixerChannel(channelId, { mode: newMode });
-  };
+  }, []);
 
   // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
   // whose in-memory params differ from the saved playlist entry. The user
@@ -869,7 +884,7 @@ export default function MixerScreen() {
     pending: boolean;
   } | null>(null);
 
-  const handleLockToggle = async (channelId: string, locked: boolean) => {
+  const handleLockToggle = useCallback(async (channelId: string, locked: boolean) => {
     // Locking is always immediate — freezing playlist saves is a safe op.
     if (locked) {
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
@@ -887,7 +902,7 @@ export default function MixerScreen() {
     }
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
     await updateMixerChannel(channelId, { locked: false });
-  };
+  }, []);
 
   // Resolve the unlock-dirty prompt. `mode` is the user's choice:
   //   - 'save'    → capture live params into the playlist entry, then unlock
@@ -922,12 +937,12 @@ export default function MixerScreen() {
   // we optimistically update local state and PATCH; the next mixer
   // broadcast confirms. No dirty-prompt machinery because faderLocked
   // doesn't gate playlist edits.
-  const handleFaderLockToggle = async (channelId: string, faderLocked: boolean) => {
+  const handleFaderLockToggle = useCallback(async (channelId: string, faderLocked: boolean) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderLocked } : c));
     await updateMixerChannel(channelId, { faderLocked });
-  };
+  }, []);
 
-  const handleControlChange = (channelId: string, controlId: number, val: number) => {
+  const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
       return { ...c, exports: (c.exports || []).map((e: any) => e.id === controlId ? { ...e, v0: val } : e) };
@@ -935,7 +950,7 @@ export default function MixerScreen() {
     if (!engineEvents.send({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 })) {
       setMixerChannelControl(channelId, controlId, val, 0, 0);
     }
-  };
+  }, []);
 
   // Adding a channel is playlist-first. The "+ ADD CHANNEL" button opens the
   // picker so the user can spin up a new layer with one tap. The first row is
@@ -1068,9 +1083,9 @@ export default function MixerScreen() {
     }
   };
 
-  const handleDeleteChannel = async (id: string) => {
+  const handleDeleteChannel = useCallback(async (id: string) => {
     await removeMixerChannel(id);
-  };
+  }, []);
 
   const handleTransitionSettingsChange = useCallback((channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
     updateMixerChannel(channelId, updates);

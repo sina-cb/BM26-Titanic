@@ -17,7 +17,7 @@ import React, { useRef } from 'react';
 import { View, Text, useWindowDimensions } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { useEngineState } from '@/hooks/useEngineState';
+import { useMaster } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 
 const C = Colors.light;
@@ -32,7 +32,7 @@ interface Props {
 export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
-  const { master } = useEngineState();
+  const master = useMaster();
   // Throttle PATCH writes to ~30 Hz — same cadence as the mixer
   // header, keeps the engine from being PATCH-spammed while still
   // letting the slider feel live.

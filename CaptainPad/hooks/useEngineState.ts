@@ -42,7 +42,7 @@
 //   - `blackout`: the engine's blackout state, broadcast inside `mixer`
 //     events (engine attaches `blackout: globalsState.blackout`).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
@@ -247,6 +247,48 @@ function _emit(next: EngineLiveState) {
       // A buggy subscriber must never break the broadcast pipeline.
     }
   });
+}
+
+// ── useEngineSlice — per-key short-circuit primitive (May 2026 perf pass) ──
+//
+// Before this primitive existed, every derived hook (useSharedParamValues,
+// useOscStatus, useAudioStatus, useChannelExports, useParamRange) called
+// useEngineState() and re-rendered on every WS message — even though it
+// only cared about one field. With 7 hooks mounted across the deck/mixer/
+// audio surface that meant a 10 Hz mixer-event burst caused ~70 setState
+// calls per second across the React tree, queueing reconciliation work
+// behind any other in-flight microtask (notably `fetchAudioConfig().then`,
+// which was the "audio tab hangs for 30s" symptom).
+//
+// useEngineSlice subscribes to the SHARED `_listeners` Set (one entry
+// per call site) but each listener computes a per-call-site slice and
+// only calls setState when the selector's output actually changes by
+// reference equality. So a sharedParams broadcast that only touched
+// `speed` no longer forces useOscStatus / useAudioStatus / useChannelExports
+// to re-render; only the consumers whose slice actually changed do.
+//
+// Contract: `selector` must be reference-stable across calls when its
+// input slice hasn't changed. The default selector returned by
+// `_pickField` and `_pickFields` honors this by returning the same
+// reference when the picked field(s) are === to the previous value.
+function useEngineSlice<T>(selector: (s: EngineLiveState) => T): T {
+  _ensureInitialized();
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const [slice, setSlice] = useState<T>(() => selector(_cached));
+  const sliceRef = useRef<T>(slice);
+  sliceRef.current = slice;
+  useEffect(() => {
+    const listener = (s: EngineLiveState) => {
+      const next = selectorRef.current(s);
+      if (next !== sliceRef.current) setSlice(next);
+    };
+    _listeners.add(listener);
+    // Resync — handles the race between mount and first emit.
+    listener(_cached);
+    return () => { _listeners.delete(listener); };
+  }, []);
+  return slice;
 }
 
 function _emitLive(next: LiveParams | null) {
@@ -492,18 +534,49 @@ export function useEngineState(): EngineLiveState {
  *
  * Pass `defaults` so callers don't have to deal with the "not loaded
  * yet" case — values get merged on top.
+ *
+ * Performance contract (May 2026 perf pass — mirrors useLiveParamValues):
+ *   The returned object is REFERENCE-STABLE across renders when the
+ *   subscribed values (keys taken from the FIRST `defaults` object) are
+ *   unchanged. So a sharedParams broadcast that only nudged `speed`
+ *   doesn't re-render audio.tsx's three FaderRow children if they only
+ *   subscribed to {bpmSpeedMin, bpmSpeedMax}. Only the keys actually
+ *   listed in `defaults` participate in the equality check.
  */
 export function useSharedParamValues<T extends Record<string, unknown>>(
   defaults: T,
 ): T {
-  const { sharedParams } = useEngineState();
-  if (!sharedParams) return defaults;
-  const flat: Record<string, unknown> = { ...defaults };
-  for (const key in sharedParams.params) {
-    const v = sharedParams.params[key]?.value;
-    if (v !== undefined) flat[key] = v;
-  }
-  return flat as T;
+  // Pin the keys this caller subscribes to. `defaults` is usually a
+  // fresh object literal on each render; its key SET (not identity)
+  // is what matters for our short-circuit.
+  const keysRef = useRef<readonly string[] | null>(null);
+  if (keysRef.current === null) keysRef.current = Object.keys(defaults);
+  const keys = keysRef.current;
+  const defaultsRef = useRef<T | null>(null);
+  if (defaultsRef.current === null) defaultsRef.current = { ...defaults };
+
+  return useEngineSlice<T>(useMemo(() => {
+    // Stable per-caller closure: captures `keys` + `defaultsRef` once.
+    // Returns the SAME `prev` reference when no subscribed key changed.
+    let prev: T | null = null;
+    return (s: EngineLiveState): T => {
+      const src = s.sharedParams?.params;
+      if (!src) return (prev ?? defaultsRef.current) as T;
+      const prevR = prev as Record<string, unknown> | null;
+      let changed = prevR === null;
+      const next: Record<string, unknown> = {};
+      for (const key of keys) {
+        const slot = src[key];
+        const v = slot && slot.value !== undefined
+          ? slot.value
+          : (defaultsRef.current as Record<string, unknown>)[key];
+        next[key] = v;
+        if (!changed && prevR![key] !== v) changed = true;
+      }
+      if (changed) prev = next as T;
+      return prev as T;
+    };
+  }, []));
 }
 
 /**
@@ -626,24 +699,59 @@ export function useLiveParamValues<T extends Record<string, unknown>>(
  * range instead of guessing 0..1.
  */
 export function useParamRange(key: string, fallback: [number, number] = [0, 1]): [number, number] {
-  const { paramSchema } = useEngineState();
-  const entry = paramSchema[key];
-  if (entry && Array.isArray(entry.range) && entry.range.length === 2) return entry.range;
-  return fallback;
+  // paramSchema is loaded once at boot and never mutates after — but
+  // it's part of EngineLiveState, so without slicing we'd re-render
+  // every GainRow on every mixer/oscStats/audioStatus event. Per-key
+  // slice keeps us still after the initial schema load lands.
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
+  return useEngineSlice<[number, number]>(useMemo(() => {
+    let prev: [number, number] | null = null;
+    return (s: EngineLiveState): [number, number] => {
+      const entry = s.paramSchema[keyRef.current];
+      const range = entry && Array.isArray(entry.range) && entry.range.length === 2
+        ? (entry.range as [number, number])
+        : fallbackRef.current;
+      if (prev && prev[0] === range[0] && prev[1] === range[1]) return prev;
+      prev = range;
+      return prev;
+    };
+  }, []));
 }
 
 export function useChannelExports(channelId: string | undefined): MixerChannelExport[] {
-  const { mixerChannels, deckChannel } = useEngineState();
-  if (!channelId) return [];
-  // Look up across both deck and mixer collections. The deck channel
-  // is intentionally NOT in `mixerChannels` post-split, but consumers
-  // that want "this channel's live exports" don't usually know or
-  // care which role it plays — they just have an id.
-  if (deckChannel && deckChannel.id === channelId) {
-    return deckChannel.exports ?? [];
-  }
-  const ch = mixerChannels.find((c) => c.id === channelId);
-  return ch?.exports ?? [];
+  // Per-channel-id slice: only re-renders when THIS channel's exports
+  // array reference changes (engine emits a fresh array on every
+  // mixer/deck broadcast, but only the strip that actually changed
+  // gets re-rendered if the underlying channel object reference is
+  // stable). Without this, every mixer broadcast re-rendered every
+  // GlobalParams variant — including the deck base strip on the
+  // mixer page even when only an overlay's fader nudged.
+  const idRef = useRef(channelId);
+  idRef.current = channelId;
+  const EMPTY: MixerChannelExport[] = useMemo(() => [], []);
+  return useEngineSlice<MixerChannelExport[]>(useMemo(() => {
+    let prev: MixerChannelExport[] = EMPTY;
+    return (s: EngineLiveState): MixerChannelExport[] => {
+      const id = idRef.current;
+      if (!id) return EMPTY;
+      // Look up across both deck and mixer collections. The deck channel
+      // is intentionally NOT in `mixerChannels` post-split, but consumers
+      // that want "this channel's live exports" don't usually know or
+      // care which role it plays — they just have an id.
+      let next: MixerChannelExport[] | undefined;
+      if (s.deckChannel && s.deckChannel.id === id) {
+        next = s.deckChannel.exports ?? EMPTY;
+      } else {
+        const ch = s.mixerChannels.find((c) => c.id === id);
+        next = ch?.exports ?? EMPTY;
+      }
+      if (next !== prev) prev = next;
+      return prev;
+    };
+  }, [EMPTY]));
 }
 
 /**
@@ -678,46 +786,81 @@ export interface OscPillState {
 const STALE_MS = 2_000;
 
 export function useOscStatus(): OscPillState | null {
-  const { oscStats } = useEngineState();
-  if (!oscStats) return null;
-
-  if (!oscStats.enabled) {
-    return { state: 'off', label: 'OFF', stats: oscStats };
-  }
-
-  const referenceTime = oscStats.now ?? Date.now();
-  const stale = oscStats.lastSeenMs === 0
-    ? true
-    : referenceTime - oscStats.lastSeenMs > STALE_MS;
-
-  if (oscStats.mappedMessagesPerSec > 0 || (!stale && oscStats.lastSeenMs > 0)) {
-    return {
-      state: 'live',
-      label: oscStats.mappedMessagesPerSec > 0
-        ? `${oscStats.mappedMessagesPerSec} msg/s`
-        : 'live',
-      stats: oscStats,
+  // Per-slice subscription: only re-renders when the oscStats object
+  // reference changes (engine emits it 1×/s, plus on lifecycle events).
+  // The pill state derivation is a pure function of oscStats so we can
+  // safely memoize it across emits that didn't touch this slice.
+  return useEngineSlice<OscPillState | null>(useMemo(() => {
+    let lastStats: OscStats | null = null;
+    let lastResult: OscPillState | null = null;
+    return (s: EngineLiveState): OscPillState | null => {
+      const oscStats = s.oscStats;
+      if (oscStats === lastStats) return lastResult;
+      lastStats = oscStats;
+      if (!oscStats) { lastResult = null; return lastResult; }
+      if (!oscStats.enabled) {
+        lastResult = { state: 'off', label: 'OFF', stats: oscStats };
+        return lastResult;
+      }
+      const referenceTime = oscStats.now ?? Date.now();
+      const stale = oscStats.lastSeenMs === 0
+        ? true
+        : referenceTime - oscStats.lastSeenMs > STALE_MS;
+      if (oscStats.mappedMessagesPerSec > 0 || (!stale && oscStats.lastSeenMs > 0)) {
+        lastResult = {
+          state: 'live',
+          label: oscStats.mappedMessagesPerSec > 0
+            ? `${oscStats.mappedMessagesPerSec} msg/s`
+            : 'live',
+          stats: oscStats,
+        };
+        return lastResult;
+      }
+      if (oscStats.rxMessagesPerSec > 0) {
+        lastResult = {
+          state: 'unmapped',
+          label: `RX ${oscStats.rxMessagesPerSec}, 0 mapped`,
+          stats: oscStats,
+        };
+        return lastResult;
+      }
+      lastResult = {
+        state: 'idle',
+        label: stale ? 'IDLE' : 'WAITING',
+        stats: oscStats,
+      };
+      return lastResult;
     };
-  }
-  if (oscStats.rxMessagesPerSec > 0) {
-    return {
-      state: 'unmapped',
-      label: `RX ${oscStats.rxMessagesPerSec}, 0 mapped`,
-      stats: oscStats,
-    };
-  }
-  return {
-    state: 'idle',
-    label: stale ? 'IDLE' : 'WAITING',
-    stats: oscStats,
-  };
+  }, []));
+}
+
+/**
+ * Selector for the mixer master fader (0..1). Reference-stable
+ * per-key slice so DeckTopBar stays still through every mixer / vis
+ * tick that didn't actually move the master.
+ */
+export function useMaster(): number {
+  return useEngineSlice<number>((s) => s.master);
+}
+
+/**
+ * Selector for the deck (PFL) channel. Reference-stable so GlobalParams
+ * stays still on overlay-fader broadcasts that didn't touch the deck.
+ */
+export function useDeckChannel(): MixerChannel | null {
+  return useEngineSlice<MixerChannel | null>((s) => s.deckChannel);
 }
 
 /**
  * Selector for the mic listener's live status (docs/25 §6.3).
  * Returns null until the first audioStatus broadcast arrives.
+ *
+ * Per-slice subscription (May 2026 perf pass): only re-renders when
+ * the audioStatus object reference changes. The engine emits this at
+ * 1 Hz plus on lifecycle events, so a calling component (audio.tsx)
+ * is no longer redrawn by every mixer broadcast.
  */
 export function useAudioStatus(): AudioStatus | null {
-  return useEngineState().audioStatus;
+  return useEngineSlice<AudioStatus | null>((s) => s.audioStatus);
 }
 
