@@ -30,9 +30,10 @@ export const CPCControls = () => {
     colorPalette2: { h: 0.5, s: 1, v: 1 },
     // Audio row. See marsin_engine/lib/param_center.js for full
     // semantics. Three stems with per-stem operator gains (range
-    // 0..gainMax from config), one master `audioReactivity`, and
-    // an OSC-driven BPM readout from LX Studio.
-    audioReactivity: 0.5,
+    // 0..gainMax from config). The master `audioReactivity` scale
+    // was retired 2026-05-26 — per-stem gains in the Audio Analysis
+    // tab are the only level control now. BPM is an OSC-driven
+    // readout from LX Studio.
     stemsVocals: 0.0,
     stemsBass: 0.0,
     stemsDrums: 0.0,
@@ -113,10 +114,6 @@ export const CPCControls = () => {
   // requires widening both — that's the whole point of the constants.
   const labelWidth = isPortrait ? 60 : 110;
   const labelGap   = isPortrait ? 8 : 12;
-
-  // Master reactivity gates every stem. Patterns combine these as
-  // `audioReactivity * stemsXGain * stemsX` — see CPC registry.
-  const master = params.audioReactivity ?? 0;
 
   // BPM → speed sync surface state (see docs/25 §6 + Audio tab). When
   // sync is ON we tag the SPEED fader green and pull its display from
@@ -256,23 +253,17 @@ export const CPCControls = () => {
         {audioCollapsed ? (
           <CollapsedAudioSummary
             isPortrait={isPortrait}
-            react={master}
             bass={(params.stemsBass ?? 0) * (params.stemsBassGain ?? 1)}
             drums={(params.stemsDrums ?? 0) * (params.stemsDrumsGain ?? 1)}
             vocals={(params.stemsVocals ?? 0) * (params.stemsVocalsGain ?? 1)}
             kick={(params.micKick ?? 0) * (params.micKickGain ?? 1)}
           />
         ) : (
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12 }}>
-            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader
-                label={isPortrait ? 'REACT' : 'REACTIVITY'}
-                value={master}
-                onChange={(v) => update('audioReactivity', v)}
-              />
-            </View>
-
-            <View style={{ flex: 1, flexDirection: 'row', gap: isPortrait ? 6 : 10 }}>
+          // Master REACTIVITY MiniFader was removed 2026-05-26 (operator
+          // review): per-stem gains in the Audio Analysis tab are now
+          // the only level controls, freeing this row to be all live
+          // meters at full width.
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10, paddingRight: isPortrait ? 4 : 12 }}>
               <LiveMeterColumn
                 isPortrait={isPortrait}
                 top={{ label: 'BASS',   value: (params.stemsBass   ?? 0) * (params.stemsBassGain   ?? 1) }}
@@ -292,7 +283,6 @@ export const CPCControls = () => {
                 isPortrait={isPortrait}
                 top={{ label: 'KICK',   value: (params.micKick     ?? 0) * (params.micKickGain     ?? 1), accent: true }}
               />
-            </View>
           </View>
         )}
       </View>
@@ -351,9 +341,11 @@ function ColorPairButton({ h1, h2, onPress }: { h1: number; h2: number; onPress:
 // ── Audio cells ─────────────────────────────────────────────────────────────
 //
 // The Deck's audio row is read-only: four compact LiveMeterColumns
-// showing what's reaching the pattern after `audioReactivity *
-// stemGain` is applied. Per-band gain sliders live in the Audio
-// Analysis tab now (see CaptainPad/app/(tabs)/audio.tsx → GainRow).
+// showing what's reaching the pattern after `stemGain` is applied.
+// Per-band gain sliders live in the Audio Analysis tab now (see
+// CaptainPad/app/(tabs)/audio.tsx → GainRow). The master
+// `audioReactivity` scale was retired 2026-05-26 — there is no
+// global level above per-stem gains anymore.
 /**
  * LiveMeterColumn — compact, read-only "what the patterns are seeing right
  * now" display for the Deck audio row.
@@ -469,8 +461,9 @@ function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean
 // REACTIVITY rows. The label cell's chevron toggles between these
 // summaries and the full editor rows above. Operator-perceptible
 // data only — SPEED %, SIZE %, the dual-hue swatch, BPM readout for
-// globals; REACT % + four micro-meters (BASS / DRUMS / VOX / KICK)
-// for audio. Sized so the row fits in ~24px regardless of orientation.
+// globals; four micro-meters (BASS / DRUMS / VOX / KICK) for audio
+// (the master REACT readout was retired with audioReactivity on
+// 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
 
 function CollapsedGlobalsSummary({
   speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
@@ -497,14 +490,16 @@ function CollapsedGlobalsSummary({
 }
 
 function CollapsedAudioSummary({
-  isPortrait, react, bass, drums, vocals, kick,
+  isPortrait, bass, drums, vocals, kick,
 }: {
   isPortrait: boolean;
-  react: number; bass: number; drums: number; vocals: number; kick: number;
+  bass: number; drums: number; vocals: number; kick: number;
 }) {
+  // Master REACT readout was removed alongside the audioReactivity
+  // param on 2026-05-26. The four micro-meters are the whole summary
+  // now.
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
-      <CollapsedReadout label="REACT" value={Math.round(react * 100)} />
       <CollapsedMeter label="BAS" value={bass} />
       <CollapsedMeter label="DRM" value={drums} />
       <CollapsedMeter label="VOX" value={vocals} />

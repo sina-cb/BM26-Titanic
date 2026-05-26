@@ -8,16 +8,16 @@ effects:
   vintageWhiteBypassDimmer: false
   uvBlastBypassDimmer: true
 params:
-  revision: 31406
+  revision: 64508
   sourceLock: null
   params:
     speed:
-      value: 0.22
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 1
+      value: 0.5136936634510487
+      lastSource: bpm-sync
+      lastOrigin: bpm-sync:auto
+      lastRevision: 64416
     size:
-      value: 0.5
+      value: 0.39
       lastSource: init
       lastOrigin: init
       lastRevision: 2
@@ -28,115 +28,110 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0
+        h: 0.03
         s: 1
         v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 31325
-    colorPalette2:
-      value:
-        h: 0.13
-        s: 1
-        v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 31326
-    audioReactivity:
-      value: 0.5
       lastSource: init
       lastOrigin: init
-      lastRevision: 6
+      lastRevision: 4
+    colorPalette2:
+      value:
+        h: 0.5
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
     stemsVocalsGain:
       value: 0.84
       lastSource: init
       lastOrigin: init
-      lastRevision: 7
+      lastRevision: 6
     stemsBassGain:
       value: 0.94
       lastSource: init
       lastOrigin: init
-      lastRevision: 8
+      lastRevision: 7
     stemsDrumsGain:
       value: 1.02
       lastSource: init
       lastOrigin: init
-      lastRevision: 9
+      lastRevision: 8
     stemsVocals:
-      value: 2.802596928649634e-45
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 10
+      value: 0.21070627868175507
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 64500
     stemsBass:
       value: 0
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 11
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 64499
     stemsDrums:
       value: 0
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 12
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 64115
     tempoBpm:
-      value: 129.27000427246094
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 13
+      value: 126.0199966430664
+      lastSource: osc
+      lastOrigin: osc:10.1.1.172:58778
+      lastRevision: 64415
     micLow:
-      value: 0.008014760160083133
+      value: 0.020764183949835292
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 31403
+      lastRevision: 64505
     micMid:
-      value: 0.012045729283342075
+      value: 0.03112995851577506
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 31404
+      lastRevision: 64506
     micHigh:
-      value: 0.004710903622622687
+      value: 0.03317765339009326
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 31405
+      lastRevision: 64507
     micKick:
-      value: 0.4186381653554382
+      value: 0.3800326494469854
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 31406
+      lastRevision: 64508
     micLowGain:
       value: 1
       lastSource: init
       lastOrigin: init
-      lastRevision: 18
+      lastRevision: 17
     micMidGain:
       value: 1
       lastSource: init
       lastOrigin: init
-      lastRevision: 19
+      lastRevision: 18
     micHighGain:
       value: 1.46
       lastSource: init
       lastOrigin: init
-      lastRevision: 20
+      lastRevision: 19
     micKickGain:
       value: 1
       lastSource: init
       lastOrigin: init
-      lastRevision: 21
+      lastRevision: 20
     bpmSpeedSync:
-      value: 0
+      value: 1
       lastSource: init
       lastOrigin: init
-      lastRevision: 22
+      lastRevision: 21
     bpmSpeedMin:
       value: 69
       lastSource: init
       lastOrigin: init
-      lastRevision: 23
+      lastRevision: 22
     bpmSpeedMax:
       value: 180
       lastSource: init
       lastOrigin: init
-      lastRevision: 24
+      lastRevision: 23
 dimmers:
   '1': 0.1026785714285714
   '2': 0.0982142857142857

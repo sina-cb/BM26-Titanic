@@ -41,17 +41,13 @@ test('stemsVocals is registered as live, non-persist, non-portWatch, 15Hz', () =
   assert.equal(e.type, 'float');
 });
 
-test('audioReactivity is registered as a persistent operator-tunable knob (not live)', () => {
+test('audioReactivity is REMOVED from the schema (operator review 2026-05-26)', () => {
+  // Master reactivity scale was retired; per-stem gains in the Audio
+  // Analysis tab are now the only level controls on the audio path.
   const pc = new ParamCenter(tmpStatePath());
   const schema = pc.getSchema();
   const e = schema.find(s => s.key === 'audioReactivity');
-  assert.ok(e, 'audioReactivity present in schema');
-  assert.equal(e.live, false, 'audioReactivity.live false (operator-tunable, not a stream)');
-  assert.equal(e.persist, true, 'audioReactivity.persist true (survives restart)');
-  assert.equal(e.portWatch, true, 'audioReactivity.portWatch true (visible on LoRa)');
-  assert.equal(e.broadcastHz, 30, 'audioReactivity.broadcastHz default 30');
-  assert.equal(e.type, 'float');
-  assert.equal(e.default, 0.5);
+  assert.equal(e, undefined, 'audioReactivity must not be registered');
 });
 
 test('stemsBass, stemsDrums, stemsVocals, tempoBpm are live OSC-driven params', () => {
@@ -338,9 +334,11 @@ test('hasPersistentDirty false for ["stemsVocals"]', () => {
   assert.equal(pc.hasPersistentDirty(['stemsVocals']), false);
 });
 
-test('hasPersistentDirty true for ["audioReactivity"] (operator-tuned, persists)', () => {
+test('hasPersistentDirty true for ["speed"] (operator-tuned, persists)', () => {
+  // Replaces the audioReactivity check from before the master scale
+  // was retired — `speed` is the equivalent persistent operator knob.
   const pc = new ParamCenter(tmpStatePath());
-  assert.equal(pc.hasPersistentDirty(['audioReactivity']), true);
+  assert.equal(pc.hasPersistentDirty(['speed']), true);
 });
 
 test('hasPersistentDirty true if any key persists', () => {

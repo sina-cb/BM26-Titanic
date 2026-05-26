@@ -61,12 +61,10 @@ const PARAM_REGISTRY = [
   },
   // ── Audio reactivity knobs (docs/24 §4.3 + §5) ─────────────────────────
   //
-  // Three roles:
-  //
-  //   audioReactivity — MASTER reactivity scale. Operator-tuned,
-  //     persistent. Multiplied on top of every per-stem gain so the
-  //     operator can globally dial audio reactivity up/down without
-  //     re-balancing the individual stems.
+  // Two roles (the master `audioReactivity` scale was removed
+  // 2026-05-26 — operator review: redundant with the per-stem gain
+  // knobs in the Audio Analysis tab, and the extra slider on the
+  // Deck was eating tap-target space without adding value):
   //
   //   stems<Bass|Drums|Vocals> — LIVE OSC scalars from the external
   //     analyser (bound to /marsin/stems/<name>). High-rate, ephemeral,
@@ -84,13 +82,8 @@ const PARAM_REGISTRY = [
   //     not a level to be scaled).
   //
   // Patterns combine these as:
-  //     effective = audioReactivity * stemsVocalsGain * stemsVocals
+  //     effective = stemsVocalsGain * stemsVocals
   // and similar for bass / drums. See docs/24 §4.3.
-  {
-    key: 'audioReactivity', label: 'Audio Reactivity', type: 'float',
-    default: 0.5, range: [0, 1], clamp: true, persist: true,
-    oscAddress: '/marsin/param/audioReactivity', sharedFnName: 'audioReactivity',
-  },
   {
     key: 'stemsVocalsGain', label: 'Vocals Gain', type: 'float',
     default: 1.0, range: [0, 2], clamp: true, persist: true,

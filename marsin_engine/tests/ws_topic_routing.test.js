@@ -67,6 +67,15 @@ test('CPC steady writes ride /ws/params, separate from signals', () => {
   );
 });
 
+test('modulationState rides /ws/params alongside sharedParams', () => {
+  // Frozen-decision (modulation contract Phase 0): the per-frame
+  // modulation snapshot is a CPC-state delta, not a live signal —
+  // it changes only when a mapping/value moves. Keeping it on
+  // /ws/params lets the deck's slider-ghost overlay subscribe
+  // without pulling in audio-rate liveParams traffic.
+  assert.equal(topicForType('modulationState'), TOPICS.PARAMS);
+});
+
 test('UI/state events ride /ws/control', () => {
   // Spot check the most important control-topic types. If any of
   // these get re-routed away from control, the deck/mixer will go

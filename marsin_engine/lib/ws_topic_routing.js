@@ -87,6 +87,12 @@ const TOPIC_BY_TYPE = Object.freeze({
 
   // ── /ws/params ─────────────────────────────────────────────────
   sharedParams:                TOPICS.PARAMS,
+  // modulationState: per-frame snapshot of the active modulation
+  // mappings + their resolved values (see modulation_controller).
+  // Frozen-decision (Phase 0): rides alongside sharedParams on
+  // /ws/params so the deck's slider-ghost overlay only re-renders
+  // when something actually moves, without spamming /ws/control.
+  modulationState:             TOPICS.PARAMS,
 
   // ── /ws/signals ────────────────────────────────────────────────
   liveParams:                  TOPICS.SIGNALS,
