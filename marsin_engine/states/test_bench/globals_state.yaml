@@ -1,4 +1,4 @@
-blackout: true
+blackout: false
 effects:
   fogger: false
   uvBlast: false
@@ -8,7 +8,7 @@ effects:
   vintageWhiteBypassDimmer: false
   uvBlastBypassDimmer: true
 params:
-  revision: 148306
+  revision: 193402
   sourceLock: null
   params:
     speed:
@@ -28,35 +28,35 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0
+        h: 0.66
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 4
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 193249
     colorPalette2:
       value:
-        h: 0.5
+        h: 0.33
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 5
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 193250
     stemsVocalsGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 119055
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 6
     stemsBassGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 112468
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 7
     stemsDrumsGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 115494
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 8
     stemsVocals:
       value: 2.802596928649634e-45
       lastSource: init
@@ -93,45 +93,45 @@ params:
       lastOrigin: init
       lastRevision: 15
     micLow:
-      value: 0.015163397166894698
+      value: 0.0019524514758268454
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148299
+      lastRevision: 193395
     micMid:
-      value: 0.02433910565132747
+      value: 0.14344784894565385
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148300
+      lastRevision: 193396
     micHigh:
-      value: 0.034711944204801205
+      value: 0.1534566035762322
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148301
+      lastRevision: 193397
     micKick:
-      value: 1
+      value: 0.01602935847664556
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148302
+      lastRevision: 193398
     micLowRaw:
-      value: 0.015163397166894698
+      value: 0.0019524514758268454
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148303
+      lastRevision: 193399
     micMidRaw:
-      value: 0.02433910565132747
+      value: 0.14344784894565385
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148304
+      lastRevision: 193400
     micHighRaw:
-      value: 0.034711944204801205
+      value: 0.1534566035762322
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148305
+      lastRevision: 193401
     micKickRaw:
-      value: 0.9077830950370342
+      value: 0.001530382860316959
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 148306
+      lastRevision: 193402
     micLowGain:
       value: 1
       lastSource: init
@@ -139,34 +139,34 @@ params:
       lastRevision: 24
     micMidGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 88769
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 25
     micHighGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 91955
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 26
     micKickGain:
       value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 98514
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 27
     bpmSpeedSync:
       value: 0
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 135664
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 28
     bpmSpeedMin:
       value: 70
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 145233
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 29
     bpmSpeedMax:
       value: 147
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 148154
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 30
 dimmers:
   '1': 0.125
   '2': 0.0982142857142857

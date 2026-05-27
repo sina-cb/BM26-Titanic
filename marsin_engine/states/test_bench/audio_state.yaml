@@ -6,9 +6,9 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  device: ':1'
-  deviceLabel: MacBook Pro Microphone
-  deviceId: avfoundation-audio-1
+  device: ':2'
+  deviceLabel: Amazon USB Streaming Mic
+  deviceId: avfoundation-audio-2
   inputFormat: avfoundation
   platform: darwin
 enabled: true
@@ -19,18 +19,66 @@ chains:
       enabled: true
       params:
         paramKey: micLowGain
+    - id: low_compressor
+      type: compressor
+      enabled: true
+      params:
+        threshold: 0.55
+        ratio: 3
+        attackMs: 10
+        releaseMs: 140
+    - id: low_envelope
+      type: envelope
+      enabled: true
+      params:
+        attackMs: 12
+        releaseMs: 220
   micMid:
     - id: mid_gain
       type: gain
       enabled: true
       params:
         paramKey: micMidGain
+    - id: mid_envelope
+      type: envelope
+      enabled: true
+      params:
+        attackMs: 20
+        releaseMs: 300
+    - id: mid_curve
+      type: curve
+      enabled: true
+      params:
+        shape: easeOut
+    - id: mid_lpf
+      type: lpf
+      enabled: true
+      params:
+        cutoffHz: 8
   micHigh:
     - id: high_gain
       type: gain
       enabled: true
       params:
         paramKey: micHighGain
+    - id: high_slew
+      type: slew
+      enabled: true
+      params:
+        maxStepPerSec: 6
+    - id: high_compressor
+      type: compressor
+      enabled: true
+      params:
+        threshold: 0.35
+        ratio: 4
+        attackMs: 4
+        releaseMs: 90
+    - id: high_lpf
+      type: lpf
+      enabled: true
+      params:
+        cutoffHz: 10
   micKick:
     - id: kick_gain
       type: gain
@@ -74,3 +122,17 @@ chains:
       enabled: true
       params:
         paramKey: stemsVocalsGain
+fftSize: 1024
+hopSize: 512
+bands:
+  lowMaxHz: 200
+  midMaxHz: 4000
+  attackMs: 8
+  releaseMs: 180
+  noiseGate: 0.04
+kick:
+  minHz: 50
+  maxHz: 110
+  threshold: 1.8
+  refractoryMs: 140
+  decayMs: 120

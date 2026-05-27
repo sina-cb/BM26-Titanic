@@ -7,38 +7,38 @@ entries:
     defaults:
       sliderLocalSpeed: 0.33
       sliderNoiseScale: 0.15
-    modulations: []
+    modulations:
+      - id: mod_sliderLocalSpeed_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderLocalSpeed
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.2
+        curve: easeOut
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.6
+      sliderLocalSpeed: 0.68
       sliderBeamWidth: 0.18
       sliderBackgroundGlow: 0.54
       sliderDirection: 0.53
     modulations:
-      - id: mod_sliderBeamWidth_micKick
+      - id: mod_sliderDirection_micLow
         type: continuous
         enabled: true
         source:
           scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderBeamWidth
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: exp
-      - id: mod_sliderDirection_stemsBass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: stemsBass
+          key: micMid
         target:
           scope: pattern
           parameter: sliderDirection
@@ -46,8 +46,8 @@ entries:
         polarity: unipolar
         range:
           - 0
-          - 0.2
-        curve: linear
+          - 0.3
+        curve: easeOut
     notes: null
   - id: e_default_2_02_phase_cathedral
     pattern: 02_phase_cathedral

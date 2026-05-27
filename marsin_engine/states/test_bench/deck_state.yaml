@@ -1,25 +1,25 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 00_golden_hour_wash
+  pattern: 40_ghost_ship_reveal
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '682166867':
-      v0: 0.15
+    '909016120':
+      v0: 0.21
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.33
+      v0: 0.84
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_0_00_golden_hour_wash
-    cursor: 0
+    activeEntryId: e_default_26_40_ghost_ship_reveal
+    cursor: 26
     autopilot:
       active: false
       delay_s: 1
@@ -29,7 +29,7 @@ channel:
     target: null
     invert: false
 transitionConfig:
-  enabled: true
+  enabled: false
   mode: trans_crossfade
   durationMs: 400
   shuffle: false
