@@ -38,6 +38,7 @@ import {
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, useParamRange, type AudioStatus, type OscPillState } from '@/hooks/useEngineState';
+import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 
 const C = Colors.light;
 // "Auto-driven" accent — mirrors Colors.light.tertiary in theme.ts.
@@ -1129,6 +1130,13 @@ function AudioConfigBody({
             <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 12 }}>{patchError}</Text>
           </View>
         ) : null}
+
+        {/* ── 0. SIGNALS · CHAINS ───────────────────────────────────────
+            Per-signal post-processing chain editor (docs/29 Phase 5).
+            One row per signal with [edit] disclosure → drag-reorderable
+            op list with per-op param sliders + the engine's 5 Hz
+            signalChain pre/post preview meters. */}
+        <AudioChainsCard />
 
         {/* ── 1. MASTER ENABLE / DISABLE ────────────────────────────── */}
         <View style={CARD}>

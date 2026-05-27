@@ -560,6 +560,133 @@ export async function resetAudioConfig(): Promise<ApiResult<any>> {
   }
 }
 
+// ── Audio chains (docs/29 Phase 5) ───────────────────────────────────────
+// Per-signal post-processing chains for the 7 live audio signals
+// (micLow/Mid/High/Kick, stemsBass/Drums/Vocals). The engine owns the
+// math (lib/signal_post_processor.js); the iPad just edits config and
+// renders the engine's `signalChain` debug previews. See
+// docs/29_[todo]_node_based_audio_post_processing.md §REST endpoints.
+
+export type AudioChainOp = {
+  id: string;
+  type: string;
+  enabled: boolean;
+  params: Record<string, number | string>;
+};
+
+export type AudioChainsMap = Record<string, AudioChainOp[]>;
+
+export type AudioChainOpSchemaParam = {
+  type: 'number' | 'string';
+  min?: number;
+  max?: number;
+  default?: number | string;
+  optional?: boolean;
+};
+
+export type AudioChainOpSchemaEntry = {
+  type: string;
+  description: string;
+  paramKeyOrValue: boolean;
+  params: Record<string, AudioChainOpSchemaParam>;
+};
+
+export type AudioChainCatalog = Record<string, AudioChainOpSchemaEntry>;
+
+export async function fetchAudioChains(): Promise<ApiResult<AudioChainsMap>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/chains`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fetchAudioChainsCatalog(): Promise<ApiResult<AudioChainCatalog>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/chains/catalog`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function putAudioChain(
+  signalKey: string,
+  ops: AudioChainOp[],
+): Promise<ApiResult<AudioChainOp[]>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/audio/chains/${encodeURIComponent(signalKey)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ops),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchAudioChainOp(
+  signalKey: string,
+  opId: string,
+  partial: { enabled?: boolean; params?: Record<string, number | string> },
+): Promise<ApiResult<AudioChainOp>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/audio/chains/${encodeURIComponent(signalKey)}/${encodeURIComponent(opId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(partial),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function resetAudioChainSignal(
+  signalKey: string,
+): Promise<ApiResult<AudioChainOp[]>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/audio/chains/${encodeURIComponent(signalKey)}/reset`,
+      { method: 'POST' },
+    );
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function resetAllAudioChains(): Promise<ApiResult<AudioChainsMap>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/audio/chains/reset`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // Curated CPC colour-pair presets. Surfaces the rig's house palette
 // (config.yaml → colorPalettes) so the COLORS picker's Presets tab can
 // render tap-to-apply cards. Each entry: { id, name, c1: hue, c2: hue }.
