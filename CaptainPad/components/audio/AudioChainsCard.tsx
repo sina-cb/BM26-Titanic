@@ -67,10 +67,26 @@ const SIGNAL_ORDER: readonly { key: string; label: string }[] = [
 ];
 
 // Op order in the picker matches docs/29 §Operator catalog reading
-// order (Math → Filter → Trigger → Hold).
+// order (Math → Curve/Shape → Filter → Dynamics → Derivative → Trigger
+// → Hold). Phase 7 added curve/slew/compressor/biquad/slope; we slot
+// them into the order so the operator-facing picker stays grouped by
+// function rather than by patch number.
 const OP_PICKER_ORDER: readonly string[] = [
-  'gain', 'bias', 'clamp', 'lpf', 'envelope', 'schmitt', 'hold',
+  'gain', 'bias', 'clamp',
+  'curve',
+  'lpf', 'biquad', 'slew',
+  'compressor',
+  'envelope', 'slope',
+  'schmitt', 'hold',
 ];
+
+// Set of op types this build knows how to render in OpParams (used by
+// the "schema missing" guard — see OpParams). Keep in sync with the
+// switch cases below; if you add an op renderer, add its type here too.
+const KNOWN_RENDERER_TYPES: ReadonlySet<string> = new Set<string>([
+  'gain', 'bias', 'clamp', 'lpf', 'envelope', 'schmitt', 'hold',
+  'curve', 'slew', 'compressor', 'biquad', 'slope',
+]);
 
 // Module-scope catalog cache. Lifecycle: fetched lazily on the first
 // AudioChainsCard mount per app session, kept until the app is killed
@@ -126,6 +142,14 @@ const UI_SLIDER_CAPS: Record<string, Record<string, [number, number]>> = {
   envelope: { attackMs:  [1, 2000], releaseMs: [1, 2000] },
   hold:     { timeoutMs: [0, 5000], decayMs:   [1, 5000] },
   schmitt:  { refractoryMs: [0, 2000] },
+  // Phase 7: UI-cap the operator-useful slice of the catalog ranges
+  // (engine accepts the full range via PATCH if needed). Precedent: lpf
+  // cutoffHz is [0.01,1000] in catalog but [0.1,50] here.
+  curve:      { gamma:         [0.1, 10]   },
+  slew:       { maxStepPerSec: [0.1, 50]   },
+  biquad:     { cutoffHz:      [0.5, 30],   Q:         [0.1, 5]    },
+  slope:      { scale:         [0.1, 50]   },
+  compressor: { ratio:         [1, 20],     attackMs:  [1, 2000], releaseMs: [1, 2000] },
 };
 
 function uiRange(opType: string, paramKey: string, fallback: [number, number]): [number, number] {
@@ -136,14 +160,20 @@ function uiRange(opType: string, paramKey: string, fallback: [number, number]): 
 // Per-op label string for the catalog picker + compact preview row.
 function opLabel(type: string): string {
   switch (type) {
-    case 'gain':     return 'Gain';
-    case 'bias':     return 'Bias';
-    case 'clamp':    return 'Clamp';
-    case 'lpf':      return 'LPF';
-    case 'envelope': return 'Envelope';
-    case 'schmitt':  return 'Schmitt';
-    case 'hold':     return 'Hold';
-    default:         return type;
+    case 'gain':       return 'Gain';
+    case 'bias':       return 'Bias';
+    case 'clamp':      return 'Clamp';
+    case 'lpf':        return 'LPF';
+    case 'envelope':   return 'Envelope';
+    case 'schmitt':    return 'Schmitt';
+    case 'hold':       return 'Hold';
+    // Phase 7
+    case 'curve':      return 'Curve';
+    case 'slew':       return 'Slew';
+    case 'compressor': return 'Compressor';
+    case 'biquad':     return 'Biquad LPF';
+    case 'slope':      return 'Slope';
+    default:           return type;
   }
 }
 
@@ -188,6 +218,34 @@ function opSummary(op: AudioChainOp): string {
     case 'hold': {
       const t = typeof op.params.timeoutMs === 'number' ? op.params.timeoutMs : 500;
       return `${name} ${Math.round(t)}ms`;
+    }
+    // Phase 7 ops — one-line compact summary for the collapsed row.
+    case 'curve': {
+      const shape = typeof op.params.shape === 'string' ? op.params.shape : 'linear';
+      if (shape === 'exp') {
+        const g = typeof op.params.gamma === 'number' ? op.params.gamma : 2;
+        return `${name} ${shape} γ${g.toFixed(1)}`;
+      }
+      return `${name} ${shape}`;
+    }
+    case 'slew': {
+      const r = typeof op.params.maxStepPerSec === 'number' ? op.params.maxStepPerSec : 4;
+      return `${name} ${r.toFixed(1)}/s`;
+    }
+    case 'compressor': {
+      const th = typeof op.params.threshold === 'number' ? op.params.threshold : 0.5;
+      const ra = typeof op.params.ratio === 'number' ? op.params.ratio : 4;
+      return `${name} ${th.toFixed(2)}@${ra.toFixed(1)}:1`;
+    }
+    case 'biquad': {
+      const fc = typeof op.params.cutoffHz === 'number' ? op.params.cutoffHz : 8;
+      const q = typeof op.params.Q === 'number' ? op.params.Q : 0.707;
+      return `${name} ${fc.toFixed(1)}Hz Q${q.toFixed(2)}`;
+    }
+    case 'slope': {
+      const s = typeof op.params.scale === 'number' ? op.params.scale : 4;
+      const bi = op.params.bipolar === true ? ' bi' : '';
+      return `${name} /${s.toFixed(1)}${bi}`;
     }
     default:
       return name;
@@ -430,17 +488,162 @@ function ParamKeyGainRow({ paramKey }: { paramKey: string }) {
   );
 }
 
+// ── Pill picker (segmented control for `oneOf` params) ───────────────────
+//
+// Used by Phase 7 `curve.shape` (linear / easeIn / easeOut / exp). Each
+// pill is a TouchableOpacity chip — no new native dep. Selection fires
+// onPick(value); the parent translates that into onPatchParam({ shape }).
+//
+// One-tap commit (no drag), so we PATCH directly on tap rather than the
+// draft/release split used by sliders.
+
+function PillPicker({
+  label, options, value, onPick,
+}: {
+  label: string;
+  options: readonly string[];
+  value: string;
+  onPick: (v: string) => void;
+}) {
+  return (
+    <View style={{ marginBottom: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10,
+          textTransform: 'uppercase', letterSpacing: 0.6,
+        }}>{label}</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 10,
+        }}>{value}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+        {options.map((opt) => {
+          const active = opt === value;
+          return (
+            <TouchableOpacity
+              key={opt}
+              onPress={() => { if (!active) onPick(opt); }}
+              style={{
+                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+                backgroundColor: active ? C.primary : C.surfaceContainerHigh,
+                borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                color: active ? '#fff' : C.secondary,
+                fontSize: 10, letterSpacing: 0.6,
+              }}>{opt}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+// ── Boolean toggle ────────────────────────────────────────────────────────
+//
+// Used by Phase 7 `slope.bipolar`. Two chips (off / on) instead of a
+// platform Switch so the visual rhythm matches the rest of the param
+// rows (chips already used by PillPicker above). Tap to commit.
+
+function BooleanToggle({
+  label, value, onLabel = 'on', offLabel = 'off', hint, onPick,
+}: {
+  label: string;
+  value: boolean;
+  onLabel?: string;
+  offLabel?: string;
+  hint?: string;
+  onPick: (v: boolean) => void;
+}) {
+  return (
+    <View style={{ marginBottom: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10,
+          textTransform: 'uppercase', letterSpacing: 0.6,
+        }}>{label}</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 10,
+        }}>{value ? onLabel : offLabel}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 4 }}>
+        {[false, true].map((b) => {
+          const active = b === value;
+          return (
+            <TouchableOpacity
+              key={String(b)}
+              onPress={() => { if (!active) onPick(b); }}
+              style={{
+                flex: 1,
+                paddingVertical: 6, borderRadius: 6,
+                alignItems: 'center',
+                backgroundColor: active ? C.primary : C.surfaceContainerHigh,
+                borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                color: active ? '#fff' : C.secondary,
+                fontSize: 10, letterSpacing: 0.6,
+              }}>{b ? onLabel : offLabel}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      {hint ? (
+        <Text style={{
+          fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+          marginTop: 2,
+        }}>{hint}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 // ── Per-op editor body ────────────────────────────────────────────────────
 
 function OpParams({
-  op, opIndex, otherOps,
+  op, opIndex, otherOps, catalog,
   onPatchParam,
 }: {
   op: AudioChainOp;
   opIndex: number;
   otherOps: AudioChainOp[];
-  onPatchParam: (paramPatch: Record<string, number | string>) => void;
+  // Catalog reference is required by Codex P0 fail-loudly: each renderer
+  // checks that the engine schema for op.type actually exists before
+  // rendering controls — if it's missing (catalog stale vs. an engine
+  // that just shipped a new op type), the panel renders a visible
+  // "schema missing" pill instead of an empty/silent body.
+  catalog: AudioChainCatalog | null;
+  onPatchParam: (paramPatch: Record<string, number | string | boolean>) => void;
 }) {
+  // docs/29 §Interactions + Codex P0: when catalog is loaded but doesn't
+  // describe this op type, surface the gap to the operator. The picker
+  // wouldn't have OFFERED an unknown op, so this only fires if the engine
+  // returns one (newer engine vs. older iPad) — render the "schema missing"
+  // pill so the operator knows to update the app rather than seeing a
+  // blank panel.
+  const schemaEntry = catalog?.[op.type];
+  if (catalog && !schemaEntry && !KNOWN_RENDERER_TYPES.has(op.type)) {
+    return (
+      <View style={{
+        padding: 8, borderRadius: 6,
+        backgroundColor: 'rgba(186, 26, 26, 0.06)',
+        borderWidth: 1, borderColor: C.error,
+      }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10,
+          textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
+        }}>SCHEMA MISSING</Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
+          No catalog entry for op type &quot;{op.type}&quot;. Engine ahead of CaptainPad — update the app to edit this op. Params: {JSON.stringify(op.params)}
+        </Text>
+      </View>
+    );
+  }
   // Render the 7 op types' param controls. Each control commits one
   // PATCH per gesture (onCommit). The engine's validateChain rejects
   // out-of-range / cross-param violations atomically; we revert at
@@ -572,11 +775,167 @@ function OpParams({
         </>
       );
     }
+    // ── Phase 7 ops ────────────────────────────────────────────────────
+    case 'curve': {
+      // Curve: per-sample shape lookup. `shape` is a oneOf enum; `gamma`
+      // is only meaningful when shape === 'exp' (engine accepts but
+      // ignores gamma for the other shapes — UI hides it so the operator
+      // doesn't think they're tuning something inert).
+      const SHAPES = ['linear', 'easeIn', 'easeOut', 'exp'] as const;
+      const shape = typeof op.params.shape === 'string' && (SHAPES as readonly string[]).includes(op.params.shape)
+        ? op.params.shape
+        : 'linear';
+      const gamma = typeof op.params.gamma === 'number' ? op.params.gamma : 2.0;
+      const [gmin, gmax] = uiRange('curve', 'gamma', [0.1, 10]);
+      const isExp = shape === 'exp';
+      return (
+        <>
+          <PillPicker
+            label="shape" options={SHAPES} value={shape}
+            onPick={(nv) => onPatchParam({ shape: nv })}
+          />
+          {isExp ? (
+            <OpParamSlider
+              label="gamma" min={gmin} max={gmax} value={gamma} step={0.05}
+              onDrag={() => { /* commit on release */ }}
+              onCommit={(nv) => onPatchParam({ gamma: nv })}
+            />
+          ) : (
+            <Text style={{
+              fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+              marginBottom: 8,
+            }}>
+              gamma applies to shape=exp only (current: {shape})
+            </Text>
+          )}
+        </>
+      );
+    }
+    case 'slew': {
+      const r = typeof op.params.maxStepPerSec === 'number' ? op.params.maxStepPerSec : 4.0;
+      const [rmin, rmax] = uiRange('slew', 'maxStepPerSec', [0.1, 50]);
+      return (
+        <>
+          <OpParamSlider
+            label="maxStepPerSec" suffix="/s" min={rmin} max={rmax} value={r} step={0.1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ maxStepPerSec: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4,
+          }}>max rate of change per second; lower = smoother</Text>
+        </>
+      );
+    }
+    case 'compressor': {
+      const th = typeof op.params.threshold === 'number' ? op.params.threshold : 0.5;
+      const ra = typeof op.params.ratio === 'number' ? op.params.ratio : 4.0;
+      const at = typeof op.params.attackMs === 'number' ? op.params.attackMs : 5;
+      const re = typeof op.params.releaseMs === 'number' ? op.params.releaseMs : 80;
+      const [rMin, rMax] = uiRange('compressor', 'ratio', [1, 20]);
+      const [aMin, aMax] = uiRange('compressor', 'attackMs', [1, 2000]);
+      const [reMin, reMax] = uiRange('compressor', 'releaseMs', [1, 2000]);
+      return (
+        <>
+          <OpParamSlider
+            label="threshold" min={0.001} max={1} value={th} step={0.01}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ threshold: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>level above which compression kicks in</Text>
+          <OpParamSlider
+            label="ratio" suffix=":1" min={rMin} max={rMax} value={ra} step={0.1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ ratio: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>1 = no compression; higher = stronger gain reduction</Text>
+          <OpParamSlider
+            label="attackMs" suffix="ms" min={aMin} max={aMax} value={at} step={1} integer
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ attackMs: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>how fast compression engages</Text>
+          <OpParamSlider
+            label="releaseMs" suffix="ms" min={reMin} max={reMax} value={re} step={1} integer
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ releaseMs: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>how fast compression releases</Text>
+        </>
+      );
+    }
+    case 'biquad': {
+      const fc = typeof op.params.cutoffHz === 'number' ? op.params.cutoffHz : 8.0;
+      const q  = typeof op.params.Q        === 'number' ? op.params.Q        : 0.707;
+      const [cmin, cmax] = uiRange('biquad', 'cutoffHz', [0.5, 30]);
+      const [qmin, qmax] = uiRange('biquad', 'Q',        [0.1, 5]);
+      return (
+        <>
+          <OpParamSlider
+            label="cutoffHz" suffix="Hz" min={cmin} max={cmax} value={fc} step={0.1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ cutoffHz: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>low-pass corner; everything above is attenuated</Text>
+          <OpParamSlider
+            label="Q" min={qmin} max={qmax} value={q} step={0.01}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ Q: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>resonance: 0.707 = smooth, 2+ = peaky</Text>
+        </>
+      );
+    }
+    case 'slope': {
+      const s = typeof op.params.scale === 'number' ? op.params.scale : 4.0;
+      const bi = op.params.bipolar === true;
+      const [smin, smax] = uiRange('slope', 'scale', [0.1, 50]);
+      return (
+        <>
+          <OpParamSlider
+            label="scale" min={smin} max={smax} value={s} step={0.1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(nv) => onPatchParam({ scale: nv })}
+          />
+          <Text style={{
+            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+            marginBottom: 4, marginTop: -4,
+          }}>divides the derivative; larger = less sensitive</Text>
+          <BooleanToggle
+            label="bipolar" value={bi}
+            offLabel="unipolar" onLabel="bipolar"
+            hint="unipolar: only rising edges register. bipolar: both rising and falling."
+            onPick={(nv) => onPatchParam({ bipolar: nv })}
+          />
+        </>
+      );
+    }
     default:
       // Unknown op type from a future engine: render a read-only json
       // dump so the operator sees SOMETHING (vs silently empty). Codex
       // P0: fail visibly — the catalog picker won't OFFER unknown ops,
-      // so this only fires if the engine returns one we don't know.
+      // and the schema-missing pill (above the switch) catches the
+      // catalog-known-but-no-renderer case, so this only fires for the
+      // truly novel "engine ahead of iPad" with no catalog yet.
       return (
         <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11 }}>
           Unknown op type &quot;{op.type}&quot;. Update CaptainPad to edit. Params: {JSON.stringify(op.params)}
@@ -599,7 +958,7 @@ function OpParams({
 
 function OpRow({
   op, opIndex, isFirst, isLast,
-  preview, accent,
+  preview, accent, catalog,
   onPatchParam, onToggleEnabled, onRemove, onMove,
   onDragStart, onDragMove, onDragEnd,
   rowHeightRef,
@@ -610,7 +969,8 @@ function OpRow({
   isLast: boolean;
   preview: { pre: number; post: number; firing?: boolean } | null;
   accent: string;
-  onPatchParam: (paramPatch: Record<string, number | string>) => void;
+  catalog: AudioChainCatalog | null;
+  onPatchParam: (paramPatch: Record<string, number | string | boolean>) => void;
   onToggleEnabled: () => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
@@ -672,6 +1032,7 @@ function OpRow({
           op={op}
           opIndex={opIndex}
           otherOps={[]}
+          catalog={catalog}
           onPatchParam={onPatchParam}
         />
         <View style={{ flexDirection: 'row', gap: 12, marginTop: 4 }}>
@@ -843,7 +1204,10 @@ function OpPicker({
 // default paramKey-driven Gain.
 function buildDefaultOpFromCatalog(opType: string, catalog: AudioChainCatalog, existingIds: Set<string>): AudioChainOp {
   const entry = catalog[opType];
-  const params: Record<string, number | string> = {};
+  // Phase 7: boolean defaults are now possible (slope.bipolar). String
+  // defaults already existed (curve.shape oneOf) — both flow through
+  // spec.default unchanged.
+  const params: Record<string, number | string | boolean> = {};
   if (entry) {
     for (const [pk, spec] of Object.entries(entry.params)) {
       if (opType === 'gain') {
@@ -958,7 +1322,7 @@ function SignalChainEditor({
 
   // ── Per-op handlers ─────────────────────────────────────────────────────
 
-  const handlePatchParam = useCallback(async (opId: string, paramPatch: Record<string, number | string>) => {
+  const handlePatchParam = useCallback(async (opId: string, paramPatch: Record<string, number | string | boolean>) => {
     const idx = chain.findIndex(o => o.id === opId);
     if (idx === -1) return;
     const next = chain.slice();
@@ -1123,6 +1487,7 @@ function SignalChainEditor({
               isLast={i === displayChain.length - 1}
               preview={previewById[op.id] ?? null}
               accent={accent}
+              catalog={catalog}
               onPatchParam={(p) => handlePatchParam(op.id, p)}
               onToggleEnabled={() => handleToggleEnabled(op.id)}
               onRemove={() => handleRemoveOp(op.id)}

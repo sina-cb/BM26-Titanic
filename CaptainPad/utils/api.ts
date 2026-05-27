@@ -567,20 +567,27 @@ export async function resetAudioConfig(): Promise<ApiResult<any>> {
 // renders the engine's `signalChain` debug previews. See
 // docs/29_[todo]_node_based_audio_post_processing.md §REST endpoints.
 
+// Phase 7 expanded the catalog with `boolean` params (slope.bipolar) and
+// `string` params constrained to `oneOf` enums (curve.shape). The op
+// payload's `params` map can therefore hold number | string | boolean,
+// and the catalog entry exposes both new shapes so the iPad renderer
+// can drive the right control (segmented picker for oneOf, toggle for
+// boolean) without re-deriving from the runtime payload.
 export type AudioChainOp = {
   id: string;
   type: string;
   enabled: boolean;
-  params: Record<string, number | string>;
+  params: Record<string, number | string | boolean>;
 };
 
 export type AudioChainsMap = Record<string, AudioChainOp[]>;
 
 export type AudioChainOpSchemaParam = {
-  type: 'number' | 'string';
+  type: 'number' | 'string' | 'boolean';
   min?: number;
   max?: number;
-  default?: number | string;
+  default?: number | string | boolean;
+  oneOf?: string[];
   optional?: boolean;
 };
 
@@ -639,7 +646,7 @@ export async function putAudioChain(
 export async function patchAudioChainOp(
   signalKey: string,
   opId: string,
-  partial: { enabled?: boolean; params?: Record<string, number | string> },
+  partial: { enabled?: boolean; params?: Record<string, number | string | boolean> },
 ): Promise<ApiResult<AudioChainOp>> {
   try {
     const res = await fetchWithTimeout(
