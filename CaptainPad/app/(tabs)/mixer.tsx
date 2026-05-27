@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions, Alert } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { globalStyles } from '@/styles/globalStyles';
@@ -11,15 +11,22 @@ import {
   fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
   addMixerChannel, updateMixerMaster,
   fetchChannelBlends, fetchTransitions, setMixerView,
-  fetchPlaylists,
+  fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
+  invalidatePlaylistsCache, invalidatePlaylistCache,
+  type PlaylistData,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { engineVizEvents } from '@/utils/engineVizEvents';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { PixelStrip } from '@/components/ui/PixelStrip';
+import {
+  ModulationReadonlyBadge, useEntryModulations, useModulationState,
+  GhostMarker,
+} from '@/components/Modulation';
 
 const C = Colors.light;
 
@@ -47,24 +54,164 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
   );
 };
 
+// ── Mixer local-params (read-only modulation badge + live ghost) ───────
+//
+// Per-channel renderer for the LOCAL PARAMS card on a mixer strip.
+// Pulls the active entry's modulations once (cached, deduped via
+// fetchPlaylist) and overlays:
+//
+//   - a green ◎ ON badge next to any slider that has a saved mapping
+//     on the channel's currently-active playlist entry. Read-only on
+//     the mixer per design — edits stay on the deck so there's one
+//     source of truth for modulation CRUD.
+//   - a thin green vertical line on the slider track when the engine
+//     is actively writing a modulated value for this target THIS
+//     frame. Frames only arrive for the deck-active pattern, so this
+//     overlay lights up when the mixer channel happens to be hosting
+//     the same pattern the deck is playing.
+function MixerLocalParams({ channel, onControlChange }: {
+  channel: { id: string; exports?: any[]; playlist?: { name?: string; activeEntryId?: string } | null };
+  onControlChange: (channelId: string, controlId: number, value: number) => void;
+}) {
+  const playlistName = channel.playlist?.name ?? null;
+  const entryId = channel.playlist?.activeEntryId ?? null;
+  const { mappings } = useEntryModulations(playlistName, entryId);
+  const modulationLive = useModulationState();
+  const mappingByTarget = React.useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const x of mappings) m[x.target.parameter] = x;
+    return m;
+  }, [mappings]);
+
+  const exps = channel.exports || [];
+  if (exps.length === 0) {
+    return <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>;
+  }
+  return (
+    <View style={{ gap: 4 }}>
+      {exps.map((exp: any) => {
+        const matched = !!exp.cpcOwned;
+        const niceLabel = exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12);
+        const hasMapping = !matched && !!mappingByTarget[exp.name];
+        const live = !matched ? modulationLive[exp.name] : null;
+        const base = exp.v0 !== undefined ? exp.v0 : 0.5;
+        const ghost = live && live.modulated !== undefined && live.modulated !== base
+          ? live.modulated : null;
+        return (
+          <View key={exp.id}>
+            {/* When mapped, render the ◎ ON pill inline above the
+                MiniFader so the slider row reads the same way on the
+                deck and mixer. CPC-matched sliders still use the
+                MiniFader's own `badge` prop because that's a
+                different concept ("the global owns this"). */}
+            {hasMapping ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+                <ModulationReadonlyBadge hasMapping={true} />
+                {ghost !== null ? (
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
+                    →{ghost.toFixed(2)}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <View style={{ position: 'relative' }}>
+              <MiniFader
+                label={niceLabel}
+                value={base}
+                onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
+                disabled={matched}
+                badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
+                fillColor={hasMapping ? undefined : undefined}
+              />
+              {/* Live modulation overlay — only paints when the engine
+                  is currently writing a modulated value for this
+                  slider on the deck-active pattern. */}
+              {ghost !== null ? (
+                <View style={{
+                  position: 'absolute',
+                  left: 0, right: 0,
+                  // MiniFader track starts after the label row (~14 px
+                  // total of label + 2 px margin). The track is 16 px
+                  // tall. Position the marker over the track.
+                  top: 14, height: 16,
+                }} pointerEvents="none">
+                  <GhostMarker ghost={ghost} />
+                </View>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 // ── Channel Strip ──────────────────────────────────────────────────────
 // "1 list to rule them all": the strip's body shows the channel's PlaylistPanel
 // as its ONLY pattern list. Tapping a row swaps the active playlist entry; +/-
 // inside the panel add or remove entries; SAVE persists. No parallel "all
 // patterns" column anymore.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onTransition, onTransitionSettingsChange }: any) => {
+// `initialPlaylist` is the inline `playlistData` payload from POST
+// /mixer/channels (or POST /mixer/channels/:id/playlist), cached by the
+// parent in `inlinePlaylistRef`. Forwarding it here gives the freshly-
+// mounted PlaylistPanel synchronous entry-list content on first paint,
+// so the operator doesn't have to re-pick from the dropdown when their
+// iPad's wifi is too slow for refresh()'s GETs to land in time.
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, playlistLibrary, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
+  const [showViewPicker, setShowViewPicker] = useState(false);
   const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
+  // Per-strip refresh nonce. Tapping the ↻ arrow on the channel name row
+  // bumps this, which propagates to the PlaylistPanel via the
+  // `refreshNonce` prop and forces it to re-fetch the playlist library +
+  // this channel's playlist content (after busting both caches). This is
+  // the operator's one-tap rescue for the "added a 3rd layer and patterns
+  // aren't showing" failure mode — instead of having to delete and re-add
+  // the channel, just tap the arrow next to the name.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const locked = !!channel.locked;
+  // Fader-lock (slot 5, independent of `locked`): freezes the fader
+  // against scripted transitions and client-side solo. Distinct icon
+  // + colour so operators can tell the two locks apart at a glance:
+  //   locked (playlist/pattern lock) → lock.fill, amber
+  //   faderLocked                    → arrow.left.and.right circle-style, teal
+  const faderLocked = !!channel.faderLocked;
+
+  // View-selection state read straight from the channel (engine is the
+  // source of truth — broadcasts overwrite local state on every mixer
+  // event). Supports ALL, GROUP (string name), and VIEW MASK (string
+  // name resolved against the model's named-viewMask dictionary).
+  // Section / fixture targets exist in the API but aren't surfaced in
+  // the picker yet — they target by numeric id which isn't
+  // operator-friendly.
+  const viewSel = channel.viewSelection || { type: 'all', target: null, invert: false };
+  let viewSelLabel: string;
+  if (viewSel.type === 'all') {
+    viewSelLabel = 'ALL';
+  } else if (viewSel.type === 'group') {
+    viewSelLabel = String(viewSel.target || '').toUpperCase();
+  } else if (viewSel.type === 'viewMask') {
+    // Named viewMask renders as its uppercased name; a raw bitmask
+    // (legacy / programmatic clients) renders as MASK·0x<bits>.
+    viewSelLabel = typeof viewSel.target === 'string'
+      ? viewSel.target.toUpperCase()
+      : `MASK·0x${(viewSel.target || 0).toString(16).toUpperCase()}`;
+  } else {
+    viewSelLabel = String(viewSel.type).toUpperCase();
+  }
   return (
     <View style={[styles.channelCard, locked && styles.channelCardLocked]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
-      {/* Header */}
+      {/* Header — title bar buttons share one geometry (28×28 squircle,
+          identical surface / border) so they read as a single toolbar.
+          Pre-May-2026 refresh was 22×22 + pinned to the name, lock was
+          28×28 + pinned to the right. Operator feedback "make them
+          look exactly the same" drove this unification. */}
       <View style={styles.channelHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
@@ -76,14 +223,61 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           />
         </View>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-          <TouchableOpacity style={[styles.lockBtn, locked && styles.lockBtnActive]} onPress={() => onLockToggle(channel.id, !locked)}>
-            <IconSymbol name={locked ? "lock.fill" : "lock.open.fill"} size={14} color={locked ? '#F5A623' : C.secondary} />
+          {/* Refresh ↻ — operator's one-tap rescue for a panel that
+              lost its entries to a transient WS / fetch race. Bumps
+              `refreshNonce` so the PlaylistPanel does a hard cache-bust
+              + refetch. With the May 2026 WS topic split this should
+              rarely be needed (control events no longer compete with
+              vis frame parsing), but keeping the button gives the
+              operator a deterministic recovery path. */}
+          <TouchableOpacity
+            style={styles.titleBtn}
+            onPress={() => {
+              invalidatePlaylistsCache();
+              const curName = channel.playlist?.name;
+              if (curName) invalidatePlaylistCache(curName);
+              setRefreshNonce(n => n + 1);
+            }}
+            accessibilityLabel="Refresh this channel's playlist + patterns list"
+            accessibilityRole="button"
+          >
+            <IconSymbol name="arrow.clockwise" size={14} color={C.secondary} />
           </TouchableOpacity>
+          {/* Lock (playlist/pattern lock) — amber when engaged. */}
+          <TouchableOpacity
+            style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
+            onPress={() => onLockToggle(channel.id, !locked)}
+            accessibilityLabel={locked ? 'Unlock channel' : 'Lock channel'}
+          >
+            <IconSymbol name={locked ? 'lock.fill' : 'lock.open.fill'} size={14} color={locked ? '#F5A623' : C.secondary} />
+          </TouchableOpacity>
+          {/* Pin (fader-lock, slot 5) — teal when engaged. When ON the
+              engine ignores manual fader writes and skips scripted
+              transitions on this channel; the client-side solo handler
+              also skips it. Independent of the lock above so the two
+              are visually unambiguous. */}
+          {onFaderLockToggle && (
+            <TouchableOpacity
+              style={[styles.titleBtn, faderLocked && styles.titleBtnTealActive]}
+              onPress={() => onFaderLockToggle(channel.id, !faderLocked)}
+              accessibilityLabel={faderLocked ? 'Unpin fader' : 'Pin fader'}
+            >
+              <IconSymbol
+                name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
+                size={14}
+                color={faderLocked ? C.primary : C.secondary}
+              />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.modeDropdown} onPress={() => { if (!locked) setShowBlendPicker(true); }} activeOpacity={locked ? 1.0 : 0.2}>
             <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
           {!locked && (
-            <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(channel.id)}>
+            <TouchableOpacity
+              style={[styles.titleBtn, { borderColor: 'rgba(217, 48, 37, 0.4)' }]}
+              onPress={() => onDelete(channel.id)}
+              accessibilityLabel="Delete channel"
+            >
               <IconSymbol name="trash" size={14} color={C.error} />
             </TouchableOpacity>
           )}
@@ -116,26 +310,26 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             channelLabel={isDeck ? 'DECK MAIN' : `CH ${index}`}
             compact
             locked={locked}
+            initialAssignment={channel.playlist || null}
+            initialPlaylist={initialPlaylist || null}
+            refreshNonce={refreshNonce}
+            playlistLibrary={playlistLibrary}
           />
         </View>
 
         {/* Right column = live parameter sliders only. Mute/Solo and the
             transition controls have moved to full-column-width rows BELOW
-            this body so they stretch the full strip width (item 1). */}
+            this body so they stretch the full strip width (item 1).
+            The list is now wrapped in a bordered card so each channel's
+            local params read as a discrete cluster (operator feedback
+            2026-05-26: bare list felt visually merged with the strip
+            chrome). The card also makes the "modulation active" green
+            ring on individual rows pop against a neutral container. */}
         <View style={styles.paramsPanel}>
           <ScrollView nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
-            <View style={{ gap: 4 }}>
-              {(channel.exports || []).map((exp: any) => (
-                <MiniFader
-                  key={exp.id}
-                  label={exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12)}
-                  value={exp.v0 !== undefined ? exp.v0 : 0.5}
-                  onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                />
-              ))}
-              {(!channel.exports || channel.exports.length === 0) && (
-                <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>
-              )}
+            <View style={styles.localParamsCard}>
+              <Text style={[styles.labelCaps, { marginBottom: 6, fontSize: 9, color: C.secondary }]}>LOCAL PARAMS</Text>
+              <MixerLocalParams channel={channel} onControlChange={onControlChange} />
             </View>
           </ScrollView>
         </View>
@@ -153,6 +347,81 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           onPress={() => onSoloToggle(channel.id)}>
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>Solo</Text>
         </TouchableOpacity>
+
+        {/* View-selection picker. Three sections in the modal: ALL,
+            GROUPS, and VIEW MASKS. Sections/fixtures are still routed
+            via the REST API directly — they target by numeric id which
+            isn't operator-friendly so we don't surface them in the
+            picker. The VIEW MASKS section only appears when the model
+            declared at least one named viewMask preset (via the inline
+            `viewMasks` export). */}
+        {!locked && onViewSelectionChange && (
+          <>
+            <TouchableOpacity
+              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }]}
+              onPress={() => setShowViewPicker(true)}>
+              <Text style={[styles.labelCaps, viewSel.type !== 'all' && { color: '#FFF' }, { fontSize: 9 }]}>
+                VIEW: {viewSelLabel}
+              </Text>
+            </TouchableOpacity>
+            <Modal transparent visible={showViewPicker} animationType="fade" onRequestClose={() => setShowViewPicker(false)}>
+              <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowViewPicker(false)}>
+                <View style={styles.modalContent}>
+                  <Text style={[styles.labelCaps, { marginBottom: 12 }]}>VIEW SELECTION</Text>
+                  <ScrollView style={{ maxHeight: 420 }}>
+                    {/* ── ALL ────────────────────────────────────── */}
+                    <TouchableOpacity
+                      style={[styles.modalRow, viewSel.type === 'all' && styles.modalRowActive]}
+                      onPress={() => { onViewSelectionChange(channel.id, { type: 'all', target: null, invert: false }); setShowViewPicker(false); }}>
+                      <Text style={[styles.valueReadout, viewSel.type === 'all' && { color: C.primary }]}>ALL PIXELS</Text>
+                    </TouchableOpacity>
+
+                    {/* ── GROUPS ─────────────────────────────────── */}
+                    {(viewSelectionGroups || []).length > 0 && (
+                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>GROUPS</Text>
+                    )}
+                    {(viewSelectionGroups || []).map((g: string) => {
+                      const active = viewSel.type === 'group' && viewSel.target === g;
+                      return (
+                        <TouchableOpacity
+                          key={`g_${g}`}
+                          style={[styles.modalRow, active && styles.modalRowActive]}
+                          onPress={() => { onViewSelectionChange(channel.id, { type: 'group', target: g, invert: false }); setShowViewPicker(false); }}>
+                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>GROUP · {g.toUpperCase()}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    {/* ── VIEW MASKS ─────────────────────────────── */}
+                    {(viewSelectionViewMasks || []).length > 0 && (
+                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>VIEW MASKS</Text>
+                    )}
+                    {(viewSelectionViewMasks || []).map((vm: { name: string; bit: number; inUse: boolean }) => {
+                      const active = viewSel.type === 'viewMask' && viewSel.target === vm.name;
+                      // `inUse=false` presets are kept visible but
+                      // dimmed — the operator may have just added the
+                      // preset and not yet tagged any fixtures with the
+                      // bit. Better to show "no pixels yet" than to
+                      // hide the row entirely.
+                      return (
+                        <TouchableOpacity
+                          key={`vm_${vm.name}`}
+                          style={[styles.modalRow, active && styles.modalRowActive, !vm.inUse && { opacity: 0.5 }]}
+                          onPress={() => { onViewSelectionChange(channel.id, { type: 'viewMask', target: vm.name, invert: false }); setShowViewPicker(false); }}>
+                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>MASK · {vm.name.toUpperCase()}{!vm.inUse ? ' (NO PIXELS)' : ''}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    {(viewSelectionGroups || []).length === 0 && (viewSelectionViewMasks || []).length === 0 && (
+                      <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO GROUPS OR VIEW MASKS IN MODEL</Text>
+                    )}
+                  </ScrollView>
+                </View>
+              </TouchableOpacity>
+            </Modal>
+          </>
+        )}
       </View>
 
       {!isDeck && (
@@ -196,19 +465,95 @@ export default function MixerScreen() {
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
+  // ─── Playlist library: parent-owned (May 2026 refactor) ───────────
+  // Previously every PlaylistPanel fetched + cached + retried its own
+  // copy of GET /playlists. Under load (3 channels added rapidly) the
+  // 3rd panel's fetch could race the engine's directory-scan and
+  // return [], leaving that one panel showing "no playlists yet".
+  //
+  // Now the mixer screen owns ONE list, fetches it once on mount, and
+  // keeps it fresh from the engine's `playlistLibrary` WS event
+  // (emitted on save/delete only — engine reads from its in-memory
+  // list, not fs.readdirSync). Every ChannelStrip / PlaylistPanel
+  // receives the list as a prop. No per-panel fetch, no per-panel
+  // cache, no per-panel race.
+  const [playlistLibrary, setPlaylistLibrary] = useState<string[]>([]);
+  // Available view-selection groups (from /model/view-selection-options).
+  // Used by the channel-strip view-selection picker. Sections /
+  // fixtures stay backend-only (they target by numeric id which isn't
+  // operator-friendly); view masks ship alongside groups now.
+  const [viewSelectionGroups, setViewSelectionGroups] = useState<string[]>([]);
+  // Named view-mask presets the model author declared (via an
+  // inline `viewMasks` export).
+  // The picker renders these in a "VIEW MASKS" section under groups;
+  // the channel's viewSelection is then `{type:'viewMask', target:<name>}`.
+  const [viewSelectionViewMasks, setViewSelectionViewMasks] = useState<{ name: string; bit: number; inUse: boolean }[]>([]);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // Pre-May-2026 we owned a WebSocket per tab. The May 2026 topic
+  // split moved that into singleton buses (utils/engineEvents +
+  // utils/engineVizEvents + utils/engineParamsEvents), so this tab
+  // just subscribes — no per-tab socket, no double-parse of the
+  // mixer / vis firehose.
   const apiBaseRef = useRef('');
+  // Per-channel inline playlist payload, populated synchronously from
+  // the POST /mixer/channels response BEFORE the matching mixer WS event
+  // mounts the PlaylistPanel. This is what makes "+ default" /
+  // "+ from playlist" feel instant even on a laggy iPad wifi link —
+  // the panel's first paint reads from this map and the entry list
+  // shows up without a single follow-up GET. We also populate from
+  // the WS `channelPlaylistData` event so a panel that re-mounts
+  // later still hydrates instantly. Entries are GC'd when the engine
+  // stops broadcasting the channel id. The Map is wrapped in a ref +
+  // a version counter so the parent re-renders when contents change
+  // but the strips that aren't affected don't.
+  const inlinePlaylistRef = useRef<Map<string, PlaylistData>>(new Map());
+  const [inlinePlaylistVersion, setInlinePlaylistVersion] = useState(0);
+  const setInlinePlaylist = useCallback((channelId: string, pd: PlaylistData | null) => {
+    const cur = inlinePlaylistRef.current.get(channelId) || null;
+    if (!pd) {
+      if (!cur) return;
+      inlinePlaylistRef.current.delete(channelId);
+    } else {
+      if (cur && cur.name === pd.name && cur.entries.length === pd.entries.length) return;
+      inlinePlaylistRef.current.set(channelId, pd);
+    }
+    setInlinePlaylistVersion(v => v + 1);
+  }, []);
   // globalExports fetching moved to GlobalParams.tsx
   const throttleRef = useRef<{[key: string]: number}>({});
   const visDataRef = useRef<{[key: string]: string | null}>({});
-  const [visVersion, setVisVersion] = useState(0);
+  // visVersion is intentionally unread — its sole job is to trigger
+  // a re-render every time the viz subscriber stamps a new frame
+  // (visDataRef is a ref, so mutating it doesn't redraw). The
+  // setter is invoked from the engineVizEvents handler below.
+  const [, setVisVersion] = useState(0);
   const lastVisUpdateRef = useRef(0);
-  const transitionActiveRef = useRef(false);
-  const transitionGenRef = useRef(0); // Cancels previous transition when a new one starts
+  // Note: previous versions tracked an `transitionActiveRef` echo-lockout
+  // and a `transitionGenRef` cancellation token here. Both are gone —
+  // transitions are now driven server-side (see handleTransition), so the
+  // client just trusts every incoming mixer broadcast and the engine
+  // handles cancellation natively when a new triggerMixerTransition lands.
+  //
+  // Per-channel "I just wrote this locally" timestamps. When the user
+  // drags a slider we stamp the channel; broadcasts arriving within
+  // LOCAL_WRITE_HOLD_MS afterward keep the local fader value instead of
+  // snapping back to the stale broadcast value. This protects the
+  // operator's finger against in-flight 10 Hz progress broadcasts that
+  // were emitted just before their drag cancelled the transition.
+  // Agent review (May 2026) §5.
+  const localFaderWriteRef = useRef<{[id: string]: number}>({});
+  const LOCAL_WRITE_HOLD_MS = 400;
   // Canonical blend modes per channel — only updated by engine state or user mode changes.
   // Transitions never touch this, so it always reflects the "true" saved blend mode.
   const savedModesRef = useRef<{[id: string]: string}>({});
+  // Engine's canonical base/deck channel id (e.g. ch_base_1778870620551). Used
+  // by handleTransition to robustly identify the deck channel — string-prefix
+  // matching against "ch_base" is the legacy fallback only.
+  const baseChannelIdRef = useRef<string | null>(null);
+  // Engine-reported max channel cap (mirror of mixer.maxChannels from
+  // config.yaml). Surfaced in the Alert when the user hits the cap so they
+  // see the real number, not a stale UI constant.
+  const maxChannelsRef = useRef<number>(3);
 
   useFocusEffect(
     useCallback(() => {
@@ -216,48 +561,118 @@ export default function MixerScreen() {
     }, [])
   );
 
-  const connectWebSocket = useCallback((base: string) => {
-    if (wsRef.current) wsRef.current.close();
-    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-    const wsPort = base.split(':').pop();
-    const wsUrl = `ws://${engineHost}:${wsPort}`;
-    try {
-      const ws = new WebSocket(wsUrl);
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          // Fan out so nested components (PlaylistPanel etc.) can react to
-          // engine broadcasts without owning their own socket.
-          engineEvents.emit(msg);
-          if (msg.type === 'mixer') {
-            setMaster(msg.master);
-            // During active transitions, ignore engine mixer echoes —
-            // the iPad animation is the source of truth for fader values.
-            if (!transitionActiveRef.current) {
-              setChannels(msg.channels || []);
-              // Update canonical blend modes from engine state (ignore intermediate trans modes)
-              for (const ch of (msg.channels || [])) {
-                if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
-              }
-            } else {
-              // Engine echo ignored during active transition
+  // Subscribe to the two singleton buses we care about (control + viz).
+  // Returns a teardown that unsubscribes both.
+  const subscribeBuses = useCallback(() => {
+    // Control plane: mixer state, baseChannelId, maxChannels, in-flight
+    // add reconciliation. ALSO: the playlist library list — engine
+    // emits `playlistLibrary` on every save/delete (and on boot it
+    // seeds via the REST fetch below). Owning it here means every
+    // ChannelStrip sees the same list via prop, not its own fetch.
+    const unsubControl = engineEvents.subscribe((msg) => {
+      if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
+        setPlaylistLibrary(msg.names as string[]);
+      }
+      // Capture inline playlist payloads BEFORE the matching mixer event
+      // arrives. Engine guarantees `channelPlaylistData` lands first
+      // (see broadcastChannelPlaylistData in api_server.js), so by the
+      // time PlaylistPanel mounts off the mixer event below, the entry
+      // list is already waiting in `inlinePlaylistRef`. Fixes the iPad
+      // "+ default" / "+ from playlist" race where refresh() lost to
+      // wifi latency on slow links.
+      if (msg.type === 'channelPlaylistData' && msg.channelId && msg.playlistData && (msg.playlistData as PlaylistData).name) {
+        setInlinePlaylist(msg.channelId as string, msg.playlistData as PlaylistData);
+      }
+      if (msg.type === 'mixer') {
+        setMaster(msg.master as number);
+        if (msg.baseChannelId) baseChannelIdRef.current = msg.baseChannelId as string;
+        if (typeof msg.maxChannels === 'number') maxChannelsRef.current = msg.maxChannels;
+        // Always trust the engine: it owns transitions, mute/solo
+        // bookkeeping, and saved state. The 10 Hz progress broadcasts
+        // that arrive during a server-side transition animate the
+        // slider UI smoothly.
+        //
+        // EXCEPTION: a channel the user just dragged (within
+        // LOCAL_WRITE_HOLD_MS) keeps its local fader value. This
+        // protects the slider from snapping back to a stale in-flight
+        // broadcast that was emitted milliseconds before the drag
+        // landed on the engine. The rest of the broadcast (enabled,
+        // mode, exports, …) still applies normally.
+        const incoming = (msg.channels as any[]) || [];
+        const now = Date.now();
+        setChannels(prev => {
+          const prevById: { [id: string]: any } = {};
+          for (const c of prev) prevById[c.id] = c;
+          return incoming.map((ch: any) => {
+            const localTs = localFaderWriteRef.current[ch.id] || 0;
+            if (now - localTs < LOCAL_WRITE_HOLD_MS && prevById[ch.id]) {
+              return { ...ch, fader: prevById[ch.id].fader };
             }
-          } else if (msg.type === 'vis') {
-            visDataRef.current = msg.vis || {};
-            // Throttle UI updates to ~5fps (200ms) to avoid re-render storm
-            const now = Date.now();
-            if (now - lastVisUpdateRef.current > 200) {
-              lastVisUpdateRef.current = now;
-              setVisVersion(v => v + 1);
+            return ch;
+          });
+        });
+        for (const ch of incoming) {
+          if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
+        }
+        // GC inlinePlaylistRef: drop entries for channels the engine
+        // no longer reports. Keeps the map bounded across long
+        // sessions of add/remove churn.
+        if (inlinePlaylistRef.current.size > 0) {
+          const liveIds = new Set<string>();
+          for (const ch of incoming) if (ch && ch.id) liveIds.add(ch.id);
+          let dropped = false;
+          for (const id of Array.from(inlinePlaylistRef.current.keys())) {
+            if (!liveIds.has(id)) {
+              inlinePlaylistRef.current.delete(id);
+              dropped = true;
             }
           }
-        } catch(e) {}
-      };
-      ws.onclose = () => {
-        setTimeout(() => { if (apiBaseRef.current) connectWebSocket(apiBaseRef.current); }, 5000);
-      };
-      wsRef.current = ws;
-    } catch {}
+          if (dropped) setInlinePlaylistVersion(v => v + 1);
+        }
+        // ── WS-driven add button clear ──────────────────────────
+        // If we're waiting on an in-flight add, check if the
+        // broadcast contains an id we DIDN'T know about when
+        // the user tapped. That id IS the newly-added channel
+        // — the engine has confirmed the add, so the "ADDING…"
+        // label can flip back to "+ DEFAULT" immediately
+        // (typically before the HTTP POST response even
+        // finishes parsing). This is what makes the button
+        // feel instant under load.
+        const pending = pendingAddRef.current;
+        if (pending) {
+          let newlyAdded = false;
+          for (const ch of incoming) {
+            if (ch.id && !pending.knownIds.has(ch.id)) {
+              newlyAdded = true;
+              break;
+            }
+          }
+          if (newlyAdded) {
+            pendingAddRef.current = null;
+            addBusyRef.current = false;
+            setAddBusy(false);
+          }
+        }
+      }
+    });
+    // Connection state pill (mirror engineEvents → setIsConnected).
+    const unsubStatus = engineEvents.subscribeStatus((s) => setIsConnected(!!s.connected));
+    // Viz plane: per-channel pixel data for the PixelStrip rows. These
+    // frames are ~3-15 KB at 10 Hz so they MUST NOT ride the control
+    // socket — that's the regression the May 2026 topic split fixed.
+    const unsubViz = engineVizEvents.subscribe((msg) => {
+      if (msg.type === 'vis') {
+        visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
+        // Client-side cap at 5 Hz redraw to keep the iPad cool even
+        // when the engine emits at a higher cadence.
+        const now = Date.now();
+        if (now - lastVisUpdateRef.current > 200) {
+          lastVisUpdateRef.current = now;
+          setVisVersion(v => v + 1);
+        }
+      }
+    });
+    return () => { unsubControl(); unsubStatus(); unsubViz(); };
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -267,43 +682,91 @@ export default function MixerScreen() {
     setIsConnected(conn.ok);
     if (!conn.ok) return;
 
-    const bRes = await fetchChannelBlends();
+    // Pre-May-2026 this was a 5-fetch serial waterfall — each request
+    // waited on the previous, so the mixer's first paint after a tab
+    // switch took ~5× the slowest hop. The fetches are independent
+    // (different endpoints, no shared state), so Promise.all collapses
+    // the wall-clock cost to max(hop_i) instead of sum(hop_i).
+    const [bRes, tRes, vsRes, pLib, mRes] = await Promise.all([
+      fetchChannelBlends(),
+      fetchTransitions(),
+      // View-selection options. Failure is non-fatal: the strip
+      // falls back to a disabled picker that just shows "ALL" if the
+      // engine can't enumerate. We pull both groups and named view-mask
+      // presets — sections / fixtures stay backend-only (operator-
+      // unfriendly numeric ids).
+      fetchViewSelectionOptions(),
+      // Parent-owned playlist library. The engine returns the current
+      // names from its in-memory cache (cheap, deterministic). After
+      // this, the library is kept in sync via the WS `playlistLibrary`
+      // event the engine emits on every save/delete.
+      fetchPlaylists(),
+      fetchMixerState(),
+    ]);
+
     if (bRes.ok && bRes.data) setBlends(bRes.data);
-
-    const tRes = await fetchTransitions();
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
+    if (vsRes.ok && vsRes.data) {
+      setViewSelectionGroups(vsRes.data.groups || []);
+      setViewSelectionViewMasks(vsRes.data.viewMasks || []);
+    }
+    if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
 
-    const mRes = await fetchMixerState();
     if (mRes.ok && mRes.data) {
       setMaster(mRes.data.master);
+      if (mRes.data.baseChannelId) baseChannelIdRef.current = mRes.data.baseChannelId;
+      if (typeof mRes.data.maxChannels === 'number') maxChannelsRef.current = mRes.data.maxChannels;
       setChannels(mRes.data.channels || []);
       for (const ch of (mRes.data.channels || [])) {
         if (ch.id && ch.mode && !ch.mode.startsWith('trans_')) savedModesRef.current[ch.id] = ch.mode;
       }
     }
 
-    // Connect WS
-    connectWebSocket(base);
-  }, [connectWebSocket]);
+    // Singleton WS buses connect lazily on first subscribe — no
+    // per-tab connect call needed. We only nudge a reconnect if the
+    // bus is currently DOWN; otherwise this would tear down a live
+    // socket on every tab focus and flash "Engine Offline" in the UI.
+    // App-foreground wakeup is already handled inside engineBus.
+    if (!engineEvents.getStatus().connected) engineEvents.reconnect();
+    if (!engineVizEvents.getStatus().connected) engineVizEvents.reconnect();
+  }, []);
 
   useEffect(() => {
     loadAll();
+    const teardown = subscribeBuses();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') loadAll();
     });
-    return () => { sub.remove(); if (wsRef.current) wsRef.current.close(); };
-  }, [loadAll]);
+    return () => { sub.remove(); teardown(); };
+  }, [loadAll, subscribeBuses]);
 
   // ── Handlers ───────────────────────────────────────────────────────
   // (Pattern selection is handled by the per-channel PlaylistPanel, which talks
   //  to /mixer/channels/:id/playlist/entry directly. No more "swap pattern"
   //  button — every pattern lives in a playlist entry.)
 
-  const handleFaderChange = async (channelId: string, level: number) => {
+  // All ChannelStrip-bound handlers are useCallback'd with empty deps
+  // so React.memo() on ChannelStrip can actually short-circuit on a
+  // MixerScreen re-render. Pre-fix (May 2026) every MixerScreen render
+  // — including the 5 Hz `setVisVersion` ticks below — created fresh
+  // handler identities, bypassing memo and reconciling every strip
+  // along with its CPC sliders, PixelStrip, and playlist panel. That
+  // was a large chunk of the "mixer feels laggy with 3 channels"
+  // operator complaint. Bodies reference only refs + module-level
+  // event buses + the setState callbacks (which React guarantees are
+  // stable), so the empty dep array is correct.
+  const handleFaderChange = useCallback(async (channelId: string, level: number) => {
+    // Stamp BEFORE the WS send so any racing broadcast that arrives
+    // during the round-trip is held off the slider's last finger position.
+    localFaderWriteRef.current[channelId] = Date.now();
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, fader: level } : c));
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'setChannelFader', channelId, fader: level }));
-    } else {
+    // The engine's setChannelFader handler cancels any in-flight
+    // transition for this channel automatically (see api_server.js),
+    // so dragging a slider during a transition stops that channel's
+    // server-side animation cleanly. engineEvents.send returns false
+    // when the WS isn't OPEN (queued for next open); we fall back to
+    // the throttled REST update below so the slider always lands.
+    if (!engineEvents.send({ type: 'setChannelFader', channelId, fader: level })) {
       const now = Date.now();
       const key = `fader_${channelId}`;
       if (now - (throttleRef.current[key] || 0) > 100) {
@@ -311,79 +774,105 @@ export default function MixerScreen() {
         updateMixerChannel(channelId, { fader: level }).catch(()=>{});
       }
     }
-  };
+  }, []);
 
-  const handleMuteToggle = async (channelId: string, enabled: boolean) => {
-    // If enabling a channel while solo is active, clear solo
+  const handleMuteToggle = useCallback(async (channelId: string, enabled: boolean) => {
+    // Mute remains interactive at all times — the operator must always be
+    // able to drop a channel even during a transition. "Transitions take
+    // precedence over mute/solo" is enforced at *transition start* time
+    // (force-enable + clear solo); after that, the operator's manual
+    // mute/solo input wins.
     if (enabled && soloRef.current) {
       soloRef.current = null;
       preSoloStateRef.current = {};
     }
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, enabled } : c));
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'setChannelEnabled', channelId, enabled }));
-    }
+    engineEvents.send({ type: 'setChannelEnabled', channelId, enabled });
     updateMixerChannel(channelId, { enabled }).catch(() => {});
-  };
+  }, []);
 
   // Track which channel is solo'd (null = no solo)
   const soloRef = useRef<string | null>(null);
   // Track pre-solo state (enabled + fader) so we can restore
   const preSoloStateRef = useRef<{ [id: string]: { enabled: boolean; fader: number } }>({});
 
-  const handleSoloToggle = async (channelId: string) => {
+  const handleSoloToggle = useCallback(async (channelId: string) => {
+    // Solo remains interactive at all times (see handleMuteToggle).
+    //
+    // Fader-lock (slot 5) interaction: solo is implemented entirely
+    // client-side (by mutating enabled+fader on each sibling channel)
+    // so the engine has no way to know "this enable/fader change is
+    // really a solo gesture". The rule is enforced HERE: fader-locked
+    // channels are SKIPPED in both the solo-on and solo-off branches
+    // — we never write enabled/fader to them, never save their state
+    // to preSoloStateRef, never restore them. The result is that a
+    // locked layer keeps its current contribution intact regardless
+    // of which other layer the operator solos. Explicit mute (the
+    // operator tapping MUTE on the locked layer itself) still works
+    // because handleMuteToggle is a separate code path and writes
+    // through to setChannelEnabled directly.
     if (soloRef.current === channelId) {
       // Un-solo: restore all channels to their pre-solo state
       soloRef.current = null;
       const restored = preSoloStateRef.current;
-      setChannels(chs => chs.map(c => ({ 
-        ...c, 
-        enabled: restored[c.id]?.enabled ?? true,
-        fader: restored[c.id]?.fader ?? c.fader
-      })));
+      setChannels(chs => chs.map(c => {
+        if (c.faderLocked) return c;
+        return {
+          ...c,
+          enabled: restored[c.id]?.enabled ?? true,
+          fader: restored[c.id]?.fader ?? c.fader,
+        };
+      }));
       for (const c of channelsRef.current) {
+        if (c.faderLocked) continue;
         const prev = restored[c.id];
         const enabled = prev?.enabled ?? true;
         const fader = prev?.fader ?? c.fader;
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'setChannelEnabled', channelId: c.id, enabled }));
-          wsRef.current.send(JSON.stringify({ type: 'setChannelFader', channelId: c.id, fader }));
-        }
+        engineEvents.send({ type: 'setChannelEnabled', channelId: c.id, enabled });
+        engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader });
         updateMixerChannel(c.id, { enabled, fader }).catch(() => {});
       }
       preSoloStateRef.current = {};
     } else {
-      // Solo: save current state, enable + fader=1.0 only on target
+      // Solo: save current state, enable + fader=1.0 only on target.
+      // Locked channels are skipped from the saved snapshot too —
+      // they're not getting mutated, so there's nothing to restore
+      // later either.
       const saveState: { [id: string]: { enabled: boolean; fader: number } } = {};
-      channelsRef.current.forEach(c => { saveState[c.id] = { enabled: c.enabled, fader: c.fader }; });
+      channelsRef.current.forEach(c => {
+        if (c.faderLocked) return;
+        saveState[c.id] = { enabled: c.enabled, fader: c.fader };
+      });
       preSoloStateRef.current = saveState;
       soloRef.current = channelId;
 
-      setChannels(chs => chs.map(c => ({ 
-        ...c, 
-        enabled: c.id === channelId, 
-        fader: c.id === channelId ? 1.0 : c.fader 
-      })));
+      setChannels(chs => chs.map(c => {
+        if (c.faderLocked) return c;
+        return {
+          ...c,
+          enabled: c.id === channelId,
+          fader: c.id === channelId ? 1.0 : c.fader,
+        };
+      }));
       for (const c of channelsRef.current) {
+        if (c.faderLocked) continue;
         const enabled = c.id === channelId;
         const fader = c.id === channelId ? 1.0 : c.fader;
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'setChannelEnabled', channelId: c.id, enabled }));
-          if (c.id === channelId) {
-            wsRef.current.send(JSON.stringify({ type: 'setChannelFader', channelId: c.id, fader: 1.0 }));
-          }
+        engineEvents.send({ type: 'setChannelEnabled', channelId: c.id, enabled });
+        if (c.id === channelId) {
+          engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader: 1.0 });
         }
         updateMixerChannel(c.id, { enabled, ...(c.id === channelId ? { fader: 1.0 } : {}) }).catch(() => {});
       }
     }
-  };
+  }, []);
 
-  const handleModeChange = async (channelId: string, newMode: string) => {
+  const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, mode: newMode } : c));
     // Update canonical modes — this is a user-initiated change
     savedModesRef.current[channelId] = newMode;
     await updateMixerChannel(channelId, { mode: newMode });
-  };
+  }, []);
 
   // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
   // whose in-memory params differ from the saved playlist entry. The user
@@ -395,7 +884,7 @@ export default function MixerScreen() {
     pending: boolean;
   } | null>(null);
 
-  const handleLockToggle = async (channelId: string, locked: boolean) => {
+  const handleLockToggle = useCallback(async (channelId: string, locked: boolean) => {
     // Locking is always immediate — freezing playlist saves is a safe op.
     if (locked) {
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
@@ -413,7 +902,7 @@ export default function MixerScreen() {
     }
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
     await updateMixerChannel(channelId, { locked: false });
-  };
+  }, []);
 
   // Resolve the unlock-dirty prompt. `mode` is the user's choice:
   //   - 'save'    → capture live params into the playlist entry, then unlock
@@ -443,37 +932,145 @@ export default function MixerScreen() {
     setUnlockPrompt(null);
   }, [unlockPrompt]);
 
-  const handleControlChange = (channelId: string, controlId: number, val: number) => {
+  // Fader-lock toggle (slot 5). Independent of the playlist lock
+  // (`handleLockToggle` above). The engine is the source of truth —
+  // we optimistically update local state and PATCH; the next mixer
+  // broadcast confirms. No dirty-prompt machinery because faderLocked
+  // doesn't gate playlist edits.
+  const handleFaderLockToggle = useCallback(async (channelId: string, faderLocked: boolean) => {
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderLocked } : c));
+    await updateMixerChannel(channelId, { faderLocked });
+  }, []);
+
+  const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
       return { ...c, exports: (c.exports || []).map((e: any) => e.id === controlId ? { ...e, v0: val } : e) };
     }));
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 }));
-    } else {
+    if (!engineEvents.send({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 })) {
       setMixerChannelControl(channelId, controlId, val, 0, 0);
     }
-  };
+  }, []);
 
   // Adding a channel is playlist-first. The "+ ADD CHANNEL" button opens the
   // picker so the user can spin up a new layer with one tap. The first row is
   // always "+ DEFAULT" for the fastest possible add.
   const [addPickerOpen, setAddPickerOpen] = useState(false);
   const [addPickerPlaylists, setAddPickerPlaylists] = useState<string[]>([]);
+  // ── "ADDING…" button state machine ───────────────────────────────────
+  //
+  // The previous design awaited the HTTP POST response before
+  // clearing addBusy. That was correct in theory (try/finally always
+  // runs) but visually broken: under heavy WS load the iPad's JS
+  // thread is starved processing 10 Hz mixer + vis broadcasts, so
+  // the fetch promise's continuation can sit in the microtask queue
+  // for hundreds of ms behind those broadcasts. The button felt
+  // stuck even though the engine had already created the channel.
+  //
+  // The fix: decouple the button state from HTTP timing. The button
+  // is cleared by whichever signal arrives first —
+  //
+  //   A. The WS `mixer` broadcast that lists the NEW channel id
+  //      (~10ms after the engine's POST handler runs; sometimes
+  //      arrives BEFORE the HTTP response is fully parsed).
+  //   B. The HTTP response itself (POST result, OK or error).
+  //
+  // Both paths clear the same single source of truth. The button is
+  // therefore guaranteed to be released as soon as the engine
+  // confirms the channel exists, regardless of which transport the
+  // confirmation arrives on. No watchdog needed.
+  //
+  // pendingAddRef holds the ids we knew about at the moment the
+  // user tapped — when a mixer broadcast arrives with a channel
+  // whose id is NOT in that set, we know the add succeeded. We use
+  // an id-set (not a counter) so concurrent remove+add operations
+  // can't confuse the matcher.
+  const addBusyRef = useRef(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const pendingAddRef = useRef<{ knownIds: Set<string> } | null>(null);
+  const clearAddBusy = useCallback(() => {
+    pendingAddRef.current = null;
+    addBusyRef.current = false;
+    setAddBusy(false);
+  }, []);
 
-  const openAddChannelPicker = async () => {
-    const lib = await fetchPlaylists();
-    setAddPickerPlaylists(lib.ok && lib.data ? lib.data : ['default']);
+  // Open the "from playlist" picker instantly using the parent-owned
+  // playlistLibrary state (kept fresh by engineEvents.playlistLibrary
+  // WS events — see loadAll + the WS subscriber). Operator review
+  // May 2026 #14: this used to await fetchPlaylists() before showing
+  // the modal AND it flipped addBusy=true while waiting, which made
+  // the button feel broken under load ("almost not showing up at
+  // all"). The cached list is by definition up-to-date because every
+  // save/delete in the engine emits a `playlistLibrary` event the
+  // mixer screen already subscribes to. Worst case (engine boot
+  // race), we fall back to ['default'].
+  const openAddChannelPicker = () => {
+    if (addBusyRef.current) return;
+    const list = playlistLibrary && playlistLibrary.length > 0
+      ? playlistLibrary
+      : ['default'];
+    setAddPickerPlaylists(list);
     setAddPickerOpen(true);
   };
 
-  const handleAddChannelWithPlaylist = async (playlistName: string) => {
+  const handleAddChannelWithPlaylist = (playlistName: string) => {
+    if (addBusyRef.current) return;
+    addBusyRef.current = true;
+    setAddBusy(true);
     setAddPickerOpen(false);
-    await addMixerChannel({
+
+    // Snapshot the channel ids we know about right NOW. The WS
+    // handler in connectWebSocket() above will spot the newly-added
+    // id when the engine's mixer broadcast lands and call
+    // clearAddBusy().
+    pendingAddRef.current = {
+      knownIds: new Set(channelsRef.current.map((c) => c.id as string)),
+    };
+
+    // Fire the POST as fire-and-forget. The button is decoupled
+    // from this promise's resolution — clearAddBusy() will fire
+    // from the WS handler the moment the engine confirms the add,
+    // typically faster than the HTTP response parses on the iPad.
+    // We still observe the response so we can show an alert if the
+    // engine rejected the add (over capacity, playlist missing,
+    // etc.); that path also calls clearAddBusy() defensively.
+    //
+    // Both transports use fetchWithTimeout (8s AbortController) /
+    // the WS connection's own keepalive, so there is NO codepath
+    // where addBusy can remain set indefinitely. Worst case (WS
+    // dropped a frame AND HTTP timed out): clearAddBusy fires from
+    // the timeout-induced rejection. No watchdog needed.
+    void addMixerChannel({
       playlist: playlistName,
       name: playlistName === 'default' ? 'New Layer' : playlistName,
       mode: 'blend_screen',
       fader: 1.0,
+    }).then((result) => {
+      if (!result.ok) {
+        clearAddBusy();
+        Alert.alert(
+          'Add channel failed',
+          result.error || 'Engine did not accept the new channel. Check that the engine is running and reachable, then try again.',
+        );
+      } else {
+        // Idempotent clear — the WS handler probably already
+        // cleared addBusy by the time this HTTP continuation runs,
+        // but if not, this is the second guaranteed clear path.
+        clearAddBusy();
+        // Synchronously stash the inline playlist payload for the
+        // newly-minted channel id. Usually the WS channelPlaylistData
+        // event lands first, but on a slow iPad the HTTP path can win.
+        // Either way the new PlaylistPanel mounting off the mixer
+        // event reads this map and gets entries on first paint.
+        const pd = (result.data as any)?.playlistData as PlaylistData | undefined;
+        const cid = (result.data as any)?.channelId as string | undefined;
+        if (cid && pd && pd.name) {
+          setInlinePlaylist(cid, pd);
+        }
+      }
+    }).catch((err) => {
+      clearAddBusy();
+      Alert.alert('Add channel failed', err?.message || String(err));
     });
   };
 
@@ -486,128 +1083,92 @@ export default function MixerScreen() {
     }
   };
 
-  const handleDeleteChannel = async (id: string) => {
+  const handleDeleteChannel = useCallback(async (id: string) => {
     await removeMixerChannel(id);
-  };
+  }, []);
 
   const handleTransitionSettingsChange = useCallback((channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
     updateMixerChannel(channelId, updates);
   }, []);
 
-  const handleTransition = useCallback((targetChannelId: string, durationSec: number, transMode: string, originalMode: string) => {
-    const durationMs = durationSec * 1000;
-    const startTime = Date.now();
-    const ws = wsRef.current;
-    const wsOk = ws && ws.readyState === WebSocket.OPEN;
-    
-    // Lock out engine echoes during the transition — iPad is source of truth
-    transitionActiveRef.current = true;
-    // Cancel any previous transition by incrementing the generation
-    transitionGenRef.current++;
-    const myGen = transitionGenRef.current;
+  // Per-channel view-selection update. Optimistic local apply + PATCH;
+  // the engine validates and broadcasts a fresh `mixer` event with the
+  // committed value, so a rejected PATCH (e.g. unknown group) is
+  // visually corrected on the next broadcast. v1 ships ALL vs GROUP.
+  const handleViewSelectionChange = useCallback((channelId: string, viewSelection: any) => {
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, viewSelection } : c));
+    updateMixerChannel(channelId, { viewSelection }).catch(() => {});
+  }, []);
 
-    // 1. Clear solo if active
-    if (soloRef.current) {
-      soloRef.current = null;
-      preSoloStateRef.current = {};
-    }
-
-    // 2. Unmute ALL channels via WS only (no HTTP PATCH — avoids disk write + broadcast)
-    setChannels(chs => chs.map(c => ({ ...c, enabled: true })));
-    for (const c of channelsRef.current) {
-      if (!c.enabled && wsOk) {
-        ws!.send(JSON.stringify({ type: 'setChannelEnabled', channelId: c.id, enabled: true }));
-      }
-    }
-    
-    // 3. Set ALL overlay channels to the transition blend mode via WS only.
-    //    savedModesRef is the canonical source — never modified by transitions.
-    const currentChannels = channelsRef.current;
-    for (const c of currentChannels) {
-      if (c.id.startsWith('ch_base')) continue;
-      // Protect canonical mode: if missing or invalid, default to 'blend_screen'
-      if (!savedModesRef.current[c.id] || savedModesRef.current[c.id].startsWith('trans_')) {
-        savedModesRef.current[c.id] = c.mode.startsWith('trans_') ? 'blend_screen' : c.mode;
-      }
-      if (wsOk) ws!.send(JSON.stringify({ type: 'setChannelMode', channelId: c.id, mode: transMode }));
-    }
-    const restoreModes = { ...savedModesRef.current };
-    
-    // 4. Snapshot starting faders for smooth interpolation
-    // We intentionally DO NOT update the UI's mode to transMode.
-    // The UI should stably display the target blend modes throughout.
-    setChannels(chs => chs.map(c => {
-      if (c.id.startsWith('ch_base')) return { ...c, enabled: true };
-      return { ...c, enabled: true };
-    }));
-
-    const startFaders: {[id: string]: number} = {};
-    const lastSentFaders: {[id: string]: number} = {};
-    currentChannels.forEach(c => { 
-      startFaders[c.id] = c.fader; 
-      lastSentFaders[c.id] = c.fader; 
+  // ─────────────────────────────────────────────────────────────────────
+  // handleTransition — server-driven (May 2026, third rewrite)
+  //
+  // What used to be ~150 lines of rAF + WS-throttle + ease-curve math
+  // collapses to a single triggerMixerTransition WS message. The
+  // marsin_engine owns the entire fader animation:
+  // pattern_mixer.triggerMixerTransition() force-enables every overlay,
+  // schedules a smooth-step interpolation for each channel, and ticks
+  // them at the engine's 40 Hz render rate inside updateTransitions().
+  // The engine then throttles the resulting mixer broadcasts to 10 Hz so
+  // the iPad sliders animate smoothly without flooding the WS connection.
+  //
+  // Why this fixes the stepping/jumping the operator was seeing:
+  //   - The DMX/SACN output is updated EVERY engine tick (40 Hz) with
+  //     the smooth-step-interpolated fader value. No throttle dead-zones,
+  //     no WS jitter, no rAF stepping.
+  //   - Smooth-step (3t² − 2t³) is symmetric: derivative is 0 at both
+  //     endpoints. Winner (start→1) and losers (start→0) ride the SAME
+  //     curve in their respective directions, so brightness evolves
+  //     symmetrically — no "creep then snap" artifacts that the
+  //     asymmetric sin/cos pair produced.
+  //   - The previous 250 ms echo lockout is gone. The iPad trusts every
+  //     mixer broadcast unconditionally (with a tiny per-channel guard
+  //     to protect against stale broadcasts arriving milliseconds after
+  //     a user's slider drag — see localFaderWriteRef), so the final
+  //     mixer-state broadcast that lands ~5 ms after the engine
+  //     completes the transition snaps the UI into perfect sync
+  //     immediately.
+  //
+  // See agent diagnostic "Mixer Transition Behavior Analysis" (May 2026)
+  // for the full root-cause breakdown of the previous client-driven
+  // implementation, and the agent review of the server-side plan for
+  // why we use smooth-step (not sin/cos) + a single per-group completion
+  // callback + manual-fader cancellation.
+  //
+  // `transMode` is the user-selected trans_* blend script (trans_flash,
+  // trans_dissolve, trans_iris, trans_wipe_left/right/up, or
+  // trans_crossfade). The engine swaps the target channel's blend mode
+  // to this script for the duration of the fade so the visual effect
+  // (flash white at midpoint, random-pixel dissolve, iris open, wipe
+  // edge…) plays out across the requested time. trans_crossfade keeps
+  // the cheaper fader-only smoothstep behavior (no script swap). See
+  // pattern_mixer.triggerMixerTransition() for the full contract.
+  // ─────────────────────────────────────────────────────────────────────
+  const handleTransition = useCallback((targetChannelId: string, durationSec: number, transMode: string, _originalMode: string) => {
+    const durationMs = Math.max(1, Math.min(30000, Math.round(durationSec * 1000)));
+    // Defensive: trans_* dropdown strings only. Anything else falls back
+    // to crossfade so a stale UI state can't break the transition.
+    const safeTransMode = (typeof transMode === 'string' && transMode.startsWith('trans_'))
+      ? transMode
+      : 'trans_crossfade';
+    // Clear solo client-side so the SOLO button visually pops back to off
+    // immediately. The engine's triggerMixerTransition() force-enables
+    // every overlay and broadcasts the new state within 100 ms, but the
+    // operator shouldn't have to wait that long to see the badge clear.
+    soloRef.current = null;
+    preSoloStateRef.current = {};
+    // engineEvents.send queues the message if the control bus is
+    // reconnecting; we deliberately don't bail out on transient
+    // disconnect so a stale state doesn't strand the transition.
+    const ok = engineEvents.send({
+      type: 'triggerMixerTransition',
+      targetChannelId,
+      durationMs,
+      curve: 'smoothstep',
+      mode: 'exclusiveOverlays',
+      transitionMode: safeTransMode,
     });
-
-    const animate = () => {
-      // If a newer transition was started, bail out silently
-      if (transitionGenRef.current !== myGen) return;
-
-      const now = Date.now();
-      const progress = Math.min((now - startTime) / durationMs, 1.0);
-      const ease = progress * progress * (3 - 2 * progress); // smooth-step
-      
-      // WS fader updates at ~30fps (33ms) to match engine's 40fps render rate
-      const needsWsUpdate = now - (throttleRef.current['transition'] || 0) > 33 || progress === 1.0;
-
-      // Always update React state for smooth UI
-      setChannels(chs => {
-        const next = chs.map(c => {
-          if (c.id.startsWith('ch_base') || startFaders[c.id] === undefined) return c;
-          const start = startFaders[c.id];
-          const target = c.id === targetChannelId ? 1.0 : 0.0;
-          const val = start + (target - start) * ease;
-          
-          if (progress === 1.0) {
-            return { ...c, fader: val, mode: restoreModes[c.id] || c.mode };
-          }
-          return { ...c, fader: val };
-        });
-        
-        // Send WS fader updates at throttled rate
-        if (needsWsUpdate && wsOk) {
-          throttleRef.current['transition'] = now;
-          next.forEach(c => {
-            if (c.id.startsWith('ch_base') || startFaders[c.id] === undefined) return;
-            if (Math.abs(c.fader - lastSentFaders[c.id]) > 0.005 || progress === 1.0) {
-              lastSentFaders[c.id] = c.fader;
-              ws!.send(JSON.stringify({ type: 'setChannelFader', channelId: c.id, fader: c.fader }));
-              
-              if (progress === 1.0) {
-                // Restore saved blend mode via WS
-                const restoreMode = restoreModes[c.id] || c.mode;
-                ws!.send(JSON.stringify({ type: 'setChannelMode', channelId: c.id, mode: restoreMode }));
-              }
-            }
-          });
-        }
-        return next;
-      });
-      
-      if (progress < 1.0) {
-        requestAnimationFrame(animate);
-      } else {
-        // Single save: persist final state to disk once
-        if (wsOk) ws!.send(JSON.stringify({ type: 'saveMixerState' }));
-        
-        // Unlock engine echoes after a short delay to ensure any in-flight
-        // WS broadcasts from the intermediate transition state are swallowed.
-        setTimeout(() => {
-          transitionActiveRef.current = false;
-        }, 500);
-      }
-    };
-    
-    requestAnimationFrame(animate);
+    if (!ok) console.warn('[Mixer] Transition queued — control WS not yet open');
   }, []);
 
   return (
@@ -634,24 +1195,27 @@ export default function MixerScreen() {
             fillStyle={styles.faderFill} 
           />
           <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
-          {/* One-tap default add: fastest path */}
+          {/* One-tap default add: fastest path. disabled+opacity gives the
+              operator visual feedback while the POST is in flight, so they
+              don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
+            disabled={addBusy}
           >
-            <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>+ DEFAULT</Text>
+            <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
-          {/* Open the playlist picker for a curated add */}
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
             onPress={openAddChannelPicker}
+            disabled={addBusy}
           >
             <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <CPCControls wsRef={wsRef} />
+      <CPCControls />
 
       {/* ── Master Visualization ────────────────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
@@ -662,9 +1226,18 @@ export default function MixerScreen() {
       </View>
 
       {/* ── Channel Strips ─────────────────────────────────────────── */}
+      {/* Post-channel-split: /mixer.channels[] contains ONLY mixer
+          overlays (the deck channel lives on /deck/channel). We
+          iterate the array directly — no `.slice(1)` skip-the-deck
+          dance. The engine's HIL test (hil_channel_isolation_test)
+          guards this invariant. */}
       <ScrollView horizontal scrollEnabled={false} contentContainerStyle={{ padding: 16, gap: 16, flexGrow: 1 }} style={{ flex: 1 }}>
-        {channels.slice(1).map((channel, idx) => {
+        {channels.map((channel, idx) => {
           const isSoloActive = soloRef.current === channel.id;
+          // Read inlinePlaylistVersion so this scope re-renders when
+          // the Map changes (Maps aren't structurally compared by React).
+          void inlinePlaylistVersion;
+          const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
           return (
             <ChannelStrip
               key={channel.id}
@@ -675,6 +1248,8 @@ export default function MixerScreen() {
               blends={blends}
               transitions={transitionsList}
               visData={visDataRef.current[channel.id]}
+              playlistLibrary={playlistLibrary}
+              initialPlaylist={channelInlinePlaylist}
               onFaderChange={handleFaderChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
@@ -682,8 +1257,12 @@ export default function MixerScreen() {
               onControlChange={handleControlChange}
               onDelete={handleDeleteChannel}
               onLockToggle={handleLockToggle}
+              onFaderLockToggle={handleFaderLockToggle}
               onTransition={handleTransition}
               onTransitionSettingsChange={handleTransitionSettingsChange}
+              viewSelectionGroups={viewSelectionGroups}
+              viewSelectionViewMasks={viewSelectionViewMasks}
+              onViewSelectionChange={handleViewSelectionChange}
             />
           );
         })}
@@ -797,14 +1376,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  // Bottom-pinned global-effects strip. Full-width, intentionally
+  // short (header + 36 px button row + small padding) so it doesn't
+  // eat fader real-estate. Pre-May-2026 this had paddingV:12 +
+  // alignItems:center which collapsed the inner row to its intrinsic
+  // width and floated it left; the inner GEM now sets flex:1 in
+  // mixer-strip mode so it stretches edge-to-edge.
   globalRigBar: {
     backgroundColor: C.surfaceContainerLow,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 6,
     borderTopWidth: 1,
     borderTopColor: C.ghostBorder,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
   },
   globalBtn: {
     paddingHorizontal: 16,
@@ -899,15 +1485,42 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.primary,
     alignItems: 'center', justifyContent: 'center'
   },
-  lockBtn: {
+  // Unified title-bar button (refresh, lock, pin, delete). 28×28
+  // squircle with the same surface + border so the title bar reads as
+  // a single toolbar regardless of which buttons are present. The
+  // ACTIVE variants below only override the colours; keeping the box
+  // geometry constant prevents reflow when an operator toggles a
+  // lock / pin.
+  titleBtn: {
     width: 28, height: 28, borderRadius: 6,
     backgroundColor: C.surfaceContainerLowest,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: C.ghostBorder,
   },
+  titleBtnAmberActive: {
+    backgroundColor: 'rgba(245, 166, 35, 0.15)',
+    borderColor: 'rgba(245, 166, 35, 0.5)',
+  },
+  titleBtnTealActive: {
+    backgroundColor: 'rgba(0, 104, 117, 0.15)',
+    borderColor: 'rgba(0, 104, 117, 0.5)',
+  },
+  // Legacy aliases — left in place so any unmigrated call sites still
+  // resolve. Title-bar buttons now use titleBtn / titleBtnAmberActive /
+  // titleBtnTealActive directly. These can be removed once nothing
+  // outside this file references them.
   lockBtnActive: {
     backgroundColor: 'rgba(245,166,35,0.15)',
     borderColor: 'rgba(245,166,35,0.5)',
+  },
+  // Fader-lock (slot 5): teal accent so the operator can tell it
+  // apart from the amber playlist lock above without reading the
+  // icon. Same footprint as lockBtnActive — uses the project's
+  // primary teal at 15% / 50% opacity to match the existing
+  // "active toggle" visual language elsewhere in the strip.
+  faderLockBtnActive: {
+    backgroundColor: 'rgba(0,104,117,0.15)',
+    borderColor: 'rgba(0,104,117,0.5)',
   },
   modeDropdown: {
     backgroundColor: C.surfaceContainerLowest,
@@ -952,6 +1565,17 @@ const styles = StyleSheet.create({
   paramsPanel: {
     width: '40%',
     padding: 8,
+  },
+  // Bordered "LOCAL PARAMS" card inside the right column. Gives each
+  // channel's local sliders a distinct visual cluster so the strip
+  // reads as { left: playlist column · right: tuned local knobs }
+  // rather than one long undifferentiated rail.
+  localParamsCard: {
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: C.surfaceContainerLowest,
   },
   // Mute / Solo span the full strip width below the body.
   muteSoloRow: {

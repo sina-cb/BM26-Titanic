@@ -1,24 +1,43 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 00_golden_hour_wash
+  pattern: 01_cylon_sweep
   mode: blend_screen
   fader: 1
   enabled: true
+  locked: false
+  faderLocked: false
   localControls:
-    '682166867':
-      v0: 0.42
+    '1037917937':
+      v0: 0.68
       v1: 0
       v2: 0
-    '3064579436':
-      v0: 0
+    '1278139614':
+      v0: 0.54
+      v1: 0
+      v2: 0
+    '2571730692':
+      v0: 0.18
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 0.53
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_0_00_golden_hour_wash
-    cursor: 0
+    activeEntryId: e_default_1_01_cylon_sweep
+    cursor: 1
     autopilot:
       active: false
-      delay_s: 30
-      shuffle: false
+      delay_s: 1
+      shuffle: true
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+transitionConfig:
+  enabled: false
+  mode: trans_crossfade
+  durationMs: 400
+  shuffle: false

@@ -29,6 +29,7 @@
 
 import { gcm } from "@noble/ciphers/aes.js";
 import { Frame, VALID_TYPES } from "../frame/types";
+import { fingerprintFor } from "../security/secretStore";
 
 export const WIRE_VERSION = "T2";
 const KEY_BYTES = 16;
@@ -195,6 +196,10 @@ export class Codec {
     }
     this.counter =
       ((r[0] << 24) | (r[1] << 16) | (r[2] << 8) | r[3]) >>> 0;
+  }
+
+  getKeyFingerprint(): string {
+    return fingerprintFor(this.key);
   }
 
   nextCtr(): number {

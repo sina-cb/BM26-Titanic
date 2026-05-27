@@ -9,6 +9,7 @@ import { Inter_400Regular, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { SpaceGrotesk_400Regular, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { warmColorPalettesCache } from '@/utils/api';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -30,6 +31,13 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded) {
       SplashScreen.hideAsync();
+      // Pre-warm the color palette cache so the COLORS picker can render
+      // presets instantly the first time the operator opens it — the
+      // previous per-open fetch would intermittently land on a flaky
+      // engine boot window and the modal would show an empty Presets tab.
+      // Best-effort: a failed warm just leaves the cache empty and the
+      // modal's own re-fetch fallback takes over.
+      warmColorPalettesCache().catch(() => {});
     }
   }, [loaded]);
 

@@ -112,17 +112,21 @@ Header through `<ctr>` is **30 bytes** (cleartext, authenticated). For a 32-byte
 
 ### 3.2 Message Types
 
-| `typ` | Direction      | Description                                                                                            |
+| `typ` | Direction      | Meaning / Description                                                                                  |
 |-------|---------------|--------------------------------------------------------------------------------------------------------|
-| `hlo` | C → S         | Client hello, sent on join. Arg `name/Sina,role/captain`. Server logs presence.                          |
-| `pin` | C → S         | Ping. Server replies with `pon`. Used for latency / liveness.                                          |
+| `hlo` | C → S         | Hello / client presence / bridge wake. Arg `name/Sina,role/captain`. Server logs presence.             |
+| `pin` | C → S         | Ping. Server replies with `pon`. Used for liveness/latency.                                            |
 | `pon` | S → C         | Pong.                                                                                                  |
-| `cmd` | C → S         | Command requiring privileged ACL. Arg uses path/value syntax — see §3.4.                              |
+| `cmd` | C → S         | Mutation command requiring privileged ACL. Arg uses path/value syntax — see §3.4.                      |
 | `qry` | C → S         | Query (read-only). Allowed for any role. Arg is a path: `engine/status`, `param/speed`, ...           |
-| `ack` | S → C         | Positive ACK for a previous `cmd`/`qry`. `seq` echoes the original. Arg may carry `ok` or short data.|
-| `nak` | S → C         | Negative ACK. Arg explains: `acl_denied`, `unknown_cmd`, `engine_error`, `timeout`.                  |
+| `ack` | S → C         | Authenticated command accepted, ACL passed, MarsinEngine REST call succeeded. `seq` echoes the original.|
+| `nak` | S → C         | Authenticated command rejected (e.g. `acl_denied`, `unknown_cmd`) or engine operation failed (`engine_error`). |
 | `rep` | S → C         | Reply with data for a `qry`. Arg is a compact key/value list (see §3.4).                              |
-| `pub` | S → broadcast | Periodic status publish. Sent every 5 or 10 s on `dst = FF`. Arg is a compact key/value list.         |
+| `pub` | S → broadcast | Broadcast status publish. Sent periodically on `dst = FF`. Arg is a compact key/value list.            |
+
+> [!IMPORTANT]
+> **ACK Semantics:**
+> There is currently **no radio-level ACK** in the Titanic protocol. Do not treat `ack` as "the radio heard the packet"; `ack` is emitted only after the bridge successfully authenticates the frame, passes ACL verification, and completes the engine-side REST operation. If the engine execution fails, the bridge emits `nak`.
 
 ### 3.3 Why no `:` in `<arg>`
 
@@ -261,6 +265,14 @@ nonce[12] = src[1]     ‖ 0x00 × 5     ‖ ctr_be[6]
   3. On boot, the firmware reads the persisted counter and **adds a safety jump of 256** before its first TX, so any in-flight increments since the last NVS write can't be replayed.
   4. The 48-bit space (281 trillion frames) cannot be exhausted in any plausible deployment.
 
+> [!IMPORTANT]
+> **P0 Security Invariant: Counter Monotonicity & Durability**
+> Every AEAD sender must maintain a monotonically increasing per-key, per-src counter. Counter reuse under the same key is strictly forbidden. A source that loses durable counter state must not continue using the same key without re-enrollment or key rotation.
+
+> [!WARNING]
+> **Durable Counter Defect:**
+> PortWatch historically seeded a random 32-bit counter in-memory and did not persist it. This caused both replay-window lockouts (because the random seed was below the bridge's `highest_ctr` and the `hlo` re-anchor drop threshold is `1 << 32`) and nonce reuse across app restarts. This is a P0 defect. A durable, key-and-src-partitioned counter implementation in PortWatch's secure storage is required.
+
 **Why explicit `src` in the nonce:**
 Even though `src` is also in the AD, having it in the nonce makes per-sender counter spaces structurally independent: a future sender that comes online late and starts at `ctr=0` cannot collide with anyone else's `(key, nonce)` history.
 
@@ -376,6 +388,28 @@ but we note the design hook here so the integration path is clear.
 - §10 (Bring-up): the bring-up checklist gains a "secret deployed on every machine" step.
 - §13 (CaptainPad): when CaptainPad falls back to BLE→radio, the AEAD work moves to the iPad app (preferred) or the Heltec firmware (fallback). The iPad change is **deferred** until after the host-side companion apps are stable.
 - §19 (Milestones): the secured-channel item is done; firmware-side AEAD is tracked as a deferred follow-on.
+
+#### 3.7 LoRa Profile Switching Policy (*CFG)
+
+The system supports runtime swapping of LoRa radio parameters (spreading factor, bandwidth, TX power) via plaintext `*CFG` commands.
+
+> [!WARNING]
+> **Plaintext Over-the-Air Profile Change Vulnerability:**
+> Plaintext `*CFG` profile switching is a development and bench diagnostic feature only. Unauthenticated `*CFG` commands received over the air present a high-risk Denial of Service (DoS) vector: any 915 MHz transmitter that can emit a valid-looking `*CFG` line can force radios onto another profile, causing link death.
+
+**Production Rules:**
+1. **Plaintext OTA CFG Rejected:** Production firmware must reject unauthenticated LoRa-originated `*CFG` changes.
+2. **Local USB Allowed:** Plaintext `*CFG` profile changes are allowed only over local USB connection (for recovery) or via an authenticated Frame v2 command path.
+3. **Bridge /profile Restricted:** The bridge's `/profile` REST endpoint and PortWatch's profile picker UI must be disabled/hidden by default in production configurations.
+4. **Orphaned-Radio Recovery:** If a node misses a profile transition (due to RF packet loss), it becomes "orphaned" on the old profile and cannot communicate with the bridge. Because profile state is persisted to NVS, a simple power-cycle will not recover it. The operator must connect to the node locally via USB serial and send the matching `*CFG` command to restore synchronisation.
+
+#### 3.8 Mesh Network Structure
+
+The Titanic protocol design accommodates multi-hop mesh relays for extended range.
+
+> [!NOTE]
+> **Mesh Relaying is Phase 3:**
+> Mesh relaying is not required for initial production readiness. Direct-link HIL (Hardware-in-the-Loop) reliability must be thoroughly verified and passing before mesh routing is enabled. MVP focus is entirely on a direct, point-to-point link.
 
 ---
 

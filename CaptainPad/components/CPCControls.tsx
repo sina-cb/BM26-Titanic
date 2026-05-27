@@ -1,56 +1,104 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { updateParamCenter } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { useSharedParamValues } from '@/hooks/useEngineState';
+import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
+import { OscStatusPill } from '@/components/OscStatusPill';
+import { ColorPickerModal, DualSwatch } from '@/components/ColorPickerModal';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 const C = Colors.light;
+// BPM-sync "auto-driven" accent (green). Lives here as a local
+// constant so this file doesn't depend on a brand-new theme token
+// landing in every consumer's TS server cache. Mirrors the value in
+// constants/theme.ts → Colors.light.tertiary.
+const ACCENT_AUTO = '#1b9e77';
 
-function hsvToRgbString(h: number, s: number, v: number) {
-  let r, g, b, i, f, p, q, t;
-  i = Math.floor(h * 6);
-  f = h * 6 - i;
-  p = v * (1 - s);
-  q = v * (1 - f * s);
-  t = v * (1 - (1 - f) * s);
-  switch (i % 6) {
-    case 0: r = v, g = t, b = p; break;
-    case 1: r = q, g = v, b = p; break;
-    case 2: r = p, g = v, b = t; break;
-    case 3: r = p, g = q, b = v; break;
-    case 4: r = t, g = p, b = v; break;
-    case 5: r = v, g = p, b = q; break;
-    default: r = 0, g = 0, b = 0;
-  }
-  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-}
-
-// Note: the `wsRef` prop is accepted for backward-compat with the
-// existing tab files but no longer required — live state now flows
-// through the module-level `useEngineState` subscription, which means
-// PortWatch / scripts / any future external writer ends up reflected
-// here automatically.
-export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
+// Live state flows through the module-level `useEngineState`
+// subscription, so this component has no props. Pre-split it took
+// a `wsRef` prop for sending sharedParam writes; that's now
+// `engineEvents.send(...)` via `updateParamCenter`.
+export const CPCControls = () => {
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const defaultParams = useMemo(() => ({
     speed: 0.5,
-    direction: 1.0,
-    count: 0.5,
     size: 0.5,
     rotate: 0,
     colorPalette1: { h: 0, s: 1, v: 1 },
-    colorPalette2: { h: 0.5, s: 1, v: 1 }
+    colorPalette2: { h: 0.5, s: 1, v: 1 },
+    // Audio row. See marsin_engine/lib/param_center.js for full
+    // semantics. Three stems with per-stem operator gains (range
+    // 0..gainMax from config). The master `audioReactivity` scale
+    // was retired 2026-05-26 — per-stem gains in the Audio Analysis
+    // tab are the only level control now. BPM is an OSC-driven
+    // readout from LX Studio.
+    stemsVocals: 0.0,
+    stemsBass: 0.0,
+    stemsDrums: 0.0,
+    stemsVocalsGain: 1.0,
+    stemsBassGain: 1.0,
+    stemsDrumsGain: 1.0,
+    tempoBpm: 0.0,
+    // Mic-derived bands + kick (docs/25). Same operator-gain × master
+    // contract as the OSC stems so patterns can treat them uniformly.
+    micLow: 0.0,
+    micMid: 0.0,
+    micHigh: 0.0,
+    micKick: 0.0,
+    micLowGain: 1.0,
+    micMidGain: 1.0,
+    micHighGain: 1.0,
+    micKickGain: 1.0,
+    // BPM → speed sync visibility on the Deck (docs/25 §6). Read-only
+    // here; the operator changes them from the Audio Analysis tab.
+    bpmSpeedSync: 0.0,
+    bpmSpeedMin: 60,
+    bpmSpeedMax: 180,
   }), []);
 
   // Live shared-param values. Every sharedParams broadcast (whether it
   // originated from this UI, PortWatch over LoRa, or any script) flows
   // through the engineEvents bus → useSharedParamValues → here, so the
   // sliders/colour swatches always show the canonical engine state.
-  const params = useSharedParamValues(defaultParams) as typeof defaultParams;
-  const [pickerModal, setPickerModal] = useState<{ visible: boolean, key: string, h: number, s: number, v: number }>({ visible: false, key: '', h: 0, s: 1, v: 1 });
+  //
+  // tempoBpm is on the separate `liveParams` channel because it
+  // ticks at the analyser's rate; reading it via useLiveParamValues
+  // keeps this component's re-render scope tight (the BpmTile child
+  // is the only thing that visibly changes when BPM nudges).
+  const steadyParams = useSharedParamValues(defaultParams) as typeof defaultParams;
+  // Live keys all ride /ws/signals at the analyser's broadcastHz (mic*
+  // and stems* are 15-30 Hz; tempoBpm is 5 Hz). Reading them via
+  // useLiveParamValues — instead of via useSharedParamValues like the
+  // rest of CPC — keeps the meters in the deck/mixer chrome ticking
+  // at the engine's actual rate. Pre-fix they were stuck at the boot
+  // sharedParams snapshot because sharedParams only re-broadcasts when
+  // an operator turns a knob, not on every analyser tick.
+  const live = useLiveParamValues({
+    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
+    stemsVocals: 0, stemsBass: 0, stemsDrums: 0,
+    tempoBpm: 0,
+  });
+  const params = useMemo(
+    () => ({ ...steadyParams, ...live }),
+    [steadyParams, live],
+  );
+  // The Deck's two old per-colour swatches collapsed into one COLORS
+  // button (May 2026). The picker itself lives in ColorPickerModal —
+  // hue-only writes, atomic dual apply, presets sourced from
+  // config.yaml. We only track open/closed here.
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  // Collapsible Global Params + Audio Reactivity rows (operator review
+  // May 2026): the top strip eats 2× the vertical space the pattern
+  // selection actually needs, especially in landscape on the iPad
+  // Pro 11". The collapse keeps the OSC pill / BPM / a glance-at
+  // SPEED & REACT value visible so a quick check at the edge of the
+  // venue still reads at a glance. State is client-side only; it
+  // resets on app cold-boot which matches the operator's expectation
+  // (they want to start every show with the full picture).
+  const [globalsCollapsed, setGlobalsCollapsed] = useState(false);
+  const [audioCollapsed, setAudioCollapsed] = useState(false);
 
   // Writers post to /param-center. The engine's POST handler
   // broadcasts a fresh sharedParams to every subscriber (including us),
@@ -60,115 +108,434 @@ export const CPCControls = ({ wsRef: _wsRef }: { wsRef?: unknown } = {}) => {
     updateParamCenter({ [key]: val });
   };
 
-  const updateColor = (key: string, h: number, s: number, v: number) => {
-    updateParamCenter({ [key]: { h, s, v } });
-  };
+  const faderMaxWidth = isPortrait ? 90 : 140;
+  // Shared label column for row-1 and row-2 so REACT lines up under
+  // SPEED. labelGap is the same number for both rows; widening one
+  // requires widening both — that's the whole point of the constants.
+  const labelWidth = isPortrait ? 60 : 110;
+  const labelGap   = isPortrait ? 8 : 12;
+
+  // BPM → speed sync surface state (see docs/25 §6 + Audio tab). When
+  // sync is ON we tag the SPEED fader green and pull its display from
+  // the live mapped value so the operator can see "speed is being
+  // auto-driven by tempoBpm" without leaving the Deck. We also surface
+  // a warning if sync expects OSC but OSC isn't flowing.
+  const oscStatus  = useOscStatus();
+  const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
+  const bpmMin     = params.bpmSpeedMin ?? 60;
+  const bpmMax     = params.bpmSpeedMax ?? 180;
+  const bpm        = params.tempoBpm ?? 0;
+  const bpmMapped  =
+    bpmSyncOn && bpm > 0 && bpmMin !== bpmMax
+      ? Math.max(0, Math.min(1, (bpm - bpmMin) / (bpmMax - bpmMin)))
+      : null;
+  const speedDisplay  = bpmMapped !== null ? bpmMapped : (params.speed ?? 0.5);
+  const speedFill     = bpmSyncOn ? ACCENT_AUTO : undefined;
+  // Operator request May 26 2026: when sync is ON, show the live BPM
+  // beside the SPEED %. Format: "BPM 128 · 73%" — the MiniFader
+  // already prints the percent, so the badge carries the BPM half.
+  // Falls back to "BPM —" if the analyser hasn't seen a tempo yet
+  // so the operator knows sync is wired but starving for tempo input.
+  const speedBadge    = bpmSyncOn
+    ? `BPM ${bpm > 0 ? Math.round(bpm) : '—'}`
+    : undefined;
+  const bpmSyncStale  = bpmSyncOn && (
+    (oscStatus && oscStatus.state !== 'live') || bpm <= 0
+  );
 
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, marginRight: isPortrait ? 8 : 16, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
-      
-      <View style={{ flexDirection: 'row', flexWrap: 'nowrap', gap: isPortrait ? 8 : 24, paddingRight: isPortrait ? 4 : 16, flex: 1 }}>
-        
-        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
-          <MiniFader label="SPEED" value={params.speed ?? 0.5} onChange={(v) => update('speed', v)} />
-        </View>
+    <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 8 : 10 }}>
 
-        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
-          <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
+      {/* ── Warning banner: BPM sync expects OSC but it's not flowing ─ */}
+      {bpmSyncStale ? (
+        <View style={{
+          flexDirection: 'row', alignItems: 'center', gap: 8,
+          paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8,
+          borderWidth: 1, borderColor: C.error,
+          backgroundColor: 'rgba(255,80,80,0.10)',
+        }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO OSC TEMPO</Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11, flex: 1 }}>
+            Speed will not move until /lx/tempo/bpm starts arriving. Disable sync on the Audio tab, or fix the OSC source.
+          </Text>
         </View>
+      ) : null}
 
-        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
-          <MiniFader label="COUNT" value={params.count ?? 0.5} onChange={(v) => update('count', v)} />
-        </View>
+      {/* ── Row 1: pattern globals + colour swatches + BPM + OSC pill ─ */}
+      {/* Order: SPEED · SIZE · C1 · C2 · BPM · OSC. `count` and `dir`
+          were demoted to pattern-local in May 2026 — they were too
+          per-pattern to act as globals. The OSC pill is intentionally
+          LAST so the eye finishes the row on health status rather than
+          starting there. */}
+      {/* Row labels share `labelWidth` so the first slider in each row
+          starts at the same x. Tweaking one number keeps the two rows
+          glued together. The label cell also doubles as the
+          collapse-toggle hit target (operator review May 2026 — they
+          asked for a one-tap "give me back the vertical space" so
+          taller iPads can squeeze in more pattern rows). */}
+      <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center' }}>
+        <TouchableOpacity
+          onPress={() => setGlobalsCollapsed(c => !c)}
+          accessibilityLabel={globalsCollapsed ? 'Expand global parameters' : 'Collapse global parameters'}
+          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+        >
+          <IconSymbol name={globalsCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
+        </TouchableOpacity>
 
-        <View style={{ flex: 1, maxWidth: isPortrait ? 90 : 140 }}>
-          {/* DIR: 0=REV, 0.5=STOP, 1.0=FWD */}
-          <MiniFader label={isPortrait ? "DIR" : "DIR (R/S/F)"} value={params.direction ?? 1.0} onChange={(v) => update('direction', v)} />
-        </View>
+        {globalsCollapsed ? (
+          <CollapsedGlobalsSummary
+            speed={speedDisplay}
+            speedBadge={speedBadge}
+            speedFill={speedFill}
+            size={params.size ?? 0.5}
+            h1={params.colorPalette1?.h ?? 0}
+            h2={params.colorPalette2?.h ?? 0.5}
+            bpm={params.tempoBpm ?? 0}
+            onEditColors={() => setColorPickerOpen(true)}
+          />
+        ) : (
+          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
+            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
+              <MiniFader
+                label="SPEED"
+                value={speedDisplay}
+                fillColor={speedFill}
+                badge={speedBadge}
+                onChange={(v) => update('speed', v)}
+              />
+            </View>
 
-        <View style={{ flexDirection: 'row', gap: isPortrait ? 6 : 12, alignItems: 'center' }}>
-          <View>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>C1</Text>
-            <TouchableOpacity 
-              onPress={() => setPickerModal({ visible: true, key: 'colorPalette1', h: params.colorPalette1?.h ?? 0, s: params.colorPalette1?.s ?? 1, v: params.colorPalette1?.v ?? 1 })}
-              style={{ width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: C.ghostBorder, backgroundColor: hsvToRgbString(params.colorPalette1?.h ?? 0, params.colorPalette1?.s ?? 1, params.colorPalette1?.v ?? 1) }} 
+            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
+              <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
+            </View>
+
+            {/* Single COLORS button. Tapping opens the tabbed picker
+                (Presets · Manual) — see ColorPickerModal. We render both
+                hues as a split-circle swatch so the operator can see the
+                current pair at a glance without opening the modal. */}
+            <ColorPairButton
+              h1={params.colorPalette1?.h ?? 0}
+              h2={params.colorPalette2?.h ?? 0.5}
+              onPress={() => setColorPickerOpen(true)}
             />
-          </View>
 
-          <View>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>C2</Text>
-            <TouchableOpacity 
-              onPress={() => setPickerModal({ visible: true, key: 'colorPalette2', h: params.colorPalette2?.h ?? 0, s: params.colorPalette2?.s ?? 1, v: params.colorPalette2?.v ?? 1 })}
-              style={{ width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: C.ghostBorder, backgroundColor: hsvToRgbString(params.colorPalette2?.h ?? 0, params.colorPalette2?.s ?? 1, params.colorPalette2?.v ?? 1) }} 
-            />
+            {/* BPM tile sits just before the OSC pill — a "tempo + source
+                health" cluster at the end of the row. */}
+            <BpmTile bpm={params.tempoBpm ?? 0} isPortrait={isPortrait} synced={bpmSyncOn} />
+
+            <OscStatusPill compact={isPortrait} />
           </View>
-        </View>
+        )}
       </View>
 
-      {/* Color Picker Modal */}
-      <Modal visible={pickerModal.visible} transparent animationType="fade">
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}>
-           <View style={{ width: 300, backgroundColor: C.surfaceContainerLowest, padding: 24, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}>
-             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, marginBottom: 16 }}>{pickerModal.key === 'colorPalette1' ? 'COLOR 1' : 'COLOR 2'}</Text>
-             
-             <View style={{ marginBottom: 24 }}>
-               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10 }}>HUE</Text>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10 }}>{Math.round(pickerModal.h * 360)}°</Text>
-               </View>
-               <HorizontalFader 
-                 value={pickerModal.h} 
-                 onChange={(v: number) => setPickerModal(p => ({ ...p, h: v }))}
-                 trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
-                 fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: hsvToRgbString(pickerModal.h, 1, 1), borderRadius: 12 }} 
-               />
-             </View>
+      {/* ── Row 2: audio — REACT + compact live-only meter columns ──────
+          New layout (per operator review):
+            REACT slider · [BAS+DRM] · [VOC+LOW] · [MID+HIGH] · [KICK]
+          The deck shows ONLY live data — operators set per-band gains
+          from the Audio Analysis tab, not here. The meter rows are
+          intentionally NOT touch-responsive (they show effective
+          post-gain energy that's already being driven by OSC / mic).
+       */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 6 : 8 }}>
+        {/* Same labelWidth + labelGap as row 1 so REACT lines up
+            directly under SPEED — no white-space gap. The label
+            cell also doubles as the collapse-toggle hit target. */}
+        <TouchableOpacity
+          onPress={() => setAudioCollapsed(c => !c)}
+          accessibilityLabel={audioCollapsed ? 'Expand audio reactivity' : 'Collapse audio reactivity'}
+          style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+        >
+          <IconSymbol name={audioCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO REACTIVITY'}</Text>
+        </TouchableOpacity>
 
-             <View style={{ marginBottom: 24 }}>
-               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10 }}>SATURATION</Text>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10 }}>{Math.round(pickerModal.s * 100)}%</Text>
-               </View>
-               <HorizontalFader 
-                 value={pickerModal.s} 
-                 onChange={(v: number) => setPickerModal(p => ({ ...p, s: v }))}
-                 trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
-                 fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 12 }} 
-               />
-             </View>
+        {audioCollapsed ? (
+          // Live mic/stem values arrive already post-gain (gain applied
+          // at the source in audio_analyzer.js / osc_listener.js before
+          // the value reaches CPC). Do NOT multiply by *Gain here — that
+          // would double-gain the meter. The patterns receive the same
+          // post-gain values, so what you see here is what the patterns
+          // see. See docs/29 for the architecture.
+          <CollapsedAudioSummary
+            isPortrait={isPortrait}
+            bass={params.stemsBass ?? 0}
+            drums={params.stemsDrums ?? 0}
+            vocals={params.stemsVocals ?? 0}
+            kick={params.micKick ?? 0}
+          />
+        ) : (
+          // Master REACTIVITY MiniFader was removed 2026-05-26 (operator
+          // review): per-stem gains in the Audio Analysis tab are now
+          // the only level controls, freeing this row to be all live
+          // meters at full width.
+          //
+          // Values below are already post-gain — see comment above.
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10, paddingRight: isPortrait ? 4 : 12 }}>
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'BASS',   value: params.stemsBass   ?? 0 }}
+                bot={{ label: 'DRUMS',  value: params.stemsDrums  ?? 0 }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'VOCALS', value: params.stemsVocals ?? 0 }}
+                bot={{ label: 'LOW',    value: params.micLow      ?? 0 }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'MID',    value: params.micMid      ?? 0 }}
+                bot={{ label: 'HIGH',   value: params.micHigh     ?? 0 }}
+              />
+              <LiveMeterColumn
+                isPortrait={isPortrait}
+                top={{ label: 'KICK',   value: params.micKick     ?? 0, accent: true }}
+              />
+          </View>
+        )}
+      </View>
 
-             <View style={{ marginBottom: 32 }}>
-               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10 }}>VALUE / BRIGHTNESS</Text>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10 }}>{Math.round(pickerModal.v * 100)}%</Text>
-               </View>
-               <HorizontalFader 
-                 value={pickerModal.v} 
-                 onChange={(v: number) => setPickerModal(p => ({ ...p, v: v }))}
-                 trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }} 
-                 fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 12 }} 
-               />
-             </View>
-
-             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-               <TouchableOpacity onPress={() => setPickerModal(p => ({ ...p, visible: false }))} style={{ padding: 12 }}>
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary }}>CANCEL</Text>
-               </TouchableOpacity>
-               <TouchableOpacity 
-                 onPress={() => {
-                   updateColor(pickerModal.key, pickerModal.h, pickerModal.s, pickerModal.v);
-                   setPickerModal(p => ({ ...p, visible: false }));
-                 }} 
-                 style={{ backgroundColor: C.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 }}
-               >
-                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000' }}>APPLY</Text>
-               </TouchableOpacity>
-             </View>
-           </View>
-        </View>
-      </Modal>
-
+      {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
+      <ColorPickerModal
+        visible={colorPickerOpen}
+        initialH1={params.colorPalette1?.h ?? 0}
+        initialH2={params.colorPalette2?.h ?? 0.5}
+        onClose={() => setColorPickerOpen(false)}
+      />
     </View>
   );
 };
+
+// ── Small subcomponents ────────────────────────────────────────────────────
+
+/**
+ * Single COLORS button on the Deck. Shows both global hues as a split
+ * circle so the operator can confirm the current pair at a glance.
+ * Tapping opens the tabbed picker (Presets · Manual).
+ */
+/**
+ * Single COLORS button. Wide pill (~96px) sized so it sits comfortably
+ * next to the SPEED/SIZE MiniFaders and gives the operator a fat
+ * tap-target on the iPad. Shows both global hues as a split-circle
+ * preview + a "COLORS" caption; opens the tabbed picker on tap.
+ */
+function ColorPairButton({ h1, h2, onPress }: { h1: number; h2: number; onPress: () => void }) {
+  return (
+    <View>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>COLORS</Text>
+      <TouchableOpacity
+        onPress={onPress}
+        accessibilityLabel="Open colour picker"
+        accessibilityRole="button"
+        style={{
+          minWidth: 96, paddingHorizontal: 10, paddingVertical: 6,
+          borderRadius: 10, borderWidth: 1, borderColor: C.ghostBorder,
+          backgroundColor: C.surface,
+          flexDirection: 'row', alignItems: 'center', gap: 10,
+        }}
+      >
+        <DualSwatch h1={h1} h2={h2} size={32} />
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+          color: C.text, letterSpacing: 0.6,
+        }}>
+          EDIT
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ── Audio cells ─────────────────────────────────────────────────────────────
+//
+// The Deck's audio row is read-only: four compact LiveMeterColumns
+// showing what's reaching the pattern after `stemGain` is applied.
+// Per-band gain sliders live in the Audio Analysis tab now (see
+// CaptainPad/app/(tabs)/audio.tsx → GainRow). The master
+// `audioReactivity` scale was retired 2026-05-26 — there is no
+// global level above per-stem gains anymore.
+/**
+ * LiveMeterColumn — compact, read-only "what the patterns are seeing right
+ * now" display for the Deck audio row.
+ *
+ * Two stacked bars (top + bottom) per column, each showing the
+ * post-gain, post-master value for one band. The deck used to also
+ * own per-band gain sliders, but the operator review (2026-05-24)
+ * moved those to the Audio Analysis tab — the deck is for performing,
+ * the tab is for tuning. Keeping the meters non-interactive avoids the
+ * "I dragged something but nothing changed" confusion the per-stem
+ * sliders kept causing.
+ *
+ * `accent` on the top row uses a brighter fill (e.g. for KICK, which
+ * is a transient envelope) so it stands out at a glance.
+ */
+function LiveMeterColumn({ isPortrait, top, bot }: {
+  isPortrait: boolean;
+  top: { label: string; value: number; accent?: boolean };
+  bot?: { label: string; value: number; accent?: boolean };
+}) {
+  const cellMinWidth = isPortrait ? 56 : 80;
+  return (
+    <View style={{
+      flex: 1, minWidth: cellMinWidth,
+      paddingVertical: 4, paddingHorizontal: 6,
+      borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surface,
+      justifyContent: 'space-between',
+    }}>
+      <CompactMeterRow {...top} />
+      {bot ? (
+        <>
+          <View style={{ height: 4 }} />
+          <CompactMeterRow {...bot} />
+        </>
+      ) : null}
+    </View>
+  );
+}
+
+function CompactMeterRow({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.text }}>{Math.round(v * 100)}</Text>
+      </View>
+      <View style={{
+        height: 8, borderRadius: 4,
+        backgroundColor: C.surfaceContainerHigh,
+        overflow: 'hidden',
+      }}>
+        <View style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: `${v * 100}%`,
+          backgroundColor: accent ? C.primaryContainer : C.primary,
+        }} />
+      </View>
+    </View>
+  );
+}
+
+// The Deck used to render per-stem GAIN sliders here (StemCell / KickCell).
+// Per operator review (2026-05-24), those gain controls moved to the
+// Audio Analysis tab and the Deck is now read-only (LiveMeterColumn
+// above). If you need the gain UI on a new surface, use the GainRow
+// component in CaptainPad/app/(tabs)/audio.tsx.
+
+// BPM gets its own compact tile (no operator gain — it's a tempo
+// reference, not a level to scale). The big numeric readout makes
+// it easy to glance at from across the venue. A faint pulse-dot
+// next to the number lights when fresh data is arriving so the
+// operator can tell at a glance whether the upstream LX tempo
+// source is live.
+function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean; synced?: boolean }) {
+  const hasSignal = bpm > 0;
+  const cellWidth = isPortrait ? 60 : 86;
+  // Green border + dot when BPM is auto-driving speed, so the
+  // operator can spot from across the venue whether the show is
+  // currently hands-on or beat-locked.
+  const accent = synced ? ACCENT_AUTO : hasSignal ? C.primary : C.ghostBorder;
+  return (
+    <View style={{
+      width: cellWidth,
+      paddingVertical: 4, paddingHorizontal: 6,
+      borderRadius: 8, borderWidth: 1, borderColor: synced ? ACCENT_AUTO : C.ghostBorder,
+      backgroundColor: C.surface,
+      justifyContent: 'space-between',
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: synced ? ACCENT_AUTO : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+          {synced ? 'BPM ●' : 'BPM'}
+        </Text>
+        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent }} />
+      </View>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold',
+        fontSize: isPortrait ? 20 : 24,
+        color: hasSignal ? C.text : C.icon,
+        textAlign: 'center',
+        lineHeight: isPortrait ? 24 : 28,
+      }}>
+        {hasSignal ? Math.round(bpm) : '—'}
+      </Text>
+    </View>
+  );
+}
+
+// ── Collapsed-row summaries ────────────────────────────────────────────
+//
+// One-line read-only snapshots for the GLOBAL PARAMS and AUDIO
+// REACTIVITY rows. The label cell's chevron toggles between these
+// summaries and the full editor rows above. Operator-perceptible
+// data only — SPEED %, SIZE %, the dual-hue swatch, BPM readout for
+// globals; four micro-meters (BASS / DRUMS / VOX / KICK) for audio
+// (the master REACT readout was retired with audioReactivity on
+// 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
+
+function CollapsedGlobalsSummary({
+  speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
+}: {
+  speed: number; speedBadge?: string; speedFill?: string;
+  size: number; h1: number; h2: number; bpm: number;
+  onEditColors: () => void;
+}) {
+  return (
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
+      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} accent={speedFill} badge={speedBadge} />
+      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} />
+      <TouchableOpacity onPress={onEditColors} accessibilityLabel="Open colour picker" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <DualSwatch h1={h1} h2={h2} size={18} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
+      </TouchableOpacity>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+        BPM <Text style={{ color: bpm > 0 ? C.text : C.icon }}>{bpm > 0 ? Math.round(bpm) : '—'}</Text>
+      </Text>
+      <View style={{ flex: 1 }} />
+      <OscStatusPill compact />
+    </View>
+  );
+}
+
+function CollapsedAudioSummary({
+  isPortrait, bass, drums, vocals, kick,
+}: {
+  isPortrait: boolean;
+  bass: number; drums: number; vocals: number; kick: number;
+}) {
+  // Master REACT readout was removed alongside the audioReactivity
+  // param on 2026-05-26. The four micro-meters are the whole summary
+  // now.
+  return (
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
+      <CollapsedMeter label="BAS" value={bass} />
+      <CollapsedMeter label="DRM" value={drums} />
+      <CollapsedMeter label="VOX" value={vocals} />
+      <CollapsedMeter label="KCK" value={kick} accent />
+    </View>
+  );
+}
+
+function CollapsedReadout({ label, value, accent, badge }: { label: string; value: number; accent?: string; badge?: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>{value}</Text>
+      {badge ? (
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: accent || C.secondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>{badge}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function CollapsedMeter({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <View style={{ flex: 1, minWidth: 36, maxWidth: 70, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Text>
+      <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.surfaceContainerHigh, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${v * 100}%`, backgroundColor: accent ? C.primaryContainer : C.primary }} />
+      </View>
+    </View>
+  );
+}

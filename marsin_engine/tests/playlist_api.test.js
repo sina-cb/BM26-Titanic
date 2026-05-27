@@ -187,41 +187,54 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_slow' });
   assert.equal(r.status, 200);
 
-  // Pull the live exports so we know real control IDs.
-  const mixerRes = await api('GET', '/mixer');
-  const baseCh = mixerRes.data.channels.find(c => c.id === 'ch_base');
-  const sliderBg = baseCh.exports.find(e => e.name === 'sliderBackgroundFade');
-  const sliderSp = baseCh.exports.find(e => e.name === 'sliderSparkleSpeed');
-  assert.ok(sliderBg && sliderSp, 'sparkle pattern must expose the expected sliders');
+  // Pull the live exports so we know real control IDs. Post-channel-
+  // split the deck channel lives at /deck/channel, NOT in
+  // /mixer.channels — so we ask for it directly here.
+  //
+  // The two slider names used below (`sliderLocalSpeed`,
+  // `sliderSparkleDensity`) match the actual exports declared by
+  // patterns/13_sparkle.js. An earlier version of this test looked
+  // for `sliderBackgroundFade` + `sliderSparkleSpeed` and silently
+  // failed once the pattern was refactored — the test was the bug,
+  // not the engine.
+  const deckRes = await api('GET', '/deck/channel');
+  const baseCh = deckRes.data.channel;
+  assert.ok(baseCh && baseCh.id === 'ch_base', 'deck channel should be ch_base');
+  const sliderA = baseCh.exports.find(e => e.name === 'sliderLocalSpeed');
+  const sliderB = baseCh.exports.find(e => e.name === 'sliderSparkleDensity');
+  assert.ok(sliderA && sliderB,
+    `sparkle pattern must expose sliderLocalSpeed + sliderSparkleDensity; ` +
+    `got exports=${baseCh.exports.map(e => e.name).join(',')}`);
 
-  // e_slow: low values
-  await api('POST', '/mixer/channels/ch_base/control', { id: sliderBg.id, v0: 0.10, v1: 0, v2: 0 });
-  await api('POST', '/mixer/channels/ch_base/control', { id: sliderSp.id, v0: 0.15, v1: 0, v2: 0 });
+  // e_slow: low values. Writes go through the deck control route now
+  // (mixer routes refuse the deck id with 400 WRONG_ROLE).
+  await api('POST', '/deck/channel/control', { id: sliderA.id, v0: 0.10, v1: 0, v2: 0 });
+  await api('POST', '/deck/channel/control', { id: sliderB.id, v0: 0.15, v1: 0, v2: 0 });
   r = await api('POST', '/deck/playlist/capture');
   assert.equal(r.status, 200);
-  assert.equal(r.data.defaults.sliderBackgroundFade, 0.10);
-  assert.equal(r.data.defaults.sliderSparkleSpeed, 0.15);
+  assert.equal(r.data.defaults.sliderLocalSpeed, 0.10);
+  assert.equal(r.data.defaults.sliderSparkleDensity, 0.15);
 
   // Switch to e_fast, set very different values, capture
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_fast' });
   assert.equal(r.status, 200);
-  await api('POST', '/mixer/channels/ch_base/control', { id: sliderBg.id, v0: 0.90, v1: 0, v2: 0 });
-  await api('POST', '/mixer/channels/ch_base/control', { id: sliderSp.id, v0: 0.95, v1: 0, v2: 0 });
+  await api('POST', '/deck/channel/control', { id: sliderA.id, v0: 0.90, v1: 0, v2: 0 });
+  await api('POST', '/deck/channel/control', { id: sliderB.id, v0: 0.95, v1: 0, v2: 0 });
   r = await api('POST', '/deck/playlist/capture');
   assert.equal(r.status, 200);
-  assert.equal(r.data.defaults.sliderBackgroundFade, 0.90);
-  assert.equal(r.data.defaults.sliderSparkleSpeed, 0.95);
+  assert.equal(r.data.defaults.sliderLocalSpeed, 0.90);
+  assert.equal(r.data.defaults.sliderSparkleDensity, 0.95);
 
   // Switch back to e_slow on the live engine — defaults must reapply.
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_slow' });
   assert.equal(r.status, 200);
   await new Promise(res => setTimeout(res, 200));
-  let post = await api('GET', '/mixer');
-  let baseAfter = post.data.channels.find(c => c.id === 'ch_base');
-  let bgAfter = baseAfter.exports.find(e => e.name === 'sliderBackgroundFade');
-  let spAfter = baseAfter.exports.find(e => e.name === 'sliderSparkleSpeed');
-  assert.equal(Number(bgAfter.v0.toFixed(2)), 0.10);
-  assert.equal(Number(spAfter.v0.toFixed(2)), 0.15);
+  let post = await api('GET', '/deck/channel');
+  let baseAfter = post.data.channel;
+  let aAfter = baseAfter.exports.find(e => e.name === 'sliderLocalSpeed');
+  let bAfter = baseAfter.exports.find(e => e.name === 'sliderSparkleDensity');
+  assert.equal(Number(aAfter.v0.toFixed(2)), 0.10);
+  assert.equal(Number(bAfter.v0.toFixed(2)), 0.15);
 
   // Now the real test: restart engine while sitting on e_slow.
   proc.kill('SIGTERM');
@@ -235,22 +248,22 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   await waitForReady(BASE());
 
   // Post-restart: the engine should have restored e_slow's defaults, NOT e_fast's.
-  const restored = await api('GET', '/mixer');
-  const restoredBase = restored.data.channels.find(c => c.id === 'ch_base');
-  const bg = restoredBase.exports.find(e => e.name === 'sliderBackgroundFade');
-  const sp = restoredBase.exports.find(e => e.name === 'sliderSparkleSpeed');
-  assert.equal(Number(bg.v0.toFixed(2)), 0.10, `sliderBackgroundFade should be 0.10 after restart, got ${bg.v0}`);
-  assert.equal(Number(sp.v0.toFixed(2)), 0.15, `sliderSparkleSpeed should be 0.15 after restart, got ${sp.v0}`);
+  const restored = await api('GET', '/deck/channel');
+  const restoredBase = restored.data.channel;
+  const a1 = restoredBase.exports.find(e => e.name === 'sliderLocalSpeed');
+  const b1 = restoredBase.exports.find(e => e.name === 'sliderSparkleDensity');
+  assert.equal(Number(a1.v0.toFixed(2)), 0.10, `sliderLocalSpeed should be 0.10 after restart, got ${a1.v0}`);
+  assert.equal(Number(b1.v0.toFixed(2)), 0.15, `sliderSparkleDensity should be 0.15 after restart, got ${b1.v0}`);
 
   // Switching to e_fast post-restart should yield the e_fast values.
   r = await api('POST', '/deck/playlist/entry', { entryId: 'e_fast' });
   await new Promise(res => setTimeout(res, 200));
-  const post2 = await api('GET', '/mixer');
-  const base2 = post2.data.channels.find(c => c.id === 'ch_base');
-  const bg2 = base2.exports.find(e => e.name === 'sliderBackgroundFade');
-  const sp2 = base2.exports.find(e => e.name === 'sliderSparkleSpeed');
-  assert.equal(Number(bg2.v0.toFixed(2)), 0.90);
-  assert.equal(Number(sp2.v0.toFixed(2)), 0.95);
+  const post2 = await api('GET', '/deck/channel');
+  const base2 = post2.data.channel;
+  const a2 = base2.exports.find(e => e.name === 'sliderLocalSpeed');
+  const b2 = base2.exports.find(e => e.name === 'sliderSparkleDensity');
+  assert.equal(Number(a2.v0.toFixed(2)), 0.90);
+  assert.equal(Number(b2.v0.toFixed(2)), 0.95);
 
   // Cleanup
   await api('POST', '/deck/playlist', { name: null });

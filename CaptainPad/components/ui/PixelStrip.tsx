@@ -17,9 +17,14 @@ const W_R = 200/255, W_G = 220/255, W_B = 255/255; // cool white
 const A_R = 255/255, A_G = 200/255, A_B =  50/255;  // yellow amber
 const U_R =  75/255, U_G =   0/255, U_B = 130/255;  // dark purple
 
-export const PixelStrip = ({ 
-  base64Data, 
-  pixelCount = 64,
+export const PixelStrip = ({
+  base64Data,
+  // Upper bound on the number of pixels we render. The engine
+  // subsamples its vis broadcast to `vis.maxPixels` (config.yaml,
+  // default 100) before shipping, so this cap just needs to be ≥
+  // whatever the engine sends. 256 is plenty for any sensible strip
+  // width without wasting render budget on a thousand <View>s.
+  pixelCount = 256,
   height = 12,
   style,
 }: {

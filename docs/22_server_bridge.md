@@ -28,8 +28,8 @@ Raspberry Pi attached to the server-role Heltec. Its job:
 2. Decode them, check the ACL, route `qry`/`cmd` paths through the
    command registry to the MarsinEngine REST API.
 3. Reply with `ack` / `nak` / `rep` on the same channel.
-4. Periodically broadcast `compact_status` PUBs so every PortWatch /
-   client_companion stays in sync without polling.
+4. Periodically broadcast `compact_status` PUBs, while PortWatch also polls
+   `qry engine/status` on an 8 s interval as a reliability backstop.
 5. Survive everything that happens to a Pi sitting in a road case:
    USB wiggles, engine restarts, WiFi drops, OOM kills, power cycles.
 
@@ -96,6 +96,26 @@ The bridge runtime lives in `server_bridge/runner.py` — moved out of
 `companions/` (a test-fixtures directory) into this Pi-deployable
 package now that it ships to production. `__main__.py` is a thin
 shim that does `from .runner import main` and runs it.
+
+### 1.5 Message Types and ACK Semantics
+
+The bridge processes and emits the following Titanic Frame v2 message types:
+
+| `typ` | Direction      | Meaning / Description                                                                                  |
+|-------|---------------|--------------------------------------------------------------------------------------------------------|
+| `hlo` | C → S         | Hello / client presence / bridge wake. Arg `name/Sina,role/captain`. Server logs presence.             |
+| `pin` | C → S         | Ping. Server replies with `pon`. Used for liveness/latency.                                            |
+| `pon` | S → C         | Pong.                                                                                                  |
+| `cmd` | C → S         | Mutation command requiring privileged ACL. Arg uses path/value syntax — see §3.4.                      |
+| `qry` | C → S         | Query (read-only). Allowed for any role. Arg is a path: `engine/status`, `param/speed`, ...           |
+| `ack` | S → C         | Authenticated command accepted, ACL passed, MarsinEngine REST call succeeded. `seq` echoes the original.|
+| `nak` | S → C         | Authenticated command rejected (e.g. `acl_denied`, `unknown_cmd`) or engine operation failed (`engine_error`). |
+| `rep` | S → C         | Reply with data for a `qry`. Arg is a compact key/value list (see §3.4).                              |
+| `pub` | S → broadcast | Broadcast status publish. Sent periodically on `dst = FF`. Arg is a compact key/value list.            |
+
+> [!IMPORTANT]
+> **Engine-Success ACK Semantics:**
+> There is **no radio-level ACK** in the system. The bridge returns `ack` only after the incoming frame has been successfully authenticated, the command has passed ACL gates, and the subsequent REST invocation on MarsinEngine has returned successfully (HTTP 200/204). If the engine REST call fails or times out, the bridge returns `nak` to the captain client. PortWatch uses this strict engine-level ACK semantics for optimistic intent resolution.
 
 ---
 
@@ -460,14 +480,24 @@ ssh titanic@pi 'systemctl show titanic-bridge -p NRestarts'
 ssh titanic@pi 'sudo systemctl disable --now titanic-bridge'
 ```
 
-### 6.3 Stats endpoint (planned)
+### 6.3 HTTP Health and Profile API
 
-The bridge already maintains a `BridgeStats` counter (RX frames,
-ACL denies, engine errors, etc.). Currently it's only exposed via
-the in-process Python; a future revision should publish it over a
-local-only HTTP endpoint (e.g. `127.0.0.1:6969/stats`) so
-journalctl spelunking isn't the only way to investigate "did this
-client actually reach the bridge?".
+The bridge exposes a local HTTP server (binding to `0.0.0.0:7099` by default, or the port configured in `.config.bridge.yaml::health.port`) for monitoring and client status checks.
+
+#### Endpoints
+
+- **`GET /health`** (or `GET /`): Returns the operational health snapshot of the bridge as a JSON object containing:
+  - **`status`**: String indicating overall service status.
+  - **`engine`**: Sub-object with engine connection stats (e.g., whether the WebSocket subscription is active).
+  - **`profile`**: String representing the active LoRa profile name.
+  - **`radio`**: Sub-object showing `RadioPortSerial` stats:
+    - `rx`: total frames received.
+    - `tx`: total frames transmitted.
+    - `tx_drop`: dropped transmissions.
+    - `parse_error`: malformed packets.
+  
+- **`GET /profile`**: Returns JSON with the current profile name and the list of available profile names.
+- **`POST /profile`**: Requests a profile switch. (Disabled/returns 503 or 403 if profile switching is gated off in production configuration.)
 
 ---
 
@@ -548,26 +578,18 @@ instead:
 
 ## 9. LoRa profile switching (`/profile`)
 
-The bridge exposes a tiny side-channel for swapping the controllers'
-LoRa radio parameters at runtime — TX power, spreading factor,
-bandwidth, coding rate — without reflashing. The operator picks a
-named profile (`test_bench`, `local`, or `playa`) from PortWatch's
-Status screen and the bridge:
+> [!WARNING]
+> **Development / Bench-Only Feature:**
+> Runtime profile switching is a development and bench diagnostic feature only. It is unsafe for production while it relies on plaintext `*CFG` commands over the air. Any 915 MHz transmitter that can emit a valid-looking `*CFG` line can force radios onto another profile and deny service (DoS).
 
-1. Writes a plaintext `*CFG name=<name> t=<delay_ms>\n` line to the
-   server controller's USB.
-2. The server firmware schedules a local apply at `now + delay_ms`,
-   then RELAYS the same line over LoRa on the OLD profile (3 retries
-   spaced ~700 ms) so the captain hears it before the switchover.
-3. At the deadline, both controllers apply the new params and
-   persist the name to NVS — so a power blip doesn't kick them back
-   to the wrong profile.
+### Target Production Design:
+1. **LoRa-Originated CFG Rejected:** Production firmware must reject unauthenticated LoRa-originated `*CFG` commands.
+2. **Bridge /profile Disabled:** The bridge's `/profile` endpoint is disabled by default in production unless explicitly enabled via `.config.bridge.yaml::profile_switching.enabled`.
+3. **PortWatch Picker Hidden:** The PortWatch profile picker UI is hidden unless the bridge `/profile` API indicates it is enabled.
+4. **Local USB Recovery:** Local USB recovery remains available under all environments — if a node becomes orphaned, it must be flashed or recovered via local serial connection.
 
-### Profile table
-
-Defined in `firmware/src/titanic_profiles.h`. Edit the table + reflash
-to add or rename profiles; the bridge picks up the new names via
-`Bridge.LORA_PROFILE_NAMES` (also in lock-step with the firmware).
+### Profile Table
+Defined in `firmware/src/titanic_profiles.h`. The bridge maps available profiles in lock-step with the firmware.
 
 | name         | SF | BW (kHz) | CR  | TX dBm HIGH | TX dBm LOW | scenario                                |
 | ------------ | -- | -------- | --- | ----------- | ---------- | --------------------------------------- |
@@ -576,6 +598,7 @@ to add or rename profiles; the bridge picks up the new names via
 | `playa`      | 10 | 125      | 4/5 | +22         | +14        | long range; ~2 mi LOS + mesh hops       |
 
 ### HTTP API
+When enabled, the bridge exposes the following REST paths:
 
 `GET /profile`
 ```json
@@ -588,21 +611,12 @@ to add or rename profiles; the bridge picks up the new names via
 ```
 
 * `applied=true` means the bridge successfully wrote to USB.
-* `applied=false` means the bridge accepted the request but the USB
-  write failed — most often a USB drop on the Pi. The controllers
-  are still on the previous profile in this case.
+* `applied=false` means the bridge accepted the request but the USB write failed.
 
-The bridge persists the most recent choice to
-`/var/lib/titanic-bridge/profile.txt` and reads it back on startup so
-PortWatch's "currently selected" highlight is correct after a bridge
-restart. The CONTROLLERS' NVS is the ground truth for what the radio
-is doing — the bridge's file is a UI hint only.
+The bridge persists the most recent choice to `/var/lib/titanic-bridge/profile.txt` and reads it back on startup.
 
 ### Wire format
-
-Plaintext ASCII, terminated by `\n`. Reserved prefix `*CFG ` cannot
-collide with v2 frames (which always start with `T2|`). Fields are
-space-separated, key=value, order-free:
+Plaintext ASCII over local USB or the diagnostic side-channel, terminated by `\n`:
 
 ```
 *CFG name=<short>
@@ -611,34 +625,12 @@ space-separated, key=value, order-free:
      t=<delay_ms>
 ```
 
-The firmware looks up `name` against the static table; the extra
-params are informational (good for journalctl forensics) and ignored.
-`t=` is the milliseconds-from-now at which the apply takes effect on
-the receiver — give the sender room to retry on the old profile
-before any peer switches.
-
-### Security
-
-* Unauthenticated. Any device that can reach `/profile` can switch
-  the link. Bridge is LAN-only; do not expose to the open internet.
-* The on-air `*CFG` relay is plaintext. An adversary inside RF range
-  could send a `*CFG name=test_bench t=0` to force +0 dBm and DOS
-  the link. BENCH USE ONLY; do NOT enable in production RF
-  environments without adding HMAC + replay protection.
-
 ### Failure mode: link death after a profile change
-
-If the captain MISSES the LoRa relay (weak link, antenna issue, peer
-out of range), the server switches but the captain doesn't. They're
-now on different SF/BW so they can't talk. Recovery:
-
+If a client node misses a profile transition (due to RF packet loss), it becomes "orphaned" on the old profile and cannot communicate. Because profile state is persisted to NVS, power-cycling does not recover it.
+Recovery:
 1. **Plug the captain into a laptop via USB.**
 2. Send `*CFG name=<server_profile> t=0\n` on its serial port.
-3. The captain applies immediately; both ends are back in sync.
-
-The NVS persistence means a power-cycle DOES NOT recover — both
-controllers come up on whatever they last applied. Don't yank the
-USB cable hoping for the best.
+3. The captain applies immediately and both ends are back in sync.
 
 ---
 
@@ -678,3 +670,30 @@ USB cable hoping for the best.
   SX1262 receiver front-end (-10 dBm received vs -25 dBm overload).
   Switching to `test_bench` at +0 dBm makes lab work safe; switching
   to `playa` re-arms for outdoor 2-mile range. No reflash needed.
+
+---
+
+## 12. Server Bridge HIL & Production Readiness Checklist
+
+This checklist details the hardware-in-the-loop (HIL) operational verification procedures required specifically for the Server Bridge and core radio policy gateways:
+
+* **Latency & RTT Performance**
+  - [ ] **Mutation Command RTT**: Verify $p_{95}$ response time for `cmd brightness/<n>` returning `ack` is within 6 seconds under the target profile.
+  - [ ] **Query Status RTT**: Verify $p_{95}$ response time for `qry engine/status` returning `rep` is within 6 seconds under the target profile.
+* **Server & Process Recovery**
+  - [ ] **Server Heltec Reboot**: Reboot the server Heltec. The bridge must automatically recover serial communication and re-anchor the replay window for the client node upon receiving the first valid frame.
+  - [ ] **Bridge Process Restart**: Kill and restart the `titanic-bridge.service` on the Pi. The bridge must initialize, load saved profiles, and synchronize.
+  - [ ] **Raspberry Pi Reboot**: Reboot the Pi. The `systemd` unit must start the bridge at boot, and all client connections must recover.
+  - [ ] **MarsinEngine Restart**: Restart the engine process. The bridge must handle request failures by returning clean NAKs to PortWatch, and automatically recover when the engine is back up.
+  - [ ] **USB Serial Unplug/Replug**: Unplug the server Heltec from the Pi and plug it back in. The bridge must recover connection serial lines without crashing the process.
+  - [ ] **Engine Outage Resilience**: With the engine down, verify the bridge returns `nak engine_error: unreachable` to PortWatch clients. Once restarted, the bridge must cleanly resolve subsequent commands.
+* **Security, Authenticity, & Access Control**
+  - [ ] **Replayed Frame Rejection**: Re-transmit an old recorded Frame v2. Verify that the bridge rejects it as `REPLAY_TOO_OLD` or `REPLAY_DUP` and logs the warning.
+  - [ ] **Ciphertext Tampering**: Mutate one byte of the `<body>` field. Verify that the bridge silently rejects the frame due to authentication tag mismatch.
+  - [ ] **Header / AAD Tampering**: Mutate one byte of the `<seq>` or `<flags>` field while keeping the body intact. Verify that the GCM engine fails authentication and rejects the frame.
+  - [ ] **Production LoRa Profile CFG Rejection**: Send a raw plaintext `*CFG` command over LoRa (simulating an RF attacker). Verify that production firmware rejects the command and logs `PROF: OTA *CFG rejected`.
+  - [ ] **USB Profile CFG Recovery**: Send a `*CFG` command locally over USB serial. The server must process it successfully, schedule the switch, and update NVS.
+  - [ ] **Unauthenticated Command Rejection**: Send a frame with an invalid tag or no tag. Verify it is rejected.
+  - [ ] **Role-Based Authorization**: Send a command that requires `captain` role from a node configured with the `crew` role in `.config.nodes.yaml`. Verify that the bridge returns a NAK indicating role denial.
+  - [ ] **Pyro System Block**: Send any command carrying a pyro/fire payload. The bridge and engine must reject the command structurally.
+

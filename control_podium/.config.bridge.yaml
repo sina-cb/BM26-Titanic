@@ -81,15 +81,15 @@ bus:
 # WS-broken-AND-polling-broken-AND-broadcast-is-our-last-hope
 # pathological case, while quartering the broadcast airtime.
 status_publish:
-  # At 4x redundant TX per frame (firmware), each PUB consumes ~2 s of
-  # airtime. The previous 15 s active cadence ate >13% of every 15 s
-  # window — colliding with operator qry/cmd traffic and degrading
-  # PortWatch responsiveness. Bumped to 60 s because PortWatch polls
-  # `qry engine/status` every 8 s on its own (the reliable sync path);
+  # At 1x redundant TX per frame (firmware), each PUB consumes less airtime.
+  # The previous 15 s active cadence could eat airtime, colliding with operator
+  # qry/cmd traffic and degrading PortWatch responsiveness. Bumped to 60 s because
+  # PortWatch polls `qry engine/status` every 8 s on its own (the reliable sync path);
   # the PUB is now purely a backstop for "WS subscriber wedged".
   short_interval_s: 60     # backstop cadence when clients are active
   long_interval_s: 120     # cadence when nobody has spoken in a while
   idle_threshold_s: 60     # "active" means anyone within this many seconds
+  enable_engine_ws_subscriber: true
 
 bridge:
   # Our own node ID. Always 0x01 (server) — keep this in sync with .config.nodes.yaml.
@@ -110,10 +110,10 @@ security:
   # Off in production (debug oracle); leave on during bring-up.
   expose_stats: false
 
-# Optional feature toggles (defaults keep legacy behaviour).
-features:
-  # Engine WebSocket subscriber wakes the compact_status publisher on every
-  # vis/mixer/pattern frame. On a busy engine + half-duplex LoRa that can
-  # flood the radio and starve operator qry/rep traffic. Set false when
-  # measuring link reliability; leave true for responsive field PUBs.
-  enable_engine_ws_subscriber: false
+# Profile switching configurations
+profile_switching:
+  # Whether raw *CFG lines over LoRa are processed (unauthenticated DoS threat).
+  # Kept false in production; can be optionally enabled on the bench.
+  plaintext_cfg_over_lora_enabled: false
+  # Whether local USB profile changes are permitted.
+  usb_cfg_enabled: true

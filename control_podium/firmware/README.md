@@ -20,6 +20,25 @@ keeps display, battery, and radio behaviour identical across the mesh.
 
 ---
 
+## 🚀 Quick Start
+
+Compile and flash the firmware:
+
+```bash
+# 1. List connected Heltec boards and their MAC address pairings
+cd control_podium/firmware
+python3 deploy.py --list
+
+# 2. Flash a client (captain handheld) node locally (e.g. node 0x0A)
+python3 deploy.py --node 0x0A
+
+# 3. Flash the server radio remotely via the Raspberry Pi
+cd ../..
+PYTHONPATH=control_podium python3 -m server_bridge.deploy --firmware-only
+```
+
+---
+
 ## Why MAC-locked deploys
 
 We have multiple Heltecs plugged into the same workstation during HIL.
@@ -68,6 +87,44 @@ python deploy.py --node 0x0A --build-only
 # 5. Skip the post-flash banner / sanity check (faster, less safe).
 python deploy.py --node 0x01 --no-verify
 ```
+
+---
+
+## Remote vs. Local Flashing
+
+We support two distinct flashing paths depending on whether the target radio is in your hand (local) or installed in the server rack (remote).
+
+### 1. Local Flashing (Workstation / HIL Bench)
+Use this path when the Heltec radio is plugged directly into your development machine:
+* **Target**: Captain handhelds (`podium_tx`) or a server radio being tested locally on the bench.
+* **Requirements**: Workstation must have PlatformIO installed (`pio` command available).
+* **Command**:
+  ```bash
+  python deploy.py --node 0x0A
+  ```
+* **Guardrails**: If multiple boards are plugged in, `deploy.py` intercepts the upload and verifies that the board's USB MAC matches the node entry in `.config.nodes.yaml` before flashing, preventing accidental role-swaps.
+
+### 2. Remote Flashing (Raspberry Pi)
+Use this path when the server Heltec is installed inside the road case and plugged into the Raspberry Pi:
+* **Target**: Server radio (`server_rx` on node `0x01`).
+* **Requirements**: SSH access to the Pi configured in `control_podium/server_bridge/.ssh.secret`.
+* **Command (run from your laptop)**:
+  ```bash
+  # Flash firmware only (leaves Python bridge code alone)
+  PYTHONPATH=control_podium python3 -m server_bridge.deploy --firmware-only
+
+  # Deploy new bridge code AND flash the server firmware
+  PYTHONPATH=control_podium python3 -m server_bridge.deploy --firmware
+  ```
+* **How it works under the hood**:
+  1. **Build Local**: The laptop builds the `server_rx` environment using PlatformIO (takes ~30s instead of ~5m on the Pi's CPU).
+  2. **Ship Binaries**: Copies the 4 output files (`bootloader.bin`, `partitions.bin`, `boot_app0.bin`, and `firmware.bin`) to `/opt/titanic-bridge/firmware-images/` on the Pi.
+  3. **Release Port**: Stops the bridge service (`sudo systemctl stop titanic-bridge`) to release the exclusive lock on `/dev/ttyACM0`.
+  4. **Flash Remote**: Runs `esptool` inside the Pi's venv to write the flash over the Pi's local USB port.
+  5. **Resume**: Restarts the bridge service and verifies the new boot banner in the journal logs.
+
+---
+
 
 ### First-time pairing
 

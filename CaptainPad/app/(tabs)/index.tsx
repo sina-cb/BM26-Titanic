@@ -1,23 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, AppState } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
-import { GlobalParams } from '@/components/GlobalParams';
+import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
+import { DeckTopBar } from '@/components/DeckTopBar';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
+import { AutopilotTimerPills, DeckTransitionControls } from '@/components/DeckTransitionControls';
+import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
   getApiBaseAsync,
   getAutopilot, setAutopilot, testConnection,
-  fetchMixerState, setMixerChannelControl,
+  fetchDeckChannel, setDeckChannelControl,
   setMixerView,
+  fetchDeckTransitionConfig, setDeckTransitionConfig,
+  fetchPlaylists,
+  type DeckTransitionConfig,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { engineVizEvents } from '@/utils/engineVizEvents';
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -86,16 +92,20 @@ const OfflineBanner = ({ error }: { error: string }) => (
 );
 
 export default function ControlDeckScreen() {
-  const [mixerChannels, setMixerChannels] = useState<any[]>([]);
+  const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
+  // D6: floating ALL MODULATIONS overlay state. Placed at the screen
+  // level so the panel can layer above every card on the deck without
+  // borrowing the deck channel card's clipping context.
+  const [showAllMods, setShowAllMods] = useState(false);
 
-  // The deck is always bound to its base channel — `mixerChannels[0]`.
-  // The "TARGET CHANNEL" picker that used to let the operator preview
-  // mixer channels from the deck was removed in May 2026; switching
-  // between channels now happens via the active playlist instead.
-  // See docs/16_captain_pad.md §"Target channel removal".
-  const deckChannel = mixerChannels[0] ?? null;
+  // Post-channel-split (May 2026): the deck channel comes from its
+  // own /deck/channel endpoint and the WS `deck` event. The mixer's
+  // `channels[]` array NEVER contains the deck channel anymore — that
+  // was the source of countless "deck shows a mixer overlay's
+  // exports" bugs. See docs/16_captain_pad.md and
+  // marsin_engine/lib/pattern_mixer.js (channel-split note).
   const deckChannelId: string | null = deckChannel?.id ?? null;
 
   // Autopilot state (cycles through the active playlist on a timer)
@@ -103,7 +113,37 @@ export default function ControlDeckScreen() {
   const [playlistDelayStr, setPlaylistDelayStr] = useState<string>('30');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // Deck transition config (soft swap between patterns via server-side
+  // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
+  // and triggerDeckPatternSwap in marsin_engine/lib/pattern_mixer.js).
+  const [deckTxConfig, setDeckTxConfig] = useState<DeckTransitionConfig>({
+    enabled: false,
+    mode: 'trans_crossfade',
+    durationMs: 1000,
+    shuffle: false,
+  });
+
+  // Live swap state — the engine broadcasts `deckSwapStarted` / `…Complete`
+  // around every soft swap. We use this to grey out the playlist (so taps
+  // during the fade are ignored client-side — server also returns 409 if
+  // a tap leaks through). Cleared on tab focus changes too: switching
+  // away to the mixer tells the engine to finalize the swap, so when we
+  // come back this flag is stale by definition.
+  const [deckSwapInFlight, setDeckSwapInFlight] = useState(false);
+
+  // Parent-owned playlist library (May 2026 refactor — see mixer.tsx
+  // for the full rationale). Fetched once on mount, then refreshed
+  // from the engine's `playlistLibrary` WS event. Passed down to the
+  // single PlaylistPanel below so it doesn't have to do its own
+  // /playlists GET — which under load could race and return an empty
+  // list, causing the "no playlists yet" symptom on the 3rd channel
+  // (in the mixer; same fetch path here for consistency).
+  const [playlistLibrary, setPlaylistLibrary] = useState<string[]>([]);
+
+  // Pre-May-2026 the deck tab owned its own WS. The topic split
+  // moved that into singleton buses (utils/engineEvents +
+  // utils/engineVizEvents). This tab now just subscribes — no per-tab
+  // socket, no double-parse of the mixer / vis firehose.
   const apiBaseRef = useRef<string>('');
   const visDataRef = useRef<{ [key: string]: string | null }>({});
   const [, setVisVersion] = useState(0);
@@ -112,73 +152,61 @@ export default function ControlDeckScreen() {
   useFocusEffect(
     useCallback(() => {
       setMixerView('deck');
+      // Tab unmount cleanup: any in-flight swap is finalized by the
+      // engine when we navigate away (the /mixer/view POST does that
+      // server-side), so clear the local flag so the next mount starts
+      // with the lock OFF instead of a stale in-flight assumption.
+      return () => setDeckSwapInFlight(false);
     }, [])
   );
 
-  const connectWebSocket = useCallback((base: string) => {
-    // Close existing
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-    const wsPort = base.split(':').pop();
-    const wsUrl = `ws://${engineHost}:${wsPort}`;
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      ws.onopen = () => {
-        setIsConnected(true);
-        setConnectionError('');
-      };
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          // Fan out to subscribers (PlaylistPanel, etc.) before any local
-          // handling. Listeners only react to types they care about.
-          engineEvents.emit(msg);
-          if (msg.type === 'mixer') {
-            setMixerChannels(msg.channels || []);
-          } else if (msg.type === 'autopilot') {
-            // The engine broadcasts every autopilot transition (so any
-            // writer — this UI, PortWatch over LoRa, an HTTP script —
-            // ends up rendered the same way). Mirror it into local state
-            // so the toggle/picker on this tab tracks remote flips
-            // without having to re-fetch on a timer.
-            if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
-            if (typeof msg.delay_s === 'string' && msg.delay_s.length) {
-              setPlaylistDelayStr(msg.delay_s);
-            }
-            if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
-          } else if (msg.type === 'vis') {
-            visDataRef.current = msg.vis || {};
-            // Throttle UI updates to ~5fps (200ms)
-            const now = Date.now();
-            if (now - lastVisUpdateRef.current > 200) {
-              lastVisUpdateRef.current = now;
-              setVisVersion(v => v + 1);
-            }
-          }
-        } catch {}
-      };
-      ws.onerror = () => {
-        setIsConnected(false);
-        setConnectionError('WebSocket connection failed');
-      };
-      ws.onclose = () => {
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => {
-          if (apiBaseRef.current) {
-            connectWebSocket(apiBaseRef.current);
-          }
-        }, 5000);
-      };
-      wsRef.current = ws;
-    } catch {}
+  const subscribeBuses = useCallback(() => {
+    // Control plane: deck channel state, autopilot, deck-transition
+    // config, soft-swap lifecycle markers.
+    const unsubControl = engineEvents.subscribe((msg) => {
+      if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
+        setPlaylistLibrary(msg.names as string[]);
+      }
+      if (msg.type === 'deck') {
+        setDeckChannel((msg.channel as any) || null);
+      } else if (msg.type === 'autopilot') {
+        if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
+        if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
+          setPlaylistDelayStr(msg.delay_s as string);
+        }
+        if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      } else if (msg.type === 'deckTransitionConfig') {
+        setDeckTxConfig((prev) => ({
+          enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
+          mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
+          durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
+          shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+        }));
+      } else if (msg.type === 'deckSwapStarted') {
+        setDeckSwapInFlight(true);
+      } else if (msg.type === 'deckSwapComplete') {
+        setDeckSwapInFlight(false);
+      }
+    });
+    const unsubStatus = engineEvents.subscribeStatus((s) => {
+      setIsConnected(!!s.connected);
+      setConnectionError(s.connected ? '' : (s.lastError || ''));
+    });
+    // Viz plane: master strip lives on the deck tab too.
+    const unsubViz = engineVizEvents.subscribe((msg) => {
+      if (msg.type === 'vis') {
+        visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
+        const now = Date.now();
+        if (now - lastVisUpdateRef.current > 200) {
+          lastVisUpdateRef.current = now;
+          setVisVersion(v => v + 1);
+        }
+      }
+    });
+    return () => { unsubControl(); unsubStatus(); unsubViz(); };
   }, []);
 
-  // ── Boot: wait for resolved API base, then connect ──────────────────
+  // ── Boot: warm REST seeds + nudge singleton buses to reconnect ─────
   const connectToEngine = useCallback(async () => {
     const base = await getApiBaseAsync();
     apiBaseRef.current = base;
@@ -188,8 +216,13 @@ export default function ControlDeckScreen() {
     setIsConnected(conn.ok);
     setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
 
-    // Always start WebSocket so the 5s auto-reconnect loop can run
-    connectWebSocket(base);
+    // Only nudge the singleton buses if they're actually down — a
+    // forced reconnect on every tab focus tears the live socket apart
+    // and surfaces as the "Engine Offline" flash. The buses already
+    // self-heal on AppState 'active' and on the engine closing the
+    // socket, so this is purely a safety net.
+    if (!engineEvents.getStatus().connected) engineEvents.reconnect();
+    if (!engineVizEvents.getStatus().connected) engineVizEvents.reconnect();
 
     if (!conn.ok) return;
 
@@ -201,17 +234,42 @@ export default function ControlDeckScreen() {
       setIsShuffle(apResult.data.shuffle);
     }
 
-    // Load initial mixer state
-    const mixerRes = await fetchMixerState();
-    if (mixerRes.ok && mixerRes.data) {
-      setMixerChannels(mixerRes.data.channels || []);
+    // Load deck transition config
+    const dtRes = await fetchDeckTransitionConfig();
+    if (dtRes.ok && dtRes.data) {
+      setDeckTxConfig(dtRes.data);
     }
-  }, [connectWebSocket]);
+
+    // Load initial deck channel state. We deliberately do NOT
+    // call /mixer here — the deck tab has no business surfacing
+    // overlay channels.
+    const deckRes = await fetchDeckChannel();
+    if (deckRes.ok && deckRes.data) {
+      setDeckChannel(deckRes.data.channel || null);
+    }
+
+    // Seed the parent-owned playlist library (see comment on the
+    // state declaration). Engine returns the cached in-memory list.
+    const pLib = await fetchPlaylists();
+    if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
+  }, []);
+
+  // Patch the deck transition config (optimistic local update + POST).
+  // The server broadcasts `deckTransitionConfig` on success which we
+  // already mirror in the WS handler — that's the source of truth, but
+  // updating locally first avoids the visible "snap-back" on tap.
+  const handleDeckTxChange = useCallback((patch: Partial<DeckTransitionConfig>) => {
+    setDeckTxConfig((prev) => ({ ...prev, ...patch }));
+    setDeckTransitionConfig(patch);
+  }, []);
 
   useEffect(() => {
     connectToEngine();
+    const teardown = subscribeBuses();
 
-    // Reconnect when app comes to foreground
+    // Reconnect REST seeds when app comes to foreground. The
+    // singleton buses also auto-reconnect on AppState 'active'
+    // (utils/engineBus.ts), so we don't duplicate the WS work here.
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         connectToEngine();
@@ -220,17 +278,23 @@ export default function ControlDeckScreen() {
 
     return () => {
       sub.remove();
-      if (wsRef.current) wsRef.current.close();
+      teardown();
     };
-  }, [connectToEngine]);
+  }, [connectToEngine, subscribeBuses]);
 
-  const triggerChannelControl = (channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
-    setMixerChannelControl(channelId, id, v0, v1, v2);
+  const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
+    // Deck tab only ever writes to the deck channel — there's a single
+    // dedicated route for that now. We ignore the channelId arg (kept
+    // for API compatibility with the previous mixer-routed call).
+    setDeckChannelControl(id, v0, v1, v2);
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-      <CPCControls wsRef={wsRef} />
+      {/* Top bar: title + connection status + master fader. Matches the
+          Marsin Mixer header layout, minus channel-add buttons. */}
+      <DeckTopBar isConnected={isConnected} />
+      <CPCControls />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -241,8 +305,14 @@ export default function ControlDeckScreen() {
         <PixelStrip base64Data={visDataRef.current[deckChannelId || 'master']} height={18} style={{ borderRadius: 6 }} />
       </View>
       <View style={globalStyles.container}>
-        {/* Left Pane — Playlist (the one and only pattern list) */}
-        <View style={globalStyles.leftPane}>
+        {/* Left Pane — Playlist (the one and only pattern list).
+            Padding is tightened from the default leftPane (24) so the
+            playlist + Rig globals strip get more vertical room. The
+            playlist now shows ≥5 entries on 11" iPad landscape and the
+            REFRESH/RECONNECT button moved INTO the playlist header
+            (top-right ↻ icon, see PlaylistPanel `onRefreshConnection`)
+            so the old full-width button below the list is gone. */}
+        <View style={[globalStyles.leftPane, { padding: 14, gap: 8 }]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
           {/* THE pattern list = the active playlist for the deck.
@@ -250,17 +320,25 @@ export default function ControlDeckScreen() {
               full library and add it as a new entry. */}
           {deckChannelId ? (
             <View key={deckChannelId} style={{ flex: 1, minHeight: 0 }}>
-              <PlaylistPanel channelId={deckChannelId} channelLabel="DECK MAIN" locked={!!deckChannel?.locked} />
+              <PlaylistPanel
+                channelId={deckChannelId}
+                role="deck"
+                channelLabel="DECK MAIN"
+                locked={!!deckChannel?.locked}
+                initialAssignment={deckChannel?.playlist || null}
+                // During a deck pattern soft-swap we grey out the list +
+                // disable taps. The engine also rejects taps server-side
+                // with 409 — this is just the UX layer of the contract.
+                disabled={deckSwapInFlight}
+                onRefreshConnection={connectToEngine}
+                playlistLibrary={playlistLibrary}
+              />
             </View>
           ) : (
             <Text style={{ color: Colors.light.secondary, fontStyle: 'italic' }}>
               Waiting for deck…
             </Text>
           )}
-
-          <TouchableOpacity onPress={connectToEngine} style={{ marginVertical: 12, padding: 10, alignItems: 'center', borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 12 }}>REFRESH / RECONNECT</Text>
-          </TouchableOpacity>
 
           <RigGlobals />
         </View>
@@ -273,49 +351,71 @@ export default function ControlDeckScreen() {
               <OfflineBanner error={connectionError} />
             )}
 
-            {/* Playlist Automator Row */}
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary, marginBottom: 8 }}>AUTOPILOT TRANSITIONS</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, padding: 12, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder }}>
-              <TouchableOpacity
-                onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
-              >
-                <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : Colors.light.text} />
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : Colors.light.text, fontSize: 12 }}>
-                  {isPlaylistActive ? 'PAUSE' : 'PLAY'}
-                </Text>
-              </TouchableOpacity>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginHorizontal: 16 }}>
-                <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.secondary, fontSize: 12 }}>TIMER</Text>
-                <View style={{ flex: 1, height: 48, justifyContent: 'center', overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, borderColor: Colors.light.ghostBorder, borderWidth: 1 }}>
-                  <Picker
-                    selectedValue={playlistDelayStr}
-                    onValueChange={(itemValue) => {
-                      setPlaylistDelayStr(itemValue);
-                      setAutopilot(isPlaylistActive, itemValue, isShuffle);
-                    }}
-                    style={{ width: '100%', height: 48, color: Colors.light.primary, justifyContent: 'center' }}
-                    itemStyle={{ color: Colors.light.primary, fontSize: 16, fontFamily: 'SpaceGrotesk_700Bold', height: 48 }}
+            {/* ── AUTOPILOT TRANSITIONS ────────────────────────────────
+                PLAY/PAUSE | preset pill-bar (1s … 180s) | SHUFFLE.
+                The pill-bar replaced a native <Picker> wheel in May 2026 —
+                the wheel was hard to hit, ate vertical space, and rendered
+                inconsistently across iOS versions. Pills are direct-tap
+                and scroll horizontally if the operator's currently-active
+                pick is off-screen.
+                Card-internal header (May 2026): the AUTOPILOT TRANSITIONS
+                label was hoisted INSIDE the card to recover the ~24px the
+                free-standing label + its 8px margin used to occupy. Same
+                typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
+                10pt / 1.2 tracking / secondary / uppercase). */}
+            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
+              {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
+                  costs zero extra vertical height — the label rides the
+                  baseline of the tallest control next to it. */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: Colors.light.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
+                  <TouchableOpacity
+                    onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
                   >
-                    {[...Array.from({ length: 30 }, (_, i) => i + 1), 45, 60, 90, 120, 180, 240, 300, 600, 1200].map(val => {
-                      const m = Math.floor(val / 60);
-                      const s = val % 60;
-                      const label = m > 0 ? (s > 0 ? `${m}m ${s}s` : `${m}m`) : `${s}s`;
-                      return <Picker.Item key={val} label={label} value={val.toString()} />;
-                    })}
-                  </Picker>
+                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : Colors.light.text} />
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : Colors.light.text, fontSize: 12 }}>
+                      {isPlaylistActive ? 'PAUSE' : 'PLAY'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
+
+                <TouchableOpacity
+                  onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+                  accessibilityRole="switch"
+                  accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
+                >
+                  <IconSymbol name="shuffle" size={16} color={isShuffle ? Colors.light.primary : Colors.light.icon} />
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? Colors.light.primary : Colors.light.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
+                </TouchableOpacity>
               </View>
 
-              <TouchableOpacity
-                onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8 }}
-              >
-                <IconSymbol name="shuffle" size={16} color={isShuffle ? Colors.light.primary : Colors.light.icon} />
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? Colors.light.primary : Colors.light.icon, fontSize: 12 }}>SHUFFLE</Text>
-              </TouchableOpacity>
+              {/* Row 2: timer pill-bar */}
+              <AutopilotTimerPills
+                value={parseInt(playlistDelayStr, 10) || 30}
+                onChange={(v) => {
+                  const str = String(v);
+                  setPlaylistDelayStr(str);
+                  setAutopilot(isPlaylistActive, str, isShuffle);
+                }}
+              />
             </View>
+
+            {/* ── DECK TRANSITIONS ───────────────────────────────────
+                Soft-swap pattern changes via the engine's hidden deck
+                shadow channel (see triggerDeckPatternSwap in the engine
+                mixer). Independent of AUTOPILOT — playlist auto-cycling
+                and per-tap entry swaps BOTH route through this when
+                enabled. */}
+            <DeckTransitionControls
+              enabled={deckTxConfig.enabled}
+              mode={deckTxConfig.mode}
+              durationMs={deckTxConfig.durationMs}
+              shuffle={deckTxConfig.shuffle}
+              onChange={handleDeckTxChange}
+            />
 
             {/* Channel parameters for the deck (base) channel. The deck is
                 hard-wired to the base channel; CaptainPad's MIXER tab is
@@ -324,19 +424,56 @@ export default function ControlDeckScreen() {
               {(deckChannel ? [deckChannel] : []).map((channel) => {
                 const channelTitle = "DECK MAIN";
                 const exports = channel.exports || [];
-                const toggles = exports.filter((e: any) => e.kind === 2);
-                const triggers = exports.filter((e: any) => e.kind === 3);
+                // GlobalParams (above) is now responsible for surfacing
+                // CPC-matched local exports with a MATCHED badge. This
+                // bottom strip just renders the operator-tappable ones,
+                // so filter the matched toggles/triggers out here to
+                // avoid double-listing them.
+                const toggles = exports.filter((e: any) => e.kind === 2 && !e.cpcOwned);
+                const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
 
                 return (
                   <View key={channel.id} style={{ width: '100%', backgroundColor: Colors.light.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
-                    {/* Renaming the active playlist entry: tap the title and type.
-                        Auto-saves on blur; the PlaylistPanel listens for the same
-                        `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
-                    <EntryLabelEditor
-                      channelId={channel.id}
-                      channelLabel={channelTitle}
-                      locked={!!channel.locked}
-                    />
+                    {/* D6 trigger: ◎ ALL pill next to the entry label.
+                        Disabled when no deck playlist is loaded — the
+                        AllModulationsPanel renders an empty state in
+                        that case but the disabled affordance is a
+                        clearer signal up-front. */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <View style={{ flex: 1 }}>
+                        {/* Renaming the active playlist entry: tap the title and type.
+                            Auto-saves on blur; the PlaylistPanel listens for the same
+                            `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
+                        <EntryLabelEditor
+                          channelId={channel.id}
+                          channelLabel={channelTitle}
+                          locked={!!channel.locked}
+                        />
+                      </View>
+                      {/* SAVED flash moved up here from inside GlobalParams
+                          so it never reflows the slider stack. The component
+                          always reserves the same width/height — the inner
+                          pill only fades in/out. */}
+                      <DeckSavedFlash deckChannelId={channel.id} />
+                      <TouchableOpacity
+                        onPress={() => setShowAllMods(true)}
+                        disabled={!channel.playlist?.name}
+                        accessibilityLabel="Open all modulations panel"
+                        style={{
+                          paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                          borderWidth: 1, borderColor: '#00a86b',
+                          backgroundColor: 'transparent',
+                          opacity: channel.playlist?.name ? 1 : 0.4,
+                        }}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+                          color: '#00a86b', letterSpacing: 0.5,
+                        }}>
+                          ◎ ALL
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
 
                     <View style={{ marginBottom: 16 }}>
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
@@ -358,6 +495,14 @@ export default function ControlDeckScreen() {
           </ScrollView>
         </View>
       </View>
+      {/* D6: floating ALL MODULATIONS overlay — rendered at the screen
+          level so it draws above every card. */}
+      <AllModulationsPanel
+        visible={showAllMods}
+        onClose={() => setShowAllMods(false)}
+        playlistName={deckChannel?.playlist?.name ?? null}
+        activeEntryId={deckChannel?.playlist?.activeEntryId ?? null}
+      />
     </View>
   );
 }

@@ -5,14 +5,22 @@ import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
-import { useServerDiscovery, DiscoveredServer } from '@/hooks/useServerDiscovery';
+import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/hooks/useServerDiscovery';
 
+// AsyncStorage key for the operator-picked subnet prefix (e.g. "10.1.1").
+// iOS getIpAddressAsync() is unreliable when multiple interfaces are
+// active (USB tether, link-local 169.254) and frequently returns the
+// wrong one — see hooks/useServerDiscovery.ts. Persisting the operator's
+// last working subnet means they don't have to retype it every cold
+// launch, especially on the rig where the show network is fixed.
+const SUBNET_OVERRIDE_KEY = '@CaptainPad:subnetOverride';
 
 export default function ConfigScreen() {
   const [ip, setIp] = useState('');
   const [saved, setSaved] = useState(false);
   const [connResult, setConnResult] = useState<ConnectionResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [subnetInput, setSubnetInput] = useState('');
 
   const discovery = useServerDiscovery();
 
@@ -23,12 +31,58 @@ export default function ConfigScreen() {
     });
   }, []);
 
+  // Hydrate the operator-picked subnet override from disk so a cold
+  // launch on the rig's known network doesn't require retyping.
+  useEffect(() => {
+    AsyncStorage.getItem(SUBNET_OVERRIDE_KEY).then(stored => {
+      if (stored && normalizeSubnetPrefix(stored)) {
+        setSubnetInput(stored);
+      }
+    }).catch(() => undefined);
+  }, []);
+
   // Auto-test connection on mount
   useEffect(() => {
     if (ip) {
       handleTestConnection();
     }
   }, []);
+
+  // Kick off a scan using the operator's override (if any). Persists
+  // the value to AsyncStorage on every successful scan-start so the
+  // next cold launch can re-use it. Empty input falls through to
+  // OS auto-detect inside the hook.
+  const handleScan = useCallback(async () => {
+    if (discovery.scanning) {
+      discovery.cancel();
+      return;
+    }
+    const normalized = normalizeSubnetPrefix(subnetInput);
+    if (subnetInput.trim() && !normalized) {
+      // Don't start a doomed scan — surface the format error to the
+      // input field by clearing the persisted value.
+      return;
+    }
+    if (normalized) {
+      AsyncStorage.setItem(SUBNET_OVERRIDE_KEY, normalized).catch(() => undefined);
+    } else {
+      AsyncStorage.removeItem(SUBNET_OVERRIDE_KEY).catch(() => undefined);
+    }
+    discovery.scan(normalized);
+  }, [subnetInput, discovery]);
+
+  // "Auto" button: pre-fill the input with whatever the OS sees right
+  // now (typically the wrong interface on iOS — but useful as a starting
+  // point the operator can edit to the correct prefix).
+  const handleAutoFillSubnet = useCallback(() => {
+    if (discovery.autoDetectedIp) {
+      const parts = discovery.autoDetectedIp.split('.');
+      if (parts.length === 4) setSubnetInput(parts.slice(0, 3).join('.'));
+    }
+  }, [discovery.autoDetectedIp]);
+
+  // Show inline validation hint when the field is non-empty but malformed.
+  const subnetInputValid = !subnetInput.trim() || !!normalizeSubnetPrefix(subnetInput);
 
   const handleSave = async () => {
     await setApiBase(ip);
@@ -175,9 +229,66 @@ export default function ConfigScreen() {
             </View>
           </View>
 
+          {/* Subnet override input — iOS getIpAddressAsync often picks
+              a link-local 169.254.x interface when USB or other
+              interfaces are active, so the operator needs a way to
+              point the scan at the real show subnet (e.g. "10.1.1"). */}
+          <View style={{ marginBottom: 12 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: Colors.light.secondary, marginBottom: 6, letterSpacing: 0.6 }}>
+              SUBNET (/24 PREFIX) — leave blank to auto-detect
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TextInput
+                value={subnetInput}
+                onChangeText={setSubnetInput}
+                placeholder="e.g. 10.1.1"
+                placeholderTextColor={Colors.light.icon}
+                editable={!discovery.scanning}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="numbers-and-punctuation"
+                style={{
+                  flex: 1,
+                  fontFamily: 'SpaceGrotesk_700Bold',
+                  fontSize: 14,
+                  color: Colors.light.text,
+                  paddingHorizontal: 12, paddingVertical: 10,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: subnetInputValid ? Colors.light.ghostBorder : Colors.light.error,
+                  backgroundColor: Colors.light.surfaceContainerLowest,
+                }}
+              />
+              <TouchableOpacity
+                onPress={handleAutoFillSubnet}
+                disabled={discovery.scanning || !discovery.autoDetectedIp}
+                style={{
+                  paddingHorizontal: 12, paddingVertical: 10,
+                  borderRadius: 8, borderWidth: 1,
+                  borderColor: Colors.light.ghostBorder,
+                  opacity: (discovery.scanning || !discovery.autoDetectedIp) ? 0.4 : 1,
+                }}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: Colors.light.secondary, letterSpacing: 0.6 }}>
+                  AUTO
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {!subnetInputValid ? (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.light.error, marginTop: 4 }}>
+                Invalid — use three octets, e.g. 10.1.1
+              </Text>
+            ) : discovery.autoDetectedIp ? (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.light.icon, marginTop: 4 }}>
+                iOS sees this iPad as {discovery.autoDetectedIp}
+              </Text>
+            ) : null}
+          </View>
+
           {/* Scan Button */}
           <TouchableOpacity
-            onPress={discovery.scanning ? discovery.cancel : discovery.scan}
+            onPress={handleScan}
+            disabled={!subnetInputValid && !discovery.scanning}
             style={{
               backgroundColor: discovery.scanning ? Colors.light.error : Colors.light.primary,
               paddingVertical: 14,
@@ -187,6 +298,7 @@ export default function ConfigScreen() {
               flexDirection: 'row',
               justifyContent: 'center',
               gap: 10,
+              opacity: (!subnetInputValid && !discovery.scanning) ? 0.5 : 1,
               ...globalStyles.ambientShadow
             }}
           >

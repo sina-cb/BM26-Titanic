@@ -15,6 +15,79 @@ nodes) sit on the other side of the airwaves.
 
 ---
 
+## 🚀 Quick Start
+
+Get the simulated environment up and running instantly:
+
+```bash
+# 1. Run the local mock mesh simulation (no hardware needed)
+cd control_podium
+PYTHONPATH=. python3 -m companions.mesh_demo -q
+
+# 2. Run the unit & integration test suite
+PYTHONPATH=. pytest tests/ -q
+```
+
+---
+
+## System Architecture & Components
+
+The Titanic control system consists of several dedicated components collaborating across different protocols and network layers.
+
+```
+                  ┌───────────────┐
+                  │  PortWatch    │ (iOS App)
+                  └───────┬───────┘
+                          │ BLE (Passkey, Encrypted)
+                          ▼
+                  ┌───────────────┐
+                  │ podium_tx     │ (Client Heltec Radio)
+                  └───────┬───────┘
+                          │ LoRa (915 MHz, AES-GCM)
+                          ▼
+                  ┌───────────────┐
+                  │ server_rx     │ (Server Heltec Radio)
+                  └───────┬───────┘
+                          │ USB-CDC Serial
+                          ▼
+                  ┌───────────────┐
+                  │ server_bridge │ (Python Pi Service)
+                  └───────┬───────┘
+                          │ HTTP REST / WebSocket
+                          ▼
+                  ┌───────────────┐
+                  │ MarsinEngine  │ (Show Control Engine)
+                  └───────────────┘
+```
+
+1. **LoRa Mesh Network Protocol**:
+   * Encrypted and authenticated with AES-128-GCM (Titanic Frame v2 `T2|` format) to secure communications over public RF bands.
+   * Engineered for half-duplex channels with strict payload constraints to maximize reliability and minimize airtime.
+   * Reference: [`docs/07_control_podium.md`](../docs/07_control_podium.md).
+
+2. **Heltec Radio Firmware (`firmware/`)**:
+   * Shared C++ codebase compiled for Heltec V3/V4 radios using PlatformIO.
+   * Supports two roles: Client (`podium_tx`) and Server (`server_rx`).
+   * Implements dynamic power profiles (HIGH/LOW TX power) to preserve battery on handhelds, NVS-persisted radio settings, and an OLED multi-page display.
+   * Reference: [`control_podium/firmware/README.md`](firmware/README.md).
+
+3. **Raspberry Pi Bridge (`server_bridge/`)**:
+   * A lightweight Python application running as a systemd service (`titanic-bridge.service`) on the server-attached Raspberry Pi.
+   * Decrypts and authenticates LoRa frames, resolves access control, translates command parameters into MarsinEngine API calls, and broadcasts telemetry.
+   * Reference: [`control_podium/server_bridge/README.md`](server_bridge/README.md).
+
+4. **PortWatch Field-Ops App (`PortWatch/`)**:
+   * A standalone React Native/Expo iOS app for remote field operations.
+   * Communicates with the client Heltec over BLE to let operators trigger patterns, blackout the rig, switch playlists, adjust master brightness, and view system health.
+   * Reference: [`control_podium/PortWatch/README.md`](PortWatch/README.md).
+
+5. **Host Companions & Protocol Core (`companions/`, `comms/`)**:
+   * Command-line utilities, simulation bus daemons, and developer tools for local integration testing.
+   * Reference: [`control_podium/companions/README.md`](companions/README.md) and [`control_podium/comms/README.md`](comms/README.md).
+
+---
+
+
 ## What lives where
 
 ```

@@ -6,13 +6,134 @@ sacn:
   multicast: false
 engine:
   fps: 40
+mixer:
+  maxChannels: 4
+vis:
+  broadcastHz: 5
+  maxPixels: 100
 server:
   port: 6968
 playlist:
   active: false
-  delay_s: '5'
-  shuffle: false
+  delay_s: '1'
+  shuffle: true
 web_client:
   enabled: false
   port: 6967
   build_dir: ../CaptainPad/dist
+osc:
+  enabled: true
+  port: 10000
+  host: 0.0.0.0
+  gainMax: 2
+  allowedSenders: []
+  bindings: {}
+audio:
+  enabled: true
+  capture:
+    backend: ffmpeg
+    ffmpegPath: ffmpeg
+    platform: auto
+    device: null
+    deviceLabel: null
+    deviceId: null
+    sampleRate: 44100
+    channels: 1
+    inputFormat: null
+    stopTimeoutMs: 2000
+    stderrWarnIntervalMs: 60000
+  fftSize: 1024
+  hopSize: 512
+  bands:
+    lowMaxHz: 200
+    midMaxHz: 4000
+    attackMs: 8
+    releaseMs: 180
+    noiseGate: 0.04
+  kick:
+    minHz: 50
+    maxHz: 110
+    threshold: 1.8
+    refractoryMs: 140
+    decayMs: 120
+colorPalettes:
+  - id: laser_lime
+    name: Laser Lime ★
+    c1: 0.28
+    c2: 0.78
+  - id: ultraviolet
+    name: Ultraviolet ★
+    c1: 0.74
+    c2: 0.52
+  - id: bass_drop
+    name: Bass Drop ★
+    c1: 0.64
+    c2: 0.9
+  - id: midnight_laser
+    name: Midnight Laser ★
+    c1: 0.66
+    c2: 0.33
+  - id: vapor_laser
+    name: Vapor Laser ★
+    c1: 0.91
+    c2: 0.45
+  - id: sunset_coral
+    name: Sunset Coral
+    c1: 0.03
+    c2: 0.5
+  - id: aurora
+    name: Aurora
+    c1: 0.35
+    c2: 0.85
+  - id: phoenix
+    name: Phoenix
+    c1: 0
+    c2: 0.13
+  - id: deep_sea
+    name: Deep Sea
+    c1: 0.62
+    c2: 0.48
+  - id: cyberpunk
+    name: Cyberpunk
+    c1: 0.92
+    c2: 0.6
+  - id: forest_fire
+    name: Forest Fire
+    c1: 0.07
+    c2: 0.25
+  - id: lavender_dream
+    name: Lavender Dream
+    c1: 0.75
+    c2: 0.95
+  - id: tropical
+    name: Tropical
+    c1: 0.46
+    c2: 0.04
+  - id: royal
+    name: Royal
+    c1: 0.78
+    c2: 0.13
+  - id: plasma_core
+    name: Plasma Core
+    c1: 0.07
+    c2: 0.8
+  - id: toxic_wave
+    name: Toxic Wave
+    c1: 0.31
+    c2: 0.6
+  - id: neon_jungle
+    name: Neon Jungle
+    c1: 0.36
+    c2: 0.18
+  - id: electric_ice
+    name: Electric Ice
+    c1: 0.5
+    c2: 0.76
+  - id: acid_sunset
+    name: Acid Sunset
+    c1: 0.08
+    c2: 0.26
+  - id: afterhours
+    name: Afterhours
+    c1: 0.69
+    c2: 0.1

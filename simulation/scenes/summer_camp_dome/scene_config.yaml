@@ -108,7 +108,7 @@ parLights:
     max: 1
     step: 0.05
   maxSpotlights:
-    value: 100
+    value: 160
     label: Max Spotlights
     min: 1
     max: 200
@@ -120,9 +120,87 @@ parLights:
     value: false
     label: Show Generators
   fixtures:
+    - group: TriangleEdges
+      name: ShehdsBar 21
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: -0.34992128010745205
+      'y': 2.83722289418119
+      z: 5.16815858009418
+      rotX: -0.0
+      rotY: 0
+      rotZ: 0
+    - group: TriangleEdges
+      name: ShehdsBar 21
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 0.10964267857508764
+      'y': 3.527116342444624
+      z: 5.219240164031626
+      rotX: 0
+      rotY: 0
+      rotZ: -56.61317144274455
+    - group: TriangleEdges
+      name: ShehdsBar 22
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: -0.8262602458616368
+      'y': 3.535042521895957
+      z: 5.190285683104403
+      rotX: -0.0
+      rotY: 0
+      rotZ: 52.50545540754772
+    - group: TrianglePars
+      name: UkingPar 23
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 20
+      angle: 20
+      penumbra: 0.5
+      x: 1.6835444712338985
+      'y': 3.4288811329809743
+      z: 6.686670656144868
+      rotX: -60.94486375723701
+      rotY: 0
+      rotZ: 0
+    - group: TrianglePars
+      name: UkingPar 24
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 20
+      angle: 20
+      penumbra: 0.5
+      x: -0.5488360276612336
+      'y': 3.510445308520201
+      z: 6.800656661125617
+      rotX: -59.529289996461
+      rotY: 0
+      rotZ: 0
+    - group: TrianglePars
+      name: UkingPar 25
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 20
+      angle: 20
+      penumbra: 0.5
+      x: -2.583081207111756
+      'y': 3.6031171228316845
+      z: 6.78192102402529
+      rotX: -59.645707765494386
+      rotY: 0
+      rotZ: 0
     - group: Fogger
-      name: ChauvetHaze4D 20
-      fixtureType: ChauvetHaze4D
+      name: TEFogMachine 26
+      fixtureType: TEFogMachine
       color: '#ffaa44'
       intensity: 5
       angle: 20
@@ -173,7 +251,7 @@ parLights:
       z: 8.229838658936565
       rotX: -40.60129464500447
       rotY: -145.3846153846154
-      rotZ: 0
+      rotZ: -2.0945189489002795e-15
       traceGenerated: true
     - group: BarLights
       name: BarLights 4
@@ -201,7 +279,7 @@ parLights:
       z: 9.350162426854148
       rotX: -40.60129464500447
       rotY: 159.23076923076923
-      rotZ: 2.0945189489002795e-15
+      rotZ: 0
       traceGenerated: true
     - group: BarLights
       name: BarLights 6
@@ -325,9 +403,9 @@ parLights:
       x: 8
       'y': 2.5
       z: 0
-      rotX: -162.6459753637387
-      rotY: -89.99999999999999
-      rotZ: 0
+      rotX: -17.35402463626129
+      rotY: 90.00000000000003
+      rotZ: 180
       traceGenerated: true
     - group: VintageLights
       name: VintageLights 2
@@ -385,89 +463,11 @@ parLights:
       rotY: -18
       rotZ: 0
       traceGenerated: true
-    - group: TriangleEdges
-      name: ShehdsBar 21
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: -0.34992128010745205
-      'y': 2.83722289418119
-      z: 5.16815858009418
-      rotX: -0.0
-      rotY: 0
-      rotZ: 0
-    - group: TriangleEdges
-      name: ShehdsBar 21
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 0.10964267857508764
-      'y': 3.527116342444624
-      z: 5.219240164031626
-      rotX: 0
-      rotY: 0
-      rotZ: -56.61317144274455
-    - group: TriangleEdges
-      name: ShehdsBar 22
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: -0.8262602458616368
-      'y': 3.535042521895957
-      z: 5.190285683104403
-      rotX: -0.0
-      rotY: 0
-      rotZ: 52.50545540754772
-    - group: TrianglePars
-      name: UkingPar 24
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 20
-      penumbra: 0.5
-      x: 1.6835444712338985
-      'y': 3.4288811329809743
-      z: 6.686670656144868
-      rotX: -60.94486375723701
-      rotY: 0
-      rotZ: 0
-    - group: TrianglePars
-      name: UkingPar 24
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 20
-      penumbra: 0.5
-      x: -0.5488360276612336
-      'y': 3.510445308520201
-      z: 6.800656661125617
-      rotX: -59.529289996461
-      rotY: 0
-      rotZ: 0
-    - group: TrianglePars
-      name: UkingPar 25
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 20
-      penumbra: 0.5
-      x: -2.583081207111756
-      'y': 3.6031171228316845
-      z: 6.78192102402529
-      rotX: -59.645707765494386
-      rotY: 0
-      rotZ: 0
 ledStrands:
   _section:
     label: 💡 LED Strands
     type: ledStrandArray
-    collapsed: false
+    collapsed: true
   strandsEnabled:
     value: true
     label: Master Enabled

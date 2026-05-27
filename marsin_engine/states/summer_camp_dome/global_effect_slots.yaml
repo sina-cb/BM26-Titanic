@@ -1,0 +1,71 @@
+slots:
+  - slotId: 1
+    enabled: true
+    label: 4 Hz Sync
+    effectId: strobe
+    presetId: sync_4hz
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 2
+    enabled: true
+    label: Ghost Ship
+    effectId: feedbackTrails
+    presetId: ghost_ship
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 3
+    enabled: true
+    label: Fogger
+    effectId: fogger
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 4
+    enabled: true
+    label: Vintage Burst
+    effectId: dropHit
+    presetId: vintage_burst
+    behavior: trigger
+    paramsOverride: {}
+  - slotId: 5
+    enabled: true
+    label: Iceberg Flash
+    effectId: dropHit
+    presetId: iceberg_flash
+    behavior: trigger
+    paramsOverride: {}
+  - slotId: 6
+    enabled: true
+    label: 10 Hz Hard
+    effectId: strobe
+    presetId: hard_10hz
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 7
+    enabled: true
+    label: Vintage Wht
+    effectId: vintageWhite
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 8
+    enabled: true
+    label: Blast Wht
+    effectId: blastWhite
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 9
+    enabled: true
+    label: UV Blast
+    effectId: uvBlast
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 10
+    enabled: true
+    label: Fogger
+    effectId: fogger
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}

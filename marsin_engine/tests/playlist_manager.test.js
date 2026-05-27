@@ -163,3 +163,106 @@ test('applyEntryDefaults skips stale names and CPC-owned exports', () => {
   assert.equal(writes[0].controlId, 100);
   assert.equal(writes[0].v0, 0.8);
 });
+
+// ---- Phase 0: modulations round-trip ---------------------------------------
+
+function makeMod(overrides = {}) {
+  return {
+    id: 'mod_noiseScale_micLow',
+    type: 'continuous',
+    enabled: true,
+    source: { scope: 'cpc', key: 'micLow' },
+    target: { scope: 'pattern', parameter: 'noiseScale' },
+    mode: 'offset',
+    polarity: 'unipolar',
+    range: [0, 0.35],
+    curve: 'linear',
+    ...overrides,
+  };
+}
+
+test('save round-trips modulations on entries', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  pm.save({
+    name: 'modtest',
+    entries: [{
+      id: 'e1', pattern: '13_sparkle',
+      defaults: { noiseScale: 0.3 },
+      modulations: [makeMod()],
+    }],
+  });
+  const loaded = pm.load('modtest');
+  assert.equal(loaded.entries[0].modulations.length, 1);
+  const m = loaded.entries[0].modulations[0];
+  assert.equal(m.id, 'mod_noiseScale_micLow');
+  assert.equal(m.source.key, 'micLow');
+  assert.equal(m.target.parameter, 'noiseScale');
+  assert.deepEqual(m.range, [0, 0.35]);
+});
+
+test('save rejects invalid modulations with a specific error', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  assert.throws(() => pm.save({
+    name: 'bad',
+    entries: [{
+      id: 'e1', pattern: '13_sparkle',
+      modulations: [makeMod({ curve: 'log' })],
+    }],
+  }), /curve must be one of/);
+});
+
+test('save rejects two modulations targeting the same parameter (v1 policy)', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  assert.throws(() => pm.save({
+    name: 'dup',
+    entries: [{
+      id: 'e1', pattern: '13_sparkle',
+      modulations: [
+        makeMod({ id: 'first' }),
+        makeMod({ id: 'second', source: { scope: 'cpc', key: 'micKick' } }),
+      ],
+    }],
+  }), /multiple modulations target 'noiseScale'/);
+});
+
+test('load drops malformed modulations on disk with a warning, keeps the entry', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  // Write malformed YAML directly to disk (bypass save validation)
+  const filePath = path.join(playlistsDir, 'manual.yaml');
+  fs.writeFileSync(filePath, yaml.dump({
+    name: 'manual',
+    entries: [{
+      id: 'e1', pattern: '13_sparkle', defaults: {},
+      modulations: [
+        { /* missing everything */ },
+        makeMod({ curve: 'invalid' }),
+        makeMod(),
+      ],
+    }],
+  }));
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const loaded = pm.load('manual');
+    assert.equal(loaded.entries.length, 1);
+    assert.equal(loaded.entries[0].modulations.length, 1);
+    assert.equal(loaded.entries[0].modulations[0].id, 'mod_noiseScale_micLow');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('load: entries with no modulations field default to []', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  pm.save({
+    name: 'nomods',
+    entries: [{ id: 'e1', pattern: '13_sparkle' }],
+  });
+  const loaded = pm.load('nomods');
+  assert.deepEqual(loaded.entries[0].modulations, []);
+});

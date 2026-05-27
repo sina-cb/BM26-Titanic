@@ -1,13 +1,37 @@
-master: 0.55
+master: 1
 channels:
-  - id: ch_1778205858556
+  - id: ch_1779852690909_20
     name: New Layer
-    pattern: 00_golden_hour_wash
+    pattern: 15_silk_prism_ribbons
     mode: blend_screen
     fader: 0
     enabled: true
     locked: false
+    faderLocked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls: {}
-    playlist: null
+    localControls:
+      '66806020':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '2384393854':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_15_15_silk_prism_ribbons
+      cursor: 15
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false

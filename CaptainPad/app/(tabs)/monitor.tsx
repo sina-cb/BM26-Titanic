@@ -5,6 +5,7 @@ import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getApiBaseAsync, testConnection } from '@/utils/api';
+import { engineEvents } from '@/utils/engineEvents';
 
 export default function MonitorScreen() {
   const [activePattern, setActivePattern] = useState<string>('...');
@@ -16,15 +17,15 @@ export default function MonitorScreen() {
   const webViewRef = useRef<WebView>(null);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
+    let alive = true;
 
     (async () => {
-      // 1. Wait for resolved API base
       const base = await getApiBaseAsync();
+      if (!alive) return;
       setApiBase(base);
 
-      // 2. Test connection
       const conn = await testConnection(base);
+      if (!alive) return;
       setIsConnected(conn.ok);
 
       if (!conn.ok) {
@@ -33,12 +34,10 @@ export default function MonitorScreen() {
         return;
       }
 
-      // 3. Update state from /status
       if (conn.data) {
         setSceneName(conn.data.activeScene || 'unknown');
         setActivePattern(conn.data.activePattern || 'unknown');
 
-        // 4. Compute stream URL after we have status data
         const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
         const SIMULATION_PORT = 6969;
         const resolvedScene = conn.data.activeScene || 'unknown';
@@ -46,25 +45,18 @@ export default function MonitorScreen() {
         const url = `http://${engineHost}:${SIMULATION_PORT}/simulation/?scene=${resolvedScene}&profile=edit&renderer=webgl&readonly=1`;
         setStreamUrl(url);
       }
-
-      // 5. Connect WebSocket for live updates
-      const engineHost = base.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
-      const wsPort = base.split(':').pop();
-      try {
-        ws = new WebSocket(`ws://${engineHost}:${wsPort}`);
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'pattern') {
-              setActivePattern(msg.name);
-            }
-          } catch {}
-        };
-        ws.onerror = () => {};
-      } catch {}
     })();
 
-    return () => { if (ws) ws.close(); };
+    // Pre-May-2026 we opened a raw WS just to watch `pattern` events.
+    // After the topic split the engineEvents singleton already owns
+    // ONE /ws/control socket for the whole app — we just subscribe.
+    const unsub = engineEvents.subscribe((msg) => {
+      if (msg.type === 'pattern' && typeof msg.name === 'string') {
+        setActivePattern(msg.name);
+      }
+    });
+
+    return () => { alive = false; unsub(); };
   }, []);
 
   return (

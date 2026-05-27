@@ -193,3 +193,9 @@ layout:
   # this and the cards look stretched. Driven from layout.ts;
   # surfaced here so it's tweakable without touching code.
   max_content_width: 1100
+
+# ── Features ───────────────────────────────────────────────────
+features:
+  # Whether the profile switching UI picker is enabled in PortWatch.
+  # If false, the ProfilePicker block is hidden.
+  profile_switching_enabled: false

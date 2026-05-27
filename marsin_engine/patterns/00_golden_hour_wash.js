@@ -3,45 +3,84 @@
   Extremely warm, ambient, shifting sunset lighting.
 */
 
+// ── MASTER PATTERN TEMPLATE ────────────────────────────────────────────
+// Every pattern in this folder should follow this shape. See
+// docs/MARSIN_ENGINE_PATTERNS.md (and 20260508_1 report §3/§4/§5)
+// for the rationale.
+//
+// What the engine owns globally (do NOT redeclare):
+//   • speed → engine accumulates a scaled pattern clock; `delta`
+//             arriving in beforeRender is already speed-scaled.
+//   • size  → engine rescales the (x,y,z) coords passed to render3D.
+//             Pattern features grow/shrink automatically — no per-
+//             pattern math required.
+//
+// What the pattern owns:
+//   • sliderLocalSpeed — local trim on top of the engine's clock,
+//                        v=0.5 = 1×, v=1 ≈ 4×, v=0 ≈ 0.25×.
+//   • colorPalette1/2  — both global colours always come through cp1
+//                        and cp2; render outputs only the cp1↔cp2
+//                        gradient (no third hues, no rainbow drift).
+
+export var localSpeed = 0.5;
 export var noiseScale = 0.5;
-export var fadeSpeed = 0.02; // Default much faster to make the movement visible
 
-export function sliderNoiseScale(v) { noiseScale = 0.1 + (v * 2.0); }
-export function sliderFadeSpeed(v) { fadeSpeed = 0.005 + (v * 0.05); }
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;
+export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // Sunset orange default cp2
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-var tPhase;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderNoiseScale(v) { noiseScale = 0.1 + (v * 0.8); }
+
+var tPhase = 0.0;
 
 export function beforeRender(delta) {
-  // Returns 0..1 based on cycle speed. 0.02 is a very fast cycle.
-  tPhase = time(fadeSpeed); 
+  // Engine already scaled `delta` by the global SPEED knob, so we
+  // only apply the local trim here. v=0.5 → 1×, exponential so the
+  // fader feels consistent across its travel.
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+
+  // Base loop duration at normal speed is 1310.72ms
+  tPhase = (tPhase + (delta / 1310.72) * localMult) % 1.0;
+  if (tPhase < 0.0) tPhase += 1.0;
 }
 
 export function render3D(index, x, y, z) {
-  // Combine axes into a single sweeping spatial coordinate, adding the phase for motion
-  // This ensures the entire wave sweeps across the volume rather than destructively interfering
   var v = (x * noiseScale) + (y * noiseScale * 0.5) - (z * noiseScale * 0.5) + tPhase;
-  
-  // wave() returns 0..1
   var noise = wave(v);
-  
-  // Power of 3 to create high contrast (sharp bright areas, deep dark areas)
   noise = noise * noise * noise;
   
-  // Base golden hour wash
-  var r = 0.5 * noise;
-  var g = 0.0;
-  var b = 0.0;
-  var w = noise;
-  var a = noise;
-  var u = 0.0;
+  var dh = cp2H - cp1H;
+  if (dh > 0.5) dh -= 1.0;
+  else if (dh < -0.5) dh += 1.0;
+  var h = cp1H + dh * noise;
+  var s = cp1S + (cp2S - cp1S) * noise;
+  var val = (cp1V + (cp2V - cp1V) * noise) * noise;
   
-  // Emphasize the bright white specifically for the Vintage lights.
-  // In the test_bench.js model, VintageLights have high y and z values.
+  // Custom hsv to rgb
+  h = abs(h - floor(h));
+  var iObj = floor(h * 6);
+  var fObj = h * 6 - iObj;
+  var pObj = val * (1.0 - s);
+  var qObj = val * (1.0 - fObj * s);
+  var tObj = val * (1.0 - (1.0 - fObj) * s);
+  var r = 0, g = 0, b = 0;
+  iObj = iObj % 6;
+  if (iObj == 0)      { r = val; g = tObj; b = pObj; }
+  else if (iObj == 1) { r = qObj; g = val; b = pObj; }
+  else if (iObj == 2) { r = pObj; g = val; b = tObj; }
+  else if (iObj == 3) { r = pObj; g = qObj; b = val; }
+  else if (iObj == 4) { r = tObj; g = pObj; b = val; }
+  else                { r = val; g = pObj; b = qObj; }
+
+  var w = 0.0;
+  var a = 0.0;
+  
   if (y > 0.8 || z > 0.8) {
-    w = noise * 2.5; // push it significantly harder
+    w = noise * 2.5;
     if (w > 1.0) w = 1.0;
   }
 
-  // Use the 6-channel RGBWAU output
-  rgbwau(r, g, b, w, a, u);
+  rgbwau(r, g, b, w, a, 0.0);
 }

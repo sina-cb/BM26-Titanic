@@ -1,37 +1,45 @@
 /*
   02_phase_cathedral.js
   A huge, beat-locked interference field made from several phase-shifted sine planes crossing the rig. 
-  It reads like a living architectural waveform. Big, classy, intelligent, ravey.
 */
 
-export var animSpeed = 0.02;
+export var localSpeed = 0.5;
 export var radialDensity = 15.0;
 export var ratioA = 1.618;
 export var ratioB = 0.618;
 export var sharpness = 4.0;
-export var hueA = 0.6; // Deep Blue
-export var hueB = 0.8; // Pink/Magenta
 export var globalDir = 1.0;
 
-export function speed(v) { animSpeed = 0.005 + v * 0.05; }
-export function count(v) { radialDensity = 2 + v * 20; }
-export function size(v) { sharpness = 1 + v * 9; }
-export function colorPalette1(h, s, v) { hueA = h; }
-export function colorPalette2(h, s, v) { hueB = h; }
-export function direction(v) { globalDir = (v * 2.0) - 1.0; }
+export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Deep Blue default
+export var cp2H = 0.8, cp2S = 1.0, cp2V = 1.0; // Pink/Magenta default
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderLocalSpeed(v) { localSpeed = v; }
+// Local sliders post-May 2026 (count/direction were demoted from
+// globals; size is engine-owned and sharpness is a per-pattern tunable).
+export function sliderCount(v) { radialDensity = 2 + v * 20; }
+export function sliderSharpness(v) { sharpness = 1 + v * 9; }
+export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
 
 var beatPhase = 0.0;
 
+// Wrap beatPhase at a *large multiple* of 2π instead of 2π exactly.
+// f3 and f4 multiply beatPhase by irrational ratios (ratioA=1.618,
+// ratioB=0.618), so wrapping at 2π causes a discontinuous phase jump
+// (2π × ratioA mod 2π ≠ 0) → a visible flicker every full cycle
+// (~1–2s at default speed).  Wrapping at 10000×2π keeps float64
+// precision intact and shifts the audible glitch to once every ~14 hours.
+var BEAT_WRAP = 62831.853; // 10000 * 2π
+
 export function beforeRender(delta) {
-  // Manually accumulate time phase so changing the speed slider doesn't cause glitches/jumps
-  // Base time loop is 65.536 seconds. delta is in milliseconds.
-  var phaseIncrement = (delta / 65536.0) / animSpeed;
-  beatPhase = (beatPhase + phaseIncrement * globalDir * 6.2831853) % 6.2831853;
-  if (beatPhase < 0) beatPhase += 6.2831853;
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var phaseIncrement = (delta / 65536.0) / (0.02 / localMultiplier);
+  beatPhase = (beatPhase + phaseIncrement * globalDir * 6.2831853) % BEAT_WRAP;
+  if (beatPhase < 0) beatPhase += BEAT_WRAP;
 }
 
 export function render3D(index, x, y, z) {
-  // Normalize coords based on rig bounding box
   var nx = (x + 1.264) / 3.125;
   var ny = y / 6.5; 
   if (nx < 0) nx = 0; 
@@ -39,58 +47,45 @@ export function render3D(index, x, y, z) {
   if (ny < 0) ny = 0; 
   if (ny > 1) ny = 1;
 
-  // Build interference scalar fields using standard sin(radians) math
-  // Removed unneeded sliders and hardcoded the structural densities as requested
-  var f1 = sin(nx * 10.0 + beatPhase);
-  var f2 = sin(ny * 10.0 - beatPhase * 0.5);
-  var f3 = sin((nx + ny) * 5.0 + beatPhase * ratioA);
+  var f1 = sin((nx * 10.0) * PI2 + beatPhase);
+  var f2 = sin((ny * 10.0) * PI2 - beatPhase * 0.5);
+  var f3 = sin(((nx + ny) * 5.0) * PI2 + beatPhase * ratioA);
   
   var dx = nx - 0.5;
   var dy = ny - 0.85;
   var dist = sqrt(dx*dx + dy*dy);
-  var f4 = sin(dist * radialDensity - beatPhase * ratioB);
+  var f4 = sin((dist * radialDensity) * PI2 - beatPhase * ratioB);
   
-  // Combine & Sharpen
   var field = (f1 + f2 + f3 + f4) * 0.25; 
   var magnitude = pow(abs(field), sharpness);
   
-  // Two-tone palette using sign
-  var h = hueB;
+  var h = cp2H;
+  var s = cp2S;
+  var finalV = cp2V * magnitude;
   if (field > 0) {
-    h = hueA;
+    h = cp1H;
+    s = cp1S;
+    finalV = cp1V * magnitude;
   }
   
-  var s = 1.0;
-  
-  // Setup baseline outputs
   var finalW = 0.0;
   var finalA = 0.0;
   var finalU = 0.0;
-  var finalV = magnitude;
   
-  // --- FIXTURE SCALES ---
-  
-  // 1. 36 Bars (y < 1.8)
   if (y < 1.8) {
-     finalV = magnitude;
-  }
-  
-  // 2. 4 Huge Pars (y >= 1.8 && y < 4.0)
+     // 36 Bars
+  } 
   else if (y < 4.0) {
-    // parImpact is hardcoded to 0.8 (strongly favors zero-crossings)
+    // 4 Huge Pars
     var zc = 1.0 - abs(field);
     zc = pow(zc, sharpness * 2); 
-    finalV = (magnitude * 0.2) + (zc * 0.8);
+    finalV = (finalV * 0.2) + (zc * 0.8 * (field > 0 ? cp1V : cp2V));
   }
-  
-  // 3. 12 Vintage Whites (y > 6.0)
   else {
-    // whiteBoost is hardcoded to 1.0
-    finalW = magnitude;
-    if (finalW > 1) finalW = 1;
-    
+    // 12 Vintage Whites
+    finalW = magnitude * (1.0 - s);
     finalA = finalW * 0.25; 
-    finalV = magnitude * 0.5; 
+    finalV = finalV * 0.5; 
   }
 
   // --- Inline HSV to RGB Converter ---

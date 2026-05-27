@@ -31,17 +31,43 @@ export default function DimmerRackScreen() {
   const { blackout: isBlackout, toggleBlackout } = useContext(RigContext);
   const [dimmerStates, setDimmerStates] = useState<Record<string, number>>({});
   const [groups, setGroups] = useState<Record<string, number>>({});
-  const [loaded, setLoaded] = useState(false);
-
+  // Tri-state: 'loading' on first attempt, 'ready' after any response
+  // (success OR failure), 'error' when the engine is offline so the
+  // operator gets a Retry button instead of a stuck spinner. Earlier
+  // we used a plain boolean and forgot to flip it inside a try/finally,
+  // which meant any rejected promise (e.g. engine offline at app boot)
+  // left the rack permanently stuck on "Loading dimmer groups…".
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [lastError, setLastError] = useState<string>('');
 
   const refreshGroups = useCallback(async () => {
-    const [groupsResult, dimmersResult] = await Promise.all([
-      fetchDimmerGroups(),
-      fetchDimmers(),
-    ]);
-    if (groupsResult.ok && groupsResult.data) setGroups(groupsResult.data);
-    if (dimmersResult.ok && dimmersResult.data) setDimmerStates(dimmersResult.data);
-    setLoaded(true);
+    let okAny = false;
+    let err = '';
+    try {
+      const [groupsResult, dimmersResult] = await Promise.all([
+        fetchDimmerGroups(),
+        fetchDimmers(),
+      ]);
+      if (groupsResult.ok && groupsResult.data) {
+        setGroups(groupsResult.data);
+        okAny = true;
+      } else if (groupsResult.error) {
+        err = groupsResult.error;
+      }
+      if (dimmersResult.ok && dimmersResult.data) {
+        setDimmerStates(dimmersResult.data);
+        okAny = true;
+      } else if (dimmersResult.error && !err) {
+        err = dimmersResult.error;
+      }
+    } catch (e: any) {
+      // Belt-and-braces: api helpers already swallow errors, but if
+      // anything ever throws here we must still flip out of 'loading'.
+      err = e?.message || String(e);
+    } finally {
+      setLastError(err);
+      setLoadState(okAny ? 'ready' : 'error');
+    }
   }, []);
 
   useEffect(() => {
@@ -107,7 +133,7 @@ export default function DimmerRackScreen() {
 
       {/* Main Fader Area (Takes remaining space) */}
       <View style={[globalStyles.card, { flex: 1, padding: 32, justifyContent: 'center' }]}>
-        {!loaded && (
+        {loadState === 'loading' && (
           <View style={{ alignItems: 'center', gap: 16 }}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 16, color: Colors.light.secondary }}>
@@ -116,7 +142,24 @@ export default function DimmerRackScreen() {
           </View>
         )}
 
-        {loaded && groupEntries.length === 0 && (
+        {loadState === 'error' && (
+          <View style={{ alignItems: 'center', gap: 16 }}>
+            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 20, color: Colors.light.error }}>
+              Engine offline
+            </Text>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, textAlign: 'center', opacity: 0.7, maxWidth: 400 }}>
+              {lastError || 'Could not reach the engine to load dimmer groups.'}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { setLoadState('loading'); refreshGroups(); }}
+              style={{ marginTop: 8, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: Colors.light.ghostBorder }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary, fontSize: 12, letterSpacing: 1 }}>RETRY</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {loadState === 'ready' && groupEntries.length === 0 && (
           <View style={{ alignItems: 'center', gap: 16 }}>
             <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 20, color: Colors.light.secondary }}>
               No Dimmer Groups Found
@@ -127,7 +170,7 @@ export default function DimmerRackScreen() {
           </View>
         )}
 
-        {loaded && groupEntries.length > 0 && (
+        {loadState === 'ready' && groupEntries.length > 0 && (
           <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 32 }}>
             {groupEntries.map(([name, sectionId]) => (
               <View key={sectionId} style={{ alignItems: 'center' }}>

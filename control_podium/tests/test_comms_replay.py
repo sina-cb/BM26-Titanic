@@ -124,3 +124,28 @@ def test_snapshot_includes_sources():
     assert "0x0B" in snap["sources"]
     assert snap["sources"]["0x0A"]["highest_ctr"] == 100
     assert snap["counters"]["ok"] == 2
+
+
+def test_simulated_durable_counter_restart():
+    """
+    Simulate app restart with DurableCounter.
+    1. First run uses counter in block [1000, 2023].
+    2. Sends counter 1000 -> accepted.
+    3. Sends counter 1001 -> accepted.
+    4. App crashes/restarts, next counter block is reserved starting at 2024.
+    5. Sends counter 2024 -> accepted.
+    6. Replaying 1000 -> rejected as too-old.
+    """
+    rw = ReplayWindow()
+    # 1. First run, counter 1000 is sent
+    assert rw.accept(0x0A, 1000) == ReplayResult.OK
+    # 2. Next counter is 1001
+    assert rw.accept(0x0A, 1001) == ReplayResult.OK
+    
+    # 3. App restarts. The DurableCounter block reservation logic means
+    #    the new block starts at least 1024 steps above the previous limit.
+    #    So the new counter starts at 2024.
+    assert rw.accept(0x0A, 2024) == ReplayResult.OK
+    
+    # 4. Replaying the old 1000 should be rejected
+    assert rw.accept(0x0A, 1000) == ReplayResult.REPLAY_TOO_OLD

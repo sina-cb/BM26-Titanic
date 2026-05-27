@@ -281,6 +281,8 @@ def load_radio_flags(*, role: str | None = None) -> list[str]:
         # Debug
         ("debug.pin_high_forever",         "PWR_DEBUG_PIN_HIGH",       "bool"),
         ("debug.log_mode_transitions",     "PWR_DEBUG_LOG_TRANSITIONS","bool"),
+        # Profile switching
+        ("profile_switching.plaintext_cfg_over_lora_enabled", "ALLOW_PLAINTEXT_PROFILE_CFG", "bool"),
     ]
 
     flags: list[str] = []

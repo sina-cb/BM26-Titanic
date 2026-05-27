@@ -10,38 +10,101 @@ Lighting design, pattern engineering, and simulation toolkit for the **Titanic**
 
 ## ⚡ Quick Start
 
+You need **three terminals** open side-by-side: one for the
+simulation (browser preview), one for the rendering engine, and one
+for the CaptainPad control surface. Each component has its own README
+with the full story — this is just enough to get pixels moving.
+
+### 0. Clone the repo
+
 ```bash
-# 1. Clone and enter the repo
 git clone git@github.com:sina-cb/BM26-Titanic.git
 cd BM26-Titanic
 ```
 
-```bash
-# Terminal 1: start the simulation
-cd simulation
-npm install
-npm start
-```
+### 1. Terminal 1 — Simulation (browser preview)
+
+The simulation renders the rig in 3D in your browser and listens for
+sACN packets from the engine, so you can see exactly what the lights
+will do without plugging anything in.
 
 ```bash
-# Then open in a browser
+cd simulation
+npm install                 # first time only
+npm start                   # launches the dev server on :6969
+```
+
+Then open one of these in a browser:
+
+```bash
 open http://localhost:6969/simulation/
+# Or with a specific scene + edit profile:
 open "http://127.0.0.1:6969/simulation/?scene=titanic&profile=edit&spotlights=100&renderer=webgpu"
 ```
 
+Full sACN/DMX architecture, fixture details, and startup flags are in
+[`simulation/README.md`](simulation/README.md).
+
+### 2. Terminal 2 — Rendering engine (MarsinEngine)
+
+The engine compiles Pixelblaze patterns into WASM bytecode, runs the
+render loop at 40 fps, and emits sACN to the simulation (and/or
+physical controllers). It also hosts the REST/WebSocket API that
+CaptainPad talks to.
+
 ```bash
-# Terminal 2: start the rendering engine (WASM MarsinVM)
 cd marsin_engine
-npm install
+npm install                                                # first time only
 node engine.js --model test_bench --pattern 00_golden_hour_wash
 ```
 
+Optional: turn on the in-engine **microphone listener** so patterns
+react to whatever's playing in the room. One-time setup per scene:
+
 ```bash
-# Terminal 3: start the CaptainPad iPad UI
-cd CaptainPad
-npm install
-npm start -c # Clears cache and shows the QR code to scan on your iPad
+node engine.js --list_mics                                 # see available mics
+node engine.js --choose_mic --model test_bench             # save your mic for this scene
+# Then boot normally — patterns can now read micLow/micMid/micHigh/micKick.
 ```
+
+Full CLI reference, audio setup, OSC integration, and operational
+notes live in [`marsin_engine/README.md`](marsin_engine/README.md).
+
+### 3. Terminal 3 — CaptainPad (iPad / web control surface)
+
+CaptainPad is the React Native / Expo app you drive the show from. It
+auto-discovers the engine's REST/WebSocket API and lets you tune
+globals, swap patterns, layer channels, and configure audio
+reactivity — all from an iPad, or from a web browser during
+development.
+
+```bash
+cd CaptainPad
+npm install                 # first time only
+npm start -c                # clears cache; prints a QR code for Expo Go
+```
+
+- **iPad / iPhone**: install **Expo Go** from the App Store, then scan
+  the QR code with your phone camera.
+- **Web preview**: press `w` in the Expo dev menu after `npm start`.
+  Handy for verifying UI changes without an iPad in hand.
+- **Permanent iPad install** (without Expo Go): see the EAS build
+  runbook in [`CaptainPad/README.md`](CaptainPad/README.md).
+
+### 4. (Optional) Verify the pipeline
+
+With all three terminals running:
+
+1. The browser shows the simulation rig in 3D.
+2. CaptainPad shows the active pattern's controls.
+3. Drag a slider in CaptainPad — the lights should update in the
+   browser within a frame or two.
+
+If anything's off, each component's README has its own troubleshooting
+notes. The most common one is "engine isn't on the same Wi-Fi as the
+iPad" — CaptainPad shows `OSC OFF` and now throttles a single
+`Network request failed` warning every 30 s per endpoint instead of
+spamming the console.
 
 ---
 
@@ -71,14 +134,13 @@ BM26-Titanic/
 ```
 
 ### `/simulation` — Interactive 3D Lighting Simulator
-Browser-based Three.js lighting previewer with real-time DMX fixtures, LED strands, procedural generators, sACN input/output, and YAML-persisted scene state. Accurately simulates **Shehds Bars**, **Uking Pars**, and **Vintage Wash Heads**.
+Browser-based Three.js lighting previewer with real-time DMX fixtures, LED strands, procedural generators, sACN input/output, and YAML-persisted scene state. Accurately simulates **Shehds Bars**, **Uking Pars**, and **Vintage Wash Heads**. See [`simulation/README.md`](simulation/README.md).
 
 ### `/marsin_engine` — WASM MarsinVM Backend
-Node.js CLI that compiles and executes 26 custom-written Pixelblaze patterns inside a native WASM runtime (`MarsinVM`). Performs sub-millisecond, multi-universe processing across all rig pixels simultaneously outputting directly to physical controllers over sACN. Completely bypasses legacy JS mapping. 
-*Features: Automated UI parameter exporting, V2 Sectional Metadata routing, global DMX dimming priorities.*
+Node.js CLI that compiles and executes Pixelblaze patterns inside a native WASM runtime (`MarsinVM`). Sub-millisecond multi-universe rendering, outputs sACN to the simulation and/or physical controllers. Auto-exports pattern UI parameters to a **Central Parameter Center (CPC)** that CaptainPad reads over WebSocket. Also hosts an **OSC listener** (live stems, BPM) and an optional **in-engine microphone listener** (low / mid / high / kick band detection + BPM-to-speed sync) so patterns can react to ambient audio without an external analyser. See [`marsin_engine/README.md`](marsin_engine/README.md).
 
 ### `/CaptainPad` — Interactive Performance UI
-An iPad-optimized React Native application allowing the crew to dynamically control lighting layers. Connects to `marsin_engine` via WebSockets to auto-generate sliders, color pickers, and toggle inputs based on what the active pattern exposes structurally.
+React Native / Expo app for performing the show. Auto-generates sliders, color pickers, and toggles from whatever the active pattern exposes. Tabs: **Deck** (active pattern + globals), **Mixer** (multi-channel layering with playlists), **Audio Analysis** (mic tuning + BPM sync), **Studio**, **Monitor**, **Config**. Runs on iPad via **Expo Go** or as a **web preview** in any browser. See [`CaptainPad/README.md`](CaptainPad/README.md).
 
 ### `/docs` — Design Documentation
 
@@ -89,6 +151,10 @@ An iPad-optimized React Native application allowing the crew to dynamically cont
 | [08_dmx_controller.md](docs/08_dmx_controller.md) | DMX controller hardware, sACN protocol, channel maps |
 | [09_dmx_fixture_models.md](docs/09_dmx_fixture_models.md) | **Current Fixtures**: Shehds 18x18, Uking Pars, Vintage Heads |
 | [06_pixelblaze_engine.md](docs/06_pixelblaze_engine.md) | Pixelblaze syntax support, PB inversion mathematics, and structural engine routing |
+| [15_central_param_center_cpc.md](docs/15_central_param_center_cpc.md) | CPC contract: shared params, registry, sources & arbitration |
+| [16_captain_pad.md](docs/16_captain_pad.md) | CaptainPad architecture, tabs, theming, CPC binding |
+| [24_osc_integration.md](docs/24_osc_integration.md) | OSC listener: bindings, live-param policy, BPM, stems |
+| [25_marsin_audio_analysis.md](docs/25_marsin_audio_analysis.md) | In-engine microphone listener: capture, FFT, kick, BPM→speed, Audio Analysis tab |
 
 ---
 

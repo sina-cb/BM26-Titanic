@@ -19,3 +19,13 @@ presets:
       x: -0.996
       'y': 3.814
       z: -0.668
+  - name: Side
+    key: side
+    position:
+      x: 19.451
+      'y': 14.457
+      z: -36.173
+    target:
+      x: -0.915
+      'y': -0.744
+      z: -0.273

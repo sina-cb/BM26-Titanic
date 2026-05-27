@@ -35,6 +35,7 @@ import {
 } from "../frame/types";
 import { OpDescriptor, frameForOp } from "../frame/ops";
 import { BleClient } from "../ble/client";
+import { DurableCounter } from "../security/counterStore";
 
 export type WireDirection = "tx" | "rx";
 
@@ -87,6 +88,7 @@ export class TitanicLink {
   private codec: Codec;
   private ble: BleClient;
   private src: number;
+  private counterStore: DurableCounter;
   private nextSeq = 0;
   private pending = new Map<string, PendingAwaiter>();
   private onWireEvent: (e: WireEvent) => void;
@@ -122,6 +124,7 @@ export class TitanicLink {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 6000;
     this.interFrameGapMs = opts.interFrameGapMs ?? 200;
     this.onWireEvent = opts.onWireEvent ?? (() => undefined);
+    this.counterStore = new DurableCounter(this.codec.getKeyFingerprint(), this.src);
   }
 
   /** Observable depth of the outbound request queue (incl. in-flight). */
@@ -254,7 +257,8 @@ export class TitanicLink {
     const seq = this.allocSeq();
     const dst = opts.dst ?? SERVER_ID;
     const frame = frameForOp(op, seq, this.src, dst);
-    const line = this.codec.encode(frame);
+    const ctr = await this.counterStore.nextCounter();
+    const line = this.codec.encode(frame, ctr);
 
     // Register the awaiter BEFORE writing so a fast reply can't race us.
     const key = this.pendingKey(SERVER_ID, seq);

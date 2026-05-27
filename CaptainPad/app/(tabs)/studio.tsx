@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvo
 import { globalStyles } from '@/styles/globalStyles';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern } from '@/utils/api';
+import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
 
 export default function StudioScreen() {
   const [patterns, setPatterns] = useState<string[]>([]);
@@ -26,12 +26,24 @@ export default function StudioScreen() {
   }, []);
 
   const loadPatterns = async () => {
+    // Operator bug May 26 2026: studio tab loaded blank on a cold app
+    // start because fetchPatterns() runs against the module-level
+    // api_base which is still the YAML default until getApiBaseAsync
+    // resolves AsyncStorage. Other tabs (deck/mixer) await this in
+    // their connectToEngine paths; studio never did, so its first
+    // GET went to the wrong host. Awaiting here makes the studio
+    // self-sufficient — no dependency on tab-mount ordering.
+    await getApiBaseAsync().catch(() => undefined);
     const result = await fetchPatterns();
     if (result.ok && result.data && Array.isArray(result.data)) {
       setPatterns(result.data);
       if (result.data.length > 0 && !activeFile) {
         handleSelectFile(result.data[0]);
+      } else if (result.data.length === 0) {
+        setLogs('> No pattern files found. Check engine connectivity.');
       }
+    } else {
+      setLogs(`> Error loading pattern list: ${result.error || 'unknown'}`);
     }
   };
 
@@ -47,25 +59,55 @@ export default function StudioScreen() {
     }
   };
 
+  // In-flight guard so a fast double-tap on RUN / SAVE & COMPILE
+  // can't fire two overlapping save+set-pattern chains. Operator bug
+  // May 26 2026: "sometimes it works, mostly it doesn't" was tracing
+  // to this — the engine would respond to the first request mid-way
+  // through, the second request would race the deck handle swap, and
+  // the deck either ended up on the OLD pattern or threw a 409 we
+  // were silently swallowing.
+  const runInFlightRef = React.useRef(false);
+  const [runBusy, setRunBusy] = useState(false);
+
   const handleSave = async () => {
-    if (!activeFile) return;
+    if (runInFlightRef.current) {
+      setLogs(prev => prev + `\n> Run already in progress — ignoring tap.`);
+      return;
+    }
+    if (!activeFile) {
+      setLogs(`> No pattern selected. Tap a file on the left first.`);
+      showToast('NO FILE SELECTED', 'Pick a pattern file before pressing RUN', 'error');
+      return;
+    }
+    runInFlightRef.current = true;
+    setRunBusy(true);
     setLogs(`> Compiling via WASM VM...\n> Saving to ${activeFile}...`);
-    const result = await savePatternCode(activeFile, code);
-    if (result.ok && result.data && !result.data.error) {
-      setLogs(prev => prev + `\n> SUCCESS. Broadcasted state to swarm.`);
-      showToast('COMPILED SUCCESSFULLY', `Loaded ${activeFile} into VM engine`, 'success');
-      
+    try {
+      // Make sure api_base is resolved (cold-start safety — see loadPatterns).
+      await getApiBaseAsync().catch(() => undefined);
+
+      const result = await savePatternCode(activeFile, code);
+      if (!result.ok || !result.data || result.data.error) {
+        const errMsg = result.data?.error || result.error || 'Unknown error during save';
+        setLogs(prev => prev + `\n> ERROR: ${errMsg}`);
+        showToast('COMPILATION ERROR', errMsg, 'error');
+        return;
+      }
+      setLogs(prev => prev + `\n> SAVED + compiled OK. Switching deck channel...`);
+
       const ptnName = activeFile.replace(/\.js$/, '');
       const setRes = await setActivePattern(ptnName);
-      if (setRes.ok) {
-        setLogs(prev => prev + `\n> Switched deck channel to ${ptnName}`);
+      if (setRes.ok && setRes.data && !setRes.data.error) {
+        setLogs(prev => prev + `\n> SUCCESS — deck is now running ${ptnName}.`);
+        showToast('COMPILED SUCCESSFULLY', `Loaded ${activeFile} into VM engine`, 'success');
       } else {
-        setLogs(prev => prev + `\n> ERROR: Failed to switch pattern on deck`);
+        const errMsg = setRes.data?.error || setRes.error || 'engine did not switch deck';
+        setLogs(prev => prev + `\n> WARN: save OK but deck switch failed: ${errMsg}`);
+        showToast('COMPILED · DECK NOT SWITCHED', errMsg, 'error');
       }
-    } else {
-      const errMsg = result.data?.error || result.error || 'Unknown error during save';
-      setLogs(prev => prev + `\n> ERROR: ${errMsg}`);
-      showToast('COMPILATION ERROR', errMsg, 'error');
+    } finally {
+      runInFlightRef.current = false;
+      setRunBusy(false);
     }
   };
 
@@ -111,8 +153,16 @@ export default function StudioScreen() {
           </Text>
           
           <View style={{ flexDirection: 'row', gap: 16 }}>
-            <TouchableOpacity onPress={() => handleSave()} style={{ backgroundColor: Colors.light.primaryContainer, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, ...globalStyles.ambientShadow }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text }}>RUN</Text>
+            <TouchableOpacity
+              onPress={() => handleSave()}
+              disabled={runBusy || !activeFile}
+              style={{
+                backgroundColor: (!activeFile || runBusy) ? Colors.light.surfaceContainerHigh : Colors.light.primaryContainer,
+                paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8,
+                opacity: (!activeFile || runBusy) ? 0.55 : 1,
+                ...globalStyles.ambientShadow,
+              }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text }}>{runBusy ? 'RUNNING…' : 'RUN'}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setIsEditing(true)} disabled={!activeFile} style={{ backgroundColor: activeFile ? '#00daf3' : Colors.light.surfaceContainerHigh, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, ...globalStyles.ambientShadow }}>
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: activeFile ? '#FFF' : Colors.light.secondary }}>EDIT</Text>
@@ -157,8 +207,14 @@ export default function StudioScreen() {
                  <TouchableOpacity onPress={() => setIsEditing(false)} style={{ backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}>
                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#FFF' }}>CLOSE</Text>
                  </TouchableOpacity>
-                 <TouchableOpacity onPress={() => handleSave()} style={{ backgroundColor: '#00daf3', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}>
-                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000' }}>SAVE & COMPILE</Text>
+                 <TouchableOpacity
+                   onPress={() => handleSave()}
+                   disabled={runBusy || !activeFile}
+                   style={{
+                     backgroundColor: '#00daf3', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8,
+                     opacity: (runBusy || !activeFile) ? 0.55 : 1,
+                   }}>
+                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000' }}>{runBusy ? 'COMPILING…' : 'SAVE & COMPILE'}</Text>
                  </TouchableOpacity>
                </View>
             </View>

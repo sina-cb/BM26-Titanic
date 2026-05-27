@@ -251,6 +251,23 @@ export function animate() {
       }
     }
   }
+  // ─── Clear Pixels if Lighting Disabled ───
+  if (!lightingEnabled) {
+    if (_batchCacheVersion !== _batchLastBuiltVersion) {
+      _rebuildBatchCache();
+    }
+    if (_batchRenderList && _batchRenderList.length > 0) {
+      const count = _batchRenderList.length;
+      for (let i = 0; i < count; i++) {
+        const entry = _batchRenderList[i];
+        entry.r = 0; entry.g = 0; entry.b = 0;
+        entry.w = 0; entry.a = 0; entry.u = 0;
+        if (!window._patchesActive && entry.apply) {
+          entry.apply(0, 0, 0);
+        }
+      }
+    }
+  }
 
   // ─── DMX Router: merge sources and apply to fixtures ───
   if (window.dmxRouter) {
@@ -260,9 +277,9 @@ export function animate() {
 
     const mappingEnabled = getProfileDef(params.lightingProfile).mappingEnabled;
 
-    // In sacn_in mode, ALWAYS demap — the simulation acts as a bridge/visualizer
+    // In sacn_in mode, demap only if lighting is enabled — the simulation acts as a bridge/visualizer
     // regardless of which lighting profile is active
-    if (lightingMode === 'sacn_in') {
+    if (lightingEnabled && lightingMode === 'sacn_in') {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }

@@ -29,6 +29,8 @@ export const Colors = {
     
     // Semantic
     error: '#ba1a1a',
+    /** "Auto-driven / synced" green — BPM sync, autopilot, etc. */
+    tertiary: '#1b9e77',
     ghostBorder: 'rgba(186, 201, 204, 0.4)', // Slightly darkened for visibility on device
     ambientShadow: 'rgba(25, 28, 29, 0.05)'
   },
@@ -54,6 +56,7 @@ export const Colors = {
     secondaryContainer: '#466270',
     
     error: '#ffdad6',
+    tertiary: '#34d39a',
     ghostBorder: 'rgba(255,255,255,0.1)',
     ambientShadow: 'rgba(0, 0, 0, 0.5)'
   },

@@ -156,6 +156,8 @@ class Bridge:
         idle_threshold_s: float = 60.0,
         engine_ws_url: Optional[str] = None,
         enable_engine_ws_subscriber: bool = True,
+        plaintext_cfg_over_lora_enabled: bool = False,
+        usb_cfg_enabled: bool = True,
     ):
         self.radio = radio
         self.engine = engine
@@ -163,6 +165,8 @@ class Bridge:
         self.registry = registry
         self.node_id = node_id
         self.short_interval_s = short_interval_s
+        self.plaintext_cfg_over_lora_enabled = plaintext_cfg_over_lora_enabled
+        self.usb_cfg_enabled = usb_cfg_enabled
         self.long_interval_s = long_interval_s
         self.idle_threshold_s = idle_threshold_s
         # `engine_ws_url` overrides the auto-derived default. When None
@@ -283,6 +287,9 @@ class Bridge:
         same choice — operator doesn't have to re-pick after a power
         blip.
         """
+        if not getattr(self, "usb_cfg_enabled", True):
+            logger.warning("profile change rejected: usb_cfg_enabled is false in bridge config")
+            return False
         if name not in self.LORA_PROFILE_NAMES:
             logger.warning("profile change rejected: unknown name %r", name)
             return False
@@ -489,6 +496,7 @@ class Bridge:
                 if self._lora_profile_last_applied_ms is not None else None
             ),
             "default_delay_ms": int(self.LORA_PROFILE_DEFAULT_DELAY_MS),
+            "enabled": getattr(self, "usb_cfg_enabled", True),
         }
         return {
             "service": "titanic-bridge",

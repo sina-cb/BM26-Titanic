@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { View, TouchableOpacity, Text } from 'react-native';
+import { View, TouchableOpacity, Text, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -35,7 +35,11 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: '#00daf3', textAlign: 'center', marginTop: 2 }}>CAPTAIN{'\n'}PAD</Text>
       </View>
 
-      <View style={{ flex: 1, width: '100%', paddingHorizontal: 16 }}>
+      <ScrollView
+        style={{ flex: 1, width: '100%' }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 32 }}
+        showsVerticalScrollIndicator={false}
+      >
         {state.routes.map((route: any, index: number) => {
           const { options } = descriptors[route.key];
           const isFocused = state.index === index;
@@ -57,22 +61,22 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
               borderWidth: isFocused ? 1 : 0,
               borderColor: 'rgba(0, 229, 255, 0.3)',
             }}>
-               <IconSymbol 
-                 name={iconName} 
-                 size={32} 
-                 color={isFocused ? '#00daf3' : '#bac9cc'} 
+               <IconSymbol
+                 name={iconName}
+                 size={32}
+                 color={isFocused ? '#00daf3' : '#bac9cc'}
                />
-               <Text style={{ 
-                 fontFamily: 'SpaceGrotesk_700Bold', 
-                 fontSize: 10, 
+               <Text style={{
+                 fontFamily: 'SpaceGrotesk_700Bold',
+                 fontSize: 10,
                  marginTop: 8,
                  textTransform: 'uppercase',
-                 color: isFocused ? '#00daf3' : '#bac9cc' 
+                 color: isFocused ? '#00daf3' : '#bac9cc'
                }}>{options.title}</Text>
             </TouchableOpacity>
           )
         })}
-      </View>
+      </ScrollView>
     </View>
   )
 }
@@ -109,6 +113,20 @@ export default function TabLayout() {
             options={{
               title: 'Studio',
               tabBarIconName: 'curlybraces',
+            } as any}
+          />
+          <Tabs.Screen
+            name="audio"
+            options={{
+              title: 'Audio',
+              tabBarIconName: 'waveform',
+            } as any}
+          />
+          <Tabs.Screen
+            name="osc"
+            options={{
+              title: 'OSC',
+              tabBarIconName: 'antenna.radiowaves.left.and.right',
             } as any}
           />
           <Tabs.Screen

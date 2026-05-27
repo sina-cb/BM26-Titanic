@@ -5,54 +5,170 @@ effects:
   vintageWhite: false
   uvBlast: false
   uvBlastBypassDimmer: false
-  vintageWhiteBypassDimmer: false
+  vintageWhiteBypassDimmer: true
   blastWhiteBypassDimmer: false
 params:
-  revision: 9
+  revision: 54586
   sourceLock: null
   params:
     speed:
-      value: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 9
-    direction:
-      value: 1
+      value: 0.6700833638509115
+      lastSource: bpm-sync
+      lastOrigin: bpm-sync:auto
+      lastRevision: 54226
+    size:
+      value: 0.28
       lastSource: init
       lastOrigin: init
       lastRevision: 2
-    count:
-      value: 0.5
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 3
-    size:
-      value: 0.5
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 4
     rotate:
       value: 0
       lastSource: init
       lastOrigin: init
-      lastRevision: 5
+      lastRevision: 3
     colorPalette1:
       value:
-        h: 0.33
+        h: 0.91
         s: 1
         v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
+    colorPalette2:
+      value:
+        h: 0.45
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
+    stemsVocalsGain:
+      value: 1
       lastSource: init
       lastOrigin: init
       lastRevision: 6
-    colorPalette2:
-      value:
-        h: 0.78
-        s: 1
-        v: 1
+    stemsBassGain:
+      value: 1
       lastSource: init
       lastOrigin: init
       lastRevision: 7
+    stemsDrumsGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 8
+    stemsVocals:
+      value: 0.07755997031927109
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 54585
+    stemsBass:
+      value: 0
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 54583
+    stemsDrums:
+      value: 0
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 53457
+    stemsVocalsRaw:
+      value: 0.07755997031927109
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 54586
+    stemsBassRaw:
+      value: 0
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 54584
+    stemsDrumsRaw:
+      value: 0
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 53458
+    tempoBpm:
+      value: 140.41000366210938
+      lastSource: osc
+      lastOrigin: osc:127.0.0.1:53425
+      lastRevision: 54225
+    micLow:
+      value: 0.002269022208975773
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54575
+    micMid:
+      value: 0.3459766561788218
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54576
+    micHigh:
+      value: 0.10203664976509702
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54577
+    micKick:
+      value: 1
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54578
+    micLowRaw:
+      value: 0.00794640517008961
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54579
+    micMidRaw:
+      value: 0.07738626307962795
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54580
+    micHighRaw:
+      value: 0.021273735354490807
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54581
+    micKickRaw:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 54582
+    micLowGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 24
+    micMidGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 25
+    micHighGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 26
+    micKickGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 27
+    bpmSpeedSync:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 28
+    bpmSpeedMin:
+      value: 60
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 29
+    bpmSpeedMax:
+      value: 180
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 30
 dimmers:
-  '2': 0.125
-  '3': 0.1696428571428571
+  '1': 1
+  '2': 1
+  '3': 1
 controlLock: null

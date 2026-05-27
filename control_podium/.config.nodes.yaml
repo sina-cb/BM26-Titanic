@@ -69,11 +69,9 @@ nodes:
     name: crew_01
     role: crew
     type: heltec_v4
+    usb_mac: "F8:5B:1B:A5:D4:50"
   0x11:
     name: crew_02
     role: crew
     type: heltec_v4
-  0x12:
-    name: crew_03
-    role: crew
-    type: heltec_v4
+    usb_mac: "F8:5B:1B:A5:11:54"

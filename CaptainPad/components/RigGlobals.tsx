@@ -1,8 +1,36 @@
-import React, { useState, createContext, useContext } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
-import { setGlobalEffect, setGlobalBlackout, fetchGlobals } from '@/utils/api';
+/**
+ * RigGlobals — thin wrapper around the unified GlobalEffectMacros grid.
+ *
+ * Pre-May-2026 this file held a parallel set of buttons (vintageWhite,
+ * blastWhite, uvBlast, fogger) plus a BLACKOUT toggle, rendered next to
+ * the new engine-side GEM grid. Operator feedback ("two parallel UIs,
+ * too much space, GEM stuck on Loading") drove a unification:
+ *   - The four legacy effects became real Global Effect Macro slots
+ *     (see marsin_engine/lib/global_effect_library.js).
+ *   - The BLACKOUT button moved into GEM and routes through the new
+ *     /global-effect-macros/blackout endpoint (proper e-stop).
+ *   - This file now exposes the original `RigContext` surface so
+ *     existing consumers (dimmer_rack BypassCheckbox / RESTORE RIG
+ *     toggle) keep working, but the rendered <RigGlobals /> body is
+ *     just the unified <GlobalEffectMacros /> grid.
+ *
+ * `RigContext` semantics preserved:
+ *   - `effects[id]` is the live boolean state of an engine effect, kept
+ *     in sync with WS broadcasts (`globalEffectMacroStatus` /
+ *     `globalEffectSlots`) and seeded from /globals on mount.
+ *   - `toggleEffect(id, def)` flips an effect via the legacy
+ *     POST /global-effect route. Dimmer-bypass checkboxes in
+ *     dimmer_rack.tsx still write to `vintageWhiteBypassDimmer` etc.
+ *     this way — that contract is unchanged.
+ *   - `toggleBlackout()` posts to the new e-stop route so the dimmer
+ *     rack's RESTORE RIG / GLOBAL BLACKOUT button is a true e-stop too,
+ *     not just a pixel dimmer.
+ */
+import React, { useState, createContext, useEffect } from 'react';
+import { View } from 'react-native';
+import { setGlobalEffect, fetchGlobals, setGlobalEffectBlackout, getApiBaseAsync } from '@/utils/api';
+import { engineEvents } from '@/utils/engineEvents';
+import { GlobalEffectMacros } from '@/components/GlobalEffectMacros';
 
 interface RigState {
   effects: Record<string, boolean>;
@@ -18,39 +46,52 @@ export const RigContext = createContext<RigState>({
   toggleBlackout: () => {},
 });
 
+// Exported so RigGlobals can fan a non-API-firing blackout setter
+// out to the GEM component (it owns the API call itself).
+export const _setBlackoutNoCall = { current: (_v: boolean) => {} };
+
 export const RigProvider = ({ children }: { children: React.ReactNode }) => {
   const [effects, setEffects] = useState<Record<string, boolean>>({});
   const [blackout, setBlackout] = useState(false);
-  
-  React.useEffect(() => {
+  // Park the raw setter so RigGlobals/GEM can sync the cached blackout
+  // value WITHOUT triggering toggleBlackout() (which would re-fire
+  // the API call already issued by GEM's button handler).
+  _setBlackoutNoCall.current = setBlackout;
+
+  useEffect(() => {
+    let alive = true;
     fetchGlobals().then(res => {
-      if (res.ok && res.data) {
-        if (res.data.effects) setEffects(res.data.effects);
-        if (res.data.blackout !== undefined) setBlackout(res.data.blackout);
+      if (!alive || !res.ok || !res.data) return;
+      if (res.data.effects) setEffects(res.data.effects);
+      if (res.data.blackout !== undefined) setBlackout(res.data.blackout);
+    });
+
+    // The singleton topic buses (engineEvents → /ws/control,
+    // engineParamsEvents → /ws/params, engineVizEvents → /ws/viz)
+    // auto-connect lazily on first subscribe and self-heal on close,
+    // so we don't pre-init them here. We do nudge engineEvents into
+    // discovering the API base early — the subscribe() below opens
+    // /ws/control which calls getApiBaseAsync internally on first
+    // open. Warm the resolver so that path is cached.
+    getApiBaseAsync().catch(() => { /* swallow — bus will retry */ });
+
+    const unsub = engineEvents.subscribe((data: any) => {
+      if (!alive || !data) return;
+      if (data.type === 'mixer' && data.blackout !== undefined) setBlackout(data.blackout);
+      if (data.type === 'globalEffectMacroStatus' && typeof data.blackout === 'boolean') {
+        setBlackout(data.blackout);
+      }
+      if (data.type === 'globalEffectMacroStatus' && data.controller) {
+        // Mirror legacy-effect state into the RigContext so
+        // dimmer_rack's bypass checkboxes pick up GEM-driven toggles.
+        const c = data.controller;
+        if (c.effects) setEffects(prev => ({ ...prev, ...c.effects }));
       }
     });
 
-    let ws: WebSocket;
-    import('@/utils/api').then(({ getApiBaseAsync }) => {
-      getApiBaseAsync().then(apiBase => {
-        const wsUrl = apiBase.replace(/^http/, 'ws');
-        ws = new WebSocket(wsUrl);
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'mixer' && data.blackout !== undefined) {
-              setBlackout(data.blackout);
-            }
-          } catch (e) {}
-        };
-      });
-    });
-
-    return () => {
-      if (ws) ws.close();
-    };
+    return () => { alive = false; unsub(); };
   }, []);
-  
+
   const toggleEffect = (id: string, def: boolean) => {
     const currentState = effects[id] !== undefined ? effects[id] : def;
     const nextState = !currentState;
@@ -61,107 +102,73 @@ export const RigProvider = ({ children }: { children: React.ReactNode }) => {
   const toggleBlackout = () => {
     const nextState = !blackout;
     setBlackout(nextState);
-    setGlobalBlackout(nextState);
+    setGlobalEffectBlackout(nextState);
   };
 
   return <RigContext.Provider value={{ effects, blackout, toggleEffect, toggleBlackout }}>{children}</RigContext.Provider>;
 };
 
-const GlobalEffectButton = ({ effectId, label, activeDefault = false, disabled = false, variant }: { effectId: string, label: string, activeDefault?: boolean, disabled?: boolean, variant: 'deck' | 'mixer' }) => {
-  const { effects, toggleEffect } = useContext(RigContext);
-  const isOn = effects[effectId] !== undefined ? effects[effectId] : activeDefault;
-  
-  const deckStyle = {
-    flexBasis: '30%', flexGrow: 1, height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', 
-    backgroundColor: disabled ? 'transparent' : (isOn ? Colors.light.primary : Colors.light.surfaceContainerHigh),
-    borderWidth: 1, borderColor: disabled ? Colors.light.ghostBorder : (isOn ? 'transparent' : Colors.light.ghostBorder),
-    ...(!disabled && globalStyles.ambientShadow)
-  };
-
-  const mixerStyle = {
-    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, borderWidth: 1,
-    backgroundColor: disabled ? 'transparent' : (isOn ? Colors.light.primary : Colors.light.surfaceContainerHigh),
-    borderColor: disabled ? Colors.light.ghostBorder : (isOn ? Colors.light.primary : Colors.light.ghostBorder)
-  };
-
-  const style = variant === 'mixer' ? mixerStyle : deckStyle;
-  
+/**
+ * RigGlobals — the unified rig control surface for both the deck and
+ * mixer tabs. Renders the engine-side GEM grid plus a compact BLACKOUT
+ * e-stop.
+ *
+ * `variant` selects the layout:
+ *   - 'deck'  → 2-row grid, 44 px buttons so slot labels fit cleanly
+ *     in portrait (operator feedback May 2026).
+ *   - 'mixer' → single-row full-width strip (52 px buttons), designed
+ *     to be pinned to the bottom of the mixer surface where the
+ *     operator's thumb naturally lands.
+ */
+export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' } = {}) => {
+  // RigGlobals binds the unified GEM component to the RigContext's
+  // blackout state so the dimmer rack's RESTORE RIG button and the
+  // deck/mixer BLACKOUT button stay in lockstep (single source of
+  // truth on the engine, mirrored via WS).
+  const gemVariant = variant === 'mixer' ? 'mixer-strip' : 'deck';
+  // CRITICAL: in mixer-strip mode the wrapper MUST be flex:1 so the
+  // inner GEM (which is also flex:1) actually stretches to fill the
+  // parent globalRigBar width. Without this the inner View collapses
+  // to its intrinsic content width and the row floats left of the
+  // viewport. Deck mode keeps the natural width — the deck right
+  // column is already constrained.
+  const isStrip = gemVariant === 'mixer-strip';
   return (
-    <TouchableOpacity 
-      onPress={() => { 
-        if (disabled) return;
-        toggleEffect(effectId, activeDefault);
-      }}
-      activeOpacity={disabled ? 1.0 : 0.7}
-      style={style as any}
-    >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: disabled ? Colors.light.ghostBorder : (isOn ? '#FFF' : Colors.light.text), fontSize: variant === 'mixer' ? 11 : 13, textAlign: 'center' }}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-const BlackoutButton = ({ variant }: { variant: 'deck' | 'mixer' }) => {
-  const { blackout, toggleBlackout } = useContext(RigContext);
-  
-  const deckStyle = {
-    flexBasis: '30%', flexGrow: 1, height: 50, borderRadius: 8, justifyContent: 'center', alignItems: 'center', 
-    backgroundColor: blackout ? Colors.light.error : Colors.light.surfaceContainerHigh,
-    borderWidth: 1, borderColor: blackout ? 'transparent' : Colors.light.ghostBorder,
-    ...globalStyles.ambientShadow
-  };
-
-  const mixerStyle = {
-    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, borderWidth: 1,
-    backgroundColor: blackout ? Colors.light.error : Colors.light.surfaceContainerHigh,
-    borderColor: blackout ? Colors.light.error : Colors.light.ghostBorder
-  };
-
-  const style = variant === 'mixer' ? mixerStyle : deckStyle;
-
-  return (
-    <TouchableOpacity 
-      onPress={toggleBlackout}
-      activeOpacity={0.7}
-      style={style as any}
-    >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: blackout ? '#FFF' : Colors.light.text, fontSize: variant === 'mixer' ? 11 : 13, textAlign: 'center' }}>
-        BLACKOUT
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-export const RigGlobals = ({ variant = 'deck' }: { variant?: 'deck' | 'mixer' }) => {
-  if (variant === 'mixer') {
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginRight: 16 }}>RIG CONTROLS</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <GlobalEffectButton variant="mixer" effectId="vintageWhite" label="VINTAGE WHT" />
-          <GlobalEffectButton variant="mixer" effectId="blastWhite" label="BLAST WHT" />
-          <GlobalEffectButton variant="mixer" effectId="uvBlast" label="UV BLAST" />
-          <GlobalEffectButton variant="mixer" effectId="fogger" label="FOGGER" />
-          <BlackoutButton variant="mixer" />
+    <RigContextBridge>
+      {({ blackout, setBlackout }) => (
+        <View style={isStrip ? { flex: 1, paddingTop: 6 } : { paddingTop: 6 }}>
+          <GlobalEffectMacros
+            blackout={blackout}
+            onBlackoutChange={setBlackout}
+            variant={gemVariant}
+          />
         </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ paddingTop: 24, paddingBottom: 16, borderTopWidth: 1, borderTopColor: Colors.light.ghostBorder }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Text style={globalStyles.headline}>Rig Globals</Text>
-      </View>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        <GlobalEffectButton variant="deck" effectId="vintageWhite" label="VINTAGE WHT" />
-        <GlobalEffectButton variant="deck" effectId="blastWhite" label="BLAST WHT" />
-        <GlobalEffectButton variant="deck" effectId="uvBlast" label="UV BLAST" />
-        <GlobalEffectButton variant="deck" effectId="fogger" label="FOGGER" />
-        <BlackoutButton variant="deck" />
-        <GlobalEffectButton variant="deck" effectId="placeholder2" label="---" disabled={true} />
-      </View>
-    </View>
+      )}
+    </RigContextBridge>
   );
+};
+
+const RigContextBridge: React.FC<{
+  children: (args: { blackout: boolean; setBlackout: (v: boolean) => void }) => React.ReactElement;
+}> = ({ children }) => {
+  const ctx = React.useContext(RigContext);
+  // Operator review May 2026 #15 — TOGGLE BUTTON FLICKER ROOT CAUSE.
+  // Pre-fix this was a fresh closure on every render:
+  //     const setBlackout = (next) => _setBlackoutNoCall.current(next);
+  // GEM consumes onBlackoutChange in a useEffect dep array. Each
+  // RigContext mutation (every blackout / effects WS event) re-rendered
+  // the bridge, which handed GEM a NEW function reference, which tore
+  // GEM's main useEffect down and re-fired its boot sequence —
+  // `fetchGlobalEffectSlots()` first sets every slot to active:false
+  // (because it's the base layout call without status), then refresh()
+  // restores the real active flags. That two-step is exactly the
+  // "off → on" flicker operators kept reporting. Memoising the
+  // setter so it has a STABLE ref across renders kills the tear-
+  // down loop entirely. The underlying setter still routes through
+  // `_setBlackoutNoCall.current` which is mutated in place by
+  // RigProvider, so we never end up with a stale closure.
+  const setBlackout = React.useCallback((next: boolean) => {
+    _setBlackoutNoCall.current(next);
+  }, []);
+  return children({ blackout: ctx.blackout, setBlackout });
 };

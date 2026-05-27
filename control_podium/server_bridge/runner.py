@@ -274,7 +274,17 @@ async def _run(args) -> None:
         try:
             radio = await _build_radio(args, cfg, bridge_node_id)
             feat = cfg.get("features") if isinstance(cfg.get("features"), dict) else {}
-            enable_ws = bool(feat.get("enable_engine_ws_subscriber", True))
+            pub_cfg = cfg.get("status_publish", {})
+            enable_ws = bool(
+                feat.get("enable_engine_ws_subscriber")
+                if feat.get("enable_engine_ws_subscriber") is not None
+                else pub_cfg.get("enable_engine_ws_subscriber", True)
+            )
+            # Read profile side-channel configuration gates
+            profile_switching_cfg = cfg.get("profile_switching", {})
+            plaintext_cfg_over_lora = bool(profile_switching_cfg.get("plaintext_cfg_over_lora_enabled", False))
+            usb_cfg = bool(profile_switching_cfg.get("usb_cfg_enabled", True))
+
             bridge = Bridge(
                 radio=radio,
                 engine=engine,
@@ -285,6 +295,8 @@ async def _run(args) -> None:
                 long_interval_s=float(pub_cfg.get("long_interval_s", 30.0)),
                 idle_threshold_s=float(pub_cfg.get("idle_threshold_s", 60.0)),
                 enable_engine_ws_subscriber=enable_ws,
+                plaintext_cfg_over_lora_enabled=plaintext_cfg_over_lora,
+                usb_cfg_enabled=usb_cfg,
             )
 
             if not boot_banner_shown:

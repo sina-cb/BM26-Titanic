@@ -1,29 +1,76 @@
 /*
-  19_swaying_lattice_ballet.js
-  RGB-only nested lattice ribbons that rise, dip, curl upward, and settle back down.
+  24_chromatic_murmuration.js
+  Flocking colour storm — strict cp1<->cp2 in RGB-space. The previous
+  hsv()-based mix could traverse non-palette hues at narrow saturations;
+  RGB-lerp guarantees output stays on the cp1<->cp2 line.
 */
 
-export var timeScale = 0.032;
-export var density = 5.5;
-export var width = 0.22;
-export var softness = 2.6;
-export var baseHue = 0.68;
-export var accentHue = 0.48;
+export var localSpeed = 0.5;
+export var flockReach = 0.36;
+export var flockFocus = 4.0;
+export var filamentDensity = 7.0;
+export var contrast = 2.2;
+export var afterglow = 0.18;
+export var blackoutDepth = 0.72;
 
-// Invert slider so maxing the UI makes the timeScale smaller (which loops the VM faster natively)
-export function sliderSpeed(v) { timeScale = 0.8 - (v * 0.78); } // 0.8 (Very Slow) to 0.02 (Rapid)
-export function sliderDensity(v) { density = 2.0 + v * 10.0; }
-export function sliderWidth(v) { width = 0.08 + v * 0.38; }
-export function sliderSoftness(v) { softness = 1.0 + v * 5.0; }
-export function hsvPickerBaseColor(h, s, v) { baseHue = h; }
-export function hsvPickerAccentColor(h, s, v) { accentHue = h; }
+export var cp1H = 0.62, cp1S = 0.94, cp1V = 1.0;
+export var cp2H = 0.03, cp2S = 0.94, cp2V = 1.0;
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
-var mainPhase = 0.0;
-var tSlow = 0.0;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderFlockReach(v) { flockReach = 0.12 + v * 0.55; }
+export function sliderFlockFocus(v) { flockFocus = 1.5 + v * 7.0; }
+export function sliderFilamentDensity(v) { filamentDensity = 2.0 + v * 16.0; }
+export function sliderContrast(v) { contrast = 0.8 + v * 5.5; }
+export function sliderAfterglow(v) { afterglow = v * 0.45; }
+export function sliderBlackoutDepth(v) { blackoutDepth = v; }
+
+var orbitA = 0.0;
+var orbitB = 0.0;
+var orbitC = 0.0;
+var currentScale = 0.18;
+
+// ── Palette RGB cache ─────────────────────────────────────────────────
+var pr1 = 1, pg1 = 0, pb1 = 0;
+var pr2 = 0, pg2 = 0, pb2 = 1;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp1V * (1 - cp1S);
+  var qv = cp1V * (1 - fv * cp1S);
+  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
+  else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
+  else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
+  else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
+  else             { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
+}
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp2V * (1 - cp2S);
+  var qv = cp2V * (1 - fv * cp2S);
+  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
+  else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
+  else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
+  else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
+  else             { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
+}
 
 export function beforeRender(delta) {
-  mainPhase = time(timeScale) * 6.2831853;
-  tSlow = time(timeScale * 0.37) * 6.2831853;
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  currentScale = 0.18 / localMultiplier;
+  orbitA = time(currentScale) * 6.2831853;
+  orbitB = time(currentScale * 0.41) * 6.2831853;
+  orbitC = time(currentScale * 0.67) * 6.2831853;
+  _hsv2rgb1();
+  _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
@@ -32,24 +79,41 @@ export function render3D(index, x, y, z) {
   nx = max(0.0, min(1.0, nx));
   ny = max(0.0, min(1.0, ny));
 
-  var sway1 = sin(mainPhase + nx * 4.1) * 0.22;
-  var sway2 = sin(mainPhase * 1.7 - nx * 7.3 + tSlow) * 0.13;
-  var sway3 = sin(mainPhase * 2.6 + nx * 11.0 - ny * 2.0) * 0.07;
-  var centerY = 0.5 + sway1 + sway2 + sway3;
+  var ax = 0.5 + flockReach * sin(orbitA + sin(orbitB) * 0.6) * 0.75;
+  var ay = 0.5 + flockReach * cos(orbitB * 1.3 - orbitC * 0.2) * 0.68;
+  var bx = 0.5 + flockReach * cos(orbitA * 0.8 + 2.2) * 0.86;
+  var by = 0.5 + flockReach * sin(orbitC * 1.6 + orbitA * 0.3) * 0.6;
+  var cx = 0.5 + flockReach * sin(orbitB * 1.9 - 1.1) * 0.66;
+  var cy = 0.5 + flockReach * cos(orbitA * 1.4 + orbitC) * 0.72;
 
-  var distY = abs(ny - centerY);
-  var ribbon = max(0.0, 1.0 - distY / width);
-  ribbon = pow(ribbon, softness);
+  var dA = hypot(nx - ax, ny - ay);
+  var dB = hypot(nx - bx, ny - by);
+  var dC = hypot(nx - cx, ny - cy);
 
-  var sideCurl = wave(nx * density + sin(tSlow + ny * 3.0) * 0.35);
-  var cross = wave((nx - ny) * density * 0.42 + time(timeScale * 0.61));
-  var v = ribbon * (0.55 + sideCurl * 0.3 + cross * 0.25);
+  var aGlow = pow(max(0.0, 1.0 - dA * flockFocus), contrast);
+  var bGlow = pow(max(0.0, 1.0 - dB * flockFocus), contrast);
+  var cGlow = pow(max(0.0, 1.0 - dC * flockFocus), contrast);
 
-  var colorMix = wave(nx * 0.7 + ny * 1.4 + time(timeScale * 0.43));
-  var dh = accentHue - baseHue;
-  if (dh > 0.5) dh -= 1.0;
-  else if (dh < -0.5) dh += 1.0;
+  var ribbon = wave((dA - dB + dC) * filamentDensity + time(currentScale * 0.27));
+  var shadow = wave((nx * 1.3 - ny * 0.8) + time(currentScale * 0.13));
+  var shutterA = wave((nx * 5.1 + ny * 2.7) - time(currentScale * 0.19));
+  var shutterB = wave((dA * 1.7 - dB * 2.1 + dC * 1.3) * filamentDensity + time(currentScale * 0.33));
+  var blackGate = pow(shutterA * shutterB, 1.4 + blackoutDepth * 5.0);
+  var lattice = aGlow * 0.75 + bGlow * 0.65 + cGlow * 0.6 + pow(ribbon, contrast) * 0.28;
+  var floorGlow = afterglow * (1.0 - blackoutDepth);
+  var v = min(1.0, floorGlow + lattice * blackGate);
+  v *= 0.74 + shadow * 0.26;
+  if (v < blackoutDepth * 0.18) v = 0.0;
 
-  var h = baseHue + dh * colorMix;
-  hsv(h - floor(h), 0.9, min(1.0, v));
+  // Blend factor in [0,1]: how much of the rig leans toward attractors b/c
+  // (cp2) vs attractor a (cp1).
+  var totalGlow = aGlow + bGlow + cGlow;
+  var tVal = totalGlow > 0.0 ? ((bGlow + cGlow) / totalGlow) : 0.0;
+  tVal = max(0.0, min(1.0, tVal));
+
+  var r = (pr1 + (pr2 - pr1) * tVal) * v;
+  var g = (pg1 + (pg2 - pg1) * tVal) * v;
+  var b = (pb1 + (pb2 - pb1) * tVal) * v;
+
+  rgb(r, g, b);
 }

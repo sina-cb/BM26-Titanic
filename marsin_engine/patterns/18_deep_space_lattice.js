@@ -3,24 +3,26 @@
   RGB-only drifting lattice waves with smooth color depth and no hard flashes.
 */
 
-export var speed = 0.028;
+export var localSpeed = 0.5;
 export var latticeScale = 6.0;
 export var lineSoftness = 2.0;
-export var baseHue = 0.68;
-export var accentHue = 0.92;
 
-export function sliderSpeed(v) { speed = 0.006 + v * 0.08; }
+export var cp1H = 0.68, cp1S = 0.95, cp1V = 1.0; // Base Color (Purple/Blue default)
+export var cp2H = 0.92, cp2S = 0.95, cp2V = 1.0; // Accent Color (Pink default)
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLatticeScale(v) { latticeScale = 2.0 + v * 12.0; }
 export function sliderLineSoftness(v) { lineSoftness = 1.0 + v * 5.0; }
-export function hsvPickerBaseColor(h, s, v) { baseHue = h; }
-export function hsvPickerAccentColor(h, s, v) { accentHue = h; }
 
 var phaseA = 0.0;
 var phaseB = 0.0;
 
 export function beforeRender(delta) {
-  phaseA = time(speed);
-  phaseB = time(speed * 0.41);
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  phaseA = time(0.028 / localMultiplier);
+  phaseB = time(0.011 / localMultiplier);
 }
 
 export function render3D(index, x, y, z) {
@@ -37,12 +39,14 @@ export function render3D(index, x, y, z) {
   lattice = pow(lattice, lineSoftness);
 
   var depth = wave(nx * 0.6 + ny * 0.9 + phaseB);
-  var dh = accentHue - baseHue;
+  var dh = cp2H - cp1H;
   if (dh > 0.5) dh -= 1.0;
   else if (dh < -0.5) dh += 1.0;
 
-  var h = baseHue + dh * depth;
+  var h = cp1H + dh * depth;
+  var s = cp1S + (cp2S - cp1S) * depth;
+  var maxVal = cp1V + (cp2V - cp1V) * depth;
   var v = 0.04 + lattice * 0.9;
 
-  hsv(h - floor(h), 0.95, min(1.0, v));
+  hsv(h - floor(h), s, min(1.0, v * maxVal));
 }

@@ -1,87 +1,96 @@
 /*
   01_cylon_sweep.js
   Classic Cylon/Scanner Sweep
-  A high-intensity, sharp tracking beam that bounces bidirectionally across the geometric X-axis 
-  with parameterized scaling and background structural glow.
 */
 
-export var timeScale = 0.05;
+export var localSpeed = 0.5;
 export var eyeWidth = 0.15;
-export var baseHue = 0.0; // Classic Red
 export var bgBrightness = 0.05;
 export var globalDir = 1.0;
 
-// Invert slider so maxing the UI makes the timeScale smaller (which loops the VM faster natively)
-// Expanding the scale up to 0.8 yields a dramatically slow ~52-second scanner loop when dialed down!
-export function speed(v) { timeScale = 0.01 + 0.79 * pow(1.0 - v, 3.0); }
-export function size(v) { eyeWidth = 0.05 + v * 0.3; }  // Controls sharpness/spread
-export function colorPalette1(h,s,v) { baseHue = h; }            // Primary target hue
-export function sliderBackgroundGlow(v) { bgBrightness = v * 0.3; } // Base architectural glow
-export function direction(v) { globalDir = (v * 2.0) - 1.0; }
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Classic Red default
+export var cp2H = 0.6, cp2S = 1.0, cp2V = 0.5; // Blue background default
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
+
+export function sliderLocalSpeed(v) { localSpeed = v; }
+// `size` and `direction` were CPC globals through May 2026; now
+// they're pattern-local so the CaptainPad per-pattern panel surfaces
+// them as proper sliders. SIZE is engine-owned now (acts on coords),
+// so the eye-width control is renamed to be its own local slider.
+export function sliderBeamWidth(v) { eyeWidth = 0.05 + v * 0.3; }
+export function sliderBackgroundGlow(v) { bgBrightness = v * 0.3; }
+export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
 
 var scanT = 0.0;
 
+// ── Palette RGB cache (strict cp1<->cp2 blending) ─────────────────────
+// Pre-convert cp1/cp2 (HSV) to RGB once per frame, then lerp in RGB-space
+// in the per-pixel path. This guarantees output stays on the straight line
+// between the two pickers (e.g. red+blue -> only red/magenta/blue, no
+// green/yellow/cyan drift from HSV shortest-path interpolation).
+var pr1 = 1, pg1 = 0, pb1 = 0;
+var pr2 = 0, pg2 = 0, pb2 = 1;
+function _hsv2rgb1() {
+  var hv = cp1H - floor(cp1H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp1V * (1 - cp1S);
+  var qv = cp1V * (1 - fv * cp1S);
+  var tv = cp1V * (1 - (1 - fv) * cp1S);
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;    pb1 = pv;    }
+  else if (iv == 1) { pr1 = qv;    pg1 = cp1V; pb1 = pv;    }
+  else if (iv == 2) { pr1 = pv;    pg1 = cp1V; pb1 = tv;    }
+  else if (iv == 3) { pr1 = pv;    pg1 = qv;    pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;    pg1 = pv;    pb1 = cp1V; }
+  else             { pr1 = cp1V; pg1 = pv;    pb1 = qv;    }
+}
+function _hsv2rgb2() {
+  var hv = cp2H - floor(cp2H); if (hv < 0) hv += 1;
+  var iv = floor(hv * 6) % 6;
+  var fv = hv * 6 - floor(hv * 6);
+  var pv = cp2V * (1 - cp2S);
+  var qv = cp2V * (1 - fv * cp2S);
+  var tv = cp2V * (1 - (1 - fv) * cp2S);
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;    pb2 = pv;    }
+  else if (iv == 1) { pr2 = qv;    pg2 = cp2V; pb2 = pv;    }
+  else if (iv == 2) { pr2 = pv;    pg2 = cp2V; pb2 = tv;    }
+  else if (iv == 3) { pr2 = pv;    pg2 = qv;    pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;    pg2 = pv;    pb2 = cp2V; }
+  else             { pr2 = cp2V; pg2 = pv;    pb2 = qv;    }
+}
+
 export function beforeRender(delta) {
-  // Manually accumulate time phase so changing the timeScale (speed) slider doesn't cause glitches/jumps
-  // Base time loop is 65.536 seconds. delta is in milliseconds.
-  var phaseIncrement = (delta / 65536.0) / timeScale;
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var phaseIncrement = (delta / 65536.0) / (0.05 / localMultiplier);
   scanT = (scanT + phaseIncrement * globalDir) % 1.0; 
   if (scanT < 0) scanT += 1.0;
+  _hsv2rgb1();
+  _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  // Geometrically map the raw physical X bounds globally across the rig
-  var normX = (x + 0.4) / 2.02; // Normalize approximately 0.0 to 1.0 bounding box
+  var normX = (x + 0.4) / 2.02;
   if (normX < 0.0) normX = 0.0;
   if (normX > 1.0) normX = 1.0;
   
-  // triangle() automatically oscillates 0.0 -> 1.0 -> 0.0 perfectly simulating a scanner bounce
   var scannerFocus = triangle(scanT); 
-  
-  // Calculate spatial distance from the physical pixel to the bouncing focal point
   var dist = abs(normX - scannerFocus);
   
-  var v = bgBrightness;
-  var hardwareWhite = 0.0;
-  var hardwareAmber = 0.0;
-  
+  var intensity = 0.0;
   if (dist < eyeWidth) {
-     // Synthesize a sharp convex curve for the scanner head
-     var intensity = 1.0 - (dist / eyeWidth);
-     intensity = pow(intensity, 2.0); // Quad sharpening for burning hot core
-     
-     // Hardware Chip Blowout logic inside the absolute center of the eye
-     if (intensity > 0.9) {
-         var blowout = (intensity - 0.9) * 10.0; // 0.0 to 1.0
-         
-         // Trigger the dedicated physical LED chips instead of fading RGB!
-         hardwareWhite = blowout;
-         hardwareAmber = blowout; 
-     }
-     
-     v = max(v, intensity);
+     intensity = 1.0 - (dist / eyeWidth);
+     intensity = pow(intensity, 2.0);
   }
-  // --- Inline HSV to RGB Converter for perfectly accurate primary colors ---
-  var r = 0.0;
-  var g = 0.0;
-  var b = 0.0;
   
-  var h = abs(baseHue - floor(baseHue)); 
-  var iObj = floor(h * 6);
-  var fObj = h * 6 - iObj;
-  var sObj = 1.0; // fully saturated core
-  var pObj = v * (1.0 - sObj);
-  var qObj = v * (1.0 - fObj * sObj);
-  var tObj = v * (1.0 - (1.0 - fObj) * sObj);
-  
-  iObj = iObj % 6;
-  if (iObj == 0)      { r = v; g = tObj; b = pObj; }
-  else if (iObj == 1) { r = qObj; g = v; b = pObj; }
-  else if (iObj == 2) { r = pObj; g = v; b = tObj; }
-  else if (iObj == 3) { r = pObj; g = qObj; b = v; }
-  else if (iObj == 4) { r = tObj; g = pObj; b = v; }
-  else                { r = v; g = pObj; b = qObj; }
-  
-  // Push out the composite array triggering both the Primary RGB gradient and the physical Amber/White strikes!
-  rgbwau(r, g, b, hardwareWhite, hardwareAmber, 0.0);
+  // Strict palette: linear-RGB lerp between cp2 (background) and cp1 (beam)
+  // — produces ONLY colours that lie on the straight line in RGB-space
+  // between the two pickers (e.g. red+blue -> red/magenta/blue, no purple
+  // chroma drift, no green).
+  var bgScale = bgBrightness;
+  var r = (pr2 * bgScale) + (pr1 - pr2 * bgScale) * intensity;
+  var g = (pg2 * bgScale) + (pg1 - pg2 * bgScale) * intensity;
+  var b = (pb2 * bgScale) + (pb1 - pb2 * bgScale) * intensity;
+
+  rgb(r, g, b);
 }

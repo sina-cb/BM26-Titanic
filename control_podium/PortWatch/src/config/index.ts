@@ -28,4 +28,5 @@ export {
   ble,
   polling,
   layout,
+  features,
 } from "../_generated/config.generated";
