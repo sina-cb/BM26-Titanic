@@ -1,21 +1,31 @@
 // Audio Analysis tab — operator surface for the in-engine mic
-// listener and BPM → speed sync (docs/25 §8.2).
+// listener, per-signal post-processing chains, and BPM → speed sync
+// (docs/25 §8.2; docs/29 chain-based audio post-processing).
 //
-// Structure (top-down) — matches the operator's mental flow:
-//   1. Header (icon + title + reset)
-//   2. MASTER ENABLE / DISABLE (mic listener on/off)
-//   3. BPM → SPEED SYNC (works independently of the mic; runs off
-//      whatever tempoBpm source is live — OSC today, mic-detected
-//      tomorrow)
-//   4. MICROPHONE — status + tap-to-pick device (server-side mic list)
-//   5. STEMS — per-stem gain (live levels are in the pinned strip up top)
-//   6. MIC — per-band gain + analyser tuning (live levels are in the
-//      pinned strip up top)
+// Structure (top-down) — matches the operator's mental flow, post
+// Phase 6 (2026-05-26):
+//   1. PINNED meter strip (mic + stems + BPM, live, sticks at top)
+//   2. Page title
+//   3. patchError banner (only when something just failed)
+//   4. MIC ANALYSIS — the master enable/disable toggle. Stays at the
+//      top of the scroll body so operators can flip it without
+//      hunting through SETTINGS during a show.
+//   5. SIGNALS · CHAINS — Phase 5 per-signal chain editor.
+//   6. SETTINGS — collapsed-by-default disclosure with everything
+//      rarely touched mid-show: mic picker, BPM → Speed sync, band
+//      crossovers + envelope, kick detector, engine FFT/hop size,
+//      and the Reset-to-defaults button (which now fires BOTH
+//      /audio/config/reset AND /audio/chains/reset).
 //
-// Important UI note: every interactive sub-component (FaderRow,
-// GainRow, …) lives at MODULE scope. Defining them inside the screen
-// function would give them a new component identity on every parent
-// state change, which unmounts / remounts the underlying HorizontalFader
+// What's retired (history at commit a76eba5): the standalone STEMS —
+// GAIN card, the MIC LIVE card, and the wrapping MIC — ANALYSIS card.
+// Per-band / per-stem gain remains editable from the chain editor's
+// Gain-op slider and via CPCControls in the deck/mixer chrome.
+//
+// Important UI note: every interactive sub-component (FaderRow, …)
+// lives at MODULE scope. Defining them inside the screen function
+// would give them a new component identity on every parent state
+// change, which unmounts / remounts the underlying HorizontalFader
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
@@ -36,8 +46,9 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import {
   fetchAudioConfig, patchAudioConfig, resetAudioConfig,
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
+  resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, useParamRange, type AudioStatus, type OscPillState } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type OscPillState } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 
 const C = Colors.light;
@@ -198,56 +209,11 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
   );
 }
 
-function GainRow({ label, paramKey, value }: { label: string; paramKey: string; value: number }) {
-  const [gMin, gMax] = useParamRange(paramKey, [0, 2]);
-  const span = Math.max(0.0001, gMax - gMin);
-  const [draft, setDraft] = useState<number | null>(null);
-  const showVal = draft !== null ? draft : value;
-  const norm = (showVal - gMin) / span;
-  // Throttled live-drag writer. The operator expects the POST trace to
-  // respond as they drag the slider — release-only writes feel broken.
-  // 33 ms ≈ 30 Hz, comfortably under the engine's analyser hop rate.
-  const lastSentAt = useRef(0);
-  const pendingRef = useRef<number | null>(null);
-  const sendNow = useCallback((v: number) => {
-    lastSentAt.current = Date.now();
-    pendingRef.current = null;
-    updateParamCenter({ [paramKey]: v });
-  }, [paramKey]);
-  const sendThrottled = useCallback((v: number) => {
-    const now = Date.now();
-    if (now - lastSentAt.current >= 33) {
-      sendNow(v);
-    } else {
-      pendingRef.current = v;
-    }
-  }, [sendNow]);
-  return (
-    <View style={{ marginBottom: 10 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 11 }}>{showVal.toFixed(2)}×</Text>
-      </View>
-      <HorizontalFader
-        value={Math.max(0, Math.min(1, norm))}
-        onChange={(v: number) => {
-          const real = gMin + v * span;
-          setDraft(real);
-          sendThrottled(real);
-        }}
-        onRelease={() => {
-          // Flush any throttled-suppressed final value, then clear draft
-          // so the slider snaps back to the engine-confirmed value.
-          const final = pendingRef.current ?? draft;
-          if (final !== null) sendNow(final);
-          setDraft(null);
-        }}
-        trackStyle={{ height: 18, backgroundColor: C.surfaceContainerHigh, borderRadius: 9 }}
-        fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 9 }}
-      />
-    </View>
-  );
-}
+// `GainRow` (the per-band / per-stem gain slider that POST'd a single
+// CPC key throttled-live) was retired in Phase 6 along with the MIC —
+// ANALYSIS and STEMS — GAIN cards. The same params remain editable via
+// the chain editor's Gain-op slider and via CPCControls in the
+// deck/mixer chrome — see AudioChainsCard + components/CPCControls.tsx.
 
 // `BandMeter` used to render the per-band level read-out inside the MIC
 // LIVE + STEMS LIVE cards. As of operator brief 2026-05-26 those rows
@@ -843,65 +809,70 @@ function BpmTempoLine() {
   );
 }
 
-// ── Stems live card ──────────────────────────────────────────────────────
+// ── Stems / mic gain cards — RETIRED (Phase 6, 2026-05-26) ──────────────
 //
-// Owns the OSC-driven stems meters + per-stem gain sub-card. Subscribes
-// to ONLY {stemsBass, stemsDrums, stemsVocals} live keys + the matching
-// gain steady keys, so this card re-renders independently of the rest
-// of the page (mic meters, tuning sliders, mic picker).
+// The standalone `MicLiveCard` (PER-BAND GAIN) and `StemsLiveCard`
+// (PER-STEM GAIN) sub-cards used to live here. Phase 5 moved every
+// signal's gain into the chain editor's first-op `Gain` slider; the
+// underlying CPC keys (micLowGain, …, stemsBassGain, …) are also still
+// driven by the deck/mixer chrome's CPCControls. Retiring these cards
+// removes the duplicate UI without losing any control surface.
+//
+// Likewise, the wrapping `MIC — ANALYSIS` card (which held PER-BAND
+// GAIN + the analyser tuning sub-cards) is retired — its tuning
+// sub-cards (BANDS — CROSSOVERS, BANDS — ENVELOPE & GATE, KICK
+// DETECTOR, ENGINE) now live inside the bottom SETTINGS disclosure.
+// If you bring them back, look at git history at commit 5455686.
 
-function StemsLiveCard() {
-  // Per-stem live meters used to live here too, but they're now redundant
-  // with the pinned <PinnedAudioMeters /> strip at the top of the AUDIO
-  // tab (which renders STEMS VOC/BAS/DRM bars + per-signal raw/post trail
-  // plots). Operator brief 2026-05-26: keep the per-stem GAIN sliders
-  // (operator tunes from this card), drop the duplicate level read-out.
-  // No `useLiveParamValues` needed any more.
-  const steady = useSharedParamValues({
-    stemsVocalsGain: 1, stemsBassGain: 1, stemsDrumsGain: 1,
-  } as Record<string, number>) as Record<string, number>;
-  return (
-    <View style={CARD}>
-      <SectionHeader
-        icon="dot.radiowaves.left.and.right"
-        title="STEMS — GAIN (OSC)"
-        hint="Per-stem gain for the external-analyser stems. Live values are in the pinned meter strip at the top of this tab."
-      />
-      <View style={SUB_CARD}>
-        <SubHeader title="PER-STEM GAIN" />
-        <GainRow label="VOCALS" paramKey="stemsVocalsGain" value={steady.stemsVocalsGain ?? 1} />
-        <GainRow label="BASS"   paramKey="stemsBassGain"   value={steady.stemsBassGain   ?? 1} />
-        <GainRow label="DRUMS"  paramKey="stemsDrumsGain"  value={steady.stemsDrumsGain  ?? 1} />
-        <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 6 }}>
-          The deck&apos;s master REACT slider multiplies all of these.
-        </Text>
-      </View>
-    </View>
-  );
+// ── SETTINGS collapsible (Phase 6) ──────────────────────────────────────
+//
+// All operator settings that are touched at rig-build time but rarely
+// mid-show live inside a single disclosure card pinned to the bottom of
+// the AUDIO tab. Wireframe A §SETTINGS in docs/29. Collapsed by default;
+// preference persists across rebuilds via AsyncStorage.
+
+const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
+
+// Power-of-two FFT sizes the engine accepts. The audio_analyzer.js
+// constructor rejects non-powers-of-two; this discrete pill picker keeps
+// the operator inside the safe set.
+const FFT_SIZE_OPTIONS = [1024, 2048, 4096, 8192] as const;
+type FftSizeOption = typeof FFT_SIZE_OPTIONS[number];
+
+// hopSize must divide fftSize. The engine defaults hopSize to fftSize/2
+// when omitted; we offer the common choices 1/4, 1/2, 1 (no overlap) of
+// the current fftSize and snap to the nearest below.
+function hopOptionsFor(fftSize: number): number[] {
+  return [fftSize / 4, fftSize / 2, fftSize].map(n => Math.max(1, Math.round(n)));
 }
 
-// ── Mic live card ────────────────────────────────────────────────────────
-//
-// Owns the PER-BAND GAIN sub-card. The per-band live meters used to live
-// here too, but they're now redundant with the pinned <PinnedAudioMeters />
-// strip at the top of the AUDIO tab (which renders MIC LOW/MID/HIGH/KICK
-// bars + per-signal raw/post trail plots). Operator brief 2026-05-26:
-// "Delete redundant per-band meters in MIC LIVE + STEMS LIVE cards" —
-// the gain sliders stay because the operator tunes from these cards;
-// only the duplicate level read-out is gone. Subscribes to the four
-// micGain steady keys only (no live subscription needed any more).
-
-function MicLiveCard() {
-  const steady = useSharedParamValues({
-    micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1,
-  } as Record<string, number>) as Record<string, number>;
+function PillPicker<T extends number | string>({ value, options, onSelect, formatLabel }: {
+  value: T;
+  options: readonly T[];
+  onSelect: (v: T) => void;
+  formatLabel?: (v: T) => string;
+}) {
   return (
-    <View style={SUB_CARD}>
-      <SubHeader title="PER-BAND GAIN" />
-      <GainRow label="MIC LOW"  paramKey="micLowGain"  value={steady.micLowGain  ?? 1} />
-      <GainRow label="MIC MID"  paramKey="micMidGain"  value={steady.micMidGain  ?? 1} />
-      <GainRow label="MIC HIGH" paramKey="micHighGain" value={steady.micHighGain ?? 1} />
-      <GainRow label="MIC KICK" paramKey="micKickGain" value={steady.micKickGain ?? 1} />
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+      {options.map((opt) => {
+        const active = opt === value;
+        return (
+          <TouchableOpacity
+            key={String(opt)}
+            onPress={() => onSelect(opt)}
+            style={{
+              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+              backgroundColor: active ? C.primary : C.surfaceContainerLowest,
+              borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+            }}
+          >
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+              color: active ? '#fff' : C.secondary, letterSpacing: 0.6,
+            }}>{formatLabel ? formatLabel(opt) : String(opt)}</Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -993,6 +964,29 @@ function AudioConfigBody({
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // SETTINGS collapse — Phase 6, default collapsed. AsyncStorage roams
+  // the operator's preference across rebuilds. We start collapsed and
+  // the effect below may flip to false if AsyncStorage has a stored
+  // 'false'. This means a fresh install gets the documented default
+  // (collapsed) even if AsyncStorage is cold.
+  const [settingsCollapsed, setSettingsCollapsed] = useState<boolean>(true);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(SETTINGS_COLLAPSED_KEY).then((raw) => {
+      if (!alive || raw == null) return;
+      if (raw === 'false') setSettingsCollapsed(false);
+      else if (raw === 'true') setSettingsCollapsed(true);
+    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
+    return () => { alive = false; };
+  }, []);
+  const toggleSettings = useCallback(() => {
+    setSettingsCollapsed((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(SETTINGS_COLLAPSED_KEY, String(next))
+        .catch(() => { /* benign — persistence is best-effort */ });
+      return next;
+    });
+  }, []);
 
   // Steady (operator-tuned, persistent) params — sliders, sync
   // toggles, gain knobs. These are quiet by default; only redrawn
@@ -1002,15 +996,13 @@ function AudioConfigBody({
   // Live high-rate keys (micLow/Mid/High/Kick, stems*, tempoBpm) re-render
   // at 15-30 Hz; folding them in here re-rendered the ENTIRE config
   // body — every FaderRow, mic picker, BPM range slider — at that
-  // cadence. Live meters now live in their own components
-  // (<PinnedAudioMeters />, <StemsLiveCard />, <MicLiveCard />,
-  // <BpmTempoLine />) which each subscribe to ONLY the live keys they
-  // need. See useLiveParamValues per-key short-circuit in
-  // hooks/useEngineState.ts.
+  // cadence. Live meters now live in their own components —
+  // <PinnedAudioMeters /> + <BpmTempoLine /> — which each subscribe to
+  // ONLY the live keys they need. Per-band / per-stem gain sliders are
+  // retired from this tab (Phase 6); the same params remain editable
+  // via chain-editor Gain ops + the deck/mixer chrome's CPCControls.
   const sp = useSharedParamValues({
     bpmSpeedSync: 0, bpmSpeedMin: 60, bpmSpeedMax: 180, speed: 0,
-    micLowGain: 1, micMidGain: 1, micHighGain: 1, micKickGain: 1,
-    stemsVocalsGain: 1, stemsBassGain: 1, stemsDrumsGain: 1,
   } as Record<string, number>) as Record<string, number>;
 
   const loadDevices = useCallback(async () => {
@@ -1032,6 +1024,44 @@ function AudioConfigBody({
     const r = await patchAudioConfig({ [group]: { [field]: value } });
     if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
     else setPatchError(null);
+  }, [reload]);
+
+  // PATCH a top-level engine field (fftSize / hopSize). These restart the
+  // ffmpeg pipeline server-side, so we reload the full config after to
+  // resync the displayed deviceLabel + sampleRate echo.
+  const commitTopLevel = useCallback(async (field: 'fftSize' | 'hopSize', value: number) => {
+    setCfg(prev => prev && ({ ...prev, [field]: value } as AudioConfig));
+    const r = await patchAudioConfig({ [field]: value });
+    if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
+    else { setPatchError(null); reload(); }
+    // `setCfg` is a useState setter and therefore stable across renders;
+    // matches the existing convention in updateLocal / toggleEnabled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reload]);
+
+  // Reset to defaults — Phase 6, docs/29 §Interactions step 7. Fires
+  // BOTH endpoints (analyzer config + every signal's default chain).
+  // Surfaces inline error if either fails; chains broadcast will refresh
+  // the AudioChainsCard on its own via /ws/control `audioChainsChanged`.
+  const resetToDefaults = useCallback(async () => {
+    setBusy('reset');
+    const [cfgRes, chainsRes] = await Promise.all([
+      resetAudioConfig(),
+      resetAllAudioChains(),
+    ]);
+    setBusy(null);
+    const errors: string[] = [];
+    if (!cfgRes.ok) errors.push(`config: ${cfgRes.error || 'reset failed'}`);
+    if (!chainsRes.ok) errors.push(`chains: ${chainsRes.error || 'reset failed'}`);
+    if (errors.length) {
+      setPatchError(errors.join(' · '));
+    } else {
+      setPatchError(null);
+    }
+    // Always reload audio config: even a chains-only failure still
+    // means the analyzer side reset succeeded and we need the fresh
+    // numbers reflected in the sliders.
+    reload();
   }, [reload]);
 
   // Master enable/disable. Restarts ffmpeg capture under the hood.
@@ -1098,30 +1128,16 @@ function AudioConfigBody({
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 32, paddingBottom: 80 }}
       >
-        {/* ── Page title ────────────────────────────────────────────── */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, gap: 16 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-            <IconSymbol name="waveform" size={32} color={C.primary} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
-              AUDIO
-            </Text>
-          </View>
-          <TouchableOpacity
-            onPress={async () => {
-              const r = await resetAudioConfig();
-              if (!r.ok) setPatchError(r.error || 'reset failed');
-              else { setPatchError(null); reload(); }
-            }}
-            style={{
-              paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8,
-              borderWidth: 1, borderColor: C.ghostBorder,
-              backgroundColor: C.surfaceContainerLowest,
-            }}
-          >
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-              Reset to defaults
-            </Text>
-          </TouchableOpacity>
+        {/* ── Page title ──────────────────────────────────────────────
+            Reset is no longer a top-right header action — it lives at
+            the bottom of the SETTINGS disclosure (Phase 6 / docs/29
+            §Interactions step 7) and now fires BOTH chain + config
+            resets. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 32, gap: 16 }}>
+          <IconSymbol name="waveform" size={32} color={C.primary} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
+            AUDIO
+          </Text>
         </View>
 
         {patchError ? (
@@ -1131,14 +1147,11 @@ function AudioConfigBody({
           </View>
         ) : null}
 
-        {/* ── 0. SIGNALS · CHAINS ───────────────────────────────────────
-            Per-signal post-processing chain editor (docs/29 Phase 5).
-            One row per signal with [edit] disclosure → drag-reorderable
-            op list with per-op param sliders + the engine's 5 Hz
-            signalChain pre/post preview meters. */}
-        <AudioChainsCard />
-
-        {/* ── 1. MASTER ENABLE / DISABLE ────────────────────────────── */}
+        {/* ── 1. MASTER ENABLE / DISABLE ──────────────────────────────
+            Stays at the top of the scrolling body (above CHAINS) per
+            the coordinator brief — operators reach for this constantly
+            when troubleshooting "why is the kick not firing?" and we
+            don't want them hunting for it inside SETTINGS. */}
         <View style={CARD}>
           <SectionHeader
             icon="power"
@@ -1152,7 +1165,7 @@ function AudioConfigBody({
             label={enabled ? '● LISTENING' : 'DISABLED'}
             subtitle={enabled
               ? `${phase.toUpperCase()} · ${status?.captureFps ?? 0} fps · ${cfg.capture.sampleRate} Hz`
-              : 'Tap to start listening. Sliders below are read-only until enabled.'}
+              : 'Tap to start listening. Chains + SETTINGS below are read-only until enabled.'}
             accent={enabled ? phaseColor : ACCENT_AUTO}
           />
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 12 }}>
@@ -1161,233 +1174,313 @@ function AudioConfigBody({
           </Text>
         </View>
 
-        {/* ── 2. BPM → SPEED SYNC ───────────────────────────────────── */}
-        <View style={CARD}>
-          <SectionHeader
-            icon="metronome"
-            title="BPM → SPEED SYNC"
-            hint="Drive the global SPEED param from live tempo (OSC /lx/tempo/bpm)."
-          />
-          <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
-          <MasterToggle
-            on={bpmSyncOn}
-            onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
-            label={bpmSyncOn ? '● SYNC ON · SPEED DRIVEN BY BPM' : 'SYNC OFF · SPEED MANUAL'}
-            subtitle={bpmSyncOn ? 'Live tempo / mapped speed shown below.' : 'Tap to drive SPEED from live BPM.'}
-          />
-          {/* Live tempo + mapped speed read-out. Subscribes ONLY to
-              tempoBpm + bpmSpeedMin/Max so the rest of the BPM card
-              stays still while it ticks. */}
-          {bpmSyncOn ? <BpmTempoLine /> : null}
-          <View style={SUB_CARD}>
-            <SubHeader title={`BPM MAPPING (${BPM_MIN_ABS}–${BPM_MAX_ABS} BPM)`} />
-            {/* Min slider caps at (max - 1); max slider floors at (min + 1).
-               Hard absolute bounds [60, 180] mirror the param_center
-               registry. Operator picks the working window inside that. */}
-            <FaderRow
-              label="BPM min"
-              min={BPM_MIN_ABS}
-              max={Math.max(BPM_MIN_ABS + 1, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)}
-              value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS))}
-              step={1}
-              onDrag={() => { /* commit on release */ }}
-              onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)) })}
-              hint={`BPM value that maps to speed = 0. Hard floor ${BPM_MIN_ABS}; must stay below BPM max.`}
-            />
-            <FaderRow
-              label="BPM max"
-              min={Math.min(BPM_MAX_ABS - 1, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)}
-              max={BPM_MAX_ABS}
-              value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS))}
-              step={1}
-              onDrag={() => { /* commit on release */ }}
-              onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)) })}
-              hint={`BPM value that maps to speed = 1. Hard ceiling ${BPM_MAX_ABS}; must stay above BPM min.`}
-            />
-          </View>
-        </View>
+        {/* ── 2. SIGNALS · CHAINS ───────────────────────────────────────
+            Per-signal post-processing chain editor (docs/29 Phase 5).
+            One row per signal with [edit] disclosure → drag-reorderable
+            op list with per-op param sliders + the engine's 5 Hz
+            signalChain pre/post preview meters. */}
+        <AudioChainsCard />
 
-        {/* ── 3. MICROPHONE ─────────────────────────────────────────── */}
+        {/* ── 3. SETTINGS (collapsed by default) ───────────────────────
+            Phase 6 / Wireframe A §SETTINGS — pinned bottom disclosure
+            that holds everything rarely touched mid-show: mic picker,
+            BPM→Speed sync, band crossovers + envelope, kick detector
+            tuning, engine FFT size, and the reset button. Operator
+            preference (collapsed vs expanded) persists across rebuilds
+            via AsyncStorage. */}
         <View style={CARD}>
-          <SectionHeader
-            icon="mic"
-            title="MICROPHONE"
-            hint="Select which mic on the engine machine to listen to."
-            right={
+          <TouchableOpacity
+            onPress={toggleSettings}
+            activeOpacity={0.7}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}
+          >
+            <View style={{
+              width: 36, height: 36, borderRadius: 8,
+              backgroundColor: C.primaryContainer, alignItems: 'center', justifyContent: 'center',
+            }}>
+              <IconSymbol name="slider.horizontal.3" size={20} color={C.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 0.8 }}>
+                SETTINGS
+              </Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
+                Microphone · BPM → Speed Sync · Bands · Engine · Reset
+              </Text>
+            </View>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary }}>
+              {settingsCollapsed ? '▾' : '▴'}
+            </Text>
+          </TouchableOpacity>
+
+          {!settingsCollapsed ? (
+            <View style={{ marginTop: 16 }}>
+              {/* ── MICROPHONE ───────────────────────────────────────── */}
+              <View style={SUB_CARD}>
+                <SubHeader
+                  title="MICROPHONE"
+                  right={
+                    <TouchableOpacity
+                      onPress={() => { setPickerOpen(o => !o); if (!devices && !pickerOpen) loadDevices(); }}
+                      style={{
+                        paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+                        backgroundColor: pickerOpen ? C.primary : C.surfaceContainerLowest,
+                        borderWidth: 1, borderColor: pickerOpen ? C.primary : C.ghostBorder,
+                      }}
+                    >
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: pickerOpen ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                        {pickerOpen ? 'Close' : 'Change'}
+                      </Text>
+                    </TouchableOpacity>
+                  }
+                />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                  <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: phaseColor }} />
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 14 }}>
+                    {cfg.capture.deviceLabel || cfg.capture.device || 'No device selected'}
+                  </Text>
+                  <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 11 }}>
+                    {enabled ? `· ${phase}` : '· disabled'}
+                  </Text>
+                </View>
+                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
+                  {cfg.capture.inputFormat || '—'} · {cfg.capture.sampleRate} Hz · {cfg.capture.channels} ch · {cfg.fftSize}-pt FFT · {status?.captureFps ?? 0} fps
+                </Text>
+                {status?.error ? (
+                  <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginTop: 6 }}>
+                    {status.error}
+                  </Text>
+                ) : null}
+
+                {pickerOpen ? (
+                  <View style={{ marginTop: 10 }}>
+                    <SubHeader
+                      title={`AVAILABLE DEVICES${devices ? ` (${devices.length})` : ''}`}
+                      right={
+                        <TouchableOpacity onPress={loadDevices} disabled={devicesLoading} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+                          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.primary, letterSpacing: 0.6 }}>
+                            {devicesLoading ? 'SCANNING…' : '↻ REFRESH'}
+                          </Text>
+                        </TouchableOpacity>
+                      }
+                    />
+                    {devicesError ? (
+                      <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11 }}>{devicesError}</Text>
+                    ) : null}
+                    {devicesLoading && !devices ? (
+                      <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color={C.primary} />
+                      </View>
+                    ) : null}
+                    {devices && devices.length === 0 ? (
+                      <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 12 }}>
+                        No audio devices found on the engine. Check ffmpeg + OS permissions.
+                      </Text>
+                    ) : null}
+                    {devices?.map((d) => (
+                      <MicPickerRow
+                        key={d.id}
+                        device={d}
+                        isCurrent={
+                          cfg.capture.deviceId === d.id ||
+                          (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
+                        }
+                        onPress={() => selectDevice(d)}
+                        busy={busy === `mic:${d.id}`}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+
+              {/* ── BPM → SPEED SYNC ────────────────────────────────── */}
+              <View style={SUB_CARD}>
+                <SubHeader title="BPM → SPEED SYNC" />
+                <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
+                <MasterToggle
+                  on={bpmSyncOn}
+                  onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
+                  label={bpmSyncOn ? '● SYNC ON · SPEED DRIVEN BY BPM' : 'SYNC OFF · SPEED MANUAL'}
+                  subtitle={bpmSyncOn ? 'Live tempo / mapped speed shown below.' : 'Tap to drive SPEED from live BPM.'}
+                />
+                {/* Live tempo + mapped speed read-out. Subscribes ONLY to
+                    tempoBpm + bpmSpeedMin/Max so the rest of the BPM
+                    section stays still while it ticks. */}
+                {bpmSyncOn ? <BpmTempoLine /> : null}
+                <View style={{ marginTop: 12 }}>
+                  <SubHeader title={`BPM MAPPING (${BPM_MIN_ABS}–${BPM_MAX_ABS} BPM)`} />
+                  <FaderRow
+                    label="BPM min"
+                    min={BPM_MIN_ABS}
+                    max={Math.max(BPM_MIN_ABS + 1, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)}
+                    value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS))}
+                    step={1}
+                    onDrag={() => { /* commit on release */ }}
+                    onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)) })}
+                    hint={`BPM value that maps to speed = 0. Hard floor ${BPM_MIN_ABS}; must stay below BPM max.`}
+                  />
+                  <FaderRow
+                    label="BPM max"
+                    min={Math.min(BPM_MAX_ABS - 1, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)}
+                    max={BPM_MAX_ABS}
+                    value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS))}
+                    step={1}
+                    onDrag={() => { /* commit on release */ }}
+                    onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)) })}
+                    hint={`BPM value that maps to speed = 1. Hard ceiling ${BPM_MAX_ABS}; must stay above BPM min.`}
+                  />
+                </View>
+              </View>
+
+              {/* ── BANDS — CROSSOVERS ──────────────────────────────── */}
+              <View style={SUB_CARD}>
+                <SubHeader title="BANDS — CROSSOVERS" />
+                <FaderRow
+                  label="Low max" suffix="Hz" min={50} max={Math.max(60, cfg.bands.midMaxHz - 50)} value={cfg.bands.lowMaxHz}
+                  step={5}
+                  onDrag={(v) => updateLocal('bands', 'lowMaxHz', v)}
+                  onCommit={(v) => commitField('bands', 'lowMaxHz', v)}
+                  hint="Upper edge of the LOW band. EDM kick + sub-bass live here."
+                />
+                <FaderRow
+                  label="Mid max" suffix="Hz" min={cfg.bands.lowMaxHz + 50} max={cfg.capture.sampleRate / 2 - 50} value={cfg.bands.midMaxHz}
+                  step={50}
+                  onDrag={(v) => updateLocal('bands', 'midMaxHz', v)}
+                  onCommit={(v) => commitField('bands', 'midMaxHz', v)}
+                  hint="Upper edge of the MID band; everything above goes to HIGH."
+                />
+              </View>
+
+              {/* ── BANDS — ENVELOPE & GATE ─────────────────────────── */}
+              <View style={SUB_CARD}>
+                <SubHeader title="BANDS — ENVELOPE & GATE" />
+                <FaderRow
+                  label="Attack" suffix="ms" min={1} max={50} value={cfg.bands.attackMs}
+                  step={1}
+                  onDrag={(v) => updateLocal('bands', 'attackMs', v)}
+                  onCommit={(v) => commitField('bands', 'attackMs', v)}
+                  hint="How fast a band rises on a peak. 5–20 ms feels musical."
+                />
+                <FaderRow
+                  label="Release" suffix="ms" min={20} max={800} value={cfg.bands.releaseMs}
+                  step={10}
+                  onDrag={(v) => updateLocal('bands', 'releaseMs', v)}
+                  onCommit={(v) => commitField('bands', 'releaseMs', v)}
+                  hint="How slow a band falls after a peak. 100–300 ms typical."
+                />
+                <FaderRow
+                  label="Noise gate" min={0} max={0.2} value={cfg.bands.noiseGate}
+                  step={0.005}
+                  onDrag={(v) => updateLocal('bands', 'noiseGate', v)}
+                  onCommit={(v) => commitField('bands', 'noiseGate', v)}
+                  hint="Bands below this floor read as 0. Raise if HVAC keeps meters lit."
+                />
+              </View>
+
+              {/* ── KICK DETECTOR ───────────────────────────────────── */}
+              <View style={SUB_CARD}>
+                <SubHeader title="KICK DETECTOR" />
+                <FaderRow
+                  label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz}
+                  step={5}
+                  onDrag={(v) => updateLocal('kick', 'minHz', v)}
+                  onCommit={(v) => commitField('kick', 'minHz', v)}
+                />
+                <FaderRow
+                  label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz}
+                  step={5}
+                  onDrag={(v) => updateLocal('kick', 'maxHz', v)}
+                  onCommit={(v) => commitField('kick', 'maxHz', v)}
+                  hint="EDM kick fundamental sits 50–80 Hz; the click transient is ~100 Hz."
+                />
+                <FaderRow
+                  label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold}
+                  step={0.05}
+                  onDrag={(v) => updateLocal('kick', 'threshold', v)}
+                  onCommit={(v) => commitField('kick', 'threshold', v)}
+                  hint="Instant energy must be this many × running average."
+                />
+                <FaderRow
+                  label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs}
+                  step={10}
+                  onDrag={(v) => updateLocal('kick', 'refractoryMs', v)}
+                  onCommit={(v) => commitField('kick', 'refractoryMs', v)}
+                  hint="Minimum gap between two kick fires."
+                />
+                <FaderRow
+                  label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs}
+                  step={10}
+                  onDrag={(v) => updateLocal('kick', 'decayMs', v)}
+                  onCommit={(v) => commitField('kick', 'decayMs', v)}
+                  hint="How fast micKick envelope falls back to 0."
+                />
+              </View>
+
+              {/* ── ENGINE (fftSize / hopSize) ──────────────────────── */}
+              {/* Discrete pill pickers — fftSize must be a power of two
+                  per audio_analyzer.js; hopSize is offered as fftSize/4
+                  · /2 · /1 (no overlap). Changing either restarts the
+                  ffmpeg pipeline server-side, so we PATCH the top-level
+                  field and reload to resync the displayed sample rate. */}
+              <View style={SUB_CARD}>
+                <SubHeader title="ENGINE" />
+                <Text style={{
+                  fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
+                  fontSize: 11, textTransform: 'uppercase',
+                  letterSpacing: 0.8, marginBottom: 6,
+                }}>FFT SIZE</Text>
+                <PillPicker<number>
+                  value={cfg.fftSize}
+                  options={FFT_SIZE_OPTIONS as readonly number[]}
+                  onSelect={(v) => commitTopLevel('fftSize', v as FftSizeOption)}
+                  formatLabel={(v) => `${v}-pt`}
+                />
+                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 4, marginBottom: 12 }}>
+                  Bigger FFT = finer band edges, more latency. 2048 is the EDM-VJ default.
+                </Text>
+                <Text style={{
+                  fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
+                  fontSize: 11, textTransform: 'uppercase',
+                  letterSpacing: 0.8, marginBottom: 6,
+                }}>HOP SIZE</Text>
+                <PillPicker<number>
+                  value={cfg.hopSize}
+                  options={hopOptionsFor(cfg.fftSize)}
+                  onSelect={(v) => commitTopLevel('hopSize', v)}
+                />
+                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 4 }}>
+                  Samples between FFT frames. fftSize/2 (50 % overlap) is the default.
+                </Text>
+              </View>
+
+              {/* ── RESET TO DEFAULTS ───────────────────────────────── */}
+              {/* docs/29 §Interactions step 7 — fires BOTH endpoints:
+                  POST /audio/config/reset + POST /audio/chains/reset.
+                  Errors are surfaced inline in the patchError banner
+                  above; no silent fallbacks. */}
               <TouchableOpacity
-                onPress={() => { setPickerOpen(o => !o); if (!devices && !pickerOpen) loadDevices(); }}
+                onPress={resetToDefaults}
+                disabled={busy === 'reset'}
                 style={{
-                  paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8,
-                  backgroundColor: pickerOpen ? C.primary : C.surfaceContainerLowest,
-                  borderWidth: 1, borderColor: pickerOpen ? C.primary : C.ghostBorder,
+                  marginTop: 16, alignSelf: 'flex-start',
+                  paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8,
+                  borderWidth: 1, borderColor: C.error,
+                  backgroundColor: 'rgba(186, 26, 26, 0.06)',
+                  opacity: busy === 'reset' ? 0.7 : 1,
+                  flexDirection: 'row', alignItems: 'center', gap: 10,
                 }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: pickerOpen ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                  {pickerOpen ? 'Close' : 'Change'}
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.error, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                  Reset to defaults
                 </Text>
+                {busy === 'reset' ? <ActivityIndicator size="small" color={C.error} /> : null}
               </TouchableOpacity>
-            }
-          />
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: phaseColor }} />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 14 }}>
-              {cfg.capture.deviceLabel || cfg.capture.device || 'No device selected'}
-            </Text>
-            <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 11 }}>
-              {enabled ? `· ${phase}` : '· disabled'}
-            </Text>
-          </View>
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
-            {cfg.capture.inputFormat || '—'} · {cfg.capture.sampleRate} Hz · {cfg.capture.channels} ch · {cfg.fftSize}-pt FFT · {status?.captureFps ?? 0} fps
-          </Text>
-          {status?.error ? (
-            <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginTop: 6 }}>
-              {status.error}
-            </Text>
-          ) : null}
-
-          {pickerOpen ? (
-            <View style={SUB_CARD}>
-              <SubHeader
-                title={`AVAILABLE DEVICES${devices ? ` (${devices.length})` : ''}`}
-                right={
-                  <TouchableOpacity onPress={loadDevices} disabled={devicesLoading} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.primary, letterSpacing: 0.6 }}>
-                      {devicesLoading ? 'SCANNING…' : '↻ REFRESH'}
-                    </Text>
-                  </TouchableOpacity>
-                }
-              />
-              {devicesError ? (
-                <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11 }}>{devicesError}</Text>
-              ) : null}
-              {devicesLoading && !devices ? (
-                <View style={{ paddingVertical: 12, alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color={C.primary} />
-                </View>
-              ) : null}
-              {devices && devices.length === 0 ? (
-                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 12 }}>
-                  No audio devices found on the engine. Check ffmpeg + OS permissions.
-                </Text>
-              ) : null}
-              {devices?.map((d) => (
-                <MicPickerRow
-                  key={d.id}
-                  device={d}
-                  isCurrent={
-                    cfg.capture.deviceId === d.id ||
-                    (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
-                  }
-                  onPress={() => selectDevice(d)}
-                  busy={busy === `mic:${d.id}`}
-                />
-              ))}
+              <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 6 }}>
+                Restores analyzer tuning (bands, envelope, kick, engine) AND every
+                signal&apos;s default post-processing chain. Mic device selection is preserved.
+              </Text>
             </View>
           ) : null}
-        </View>
-
-        {/* ── 4. STEMS — GAIN (OSC) ──────────────────────────────────── */}
-        {/* Per-stem GAIN sub-card. Stem live levels render in the pinned
-            <PinnedAudioMeters /> strip at the top of the tab. */}
-        <StemsLiveCard />
-
-        {/* ── 5. MIC — ANALYSIS ────────────────────────────────────── */}
-        <View style={CARD}>
-          <SectionHeader
-            icon="waveform.path.ecg"
-            title="MIC — ANALYSIS"
-            hint="Per-band gain + analyser tuning. Live mic levels are in the pinned meter strip at the top of this tab."
-          />
-          {/* PER-BAND GAIN sub-card. Live mic meters used to render here
-              too but are now redundant with <PinnedAudioMeters />; only
-              the gain sliders remain. */}
-          <MicLiveCard />
-
-          <View style={SUB_CARD}>
-            <SubHeader title="BANDS — CROSSOVERS" />
-            <FaderRow
-              label="Low max" suffix="Hz" min={50} max={Math.max(60, cfg.bands.midMaxHz - 50)} value={cfg.bands.lowMaxHz}
-              step={5}
-              onDrag={(v) => updateLocal('bands', 'lowMaxHz', v)}
-              onCommit={(v) => commitField('bands', 'lowMaxHz', v)}
-              hint="Upper edge of the LOW band. EDM kick + sub-bass live here."
-            />
-            <FaderRow
-              label="Mid max" suffix="Hz" min={cfg.bands.lowMaxHz + 50} max={cfg.capture.sampleRate / 2 - 50} value={cfg.bands.midMaxHz}
-              step={50}
-              onDrag={(v) => updateLocal('bands', 'midMaxHz', v)}
-              onCommit={(v) => commitField('bands', 'midMaxHz', v)}
-              hint="Upper edge of the MID band; everything above goes to HIGH."
-            />
-          </View>
-
-          <View style={SUB_CARD}>
-            <SubHeader title="BANDS — ENVELOPE & GATE" />
-            {/* Asymmetric attack/release envelope (VU-meter
-                convention): snap up on peaks, smooth fall on
-                releases. Defaults 8 ms / 180 ms are the EDM-VJ
-                sweet spot — see audio_analyzer.js header. */}
-            <FaderRow
-              label="Attack" suffix="ms" min={1} max={50} value={cfg.bands.attackMs}
-              step={1}
-              onDrag={(v) => updateLocal('bands', 'attackMs', v)}
-              onCommit={(v) => commitField('bands', 'attackMs', v)}
-              hint="How fast a band rises on a peak. 5–20 ms feels musical."
-            />
-            <FaderRow
-              label="Release" suffix="ms" min={20} max={800} value={cfg.bands.releaseMs}
-              step={10}
-              onDrag={(v) => updateLocal('bands', 'releaseMs', v)}
-              onCommit={(v) => commitField('bands', 'releaseMs', v)}
-              hint="How slow a band falls after a peak. 100–300 ms typical."
-            />
-            <FaderRow
-              label="Noise gate" min={0} max={0.2} value={cfg.bands.noiseGate}
-              step={0.005}
-              onDrag={(v) => updateLocal('bands', 'noiseGate', v)}
-              onCommit={(v) => commitField('bands', 'noiseGate', v)}
-              hint="Bands below this floor read as 0. Raise if HVAC keeps meters lit."
-            />
-          </View>
-
-          <View style={SUB_CARD}>
-            <SubHeader title="KICK DETECTOR" />
-            <FaderRow
-              label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz}
-              step={5}
-              onDrag={(v) => updateLocal('kick', 'minHz', v)}
-              onCommit={(v) => commitField('kick', 'minHz', v)}
-            />
-            <FaderRow
-              label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz}
-              step={5}
-              onDrag={(v) => updateLocal('kick', 'maxHz', v)}
-              onCommit={(v) => commitField('kick', 'maxHz', v)}
-              hint="EDM kick fundamental sits 50–80 Hz; the click transient is ~100 Hz."
-            />
-            <FaderRow
-              label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold}
-              step={0.05}
-              onDrag={(v) => updateLocal('kick', 'threshold', v)}
-              onCommit={(v) => commitField('kick', 'threshold', v)}
-              hint="Instant energy must be this many × running average."
-            />
-            <FaderRow
-              label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs}
-              step={10}
-              onDrag={(v) => updateLocal('kick', 'refractoryMs', v)}
-              onCommit={(v) => commitField('kick', 'refractoryMs', v)}
-              hint="Minimum gap between two kick fires."
-            />
-            <FaderRow
-              label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs}
-              step={10}
-              onDrag={(v) => updateLocal('kick', 'decayMs', v)}
-              onCommit={(v) => commitField('kick', 'decayMs', v)}
-              hint="How fast micKick envelope falls back to 0."
-            />
-          </View>
         </View>
       </ScrollView>
     </View>
