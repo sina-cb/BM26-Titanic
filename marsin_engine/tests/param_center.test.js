@@ -118,7 +118,7 @@ test('bpmSpeedSync snaps to {0, 1} and persists; min/max are ints in [60,180]', 
   assert.deepEqual(bMin.range, [60, 180]);
   assert.deepEqual(bMax.range, [60, 180]);
   assert.equal(bMin.default, 60);
-  assert.equal(bMax.default, 180);
+  assert.equal(bMax.default, 160);
 });
 
 // ── Multi-subscriber API ──────────────────────────────────────────────────

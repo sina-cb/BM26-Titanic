@@ -261,7 +261,7 @@ const PARAM_REGISTRY = [
   },
   {
     key: 'bpmSpeedMax', label: 'BPM Sync Max', type: 'int',
-    default: 180, range: [60, 180], clamp: true, persist: true,
+    default: 160, range: [60, 180], clamp: true, persist: true,
     oscAddress: '/marsin/param/bpmSpeedMax', sharedFnName: 'bpmSpeedMax',
   },
 ];
