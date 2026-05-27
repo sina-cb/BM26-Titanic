@@ -1,25 +1,33 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 40_ghost_ship_reveal
+  pattern: 01_cylon_sweep
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '909016120':
-      v0: 0.21
+    '1037917937':
+      v0: 0.68
       v1: 0
       v2: 0
-    '1037917937':
-      v0: 0.84
+    '1278139614':
+      v0: 0.54
+      v1: 0
+      v2: 0
+    '2571730692':
+      v0: 0.18
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 0.53
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_26_40_ghost_ship_reveal
-    cursor: 26
+    activeEntryId: e_default_1_01_cylon_sweep
+    cursor: 1
     autopilot:
       active: false
       delay_s: 1

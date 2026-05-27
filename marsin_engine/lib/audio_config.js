@@ -42,6 +42,42 @@ import yaml from 'js-yaml';
 export const AUDIO_LIVE_FIELDS = Object.freeze({
   bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+  // kickEma — internal kick-detector EMA tuning. Exposed (2026-05-26)
+  // so operators can field-tune the asymmetric attack/release and
+  // ceiling clamp from CaptainPad without an engine rebuild. The
+  // analyzer's constructor seeds these from the merged config; PATCH
+  // /audio/config {kickEma:{…}} hot-reconfigures via reconfigure().
+  // See audio_analyzer.js constructor comment for the per-field
+  // engineering rationale.
+  kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
+});
+
+/**
+ * Per-field validation rules for nested live-tunable groups. Each
+ * entry receives the numeric value and returns null on success or a
+ * human-readable error suffix on failure (the caller prefixes
+ * `"<group>.<field>": `). Centralised here (vs. inside the analyzer)
+ * so PATCH /audio/config can 400 cleanly before reaching the engine
+ * core, AND so the analyzer can re-run the same checks defensively on
+ * its boot path. No silent fallbacks (codex P0): every field validated
+ * explicitly with the documented range, integer-ness, etc.
+ */
+const LIVE_FIELD_VALIDATORS = Object.freeze({
+  kickEma: Object.freeze({
+    // Three alpha coefficients share the (0, 1] contract — they're
+    // one-pole IIR mixing weights so values <= 0 or > 1 are nonsense.
+    alphaUp:      (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    alphaDown:    (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    trailAlpha:   (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    // ceilingRatio: must be > 1.0 — anything <= 1 makes the clamp a
+    // FLOOR instead of a ceiling and the EMA would be pinned BELOW
+    // the trailing reference, never above. Operator-explicit guard.
+    ceilingRatio: (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
+    // warmupHops: number of analysis frames used to seed the EMA's
+    // initial value before the detector goes live. Integer ≥ 1.
+    warmupHops:   (v) => (Number.isInteger(v) && v >= 1 && v <= 1000)
+                         ? null : `must be an integer in [1, 1000]; got ${v}`,
+  }),
 });
 
 /**
@@ -213,6 +249,7 @@ export function validateLivePatch(partial) {
     if (!value || typeof value !== 'object') {
       return { ok: false, error: `"${key}" must be an object of {field: value}` };
     }
+    const groupValidators = LIVE_FIELD_VALIDATORS[key] || null;
     live[key] = {};
     for (const [k, v] of Object.entries(value)) {
       if (!allowedFields.includes(k)) {
@@ -220,6 +257,14 @@ export function validateLivePatch(partial) {
       }
       if (typeof v !== 'number' || !Number.isFinite(v)) {
         return { ok: false, error: `"${key}.${k}" must be a finite number` };
+      }
+      // Per-field range/integer guard for groups that have one. Returns
+      // 400 with a precise reason — operator can fix the slider and
+      // retry without guessing what range is legal. (codex P0: never
+      // silently swap an out-of-range value for the default.)
+      if (groupValidators && groupValidators[k]) {
+        const err = groupValidators[k](v);
+        if (err) return { ok: false, error: `"${key}.${k}" ${err}` };
       }
       live[key][k] = v;
     }

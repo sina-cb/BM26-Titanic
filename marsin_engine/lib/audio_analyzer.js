@@ -75,6 +75,49 @@ import FFT from 'fft.js';
 // see on the meter.
 const PRE_CLAMP_GAIN = 8.0;
 
+/**
+ * Hard defaults for the kick-detector EMA tuning. Used by the
+ * constructor when the merged config / explicit opts don't carry a
+ * `kickEma` block — and by the engine bootstrap path as the seed
+ * before scene overrides land. Values must NOT change here without
+ * updating config.yaml (operator-tunable defaults) AND the docs.
+ *
+ * The asymmetric attack/release + ceiling clamp rationale lives in the
+ * constructor comment below — these literals are JUST the defaults.
+ */
+const KICK_EMA_DEFAULTS = Object.freeze({
+  alphaUp:      0.005,
+  alphaDown:    0.05,
+  trailAlpha:   0.0005,
+  ceilingRatio: 1.5,
+  warmupHops:   50,
+});
+
+/**
+ * Per-field validation for opts.kickEma. Mirrors the rules in
+ * audio_config.js (LIVE_FIELD_VALIDATORS.kickEma) so a bad value
+ * reaches the same RangeError regardless of whether it arrives via
+ * the engine boot path (cfg.kickEma) or a hot reconfigure
+ * (PATCH /audio/config). Codex P0: throw, never silently fall back.
+ */
+function validateKickEma(k) {
+  if (!(k.alphaUp > 0 && k.alphaUp <= 1)) {
+    throw new RangeError(`kickEma.alphaUp must be in (0, 1]; got ${k.alphaUp}`);
+  }
+  if (!(k.alphaDown > 0 && k.alphaDown <= 1)) {
+    throw new RangeError(`kickEma.alphaDown must be in (0, 1]; got ${k.alphaDown}`);
+  }
+  if (!(k.trailAlpha > 0 && k.trailAlpha <= 1)) {
+    throw new RangeError(`kickEma.trailAlpha must be in (0, 1]; got ${k.trailAlpha}`);
+  }
+  if (!(k.ceilingRatio > 1.0 && k.ceilingRatio <= 10.0)) {
+    throw new RangeError(`kickEma.ceilingRatio must be in (1.0, 10.0]; got ${k.ceilingRatio}`);
+  }
+  if (!(Number.isInteger(k.warmupHops) && k.warmupHops >= 1 && k.warmupHops <= 1000)) {
+    throw new RangeError(`kickEma.warmupHops must be an integer in [1, 1000]; got ${k.warmupHops}`);
+  }
+}
+
 function softCompress(x) {
   // Maps [0, +∞) → [0, 1). Identity-ish near zero, asymptotes at 1.
   return x / (1 + x);
@@ -370,7 +413,11 @@ export class AudioAnalyzer {
     // EMA + ceiling clamp is a second line of defense: even if the
     // asymmetric coefficients get retuned, the threshold can never
     // sit more than CEILING_RATIO × a several-second baseline.
-    const instant = kickE;
+    // Gate the kick input through the SAME softCompress + noiseGate
+    // pipeline as the display bands. Without this, raw FFT energy in
+    // silence is tiny but so is the EMA, so the threshold ratio still
+    // fires on noise floor (HVAC, mic self-noise).
+    const instant = applyGate(softCompress(PRE_CLAMP_GAIN * kickE));
     if (this._kickEmaWarmedUp) {
       const alpha = instant > this._kickEma
         ? this._kickEmaAlphaUp     // slow attack — lag loud baselines

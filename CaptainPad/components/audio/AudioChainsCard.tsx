@@ -2041,26 +2041,34 @@ function SharedMicAnalyzerSection({
             derived from the other, so dragging one moved the other's
             knob along its track mid-drag. Cross-bound constraint
             (low < mid - 5) now clamps at COMMIT only. */}
+        {/* lowMaxHz: typical bass-band edge is 80-400 Hz (sub-bass kick
+            fundamental up to bass body). Range tightened from [50, 1000]
+            so the slider's full track lives where the operator actually
+            tunes. */}
         <OpParamSlider
           label="lowMaxHz" suffix="Hz"
-          min={50}
-          max={1000}
+          min={80}
+          max={400}
           value={cfg.bands.lowMaxHz}
           step={5}
           integer
           onDrag={(v) => handlers.onUpdateLocal('bands', 'lowMaxHz', v)}
-          onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', Math.min(v, cfg.bands.midMaxHz - 5))}
+          onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', Math.min(v, cfg.bands.midMaxHz - 50))}
         />
         <AnalyzerHint text="Upper edge of LOW band / lower edge of MID band." />
+        {/* midMaxHz: typical mid-to-high crossover is 1-8 kHz (vocal
+            presence + sibilance edge). Range tightened from [50, 1000]
+            (which was below typical floor!) to [1000, 12000]. step=50
+            keeps fine-tuning practical at the higher numbers. */}
         <OpParamSlider
           label="midMaxHz" suffix="Hz"
-          min={50}
-          max={1000}
+          min={1000}
+          max={12000}
           value={cfg.bands.midMaxHz}
           step={50}
           integer
           onDrag={(v) => handlers.onUpdateLocal('bands', 'midMaxHz', v)}
-          onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', Math.max(v, cfg.bands.lowMaxHz + 5))}
+          onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', Math.max(v, cfg.bands.lowMaxHz + 50))}
         />
         <AnalyzerHint text="Upper edge of MID band / lower edge of HIGH band." />
       </View>
