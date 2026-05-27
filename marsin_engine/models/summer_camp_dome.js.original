@@ -1,5 +1,5 @@
 // Auto-generated Pixelblaze model — do not edit manually
-// Updated: 2026-05-27T08:40:54.315Z
+// Updated: 2026-05-27T08:00:40.285Z
 //
 // Note: Non-light simulation fixtures (Horn, Fire, Foggers) are exported to
 // the companion .effects.js model.
@@ -64,7 +64,7 @@ export const pixels = [
   { i: 51, type: 'dmx', fixtureType: 'ShehdsBar', name: 'ShehdsBar 22 - pixel_16', group: 'TriangleEdges', x: -0.607, y: 3.821, z: 5.19, nx: 0.4649, ny: 0.9587, nz: 0.7599, cId: 0, sId: 1, fId: 3, vMask: 0, patch: { universe: 6, addr: 120, footprint: 119 }, channels: {"r":102,"g":103,"b":104,"w":105,"a":106,"u":107} },
   { i: 52, type: 'dmx', fixtureType: 'ShehdsBar', name: 'ShehdsBar 22 - pixel_17', group: 'TriangleEdges', x: -0.573, y: 3.865, z: 5.19, nx: 0.4666, ny: 0.9769, nz: 0.7599, cId: 0, sId: 1, fId: 3, vMask: 0, patch: { universe: 6, addr: 120, footprint: 119 }, channels: {"r":108,"g":109,"b":110,"w":111,"a":112,"u":113} },
   { i: 53, type: 'dmx', fixtureType: 'ShehdsBar', name: 'ShehdsBar 22 - pixel_18', group: 'TriangleEdges', x: -0.539, y: 3.91, z: 5.19, nx: 0.4683, ny: 0.9955, nz: 0.7599, cId: 0, sId: 1, fId: 3, vMask: 0, patch: { universe: 6, addr: 120, footprint: 119 }, channels: {"r":114,"g":115,"b":116,"w":117,"a":118,"u":119} },
-  { i: 54, type: 'dmx', fixtureType: 'UkingPar', name: 'UkingPar 23 - rgbwau_1', group: 'TrianglePars', x: 1.684, y: 3.429, z: 6.687, nx: 0.5805, ny: 0.7968, nz: 0.8349, cId: 0, sId: 2, fId: 5, vMask: 0, patch: { universe: 6, addr: 249, footprint: 10 }, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
+  { i: 54, type: 'dmx', fixtureType: 'UkingPar', name: 'UkingPar 24 - rgbwau_1', group: 'TrianglePars', x: 1.684, y: 3.429, z: 6.687, nx: 0.5805, ny: 0.7968, nz: 0.8349, cId: 0, sId: 2, fId: 5, vMask: 0, patch: { universe: 6, addr: 249, footprint: 10 }, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
   { i: 55, type: 'dmx', fixtureType: 'UkingPar', name: 'UkingPar 24 - rgbwau_1', group: 'TrianglePars', x: -0.549, y: 3.51, z: 6.801, nx: 0.4678, ny: 0.8302, nz: 0.8406, cId: 0, sId: 2, fId: 5, vMask: 0, patch: { universe: 6, addr: 249, footprint: 10 }, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
   { i: 56, type: 'dmx', fixtureType: 'UkingPar', name: 'UkingPar 25 - rgbwau_1', group: 'TrianglePars', x: -2.583, y: 3.603, z: 6.782, nx: 0.3652, ny: 0.8686, nz: 0.8396, cId: 0, sId: 2, fId: 6, vMask: 0, patch: { universe: 6, addr: 259, footprint: 10 }, channels: {"r":2,"g":3,"b":4,"w":5,"a":6,"u":7} },
   { i: 57, type: 'dmx', fixtureType: 'ShehdsBar', name: 'BarLights 1 - pixel_1', group: 'BarLights', x: 10, y: 1.5, z: -0.472, nx: 1, ny: 0, nz: 0.4764, cId: 1, sId: 2, fId: 2, vMask: 0, patch: { universe: 2, addr: 1, footprint: 119 }, channels: {"r":12,"g":13,"b":14,"w":15,"a":16,"u":17} },

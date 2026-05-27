@@ -1,9 +1,9 @@
 slots:
   - slotId: 1
     enabled: true
-    label: 5 Hz Punch
+    label: 4 Hz Sync
     effectId: strobe
-    presetId: punch_5hz
+    presetId: sync_4hz
     behavior: toggle
     paramsOverride: {}
   - slotId: 2

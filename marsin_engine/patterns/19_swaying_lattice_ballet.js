@@ -11,6 +11,7 @@ export var flockFocus = 4.0;
 export var filamentDensity = 7.0;
 export var contrast = 2.2;
 export var afterglow = 0.18;
+export var blackoutDepth = 0.72;
 
 export var cp1H = 0.62, cp1S = 0.94, cp1V = 1.0;
 export var cp2H = 0.03, cp2S = 0.94, cp2V = 1.0;
@@ -23,6 +24,7 @@ export function sliderFlockFocus(v) { flockFocus = 1.5 + v * 7.0; }
 export function sliderFilamentDensity(v) { filamentDensity = 2.0 + v * 16.0; }
 export function sliderContrast(v) { contrast = 0.8 + v * 5.5; }
 export function sliderAfterglow(v) { afterglow = v * 0.45; }
+export function sliderBlackoutDepth(v) { blackoutDepth = v; }
 
 var orbitA = 0.0;
 var orbitB = 0.0;
@@ -94,8 +96,14 @@ export function render3D(index, x, y, z) {
 
   var ribbon = wave((dA - dB + dC) * filamentDensity + time(currentScale * 0.27));
   var shadow = wave((nx * 1.3 - ny * 0.8) + time(currentScale * 0.13));
-  var v = min(1.0, afterglow + aGlow * 0.75 + bGlow * 0.65 + cGlow * 0.6 + pow(ribbon, contrast) * 0.28);
-  v *= 0.82 + shadow * 0.18;
+  var shutterA = wave((nx * 5.1 + ny * 2.7) - time(currentScale * 0.19));
+  var shutterB = wave((dA * 1.7 - dB * 2.1 + dC * 1.3) * filamentDensity + time(currentScale * 0.33));
+  var blackGate = pow(shutterA * shutterB, 1.4 + blackoutDepth * 5.0);
+  var lattice = aGlow * 0.75 + bGlow * 0.65 + cGlow * 0.6 + pow(ribbon, contrast) * 0.28;
+  var floorGlow = afterglow * (1.0 - blackoutDepth);
+  var v = min(1.0, floorGlow + lattice * blackGate);
+  v *= 0.74 + shadow * 0.26;
+  if (v < blackoutDepth * 0.18) v = 0.0;
 
   // Blend factor in [0,1]: how much of the rig leans toward attractors b/c
   // (cp2) vs attractor a (cp1).

@@ -70,7 +70,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: pixel_mapping
+    value: full
     label: 💡 Lighting Profile
     options:
       - edit
@@ -123,7 +123,7 @@ options:
 colorWave:
   _section:
     label: ⚡ Lighting Engine
-    collapsed: true
+    collapsed: false
   lightingEnabled:
     value: true
     label: ⚡ Enable
@@ -153,7 +153,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6
+    value: 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 10000
@@ -182,13 +182,13 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -18.9576
-    'y': 4.1131
-    z: -8.4033
+    x: 14.1802
+    'y': 11.7878
+    z: -15.0003
   target:
-    x: -0.9146
-    'y': -0.7445
-    z: -0.2734
+    x: 1.5618
+    'y': 3.9395
+    z: -1.0567
 _patternEditor:
   x: 0
   'y': 0

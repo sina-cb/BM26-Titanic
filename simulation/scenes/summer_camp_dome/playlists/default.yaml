@@ -28,13 +28,16 @@ entries:
   - id: e_default_4_04_beat_folded_helix
     pattern: 04_beat_folded_helix
     label: null
-    defaults: {}
+    defaults:
+      sliderOverallBrightness: 1.0
     modulations: []
     notes: null
   - id: e_default_5_05_orbital_attractor_field
     pattern: 05_orbital_attractor_field
     label: null
-    defaults: {}
+    defaults:
+      sliderColorVariation: 0.45
+      sliderBlackoutTexture: 0.0
     modulations: []
     notes: null
   - id: e_default_6_06_neon_elevator
@@ -46,7 +49,8 @@ entries:
   - id: e_default_7_07_shimmer
     pattern: 07_shimmer
     label: null
-    defaults: {}
+    defaults:
+      sliderShimmerSpeedTrim: 0.5
     modulations: []
     notes: null
   - id: e_default_8_08_ocean_liner
@@ -82,7 +86,16 @@ entries:
   - id: e_default_13_13_sparkle
     pattern: 13_sparkle
     label: null
-    defaults: {}
+    defaults:
+      sliderSparkleSpeedTrim: 0.62
+      sliderSparkleDensity: 0.58
+      sliderSparkleIntensity: 0.9
+      sliderSparkleSize: 0.42
+      sliderBackgroundLevel: 0.12
+      sliderBackgroundMotion: 0.45
+      sliderWhiteGlint: 0.48
+      sliderAmberGlint: 0.16
+      sliderUvGlint: 0.10
     modulations: []
     notes: null
   - id: e_default_14_14_lunar_current
@@ -106,7 +119,14 @@ entries:
   - id: e_default_17_17_rolling_color_dunes
     pattern: 17_rolling_color_dunes
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.54
+      sliderDuneScale: 0.42
+      sliderDuneContrast: 0.48
+      sliderOrbitDrift: 0.36
+      sliderBlackoutDepth: 0.58
+      sliderStageSurf: 0.64
+      sliderAmberWarmth: 0.22
     modulations: []
     notes: null
   - id: e_default_18_18_deep_space_lattice
@@ -118,7 +138,9 @@ entries:
   - id: e_default_19_19_swaying_lattice_ballet
     pattern: 19_swaying_lattice_ballet
     label: null
-    defaults: {}
+    defaults:
+      sliderBlackoutDepth: 0.72
+      sliderAfterglow: 0.12
     modulations: []
     notes: null
   - id: e_default_20_20_parametric_sway_field

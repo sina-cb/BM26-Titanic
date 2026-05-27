@@ -1,0 +1,23 @@
+schemaVersion: 1
+name: slow
+entries:
+  - id: e_1779867313101_9047
+    pattern: 07_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.9
+      sliderShimmerSpeedTrim: 0.64
+      sliderDensity: 0.17
+      sliderBreathing: 0.47
+    modulations: []
+    notes: null
+  - id: e_1779867336212_2923
+    pattern: 08_ocean_liner
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.8
+      sliderContrast: 0.92
+      sliderWindowCount: 0.31
+      sliderWindowFocus: 0.47
+    modulations: []
+    notes: null

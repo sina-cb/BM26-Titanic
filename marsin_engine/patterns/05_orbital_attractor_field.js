@@ -12,6 +12,8 @@ export var r2 = -1.5;
 export var r3 = 2.0;
 export var falloff = 2.5; 
 export var focus = 1.5;
+export var colorVariation = 0.45;
+export var blackoutTexture = 0.0;
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Classic Red default
 export var cp2H = 0.15, cp2S = 1.0, cp2V = 1.0; // Yellow/Orange default
@@ -21,6 +23,8 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderFalloff(v) { falloff = 1.0 + v * 5.0; }
 export function sliderFocus(v) { focus = 1.0 + v * 4.0; }
+export function sliderColorVariation(v) { colorVariation = v; }
+export function sliderBlackoutTexture(v) { blackoutTexture = v; }
 
 var beatPhase = 0.0;
 
@@ -59,12 +63,15 @@ export function render3D(index, wx, wy, wz) {
   var outW = 0.0;
   var outA = 0.0;
   
-  var tVal = 0.5;
-  if (d == d1) {
-    tVal = 0.0;
-  } else if (d == d2) {
-    tVal = 1.0;
-  }
+  var influence1 = pow(max(0.0, 1.0 - d1 * falloff), focus);
+  var influence2 = pow(max(0.0, 1.0 - d2 * falloff), focus);
+  var influence3 = pow(max(0.0, 1.0 - d3 * falloff), focus);
+  var influenceTotal = influence1 + influence2 + influence3 + 0.0001;
+
+  var attractorBlend = (influence2 + influence3 * 0.52) / influenceTotal;
+  var verticalGradient = ny * 0.24 + nx * 0.10;
+  var orbitalGradient = wave((d1 - d2) * 1.7 + d3 * 0.9 + beatPhase * 0.41) * 0.22;
+  var tVal = max(0.0, min(1.0, attractorBlend * 0.68 + verticalGradient + orbitalGradient));
 
   var dh = cp2H - cp1H;
   if (dh > 0.5) dh -= 1.0;
@@ -72,6 +79,14 @@ export function render3D(index, wx, wy, wz) {
   var hue = cp1H + dh * tVal;
   var sat = cp1S + (cp2S - cp1S) * tVal;
   var maxVal = cp1V + (cp2V - cp1V) * tVal;
+
+  var colorWaveA = wave(nx * 2.7 + ny * 1.9 + beatPhase * 0.73);
+  var colorWaveB = wave((d1 - d2 + d3) * 1.8 - beatPhase * 1.17);
+  var orbitHue = (colorWaveA - 0.5) * colorVariation * 0.22;
+  var attractorHue = (colorWaveB - 0.5) * colorVariation * 0.12;
+  hue += orbitHue + attractorHue + (tVal - 0.5) * colorVariation * 0.10;
+  sat = max(0.0, min(1.0, sat - colorVariation * 0.12 + colorWaveB * colorVariation * 0.18));
+  maxVal = maxVal * (0.82 + colorVariation * 0.08 + colorWaveA * colorVariation * 0.16);
 
   var isBar = wy < 1.8;
   var isPar = wy >= 1.8 && wy < 4.0;
@@ -92,6 +107,18 @@ export function render3D(index, wx, wy, wz) {
   outV = max(0.0, min(1.0, outV));
   outW = max(0.0, min(1.0, outW));
   outA = max(0.0, min(1.0, outA));
+
+  if (blackoutTexture > 0.0) {
+    var cell = floor(nx * 17.0 + ny * 29.0 + index * 0.071);
+    var maskA = wave(cell * 0.371 + beatPhase * 0.19);
+    var maskB = wave((nx - ny) * 3.7 + beatPhase * 0.43);
+    var movingCut = pow(maskB, 2.0 + blackoutTexture * 5.0);
+    var sparseCut = maskA > (0.72 - blackoutTexture * 0.34) ? 1.0 : 0.0;
+    var blackMask = clamp(1.0 - sparseCut * movingCut * blackoutTexture, 0.0, 1.0);
+    outV *= blackMask;
+    outW *= blackMask;
+    outA *= blackMask;
+  }
   
   var val = outV * maxVal;
   var h = abs(hue - floor(hue)); 

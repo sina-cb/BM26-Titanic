@@ -7,6 +7,7 @@ export var localSpeed = 0.5;
 export var armCount = 3.0;
 export var twistFreq = 4.0;
 export var contrast = 1.5;
+export var overallBrightness = 1.0;
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Cyan default
 export var cp2H = 0.0, cp2S = 1.0, cp2V = 1.0; // Red default
@@ -18,6 +19,7 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderCount(v) { armCount = 1.0 + floor(v * 12.0); }
 export function sliderTwistFreq(v) { twistFreq = -10.0 + v * 40.0; }
 export function sliderContrast(v) { contrast = 0.5 + v * 9.0; }
+export function sliderOverallBrightness(v) { overallBrightness = v; }
 
 var masterTime = 0;
 var tunnelZ = 0;
@@ -114,5 +116,12 @@ export function render3D(index, wx, wy, wz) {
   else if (iObj == 4) { r = tObj; g = pObj; b = val; }
   else                { r = val; g = pObj; b = qObj; }
 
-  rgbwau(r, g, b, outW, outA, 0.0);
+  rgbwau(
+    r * overallBrightness,
+    g * overallBrightness,
+    b * overallBrightness,
+    outW * overallBrightness,
+    outA * overallBrightness,
+    0.0
+  );
 }

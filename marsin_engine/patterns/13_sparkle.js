@@ -9,6 +9,13 @@
 export var localSpeed = 0.5;
 export var sparkleSpeedTrim = 0.5;
 export var sparkleDensity = 0.4;
+export var sparkleIntensity = 0.85;
+export var sparkleSize = 0.35;
+export var backgroundLevel = 0.18;
+export var whiteGlint = 0.42;
+export var amberGlint = 0.18;
+export var uvGlint = 0.12;
+export var backgroundMotion = 0.45;
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Left / "A" colour
 export var cp2H = 0.5, cp2S = 1.0, cp2V = 1.0; // Right / "B" colour
@@ -18,6 +25,13 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderSparkleSpeedTrim(v) { sparkleSpeedTrim = v; }
 export function sliderSparkleDensity(v) { sparkleDensity = 0.1 + v * 0.8; }
+export function sliderSparkleIntensity(v) { sparkleIntensity = v; }
+export function sliderSparkleSize(v) { sparkleSize = v; }
+export function sliderBackgroundLevel(v) { backgroundLevel = v; }
+export function sliderWhiteGlint(v) { whiteGlint = v; }
+export function sliderAmberGlint(v) { amberGlint = v; }
+export function sliderUvGlint(v) { uvGlint = v; }
+export function sliderBackgroundMotion(v) { backgroundMotion = v; }
 
 var tFade;
 var tSparkle;
@@ -70,26 +84,41 @@ export function render3D(index, x, y, z) {
   if (nx < 0.0) nx = 0.0;
   if (nx > 1.0) nx = 1.0;
 
-  var bgAlpha = wave(tFade + (sectionId * 0.2)); // keep the per-section breathe
+  var theta = (atan2(z, x) / PI2) + 0.5;
+  theta = theta - floor(theta);
+  var bgFieldA = wave(nx * 1.7 + y * 0.061 - tFade * (0.45 + backgroundMotion));
+  var bgFieldB = wave(theta * 2.3 + z * 0.037 + tFade * (0.22 + backgroundMotion * 0.70));
+  var bgFieldC = wave((nx - theta) * 1.9 + sectionId * 0.17 + tFade * 0.31);
+  var bgBlend = max(0.0, min(1.0, bgFieldA * 0.42 + bgFieldB * 0.38 + bgFieldC * 0.20));
+  var bgAlpha = wave(tFade + (sectionId * 0.2) + bgBlend * backgroundMotion * 0.35);
 
   // Per-pixel sparkle decision (cheap deterministic hash on index + time).
   var seed = index * 73.137 + tSparkle * 1000.0;
   var sparkle = sin(seed) * sin(seed * 3.7) * sin(seed * 7.3);
   sparkle = sparkle * sparkle * sparkle * sparkle;
+  var bloom = sin(seed * 0.071 + x * 0.37 + y * 0.19 + z * 0.11);
+  bloom = bloom * bloom;
+  var threshold = 0.96 - sparkleDensity * 0.62;
 
   // Blend factor along the cp1<->cp2 line. Sparkles always favour cp2
   // (the "spark" colour) so they read as a bright accent over the wash.
-  var tColour = nx;
-  var v = bgAlpha * 0.5;
+  var tColour = bgBlend;
+  var v = bgAlpha * backgroundLevel;
+  var sparkV = 0.0;
 
-  if (sparkle > sparkleDensity) {
-     var intensity = min(1.0, (sparkle - sparkleDensity) * 3.0);
-     tColour = 1.0; // full cp2 for the spark
-     v = max(v, intensity); // full brightness peak — stays on palette
+  if (sparkle > threshold) {
+     var intensity = min(1.0, (sparkle - threshold) / (1.0 - threshold + 0.0001));
+     sparkV = pow(intensity, 1.0 + (1.0 - sparkleSize) * 4.0);
+     sparkV = min(1.0, sparkV * (0.55 + sparkleIntensity * 1.45) + bloom * sparkleSize * sparkleIntensity * 0.35);
+     tColour = min(1.0, bgBlend * 0.28 + 0.68 + bloom * 0.18); // sparkle leans cp2 but keeps palette context
+     v = max(v, sparkV);
   }
 
   var r = (pr1 + (pr2 - pr1) * tColour) * v;
   var g = (pg1 + (pg2 - pg1) * tColour) * v;
   var b = (pb1 + (pb2 - pb1) * tColour) * v;
-  rgb(r, g, b);
+  var w = sparkV * whiteGlint;
+  var a = sparkV * amberGlint;
+  var u = sparkV * uvGlint;
+  rgbwau(r, g, b, w, a, u);
 }

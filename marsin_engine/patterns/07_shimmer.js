@@ -24,9 +24,9 @@ var tShimmer;
 
 export function beforeRender(delta) {
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  var localShimmerMultiplier = pow(2.0, (shimmerSpeedTrim - 0.5) * 4.0);
+  var localShimmerMultiplier = pow(2.0, (shimmerSpeedTrim - 0.5) * 11.0);
   tBreathing = time(0.1 / localMultiplier);
-  tShimmer = time(0.5 / localShimmerMultiplier);
+  tShimmer = time(0.12 / localShimmerMultiplier);
 }
 
 export function render(index) {
