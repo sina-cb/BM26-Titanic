@@ -900,12 +900,18 @@ function CompactBpmCard({
       {/* Two sliders on one row (min | max). Reuses FaderRow but with
           a compacted column layout — short labels, no per-slider hint
           paragraph. The one-liner hint sits below the pair. */}
+      {/* Fixed slider scales [BPM_MIN_ABS, BPM_MAX_ABS] on both ends —
+          operator brief 2026-05-27. Previously each end's slider range
+          was derived from the other (max={maxVal-1}, min={minVal+1}),
+          which made the slider knobs visibly shift along their tracks
+          as the partner was dragged. Cross-bound constraint (min < max)
+          stays enforced at COMMIT time via the existing clamp. */}
       <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
         <View style={{ flex: 1 }}>
           <FaderRow
             label="BPM min"
             min={BPM_MIN_ABS}
-            max={Math.max(BPM_MIN_ABS + 1, maxVal - 1)}
+            max={BPM_MAX_ABS}
             value={minVal}
             step={1}
             onDrag={() => { /* commit on release */ }}
@@ -915,7 +921,7 @@ function CompactBpmCard({
         <View style={{ flex: 1 }}>
           <FaderRow
             label="BPM max"
-            min={Math.min(BPM_MAX_ABS - 1, minVal + 1)}
+            min={BPM_MIN_ABS}
             max={BPM_MAX_ABS}
             value={maxVal}
             step={1}

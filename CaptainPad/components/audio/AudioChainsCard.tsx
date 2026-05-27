@@ -1919,15 +1919,21 @@ function AnalyzerSection({
         title="KICK DETECTOR · CONFIGURED PER MICKICK CHAIN"
         hint="EDM kick fundamental sits 50–80 Hz; click transient ~100 Hz."
       />
+      {/* Fixed slider scales [20, 500] Hz on both ends — operator brief
+          2026-05-27. Previously maxHz's slider min was derived from
+          cfg.kick.minHz, which made the slider knob visibly jump as the
+          other one was dragged. Cross-bound constraint (min < max - 5)
+          is now enforced at COMMIT time so the engine never sees an
+          invalid pair while the drag remains predictable. */}
       <OpParamSlider
-        label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz} step={5} integer
+        label="Energy min" suffix="Hz" min={20} max={500} value={cfg.kick.minHz} step={5} integer
         onDrag={(v) => handlers.onUpdateLocal('kick', 'minHz', v)}
-        onCommit={(v) => handlers.onCommitField('kick', 'minHz', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'minHz', Math.min(v, cfg.kick.maxHz - 5))}
       />
       <OpParamSlider
-        label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz} step={5} integer
+        label="Energy max" suffix="Hz" min={20} max={500} value={cfg.kick.maxHz} step={5} integer
         onDrag={(v) => handlers.onUpdateLocal('kick', 'maxHz', v)}
-        onCommit={(v) => handlers.onCommitField('kick', 'maxHz', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'maxHz', Math.max(v, cfg.kick.minHz + 5))}
       />
       <OpParamSlider
         label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold} step={0.05}
@@ -2011,8 +2017,6 @@ function SharedMicAnalyzerSection({
     );
   }
 
-  const nyquist = cfg.capture.sampleRate / 2 - 50;
-
   return (
     <View style={{
       marginBottom: 16, padding: 12, borderRadius: 10,
@@ -2025,26 +2029,31 @@ function SharedMicAnalyzerSection({
       />
       <View style={{ marginTop: 4 }}>
         <AnalyzerSubHeader title="CROSSOVERS" />
+        {/* Fixed slider scales [50, 1000] Hz on both ends — operator
+            brief 2026-05-27. Previously each end's slider range was
+            derived from the other, so dragging one moved the other's
+            knob along its track mid-drag. Cross-bound constraint
+            (low < mid - 5) now clamps at COMMIT only. */}
         <OpParamSlider
           label="lowMaxHz" suffix="Hz"
           min={50}
-          max={Math.max(60, cfg.bands.midMaxHz - 50)}
+          max={1000}
           value={cfg.bands.lowMaxHz}
           step={5}
           integer
           onDrag={(v) => handlers.onUpdateLocal('bands', 'lowMaxHz', v)}
-          onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', v)}
+          onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', Math.min(v, cfg.bands.midMaxHz - 5))}
         />
         <AnalyzerHint text="Upper edge of LOW band / lower edge of MID band." />
         <OpParamSlider
           label="midMaxHz" suffix="Hz"
-          min={cfg.bands.lowMaxHz + 50}
-          max={nyquist}
+          min={50}
+          max={1000}
           value={cfg.bands.midMaxHz}
           step={50}
           integer
           onDrag={(v) => handlers.onUpdateLocal('bands', 'midMaxHz', v)}
-          onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', v)}
+          onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', Math.max(v, cfg.bands.lowMaxHz + 5))}
         />
         <AnalyzerHint text="Upper edge of MID band / lower edge of HIGH band." />
       </View>
