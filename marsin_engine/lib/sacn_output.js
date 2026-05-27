@@ -26,10 +26,15 @@ export function createSacnOutput({
   // Create one sender per universe/destination pairing
   const senders = {};
   for (const uid of universes) {
+    addUniverse(uid);
+  }
+
+  function addUniverse(uid) {
+    if (senders[uid]) return;
     senders[uid] = [];
     for (const dest of destArray) {
       senders[uid].push(new Sender({
-        universe: uid,
+        universe: parseInt(uid, 10),
         port: 5568,
         reuseAddr: true,
         useUnicastDestination: dest,
@@ -95,5 +100,5 @@ export function createSacnOutput({
     console.log(`[sACN Out] Sender stopped after ${_frameCount} frames`);
   }
 
-  return { start, stop, sendFrame, get frameCount() { return _frameCount; } };
+  return { start, stop, sendFrame, addUniverse, get frameCount() { return _frameCount; } };
 }

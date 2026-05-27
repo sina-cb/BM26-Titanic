@@ -16,7 +16,11 @@ entries:
   - id: e_default_2_02_phase_cathedral
     pattern: 02_phase_cathedral
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.31
+      sliderCount: 0
+      sliderSharpness: 0
+      sliderDirection: 0
     modulations: []
     notes: null
   - id: e_default_3_03_dual_axis_crush
@@ -29,7 +33,7 @@ entries:
     pattern: 04_beat_folded_helix
     label: null
     defaults:
-      sliderOverallBrightness: 1.0
+      sliderOverallBrightness: 1
     modulations: []
     notes: null
   - id: e_default_5_05_orbital_attractor_field
@@ -37,7 +41,7 @@ entries:
     label: null
     defaults:
       sliderColorVariation: 0.45
-      sliderBlackoutTexture: 0.0
+      sliderBlackoutTexture: 0
     modulations: []
     notes: null
   - id: e_default_6_06_neon_elevator
@@ -95,7 +99,7 @@ entries:
       sliderBackgroundMotion: 0.45
       sliderWhiteGlint: 0.48
       sliderAmberGlint: 0.16
-      sliderUvGlint: 0.10
+      sliderUvGlint: 0.1
     modulations: []
     notes: null
   - id: e_default_14_14_lunar_current

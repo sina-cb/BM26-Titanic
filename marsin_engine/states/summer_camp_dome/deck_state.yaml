@@ -1,17 +1,45 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 46_dome_lockdown
+  pattern: 17_rolling_color_dunes
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
-  localControls: {}
+  localControls:
+    '1037917937':
+      v0: 0.54
+      v1: 0
+      v2: 0
+    '1544917751':
+      v0: 0.22
+      v1: 0
+      v2: 0
+    '2380827328':
+      v0: 0.36
+      v1: 0
+      v2: 0
+    '2444828941':
+      v0: 0.42
+      v1: 0
+      v2: 0
+    '2907612615':
+      v0: 0.48
+      v1: 0
+      v2: 0
+    '3672202131':
+      v0: 0.58
+      v1: 0
+      v2: 0
+    '3706400219':
+      v0: 0.64
+      v1: 0
+      v2: 0
   playlist:
-    name: fast
-    activeEntryId: e_1779867426024_2624
-    cursor: 30
+    name: default
+    activeEntryId: e_default_17_17_rolling_color_dunes
+    cursor: 17
     autopilot:
       active: false
       delay_s: 30

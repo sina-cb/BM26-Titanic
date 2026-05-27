@@ -251,7 +251,7 @@ parLights:
       z: 8.229838658936565
       rotX: -40.60129464500447
       rotY: -145.3846153846154
-      rotZ: -2.0945189489002795e-15
+      rotZ: 0
       traceGenerated: true
     - group: BarLights
       name: BarLights 4
@@ -403,9 +403,9 @@ parLights:
       x: 8
       'y': 2.5
       z: 0
-      rotX: -17.35402463626129
-      rotY: 90.00000000000003
-      rotZ: 180
+      rotX: -162.6459753637387
+      rotY: -89.99999999999999
+      rotZ: 0
       traceGenerated: true
     - group: VintageLights
       name: VintageLights 2

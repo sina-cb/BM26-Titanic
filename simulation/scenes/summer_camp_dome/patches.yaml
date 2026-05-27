@@ -19,7 +19,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 1
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 5
     viewMask: 0
@@ -27,7 +27,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 11
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 5
     viewMask: 0
@@ -35,7 +35,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 21
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 6
     viewMask: 0
@@ -59,7 +59,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 226
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 3
     viewMask: 0
@@ -67,7 +67,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 107
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 4
     viewMask: 0
@@ -155,7 +155,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 41
-    controllerId: 0
+    controllerId: 1
     sectionId: 3
     fixtureId: 15
     viewMask: 0
@@ -163,7 +163,7 @@ patches:
     controllerIp: 10.1.1.102
     dmxUniverse: 2
     dmxAddress: 74
-    controllerId: 0
+    controllerId: 1
     sectionId: 3
     fixtureId: 16
     viewMask: 0

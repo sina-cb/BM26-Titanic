@@ -874,17 +874,27 @@ body.edit-mode-active #engine-params-panel {
 /* Preset bar */
 .pe-presets {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   padding: 5px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  flex-wrap: wrap;
 }
 .pe-preset-buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
   flex: 1;
+  max-height: 80px;
+  overflow-y: auto;
+  align-content: flex-start;
+  padding-right: 4px; /* for scrollbar */
+}
+.pe-preset-buttons::-webkit-scrollbar {
+  width: 4px;
+}
+.pe-preset-buttons::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
 }
 .pe-preset-buttons button {
   padding: 2px 8px;
@@ -1007,7 +1017,6 @@ body.edit-mode-active #engine-params-panel {
   background: rgba(0, 0, 0, 0.2);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .pe-presets button {
