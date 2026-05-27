@@ -833,49 +833,15 @@ function BpmTempoLine() {
 
 const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 
-// Power-of-two FFT sizes the engine accepts. The audio_analyzer.js
-// constructor rejects non-powers-of-two; this discrete pill picker keeps
-// the operator inside the safe set.
-const FFT_SIZE_OPTIONS = [1024, 2048, 4096, 8192] as const;
-type FftSizeOption = typeof FFT_SIZE_OPTIONS[number];
-
-// hopSize must divide fftSize. The engine defaults hopSize to fftSize/2
-// when omitted; we offer the common choices 1/4, 1/2, 1 (no overlap) of
-// the current fftSize and snap to the nearest below.
-function hopOptionsFor(fftSize: number): number[] {
-  return [fftSize / 4, fftSize / 2, fftSize].map(n => Math.max(1, Math.round(n)));
-}
-
-function PillPicker<T extends number | string>({ value, options, onSelect, formatLabel }: {
-  value: T;
-  options: readonly T[];
-  onSelect: (v: T) => void;
-  formatLabel?: (v: T) => string;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-      {options.map((opt) => {
-        const active = opt === value;
-        return (
-          <TouchableOpacity
-            key={String(opt)}
-            onPress={() => onSelect(opt)}
-            style={{
-              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
-              backgroundColor: active ? C.primary : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-            }}
-          >
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-              color: active ? '#fff' : C.secondary, letterSpacing: 0.6,
-            }}>{formatLabel ? formatLabel(opt) : String(opt)}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
+// ENGINE section (fftSize / hopSize) is render-only — see the read-only
+// display deep in <AudioConfigLoaded /> below. The fields are deliberately
+// non-live-tunable per marsin_engine/lib/audio_config.js §AUDIO_LIVE_FIELDS
+// (changing either requires analyzer reconstruction). A previous iteration
+// rendered a discrete pill picker (FFT_SIZE_OPTIONS + hopOptionsFor +
+// PillPicker) and PATCHed the top-level field; every tap hit a 400
+// "field is not live-tunable; restart the engine to change it" — a
+// misleading affordance. Restore from git history at commit 51623ae if
+// reviving an editor that goes through a proper restart flow.
 
 // ── Screen ──────────────────────────────────────────────────────────────
 
@@ -1024,19 +990,6 @@ function AudioConfigBody({
     const r = await patchAudioConfig({ [group]: { [field]: value } });
     if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
     else setPatchError(null);
-  }, [reload]);
-
-  // PATCH a top-level engine field (fftSize / hopSize). These restart the
-  // ffmpeg pipeline server-side, so we reload the full config after to
-  // resync the displayed deviceLabel + sampleRate echo.
-  const commitTopLevel = useCallback(async (field: 'fftSize' | 'hopSize', value: number) => {
-    setCfg(prev => prev && ({ ...prev, [field]: value } as AudioConfig));
-    const r = await patchAudioConfig({ [field]: value });
-    if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
-    else { setPatchError(null); reload(); }
-    // `setCfg` is a useState setter and therefore stable across renders;
-    // matches the existing convention in updateLocal / toggleEnabled.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   // Reset to defaults — Phase 6, docs/29 §Interactions step 7. Fires
@@ -1416,40 +1369,51 @@ function AudioConfigBody({
                 />
               </View>
 
-              {/* ── ENGINE (fftSize / hopSize) ──────────────────────── */}
-              {/* Discrete pill pickers — fftSize must be a power of two
-                  per audio_analyzer.js; hopSize is offered as fftSize/4
-                  · /2 · /1 (no overlap). Changing either restarts the
-                  ffmpeg pipeline server-side, so we PATCH the top-level
-                  field and reload to resync the displayed sample rate. */}
+              {/* ── ENGINE (fftSize / hopSize) — READ-ONLY ─────────── */}
+              {/* fftSize and hopSize live in marsin_engine/lib/audio_config.js
+                  §AUDIO_LIVE_FIELDS as deliberately-NOT-live-tunable:
+                  changing either requires reconstructing the analyzer
+                  (FFT bin table, hop buffer, ffmpeg pipeline). The engine
+                  team's design choice is to surface this with an explicit
+                  400 ("field \"fftSize\" is not live-tunable; restart the
+                  engine to change it") rather than silently restart audio
+                  capture under the operator. We mirror that contract here:
+                  show the running values so the operator knows what they
+                  have, but no editable control — a disabled picker is a
+                  misleading affordance per Wireframe A guidance. To
+                  change either, edit marsin_engine/config.yaml
+                  (audio.fftSize / audio.hopSize) and restart the engine. */}
               <View style={SUB_CARD}>
                 <SubHeader title="ENGINE" />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
+                    fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8,
+                  }}>FFT size</Text>
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', color: C.primary,
+                    fontSize: 12,
+                  }}>{cfg.fftSize}-pt</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
+                    fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8,
+                  }}>Hop size</Text>
+                  <Text style={{
+                    fontFamily: 'SpaceGrotesk_700Bold', color: C.primary,
+                    fontSize: 12,
+                  }}>{cfg.hopSize}</Text>
+                </View>
                 <Text style={{
-                  fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
-                  fontSize: 11, textTransform: 'uppercase',
-                  letterSpacing: 0.8, marginBottom: 6,
-                }}>FFT SIZE</Text>
-                <PillPicker<number>
-                  value={cfg.fftSize}
-                  options={FFT_SIZE_OPTIONS as readonly number[]}
-                  onSelect={(v) => commitTopLevel('fftSize', v as FftSizeOption)}
-                  formatLabel={(v) => `${v}-pt`}
-                />
-                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 4, marginBottom: 12 }}>
-                  Bigger FFT = finer band edges, more latency. 2048 is the EDM-VJ default.
-                </Text>
-                <Text style={{
-                  fontFamily: 'SpaceGrotesk_700Bold', color: C.text,
-                  fontSize: 11, textTransform: 'uppercase',
-                  letterSpacing: 0.8, marginBottom: 6,
-                }}>HOP SIZE</Text>
-                <PillPicker<number>
-                  value={cfg.hopSize}
-                  options={hopOptionsFor(cfg.fftSize)}
-                  onSelect={(v) => commitTopLevel('hopSize', v)}
-                />
-                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 4 }}>
-                  Samples between FFT frames. fftSize/2 (50 % overlap) is the default.
+                  fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+                  marginTop: 2, lineHeight: 14,
+                }}>
+                  Read-only — these fields are not live-tunable. To change,
+                  edit marsin_engine/config.yaml (audio.fftSize / audio.hopSize)
+                  and restart the engine. Bigger FFT = finer band edges, more
+                  latency; 2048-pt with hopSize 1024 (50 % overlap) is the
+                  EDM-VJ default.
                 </Text>
               </View>
 

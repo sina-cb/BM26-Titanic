@@ -46,8 +46,10 @@ import {
   fetchAudioChains, fetchAudioChainsCatalog,
   putAudioChain, patchAudioChainOp,
   resetAudioChainSignal, getApiBaseAsync,
+  updateParamCenter,
   type AudioChainOp, type AudioChainsMap, type AudioChainCatalog,
 } from '@/utils/api';
+import { useSharedParamValues, useParamRange } from '@/hooks/useEngineState';
 
 const C = Colors.light;
 
@@ -343,6 +345,91 @@ function OpParamSlider({
   );
 }
 
+// ── paramKey-bound Gain slider ────────────────────────────────────────────
+//
+// A `gain` op configured with `paramKey: "micLowGain"` (etc.) reads its
+// multiplier from the shared CPC paramCenter live each frame on the
+// engine. Pre-Phase 5 the operator drove that key from MIC LIVE /
+// STEMS LIVE cards; pre-Phase 6 the same key was driven from the
+// GainRow helper inside the AUDIO tab settings. Both were retired in
+// favor of editing the value here on the chain row itself.
+//
+// Without this component the row would show only the hint string and
+// the operator would have NO surface to change per-band/per-stem gain
+// from the iPad — a regression. We restore the original GainRow
+// pattern: 33 ms throttled live-drag writes via `updateParamCenter`
+// (so the post signal responds visually as the operator drags) and a
+// release-time flush of any pending throttled value. Range comes from
+// the engine's paramSchema via `useParamRange` (falls back to [0, 2]
+// per the pre-Phase 5 convention).
+function ParamKeyGainRow({ paramKey }: { paramKey: string }) {
+  const [gMin, gMax] = useParamRange(paramKey, [0, 2]);
+  const span = Math.max(0.0001, gMax - gMin);
+  const live = useSharedParamValues(useMemo(() => ({ [paramKey]: 1 }), [paramKey])) as Record<string, number>;
+  const liveVal = typeof live[paramKey] === 'number' ? live[paramKey] : 1;
+  const [draft, setDraft] = useState<number | null>(null);
+  const showVal = draft !== null ? draft : liveVal;
+  const norm = (showVal - gMin) / span;
+
+  // Throttled live-drag writer. The operator expects the POST trace to
+  // respond as they drag — release-only writes feel broken. 33 ms ≈
+  // 30 Hz, comfortably under the engine's analyser hop rate. Identical
+  // to the retired GainRow helper that used to live in audio.tsx.
+  const lastSentAt = useRef(0);
+  const pendingRef = useRef<number | null>(null);
+  const sendNow = useCallback((v: number) => {
+    lastSentAt.current = Date.now();
+    pendingRef.current = null;
+    updateParamCenter({ [paramKey]: v });
+  }, [paramKey]);
+  const sendThrottled = useCallback((v: number) => {
+    const now = Date.now();
+    if (now - lastSentAt.current >= 33) {
+      sendNow(v);
+    } else {
+      pendingRef.current = v;
+    }
+  }, [sendNow]);
+
+  return (
+    <View style={{ marginBottom: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 10,
+          textTransform: 'uppercase', letterSpacing: 0.6,
+        }}>value</Text>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 10,
+        }}>{showVal.toFixed(2)}×</Text>
+      </View>
+      <HorizontalFader
+        value={Math.max(0, Math.min(1, norm))}
+        onChange={(v: number) => {
+          const real = gMin + v * span;
+          setDraft(real);
+          sendThrottled(real);
+        }}
+        onRelease={() => {
+          // Flush any throttled-suppressed final value, then clear
+          // draft so the slider snaps back to engine-confirmed value.
+          const final = pendingRef.current ?? draft;
+          if (final !== null) sendNow(final);
+          setDraft(null);
+        }}
+        trackStyle={{ height: 16, backgroundColor: C.surfaceContainerHigh, borderRadius: 8 }}
+        fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 8 }}
+      />
+      <Text style={{
+        fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+        marginTop: 2,
+      }}>
+        Driven live from CPC key: {paramKey}. Shared with the CPC controls
+        elsewhere in the app.
+      </Text>
+    </View>
+  );
+}
+
 // ── Per-op editor body ────────────────────────────────────────────────────
 
 function OpParams({
@@ -362,14 +449,11 @@ function OpParams({
     case 'gain': {
       const usesParamKey = typeof op.params.paramKey === 'string';
       if (usesParamKey) {
-        return (
-          <Text style={{
-            fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
-            marginTop: 2,
-          }}>
-            Value driven live from CPC key: {String(op.params.paramKey)}. Edit the slider that owns this key (e.g. PER-BAND GAIN below) to change.
-          </Text>
-        );
+        // paramKey-bound gain: value lives in shared CPC paramCenter.
+        // The slider writes through `updateParamCenter` instead of a
+        // PATCH on this op (the op itself has no static value — it
+        // reads paramCenter.get(paramKey) live each engine frame).
+        return <ParamKeyGainRow paramKey={String(op.params.paramKey)} />;
       }
       const v = typeof op.params.value === 'number' ? op.params.value : 1;
       return (
@@ -1368,15 +1452,16 @@ export function AudioChainsCard() {
   // While the AUDIO tab is focused, tell the engine to emit 5 Hz
   // signalChain preview frames. On blur, unsubscribe so the engine
   // pays zero cost. On WS reconnect we BOTH re-subscribe (so preview
-  // frames resume) AND re-fetch chains via reload() — the engine does
-  // NOT emit `audioChainsChanged` on reconnect, so the iPad's local
-  // chain cache could have drifted while we were offline (another
-  // client edited, scene reload, reset). docs/29 §Interactions step 8
-  // promises: "engine bus reconnects → on `audioChainsChanged` resync";
-  // we fulfill the contract from the iPad side by pulling the engine's
-  // current truth. If the operator had an optimistic PATCH in flight
-  // when the WS dropped, either side may have applied it — taking the
-  // engine's authoritative state is the correct resolution.
+  // frames resume) AND re-fetch chains via reload() — belt-and-braces
+  // alongside the engine-side snapshot emission added in Phase 5.1
+  // (commit adc92be: /ws/control now broadcasts `audioChainsChanged`
+  // in its initial post-reconnect snapshot). The reload() call here
+  // covers the legacy/transport edge cases (operator had an optimistic
+  // PATCH in flight when the WS dropped; another client edited; scene
+  // reload between disconnect and reconnect) and ensures the iPad
+  // ends up on the engine's authoritative state regardless of which
+  // side actually applied the in-flight change. docs/29 §Interactions
+  // step 8: "engine bus reconnects → on `audioChainsChanged` resync".
   useFocusEffect(useCallback(() => {
     // Send immediately if connected; otherwise the bus's outbound queue
     // (cap 64) will flush on the next open.
