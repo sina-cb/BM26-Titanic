@@ -1457,10 +1457,12 @@ function SignalChainEditor({
       backgroundColor: C.surfaceContainerLow,
       borderWidth: 1, borderColor: C.ghostBorder,
     }}>
-      {/* ANALYZER sub-section — first thing the operator sees in the
-          editor. Pre-chain band tuning (crossovers + envelope/gate for
-          mic LOW/MID/HIGH, kick detector for micKick). Stems get no
-          section (OSC-fed, not FFT-fed). Per operator brief 2026-05-26. */}
+      {/* ANALYZER sub-section — only renders for micKick (kick detector
+          params are genuinely per-signal). Crossovers + envelope/gate
+          for mic LOW/MID/HIGH live in `SharedMicAnalyzerSection` at the
+          top of the CHAINS card body (they're engine-global). Stems get
+          no section (OSC-fed, not FFT-fed). Operator brief 2026-05-26
+          (revised). */}
       <AnalyzerSection
         signalKey={signalKey}
         cfg={audioConfig}
@@ -1751,21 +1753,24 @@ function SignalChainRow({
 
 // ── Per-signal ANALYZER sub-section ───────────────────────────────────────
 //
-// The crossovers, envelope/gate, and kick detector live in
-// `audio_analyzer.js` as a SINGLE GLOBAL FFT instance — they're not truly
-// per-signal in the engine. We surface them per-signal in the chain editor
-// (operator brief 2026-05-26: "analyzer config belongs with the band it
-// tunes") but PATCH them via the same /audio/config endpoint, and call
-// out the shared-with-other-mic-bands envelope at the section level so the
-// operator understands the wire shape.
+// Only renders for micKick now. Pre-revision (2026-05-26 v1) the
+// crossovers + envelope/gate were ALSO surfaced inside the micLow /
+// micMid / micHigh editors, but the engine has a SINGLE GLOBAL FFT
+// instance — those sliders were misleading because tweaks in one band
+// silently changed all three. They've been consolidated into
+// `SharedMicAnalyzerSection`, which renders once at the top of the
+// SIGNALS · CHAINS card body.
+//
+// micKick's kick-detector params (kick.{minHz,maxHz,threshold,
+// refractoryMs,decayMs}) ARE per-signal in spirit — only micKick uses
+// them — so they stay here in the chain editor with a clarifying label.
 //
 // Wire details (Codex P0 no-silent-fallback):
 //   - audioConfig is owned by the parent screen and passed in. When null
 //     (fetch still in flight or failed at the parent) we surface a small
 //     inline notice — the chain ops themselves are still editable.
 //   - Every slider commits ONE PATCH on release; live drag updates the
-//     parent's optimistic cache via onUpdateLocal so all per-signal
-//     editors see the same lowMaxHz, midMaxHz, etc. while dragging.
+//     parent's optimistic cache via onUpdateLocal.
 //   - On 400 the parent reverts via a refetch (reload). We do NOT
 //     clamp silently — engine error strings appear in the parent's
 //     patchError banner.
@@ -1809,15 +1814,16 @@ function AnalyzerHint({ text }: { text: string }) {
   );
 }
 
-// Shared envelope/gate block — rendered inside micLow / micMid / micHigh.
-// Three sliders + an upfront "(shared with all mic bands)" callout so the
-// operator never assumes per-band envelope tuning.
+// Shared envelope/gate block — rendered inside the shared MIC ANALYZER
+// section at the top of the CHAINS card. (Previously also rendered
+// per-band inside each mic chain editor; consolidated 2026-05-26 because
+// the engine has a single global FFT analyzer and per-band rendering
+// misled the operator.)
 function SharedEnvelopeGate({ cfg, handlers }: { cfg: AnalyzerConfig; handlers: AnalyzerHandlers }) {
   return (
     <View style={{ marginTop: 10 }}>
       <AnalyzerSubHeader
         title="ENVELOPE & GATE"
-        hint="Shared with all mic bands (LOW · MID · HIGH)."
       />
       <OpParamSlider
         label="attackMs" suffix="ms" min={1} max={50} value={cfg.bands.attackMs} step={1} integer
@@ -1850,8 +1856,16 @@ function AnalyzerSection({
   handlers: AnalyzerHandlers;
   onRetryCfg: () => void;
 }) {
-  // Stems have no analyzer config — they come from OSC, not the FFT.
-  if (signalKey.startsWith('stems')) return null;
+  // Only micKick has a per-signal analyzer section now. The crossover
+  // edges and envelope/gate live in the engine as a SINGLE GLOBAL FFT
+  // instance — rendering them inside each mic band's editor was
+  // misleading (tweaks in one band silently affected all). They were
+  // consolidated to `SharedMicAnalyzerSection` at the top of the
+  // SIGNALS · CHAINS card body. Operator brief 2026-05-26 (revised).
+  //
+  // Stems have no analyzer config (OSC-fed, not FFT-fed) → null.
+  // Mic LOW/MID/HIGH now render no analyzer section → null.
+  if (signalKey !== 'micKick') return null;
 
   // Codex P0: if cfg fetch failed we render a visible error + retry, NOT
   // a silently-defaulted set of sliders.
@@ -1862,7 +1876,7 @@ function AnalyzerSection({
         backgroundColor: C.surfaceContainerLow,
         borderWidth: 1, borderColor: cfgError ? C.error : C.ghostBorder,
       }}>
-        <AnalyzerSubHeader title="ANALYZER" />
+        <AnalyzerSubHeader title="KICK DETECTOR" />
         {cfgError ? (
           <>
             <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginBottom: 8 }}>
@@ -1890,61 +1904,11 @@ function AnalyzerSection({
     );
   }
 
-  // micKick has its own threshold/refractory/decay — no shared envelope.
-  if (signalKey === 'micKick') {
-    return (
-      <View style={{
-        marginBottom: 12, padding: 12, borderRadius: 10,
-        backgroundColor: C.surfaceContainerLow,
-        borderWidth: 1, borderColor: C.ghostBorder,
-      }}>
-        <AnalyzerSubHeader
-          title="ANALYZER · KICK DETECTOR"
-          hint="EDM kick fundamental sits 50–80 Hz; click transient ~100 Hz."
-        />
-        <OpParamSlider
-          label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz} step={5} integer
-          onDrag={(v) => handlers.onUpdateLocal('kick', 'minHz', v)}
-          onCommit={(v) => handlers.onCommitField('kick', 'minHz', v)}
-        />
-        <OpParamSlider
-          label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz} step={5} integer
-          onDrag={(v) => handlers.onUpdateLocal('kick', 'maxHz', v)}
-          onCommit={(v) => handlers.onCommitField('kick', 'maxHz', v)}
-        />
-        <OpParamSlider
-          label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold} step={0.05}
-          onDrag={(v) => handlers.onUpdateLocal('kick', 'threshold', v)}
-          onCommit={(v) => handlers.onCommitField('kick', 'threshold', v)}
-        />
-        <AnalyzerHint text="Instant energy must be this many × running average to fire." />
-        <OpParamSlider
-          label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs} step={10} integer
-          onDrag={(v) => handlers.onUpdateLocal('kick', 'refractoryMs', v)}
-          onCommit={(v) => handlers.onCommitField('kick', 'refractoryMs', v)}
-        />
-        <AnalyzerHint text="Minimum gap between two kick fires." />
-        <OpParamSlider
-          label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs} step={10} integer
-          onDrag={(v) => handlers.onUpdateLocal('kick', 'decayMs', v)}
-          onCommit={(v) => handlers.onCommitField('kick', 'decayMs', v)}
-        />
-        <AnalyzerHint text="How fast micKick envelope falls back to 0." />
-      </View>
-    );
-  }
-
-  // Mic bands — crossover edges + shared envelope/gate.
-  // Each band shows only the crossover(s) it owns; lowMaxHz appears in
-  // micLow (upper) and micMid (lower); midMaxHz in micMid (upper) and
-  // micHigh (lower). The shared-edge hint tells the operator that editing
-  // here propagates to the other side.
-  const showLowMax  = signalKey === 'micLow' || signalKey === 'micMid';
-  const showMidMax  = signalKey === 'micMid' || signalKey === 'micHigh';
-  const lowIsUpper  = signalKey === 'micLow';
-  const midIsUpper  = signalKey === 'micMid';
-  const nyquist     = cfg.capture.sampleRate / 2 - 50;
-
+  // micKick has its own threshold/refractory/decay — genuinely
+  // per-signal (only kick has these). The clarifying label tells the
+  // operator these params are specific to this chain, distinguishing
+  // from the global crossovers/envelope that now live in the shared
+  // section at the top of the CHAINS card.
   return (
     <View style={{
       marginBottom: 12, padding: 12, borderRadius: 10,
@@ -1952,49 +1916,138 @@ function AnalyzerSection({
       borderWidth: 1, borderColor: C.ghostBorder,
     }}>
       <AnalyzerSubHeader
-        title="ANALYZER · CROSSOVERS"
-        hint="Band edges feed the LOW/MID/HIGH split. Shared with the neighbouring band."
+        title="KICK DETECTOR · CONFIGURED PER MICKICK CHAIN"
+        hint="EDM kick fundamental sits 50–80 Hz; click transient ~100 Hz."
       />
-      {showLowMax ? (
-        <>
-          <OpParamSlider
-            label={lowIsUpper ? 'Upper edge (lowMaxHz)' : 'Lower edge (lowMaxHz)'}
-            suffix="Hz"
-            min={50}
-            max={Math.max(60, cfg.bands.midMaxHz - 50)}
-            value={cfg.bands.lowMaxHz}
-            step={5}
-            integer
-            onDrag={(v) => handlers.onUpdateLocal('bands', 'lowMaxHz', v)}
-            onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', v)}
-          />
-          <AnalyzerHint
-            text={lowIsUpper
-              ? 'Frequencies below this go to LOW band. Shared crossover with MID.'
-              : 'Lower bound of MID band (= upper edge of LOW). Shared crossover with LOW.'}
-          />
-        </>
-      ) : null}
-      {showMidMax ? (
-        <>
-          <OpParamSlider
-            label={midIsUpper ? 'Upper edge (midMaxHz)' : 'Lower edge (midMaxHz)'}
-            suffix="Hz"
-            min={cfg.bands.lowMaxHz + 50}
-            max={nyquist}
-            value={cfg.bands.midMaxHz}
-            step={50}
-            integer
-            onDrag={(v) => handlers.onUpdateLocal('bands', 'midMaxHz', v)}
-            onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', v)}
-          />
-          <AnalyzerHint
-            text={midIsUpper
-              ? 'Frequencies below this stay in MID; above go to HIGH.'
-              : 'Lower bound of HIGH band (= upper edge of MID). Shared crossover with MID.'}
-          />
-        </>
-      ) : null}
+      <OpParamSlider
+        label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz} step={5} integer
+        onDrag={(v) => handlers.onUpdateLocal('kick', 'minHz', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'minHz', v)}
+      />
+      <OpParamSlider
+        label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz} step={5} integer
+        onDrag={(v) => handlers.onUpdateLocal('kick', 'maxHz', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'maxHz', v)}
+      />
+      <OpParamSlider
+        label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold} step={0.05}
+        onDrag={(v) => handlers.onUpdateLocal('kick', 'threshold', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'threshold', v)}
+      />
+      <AnalyzerHint text="Instant energy must be this many × running average to fire." />
+      <OpParamSlider
+        label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs} step={10} integer
+        onDrag={(v) => handlers.onUpdateLocal('kick', 'refractoryMs', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'refractoryMs', v)}
+      />
+      <AnalyzerHint text="Minimum gap between two kick fires." />
+      <OpParamSlider
+        label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs} step={10} integer
+        onDrag={(v) => handlers.onUpdateLocal('kick', 'decayMs', v)}
+        onCommit={(v) => handlers.onCommitField('kick', 'decayMs', v)}
+      />
+      <AnalyzerHint text="How fast micKick envelope falls back to 0." />
+    </View>
+  );
+}
+
+// ── Shared MIC ANALYZER section (always-visible, top of CHAINS card) ──────
+//
+// Renders the engine's GLOBAL FFT analyzer config — crossovers + envelope/
+// gate — as a single shared block at the top of the SIGNALS · CHAINS card.
+// Previously these sliders were rendered inside micLow / micMid / micHigh
+// editors, which misled the operator: there's only ONE analyzer in the
+// engine, so a tweak in one band silently affected all three.
+//
+// Wire shape is unchanged from the per-signal version: the same
+// AnalyzerHandlers (onUpdateLocal for live drag, onCommitField for the
+// release-time PATCH) flow through, and the parent screen owns audioConfig.
+//
+// Codex P0: if cfg is null (loading or error), surface the state instead
+// of rendering silently-defaulted sliders.
+function SharedMicAnalyzerSection({
+  cfg, cfgError, handlers, onRetryCfg,
+}: {
+  cfg: AnalyzerConfig | null;
+  cfgError: string | null;
+  handlers: AnalyzerHandlers;
+  onRetryCfg: () => void;
+}) {
+  if (!cfg) {
+    return (
+      <View style={{
+        marginBottom: 12, padding: 12, borderRadius: 10,
+        backgroundColor: C.surfaceContainerLow,
+        borderWidth: 1, borderColor: cfgError ? C.error : C.ghostBorder,
+      }}>
+        <AnalyzerSubHeader
+          title="MIC ANALYZER · SHARED ACROSS LOW · MID · HIGH"
+          hint="Engine-global FFT analyzer config. Tuning here affects all three mic bands."
+        />
+        {cfgError ? (
+          <>
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginBottom: 8 }}>
+              Audio config unavailable: {cfgError}
+            </Text>
+            <TouchableOpacity
+              onPress={onRetryCfg}
+              style={{
+                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+                backgroundColor: C.primary, alignSelf: 'flex-start',
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', color: '#fff', fontSize: 10,
+                textTransform: 'uppercase', letterSpacing: 0.6,
+              }}>RETRY</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
+            loading analyzer config…
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  const nyquist = cfg.capture.sampleRate / 2 - 50;
+
+  return (
+    <View style={{
+      marginBottom: 16, padding: 12, borderRadius: 10,
+      backgroundColor: C.surfaceContainerLow,
+      borderWidth: 1, borderColor: C.ghostBorder,
+    }}>
+      <AnalyzerSubHeader
+        title="MIC ANALYZER · SHARED ACROSS LOW · MID · HIGH"
+        hint="Engine-global FFT analyzer config. Tuning here affects all three mic bands."
+      />
+      <View style={{ marginTop: 4 }}>
+        <AnalyzerSubHeader title="CROSSOVERS" />
+        <OpParamSlider
+          label="lowMaxHz" suffix="Hz"
+          min={50}
+          max={Math.max(60, cfg.bands.midMaxHz - 50)}
+          value={cfg.bands.lowMaxHz}
+          step={5}
+          integer
+          onDrag={(v) => handlers.onUpdateLocal('bands', 'lowMaxHz', v)}
+          onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', v)}
+        />
+        <AnalyzerHint text="Upper edge of LOW band / lower edge of MID band." />
+        <OpParamSlider
+          label="midMaxHz" suffix="Hz"
+          min={cfg.bands.lowMaxHz + 50}
+          max={nyquist}
+          value={cfg.bands.midMaxHz}
+          step={50}
+          integer
+          onDrag={(v) => handlers.onUpdateLocal('bands', 'midMaxHz', v)}
+          onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', v)}
+        />
+        <AnalyzerHint text="Upper edge of MID band / lower edge of HIGH band." />
+      </View>
       <SharedEnvelopeGate cfg={cfg} handlers={handlers} />
     </View>
   );
@@ -2205,6 +2258,19 @@ export function AudioChainsCard({
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {/* Shared MIC ANALYZER — the engine has a single global FFT, so
+          crossovers + envelope/gate are NOT per-band. Surfacing them
+          once at the top of the CHAINS card (vs. inside each mic band
+          editor) prevents the "tweaks in micLow silently change micMid"
+          confusion. Always visible — small and important. Operator
+          brief 2026-05-26 (revised). */}
+      <SharedMicAnalyzerSection
+        cfg={audioConfig}
+        cfgError={audioConfigError}
+        handlers={analyzerHandlers}
+        onRetryCfg={onRetryAudioConfig}
+      />
 
       {SIGNAL_ORDER.map(({ key, label }) => {
         const others = SIGNAL_ORDER
