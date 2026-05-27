@@ -1,0 +1,15 @@
+schemaVersion: 1
+name: hil_tx_smooth
+entries:
+  - id: e_A
+    pattern: test_const
+    label: A (red)
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_B
+    pattern: test_dualband
+    label: B (red+cyan)
+    defaults: {}
+    modulations: []
+    notes: null

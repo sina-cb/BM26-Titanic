@@ -1,6 +1,6 @@
 master: 1
 channels:
-  - id: ch_1779762447195_0
+  - id: ch_1779852690909_20
     name: New Layer
     pattern: 15_silk_prism_ribbons
     mode: blend_screen
@@ -34,78 +34,4 @@ channels:
     viewSelection:
       type: all
       target: null
-      invert: false
-  - id: ch_1779762472447_1
-    name: New Layer
-    pattern: 06_neon_elevator
-    mode: blend_screen
-    fader: 1
-    enabled: true
-    locked: false
-    faderLocked: false
-    transitionMode: trans_crossfade
-    transitionTime: 1
-    localControls:
-      '1037917937':
-        v0: 0.58
-        v1: 0
-        v2: 0
-      '1225222055':
-        v0: 0.17
-        v1: 0
-        v2: 0
-      '1628509418':
-        v0: 0.16
-        v1: 0
-        v2: 0
-      '3772320662':
-        v0: 0.73
-        v1: 0
-        v2: 0
-    playlist:
-      name: default
-      activeEntryId: e_default_6_06_neon_elevator
-      cursor: 6
-      autopilot:
-        active: false
-        delay_s: 30
-        shuffle: false
-    viewSelection:
-      type: all
-      target: null
-      invert: false
-  - id: ch_1779762486476_2
-    name: New Layer
-    pattern: 10_chasers
-    mode: blend_over
-    fader: 1
-    enabled: false
-    locked: false
-    faderLocked: true
-    transitionMode: trans_crossfade
-    transitionTime: 1
-    localControls:
-      '145792981':
-        v0: 0.5
-        v1: 0
-        v2: 0
-      '1037917937':
-        v0: 0.5
-        v1: 0
-        v2: 0
-      '2058914376':
-        v0: 0.5
-        v1: 0
-        v2: 0
-    playlist:
-      name: default
-      activeEntryId: e_default_10_10_chasers
-      cursor: 10
-      autopilot:
-        active: false
-        delay_s: 30
-        shuffle: false
-    viewSelection:
-      type: group
-      target: VintageLights
       invert: false

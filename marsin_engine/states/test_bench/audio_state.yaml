@@ -12,17 +12,65 @@ capture:
   inputFormat: avfoundation
   platform: darwin
 enabled: true
-fftSize: 1024
-hopSize: 512
-bands:
-  lowMaxHz: 200
-  midMaxHz: 4000
-  attackMs: 20
-  releaseMs: 280
-  noiseGate: 0.025
-kick:
-  minHz: 25
-  maxHz: 75
-  threshold: 1.8
-  refractoryMs: 140
-  decayMs: 120
+chains:
+  micLow:
+    - id: low_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: micLowGain
+  micMid:
+    - id: mid_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: micMidGain
+  micHigh:
+    - id: high_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: micHighGain
+  micKick:
+    - id: kick_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: micKickGain
+    - id: kick_envelope
+      type: envelope
+      enabled: true
+      params:
+        attackMs: 8
+        releaseMs: 180
+    - id: kick_schmitt
+      type: schmitt
+      enabled: true
+      params:
+        tHigh: 0.5
+        tLow: 0.3
+        refractoryMs: 200
+    - id: kick_hold
+      type: hold
+      enabled: true
+      params:
+        timeoutMs: 120
+        decayMs: 120
+  stemsBass:
+    - id: stems_bass_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: stemsBassGain
+  stemsDrums:
+    - id: stems_drums_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: stemsDrumsGain
+  stemsVocals:
+    - id: stems_vocals_gain
+      type: gain
+      enabled: true
+      params:
+        paramKey: stemsVocalsGain

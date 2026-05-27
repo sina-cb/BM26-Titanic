@@ -29,7 +29,7 @@ channel:
     target: null
     invert: false
 transitionConfig:
-  enabled: false
-  mode: trans_split_vertical
-  durationMs: 1000
+  enabled: true
+  mode: trans_crossfade
+  durationMs: 400
   shuffle: false
