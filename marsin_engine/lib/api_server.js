@@ -3352,6 +3352,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // ignore
     }
 
+    // Initial audio-chains snapshot — docs/29 §Interactions step 8:
+    // "engine emits one of these immediately after any client reconnects
+    // to /ws/control so the iPad picks up changes that happened during
+    // disconnect". Reuses the same accessor as GET /audio/chains. If
+    // signalPostProcessor isn't initialized (engine booted without
+    // audio), skip silently — an empty map would be misleading.
+    try {
+      const spp = engineCore && engineCore.signalPostProcessor;
+      if (spp) {
+        ws.send(JSON.stringify({
+          type: 'audioChainsChanged',
+          chains: spp.getAllChains(),
+        }));
+      }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
