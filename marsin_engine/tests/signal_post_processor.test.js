@@ -451,17 +451,17 @@ test('Codex P0: process() throws on negative dtSeconds', () => {
   );
 });
 
-test('Codex P0: Gain with paramKey propagates missing CPC key error', () => {
+test('Codex P0: Gain with unknown CPC paramKey is rejected at putChain (fail loudly EARLY)', () => {
+  // Old behavior let the typo sail through PUT and only threw on the
+  // first audio-hot-path process() call. New contract: validate at
+  // PUT/PATCH so the operator gets a 400 with a clear message, never
+  // a mid-show crash on the first frame.
   const pc = makeParamCenter({}); // no gain key
   const proc = new SignalPostProcessor({ paramCenter: pc });
-  // putChain itself succeeds (paramKey existence is not validated —
-  // CPC keys can be added by registry overrides), but the first
-  // process() call will throw via pc.get().
-  proc.putChain('micLow', [{ id: 'g', type: 'gain', params: { paramKey: 'micLowGain' } }]);
-  assert.throws(
-    () => proc.process('micLow', 0.5, 0.025),
-    /unknown key micLowGain/,
-  );
+  const r = proc.putChain('micLow', [{ id: 'g', type: 'gain', params: { paramKey: 'micLowGain' } }]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /paramKey/);
+  assert.match(r.error, /micLowGain/);
 });
 
 // ── PUT / PATCH / reset ──────────────────────────────────────────────────────
@@ -506,6 +506,170 @@ test('patchOp re-validates with cross-param invariants (Schmitt tHigh > tLow)', 
   const r = proc.patchOp('micKick', 'sch', { params: { tHigh: 0.2 } }); // now < tLow
   assert.equal(r.ok, false);
   assert.match(r.error, /tHigh > tLow/);
+});
+
+// ── patchOp runtime-state continuity (operator tweak ≠ visible pop) ─────────
+//
+// MAJOR contract from the file docstrings (lines ~366, ~428, ~716): PATCH
+// preserves per-op runtime state so a mid-show param tweak does NOT cause
+// the chain to "snap back to zero" while smoothing/hold history rebuilds.
+// One test per stateful op: build state with N process() calls, snapshot,
+// patchOp the param, process ONE more sample, and assert post is roughly
+// continuous from the snapshot (NOT reset to the default initial state).
+//
+// We use a generous epsilon on each post check because the new param may
+// legitimately affect the next sample's value (e.g. a smaller attackMs
+// reaches steady-state faster) — what we are pinning is "yPrev did NOT
+// reset to default" (which would manifest as a giant drop toward 0).
+
+function _processN(proc, sig, value, dt, n) {
+  let last = 0;
+  for (let i = 0; i < n; i++) last = proc.process(sig, value, dt);
+  return last;
+}
+
+test('patchOp preserves runtime state — LPF (yPrev does not reset on cutoff tweak)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'lpf', type: 'lpf', params: { cutoffHz: 2.0 } }]);
+  // Build yPrev close to 1 with sustained input=1.0.
+  const before = _processN(proc, 'micLow', 1.0, 0.025, 200);
+  assert.ok(before > 0.99, `LPF should be near steady-state before patch (got ${before})`);
+  // Patch the cutoff and process ONE more frame at the same input.
+  const r = proc.patchOp('micLow', 'lpf', { params: { cutoffHz: 10.0 } });
+  assert.equal(r.ok, true);
+  const after = proc.process('micLow', 1.0, 0.025);
+  assert.ok(after > 0.95,
+    `LPF yPrev must be preserved across patchOp — expected post ≈ ${before}, got ${after} (yPrev was reset to 0?)`);
+});
+
+test('patchOp preserves runtime state — Envelope (yPrev does not reset on attack tweak)', () => {
+  // The exact scenario from the validator's reproduction.
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{
+    id: 'env', type: 'envelope',
+    params: { attackMs: 50, releaseMs: 100 },
+  }]);
+  // Run enough steps to drive yPrev near 1.
+  const before = _processN(proc, 'micLow', 1.0, 0.025, 300);
+  assert.ok(before > 0.99, `Envelope should be near steady-state (got ${before})`);
+  // Patch attackMs and process ONE more input=1.0 sample.
+  const r = proc.patchOp('micLow', 'env', { params: { attackMs: 10 } });
+  assert.equal(r.ok, true);
+  const after = proc.process('micLow', 1.0, 0.025);
+  // If yPrev had been reset to 0, post would drop to roughly
+  // alpha * 1 + (1 - alpha) * 0 ≈ 0.7 (the validator's 0.6988 number).
+  // With preservation, post stays right next to 1.0.
+  assert.ok(after > 0.95,
+    `Envelope yPrev must survive patchOp — expected post ≈ ${before}, got ${after} (operator-visible pop if this fails)`);
+});
+
+test('patchOp preserves runtime state — Schmitt (yPrev/lastFireAt do not reset on tHigh tweak)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micKick', [{
+    id: 'sch', type: 'schmitt',
+    params: { tHigh: 0.8, tLow: 0.3, refractoryMs: 100 },
+  }]);
+  // Drive the schmitt high.
+  const fired = proc.process('micKick', 0.95, 0.025);
+  assert.equal(fired, 1, 'schmitt should have fired on first high sample');
+  // Patch tHigh while it's HIGH. yPrev=1, lastFireAt is set. After
+  // the patch, an input BELOW tLow should release (proving yPrev was
+  // preserved as 1, otherwise we wouldn't be in the "high" branch).
+  const r = proc.patchOp('micKick', 'sch', { params: { tHigh: 0.7 } });
+  assert.equal(r.ok, true);
+  const stillHigh = proc.process('micKick', 0.5, 0.025); // tLow < 0.5 < tHigh → hold high
+  assert.equal(stillHigh, 1, 'schmitt should still be HIGH after patch (yPrev preserved)');
+  const released = proc.process('micKick', 0.1, 0.025); // < tLow → release
+  assert.equal(released, 0, 'schmitt should release on input < tLow');
+});
+
+test('patchOp preserves runtime state — Hold (yPrev/lastInputAt do not reset on decay tweak)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micKick', [{
+    id: 'hold', type: 'hold',
+    params: { timeoutMs: 500, decayMs: 200 },
+  }]);
+  // Drive the hold high (sustained input=1.0).
+  const before = _processN(proc, 'micKick', 1.0, 0.025, 50);
+  assert.ok(before > 0.99, `Hold should be near 1.0 with sustained input (got ${before})`);
+  // Patch decayMs while held high.
+  const r = proc.patchOp('micKick', 'hold', { params: { decayMs: 500 } });
+  assert.equal(r.ok, true);
+  // One more sustained sample — held high should stay held high (NOT
+  // snap to 0 because yPrev got reset).
+  const after = proc.process('micKick', 1.0, 0.025);
+  assert.ok(after > 0.95,
+    `Hold yPrev must survive patchOp — expected ≈ ${before}, got ${after}`);
+});
+
+test('patchOp preserves runtime state — disabled-only patch keeps yPrev intact', () => {
+  // PATCH with only `enabled: false` must not blow runtime away
+  // either — re-enabling later should resume from the last yPrev,
+  // not from a fresh zero (otherwise the re-enable would pop too).
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'lpf', type: 'lpf', params: { cutoffHz: 2.0 } }]);
+  const before = _processN(proc, 'micLow', 1.0, 0.025, 200);
+  assert.ok(before > 0.99);
+  // Disable then re-enable.
+  assert.equal(proc.patchOp('micLow', 'lpf', { enabled: false }).ok, true);
+  // While disabled, process passes value through unchanged (but yPrev
+  // must stay frozen at its prior value, not reset to 0).
+  proc.process('micLow', 0.0, 0.025);
+  assert.equal(proc.patchOp('micLow', 'lpf', { enabled: true }).ok, true);
+  const after = proc.process('micLow', 1.0, 0.025);
+  assert.ok(after > 0.95,
+    `LPF yPrev must persist through disable/enable cycle — expected ≈ ${before}, got ${after}`);
+});
+
+// ── putChain / patchOp paramKey validation (Codex P0 — fail early) ──────────
+
+test('putChain rejects Gain op with a typo paramKey (error mentions paramKey + key name)', () => {
+  // The bogus paramKey used to sail through PUT and only crash on the
+  // first process() call (audio hot path). New contract: caught at PUT.
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  const r = proc.putChain('micLow', [
+    { id: 'g', type: 'gain', params: { paramKey: 'micLowGainX' } },
+  ]);
+  assert.equal(r.ok, false, 'putChain must reject unknown paramKey');
+  assert.match(r.error, /paramKey/, 'error should mention paramKey');
+  assert.match(r.error, /micLowGainX/, 'error should mention the unknown key name');
+});
+
+test('patchOp rejects switching to a typo paramKey', () => {
+  // Note: the dual-mode XOR means we have to switch via a chain that's
+  // already in paramKey mode. (Switching value→paramKey via PATCH is
+  // an out-of-scope Phase-5 concern — operator UI translates that to
+  // PUT. We test the paramKey→paramKey rename path here.)
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [
+    { id: 'g', type: 'gain', params: { paramKey: 'micLowGain' } },
+  ]);
+  const r = proc.patchOp('micLow', 'g', { params: { paramKey: 'micLowGainX' } });
+  assert.equal(r.ok, false, 'patchOp must reject unknown paramKey');
+  assert.match(r.error, /paramKey/);
+  assert.match(r.error, /micLowGainX/);
+});
+
+test('putChain ACCEPTS a known paramKey when paramCenter exposes getSchema()', () => {
+  // The real ParamCenter exposes getSchema(); our test fullGainPC()
+  // helper only exposes get/set, which exercises the get-throws
+  // fallback. Confirm the schema path also works.
+  const pc = {
+    _store: { micLowGain: 1.0 },
+    get(k) { if (!(k in this._store)) throw new Error(`unknown ${k}`); return this._store[k]; },
+    getSchema() { return [{ key: 'micLowGain', label: 'Mic Low Gain', type: 'number' }]; },
+  };
+  const proc = new SignalPostProcessor({ paramCenter: pc });
+  const r = proc.putChain('micLow', [
+    { id: 'g', type: 'gain', params: { paramKey: 'micLowGain' } },
+  ]);
+  assert.equal(r.ok, true, `expected success, got ${r.error}`);
+  // And the rejection path with getSchema also fires:
+  const r2 = proc.putChain('micMid', [
+    { id: 'g', type: 'gain', params: { paramKey: 'micMidGainX' } },
+  ]);
+  assert.equal(r2.ok, false);
+  assert.match(r2.error, /micMidGainX/);
 });
 
 test('resetSignal restores the documented default chain', () => {

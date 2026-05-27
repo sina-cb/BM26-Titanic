@@ -173,10 +173,55 @@ function isFiniteNumber(v) {
 }
 
 /**
+ * Best-effort check that `key` is a known CPC param. Uses whatever
+ * discovery surface the paramCenter exposes:
+ *   1. `.has(key)` — direct boolean probe (cheapest).
+ *   2. `.getSchema()` — returns [{ key, ... }] (real ParamCenter).
+ *   3. `.get(key)` — fall back to a try/catch; the real ParamCenter
+ *      throws on unknown keys per its contract.
+ * Returns true on a known key, false on a clearly-unknown one. If
+ * the paramCenter offers none of these surfaces (defensive: shouldn't
+ * happen — constructor guarantees `.get`), we return true so we don't
+ * block PUTs on an under-featured stub.
+ */
+function _paramCenterHasKey(paramCenter, key) {
+  if (typeof paramCenter.has === 'function') {
+    return !!paramCenter.has(key);
+  }
+  if (typeof paramCenter.getSchema === 'function') {
+    try {
+      const schema = paramCenter.getSchema();
+      if (Array.isArray(schema)) return schema.some(e => e && e.key === key);
+    } catch { /* fall through */ }
+  }
+  // Final fallback: probe with .get and treat a throw as "unknown".
+  try {
+    paramCenter.get(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Append a short hint pointing operators at the discovery surface. */
+function _paramCenterKeyHint(paramCenter) {
+  if (typeof paramCenter.getSchema === 'function') {
+    return ' (see GET /param-center/schema for valid keys)';
+  }
+  return '';
+}
+
+/**
  * Validate one op-config object. Returns { ok, error, normalized }.
  * Used by validateChain — never used standalone.
+ *
+ * `paramCenter` is optional. When supplied, Gain ops that use
+ * `paramKey` have the key looked up against the CPC schema NOW, so
+ * a typo like `micLowGainX` fails at PUT/PATCH time with a clear
+ * 400 instead of throwing on the first audio-hot-path process()
+ * call (Codex P0 — fail loudly early).
  */
-function _validateOp(op, indexForMsg) {
+function _validateOp(op, indexForMsg, paramCenter = null) {
   if (!op || typeof op !== 'object' || Array.isArray(op)) {
     return { ok: false, error: `op[${indexForMsg}] must be an object` };
   }
@@ -210,6 +255,26 @@ function _validateOp(op, indexForMsg) {
       // We only fall back on _internal_ default-chain construction;
       // operator-facing validation requires one of the two.
       return { ok: false, error: `op "${op.id}": gain requires exactly one of {value, paramKey}` };
+    }
+    // Early paramKey validation (Codex P0: fail loudly EARLY). When a
+    // paramCenter is wired in (the PUT/PATCH path always wires it),
+    // reject a typo like `micLowGainX` here instead of letting it
+    // sail through and crash on the first audio-hot-path process()
+    // call. Skipped when paramCenter is null (free-standing
+    // validateChain() callers, e.g. unit tests for the validator).
+    if (hasPK && paramCenter) {
+      const candidate = params.paramKey;
+      if (typeof candidate !== 'string' || candidate.length === 0) {
+        return { ok: false, error: `op "${op.id}".paramKey: must be a non-empty string` };
+      }
+      const known = _paramCenterHasKey(paramCenter, candidate);
+      if (!known) {
+        const hint = _paramCenterKeyHint(paramCenter);
+        return {
+          ok: false,
+          error: `op "${op.id}".paramKey: unknown CPC key "${candidate}"${hint}`,
+        };
+      }
     }
   }
 
@@ -282,8 +347,15 @@ function _validateOp(op, indexForMsg) {
  * Strict validation of a per-signal chain (array of op configs).
  * Returns { ok: true, normalized } on success or { ok: false, error }
  * on failure. Mirrors `audio_config.validateLivePatch` style.
+ *
+ * `opts.paramCenter` is optional. When provided, Gain ops with
+ * `paramKey` get the key existence-checked against CPC at validation
+ * time (Codex P0 — fail loudly EARLY, before the audio hot path).
+ * Free-standing callers (unit tests, schema introspection) may omit
+ * it; the instance methods always wire it.
  */
-export function validateChain(signalKey, chain) {
+export function validateChain(signalKey, chain, opts = {}) {
+  const paramCenter = opts && opts.paramCenter ? opts.paramCenter : null;
   if (!KNOWN_SIGNALS.includes(signalKey)) {
     return { ok: false, error: `unknown signalKey "${signalKey}" (known: ${KNOWN_SIGNALS.join(', ')})` };
   }
@@ -293,7 +365,7 @@ export function validateChain(signalKey, chain) {
   const seenIds = new Set();
   const normalized = [];
   for (let i = 0; i < chain.length; i++) {
-    const res = _validateOp(chain[i], i);
+    const res = _validateOp(chain[i], i, paramCenter);
     if (!res.ok) return res;
     if (seenIds.has(res.normalized.id)) {
       return { ok: false, error: `duplicate op id "${res.normalized.id}" in signal ${signalKey}` };
@@ -399,7 +471,7 @@ export class SignalPostProcessor {
       if (!KNOWN_SIGNALS.includes(signalKey)) {
         throw new Error(`loadChains: unknown signalKey "${signalKey}" (known: ${KNOWN_SIGNALS.join(', ')})`);
       }
-      const v = validateChain(signalKey, chain);
+      const v = validateChain(signalKey, chain, { paramCenter: this.paramCenter });
       if (!v.ok) throw new Error(`loadChains: invalid chain for ${signalKey}: ${v.error}`);
       validated[signalKey] = v.normalized;
     }
@@ -416,7 +488,7 @@ export class SignalPostProcessor {
    * @returns {{ ok: true, chain }} or { ok: false, error }
    */
   putChain(signalKey, ops) {
-    const v = validateChain(signalKey, ops);
+    const v = validateChain(signalKey, ops, { paramCenter: this.paramCenter });
     if (!v.ok) return { ok: false, error: v.error };
     this._chains[signalKey] = v.normalized;
     this._resetRuntime(signalKey);
@@ -461,15 +533,30 @@ export class SignalPostProcessor {
     };
     // Re-validate the resulting op standalone (preserves cross-param
     // invariants like Schmitt tHigh > tLow even when only one is sent).
-    const res = _validateOp(nextOp, idx);
+    // Pass paramCenter so a typo'd paramKey is caught here, not in the
+    // audio hot path.
+    const res = _validateOp(nextOp, idx, this.paramCenter);
     if (!res.ok) return { ok: false, error: res.error };
 
-    // Splice in the validated op + refresh its runtime only (other
-    // ops keep their state, which is the point of PATCH vs PUT).
+    // Splice in the validated op. CRITICALLY, the runtime state for
+    // this op is PRESERVED — we already rejected `type` changes above,
+    // so the runtime shape is correct for the new op and the smoothing
+    // history (yPrev, clock, lastFireAt, lastInputAt) stays continuous.
+    // This is the entire point of PATCH vs PUT: the operator can nudge
+    // attackMs / cutoffHz / tHigh mid-show without the chain "snapping
+    // back to zero" while history rebuilds — i.e. no visible LED-wall
+    // pop. See docstrings above and at _initRuntime for the full
+    // contract. If a future op type ever needs to invalidate runtime
+    // on a specific param transition, add that case explicitly here.
     const nextChain = chain.slice();
     nextChain[idx] = res.normalized;
     this._chains[signalKey] = nextChain;
-    this._runtime[signalKey][opId] = _initRuntime(res.normalized);
+    // Defensive: if for any reason the runtime slot is missing (e.g.
+    // an op id was somehow patched before its runtime was seeded),
+    // fall back to a fresh init so process() never sees `undefined`.
+    if (!this._runtime[signalKey][opId]) {
+      this._runtime[signalKey][opId] = _initRuntime(res.normalized);
+    }
     this._broadcastChanged();
     return { ok: true, op: { ...res.normalized, params: { ...res.normalized.params } } };
   }
