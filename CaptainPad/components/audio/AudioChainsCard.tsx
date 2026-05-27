@@ -680,17 +680,24 @@ function OpParams({
     case 'clamp': {
       const lo = typeof op.params.min === 'number' ? op.params.min : 0;
       const hi = typeof op.params.max === 'number' ? op.params.max : 1;
+      // Fixed slider scales [0, 1] on both ends — operator brief
+      // 2026-05-27 (4th paired-bound pair, matches kick/bands/BPM fix
+      // in ab735b2). Previously min's slider max was derived from hi
+      // and max's slider min was derived from lo, so dragging one knob
+      // visibly resized the partner's scale and shifted its knob along
+      // the track mid-drag. Cross-bound constraint (min < max - 0.01)
+      // now clamps at COMMIT only.
       return (
         <>
           <OpParamSlider
-            label="min" min={0} max={Math.max(0.01, hi)} value={lo} step={0.01}
+            label="min" min={0} max={1} value={lo} step={0.01}
             onDrag={() => { /* commit on release */ }}
-            onCommit={(nv) => onPatchParam({ min: Math.min(nv, hi) })}
+            onCommit={(nv) => onPatchParam({ min: Math.min(nv, hi - 0.01) })}
           />
           <OpParamSlider
-            label="max" min={Math.min(lo, 0.99)} max={1} value={hi} step={0.01}
+            label="max" min={0} max={1} value={hi} step={0.01}
             onDrag={() => { /* commit on release */ }}
-            onCommit={(nv) => onPatchParam({ max: Math.max(nv, lo) })}
+            onCommit={(nv) => onPatchParam({ max: Math.max(nv, lo + 0.01) })}
           />
         </>
       );
