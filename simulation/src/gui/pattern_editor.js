@@ -37,28 +37,27 @@ function renderPresetButtons() {
 }
 
 export async function loadPatternPresets() {
-  // Discover patterns from server
-  try {
-    const resp = await fetch(`http://localhost:6970/list-patterns`);
-    if (resp.ok) {
-      const names = await resp.json();
-      await Promise.all(names.map(async name => {
-        try {
-          const r = await fetch(`../marsin_engine/patterns/${name}.js?t=${Date.now()}`);
-          if (r.ok) PATTERN_PRESETS[name] = await r.text();
-        } catch (e) { console.warn(`[PB] Failed to load ../marsin_engine/patterns/${name}.js`); }
-      }));
-    }
-  } catch (e) {
-    console.warn('[PB] list-patterns endpoint not available, trying static list');
-    const fallbackNames = ['rainbow', 'breathing', 'sparkle', 'fire', 'plasma', 'wipe'];
-    await Promise.all(fallbackNames.map(async name => {
-      try {
-        const r = await fetch(`../marsin_engine/patterns/${name}.js?t=${Date.now()}`);
-        if (r.ok) PATTERN_PRESETS[name] = await r.text();
-      } catch (e) { /* skip */ }
-    }));
+  // Single source of truth: the static manifest committed alongside the patterns.
+  // Same path in dev and prod (no localhost fallback, no hardcoded preset list) —
+  // see .agent/00_gol/00_codex.md P0. The dev save-server regenerates this file
+  // after any pattern save / delete so the list stays live during development.
+  const manifestUrl = `../marsin_engine/patterns/manifest.json?t=${Date.now()}`;
+  const resp = await fetch(manifestUrl);
+  if (!resp.ok) {
+    console.error(`[PB] Failed to load patterns manifest at ${manifestUrl}: HTTP ${resp.status}`);
+    renderPresetButtons();
+    return;
   }
+  const names = await resp.json();
+  await Promise.all(names.map(async name => {
+    const url = `../marsin_engine/patterns/${name}.js?t=${Date.now()}`;
+    const r = await fetch(url);
+    if (r.ok) {
+      PATTERN_PRESETS[name] = await r.text();
+    } else {
+      console.error(`[PB] Failed to load pattern source ${url}: HTTP ${r.status}`);
+    }
+  }));
   // Set default in editor
   const textarea = document.getElementById('pe-code');
   if (textarea && !textarea.value && PATTERN_PRESETS.rainbow) {
