@@ -199,6 +199,35 @@ export interface EngineLiveState {
   paramSchema: Record<string, ParamSchemaEntry>;
 }
 
+/**
+ * Mic device shape carried inside `availableDevices` of an audioStatus
+ * `configured_mic_not_found` error payload. Same wire shape as
+ * `/audio/devices` returns (see fetchAudioDevices), so the iPad can
+ * reuse the existing MicPickerRow without re-fetching.
+ */
+export interface AudioStatusDevice {
+  id: string;
+  label: string;
+  platform: string;
+  inputFormat: string;
+  ffmpegDevice: string;
+  isDefault?: boolean;
+  alternativeName?: string;
+}
+
+export interface AudioStatusMissingDevice {
+  device: string | null;
+  deviceLabel: string | null;
+  deviceId: string | null;
+  platform: string | null;
+}
+
+export interface AudioStatusEnumerationError {
+  /** Engine-side code: `'ffmpeg_missing' | 'unsupported_platform' | 'unknown'` */
+  code: string;
+  message: string;
+}
+
 export interface AudioStatus {
   enabled: boolean;
   backend?: string;
@@ -208,7 +237,27 @@ export interface AudioStatus {
   captureFps?: number;
   /** `'starting' | 'running' | 'exited' | 'restarting' | 'stopped' | 'error'` */
   phase?: string;
+  /**
+   * Engine error code when audio capture cannot start. Currently
+   * `'configured_mic_not_found' | 'device_enumeration_failed'` from
+   * engine commit 5d830d6 (cross-machine mic-not-found guard), plus
+   * the original free-form string for legacy lifecycle errors. CaptainPad
+   * surfaces the two coded states as a prominent banner in the AUDIO
+   * tab; everything else falls back to the inline picker error line.
+   */
   error?: string | null;
+  /** Populated only when `error === 'configured_mic_not_found'`. */
+  missingDevice?: AudioStatusMissingDevice;
+  /**
+   * Engine-enumerated devices, same shape as `/audio/devices`. Populated
+   * when `error === 'configured_mic_not_found'` so the iPad can offer a
+   * one-tap picker without round-tripping `/audio/devices` again.
+   */
+  availableDevices?: AudioStatusDevice[];
+  /** Populated only when `error === 'device_enumeration_failed'`. */
+  enumerationError?: AudioStatusEnumerationError;
+  platform?: string;
+  inputFormat?: string;
   lastKickMs?: number;
 }
 
@@ -407,6 +456,54 @@ function _onMessage(msg: EngineMessage) {
     // Mic-listener heartbeat (docs/25 §6.3). Sent at 1 Hz from the
     // engine, plus on every lifecycle event (start/stop/restart) so
     // the Audio Analysis tab reflects state changes immediately.
+    //
+    // Engine commit 5d830d6 added two coded error states (cross-machine
+    // mic-not-found guard) — we widen the payload here so the AUDIO tab
+    // can surface a fix-it banner. Unknown / legacy payloads with no
+    // missingDevice / availableDevices / enumerationError just leave
+    // those fields undefined.
+    const rawMsg = msg as unknown as Record<string, unknown>;
+    const missingRaw = rawMsg.missingDevice as Record<string, unknown> | undefined;
+    const enumErrRaw = rawMsg.enumerationError as Record<string, unknown> | undefined;
+    const availableRaw = rawMsg.availableDevices;
+    // Strict-ish device shape coercion — drop entries missing the keys
+    // MicPickerRow expects so a broken engine payload can't render a
+    // half-empty picker row (Codex P0: malformed devices must not
+    // silently surface). Anything that's missing id/label/inputFormat/
+    // ffmpegDevice/platform is filtered out; consumers can compare the
+    // filtered length to availableRaw.length to detect schema drift.
+    const availableDevices: AudioStatusDevice[] | undefined = Array.isArray(availableRaw)
+      ? (availableRaw as Array<Record<string, unknown>>)
+          .filter((d) =>
+            d && typeof d === 'object' &&
+            typeof d.id === 'string' && typeof d.label === 'string' &&
+            typeof d.platform === 'string' && typeof d.inputFormat === 'string' &&
+            typeof d.ffmpegDevice === 'string'
+          )
+          .map((d) => ({
+            id:           d.id as string,
+            label:        d.label as string,
+            platform:     d.platform as string,
+            inputFormat:  d.inputFormat as string,
+            ffmpegDevice: d.ffmpegDevice as string,
+            isDefault:        typeof d.isDefault === 'boolean' ? d.isDefault : undefined,
+            alternativeName:  typeof d.alternativeName === 'string' ? d.alternativeName : undefined,
+          }))
+      : undefined;
+    const missingDevice: AudioStatusMissingDevice | undefined = missingRaw
+      ? {
+          device:      (missingRaw.device      as string | null | undefined) ?? null,
+          deviceLabel: (missingRaw.deviceLabel as string | null | undefined) ?? null,
+          deviceId:    (missingRaw.deviceId    as string | null | undefined) ?? null,
+          platform:    (missingRaw.platform    as string | null | undefined) ?? null,
+        }
+      : undefined;
+    const enumerationError: AudioStatusEnumerationError | undefined = enumErrRaw
+      ? {
+          code:    typeof enumErrRaw.code === 'string' ? enumErrRaw.code : 'unknown',
+          message: typeof enumErrRaw.message === 'string' ? enumErrRaw.message : '',
+        }
+      : undefined;
     _emit({
       ..._cached,
       audioStatus: {
@@ -418,6 +515,11 @@ function _onMessage(msg: EngineMessage) {
         captureFps: typeof msg.captureFps === 'number' ? msg.captureFps : 0,
         phase:      (msg.phase as string | undefined),
         error:      (msg.error as string | null | undefined) ?? null,
+        missingDevice,
+        availableDevices,
+        enumerationError,
+        platform:    typeof msg.platform    === 'string' ? msg.platform    : undefined,
+        inputFormat: typeof msg.inputFormat === 'string' ? msg.inputFormat : undefined,
         lastKickMs: typeof msg.lastKickMs === 'number' ? msg.lastKickMs : 0,
       },
     });

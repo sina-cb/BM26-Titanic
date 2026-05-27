@@ -56,7 +56,7 @@ import {
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
   resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type OscPillState } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type AudioStatusDevice, type OscPillState } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 
 const C = Colors.light;
@@ -654,11 +654,22 @@ function PinnedAudioMeters({
 
   const micOn       = audioStatus?.enabled === true;
   const micPhase    = audioStatus?.phase ?? (micOn ? 'unknown' : 'off');
+  // Engine commit 5d830d6 added coded error states. When audioStatus
+  // reports `configured_mic_not_found` or `device_enumeration_failed`
+  // the engine is intentionally not running capture and `enabled` is
+  // false — so the pill needs to escalate from "MIC OFF" (passive) to
+  // "MIC ERR" (warn) so the operator notices on the meter strip even
+  // before scrolling to the banner below.
+  const micCodedErr =
+    audioStatus?.error === 'configured_mic_not_found' ||
+    audioStatus?.error === 'device_enumeration_failed';
   const micTone: 'on' | 'off' | 'warn' =
+    micCodedErr                 ? 'warn' :
     !micOn                      ? 'off'  :
     micPhase === 'error'        ? 'warn' :
     micPhase === 'restarting'   ? 'warn' :
                                   'on';
+  const micLabel = micCodedErr ? 'MIC ERR' : (micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF');
   const oscState  = oscStatus?.state ?? null;
   const oscTone: 'on' | 'off' | 'warn' =
     oscState === 'live'     ? 'on'   :
@@ -685,7 +696,7 @@ function PinnedAudioMeters({
           One picker controls ALL 7 trails (operator never has to think
           about which axis they're tuning). */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-        <StatusPill label={micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF'} tone={micTone} />
+        <StatusPill label={micLabel} tone={micTone} />
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
         <View style={{ flex: 1 }} />
@@ -920,6 +931,148 @@ function CompactBpmCard({
   );
 }
 
+// ── Cross-machine mic-not-found banner (engine commit 5d830d6) ──────────
+//
+// When the engine boots a scene whose saved mic isn't on this machine
+// (operator moved rigs), capture stays off and audioStatus carries
+// `error: 'configured_mic_not_found'` plus `availableDevices` (same wire
+// as /audio/devices) and `missingDevice`. The banner surfaces the
+// problem prominently above SIGNALS · CHAINS and offers a one-tap
+// picker built from the engine-supplied device list — no extra fetch.
+//
+// The companion `device_enumeration_failed` state (engine can't list
+// devices at all — typically missing ffmpeg) renders a simpler version
+// with operator-side resolution copy and no picker. Banner self-hides
+// the moment audioStatus.error clears (engine restarts capture and
+// broadcasts a healthy snapshot).
+//
+// Codex P0 corners handled:
+//   - configured_mic_not_found + empty availableDevices → "No mics
+//     available" copy instead of an empty picker.
+//   - malformed device entries are filtered upstream in
+//     useEngineState's audioStatus handler (missing required fields
+//     → dropped) so picker rows here are always valid.
+
+function MicNotFoundBanner({
+  audioStatus, busyMicId, onPickDevice, onExpandSettings,
+}: {
+  audioStatus: AudioStatus | null;
+  busyMicId: string | null;
+  onPickDevice: (d: AudioStatusDevice) => void;
+  onExpandSettings: () => void;
+}) {
+  const err = audioStatus?.error;
+  // Hide cleanly when healthy or for any non-coded error (legacy free-form
+  // strings continue to surface inline in the MICROPHONE picker card).
+  if (err !== 'configured_mic_not_found' && err !== 'device_enumeration_failed') {
+    return null;
+  }
+  const errorBg = 'rgba(186, 26, 26, 0.08)';
+  // ── device_enumeration_failed — simpler render, no picker.
+  if (err === 'device_enumeration_failed') {
+    const detail = audioStatus?.enumerationError?.message
+      || 'no detail provided by engine';
+    return (
+      <View style={{
+        ...CARD, borderColor: C.error, backgroundColor: errorBg,
+      }}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+          <View style={{
+            width: 36, height: 36, borderRadius: 8,
+            backgroundColor: 'rgba(186, 26, 26, 0.15)',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <IconSymbol name="exclamationmark.triangle.fill" size={20} color={C.error} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14,
+              color: C.error, letterSpacing: 0.6, marginBottom: 4,
+            }}>
+              Audio devices unavailable
+            </Text>
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 12, lineHeight: 17 }}>
+              Engine can&apos;t list devices: {detail}. Check ffmpeg availability and engine logs, then restart the engine.
+            </Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+  // ── configured_mic_not_found — picker + jump-to-SETTINGS action.
+  const missing = audioStatus?.missingDevice;
+  const missingName = missing?.deviceLabel || missing?.device || missing?.deviceId || 'the saved mic';
+  const devices = audioStatus?.availableDevices ?? [];
+  return (
+    <View style={{ ...CARD, borderColor: C.error, backgroundColor: errorBg }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+        <View style={{
+          width: 36, height: 36, borderRadius: 8,
+          backgroundColor: 'rgba(186, 26, 26, 0.15)',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          <IconSymbol name="exclamationmark.triangle.fill" size={20} color={C.error} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14,
+            color: C.error, letterSpacing: 0.6, marginBottom: 4,
+          }}>
+            Configured microphone not available
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 12, lineHeight: 17 }}>
+            Saved mic &ldquo;{missingName}&rdquo; isn&apos;t on this machine. Pick a new one to start listening.
+          </Text>
+        </View>
+        {/* Secondary action — operator who prefers the full SETTINGS
+            picker (richer rig context) can jump there in one tap. The
+            inline picker below is the fastest path; this is a fallback. */}
+        <TouchableOpacity
+          onPress={onExpandSettings}
+          style={{
+            paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+            backgroundColor: C.surface, borderWidth: 1, borderColor: C.error,
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: C.error, textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>
+            Open Settings
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {devices.length === 0 ? (
+        <View style={{
+          padding: 12, borderRadius: 8,
+          backgroundColor: C.surface, borderWidth: 1, borderColor: C.ghostBorder,
+        }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 12 }}>
+            No microphones available — connect one and restart engine.
+          </Text>
+        </View>
+      ) : (
+        <View>
+          <SubHeader title={`AVAILABLE DEVICES (${devices.length})`} />
+          {devices.map((d) => (
+            <MicPickerRow
+              key={d.id}
+              device={d}
+              // Engine has stopped capture in this state, so nothing is
+              // "current" — every row is a fresh pick. We pass
+              // isCurrent={false} explicitly so the picker doesn't try
+              // to highlight one based on the stale (missing) cfg state.
+              isCurrent={false}
+              onPress={() => onPickDevice(d)}
+              busy={busyMicId === d.id}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
 // ── Stems / mic gain cards — RETIRED (Phase 6, 2026-05-26) ──────────────
 //
 // The standalone `MicLiveCard` (PER-BAND GAIN) and `StemsLiveCard`
@@ -1141,8 +1294,14 @@ function AudioConfigBody({
   }, [cfg, reload]);
 
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
-  // and respawns on the new input.
-  const selectDevice = useCallback(async (d: AudioDevice) => {
+  // and respawns on the new input. AudioDevice and AudioStatusDevice
+  // both have the picker fields the engine wants — accept the union so
+  // both the SETTINGS picker and the banner's fix-it picker share one
+  // commit path. Banner picks omit reload-from-cfg implications: once
+  // the engine successfully restarts capture it broadcasts a healthy
+  // audioStatus (error cleared), the banner hides on its own, and the
+  // reload() below also resyncs the SETTINGS cfg.
+  const selectDevice = useCallback(async (d: AudioDevice | AudioStatusDevice) => {
     setBusy(`mic:${d.id}`);
     const r = await patchAudioConfig({
       capture: {
@@ -1157,6 +1316,18 @@ function AudioConfigBody({
     if (!r.ok) { setPatchError(r.error || 'failed to switch mic'); }
     else { setPatchError(null); setPickerOpen(false); reload(); }
   }, [reload]);
+
+  // "Open Settings" action on the cross-machine mic banner — expand the
+  // SETTINGS disclosure and (if not already loaded) warm the device list
+  // so the operator who wants the full rig context lands on a ready picker.
+  // We also persist the expansion so a remount keeps it open.
+  const openSettingsForMic = useCallback(() => {
+    setSettingsCollapsed(false);
+    AsyncStorage.setItem(SETTINGS_COLLAPSED_KEY, 'false')
+      .catch(() => { /* benign — persistence is best-effort */ });
+    setPickerOpen(true);
+    if (!devices) loadDevices();
+  }, [devices, loadDevices]);
 
   // ── Derived ────────────────────────────────────────────────────────
   const enabled  = cfg?.enabled ?? false;
@@ -1248,6 +1419,20 @@ function AudioConfigBody({
           bpmSyncOn={bpmSyncOn}
           oscMissing={oscMissing}
           oscState={oscState}
+        />
+
+        {/* ── Cross-machine mic-not-found banner ──────────────────────
+            Surfaces engine commit 5d830d6 audioStatus coded errors:
+            `configured_mic_not_found` (saved mic absent on this rig —
+            inline picker shows availableDevices the engine sent with
+            the status payload) and `device_enumeration_failed` (engine
+            can't list mics — operator-side fix). Renders nothing when
+            audioStatus is healthy or carries any other error string. */}
+        <MicNotFoundBanner
+          audioStatus={status}
+          busyMicId={busy?.startsWith('mic:') ? busy.slice(4) : null}
+          onPickDevice={selectDevice}
+          onExpandSettings={openSettingsForMic}
         />
 
         {/* ── 3. SIGNALS · CHAINS ───────────────────────────────────────
