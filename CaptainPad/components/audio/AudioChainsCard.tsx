@@ -1241,6 +1241,7 @@ function buildDefaultOpFromCatalog(opType: string, catalog: AudioChainCatalog, e
 
 function SignalChainEditor({
   signalKey, label, chain, catalog, catalogLoading, catalogError, otherSignals,
+  audioConfig, audioConfigError, analyzerHandlers, onRetryAudioConfig,
   onChainUpdated, onError, onRetryCatalog,
 }: {
   signalKey: string;
@@ -1250,6 +1251,10 @@ function SignalChainEditor({
   catalogLoading: boolean;
   catalogError: string | null;
   otherSignals: { key: string; label: string; chain: AudioChainOp[] }[];
+  audioConfig: AnalyzerConfig | null;
+  audioConfigError: string | null;
+  analyzerHandlers: AnalyzerHandlers;
+  onRetryAudioConfig: () => void;
   onChainUpdated: (next: AudioChainOp[]) => void;
   onError: (msg: string) => void;
   onRetryCatalog: () => void;
@@ -1452,6 +1457,17 @@ function SignalChainEditor({
       backgroundColor: C.surfaceContainerLow,
       borderWidth: 1, borderColor: C.ghostBorder,
     }}>
+      {/* ANALYZER sub-section — first thing the operator sees in the
+          editor. Pre-chain band tuning (crossovers + envelope/gate for
+          mic LOW/MID/HIGH, kick detector for micKick). Stems get no
+          section (OSC-fed, not FFT-fed). Per operator brief 2026-05-26. */}
+      <AnalyzerSection
+        signalKey={signalKey}
+        cfg={audioConfig}
+        cfgError={audioConfigError}
+        handlers={analyzerHandlers}
+        onRetryCfg={onRetryAudioConfig}
+      />
       {isEmpty ? (
         <View style={{
           paddingVertical: 16, alignItems: 'center', justifyContent: 'center',
@@ -1649,7 +1665,8 @@ function SignalChainEditor({
 
 function SignalChainRow({
   signalKey, label, chain, expanded, catalog, catalogLoading, catalogError,
-  otherSignals, onToggleExpand, onChainUpdated, onError, onRetryCatalog,
+  otherSignals, audioConfig, audioConfigError, analyzerHandlers, onRetryAudioConfig,
+  onToggleExpand, onChainUpdated, onError, onRetryCatalog,
 }: {
   signalKey: string;
   label: string;
@@ -1659,6 +1676,10 @@ function SignalChainRow({
   catalogLoading: boolean;
   catalogError: string | null;
   otherSignals: { key: string; label: string; chain: AudioChainOp[] }[];
+  audioConfig: AnalyzerConfig | null;
+  audioConfigError: string | null;
+  analyzerHandlers: AnalyzerHandlers;
+  onRetryAudioConfig: () => void;
   onToggleExpand: () => void;
   onChainUpdated: (next: AudioChainOp[]) => void;
   onError: (msg: string) => void;
@@ -1715,6 +1736,10 @@ function SignalChainRow({
           catalogLoading={catalogLoading}
           catalogError={catalogError}
           otherSignals={otherSignals}
+          audioConfig={audioConfig}
+          audioConfigError={audioConfigError}
+          analyzerHandlers={analyzerHandlers}
+          onRetryAudioConfig={onRetryAudioConfig}
           onChainUpdated={onChainUpdated}
           onError={onError}
           onRetryCatalog={onRetryCatalog}
@@ -1724,9 +1749,268 @@ function SignalChainRow({
   );
 }
 
+// ── Per-signal ANALYZER sub-section ───────────────────────────────────────
+//
+// The crossovers, envelope/gate, and kick detector live in
+// `audio_analyzer.js` as a SINGLE GLOBAL FFT instance — they're not truly
+// per-signal in the engine. We surface them per-signal in the chain editor
+// (operator brief 2026-05-26: "analyzer config belongs with the band it
+// tunes") but PATCH them via the same /audio/config endpoint, and call
+// out the shared-with-other-mic-bands envelope at the section level so the
+// operator understands the wire shape.
+//
+// Wire details (Codex P0 no-silent-fallback):
+//   - audioConfig is owned by the parent screen and passed in. When null
+//     (fetch still in flight or failed at the parent) we surface a small
+//     inline notice — the chain ops themselves are still editable.
+//   - Every slider commits ONE PATCH on release; live drag updates the
+//     parent's optimistic cache via onUpdateLocal so all per-signal
+//     editors see the same lowMaxHz, midMaxHz, etc. while dragging.
+//   - On 400 the parent reverts via a refetch (reload). We do NOT
+//     clamp silently — engine error strings appear in the parent's
+//     patchError banner.
+
+export type AnalyzerConfig = {
+  bands: {
+    lowMaxHz: number; midMaxHz: number;
+    attackMs: number; releaseMs: number; noiseGate: number;
+  };
+  kick: { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
+  capture: { sampleRate: number };
+};
+
+type AnalyzerHandlers = {
+  onUpdateLocal: (group: 'bands' | 'kick', field: string, value: number) => void;
+  onCommitField: (group: 'bands' | 'kick', field: string, value: number) => void;
+};
+
+function AnalyzerSubHeader({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <View style={{ marginBottom: 8 }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+        color: C.secondary, textTransform: 'uppercase', letterSpacing: 1,
+      }}>{title}</Text>
+      {hint ? (
+        <Text style={{
+          fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 2,
+        }}>{hint}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function AnalyzerHint({ text }: { text: string }) {
+  return (
+    <Text style={{
+      fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
+      marginTop: -4, marginBottom: 6,
+    }}>{text}</Text>
+  );
+}
+
+// Shared envelope/gate block — rendered inside micLow / micMid / micHigh.
+// Three sliders + an upfront "(shared with all mic bands)" callout so the
+// operator never assumes per-band envelope tuning.
+function SharedEnvelopeGate({ cfg, handlers }: { cfg: AnalyzerConfig; handlers: AnalyzerHandlers }) {
+  return (
+    <View style={{ marginTop: 10 }}>
+      <AnalyzerSubHeader
+        title="ENVELOPE & GATE"
+        hint="Shared with all mic bands (LOW · MID · HIGH)."
+      />
+      <OpParamSlider
+        label="attackMs" suffix="ms" min={1} max={50} value={cfg.bands.attackMs} step={1} integer
+        onDrag={(v) => handlers.onUpdateLocal('bands', 'attackMs', v)}
+        onCommit={(v) => handlers.onCommitField('bands', 'attackMs', v)}
+      />
+      <AnalyzerHint text="How fast a band rises on a peak. 5–20 ms feels musical." />
+      <OpParamSlider
+        label="releaseMs" suffix="ms" min={20} max={800} value={cfg.bands.releaseMs} step={10} integer
+        onDrag={(v) => handlers.onUpdateLocal('bands', 'releaseMs', v)}
+        onCommit={(v) => handlers.onCommitField('bands', 'releaseMs', v)}
+      />
+      <AnalyzerHint text="How slow a band falls after a peak. 100–300 ms typical." />
+      <OpParamSlider
+        label="noiseGate" min={0} max={0.2} value={cfg.bands.noiseGate} step={0.005}
+        onDrag={(v) => handlers.onUpdateLocal('bands', 'noiseGate', v)}
+        onCommit={(v) => handlers.onCommitField('bands', 'noiseGate', v)}
+      />
+      <AnalyzerHint text="Bands below this floor read as 0. Raise if HVAC keeps meters lit." />
+    </View>
+  );
+}
+
+function AnalyzerSection({
+  signalKey, cfg, cfgError, handlers, onRetryCfg,
+}: {
+  signalKey: string;
+  cfg: AnalyzerConfig | null;
+  cfgError: string | null;
+  handlers: AnalyzerHandlers;
+  onRetryCfg: () => void;
+}) {
+  // Stems have no analyzer config — they come from OSC, not the FFT.
+  if (signalKey.startsWith('stems')) return null;
+
+  // Codex P0: if cfg fetch failed we render a visible error + retry, NOT
+  // a silently-defaulted set of sliders.
+  if (!cfg) {
+    return (
+      <View style={{
+        marginBottom: 12, padding: 12, borderRadius: 10,
+        backgroundColor: C.surfaceContainerLow,
+        borderWidth: 1, borderColor: cfgError ? C.error : C.ghostBorder,
+      }}>
+        <AnalyzerSubHeader title="ANALYZER" />
+        {cfgError ? (
+          <>
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginBottom: 8 }}>
+              Audio config unavailable: {cfgError}
+            </Text>
+            <TouchableOpacity
+              onPress={onRetryCfg}
+              style={{
+                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+                backgroundColor: C.primary, alignSelf: 'flex-start',
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', color: '#fff', fontSize: 10,
+                textTransform: 'uppercase', letterSpacing: 0.6,
+              }}>RETRY</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
+            syncing…
+          </Text>
+        )}
+      </View>
+    );
+  }
+
+  // micKick has its own threshold/refractory/decay — no shared envelope.
+  if (signalKey === 'micKick') {
+    return (
+      <View style={{
+        marginBottom: 12, padding: 12, borderRadius: 10,
+        backgroundColor: C.surfaceContainerLow,
+        borderWidth: 1, borderColor: C.ghostBorder,
+      }}>
+        <AnalyzerSubHeader
+          title="ANALYZER · KICK DETECTOR"
+          hint="EDM kick fundamental sits 50–80 Hz; click transient ~100 Hz."
+        />
+        <OpParamSlider
+          label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz} step={5} integer
+          onDrag={(v) => handlers.onUpdateLocal('kick', 'minHz', v)}
+          onCommit={(v) => handlers.onCommitField('kick', 'minHz', v)}
+        />
+        <OpParamSlider
+          label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz} step={5} integer
+          onDrag={(v) => handlers.onUpdateLocal('kick', 'maxHz', v)}
+          onCommit={(v) => handlers.onCommitField('kick', 'maxHz', v)}
+        />
+        <OpParamSlider
+          label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold} step={0.05}
+          onDrag={(v) => handlers.onUpdateLocal('kick', 'threshold', v)}
+          onCommit={(v) => handlers.onCommitField('kick', 'threshold', v)}
+        />
+        <AnalyzerHint text="Instant energy must be this many × running average to fire." />
+        <OpParamSlider
+          label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs} step={10} integer
+          onDrag={(v) => handlers.onUpdateLocal('kick', 'refractoryMs', v)}
+          onCommit={(v) => handlers.onCommitField('kick', 'refractoryMs', v)}
+        />
+        <AnalyzerHint text="Minimum gap between two kick fires." />
+        <OpParamSlider
+          label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs} step={10} integer
+          onDrag={(v) => handlers.onUpdateLocal('kick', 'decayMs', v)}
+          onCommit={(v) => handlers.onCommitField('kick', 'decayMs', v)}
+        />
+        <AnalyzerHint text="How fast micKick envelope falls back to 0." />
+      </View>
+    );
+  }
+
+  // Mic bands — crossover edges + shared envelope/gate.
+  // Each band shows only the crossover(s) it owns; lowMaxHz appears in
+  // micLow (upper) and micMid (lower); midMaxHz in micMid (upper) and
+  // micHigh (lower). The shared-edge hint tells the operator that editing
+  // here propagates to the other side.
+  const showLowMax  = signalKey === 'micLow' || signalKey === 'micMid';
+  const showMidMax  = signalKey === 'micMid' || signalKey === 'micHigh';
+  const lowIsUpper  = signalKey === 'micLow';
+  const midIsUpper  = signalKey === 'micMid';
+  const nyquist     = cfg.capture.sampleRate / 2 - 50;
+
+  return (
+    <View style={{
+      marginBottom: 12, padding: 12, borderRadius: 10,
+      backgroundColor: C.surfaceContainerLow,
+      borderWidth: 1, borderColor: C.ghostBorder,
+    }}>
+      <AnalyzerSubHeader
+        title="ANALYZER · CROSSOVERS"
+        hint="Band edges feed the LOW/MID/HIGH split. Shared with the neighbouring band."
+      />
+      {showLowMax ? (
+        <>
+          <OpParamSlider
+            label={lowIsUpper ? 'Upper edge (lowMaxHz)' : 'Lower edge (lowMaxHz)'}
+            suffix="Hz"
+            min={50}
+            max={Math.max(60, cfg.bands.midMaxHz - 50)}
+            value={cfg.bands.lowMaxHz}
+            step={5}
+            integer
+            onDrag={(v) => handlers.onUpdateLocal('bands', 'lowMaxHz', v)}
+            onCommit={(v) => handlers.onCommitField('bands', 'lowMaxHz', v)}
+          />
+          <AnalyzerHint
+            text={lowIsUpper
+              ? 'Frequencies below this go to LOW band. Shared crossover with MID.'
+              : 'Lower bound of MID band (= upper edge of LOW). Shared crossover with LOW.'}
+          />
+        </>
+      ) : null}
+      {showMidMax ? (
+        <>
+          <OpParamSlider
+            label={midIsUpper ? 'Upper edge (midMaxHz)' : 'Lower edge (midMaxHz)'}
+            suffix="Hz"
+            min={cfg.bands.lowMaxHz + 50}
+            max={nyquist}
+            value={cfg.bands.midMaxHz}
+            step={50}
+            integer
+            onDrag={(v) => handlers.onUpdateLocal('bands', 'midMaxHz', v)}
+            onCommit={(v) => handlers.onCommitField('bands', 'midMaxHz', v)}
+          />
+          <AnalyzerHint
+            text={midIsUpper
+              ? 'Frequencies below this stay in MID; above go to HIGH.'
+              : 'Lower bound of HIGH band (= upper edge of MID). Shared crossover with MID.'}
+          />
+        </>
+      ) : null}
+      <SharedEnvelopeGate cfg={cfg} handlers={handlers} />
+    </View>
+  );
+}
+
 // ── Outer card ────────────────────────────────────────────────────────────
 
-export function AudioChainsCard() {
+export function AudioChainsCard({
+  audioConfig, audioConfigError, onUpdateAudioConfigLocal, onCommitAudioConfigField, onRetryAudioConfig,
+}: {
+  audioConfig: AnalyzerConfig | null;
+  audioConfigError: string | null;
+  onUpdateAudioConfigLocal: (group: 'bands' | 'kick', field: string, value: number) => void;
+  onCommitAudioConfigField: (group: 'bands' | 'kick', field: string, value: number) => void;
+  onRetryAudioConfig: () => void;
+}) {
   const [chains, setChains] = useState<AudioChainsMap | null>(null);
   const [catalog, setCatalog] = useState<AudioChainCatalog | null>(_catalogCache);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(_catalogCache == null);
@@ -1868,6 +2152,13 @@ export function AudioChainsCard() {
     reload();
   }, [reload]);
 
+  // Bundle the per-signal analyzer handlers once; stable reference so
+  // SignalChainRow's expanded body doesn't re-render on identity churn.
+  const analyzerHandlers = useMemo<AnalyzerHandlers>(() => ({
+    onUpdateLocal: onUpdateAudioConfigLocal,
+    onCommitField: onCommitAudioConfigField,
+  }), [onUpdateAudioConfigLocal, onCommitAudioConfigField]);
+
   // Render
   return (
     <View style={CARD}>
@@ -1930,6 +2221,10 @@ export function AudioChainsCard() {
             catalogLoading={catalogLoading}
             catalogError={catalogError}
             otherSignals={others}
+            audioConfig={audioConfig}
+            audioConfigError={audioConfigError}
+            analyzerHandlers={analyzerHandlers}
+            onRetryAudioConfig={onRetryAudioConfig}
             onToggleExpand={() => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))}
             onChainUpdated={(next) => updateSignalChain(key, next)}
             onError={handleError}

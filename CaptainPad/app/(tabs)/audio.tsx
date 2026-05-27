@@ -3,19 +3,27 @@
 // (docs/25 §8.2; docs/29 chain-based audio post-processing).
 //
 // Structure (top-down) — matches the operator's mental flow, post
-// Phase 6 (2026-05-26):
+// operator brief 2026-05-26 (BPM out of SETTINGS, analyzer config
+// embedded per-signal in chain editor):
 //   1. PINNED meter strip (mic + stems + BPM, live, sticks at top)
 //   2. Page title
 //   3. patchError banner (only when something just failed)
 //   4. MIC ANALYSIS — the master enable/disable toggle. Stays at the
 //      top of the scroll body so operators can flip it without
 //      hunting through SETTINGS during a show.
-//   5. SIGNALS · CHAINS — Phase 5 per-signal chain editor.
-//   6. SETTINGS — collapsed-by-default disclosure with everything
-//      rarely touched mid-show: mic picker, BPM → Speed sync, band
-//      crossovers + envelope, kick detector, engine FFT/hop size,
-//      and the Reset-to-defaults button (which now fires BOTH
-//      /audio/config/reset AND /audio/chains/reset).
+//   5. BPM → SPEED SYNC (compact) — pulled out of SETTINGS into its
+//      own card right under MASTER ENABLE so the mapping is reachable
+//      without expanding a disclosure.
+//   6. SIGNALS · CHAINS — Phase 5 per-signal chain editor, now with
+//      embedded ANALYZER sub-sections per signal (crossovers +
+//      envelope for mic LOW/MID/HIGH, kick detector for micKick).
+//      Analyzer state is still global in the engine (single FFT) but
+//      surfaced per-signal so it lives with the band the operator is
+//      tuning.
+//   7. SETTINGS — collapsed-by-default disclosure with only the rig-
+//      build settings: mic picker, engine FFT/hop size (read-only),
+//      Reset to defaults (still fires BOTH /audio/config/reset AND
+//      /audio/chains/reset).
 //
 // What's retired (history at commit a76eba5): the standalone STEMS —
 // GAIN card, the MIC LIVE card, and the wrapping MIC — ANALYSIS card.
@@ -792,7 +800,17 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
   );
 }
 
-function BpmTempoLine() {
+// `BpmTempoLine` (the multi-line "tempo X BPM → speed Y" read-out used
+// inside the retired SETTINGS BPM sub-card) was deleted alongside that
+// sub-card on 2026-05-26. The CompactBpmCard renders a single-line
+// inline read-out via <BpmInlineReadout /> instead. Restore from git
+// history if a future card needs the verbose tempo line back.
+
+// Compact inline live read-out for the BPM card header. Single line,
+// quiet typography — just "126 BPM → 0.43" or "—". Subscribes ONLY to
+// tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
+// re-render on every tempo tick.
+function BpmInlineReadout() {
   const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
   const bpm = live.tempoBpm;
@@ -800,12 +818,105 @@ function BpmTempoLine() {
     if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));
   }, [bpm, steady.bpmSpeedMin, steady.bpmSpeedMax]);
+  if (!(bpm > 0)) {
+    return (
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.icon, fontSize: 12, letterSpacing: 0.4 }}>
+        —
+      </Text>
+    );
+  }
   return (
-    <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 8 }}>
-      {bpm > 0
-        ? `tempo ${Math.round(bpm)} BPM${mapped !== null ? ` → speed ${mapped.toFixed(2)}` : ''}`
-        : 'No tempo signal yet.'}
+    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 12, letterSpacing: 0.4 }}>
+      {Math.round(bpm)} BPM{mapped !== null ? ` → ${mapped.toFixed(2)}` : ''}
     </Text>
+  );
+}
+
+// ── Compact BPM → SPEED SYNC card (operator brief 2026-05-26) ──────────
+// Sits between MASTER ENABLE and SIGNALS · CHAINS. Single-row header
+// (title + status pill + live read-out), tap-to-toggle status pill (no
+// separate MasterToggle bar), two BPM sliders side-by-side, one-line
+// hint. ~half the height of the old SETTINGS-buried version.
+//
+// Wire identical to the retired version: PATCH bpmSpeedSync /
+// bpmSpeedMin / bpmSpeedMax via updateParamCenter. The slider min/max
+// are kept ≥ 1 BPM apart on commit (client-side guard; engine validates).
+
+function CompactBpmCard({
+  sp, bpmSyncOn, oscMissing, oscState,
+}: {
+  sp: Record<string, number>;
+  bpmSyncOn: boolean;
+  oscMissing: boolean;
+  oscState: string | null;
+}) {
+  const minVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS));
+  const maxVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS));
+  return (
+    <View style={CARD}>
+      {/* Header row — title + tap-to-toggle status pill + live read-out.
+          Tap the pill to flip SYNC; saves a whole MasterToggle row. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
+          letterSpacing: 0.8, flex: 1,
+        }}>
+          BPM → SPEED SYNC
+        </Text>
+        <BpmInlineReadout />
+        <TouchableOpacity
+          onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+            backgroundColor: bpmSyncOn ? ACCENT_AUTO : C.surfaceContainerHigh,
+            borderWidth: 1,
+            borderColor: bpmSyncOn ? ACCENT_AUTO : (oscMissing ? C.error : C.ghostBorder),
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: bpmSyncOn ? '#000' : C.secondary,
+            textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>
+            {bpmSyncOn ? 'SYNC ON' : 'SYNC OFF'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {/* Stale/no-signal banner only when sync is on AND something is
+          actually wrong. BpmStaleWarning self-gates and self-subscribes. */}
+      <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
+      {/* Two sliders on one row (min | max). Reuses FaderRow but with
+          a compacted column layout — short labels, no per-slider hint
+          paragraph. The one-liner hint sits below the pair. */}
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
+        <View style={{ flex: 1 }}>
+          <FaderRow
+            label="BPM min"
+            min={BPM_MIN_ABS}
+            max={Math.max(BPM_MIN_ABS + 1, maxVal - 1)}
+            value={minVal}
+            step={1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, maxVal - 1)) })}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FaderRow
+            label="BPM max"
+            min={Math.min(BPM_MAX_ABS - 1, minVal + 1)}
+            max={BPM_MAX_ABS}
+            value={maxVal}
+            step={1}
+            onDrag={() => { /* commit on release */ }}
+            onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, minVal + 1)) })}
+          />
+        </View>
+      </View>
+      <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
+        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from /lx/tempo/bpm.
+      </Text>
+    </View>
   );
 }
 
@@ -1127,20 +1238,54 @@ function AudioConfigBody({
           </Text>
         </View>
 
-        {/* ── 2. SIGNALS · CHAINS ───────────────────────────────────────
+        {/* ── 2. BPM → SPEED SYNC (compact) ─────────────────────────────
+            Operator brief 2026-05-26 — pulled out of SETTINGS so the
+            mapping is reachable without expanding a disclosure. Tap
+            the SYNC pill to flip; min/max sliders side-by-side. The
+            stale/no-signal banner is self-rendered when sync is on. */}
+        <CompactBpmCard
+          sp={sp}
+          bpmSyncOn={bpmSyncOn}
+          oscMissing={oscMissing}
+          oscState={oscState}
+        />
+
+        {/* ── 3. SIGNALS · CHAINS ───────────────────────────────────────
             Per-signal post-processing chain editor (docs/29 Phase 5).
             One row per signal with [edit] disclosure → drag-reorderable
             op list with per-op param sliders + the engine's 5 Hz
-            signalChain pre/post preview meters. */}
-        <AudioChainsCard />
+            signalChain pre/post preview meters.
+            Operator brief 2026-05-26: the chain editor now embeds an
+            ANALYZER sub-section per signal — crossovers + envelope for
+            mic LOW/MID/HIGH, kick detector for micKick. We pass the
+            same audio config + commit handlers we used to keep in the
+            SETTINGS sub-cards; analyzer state is still global in the
+            engine (single FFT), surfaced per-signal in the UI so it
+            lives with the band the operator is tuning. */}
+        <AudioChainsCard
+          audioConfig={cfg}
+          // patchError is shown in the page-level banner above; the
+          // AnalyzerSection's null-cfg branch is only reachable if the
+          // parent's initial fetch failed (which mounts a different
+          // screen entirely), so we hand down `null` here. Reload is
+          // wired for completeness — if the engine ever ships a
+          // post-mount `audioConfig` invalidation event, the retry
+          // button is already wired.
+          audioConfigError={null}
+          onUpdateAudioConfigLocal={updateLocal}
+          onCommitAudioConfigField={commitField}
+          onRetryAudioConfig={reload}
+        />
 
-        {/* ── 3. SETTINGS (collapsed by default) ───────────────────────
-            Phase 6 / Wireframe A §SETTINGS — pinned bottom disclosure
-            that holds everything rarely touched mid-show: mic picker,
-            BPM→Speed sync, band crossovers + envelope, kick detector
-            tuning, engine FFT size, and the reset button. Operator
-            preference (collapsed vs expanded) persists across rebuilds
-            via AsyncStorage. */}
+        {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
+            Pinned bottom disclosure that holds everything rarely touched
+            mid-show. Operator brief 2026-05-26: the old BPM mapping,
+            BANDS — CROSSOVERS, BANDS — ENVELOPE & GATE, and KICK
+            DETECTOR sub-cards have all moved out — BPM is now its own
+            compact card above CHAINS; analyzer config is embedded per
+            signal inside the chain editor. What remains here is what
+            genuinely belongs in "configuration": mic picker, engine
+            (FFT/hop, read-only), reset-to-defaults. */}
         <View style={CARD}>
           <TouchableOpacity
             onPress={toggleSettings}
@@ -1158,7 +1303,7 @@ function AudioConfigBody({
                 SETTINGS
               </Text>
               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-                Microphone · BPM → Speed Sync · Bands · Engine · Reset
+                Microphone · Engine · Reset
               </Text>
             </View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary }}>
@@ -1244,129 +1389,6 @@ function AudioConfigBody({
                     ))}
                   </View>
                 ) : null}
-              </View>
-
-              {/* ── BPM → SPEED SYNC ────────────────────────────────── */}
-              <View style={SUB_CARD}>
-                <SubHeader title="BPM → SPEED SYNC" />
-                <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
-                <MasterToggle
-                  on={bpmSyncOn}
-                  onPress={() => updateParamCenter({ bpmSpeedSync: bpmSyncOn ? 0 : 1 })}
-                  label={bpmSyncOn ? '● SYNC ON · SPEED DRIVEN BY BPM' : 'SYNC OFF · SPEED MANUAL'}
-                  subtitle={bpmSyncOn ? 'Live tempo / mapped speed shown below.' : 'Tap to drive SPEED from live BPM.'}
-                />
-                {/* Live tempo + mapped speed read-out. Subscribes ONLY to
-                    tempoBpm + bpmSpeedMin/Max so the rest of the BPM
-                    section stays still while it ticks. */}
-                {bpmSyncOn ? <BpmTempoLine /> : null}
-                <View style={{ marginTop: 12 }}>
-                  <SubHeader title={`BPM MAPPING (${BPM_MIN_ABS}–${BPM_MAX_ABS} BPM)`} />
-                  <FaderRow
-                    label="BPM min"
-                    min={BPM_MIN_ABS}
-                    max={Math.max(BPM_MIN_ABS + 1, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)}
-                    value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS))}
-                    step={1}
-                    onDrag={() => { /* commit on release */ }}
-                    onCommit={(v) => updateParamCenter({ bpmSpeedMin: Math.max(BPM_MIN_ABS, Math.min(v, (sp.bpmSpeedMax ?? BPM_MAX_ABS) - 1)) })}
-                    hint={`BPM value that maps to speed = 0. Hard floor ${BPM_MIN_ABS}; must stay below BPM max.`}
-                  />
-                  <FaderRow
-                    label="BPM max"
-                    min={Math.min(BPM_MAX_ABS - 1, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)}
-                    max={BPM_MAX_ABS}
-                    value={Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS))}
-                    step={1}
-                    onDrag={() => { /* commit on release */ }}
-                    onCommit={(v) => updateParamCenter({ bpmSpeedMax: Math.min(BPM_MAX_ABS, Math.max(v, (sp.bpmSpeedMin ?? BPM_MIN_ABS) + 1)) })}
-                    hint={`BPM value that maps to speed = 1. Hard ceiling ${BPM_MAX_ABS}; must stay above BPM min.`}
-                  />
-                </View>
-              </View>
-
-              {/* ── BANDS — CROSSOVERS ──────────────────────────────── */}
-              <View style={SUB_CARD}>
-                <SubHeader title="BANDS — CROSSOVERS" />
-                <FaderRow
-                  label="Low max" suffix="Hz" min={50} max={Math.max(60, cfg.bands.midMaxHz - 50)} value={cfg.bands.lowMaxHz}
-                  step={5}
-                  onDrag={(v) => updateLocal('bands', 'lowMaxHz', v)}
-                  onCommit={(v) => commitField('bands', 'lowMaxHz', v)}
-                  hint="Upper edge of the LOW band. EDM kick + sub-bass live here."
-                />
-                <FaderRow
-                  label="Mid max" suffix="Hz" min={cfg.bands.lowMaxHz + 50} max={cfg.capture.sampleRate / 2 - 50} value={cfg.bands.midMaxHz}
-                  step={50}
-                  onDrag={(v) => updateLocal('bands', 'midMaxHz', v)}
-                  onCommit={(v) => commitField('bands', 'midMaxHz', v)}
-                  hint="Upper edge of the MID band; everything above goes to HIGH."
-                />
-              </View>
-
-              {/* ── BANDS — ENVELOPE & GATE ─────────────────────────── */}
-              <View style={SUB_CARD}>
-                <SubHeader title="BANDS — ENVELOPE & GATE" />
-                <FaderRow
-                  label="Attack" suffix="ms" min={1} max={50} value={cfg.bands.attackMs}
-                  step={1}
-                  onDrag={(v) => updateLocal('bands', 'attackMs', v)}
-                  onCommit={(v) => commitField('bands', 'attackMs', v)}
-                  hint="How fast a band rises on a peak. 5–20 ms feels musical."
-                />
-                <FaderRow
-                  label="Release" suffix="ms" min={20} max={800} value={cfg.bands.releaseMs}
-                  step={10}
-                  onDrag={(v) => updateLocal('bands', 'releaseMs', v)}
-                  onCommit={(v) => commitField('bands', 'releaseMs', v)}
-                  hint="How slow a band falls after a peak. 100–300 ms typical."
-                />
-                <FaderRow
-                  label="Noise gate" min={0} max={0.2} value={cfg.bands.noiseGate}
-                  step={0.005}
-                  onDrag={(v) => updateLocal('bands', 'noiseGate', v)}
-                  onCommit={(v) => commitField('bands', 'noiseGate', v)}
-                  hint="Bands below this floor read as 0. Raise if HVAC keeps meters lit."
-                />
-              </View>
-
-              {/* ── KICK DETECTOR ───────────────────────────────────── */}
-              <View style={SUB_CARD}>
-                <SubHeader title="KICK DETECTOR" />
-                <FaderRow
-                  label="Energy min" suffix="Hz" min={20} max={Math.max(30, cfg.kick.maxHz - 10)} value={cfg.kick.minHz}
-                  step={5}
-                  onDrag={(v) => updateLocal('kick', 'minHz', v)}
-                  onCommit={(v) => commitField('kick', 'minHz', v)}
-                />
-                <FaderRow
-                  label="Energy max" suffix="Hz" min={cfg.kick.minHz + 10} max={400} value={cfg.kick.maxHz}
-                  step={5}
-                  onDrag={(v) => updateLocal('kick', 'maxHz', v)}
-                  onCommit={(v) => commitField('kick', 'maxHz', v)}
-                  hint="EDM kick fundamental sits 50–80 Hz; the click transient is ~100 Hz."
-                />
-                <FaderRow
-                  label="Threshold ×" min={1.05} max={4.0} value={cfg.kick.threshold}
-                  step={0.05}
-                  onDrag={(v) => updateLocal('kick', 'threshold', v)}
-                  onCommit={(v) => commitField('kick', 'threshold', v)}
-                  hint="Instant energy must be this many × running average."
-                />
-                <FaderRow
-                  label="Refractory" suffix="ms" min={0} max={1000} value={cfg.kick.refractoryMs}
-                  step={10}
-                  onDrag={(v) => updateLocal('kick', 'refractoryMs', v)}
-                  onCommit={(v) => commitField('kick', 'refractoryMs', v)}
-                  hint="Minimum gap between two kick fires."
-                />
-                <FaderRow
-                  label="Decay" suffix="ms" min={20} max={1000} value={cfg.kick.decayMs}
-                  step={10}
-                  onDrag={(v) => updateLocal('kick', 'decayMs', v)}
-                  onCommit={(v) => commitField('kick', 'decayMs', v)}
-                  hint="How fast micKick envelope falls back to 0."
-                />
               </View>
 
               {/* ── ENGINE (fftSize / hopSize) — READ-ONLY ─────────── */}
