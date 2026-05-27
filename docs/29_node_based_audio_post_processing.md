@@ -1,6 +1,6 @@
 # Design: Node-Based Audio Post-Processing + AUDIO Tab Reshape
 
-**Status:** Draft
+**Status:** Implemented (2026-05)
 **Operator request (summarized):**
 1. General UI improvements to the AUDIO tab.
 2. Pin a live signals card to the top so meters are always visible while tuning.
