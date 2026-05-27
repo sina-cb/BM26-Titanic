@@ -24,11 +24,15 @@
  *     emission gated by `setEditorSubscribed(true)` so the engine pays
  *     zero cost when the AUDIO tab is not open.
  *
- * Ops shipped in Phase 2 (this commit): Gain, Bias, Clamp, LPF (one-
- * pole), Envelope (asymmetric attack/release), Schmitt (hysteresis +
- * refractory), Hold (sample-and-hold + exponential decay). The other
- * 5 catalog ops (Compressor, Biquad, Slew, Slope, Curve) land in
- * Phase 7 per the design doc's recommended implementation path.
+ * Ops shipped in Phase 2: Gain, Bias, Clamp, LPF (one-pole),
+ * Envelope (asymmetric attack/release), Schmitt (hysteresis +
+ * refractory), Hold (sample-and-hold + exponential decay).
+ *
+ * Ops shipped in Phase 7 (this commit, closes docs/29 Phase 7 — full
+ * 12-op catalog for operator chain authoring): Curve, Slew Limiter,
+ * Compressor, Biquad LPF, Slope. Each cites its source formula in a
+ * comment above its `_applyOp` case (Katz / RBJ EQ Cookbook / TD CHOP
+ * / matches `modulation_engine.js applyCurve()`).
  *
  * Per-op math is cited inline above each `case` in `_applyOp` — every
  * formula points to the source in the design doc's Operator catalog
@@ -147,6 +151,51 @@ const OP_SCHEMA = Object.freeze({
     params: {
       timeoutMs: { type: 'number', min: 0,    max: 60000, default: 500 },
       decayMs:   { type: 'number', min: 0.01, max: 60000, default: 200 },
+    },
+  },
+  curve: {
+    // Phase 7 — TD CHOP Lookup; matches modulation_engine.js applyCurve().
+    description: 'Per-sample shape lookup (linear / easeIn / easeOut / exp). `gamma` applies to exp only.',
+    params: {
+      shape: { type: 'string', oneOf: ['linear', 'easeIn', 'easeOut', 'exp'], default: 'linear' },
+      gamma: { type: 'number', min: 0.1, max: 10, default: 2.0 },
+    },
+  },
+  slew: {
+    // Phase 7 — TD CHOP Limit (step mode). Rate-limits how fast y can change.
+    description: 'Slew-rate limiter: y is clamped within ±(maxStepPerSec·dt) of y_prev.',
+    params: {
+      maxStepPerSec: { type: 'number', min: 0.001, max: 1000, default: 4.0 },
+    },
+  },
+  compressor: {
+    // Phase 7 — Bob Katz, Mastering Audio (3rd ed. 2014, ch. 7); RBJ-cookbook
+    // smoothing constants. Soft-knee not implemented (hard knee at threshold).
+    description: 'dB-domain dynamics compressor (hard knee). ratio ≥ 1.',
+    params: {
+      threshold: { type: 'number', min: 0.001, max: 1,     default: 0.5 },
+      ratio:     { type: 'number', min: 1,     max: 100,   default: 4.0 },
+      attackMs:  { type: 'number', min: 0.1,   max: 10000, default: 5 },
+      releaseMs: { type: 'number', min: 0.1,   max: 10000, default: 80 },
+    },
+  },
+  biquad: {
+    // Phase 7 — RBJ EQ Cookbook (W3C-Note, 2021) §LPF, Direct-Form-1.
+    description: 'Biquad low-pass filter (RBJ EQ Cookbook LPF, Direct-Form-1).',
+    params: {
+      cutoffHz: { type: 'number', min: 0.01, max: 1000, default: 8.0 },
+      Q:        { type: 'number', min: 0.01, max: 50,   default: 0.707 },
+    },
+  },
+  slope: {
+    // Phase 7 — TD CHOP Slope. Discrete derivative, scaled. Bipolar mode
+    // outputs (x − x_prev) / dt / scale clamped to [-1, 1] (so negative
+    // outputs are preserved); unipolar (default) clamps to [0, 1] so falling
+    // input reads 0 (use bipolar:true if you need the negative half).
+    description: 'Discrete derivative (per-second), scaled. Bipolar mode preserves negative output.',
+    params: {
+      scale:   { type: 'number',  min: 0.001, max: 1000, default: 4.0 },
+      bipolar: { type: 'boolean', default: false },
     },
   },
 });
@@ -294,6 +343,15 @@ function _validateOp(op, indexForMsg, paramCenter = null) {
     } else if (spec.type === 'string') {
       if (typeof pv !== 'string' || pv.length === 0) {
         return { ok: false, error: `op "${op.id}".${pk}: must be a non-empty string` };
+      }
+      if (Array.isArray(spec.oneOf) && !spec.oneOf.includes(pv)) {
+        // Codex P0: unknown shape strings throw (not silently coerced).
+        return { ok: false, error: `op "${op.id}".${pk}: "${pv}" not in [${spec.oneOf.join(', ')}]` };
+      }
+      normalizedParams[pk] = pv;
+    } else if (spec.type === 'boolean') {
+      if (typeof pv !== 'boolean') {
+        return { ok: false, error: `op "${op.id}".${pk}: must be a boolean` };
       }
       normalizedParams[pk] = pv;
     } else {
@@ -787,6 +845,155 @@ export class SignalPostProcessor {
         rt.yPrev = y;
         return y;
       }
+      case 'curve': {
+        // Source: design doc §Operator catalog row "Curve" — TD CHOP
+        // Lookup. Shape table:
+        //   linear  : y = x
+        //   easeIn  : y = x^2                  (matches modulation_engine.js applyCurve)
+        //   easeOut : y = 1 − (1 − x)^2        (matches modulation_engine.js applyCurve)
+        //   exp     : y = x^gamma              (modulation_engine uses fixed x^3; the
+        //                                       design doc's Curve op exposes gamma so
+        //                                       the operator can dial the shape — default
+        //                                       gamma=2.0; gamma=3.0 reproduces the legacy
+        //                                       modulation_engine 'exp' shape)
+        // Codex P0: unknown shape strings throw at validateChain; defaults
+        // already injected so op.params.shape is always one of the four.
+        const shape = op.params.shape;
+        // Clamp x into [0, 1] before the shape so a hot upstream Gain that
+        // emits 1.1 doesn't pass an unbounded value into pow().
+        const xc = x < 0 ? 0 : (x > 1 ? 1 : x);
+        if (shape === 'linear')  return xc;
+        if (shape === 'easeIn')  return xc * xc;
+        if (shape === 'easeOut') return 1 - (1 - xc) * (1 - xc);
+        if (shape === 'exp')     return Math.pow(xc, op.params.gamma);
+        // Defensive — _validateOp rejects unknown shapes; this is unreachable.
+        throw new Error(`SignalPostProcessor: unknown curve shape "${shape}"`);
+      }
+      case 'slew': {
+        // Source: design doc §Operator catalog row "Slew Limiter" —
+        // TD CHOP Limit (step mode). step = maxStepPerSec * dt;
+        // y = clamp(x, y_prev − step, y_prev + step).
+        const step = op.params.maxStepPerSec * dt;
+        const lo = rt.yPrev - step;
+        const hi = rt.yPrev + step;
+        let y = x;
+        if (y < lo) y = lo;
+        else if (y > hi) y = hi;
+        rt.yPrev = y;
+        return y;
+      }
+      case 'compressor': {
+        // Source: design doc §Operator catalog row "Compressor" —
+        // Bob Katz, *Mastering Audio* (3rd ed. 2014, ch. 7), with
+        // RBJ-cookbook smoothing constants for the attack/release
+        // envelope on the gain-reduction signal.
+        //
+        // Per sample x in [0, 1]:
+        //   x_dB        = 20·log10(x + ε)              (ε = 1e-9 to avoid log(0))
+        //   thresh_dB   = 20·log10(threshold)
+        //   over_dB     = max(0, x_dB − thresh_dB)
+        //   targetGR_dB = −over_dB · (1 − 1/ratio)     (≤ 0; negative = gain reduction)
+        //   α (attack/release) = 1 − exp(−dt / τ),     where τ = ms/1000
+        //     — attack used when targetGR_dB is BELOW current state (more
+        //       reduction needed, i.e. signal got louder); release used
+        //       when targetGR_dB is ABOVE current (less reduction, signal
+        //       quieted). This is the standard "compressor envelope chases
+        //       the reduction" topology — attack = how fast we clamp down,
+        //       release = how fast we let go.
+        //   gr_dB ← gr_dB + α · (targetGR_dB − gr_dB)
+        //   y     = clamp01(x · 10^(gr_dB/20))
+        const { threshold, ratio, attackMs, releaseMs } = op.params;
+        const eps = 1e-9;
+        const xDb = 20 * Math.log10(x + eps);
+        const threshDb = 20 * Math.log10(threshold);
+        const overDb = xDb - threshDb;
+        const targetGrDb = overDb > 0 ? -overDb * (1 - 1 / ratio) : 0;
+        // Pick attack vs release. targetGrDb < gr_dB ⇒ MORE reduction
+        // needed ⇒ attack phase (clamp down faster). targetGrDb > gr_dB
+        // ⇒ LESS reduction ⇒ release phase (let go slower, typically).
+        const tau = (targetGrDb < rt.grDb ? attackMs : releaseMs) / 1000;
+        const alpha = 1 - Math.exp(-dt / tau);
+        rt.grDb = rt.grDb + alpha * (targetGrDb - rt.grDb);
+        const gainLinear = Math.pow(10, rt.grDb / 20);
+        const y = x * gainLinear;
+        if (!(y > 0)) return 0;
+        return y < 1 ? y : 1;
+      }
+      case 'biquad': {
+        // Source: design doc §Operator catalog row "Biquad LPF" —
+        // RBJ EQ Cookbook (W3C-Note, 2021) §LPF, Direct-Form-1.
+        //   ω₀ = 2π · fc · dt           (rad/sample)
+        //   α  = sin(ω₀) / (2 · Q)
+        //   b0 = (1 − cos ω₀) / 2
+        //   b1 =  1 − cos ω₀
+        //   b2 = (1 − cos ω₀) / 2
+        //   a0 =  1 + α
+        //   a1 = −2 · cos ω₀
+        //   a2 =  1 − α
+        //   y[n] = (b0·x[n] + b1·x[n−1] + b2·x[n−2]
+        //          − a1·y[n−1] − a2·y[n−2]) / a0
+        //
+        // Note: we recompute coefficients every sample because `dt` (the
+        // audio-analyzer hop) can vary by a few ms; the cookbook assumes a
+        // fixed sample rate but on a varying-dt source the only stable
+        // choice is to re-derive ω₀ from the current dt. Cost: a sin/cos
+        // per sample on micKick (~86 Hz). Negligible per the design doc
+        // §Performance note.
+        const w0 = 2 * Math.PI * op.params.cutoffHz * dt;
+        const cosW0 = Math.cos(w0);
+        const sinW0 = Math.sin(w0);
+        const alpha = sinW0 / (2 * op.params.Q);
+        const b0 = (1 - cosW0) / 2;
+        const b1 =  1 - cosW0;
+        const b2 = (1 - cosW0) / 2;
+        const a0 =  1 + alpha;
+        const a1 = -2 * cosW0;
+        const a2 =  1 - alpha;
+        const y = (b0 * x + b1 * rt.xPrev1 + b2 * rt.xPrev2
+                   - a1 * rt.yPrev1 - a2 * rt.yPrev2) / a0;
+        // Shift sample-history words.
+        rt.xPrev2 = rt.xPrev1;
+        rt.xPrev1 = x;
+        rt.yPrev2 = rt.yPrev1;
+        rt.yPrev1 = y;
+        // Mirror yPrev for the editor snapshot's `firing`-style consumers
+        // (Schmitt uses yPrev; other ops can ignore but we keep it set so
+        // snapshotForEditor doesn't see `undefined`).
+        rt.yPrev = y;
+        return y;
+      }
+      case 'slope': {
+        // Source: design doc §Operator catalog row "Slope" — TD CHOP Slope.
+        // First-difference / dt, scaled. With bipolar:false (default) the
+        // output is clamped to [0, 1] so a falling input reads 0; with
+        // bipolar:true it's clamped to [-1, 1] (the design doc note: "can
+        // output negative if bipolar:true"). The final per-process clamp01
+        // in process() will additionally clamp negative output to 0 for
+        // CPC; bipolar ops should be followed by Bias+Gain or used in a
+        // chain whose downstream consumer accepts negatives. (Documented
+        // behavior — operator brief.)
+        //
+        // dt floor: the discrete derivative is undefined at dt=0, and at
+        // very tiny dt the (x − x_prev) / dt term explodes. The framework
+        // already rejects dt<0 in process(), but dt=0 is technically
+        // allowed; we floor to 1e-6 here so a zero-dt frame yields 0 rather
+        // than NaN/Infinity (defensive).
+        const safeDt = dt > 1e-6 ? dt : 1e-6;
+        const raw = (x - rt.xPrev) / safeDt / op.params.scale;
+        rt.xPrev = x;
+        let y;
+        if (op.params.bipolar) {
+          if (raw < -1) y = -1;
+          else if (raw > 1) y = 1;
+          else y = raw;
+        } else {
+          if (raw < 0) y = 0;
+          else if (raw > 1) y = 1;
+          else y = raw;
+        }
+        rt.yPrev = y;
+        return y;
+      }
       default:
         // Unreachable — validateChain rejects unknown types at config
         // time. If we ever land here it's a P0 escape; surface it.
@@ -814,7 +1021,23 @@ function _initRuntime(op) {
       break;
     case 'envelope':
     case 'lpf':
-      // yPrev starts at 0; rising input will smoothly attack toward it.
+    case 'slew':
+      // yPrev starts at 0; first sample rises through the limit/EMA.
+      break;
+    case 'compressor':
+      // gain-reduction state (dB, ≤ 0). 0 = unity (no reduction yet).
+      rt.grDb = 0;
+      break;
+    case 'biquad':
+      // Direct-Form-1 sample history: two x and two y words.
+      rt.xPrev1 = 0;
+      rt.xPrev2 = 0;
+      rt.yPrev1 = 0;
+      rt.yPrev2 = 0;
+      break;
+    case 'slope':
+      // Discrete derivative needs the previous input sample.
+      rt.xPrev = 0;
       break;
     default:
       break;

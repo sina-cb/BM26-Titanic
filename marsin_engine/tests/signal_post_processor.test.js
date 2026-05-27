@@ -796,12 +796,23 @@ test('resetSignal triggers audioChainsChanged broadcast', () => {
 
 // ── opCatalog (public for iPad picker) ──────────────────────────────────────
 
-test('opCatalog lists the 7 Phase-2 op types', () => {
+test('opCatalog lists the 12 op types (7 Phase-2 + 5 Phase-7)', () => {
   const cat = opCatalog();
   const types = Object.keys(cat).sort();
-  assert.deepEqual(types, ['bias', 'clamp', 'envelope', 'gain', 'hold', 'lpf', 'schmitt']);
+  assert.deepEqual(types, [
+    'bias', 'biquad', 'clamp', 'compressor', 'curve',
+    'envelope', 'gain', 'hold', 'lpf', 'schmitt',
+    'slew', 'slope',
+  ]);
   assert.equal(cat.gain.paramKeyOrValue, true);
   assert.equal(cat.bias.paramKeyOrValue, false);
+  // Phase 7 schema spot-checks (the iPad picker / chain editor reads these).
+  assert.equal(cat.curve.params.shape.default, 'linear');
+  assert.deepEqual(cat.curve.params.shape.oneOf, ['linear', 'easeIn', 'easeOut', 'exp']);
+  assert.equal(cat.compressor.params.ratio.min, 1);
+  assert.equal(cat.biquad.params.cutoffHz.default, 8.0);
+  assert.equal(cat.slope.params.bipolar.default, false);
+  assert.equal(cat.slew.params.maxStepPerSec.default, 4.0);
 });
 
 // ── Constructor guards ──────────────────────────────────────────────────────
@@ -809,4 +820,551 @@ test('opCatalog lists the 7 Phase-2 op types', () => {
 test('SignalPostProcessor requires a paramCenter with .get()', () => {
   assert.throws(() => new SignalPostProcessor({}), /paramCenter/);
   assert.throws(() => new SignalPostProcessor({ paramCenter: {} }), /paramCenter/);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 7 — 5 new ops (Curve, Slew, Compressor, Biquad LPF, Slope).
+// Each test cites the source formula in a comment so the validator can
+// trace the math back to the design doc §Operator catalog.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Curve ───────────────────────────────────────────────────────────────────
+// Source: design doc §Operator catalog row "Curve" — TD CHOP Lookup;
+// matches modulation_engine.js applyCurve(). Shapes:
+//   linear  : y = x
+//   easeIn  : y = x^2
+//   easeOut : y = 1 − (1 − x)^2
+//   exp     : y = x^gamma  (gamma exposed by the op; default 2.0)
+
+test('Curve(linear): y = x for every sample', () => {
+  const out = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'linear' } },
+    [{ x: 0, dt: 0.025 }, { x: 0.25, dt: 0.025 }, { x: 0.5, dt: 0.025 },
+     { x: 0.75, dt: 0.025 }, { x: 1.0, dt: 0.025 }],
+  );
+  approxEqual(out[0], 0);
+  approxEqual(out[1], 0.25);
+  approxEqual(out[2], 0.5);
+  approxEqual(out[3], 0.75);
+  approxEqual(out[4], 1.0);
+});
+
+test('Curve(easeIn): y = x^2', () => {
+  const out = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'easeIn' } },
+    [{ x: 0, dt: 0.025 }, { x: 0.25, dt: 0.025 }, { x: 0.5, dt: 0.025 },
+     { x: 0.75, dt: 0.025 }, { x: 1.0, dt: 0.025 }],
+  );
+  approxEqual(out[0], 0);
+  approxEqual(out[1], 0.0625);
+  approxEqual(out[2], 0.25);
+  approxEqual(out[3], 0.5625);
+  approxEqual(out[4], 1.0);
+});
+
+test('Curve(easeOut): y = 1 − (1 − x)^2', () => {
+  const out = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'easeOut' } },
+    [{ x: 0, dt: 0.025 }, { x: 0.25, dt: 0.025 }, { x: 0.5, dt: 0.025 },
+     { x: 0.75, dt: 0.025 }, { x: 1.0, dt: 0.025 }],
+  );
+  approxEqual(out[0], 0);
+  approxEqual(out[1], 1 - 0.75 * 0.75);   // 0.4375
+  approxEqual(out[2], 0.75);              // 1 − 0.25
+  approxEqual(out[3], 1 - 0.25 * 0.25);   // 0.9375
+  approxEqual(out[4], 1.0);
+});
+
+test('Curve(exp): y = x^gamma — gamma applies only to exp shape', () => {
+  // Default gamma = 2.0 ⇒ exp matches easeIn numerically. Bump gamma to
+  // 3.0 ⇒ matches modulation_engine.js applyCurve(_, 'exp').
+  const outG2 = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'exp', gamma: 2.0 } },
+    [{ x: 0.5, dt: 0.025 }, { x: 0.8, dt: 0.025 }],
+  );
+  approxEqual(outG2[0], 0.25);
+  approxEqual(outG2[1], 0.64);
+
+  const outG3 = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'exp', gamma: 3.0 } },
+    [{ x: 0.5, dt: 0.025 }, { x: 0.8, dt: 0.025 }],
+  );
+  approxEqual(outG3[0], 0.125);                  // 0.5^3
+  approxEqual(outG3[1], 0.512, 1e-9);            // 0.8^3
+
+  // And gamma is IGNORED for non-exp shapes — easeIn is fixed x^2.
+  const outEaseInG5 = runSingleOp(
+    { id: 'cv', type: 'curve', params: { shape: 'easeIn', gamma: 5.0 } },
+    [{ x: 0.5, dt: 0.025 }],
+  );
+  approxEqual(outEaseInG5[0], 0.25, 1e-9, 'gamma must NOT affect easeIn');
+});
+
+test('Curve edge inputs: 0 maps to 0, 1 maps to 1 for every shape', () => {
+  for (const shape of ['linear', 'easeIn', 'easeOut', 'exp']) {
+    const out = runSingleOp(
+      { id: 'cv', type: 'curve', params: { shape, gamma: 2.5 } },
+      [{ x: 0, dt: 0.025 }, { x: 1, dt: 0.025 }],
+    );
+    approxEqual(out[0], 0, 1e-9, `${shape}: 0 → 0`);
+    approxEqual(out[1], 1, 1e-9, `${shape}: 1 → 1`);
+  }
+});
+
+test('Curve: rejects unknown shape at validateChain (Codex P0 strict)', () => {
+  const r = validateChain('micLow', [
+    { id: 'cv', type: 'curve', params: { shape: 'bouncyHouse' } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /shape/);
+  assert.match(r.error, /bouncyHouse/);
+});
+
+test('Curve: rejects non-finite gamma at validateChain (Codex P0 strict)', () => {
+  const r = validateChain('micLow', [
+    { id: 'cv', type: 'curve', params: { shape: 'exp', gamma: Number.NaN } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /finite/);
+});
+
+// ── Slew Limiter ────────────────────────────────────────────────────────────
+// Source: design doc §Operator catalog row "Slew Limiter" — TD CHOP
+// Limit (step mode). step = maxStepPerSec * dt; y = clamp(x, y_prev −
+// step, y_prev + step). With y_prev = 0, dt = 0.025 s, maxStepPerSec
+// = 4 → step = 0.1 per frame; a 1.0 input takes 10 frames to reach 1.
+
+test('Slew: input rising faster than maxStepPerSec is clamped to ±step per tick', () => {
+  const dt = 0.025;
+  const step = 4.0 * dt; // 0.1
+  // Input jumps to 1.0 from 0 — output should rise by `step` per tick.
+  const out = runSingleOp(
+    { id: 'sl', type: 'slew', params: { maxStepPerSec: 4.0 } },
+    [
+      { x: 1.0, dt }, // y_prev=0; y = min(1.0, 0+step) = 0.1
+      { x: 1.0, dt }, // y = min(1.0, 0.1+step) = 0.2
+      { x: 1.0, dt }, // y = 0.3
+      { x: 1.0, dt }, // y = 0.4
+    ],
+  );
+  approxEqual(out[0], step,     1e-9, 'tick 0');
+  approxEqual(out[1], 2 * step, 1e-9, 'tick 1');
+  approxEqual(out[2], 3 * step, 1e-9, 'tick 2');
+  approxEqual(out[3], 4 * step, 1e-9, 'tick 3');
+});
+
+test('Slew: input rising slower than maxStepPerSec passes through unchanged', () => {
+  // maxStepPerSec=10 ⇒ step = 0.25/tick at dt=0.025. Input rises by 0.1/tick.
+  const out = runSingleOp(
+    { id: 'sl', type: 'slew', params: { maxStepPerSec: 10.0 } },
+    [
+      { x: 0.1, dt: 0.025 },
+      { x: 0.2, dt: 0.025 },
+      { x: 0.3, dt: 0.025 },
+    ],
+  );
+  approxEqual(out[0], 0.1);
+  approxEqual(out[1], 0.2);
+  approxEqual(out[2], 0.3);
+});
+
+test('Slew: falling input also rate-limited (symmetric)', () => {
+  const dt = 0.025;
+  const step = 4.0 * dt;
+  // Climb a bit, then crash to 0.
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'sl', type: 'slew', params: { maxStepPerSec: 4.0 } }]);
+  // Pull y_prev up to 0.5.
+  for (let i = 0; i < 5; i++) proc.process('micLow', 1.0, dt); // 5 * 0.1 = 0.5
+  // Now drop input to 0 — output should fall by `step` per tick.
+  approxEqual(proc.process('micLow', 0, dt), 0.5 - step, 1e-9);
+  approxEqual(proc.process('micLow', 0, dt), 0.5 - 2 * step, 1e-9);
+});
+
+test('Slew: rejects non-positive maxStepPerSec', () => {
+  const r = validateChain('micLow', [
+    { id: 'sl', type: 'slew', params: { maxStepPerSec: 0 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /out of range/);
+});
+
+// ── Compressor ──────────────────────────────────────────────────────────────
+// Source: design doc §Operator catalog row "Compressor" — Bob Katz,
+// *Mastering Audio* (3rd ed. 2014, ch. 7); RBJ-cookbook smoothing
+// constants for the envelope on the gain-reduction signal.
+//
+// over_dB = max(0, 20·log10(x+ε) − thresh_dB)
+// targetGR_dB = −over_dB · (1 − 1/ratio)
+// gr_dB ← gr_dB + α · (targetGR_dB − gr_dB)
+// y = clamp01(x · 10^(gr_dB/20))
+
+test('Compressor: input strictly below threshold passes unchanged (zero reduction)', () => {
+  const out = runSingleOp(
+    { id: 'cmp', type: 'compressor',
+      params: { threshold: 0.5, ratio: 4.0, attackMs: 5, releaseMs: 80 } },
+    [{ x: 0.1, dt: 0.025 }, { x: 0.3, dt: 0.025 }, { x: 0.4, dt: 0.025 }],
+  );
+  // Below thresh → over_dB ≤ 0 → targetGR_dB = 0; gr_dB stays at 0
+  // → gain = 1.0 → y = x. (Within numeric precision.)
+  approxEqual(out[0], 0.1, 1e-9);
+  approxEqual(out[1], 0.3, 1e-9);
+  approxEqual(out[2], 0.4, 1e-9);
+});
+
+test('Compressor: steady-state reduction above threshold matches hand-computed gr_dB', () => {
+  // Pin a steady input at x = 1.0, threshold = 0.5, ratio = 4.
+  //   x_dB = 20·log10(1) = 0
+  //   thresh_dB = 20·log10(0.5) ≈ −6.0206
+  //   over_dB = 0 − (−6.0206) = 6.0206
+  //   targetGR_dB = −6.0206 · (1 − 1/4) = −4.5154
+  //   At steady state, gr_dB = targetGR_dB.
+  //   gain_linear = 10^(−4.5154/20) ≈ 0.5946
+  //   y_steady = 1.0 · 0.5946 = 0.5946
+  const dt = 0.025;
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{
+    id: 'cmp', type: 'compressor',
+    params: { threshold: 0.5, ratio: 4.0, attackMs: 1, releaseMs: 1 },
+  }]);
+  // Hammer it long enough that the 1 ms attack converges (~50 ticks plenty).
+  let y;
+  for (let i = 0; i < 200; i++) y = proc.process('micLow', 1.0, dt);
+  const expectedThreshDb = 20 * Math.log10(0.5);
+  const expectedOverDb = 0 - expectedThreshDb;
+  const expectedTargetGrDb = -expectedOverDb * (1 - 1 / 4);
+  const expectedGainLin = Math.pow(10, expectedTargetGrDb / 20);
+  const expectedY = 1.0 * expectedGainLin;
+  approxEqual(y, expectedY, 1e-4,
+    `Compressor steady-state: gr_dB=${expectedTargetGrDb.toFixed(4)}, expected y≈${expectedY.toFixed(4)}`);
+});
+
+test('Compressor: attack envelope ramps gr_dB toward target per α=1−exp(−dt/τ)', () => {
+  // attackMs=10, dt=25 ⇒ α = 1 − exp(−0.025/0.010) = 1 − exp(−2.5)
+  //                       ≈ 0.9179. One step should pull gr_dB ~92% of the way.
+  const dt = 0.025;
+  const attackMs = 10;
+  const releaseMs = 80;
+  const alpha = 1 - Math.exp(-dt / (attackMs / 1000));
+  const threshold = 0.5;
+  const ratio = 4.0;
+  // Hand-compute expected after exactly ONE tick with x=1.0.
+  const xDb = 20 * Math.log10(1.0 + 1e-9);
+  const threshDb = 20 * Math.log10(threshold);
+  const overDb = xDb - threshDb;
+  const targetGrDb = -overDb * (1 - 1 / ratio);
+  const expectedGrDbAfter1 = 0 + alpha * (targetGrDb - 0);
+  const expectedY1 = 1.0 * Math.pow(10, expectedGrDbAfter1 / 20);
+  const out = runSingleOp(
+    { id: 'cmp', type: 'compressor', params: { threshold, ratio, attackMs, releaseMs } },
+    [{ x: 1.0, dt }],
+  );
+  approxEqual(out[0], expectedY1, 1e-6,
+    `attack tick 1: α=${alpha.toFixed(4)}, expected y=${expectedY1.toFixed(6)}`);
+});
+
+test('Compressor: rejects ratio < 1 (Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'cmp', type: 'compressor', params: { threshold: 0.5, ratio: 0.5 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /out of range/);
+});
+
+test('Compressor: rejects non-finite attackMs (Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'cmp', type: 'compressor',
+      params: { threshold: 0.5, ratio: 4, attackMs: Number.POSITIVE_INFINITY } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /finite/);
+});
+
+// ── Biquad LPF ──────────────────────────────────────────────────────────────
+// Source: design doc §Operator catalog row "Biquad LPF" — RBJ EQ
+// Cookbook (W3C-Note, 2021) §LPF, Direct-Form-1.
+//
+// Coefficients (recomputed per sample because dt can vary):
+//   ω₀ = 2π · fc · dt; α = sin(ω₀)/(2Q)
+//   b0 = (1−cos ω₀)/2; b1 = 1−cos ω₀; b2 = (1−cos ω₀)/2
+//   a0 = 1+α; a1 = −2 cos ω₀; a2 = 1−α
+//   y[n] = (b0·x[n] + b1·x[n−1] + b2·x[n−2]
+//          − a1·y[n−1] − a2·y[n−2]) / a0
+
+test('Biquad LPF: impulse response matches closed-form Direct-Form-1 at fc=8 Hz, Q=0.707', () => {
+  const fc = 8.0;
+  const dt = 0.025;
+  const Q = 0.707;
+  // Hand-compute coefficients ONCE (dt is constant here).
+  const w0 = 2 * Math.PI * fc * dt;
+  const cosW0 = Math.cos(w0);
+  const sinW0 = Math.sin(w0);
+  const alpha = sinW0 / (2 * Q);
+  const b0 = (1 - cosW0) / 2;
+  const b1 =  1 - cosW0;
+  const b2 = (1 - cosW0) / 2;
+  const a0 =  1 + alpha;
+  const a1 = -2 * cosW0;
+  const a2 =  1 - alpha;
+
+  // Impulse: 1, 0, 0, 0, 0. Walk the DF-1 recursion by hand.
+  let xP1 = 0, xP2 = 0, yP1 = 0, yP2 = 0;
+  const expected = [];
+  for (const x of [1, 0, 0, 0, 0]) {
+    const y = (b0 * x + b1 * xP1 + b2 * xP2 - a1 * yP1 - a2 * yP2) / a0;
+    expected.push(y);
+    xP2 = xP1; xP1 = x; yP2 = yP1; yP1 = y;
+  }
+  const out = runSingleOp(
+    { id: 'bq', type: 'biquad', params: { cutoffHz: fc, Q } },
+    [1, 0, 0, 0, 0].map(x => ({ x, dt })),
+  );
+  for (let i = 0; i < expected.length; i++) {
+    // The framework's final clamp01 in process() will clamp negative
+    // ringing tail samples to 0 — biquad LPFs CAN ring slightly negative
+    // at low Q. Assert against max(0, expected) so the hand-checked
+    // values match the post-clamp output.
+    const expClamped = expected[i] < 0 ? 0 : (expected[i] > 1 ? 1 : expected[i]);
+    approxEqual(out[i], expClamped, 1e-9, `impulse sample[${i}]`);
+  }
+});
+
+test('Biquad LPF: impulse response is stable (bounded) over many samples', () => {
+  // Stability check — feed an impulse and let it ring for 500 samples.
+  // A well-formed RBJ LPF should decay; assert no value blows past [-2, 2].
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'bq', type: 'biquad', params: { cutoffHz: 8.0, Q: 0.707 } }]);
+  proc.setEditorSubscribed(true); // capture pre-clamp post via snapshot
+  proc.process('micLow', 1.0, 0.025); // impulse
+  for (let i = 0; i < 500; i++) proc.process('micLow', 0, 0.025);
+  const snap = proc.snapshotForEditor('micLow');
+  // Confirm runtime hasn't blown up — the recursive state words should
+  // still be bounded. (We probe via snapshot.post.)
+  assert.ok(Math.abs(snap.ops[0].post) < 2,
+    `biquad post-value out of bounds: ${snap.ops[0].post} (impulse should have decayed)`);
+});
+
+test('Biquad LPF: rejects Q ≤ 0 (Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'bq', type: 'biquad', params: { cutoffHz: 8.0, Q: -1 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /out of range/);
+});
+
+test('Biquad LPF: rejects cutoffHz ≤ 0 (Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'bq', type: 'biquad', params: { cutoffHz: 0, Q: 0.707 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /out of range/);
+});
+
+// ── Slope ───────────────────────────────────────────────────────────────────
+// Source: design doc §Operator catalog row "Slope" — TD CHOP Slope.
+// y = (x − x_prev) / dt / scale. With bipolar:false (default) the
+// output is clamped to [0, 1] (falling input ⇒ 0). With bipolar:true
+// the output is clamped to [-1, 1]; the chain's final clamp01 will
+// then clamp negatives to 0 for the CPC sink, so bipolar Slope is
+// only meaningful mid-chain (where snapshotForEditor exposes the
+// pre-final-clamp value via snap.ops[i].post).
+
+test('Slope (unipolar default): rising input gives positive scaled derivative', () => {
+  const dt = 0.025;
+  const scale = 4.0;
+  // x rises by 0.1 per tick ⇒ raw = 0.1 / 0.025 / 4 = 1.0 (saturates to 1).
+  // Use a gentler ramp: 0.05 per tick ⇒ raw = 0.05/0.025/4 = 0.5.
+  const out = runSingleOp(
+    { id: 'sp', type: 'slope', params: { scale } },
+    [
+      { x: 0.05, dt }, // x_prev=0; raw = 0.05/0.025/4 = 0.5
+      { x: 0.10, dt }, // raw = 0.05/0.025/4 = 0.5
+      { x: 0.15, dt }, // raw = 0.5
+    ],
+  );
+  approxEqual(out[0], 0.5, 1e-9, 'tick 0');
+  approxEqual(out[1], 0.5, 1e-9, 'tick 1');
+  approxEqual(out[2], 0.5, 1e-9, 'tick 2');
+});
+
+test('Slope (unipolar): falling input clamps to 0', () => {
+  // Build up x_prev, then drop. Default scale=4.
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'sp', type: 'slope', params: { scale: 4.0 } }]);
+  // First tick: x=0.5, x_prev=0. raw=0.5/0.025/4 = 5 ⇒ clamp to 1.
+  approxEqual(proc.process('micLow', 0.5, 0.025), 1.0, 1e-9);
+  // Second tick: x=0.0, x_prev=0.5. raw = -0.5/0.025/4 = -5 ⇒ unipolar clamps to 0.
+  approxEqual(proc.process('micLow', 0.0, 0.025), 0, 1e-9);
+});
+
+test('Slope (bipolar:true): falling input outputs negative value mid-chain (visible via snapshot)', () => {
+  // bipolar:true preserves negative output [-1, 1], but the chain's
+  // final clamp01 wipes it for the return value. Use snapshotForEditor
+  // to read the pre-final-clamp `post` field per the design doc note
+  // ("can output negative if bipolar:true").
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'sp', type: 'slope', params: { scale: 4.0, bipolar: true } }]);
+  proc.setEditorSubscribed(true);
+  // Push x_prev up.
+  proc.process('micLow', 0.5, 0.025);
+  // Drop: x=0, x_prev=0.5 ⇒ raw = -0.5/0.025/4 = -5 ⇒ bipolar clamps to -1.
+  proc.process('micLow', 0.0, 0.025);
+  const snap = proc.snapshotForEditor('micLow');
+  approxEqual(snap.ops[0].post, -1.0, 1e-9,
+    'bipolar slope should emit −1 on a hard fall (pre-final-clamp)');
+});
+
+test('Slope: scale parameter divides the derivative — bigger scale → smaller output', () => {
+  // Same input ramp, two different scales.
+  const inputs = [{ x: 0.05, dt: 0.025 }, { x: 0.10, dt: 0.025 }];
+  const outSmall = runSingleOp(
+    { id: 'sp', type: 'slope', params: { scale: 1.0 } }, inputs);
+  const outLarge = runSingleOp(
+    { id: 'sp', type: 'slope', params: { scale: 10.0 } }, inputs);
+  // outSmall samples saturate (raw = 0.05/0.025/1 = 2 ⇒ clamp 1).
+  approxEqual(outSmall[1], 1.0, 1e-9);
+  // outLarge: raw = 0.05/0.025/10 = 0.2 (well under 1).
+  approxEqual(outLarge[1], 0.2, 1e-9);
+});
+
+test('Slope: rejects scale ≤ 0 (Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'sp', type: 'slope', params: { scale: 0 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /out of range/);
+});
+
+test('Slope: rejects non-boolean bipolar (Codex P0 strict)', () => {
+  const r = validateChain('micLow', [
+    { id: 'sp', type: 'slope', params: { scale: 4.0, bipolar: 'yes' } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /boolean/);
+});
+
+test('Slope: dt floor protects against zero-dt frames (no Infinity)', () => {
+  // Framework allows dt=0; the slope op floors it to 1e-6 internally so
+  // raw = (0.5 − 0) / 1e-6 / 4 = 125 000 ⇒ clamps to 1 (not Infinity / NaN).
+  const out = runSingleOp(
+    { id: 'sp', type: 'slope', params: { scale: 4.0 } },
+    [{ x: 0.5, dt: 0 }],
+  );
+  assert.ok(Number.isFinite(out[0]), `slope must not emit non-finite at dt=0 (got ${out[0]})`);
+  approxEqual(out[0], 1.0, 1e-9);
+});
+
+// ── PATCH preserves runtime state for the new stateful ops ──────────────────
+//
+// docs/29 §Chain runtime state + Phase 2 fix 5642b48: PATCH must not
+// reset per-op runtime so a mid-show param tweak doesn't pop. Phase 7
+// adds three new stateful ops: Biquad (xPrev1/2, yPrev1/2), Slope
+// (xPrev), Compressor (grDb). Slew also gets a yPrev that must
+// survive PATCH so the rate-limit clock keeps ticking. Curve is
+// stateless beyond yPrev (covered by the framework's existing slot).
+
+test('patchOp preserves runtime state — Biquad (xPrev/yPrev history not reset)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'bq', type: 'biquad', params: { cutoffHz: 5.0, Q: 0.707 } }]);
+  // Drive sustained input — biquad LPF should converge near 1.0.
+  const before = _processN(proc, 'micLow', 1.0, 0.025, 400);
+  assert.ok(before > 0.95, `biquad should be near steady-state (got ${before})`);
+  // Patch Q while held high.
+  const r = proc.patchOp('micLow', 'bq', { params: { Q: 1.5 } });
+  assert.equal(r.ok, true);
+  const after = proc.process('micLow', 1.0, 0.025);
+  // If history were reset to 0, the next sample would be ≈ b0/a0 — a
+  // tiny number — instead of staying near 1. Assert >0.9 to pin
+  // continuity without over-constraining the new-Q response.
+  assert.ok(after > 0.9,
+    `Biquad runtime history must survive patchOp — expected ≈ ${before}, got ${after}`);
+});
+
+test('patchOp preserves runtime state — Slope (xPrev not reset)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'sp', type: 'slope', params: { scale: 4.0 } }]);
+  // Push x_prev up to 0.5 via one tick.
+  proc.process('micLow', 0.5, 0.025);
+  // Patch scale (x_prev should NOT reset to 0).
+  const r = proc.patchOp('micLow', 'sp', { params: { scale: 2.0 } });
+  assert.equal(r.ok, true);
+  // Next tick at x=0.5 (no change). If xPrev were preserved at 0.5, raw
+  // = (0.5 − 0.5)/dt/scale = 0. If it had been reset to 0, raw =
+  // (0.5 − 0)/0.025/2 = 10 ⇒ clamp 1. Assert it's 0 (continuity).
+  const after = proc.process('micLow', 0.5, 0.025);
+  approxEqual(after, 0, 1e-9,
+    `Slope xPrev must survive patchOp — expected 0 (continuity), got ${after}`);
+});
+
+test('patchOp preserves runtime state — Compressor (grDb envelope not reset)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{
+    id: 'cmp', type: 'compressor',
+    params: { threshold: 0.5, ratio: 4.0, attackMs: 5, releaseMs: 80 },
+  }]);
+  // Drive sustained loud input — grDb converges to its target negative value.
+  const before = _processN(proc, 'micLow', 1.0, 0.025, 400);
+  assert.ok(before < 0.8, `Compressor should be reducing gain on sustained 1.0 (got ${before})`);
+  // Patch attackMs.
+  const r = proc.patchOp('micLow', 'cmp', { params: { attackMs: 1 } });
+  assert.equal(r.ok, true);
+  // Next sample at 1.0 — grDb should still be near its prior value, so
+  // the output should still be near `before`. If grDb were reset to 0,
+  // the output would briefly jump back near 1.0 (an audible/visible pop).
+  const after = proc.process('micLow', 1.0, 0.025);
+  approxEqual(after, before, 0.05,
+    `Compressor grDb must survive patchOp — before=${before.toFixed(4)}, after=${after.toFixed(4)}`);
+});
+
+test('patchOp preserves runtime state — Slew (yPrev not reset)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'sl', type: 'slew', params: { maxStepPerSec: 4.0 } }]);
+  // Climb yPrev to 0.5 over 5 ticks (step=0.1).
+  for (let i = 0; i < 5; i++) proc.process('micLow', 1.0, 0.025);
+  // Patch maxStepPerSec.
+  const r = proc.patchOp('micLow', 'sl', { params: { maxStepPerSec: 8.0 } });
+  assert.equal(r.ok, true);
+  // Next tick at x=1.0; step is now 0.2. If yPrev were preserved at 0.5,
+  // output = min(1.0, 0.5 + 0.2) = 0.7. If reset to 0, output = min(1.0,
+  // 0 + 0.2) = 0.2. Assert preservation.
+  const after = proc.process('micLow', 1.0, 0.025);
+  approxEqual(after, 0.7, 1e-9,
+    `Slew yPrev must survive patchOp — expected 0.7, got ${after}`);
+});
+
+// ── Persistence round-trip with a Phase 7 op ────────────────────────────────
+
+test('Persistence round-trip: a Biquad-bearing chain survives putChain → snapshot → loadChains', () => {
+  const proc1 = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  const customChain = [
+    { id: 'bq',  type: 'biquad',     params: { cutoffHz: 12.0, Q: 1.2 } },
+    { id: 'cmp', type: 'compressor', params: { threshold: 0.4, ratio: 6.0, attackMs: 3, releaseMs: 60 } },
+    { id: 'cv',  type: 'curve',      params: { shape: 'exp', gamma: 2.5 } },
+    { id: 'sp',  type: 'slope',      params: { scale: 8.0, bipolar: true } },
+    { id: 'sl',  type: 'slew',       params: { maxStepPerSec: 2.5 } },
+  ];
+  const putRes = proc1.putChain('micLow', customChain);
+  assert.equal(putRes.ok, true, `expected putChain ok, got error: ${putRes.error}`);
+  const snapshot = proc1.getAllChains();
+
+  // Simulate engine restart.
+  const proc2 = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc2.loadChains(snapshot);
+  assert.deepEqual(proc2.getAllChains(), snapshot,
+    'Phase 7 ops must round-trip through YAML snapshot/loadChains');
+});
+
+// ── Default chains: unchanged after Phase 7 (no new default-installed ops) ──
+
+test('Phase 7 contract: NO new ops added to DEFAULT_CHAINS (7 existing chains unchanged)', () => {
+  // The 7 default chains stay as they were after Phase 2. The new ops
+  // are available via the catalog for operators to add manually.
+  const phase7Types = new Set(['curve', 'slew', 'compressor', 'biquad', 'slope']);
+  for (const sig of KNOWN_SIGNALS) {
+    const types = DEFAULT_CHAINS[sig].map(op => op.type);
+    for (const t of types) {
+      assert.ok(!phase7Types.has(t),
+        `default chain for ${sig} must not include Phase 7 op "${t}"`);
+    }
+  }
 });
