@@ -18,6 +18,7 @@ import {
   deviceToCaptureConfig,
   listAudioDevices,
   defaultInputFormatFor,
+  findConfiguredDevice,
 } from '../lib/audio_devices.js';
 
 const MAC_AV_OUTPUT = `
@@ -141,4 +142,60 @@ test('listAudioDevices — ffmpeg spawn failure surfaces ffmpeg_missing', async 
     () => listAudioDevices({ spawnFn: fakeSpawn, platform: 'darwin' }),
     /ffmpeg/i,
   );
+});
+
+// ── findConfiguredDevice ─────────────────────────────────────────────────
+// Used by engine boot to validate the saved mic still exists on this
+// machine before spawning ffmpeg. Pure function — exhaustive here so
+// the engine boot path can rely on the matching contract.
+
+const SAMPLE_DEVICES = [
+  { id: 'avfoundation-audio-0', label: 'MacBook Pro Microphone', platform: 'darwin', inputFormat: 'avfoundation', ffmpegDevice: ':0' },
+  { id: 'avfoundation-audio-1', label: 'USB Audio Device',       platform: 'darwin', inputFormat: 'avfoundation', ffmpegDevice: ':1' },
+  { id: 'avfoundation-audio-2', label: 'Amazon USB Streaming Mic', platform: 'darwin', inputFormat: 'avfoundation', ffmpegDevice: ':2' },
+];
+
+test('findConfiguredDevice — matches by deviceId first', () => {
+  const m = findConfiguredDevice({ deviceId: 'avfoundation-audio-2' }, SAMPLE_DEVICES);
+  assert.equal(m?.ffmpegDevice, ':2');
+});
+
+test('findConfiguredDevice — falls back to device path when no deviceId match', () => {
+  // deviceId points to nonexistent slot; device path :1 still exists.
+  const m = findConfiguredDevice({ deviceId: 'avfoundation-audio-99', device: ':1' }, SAMPLE_DEVICES);
+  assert.equal(m?.id, 'avfoundation-audio-1');
+});
+
+test('findConfiguredDevice — falls back to label (case-insensitive) last', () => {
+  const m = findConfiguredDevice(
+    { deviceId: 'avfoundation-audio-99', device: ':99', deviceLabel: 'amazon usb streaming mic' },
+    SAMPLE_DEVICES,
+  );
+  assert.equal(m?.id, 'avfoundation-audio-2');
+});
+
+test('findConfiguredDevice — returns null when nothing matches', () => {
+  const m = findConfiguredDevice(
+    { deviceId: 'x', device: ':99', deviceLabel: 'Not Here' },
+    SAMPLE_DEVICES,
+  );
+  assert.equal(m, null);
+});
+
+test('findConfiguredDevice — null sel or empty list returns null', () => {
+  assert.equal(findConfiguredDevice(null, SAMPLE_DEVICES), null);
+  assert.equal(findConfiguredDevice({ deviceId: 'x' }, []), null);
+  assert.equal(findConfiguredDevice({ deviceId: 'x' }, null), null);
+});
+
+test('findConfiguredDevice — deviceId match wins over label mismatch', () => {
+  // Even if label changed on this machine, the deviceId still wins.
+  const devices = [
+    { id: 'avfoundation-audio-0', label: 'Renamed Mic', ffmpegDevice: ':0' },
+  ];
+  const m = findConfiguredDevice(
+    { deviceId: 'avfoundation-audio-0', deviceLabel: 'Original Name' },
+    devices,
+  );
+  assert.equal(m?.ffmpegDevice, ':0');
 });

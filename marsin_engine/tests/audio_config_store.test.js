@@ -17,6 +17,7 @@ import {
   saveSelectedMic, saveManualMic, clearSavedMic,
   sceneAudioPath,
 } from '../lib/audio_config_store.js';
+import { pickLiveFields } from '../lib/audio_config.js';
 
 function tmpScene() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'mae-scene-'));
@@ -142,6 +143,88 @@ test('saveSceneAudio + saveSelectedMic — full read-write cycle', () => {
   assert.equal(after.capture.device, ':2', 'mic must survive a tuning save');
   assert.equal(after.bands.lowMaxHz, 200);
   assert.equal(after.enabled, true);
+});
+
+// ── Boot-write contract (engine.js boot path) ────────────────────────────
+// The engine boot does:
+//   saveSceneAudio(dir, { ...loadSceneAudio(dir), ...pickLiveFields(cfg) })
+// once per boot so the file always reflects ground truth. The tests
+// below pin the two scenarios that prompted the change.
+
+const BOOT_CFG = {
+  enabled: true,
+  fftSize: 2048,
+  hopSize: 1024,
+  bands: { lowMaxHz: 220, midMaxHz: 1800, attackMs: 4, releaseMs: 90, noiseGate: 0.02 },
+  kick:  { minHz: 45, maxHz: 110, threshold: 1.8, refractoryMs: 250, decayMs: 140 },
+  capture: {
+    platform: 'darwin', inputFormat: 'avfoundation',
+    device: ':2', deviceId: 'avfoundation-audio-2', deviceLabel: 'Amazon USB',
+  },
+};
+
+test('boot-write — fresh scene (no audio_state.yaml on disk) creates file with full shape', () => {
+  const dir = tmpScene();
+  assert.ok(!fs.existsSync(sceneAudioPath(dir)), 'precondition: no file');
+
+  // Simulate engine boot-write.
+  const onDisk = loadSceneAudio(dir);
+  saveSceneAudio(dir, { ...onDisk, ...pickLiveFields(BOOT_CFG) });
+
+  const back = loadSceneAudio(dir);
+  assert.ok(fs.existsSync(sceneAudioPath(dir)), 'file should now exist');
+  assert.equal(back.enabled, true);
+  assert.equal(back.fftSize, 2048);
+  assert.equal(back.hopSize, 1024);
+  assert.equal(back.bands.lowMaxHz, 220);
+  assert.equal(back.bands.attackMs, 4);
+  assert.equal(back.kick.minHz, 45);
+  assert.equal(back.capture.device, ':2');
+  assert.equal(back.capture.deviceId, 'avfoundation-audio-2');
+});
+
+test('boot-write — preserves pre-existing chains block; fills in missing bands/kick', () => {
+  const dir = tmpScene();
+  // Pre-existing file like an early-development state — has chains and
+  // capture, missing bands/kick/fftSize/hopSize.
+  saveSceneAudio(dir, {
+    capture: { device: ':2', deviceLabel: 'Old Mic', platform: 'darwin' },
+    enabled: true,
+    chains: {
+      micLow:  [{ id: 'low_gain',  type: 'gain', enabled: true, params: { paramKey: 'micLowGain' } }],
+      micKick: [{ id: 'kick_gain', type: 'gain', enabled: true, params: { paramKey: 'micKickGain' } }],
+    },
+  });
+
+  // Simulate engine boot-write with a fully-merged cfg (config.yaml
+  // defaults + the per-scene mic).
+  const onDisk = loadSceneAudio(dir);
+  saveSceneAudio(dir, { ...onDisk, ...pickLiveFields(BOOT_CFG) });
+
+  const back = loadSceneAudio(dir);
+  // Bands / kick / fftSize / hopSize now present:
+  assert.equal(back.bands.lowMaxHz, 220);
+  assert.equal(back.kick.threshold, 1.8);
+  assert.equal(back.fftSize, 2048);
+  assert.equal(back.hopSize, 1024);
+  // Chains preserved verbatim:
+  assert.ok(back.chains);
+  assert.equal(back.chains.micLow[0].id, 'low_gain');
+  assert.equal(back.chains.micKick[0].params.paramKey, 'micKickGain');
+});
+
+test('boot-write — fires even when audio disabled (enabled:false in cfg)', () => {
+  // Operator request: audio_state.yaml should reflect ground truth
+  // even for scenes with audio off, so they can pre-tune before
+  // flipping enabled on.
+  const dir = tmpScene();
+  const disabledCfg = { ...BOOT_CFG, enabled: false };
+  const onDisk = loadSceneAudio(dir);
+  saveSceneAudio(dir, { ...onDisk, ...pickLiveFields(disabledCfg) });
+  const back = loadSceneAudio(dir);
+  assert.equal(back.enabled, false);
+  assert.ok(back.bands, 'bands should still be persisted when disabled');
+  assert.ok(back.kick,  'kick should still be persisted when disabled');
 });
 
 test('sceneAudioPath — predictable location', () => {

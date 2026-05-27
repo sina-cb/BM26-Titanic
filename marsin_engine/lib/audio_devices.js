@@ -152,6 +152,43 @@ export async function listAudioDevices({
 }
 
 /**
+ * Locate a configured mic in an enumerated device list.
+ *
+ * Matching is checked in three passes, MOST specific first, so a stale
+ * label match can't shadow a precise deviceId / device-path hit:
+ *   1) `deviceId`     — unique per OS index (e.g. `avfoundation-audio-2`)
+ *   2) `device`       — ffmpeg device string (e.g. `:2`, `audio=Mic`)
+ *   3) `deviceLabel`  — case-insensitive exact label match (best-effort
+ *                       cross-machine fallback when the OS renumbered)
+ *
+ * Returns the matching AudioDevice or `null` if no pass found one.
+ * Pure function — exported for tests; callers (engine boot) decide
+ * what to do on null (typically: disable audio + status error).
+ *
+ * @param {{ deviceId?: string|null, device?: string|null, deviceLabel?: string|null }} sel
+ * @param {Array<object>} devices
+ * @returns {object|null}
+ */
+export function findConfiguredDevice(sel, devices) {
+  if (!sel || !Array.isArray(devices) || devices.length === 0) return null;
+  const { deviceId, device, deviceLabel } = sel;
+  if (deviceId) {
+    const m = devices.find((d) => d && d.id === deviceId);
+    if (m) return m;
+  }
+  if (device) {
+    const m = devices.find((d) => d && d.ffmpegDevice === device);
+    if (m) return m;
+  }
+  if (deviceLabel) {
+    const want = String(deviceLabel).toLowerCase();
+    const m = devices.find((d) => d && typeof d.label === 'string' && d.label.toLowerCase() === want);
+    if (m) return m;
+  }
+  return null;
+}
+
+/**
  * Convert a chosen AudioDevice into the audio.capture config slice we
  * persist in audio_config.yaml. Keeps the schema in one place.
  */

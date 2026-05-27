@@ -31,6 +31,7 @@ import { mergeAudioConfig, pickLiveFields } from './lib/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
 } from './lib/audio_config_store.js';
+import { listAudioDevices, findConfiguredDevice } from './lib/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
@@ -956,6 +957,72 @@ async function main() {
     }
     try {
       const resolvedFfmpeg = await resolveFfmpegPath(cfg.capture.ffmpegPath || 'ffmpeg');
+
+      // Cross-machine portability guard: if the operator EXPLICITLY
+      // selected a mic on a different rig (e.g. ":2 Amazon USB" on Mac
+      // A) and we're now booting on Mac B where that index doesn't
+      // exist, ffmpeg would crash with a cryptic stderr. Enumerate
+      // first and fail with a clear status the iPad can banner.
+      //
+      // Skipped when `cfg.capture.device == null` — that's "use platform
+      // default", a legitimate config.yaml state that AudioCapture
+      // resolves at start() time.
+      //
+      // Codex P0: NO silent fallback to the platform default mic. The
+      // operator's selection IS the truth — if it's missing, surface.
+      const sel = cfg.capture || {};
+      if (sel.device || sel.deviceId) {
+        let enumResult;
+        try {
+          enumResult = await listAudioDevices({
+            ffmpegPath: resolvedFfmpeg,
+            platform:   sel.platform || process.platform,
+            inputFormat: sel.inputFormat || undefined,
+          });
+        } catch (enumErr) {
+          // The enumeration itself failed (ffmpeg missing, unsupported
+          // platform, etc.). Don't paper over — surface and disable.
+          audioState.capture = null;
+          audioState.analyzer = null;
+          audioState.lastStatus = {
+            enabled: false,
+            error: 'device_enumeration_failed',
+            enumerationError: { code: enumErr.code || 'unknown', message: enumErr.message },
+          };
+          console.error(`  ⚠️  audio device enumeration failed (${enumErr.code || 'unknown'}): ${enumErr.message} — audio disabled`);
+          broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+          return;
+        }
+        const match = findConfiguredDevice(
+          { deviceId: sel.deviceId, device: sel.device, deviceLabel: sel.deviceLabel },
+          enumResult.devices || [],
+        );
+        if (!match) {
+          // Saved mic not on this machine. Build a status payload whose
+          // `availableDevices` shape mirrors what /audio/devices serves
+          // so the iPad can reuse fetchAudioDevices' types directly.
+          audioState.capture = null;
+          audioState.analyzer = null;
+          audioState.lastStatus = {
+            enabled: false,
+            error: 'configured_mic_not_found',
+            missingDevice: {
+              device:      sel.device      ?? null,
+              deviceLabel: sel.deviceLabel ?? null,
+              deviceId:    sel.deviceId    ?? null,
+              platform:    sel.platform    ?? process.platform,
+            },
+            availableDevices: enumResult.devices || [],
+            platform:    enumResult.platform,
+            inputFormat: enumResult.inputFormat,
+          };
+          const human = sel.deviceLabel || sel.device || sel.deviceId;
+          console.warn(`  ⚠️  configured mic '${human}' not found on this machine — pick a new mic from the AUDIO tab in CaptainPad (saw ${enumResult.devices?.length || 0} alternative devices)`);
+          broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+          return;
+        }
+      }
+
       // docs/29 Phase 2: the analyzer emits RAW post-envelope band
       // values. We route each through `signalPostProcessor.process()`
       // (which runs the per-signal node chain — Gain via paramKey,
@@ -1124,7 +1191,27 @@ async function main() {
     return next;
   };
 
-  await buildAndStartAudio();
+  // Boot-write the per-scene audio_state.yaml so a fresh scene (or one
+   // that was hand-edited to a partial state) ends up containing the
+   // FULL pickLiveFields snapshot — capture, enabled, fftSize, hopSize,
+   // bands, kick — alongside any pre-existing orthogonal sections
+   // (currently just `chains:`). Operator request: the file should
+   // reflect ground truth from boot, not "after the first PATCH".
+   //
+   // Fires unconditionally — even when `cfg.enabled === false` — so a
+   // scene with audio off still surfaces the analyzer config for the
+   // operator to inspect / hand-tune before flipping enabled on.
+   //
+   // Same merge pattern as applyLiveUpdate: load → merge → save. Any
+   // future top-level sections (e.g. signal routing) are preserved.
+   try {
+     const onDisk = loadSceneAudio(audioState.sceneDir);
+     saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
+   } catch (e) {
+     console.warn(`[audio] failed to boot-write scene audio state: ${e.message}`);
+   }
+
+   await buildAndStartAudio();
 
   /**
    * Persist the current per-signal chain map into the scene's
