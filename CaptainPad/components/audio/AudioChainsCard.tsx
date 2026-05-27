@@ -75,18 +75,28 @@ const OP_PICKER_ORDER: readonly string[] = [
 // (the op schemas don't change without an engine restart, and a stale
 // cache would surface as a 400 from the engine on PUT — operator-visible,
 // fail-loudly).
+//
+// Failure handling (docs/29 §Interactions + codex P0 fail-loudly):
+// if the first fetch fails (engine offline at first mount), neither
+// the cache nor an in-flight promise sticks around — `loadCatalog()`
+// is callable again to drive a retry. The outer card holds the
+// last-seen error in React state and surfaces it on the disabled
+// `[+ ADD OP]` button so the operator has a tap-to-retry path
+// without restarting the app.
+type CatalogLoadResult = { ok: true; catalog: AudioChainCatalog } | { ok: false; error: string };
+
 let _catalogCache: AudioChainCatalog | null = null;
-let _catalogInflight: Promise<AudioChainCatalog | null> | null = null;
-function loadCatalog(): Promise<AudioChainCatalog | null> {
-  if (_catalogCache) return Promise.resolve(_catalogCache);
+let _catalogInflight: Promise<CatalogLoadResult> | null = null;
+function loadCatalog(): Promise<CatalogLoadResult> {
+  if (_catalogCache) return Promise.resolve({ ok: true, catalog: _catalogCache });
   if (_catalogInflight) return _catalogInflight;
-  _catalogInflight = (async () => {
+  _catalogInflight = (async (): Promise<CatalogLoadResult> => {
     const r = await fetchAudioChainsCatalog();
     if (r.ok && r.data) {
       _catalogCache = r.data;
-      return _catalogCache;
+      return { ok: true, catalog: r.data };
     }
-    return null;
+    return { ok: false, error: r.error || 'failed to load op catalog' };
   })().finally(() => { _catalogInflight = null; });
   return _catalogInflight;
 }
@@ -627,12 +637,15 @@ function iconButtonText(color: string) {
 // its description. Tapping one calls onPick(opType).
 
 function OpPicker({
-  visible, onPick, onCancel, catalog,
+  visible, onPick, onCancel, catalog, catalogLoading, catalogError, onRetryCatalog,
 }: {
   visible: boolean;
   onPick: (opType: string) => void;
   onCancel: () => void;
   catalog: AudioChainCatalog | null;
+  catalogLoading: boolean;
+  catalogError: string | null;
+  onRetryCatalog: () => void;
 }) {
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
@@ -657,31 +670,71 @@ function OpPicker({
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
             textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12,
           }}>+ Add op</Text>
-          <ScrollView style={{ maxHeight: 360 }}>
-            {OP_PICKER_ORDER.map((opType) => {
-              const entry = catalog?.[opType];
-              if (!entry) return null;
-              return (
-                <TouchableOpacity
-                  key={opType}
-                  onPress={() => onPick(opType)}
-                  style={{
-                    paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6,
-                    borderRadius: 8, backgroundColor: C.surfaceContainerLowest,
-                    borderWidth: 1, borderColor: C.ghostBorder,
-                  }}
-                >
-                  <Text style={{
-                    fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.primary,
-                    textTransform: 'uppercase', letterSpacing: 0.8,
-                  }}>{opLabel(opType)}</Text>
-                  <Text style={{
-                    fontFamily: 'Inter_400Regular', fontSize: 11, color: C.text, marginTop: 2,
-                  }}>{entry.description}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          {/* docs/29 + codex P0 fail-loudly: when the catalog is still
+              loading or the fetch failed, render inline status (NOT a
+              blank picker). Operator gets clear feedback instead of a
+              modal that opens to nothing. */}
+          {!catalog && catalogLoading ? (
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+              <Text style={{
+                fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon,
+              }}>Loading op catalog…</Text>
+            </View>
+          ) : null}
+          {!catalog && !catalogLoading && catalogError ? (
+            <View style={{
+              padding: 12, borderRadius: 8, marginBottom: 8,
+              backgroundColor: 'rgba(186, 26, 26, 0.06)',
+              borderWidth: 1, borderColor: C.error,
+            }}>
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.error,
+                marginBottom: 4, letterSpacing: 0.6,
+              }}>OP CATALOG UNAVAILABLE</Text>
+              <Text style={{
+                fontFamily: 'Inter_400Regular', fontSize: 11, color: C.text, marginBottom: 8,
+              }}>{catalogError}</Text>
+              <TouchableOpacity
+                onPress={onRetryCatalog}
+                style={{
+                  paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6,
+                  backgroundColor: C.primary, alignSelf: 'flex-start',
+                }}
+              >
+                <Text style={{
+                  fontFamily: 'SpaceGrotesk_700Bold', color: '#fff', fontSize: 11,
+                  textTransform: 'uppercase', letterSpacing: 0.6,
+                }}>RETRY</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {catalog ? (
+            <ScrollView style={{ maxHeight: 360 }}>
+              {OP_PICKER_ORDER.map((opType) => {
+                const entry = catalog?.[opType];
+                if (!entry) return null;
+                return (
+                  <TouchableOpacity
+                    key={opType}
+                    onPress={() => onPick(opType)}
+                    style={{
+                      paddingVertical: 10, paddingHorizontal: 12, marginBottom: 6,
+                      borderRadius: 8, backgroundColor: C.surfaceContainerLowest,
+                      borderWidth: 1, borderColor: C.ghostBorder,
+                    }}
+                  >
+                    <Text style={{
+                      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.primary,
+                      textTransform: 'uppercase', letterSpacing: 0.8,
+                    }}>{opLabel(opType)}</Text>
+                    <Text style={{
+                      fontFamily: 'Inter_400Regular', fontSize: 11, color: C.text, marginTop: 2,
+                    }}>{entry.description}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : null}
           <TouchableOpacity
             onPress={onCancel}
             style={{
@@ -739,16 +792,19 @@ function buildDefaultOpFromCatalog(opType: string, catalog: AudioChainCatalog, e
 // ── Per-signal chain editor (expanded body) ───────────────────────────────
 
 function SignalChainEditor({
-  signalKey, label, chain, catalog, otherSignals,
-  onChainUpdated, onError,
+  signalKey, label, chain, catalog, catalogLoading, catalogError, otherSignals,
+  onChainUpdated, onError, onRetryCatalog,
 }: {
   signalKey: string;
   label: string;
   chain: AudioChainOp[];
   catalog: AudioChainCatalog | null;
+  catalogLoading: boolean;
+  catalogError: string | null;
   otherSignals: { key: string; label: string; chain: AudioChainOp[] }[];
   onChainUpdated: (next: AudioChainOp[]) => void;
   onError: (msg: string) => void;
+  onRetryCatalog: () => void;
 }) {
   const frame = useSignalChainFrame(signalKey);
   const previewById = useMemo(() => {
@@ -884,7 +940,13 @@ function SignalChainEditor({
 
   const handleAddOp = useCallback(async (opType: string) => {
     setPickerOpen(false);
-    if (!catalog) return;
+    if (!catalog) {
+      // Defensive: OpPicker hides the rows when catalog is null, so
+      // this branch is unreachable in normal use. If it ever fires
+      // (e.g. catalog cleared mid-tap), surface it instead of swallowing.
+      onError('op catalog not loaded — cannot add op');
+      return;
+    }
     const existingIds = new Set(chain.map(o => o.id));
     const newOp = buildDefaultOpFromCatalog(opType, catalog, existingIds);
     const next = [...chain, newOp];
@@ -997,17 +1059,45 @@ function SignalChainEditor({
         flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8,
         alignItems: 'center',
       }}>
+        {/* [+ ADD OP] is disabled while the op catalog is unavailable
+            (loading on first mount, or failed and not yet retried). The
+            old code silently returned from handleAddOp on null catalog —
+            operator saw a tappable button that did nothing. Codex P0:
+            never swallow. If the catalog FAILED, tapping the button
+            triggers a fresh fetch (the picker spinner then resolves to
+            rows). If still loading, the button is greyed out. */}
         <TouchableOpacity
-          onPress={() => setPickerOpen(true)}
+          onPress={() => {
+            if (catalog) {
+              setPickerOpen(true);
+              return;
+            }
+            // Catalog null — either loading (no-op; spinner shown
+            // inline) or failed (kick off retry). Either way we open
+            // the picker so the operator sees the loading/error state
+            // resolve into rows.
+            if (catalogError && !catalogLoading) {
+              onRetryCatalog();
+            }
+            setPickerOpen(true);
+          }}
+          disabled={catalogLoading}
           style={{
             paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8,
-            backgroundColor: C.primary,
+            backgroundColor: catalog ? C.primary : C.surfaceContainerHigh,
+            borderWidth: catalog ? 0 : 1,
+            borderColor: catalogError ? C.error : C.ghostBorder,
+            opacity: catalogLoading ? 0.5 : 1,
           }}
         >
           <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', color: '#fff', fontSize: 11,
+            fontFamily: 'SpaceGrotesk_700Bold',
+            color: catalog ? '#fff' : (catalogError ? C.error : C.secondary),
+            fontSize: 11,
             textTransform: 'uppercase', letterSpacing: 0.8,
-          }}>+ Add op</Text>
+          }}>
+            {catalog ? '+ Add op' : (catalogLoading ? '+ Add op (loading…)' : '+ Add op (retry)')}
+          </Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
         <TouchableOpacity
@@ -1041,8 +1131,11 @@ function SignalChainEditor({
       <OpPicker
         visible={pickerOpen}
         catalog={catalog}
+        catalogLoading={catalogLoading}
+        catalogError={catalogError}
         onPick={handleAddOp}
         onCancel={() => setPickerOpen(false)}
+        onRetryCatalog={onRetryCatalog}
       />
 
       {/* Duplicate-from picker — reuses the modal pattern */}
@@ -1106,18 +1199,21 @@ function SignalChainEditor({
 // ── Collapsed/expanded row per signal ─────────────────────────────────────
 
 function SignalChainRow({
-  signalKey, label, chain, expanded, catalog, otherSignals,
-  onToggleExpand, onChainUpdated, onError,
+  signalKey, label, chain, expanded, catalog, catalogLoading, catalogError,
+  otherSignals, onToggleExpand, onChainUpdated, onError, onRetryCatalog,
 }: {
   signalKey: string;
   label: string;
   chain: AudioChainOp[] | undefined;
   expanded: boolean;
   catalog: AudioChainCatalog | null;
+  catalogLoading: boolean;
+  catalogError: string | null;
   otherSignals: { key: string; label: string; chain: AudioChainOp[] }[];
   onToggleExpand: () => void;
   onChainUpdated: (next: AudioChainOp[]) => void;
   onError: (msg: string) => void;
+  onRetryCatalog: () => void;
 }) {
   const isLoaded = Array.isArray(chain);
   const ops = chain ?? [];
@@ -1167,9 +1263,12 @@ function SignalChainRow({
           label={label}
           chain={ops}
           catalog={catalog}
+          catalogLoading={catalogLoading}
+          catalogError={catalogError}
           otherSignals={otherSignals}
           onChainUpdated={onChainUpdated}
           onError={onError}
+          onRetryCatalog={onRetryCatalog}
         />
       ) : null}
     </View>
@@ -1181,6 +1280,8 @@ function SignalChainRow({
 export function AudioChainsCard() {
   const [chains, setChains] = useState<AudioChainsMap | null>(null);
   const [catalog, setCatalog] = useState<AudioChainCatalog | null>(_catalogCache);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(_catalogCache == null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -1198,10 +1299,48 @@ export function AudioChainsCard() {
     }
   }, []);
 
+  // Catalog loader, re-callable on retry. The module-scope cache means
+  // a second mount in the same session is a no-op when the first
+  // succeeded. When the first fetch failed, this clears any stale
+  // inflight state and drives a fresh request.
+  const loadCatalogIntoState = useCallback(async () => {
+    if (_catalogCache) {
+      setCatalog(_catalogCache);
+      setCatalogLoading(false);
+      setCatalogError(null);
+      return;
+    }
+    setCatalogLoading(true);
+    setCatalogError(null);
+    const res = await loadCatalog();
+    if (res.ok) {
+      setCatalog(res.catalog);
+      setCatalogError(null);
+    } else {
+      setCatalogError(res.error);
+    }
+    setCatalogLoading(false);
+  }, []);
+
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
     let alive = true;
-    loadCatalog().then((c) => { if (alive && c) setCatalog(c); });
+    if (_catalogCache) {
+      setCatalog(_catalogCache);
+      setCatalogLoading(false);
+      return () => { alive = false; };
+    }
+    setCatalogLoading(true);
+    loadCatalog().then((res) => {
+      if (!alive) return;
+      if (res.ok) {
+        setCatalog(res.catalog);
+        setCatalogError(null);
+      } else {
+        setCatalogError(res.error);
+      }
+      setCatalogLoading(false);
+    });
     return () => { alive = false; };
   }, []);
 
@@ -1224,23 +1363,35 @@ export function AudioChainsCard() {
     return () => { unsub(); };
   }, []);
 
-  // ── Subscription lifecycle (docs/29 §Interactions step 1/6) ──────────
+  // ── Subscription lifecycle (docs/29 §Interactions step 1/6 + step 8) ─
   //
   // While the AUDIO tab is focused, tell the engine to emit 5 Hz
   // signalChain preview frames. On blur, unsubscribe so the engine
-  // pays zero cost. Re-subscribe on WS reconnect (an `audioChainsChanged`
-  // doesn't fire on reconnect, so we hook the bus status directly).
+  // pays zero cost. On WS reconnect we BOTH re-subscribe (so preview
+  // frames resume) AND re-fetch chains via reload() — the engine does
+  // NOT emit `audioChainsChanged` on reconnect, so the iPad's local
+  // chain cache could have drifted while we were offline (another
+  // client edited, scene reload, reset). docs/29 §Interactions step 8
+  // promises: "engine bus reconnects → on `audioChainsChanged` resync";
+  // we fulfill the contract from the iPad side by pulling the engine's
+  // current truth. If the operator had an optimistic PATCH in flight
+  // when the WS dropped, either side may have applied it — taking the
+  // engine's authoritative state is the correct resolution.
   useFocusEffect(useCallback(() => {
     // Send immediately if connected; otherwise the bus's outbound queue
     // (cap 64) will flush on the next open.
     engineEvents.send({ type: 'subscribeChains' });
 
-    // Watch for reconnects and re-subscribe. (Subscribing while already
-    // subscribed is cheap on the engine — it's a boolean set.)
+    // Watch for reconnects and re-subscribe + resync chain state.
+    // (Subscribing while already subscribed is cheap on the engine —
+    // it's a boolean set.)
     let lastConnected = engineEvents.getStatus().connected;
     const unsubStatus = engineEvents.subscribeStatus((s) => {
       if (!lastConnected && s.connected) {
         engineEvents.send({ type: 'subscribeChains' });
+        // Re-fetch chains so any engine-side mutations that happened
+        // during the disconnect window land in our local cache.
+        reload();
       }
       lastConnected = s.connected;
     });
@@ -1249,7 +1400,7 @@ export function AudioChainsCard() {
       engineEvents.send({ type: 'unsubscribeChains' });
       unsubStatus();
     };
-  }, []));
+  }, [reload]));
 
   const updateSignalChain = useCallback((signalKey: string, next: AudioChainOp[]) => {
     setChains((prev) => {
@@ -1326,10 +1477,13 @@ export function AudioChainsCard() {
             chain={chains?.[key]}
             expanded={!!expanded[key]}
             catalog={catalog}
+            catalogLoading={catalogLoading}
+            catalogError={catalogError}
             otherSignals={others}
             onToggleExpand={() => setExpanded(prev => ({ ...prev, [key]: !prev[key] }))}
             onChainUpdated={(next) => updateSignalChain(key, next)}
             onError={handleError}
+            onRetryCatalog={loadCatalogIntoState}
           />
         );
       })}
