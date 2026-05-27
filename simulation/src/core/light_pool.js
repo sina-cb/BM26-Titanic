@@ -14,9 +14,9 @@ import { getProfileDef } from './profile_registry.js';
 
 // ── Pool Configuration ──────────────────────────────────────────────────
 const _urlParams = new URLSearchParams(window.location.search);
-const DEFAULT_POOL_SIZE = 150;
+const DEFAULT_POOL_SIZE = 60;
 export const MAX_SPOTLIGHT_POOL_SIZE = 200; // Manual hard cap for ?spotlights=N and pool allocation
-const DEFAULT_SPOTLIGHT_SAMPLING_MODE = 'closest';
+const DEFAULT_SPOTLIGHT_SAMPLING_MODE = 'uniform';
 const SPOTLIGHT_SAMPLING_BUCKET_MIN = 2;
 const SPOTLIGHT_SAMPLING_BUCKET_MAX = 20;
 const DEFAULT_SPOTLIGHT_SAMPLING_BUCKET_DISTANCE = 10;

@@ -78,7 +78,7 @@ options:
       - emissive
       - full
   spotlightSamplingMode:
-    value: closest
+    value: uniform
     label: Sim Spotlight Sampling
     options:
       - closest
