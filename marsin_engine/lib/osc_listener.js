@@ -20,23 +20,30 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
-import { GAIN_BY_KEY, processSignal } from './audio_post_processing.js';
-
-// Per-signal post-processing is applied AT THE SOURCE before writing
-// to CPC, so every downstream consumer (patterns, modulation, iPad
-// meters, OSC echo) reads one authoritative post-processed value. The
-// math + the signalKey→gainKey map live in
-// `lib/audio_post_processing.js` so the analyzer (mic side) and this
-// listener (stems side) run the EXACT same code path — no risk of
-// subtle behavioral diffs (operator brief 2026-05-26 "make sure the
-// gain and post-processing pipeline is the exact same for stems and
-// mic signals"). When V2 of the chain (docs/29 — Gain → LPF →
-// Schmitt → Hold → Compressor → …) lands, BOTH call sites pick up
-// the new ops for free.
+// Per-signal post-processing (docs/29) runs in the engine via
+// `lib/signal_post_processor.js`. The OSC listener accepts an OPTIONAL
+// `signalPostProcessor` constructor arg and routes each gainable
+// scalar write through `signalPostProcessor.process(key, raw, dt)`
+// before publishing — so the chain framework's Gain op (and any
+// downstream ops the operator adds) applies uniformly to stems just
+// like it does to mic bands.
 //
-// Re-export GAIN_BY_KEY for back-compat with existing importers — the
-// post-processing module is the source of truth now.
-export { GAIN_BY_KEY };
+// GAIN_BY_KEY is preserved here as the source-side validation map:
+// every live key the listener knows about that should be gain-aware
+// MUST have its `*Gain` partner in the CPC registry, else boot
+// crashes (Codex P0: a half-wired gain knob would silently do
+// nothing, which is the failure mode this map exists to prevent).
+// The MATH of gain is now in the chain framework — this map stays
+// only as a boot-time existence check.
+export const GAIN_BY_KEY = Object.freeze({
+  stemsBass:   'stemsBassGain',
+  stemsDrums:  'stemsDrumsGain',
+  stemsVocals: 'stemsVocalsGain',
+  micLow:      'micLowGain',
+  micMid:      'micMidGain',
+  micHigh:     'micHighGain',
+  micKick:     'micKickGain',
+});
 
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 
@@ -268,12 +275,20 @@ export class OscListener {
    * @param {Array}  [opts.allowedSenders]
    * @param {object} opts.paramCenter   — CPC instance (setMany/setHsvField/set)
    * @param {(stats: object) => void} [opts.onStats]
+   * @param {object} [opts.signalPostProcessor] — when present, every
+   *   gainable scalar write (keys in GAIN_BY_KEY) is routed through
+   *   `signalPostProcessor.process(key, rawValue, dtSeconds)` before
+   *   the post value is published. The raw mirror is written
+   *   unchanged. When omitted (older boots / tests), gainable writes
+   *   pass through unprocessed — the chain framework gracefully
+   *   degrades to identity rather than block packets.
    */
   constructor(opts = {}) {
     const {
       port, host = '0.0.0.0',
       bindings = {}, allowedSenders = [],
       paramCenter, onStats,
+      signalPostProcessor = null,
     } = opts;
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`osc.port must be an integer in [1, 65535], got ${port}.`);
@@ -291,6 +306,12 @@ export class OscListener {
     this.host = host;
     this.paramCenter = paramCenter;
     this.onStats = onStats;
+    this.signalPostProcessor = signalPostProcessor;
+    // Last-dispatched timestamp per signal key — feeds dt into the
+    // per-signal chain so time-domain ops (LPF, Envelope, Hold) get a
+    // valid delta even though OSC packets land aperiodically. Seeded
+    // at constructor time so the first packet sees dt = 0.
+    this._lastDispatchAt = Object.create(null);
 
     // Build maps eagerly so any bad config throws BEFORE we open
     // the socket. No partial binding map ever survives the
@@ -529,17 +550,22 @@ export class OscListener {
       }
       if (b.kind === 'scalar') {
         // Source-side post-processing: if this live key has a gain
-        // partner (stems*, mic*), push it through the shared
-        // post-processing framework BEFORE it lands in CPC. Every
-        // downstream consumer sees the post-processed value — one
-        // truth. Same framework the analyzer uses for the mic side
-        // (lib/audio_post_processing.js), so any future op (LPF /
-        // Schmitt / Hold / Compressor per docs/29) lands here
-        // automatically.
+        // partner (stems*, mic*) AND the engine wired a
+        // signalPostProcessor, push the value through the chain
+        // BEFORE it lands in CPC. Every downstream consumer sees the
+        // post-processed value — one truth. The chain's first op is
+        // a Gain tied to `paramKey: '<key>Gain'`, so the operator's
+        // existing gain slider behaviour is preserved verbatim while
+        // any extra ops (LPF / Schmitt / Hold / etc.) layer on top.
         const hasGain = this._gainByKey[b.key] !== undefined;
-        const outValue = hasGain
-          ? processSignal(this.paramCenter, b.key, value)
-          : value;
+        let outValue = value;
+        if (hasGain && this.signalPostProcessor) {
+          const nowMs = Date.now();
+          const prevMs = this._lastDispatchAt[b.key];
+          const dt = (prevMs === undefined) ? 0 : Math.max(0, (nowMs - prevMs) / 1000);
+          this._lastDispatchAt[b.key] = nowMs;
+          outValue = this.signalPostProcessor.process(b.key, value, dt);
+        }
         writes.push({ kind: 'scalar', key: b.key, value: outValue });
         // RAW mirror: when the registry has a `<liveKey>Raw` entry
         // (e.g. stemsBassRaw), publish the PRE-processing value to it

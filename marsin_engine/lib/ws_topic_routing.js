@@ -96,6 +96,16 @@ const TOPIC_BY_TYPE = Object.freeze({
 
   // ── /ws/signals ────────────────────────────────────────────────
   liveParams:                  TOPICS.SIGNALS,
+  // 5 Hz pre/post per-op preview for the chain editor. Emitted only
+  // when at least one client has sent `subscribeChains` upstream;
+  // gated by SignalPostProcessor.setEditorSubscribed (docs/29 §WS
+  // contract — "cheap when off").
+  signalChain:                 TOPICS.SIGNALS,
+
+  // ── /ws/control ────────────────────────────────────────────────
+  // docs/29: replayed after every successful PUT/PATCH/reset so iPad
+  // reconciles its local cache without re-fetching.
+  audioChainsChanged:          TOPICS.CONTROL,
 
   // ── /ws/viz ────────────────────────────────────────────────────
   vis:                         TOPICS.VIZ,

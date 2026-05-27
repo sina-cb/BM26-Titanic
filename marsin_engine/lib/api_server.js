@@ -214,6 +214,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     engineCore.modulationBroadcastRef.publish = broadcastWs;
   }
 
+  // Same pattern for the SignalPostProcessor (docs/29) — the engine
+  // constructs it before api_server runs, hands us a deferred ref;
+  // wire it here so `audioChainsChanged` (on PUT/PATCH/reset) and
+  // 5 Hz `signalChain` previews flow through broadcastWs.
+  if (engineCore.signalPostProcessorBroadcastRef) {
+    engineCore.signalPostProcessorBroadcastRef.publish = broadcastWs;
+  }
+
   const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
 
@@ -2547,6 +2555,91 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
+    } else if (req.method === 'GET' && req.url === '/audio/chains') {
+      // docs/29 §REST endpoints: full per-signal chain map.
+      const spp = engineCore && engineCore.signalPostProcessor;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(spp.getAllChains()));
+    } else if (req.method === 'GET' && req.url === '/audio/chains/catalog') {
+      // docs/29 §REST endpoints — op catalog for the iPad's "+ ADD OP"
+      // picker (Phase 5). Cached client-side per engine version.
+      import('./signal_post_processor.js').then(({ opCatalog }) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(opCatalog()));
+      });
+    } else if (req.method === 'POST' && req.url === '/audio/chains/reset') {
+      // docs/29 §REST endpoints — restore ALL signals to defaults.
+      const spp = engineCore && engineCore.signalPostProcessor;
+      const audioState = engineCore && engineCore.audioState;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      const r = spp.resetAll();
+      if (audioState && typeof audioState.persistChains === 'function') audioState.persistChains();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(r.chains));
+    } else if (req.method === 'GET' && req.url.match(/^\/audio\/chains\/[^\/]+$/)) {
+      const spp = engineCore && engineCore.signalPostProcessor;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      const signalKey = decodeURIComponent(req.url.split('/')[3]);
+      const chain = spp.getChain(signalKey);
+      if (chain === null) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `unknown signalKey "${signalKey}"` }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(chain));
+    } else if (req.method === 'PUT' && req.url.match(/^\/audio\/chains\/[^\/]+$/)) {
+      // docs/29: atomic replace of a signal's chain. 400 on validation
+      // failure (existing chain unchanged — see SignalPostProcessor).
+      const spp = engineCore && engineCore.signalPostProcessor;
+      const audioState = engineCore && engineCore.audioState;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      const signalKey = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        const r = spp.putChain(signalKey, data);
+        if (!r.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: r.error }));
+        }
+        if (audioState && typeof audioState.persistChains === 'function') audioState.persistChains();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r.chain));
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/audio\/chains\/[^\/]+\/reset$/)) {
+      // Place BEFORE the generic /:signalKey/:opId PATCH so /reset
+      // doesn't get parsed as an opId.
+      const spp = engineCore && engineCore.signalPostProcessor;
+      const audioState = engineCore && engineCore.audioState;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      const parts = req.url.split('/');
+      const signalKey = decodeURIComponent(parts[3]);
+      const r = spp.resetSignal(signalKey);
+      if (!r.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: r.error }));
+      }
+      if (audioState && typeof audioState.persistChains === 'function') audioState.persistChains();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(r.chain));
+    } else if (req.method === 'PATCH' && req.url.match(/^\/audio\/chains\/[^\/]+\/[^\/]+$/)) {
+      // docs/29: partial update of one op (enabled toggle + subset of
+      // params). 400 on validation failure.
+      const spp = engineCore && engineCore.signalPostProcessor;
+      const audioState = engineCore && engineCore.audioState;
+      if (!spp) { res.writeHead(503); return res.end(JSON.stringify({ error: 'signal_post_processor_not_initialized' })); }
+      const parts = req.url.split('/');
+      const signalKey = decodeURIComponent(parts[3]);
+      const opId      = decodeURIComponent(parts[4]);
+      readBody(data => {
+        const r = spp.patchOp(signalKey, opId, data);
+        if (!r.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: r.error }));
+        }
+        if (audioState && typeof audioState.persistChains === 'function') audioState.persistChains();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r.op));
+      });
     } else if (req.method === 'PATCH' && req.url === '/audio/config') {
       const audioState = engineCore && engineCore.audioState;
       if (!audioState || typeof audioState.applyLiveUpdate !== 'function') {
@@ -3397,6 +3490,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Success path: paramCenter.onChange (wired at boot)
           // handles persistence + throttled WS broadcast + WASM
           // dirty marking. See docs/24 §7.2.
+        } else if (d.type === 'subscribeChains' || d.type === 'unsubscribeChains') {
+          // docs/29 §WS contract: gate the 5 Hz signalChain preview
+          // emission. Engine pays zero cost when no client is subscribed.
+          // V1 is "is anyone subscribed at all?" — the engine doesn't
+          // need a per-client subscriber map because the 5 Hz frame is
+          // broadcast to ALL /ws/signals clients anyway.
+          const spp = engineCore && engineCore.signalPostProcessor;
+          if (spp && typeof spp.setEditorSubscribed === 'function') {
+            spp.setEditorSubscribed(d.type === 'subscribeChains');
+          }
         }
       } catch(e) {}
     });

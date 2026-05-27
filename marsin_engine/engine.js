@@ -31,6 +31,7 @@ import { mergeAudioConfig, pickLiveFields } from './lib/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
 } from './lib/audio_config_store.js';
+import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
@@ -847,11 +848,25 @@ async function main() {
     broadcast: (msg) => modulationBroadcastRef.publish(msg),
   });
 
+  // SignalPostProcessor (docs/29 Phase 2): per-signal node chain that
+  // sits between the analyzer/OSC source and CPC writes. Default
+  // chains are seeded at construction; the per-scene `audio_state.yaml`
+  // `chains:` block (if present) is merged on top below, after the
+  // file is loaded. Broadcast is a deferred ref filled by api_server.
+  const signalPostProcessorBroadcastRef = { publish: () => {} };
+  const signalPostProcessor = new SignalPostProcessor({
+    scenePath: path.join(__dirname, 'states', opts.modelName),
+    paramCenter,
+    broadcast: (msg) => signalPostProcessorBroadcastRef.publish(msg),
+  });
+
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
     globalEffectSlotManager,
     modulationController,
     modulationBroadcastRef,
+    signalPostProcessor,
+    signalPostProcessorBroadcastRef,
     // Expose the live frame counter as a getter so API routes can
     // pass the engine's true frame index to dispatchSlotAction
     // (strobe phase needs that to start at the right cycle).
@@ -909,6 +924,19 @@ async function main() {
   audioState.defaults = baseAudioCfg;
   audioState.config = mergeAudioConfig(baseAudioCfg, sceneAudioOv);
 
+  // docs/29: load the per-scene `chains:` block, if any, on top of
+  // the processor's compiled-in DEFAULT_CHAINS. Validation runs
+  // atomically — any malformed entry throws and the boot logs it,
+  // preserving the default chains so the show can still light up.
+  if (sceneAudioOv && sceneAudioOv.chains !== undefined) {
+    try {
+      signalPostProcessor.loadChains(sceneAudioOv.chains);
+      console.log('  🔧 signal chains: loaded from audio_state.yaml');
+    } catch (e) {
+      console.error(`  ⚠️  signal chains: ignoring malformed chains block (${e.message}) — using defaults`);
+    }
+  }
+
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
   // hand. Defined here so it closes over paramCenter + broadcasts.
@@ -928,43 +956,43 @@ async function main() {
     }
     try {
       const resolvedFfmpeg = await resolveFfmpegPath(cfg.capture.ffmpegPath || 'ffmpeg');
+      // docs/29 Phase 2: the analyzer emits RAW post-envelope band
+      // values. We route each through `signalPostProcessor.process()`
+      // (which runs the per-signal node chain — Gain via paramKey,
+      // then any operator-added LPF / Envelope / Schmitt / Hold).
+      // Both raw + post are then written to CPC so the iPad can
+      // show pre/post side-by-side. The chain's Gain op reads its
+      // `*Gain` CPC param live each call, preserving the operator's
+      // existing slider-as-source-of-truth contract.
+      let lastAnalysisAtMs = 0;
       audioState.analyzer = new AudioAnalyzer({
         sampleRate: cfg.capture.sampleRate,
         fftSize:    cfg.fftSize,
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        // Per-band gain (and any future post-processing op) is applied
-        // INSIDE the analyzer via the shared `audio_post_processing.js`
-        // framework — see header comment. We hand the analyzer the CPC
-        // SIGNAL keys (`micLow`, `micMid`, …); the framework derives
-        // each gain key from GAIN_BY_KEY and pulls the live value from
-        // `paramCenter`. The values we receive here are the
-        // post-processed (gained + clamped) bands plus their raw
-        // counterparts — both are written to CPC so the iPad can show
-        // raw vs post side-by-side.
-        paramCenter,
-        signalKeys: {
-          low:  'micLow',
-          mid:  'micMid',
-          high: 'micHigh',
-          kick: 'micKick',
-        },
-        onAnalysis: ({ low, mid, high, kick, lowRaw, midRaw, highRaw, kickRaw }) => {
-          if (kick > 0.95) audioState.lastKickAt = Date.now();
+        onAnalysis: ({ low, mid, high, kick }) => {
+          const nowMs = Date.now();
+          const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
+          lastAnalysisAtMs = nowMs;
+          const lowPost  = signalPostProcessor.process('micLow',  low,  dt);
+          const midPost  = signalPostProcessor.process('micMid',  mid,  dt);
+          const highPost = signalPostProcessor.process('micHigh', high, dt);
+          const kickPost = signalPostProcessor.process('micKick', kick, dt);
+          if (kickPost > 0.95) audioState.lastKickAt = nowMs;
           // Single setMany so the downstream onChange fan-out fires
           // ONCE per hop for the full 8-key bundle (post + raw), not
           // twice. CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys
           // to render the raw row of the diagnostics strip.
           paramCenter.setMany([
-            { kind: 'scalar', key: 'micLow',     value: low     },
-            { kind: 'scalar', key: 'micMid',     value: mid     },
-            { kind: 'scalar', key: 'micHigh',    value: high    },
-            { kind: 'scalar', key: 'micKick',    value: kick    },
-            { kind: 'scalar', key: 'micLowRaw',  value: lowRaw  },
-            { kind: 'scalar', key: 'micMidRaw',  value: midRaw  },
-            { kind: 'scalar', key: 'micHighRaw', value: highRaw },
-            { kind: 'scalar', key: 'micKickRaw', value: kickRaw },
+            { kind: 'scalar', key: 'micLow',     value: lowPost  },
+            { kind: 'scalar', key: 'micMid',     value: midPost  },
+            { kind: 'scalar', key: 'micHigh',    value: highPost },
+            { kind: 'scalar', key: 'micKick',    value: kickPost },
+            { kind: 'scalar', key: 'micLowRaw',  value: low      },
+            { kind: 'scalar', key: 'micMidRaw',  value: mid      },
+            { kind: 'scalar', key: 'micHighRaw', value: high     },
+            { kind: 'scalar', key: 'micKickRaw', value: kick     },
           ], 'audio', 'audio:mic');
         },
       });
@@ -1098,6 +1126,37 @@ async function main() {
 
   await buildAndStartAudio();
 
+  /**
+   * Persist the current per-signal chain map into the scene's
+   * `audio_state.yaml` under a top-level `chains:` block. Called on
+   * every successful PUT / PATCH / reset (the api_server route hands
+   * back to this helper so persistence stays consistent with how
+   * applyLiveUpdate handles bands/kick).
+   */
+  audioState.persistChains = function persistChains() {
+    try {
+      const onDisk = loadSceneAudio(audioState.sceneDir);
+      const next = { ...onDisk, chains: signalPostProcessor.getAllChains() };
+      saveSceneAudio(audioState.sceneDir, next);
+    } catch (e) {
+      console.warn(`[audio] failed to persist chains: ${e.message}`);
+    }
+  };
+
+  // 5 Hz signalChain preview broadcast — emits ONE message per signal
+  // per tick (so ~35 small frames/s when subscribed, ~0 when not).
+  // The processor's `snapshotForEditor` returns zero-cost stubs when
+  // `setEditorSubscribed(false)` so this timer still pays nothing on
+  // the wire when the AUDIO tab isn't open.
+  const signalChainTimer = setInterval(() => {
+    if (!signalPostProcessor._editorSubscribed) return;
+    for (const sig of KNOWN_SIGNALS) {
+      const snap = signalPostProcessor.snapshotForEditor(sig);
+      if (snap) signalPostProcessorBroadcastRef.publish(snap);
+    }
+  }, 200);
+  if (signalChainTimer.unref) signalChainTimer.unref();
+
   // 1-Hz audioStatus heartbeat so CaptainPad's Audio Analysis tab
   // shows a live captureFps + lastKickMs even between explicit
   // lifecycle events from the capture layer. Cheap and unconditional
@@ -1205,6 +1264,7 @@ async function main() {
         bindings:       cfg.bindings || {},
         allowedSenders: cfg.allowedSenders || [],
         paramCenter,
+        signalPostProcessor,
         onStats:        (s) => broadcastStatsRef.publish(s),
       });
       try {
@@ -1252,6 +1312,7 @@ async function main() {
         bindings:       cfg.bindings || {},
         allowedSenders: cfg.allowedSenders || [],
         paramCenter,
+        signalPostProcessor,
         onStats:        (s) => broadcastStatsRef.publish(s),
       });
     } catch (err) {

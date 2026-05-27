@@ -13,6 +13,16 @@ import {
   normalizeIp,
   coerceArg,
 } from '../lib/osc_listener.js';
+import { SignalPostProcessor } from '../lib/signal_post_processor.js';
+
+/**
+ * Build a real SignalPostProcessor wired to a paramCenter so the
+ * OscListener's source-side gain test cases get the chain framework's
+ * default Gain op (paramKey: '<key>Gain'). Mirrors the engine's wiring.
+ */
+function makePostProcessor(pc) {
+  return new SignalPostProcessor({ paramCenter: pc });
+}
 
 // ── Test doubles ───────────────────────────────────────────────────────────
 
@@ -335,7 +345,9 @@ test('raw + post pair: gain=2 doubles post but raw passes through, in one setMan
   ]);
   // Twist the gain knob to 2× so post ≠ raw and we can tell them apart.
   pc.set('stemsVocalsGain', 2.0, 'api');
-  const l = new OscListener({ port: 6970, paramCenter: pc });
+  // Inject the chain framework's processor — the listener now routes
+  // gain through the chain's first Gain op (`paramKey: 'stemsVocalsGain'`).
+  const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   // Drain the .set() bookkeeping call so we can assert on the dispatch
   // batch in isolation.
   pc.calls.length = 0;
@@ -364,7 +376,7 @@ test('raw + post pair: post saturates at 1.0 while raw passes through unclamped 
       live: true, broadcastHz: 15, persist: false, portWatch: false },
   ]);
   pc.set('stemsVocalsGain', 4.0, 'api');
-  const l = new OscListener({ port: 6970, paramCenter: pc });
+  const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   pc.calls.length = 0;
   dispatchPacket(l, '/marsin/stems/vocals', [0.5]);
   const writes = pc.calls[0].writes;
@@ -381,7 +393,7 @@ test('raw + post pair: absent *Raw registry entry → post-only (back-compat)', 
   // post pipeline.
   const pc = makeMockParamCenter();  // no extras
   pc.set('stemsVocalsGain', 2.0, 'api');
-  const l = new OscListener({ port: 6970, paramCenter: pc });
+  const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   pc.calls.length = 0;
   dispatchPacket(l, '/marsin/stems/vocals', [0.3]);
   assert.equal(pc.calls[0].writes.length, 1, 'no raw entry → 1 write only');

@@ -2,20 +2,23 @@
  * AudioAnalyzer — FFT, band energy + kick detection. PURE DATA SOURCE.
  *
  * Reads Int16 PCM frames via `pushSamples(int16)` and emits per-hop
- * analysis results to `onAnalysis({ low, lowRaw, mid, midRaw, high,
- * highRaw, kick, kickRaw })` — both the raw post-envelope band value
- * AND the post-processed value (gain × clamp today, future: filter /
- * smoothing / schmitt per docs/29) for every band. The engine then
- * publishes BOTH to CPC so consumers (patterns, modulation, iPad
- * trail/instant plots) can read either.
+ * analysis results to `onAnalysis({ low, mid, high, kick })` — RAW
+ * post-envelope band values in [0, 1]. No per-band gain, no chain
+ * processing here. The engine wraps each value through the per-signal
+ * post-processing chain (`lib/signal_post_processor.js`, docs/29) in
+ * its `onAnalysis` callback before writing to CPC.
  *
- * Architectural rationale (operator brief, 2026-05-26): the analyzer
- * is a data source; all post-processing math lives in
- * `lib/audio_post_processing.js` so the mic side (this file) and
- * the stems side (`lib/osc_listener.js`) run the EXACT same
- * pipeline. Single source of truth — when V2 of the pipeline (LPF
- * / Schmitt / Hold / Compressor per docs/29) lands, both call sites
- * pick it up for free with zero divergence risk.
+ * Architectural rationale (operator brief, 2026-05-26 + docs/29):
+ *   - The analyzer is the canonical "raw mic" source. Per-band gain,
+ *     smoothing, schmitt, hold, etc. live in the chain framework so
+ *     the operator can tune each signal independently from the iPad.
+ *     Both mic (this file) and stems (`lib/osc_listener.js`) feed the
+ *     SAME chain framework so there's no divergence risk.
+ *   - Until docs/29 Phase 2 (this rollout) the analyzer applied a
+ *     per-band Gain itself via `lib/audio_post_processing.js`. That
+ *     module is now subsumed by the chain framework's Gain op (with
+ *     `paramKey: 'micLowGain'` etc.) so the analyzer is back to being
+ *     a pure data source — one less place for gain to silently drift.
  *
  * Design: docs/25_marsin_audio_analysis.md §4. Summary:
  *
@@ -27,15 +30,7 @@
  *   - Bands defined as `[loHz, hiHz]` ranges, converted to bin
  *     indices at construction / reconfigure. Per-band sum-of-magnitudes.
  *   - Soft compression `x / (1 + x)` plus a pre-clamp gain so quiet
- *     rooms still produce visible movement. The per-band operator
- *     gain (`mic*Gain` CPC params) is applied via the shared
- *     post-processing framework (`lib/audio_post_processing.js`)
- *     immediately after the envelope, before the value is emitted.
- *     The framework is called with the live signal key (`micLow`,
- *     `micMid`, etc.); it derives the gain key, multiplies, and
- *     clamps to [0, 1]. The engine writes BOTH the raw post-envelope
- *     value AND the post-processed value to CPC so the iPad can
- *     visualize the pre/post pair without guessing.
+ *     rooms still produce visible movement.
  *   - Per-band asymmetric attack/release envelope (VU-meter
  *     convention): fast attack so peaks register, slow release so
  *     visuals don't flicker. Configurable via `bands.attackMs` /
@@ -71,8 +66,6 @@
  */
 
 import FFT from 'fft.js';
-
-import { processSignal } from './audio_post_processing.js';
 
 // Maps the FFT magnitude scale (post sum-of-magnitudes / fftSize, where
 // a single tone at amplitude A lands around A/2) into something useful
@@ -115,26 +108,11 @@ export class AudioAnalyzer {
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
-   * @param {(r: {low, lowRaw, mid, midRaw, high, highRaw, kick, kickRaw}) => void} opts.onAnalysis
-   *        Each callback gets BOTH the raw post-envelope value and
-   *        the post-processed value for every band. When the analyzer
-   *        is constructed without `signalKeys` (test-only path) the
-   *        raw and post are identical (no post-processing applied).
-   * @param {object} [opts.paramCenter] — CPC instance; required when `signalKeys` is set. Passed to the post-processing framework for per-hop gain reads.
-   * @param {{low:string, mid:string, high:string, kick:string}} [opts.signalKeys]
-   *        — CPC live signal keys for each band (e.g. `micLow`,
-   *          `micMid`). When set, the analyzer pushes each post-
-   *          envelope band value through the shared post-processing
-   *          framework (`lib/audio_post_processing.js`) and emits
-   *          both the raw and the post-processed value. The framework
-   *          derives the gain key from the signal key via GAIN_BY_KEY.
-   *          When omitted (e.g. unit tests that don't care about
-   *          gain) the analyzer emits raw post-envelope values as
-   *          both raw and post — no post-processing applied.
-   *          Codex P0: if `signalKeys` is set, every listed signal
-   *          key must be known to the framework AND its derived gain
-   *          key must resolve via `paramCenter.get` at construction
-   *          or construction throws — no silent zero-gain fallbacks.
+   * @param {(r: {low, mid, high, kick}) => void} opts.onAnalysis
+   *        Each callback receives the RAW post-envelope band values
+   *        in [0, 1]. The engine wraps these through the per-signal
+   *        post-processing chain (lib/signal_post_processor.js) before
+   *        writing them to CPC.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -154,51 +132,6 @@ export class AudioAnalyzer {
     this.hopSize     = (opts.hopSize | 0) || (fftSize >> 1);
     this._onAnalysis = opts.onAnalysis;
     this._nowFn      = opts.nowFn || (() => Date.now());
-
-    // Post-processing hookup. Either both `paramCenter` AND
-    // `signalKeys` are present (production / gain-aware tests) or
-    // both absent (analyzer-only unit tests for FFT correctness).
-    // Half-configured is a programmer error — fail loud at
-    // construction. The framework (audio_post_processing.js) derives
-    // each gain key from the signal key via GAIN_BY_KEY; we probe
-    // the gain via processSignal() at construction so any missing
-    // entry in GAIN_BY_KEY or the CPC registry surfaces as a
-    // boot-time crash, never as "knob does nothing" at runtime.
-    if (opts.signalKeys || opts.paramCenter) {
-      if (!opts.signalKeys || typeof opts.signalKeys !== 'object') {
-        throw new TypeError('AudioAnalyzer: signalKeys required when paramCenter is provided');
-      }
-      if (!opts.paramCenter || typeof opts.paramCenter.get !== 'function') {
-        throw new TypeError('AudioAnalyzer: paramCenter with .get(key) required when signalKeys is provided');
-      }
-      const required = ['low', 'mid', 'high', 'kick'];
-      for (const band of required) {
-        const key = opts.signalKeys[band];
-        if (typeof key !== 'string' || key.length === 0) {
-          throw new TypeError(`AudioAnalyzer: signalKeys.${band} must be a non-empty CPC live signal key`);
-        }
-        // Probe — processSignal() throws on unknown signalKey (via
-        // GAIN_BY_KEY) AND on unknown derived gainKey (via
-        // paramCenter.get). Codex P0: convert "phantom signal /
-        // missing gain partner" runtime bugs into a boot-time crash.
-        const probe = processSignal(opts.paramCenter, key, 0);
-        if (typeof probe !== 'number') {
-          throw new TypeError(
-            `AudioAnalyzer: processSignal(${key}) returned ${typeof probe}; expected number`,
-          );
-        }
-      }
-      this._paramCenter = opts.paramCenter;
-      this._signalKeys = {
-        low:  opts.signalKeys.low,
-        mid:  opts.signalKeys.mid,
-        high: opts.signalKeys.high,
-        kick: opts.signalKeys.kick,
-      };
-    } else {
-      this._paramCenter = null;
-      this._signalKeys = null;
-    }
 
     this._fft = new FFT(fftSize);
     this._window = hannWindow(fftSize);
@@ -489,36 +422,14 @@ export class AudioAnalyzer {
     // can't recover clipped post=1.0 cases. Operator brief 2026-05-26
     // "show raw + post" + scope clarification "RAW = pre-gain,
     // pre-post-processing analyzer output".
-    const lowRaw  = clamp01(low);
-    const midRaw  = clamp01(mid);
-    const highRaw = clamp01(high);
-    const kickRaw = clamp01(this._kickValue);
-
-    // Push each post-envelope band through the shared post-processing
-    // framework. The framework (lib/audio_post_processing.js) is the
-    // single source of truth for the pipeline — same module the OSC
-    // listener uses for stems, so future ops added there (LPF /
-    // Schmitt / Hold / Compressor per docs/29) land here automatically.
-    // When the analyzer was constructed without paramCenter+signalKeys
-    // (test-only path) we emit raw values as both raw and post — no
-    // pipeline applied.
-    //
-    // Codex P0: processSignal reads via paramCenter.get() which throws
-    // on unknown keys. We probed all four at construction, so any
-    // throw here means someone tore down a gain key at runtime — let
-    // it surface, don't paper over it.
-    let lowOut, midOut, highOut, kickOut;
-    if (this._signalKeys) {
-      lowOut  = processSignal(this._paramCenter, this._signalKeys.low,  lowRaw);
-      midOut  = processSignal(this._paramCenter, this._signalKeys.mid,  midRaw);
-      highOut = processSignal(this._paramCenter, this._signalKeys.high, highRaw);
-      kickOut = processSignal(this._paramCenter, this._signalKeys.kick, kickRaw);
-    } else {
-      lowOut  = lowRaw;
-      midOut  = midRaw;
-      highOut = highRaw;
-      kickOut = kickRaw;
-    }
+    // Emit RAW post-envelope band values. The engine's onAnalysis
+    // callback runs each through `signalPostProcessor.process()` before
+    // writing to CPC (the chain is the new single source of truth for
+    // gain, smoothing, schmitt, hold, etc. — docs/29 Phase 2).
+    const lowOut  = clamp01(low);
+    const midOut  = clamp01(mid);
+    const highOut = clamp01(high);
+    const kickOut = clamp01(this._kickValue);
 
     try {
       this._onAnalysis({
@@ -526,10 +437,6 @@ export class AudioAnalyzer {
         mid:  midOut,
         high: highOut,
         kick: kickOut,
-        lowRaw,
-        midRaw,
-        highRaw,
-        kickRaw,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);
