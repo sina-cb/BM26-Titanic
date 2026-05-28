@@ -43,15 +43,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Alert, Platform } from 'react-native';
-import { Colors } from '@/constants/theme';
-
-// Hard UI contract (operator review May 2026): the rig surface shows
-// EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
-// — anything beyond this is hidden from the strip. The operator
-// re-binds the visible 6 via long-press swap; the engine's library
-// still contains every preset so swapping in vintageWhite, fogger,
-// blastWhite, etc. is one tap of the SWAP modal.
-const VISIBLE_SLOT_COUNT = 6;
+import { usePalette } from '@/hooks/use-theme';
 import {
   fetchGlobalEffectSlots,
   fetchGlobalEffectSlotsStatus,
@@ -64,7 +56,13 @@ import {
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 
-const C = Colors.light;
+// Hard UI contract (operator review May 2026): the rig surface shows
+// EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
+// — anything beyond this is hidden from the strip. The operator
+// re-binds the visible 6 via long-press swap; the engine's library
+// still contains every preset so swapping in vintageWhite, fogger,
+// blastWhite, etc. is one tap of the SWAP modal.
+const VISIBLE_SLOT_COUNT = 6;
 
 type LibPreset = { id: string; label: string; defaultBehavior: string; safetyTier?: string; params: any };
 type LibEffect = { id: string; name: string; category: string; behaviorTypes: string[]; presets: Record<string, LibPreset>; legacyEffectId?: string | null };
@@ -114,6 +112,7 @@ const EMPTY_STENCIL = Object.freeze({
 });
 
 export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange, variant = 'deck' }) => {
+  const C = usePalette();
   const [slots, setSlots] = useState<GlobalEffectSlotStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library | null>(null);
@@ -510,17 +509,20 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   );
 };
 
-const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => (
-  <Text style={{
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: variant === 'mixer-strip' ? 9 : 10,
-    color: C.secondary, letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  }}>
-    Global Effects
-  </Text>
-);
+const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
+  const C = usePalette();
+  return (
+    <Text style={{
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: variant === 'mixer-strip' ? 9 : 10,
+      color: C.secondary, letterSpacing: 1.2,
+      textTransform: 'uppercase',
+      marginBottom: 4,
+    }}>
+      Global Effects
+    </Text>
+  );
+};
 
 // Bound slot cell. The cell body is the tap target; the tiny edit
 // pencil in the top-right corner opens the swap sheet. We deliberately
@@ -550,6 +552,7 @@ const SlotButton: React.FC<{
   onPress: () => void;
   onEdit: () => void;
 }> = ({ slot, isOn, height, fontSize, onPress, onEdit }) => {
+  const C = usePalette();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
   const [ackAt, setAckAt] = useState<number | null>(null);
   useEffect(() => {
@@ -641,26 +644,29 @@ const EmptySlotButton: React.FC<{
   slotId: number;
   height: number;
   onPress: () => void;
-}> = ({ slotId, height, onPress }) => (
-  <TouchableOpacity
-    onPress={onPress}
-    activeOpacity={1}
-    accessibilityLabel={`Add effect to slot ${slotId}`}
-    style={{
-      flex: 1, height, borderRadius: 6,
-      backgroundColor: C.surfaceContainerLowest,
-      borderWidth: 1,
-      borderStyle: 'dashed',
-      borderColor: C.ghostBorder,
-      justifyContent: 'center', alignItems: 'center',
-      ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
-    }}
-  >
-    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.icon, lineHeight: 20 }}>
-      +
-    </Text>
-  </TouchableOpacity>
-);
+}> = ({ slotId, height, onPress }) => {
+  const C = usePalette();
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={1}
+      accessibilityLabel={`Add effect to slot ${slotId}`}
+      style={{
+        flex: 1, height, borderRadius: 6,
+        backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: C.ghostBorder,
+        justifyContent: 'center', alignItems: 'center',
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+    >
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.icon, lineHeight: 20 }}>
+        +
+      </Text>
+    </TouchableOpacity>
+  );
+};
 
 const BlackoutButton: React.FC<{
   blackout: boolean;
@@ -668,6 +674,7 @@ const BlackoutButton: React.FC<{
   fontSize: number;
   onPress: () => void;
 }> = ({ blackout, height, fontSize, onPress }) => {
+  const C = usePalette();
   // When OFF the cell is a flat ghost-bordered surface with red text
   // (operator review May 2026: the always-on red border was reading
   // as "this is constantly active / flashing"). When ON the entire
@@ -714,6 +721,7 @@ const SwapSheet: React.FC<{
   onPicked: (effectId: string, presetId: string, preset: LibPreset) => void;
   onClear: () => void;
 }> = ({ slotId, slot, library, onClose, onPicked, onClear }) => {
+  const C = usePalette();
   if (slotId === null) return null;
   const isBound = !!slot?.effectId;
   const title = isBound

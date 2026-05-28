@@ -25,7 +25,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   deleteModulation, fetchPlaylistByName, ModulationMapping, patchModulation,
@@ -35,8 +35,6 @@ import { engineEvents } from '@/utils/engineEvents';
 import {
   ModulationPopover, MOD_GREEN, useModulationState,
 } from '@/components/Modulation';
-
-const C = Colors.light;
 
 type Props = {
   visible: boolean;
@@ -90,6 +88,7 @@ function rangeReadout(m: ModulationMapping): string {
 export const AllModulationsPanel: React.FC<Props> = ({
   visible, onClose, playlistName, activeEntryId,
 }) => {
+  const C = usePalette();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tick, setTick] = useState(0);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
@@ -411,6 +410,7 @@ function ModulationRow({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const C = usePalette();
   const enabled = !!mapping.enabled;
   return (
     <View style={{

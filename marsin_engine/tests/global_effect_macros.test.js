@@ -552,3 +552,59 @@ test('validateParams supports and validates fadeOutMs parameter', () => {
   assert.equal(out.fadeOutMs, 250);
 });
 
+// ── stopStrobe defaults: no fade unless preset opts in ──────────────────
+//
+// Prior behavior: stopStrobe defaulted to a 1000 ms fade-out, which made
+// scheduler OFF dispatches AND manual GEM-tap OFFs look like "the strobe
+// didn't turn off" — the rig kept pulsing through the fade tail.
+// Strobe library presets don't set fadeOutMs, so the default is now
+// immediate stop. Fades remain available by setting fadeOutMs > 0 on
+// the preset (the existing "smooth disable" test sets it explicitly).
+
+test('stopStrobe is immediate when no fadeOutMs was provided', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setStrobe(true, 4, 0.5, 1.0, 0, {}); // no fadeOutMs
+  assert.equal(ctrl.strobeActive, true);
+
+  ctrl.stopStrobe({ nowMs: 200 });
+  assert.equal(ctrl.strobeActive, false);
+  assert.equal(ctrl.strobeFadingOut, false, 'no fade — instant stop');
+  assert.equal(ctrl.strobeConfig, null, 'strobeConfig cleared immediately');
+
+  // Render a frame after stop — no strobe gating, no fade scaling.
+  const pixels = makePixels(1);
+  ctrl.applyMacros({ pixels, frameIndex: 30, nowMs: 700 });
+  assert.equal(pixels[0].r, 0.5, 'solid baseline, no strobe residue');
+});
+
+test('stopStrobe fades only when fadeOutMs > 0 is set on the strobe', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setStrobe(true, 4, 0.5, 1.0, 0, { fadeOutMs: 200 });
+  ctrl.stopStrobe({ nowMs: 200 });
+  assert.equal(ctrl.strobeActive, false);
+  assert.equal(ctrl.strobeFadingOut, true, 'opt-in fade kicks in');
+});
+
+test('stopStrobe with fadeOutMs:0 explicitly is also immediate', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  ctrl.setStrobe(true, 4, 0.5, 1.0, 0, { fadeOutMs: 0 });
+  ctrl.stopStrobe({ nowMs: 200 });
+  assert.equal(ctrl.strobeFadingOut, false, '0 means immediate');
+  assert.equal(ctrl.strobeConfig, null);
+});
+
+// ── setEffect throws on unknown names (codex P0, no silent no-op) ──────
+
+test('setEffect throws on an unknown effect name (P0 — no silent no-op)', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  // Sanity: known effects still work.
+  ctrl.setEffect('vintageWhite', true);
+  assert.equal(ctrl.effects.vintageWhite, true);
+  // Bypass keys are allowed by name pattern (includes 'Bypass').
+  ctrl.setEffect('uvBlastBypassDimmer', true);
+  assert.equal(ctrl.effects.uvBlastBypassDimmer, true);
+  // Typo or unknown effect must NOT silently no-op.
+  assert.throws(() => ctrl.setEffect('vintageWhight', true), /unknown effect/);
+  assert.throws(() => ctrl.setEffect('hzr', true), /unknown effect/);
+});
+

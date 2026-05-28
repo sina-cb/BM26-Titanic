@@ -1,33 +1,33 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 08_ocean_liner
+  pattern: 03_dual_axis_crush
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '23515769':
-      v0: 0.92
-      v1: 0
-      v2: 0
     '1037917937':
-      v0: 0.8
+      v0: 0.77
       v1: 0
       v2: 0
-    '3651408529':
-      v0: 0.47
+    '1323486710':
+      v0: 0.57
       v1: 0
       v2: 0
-    '4193208886':
-      v0: 0.31
+    '2571730692':
+      v0: 0.21
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 0.89
       v1: 0
       v2: 0
   playlist:
     name: fast
-    activeEntryId: e_1779867336212_2923
-    cursor: 8
+    activeEntryId: e_1779867305954_4007
+    cursor: 3
     autopilot:
       active: false
       delay_s: 30

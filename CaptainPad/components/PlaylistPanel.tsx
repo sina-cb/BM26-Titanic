@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
@@ -13,8 +14,7 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
-
-const C = Colors.light;
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // "1 list to rule them all": this component renders the active playlist's
 // entries AS the channel's pattern queue. There's no separate "all patterns"
@@ -118,6 +118,7 @@ function sanitizeName(raw: string): string {
 }
 
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
+  const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
   // state + engineEvents `playlistLibrary` subscription further down.
   // The prop is accepted so parents (mixer/index) can pass their
@@ -139,6 +140,97 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Playlist-edits lock — operator-toggled gate that hides every
+  // destructive edit affordance on the deck's playlist: per-row up/down
+  // chevrons, per-row remove (−) button, and the header's add (+)
+  // button. Mid-show, operators worry about brushing any of these by
+  // accident and quietly mutating the set. With the lock engaged none
+  // of them render (no visual affordance, no tap target). The lock
+  // control sits next to the refresh icon in the header so it's
+  // discoverable from where the operator already looks. Deck-only —
+  // mixer channels already have their own channel-scoped lock.
+  //
+  // Persisted to AsyncStorage so the choice survives panel remounts +
+  // app restarts; default = unlocked so existing iPads keep current
+  // behavior until the operator opts in.
+  const REORDER_LOCK_STORAGE_KEY = '@CaptainPad:deck:playlistEditsLocked';
+  const [playlistEditsLocked, setReorderLocked] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(REORDER_LOCK_STORAGE_KEY)
+      .then((v) => { if (v === 'true') setReorderLocked(true); })
+      .catch(() => undefined);
+  }, []);
+  const toggleReorderLock = useCallback(() => {
+    setReorderLocked((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(REORDER_LOCK_STORAGE_KEY, next ? 'true' : 'false')
+        .catch(() => undefined);
+      return next;
+    });
+  }, []);
+
+  // Mid-transition reconciliation suppression. Operator report
+  // 2026-05-29: when transitions are enabled and the operator taps a
+  // new pattern, the row highlight bounces NEW → OLD → NEW. Root cause:
+  // the engine keeps reporting the OLD activeEntryId in its WS
+  // broadcasts (mixer / deck / channelPlaylistData) until the
+  // transition completes ~Ns later. Our optimistic flip lands on NEW,
+  // then the broadcast (still OLD) overwrites it, then the
+  // post-transition broadcast settles on NEW.
+  //
+  // Fix: when the operator taps, record the target id in
+  // `pendingActiveEntryIdRef`. While that ref is non-null, broadcasts
+  // whose activeEntryId DOESN'T match the target are ignored — the
+  // engine is mid-transition and the operator's intent is the source
+  // of truth. The moment a broadcast arrives WITH the target we clear
+  // the ref and adopt the engine state. A watchdog clears the ref
+  // after PENDING_WATCHDOG_MS in case the engine never confirms (the
+  // transition was cancelled out-of-band, the network dropped, …) so
+  // the panel can't get stranded ignoring real state forever.
+  const pendingActiveEntryIdRef = useRef<string | null>(null);
+  const pendingWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const PENDING_WATCHDOG_MS = 8000;
+  const armPendingWatchdog = useCallback(() => {
+    if (pendingWatchdogRef.current) clearTimeout(pendingWatchdogRef.current);
+    pendingWatchdogRef.current = setTimeout(() => {
+      pendingActiveEntryIdRef.current = null;
+      pendingWatchdogRef.current = null;
+    }, PENDING_WATCHDOG_MS);
+  }, []);
+  const clearPending = useCallback(() => {
+    pendingActiveEntryIdRef.current = null;
+    if (pendingWatchdogRef.current) {
+      clearTimeout(pendingWatchdogRef.current);
+      pendingWatchdogRef.current = null;
+    }
+  }, []);
+  // Returns true when the broadcast is mid-transition (engine reports
+  // an activeEntryId that doesn't match what the operator just asked
+  // for). Callers should bail out without applying the reconciliation.
+  // When the broadcast MATCHES the pending target, this also clears
+  // the gate as a side effect — the next reconciliation pass will run
+  // unhindered.
+  const shouldSuppressReconcile = useCallback((incomingActiveEntryId: string | null | undefined, source: string): boolean => {
+    const pending = pendingActiveEntryIdRef.current;
+    const local = assignmentRef.current?.activeEntryId ?? null;
+    if (!pending) {
+      console.log(`[PLAYLIST_DBG] reconcile/${source}: no pending, incoming=${incomingActiveEntryId} local=${local} → ACCEPT`);
+      return false;
+    }
+    if (incomingActiveEntryId === pending) {
+      console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} matched, clearing → ACCEPT`);
+      clearPending();
+      return false;
+    }
+    console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} ≠ incoming=${incomingActiveEntryId} → SUPPRESS`);
+    return true;
+  }, [clearPending]);
+  useEffect(() => {
+    return () => {
+      if (pendingWatchdogRef.current) clearTimeout(pendingWatchdogRef.current);
+    };
+  }, []);
 
   // ── Why the dropdown has no `busy` gate anymore ─────────────────────
   // The previous design wrapped handleLoadPlaylist in a busy flag and
@@ -294,7 +386,23 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       // "default" back to "LOAD…" and the entries would never show.
       const nextAssign = a.ok ? (a.data || null) : null;
       const effectiveAssign = nextAssign || assignmentRef.current || null;
-      setAssignment(effectiveAssign);
+      // refresh() reaches here regardless of the pending-gate state. If
+      // we have a pending target and the GET response disagrees with
+      // it (engine still mid-transition), DO NOT clobber the optimistic
+      // flip — preserve the operator's intent until a broadcast finally
+      // confirms.
+      const pending = pendingActiveEntryIdRef.current;
+      if (pending && effectiveAssign && effectiveAssign.activeEntryId !== pending) {
+        console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} but pending=${pending} → SKIP setAssignment`);
+      } else {
+        if (pending && effectiveAssign && effectiveAssign.activeEntryId === pending) {
+          console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} matches pending → clear + setAssignment`);
+          clearPending();
+        } else {
+          console.log(`[PLAYLIST_DBG] refresh() GET → setAssignment activeEntryId=${effectiveAssign?.activeEntryId}`);
+        }
+        setAssignment(effectiveAssign);
+      }
       if (a.ok && !nextAssign && assignmentRef.current) scheduleRetry();
 
       // If our hint was right (same name the engine reports), the
@@ -388,22 +496,33 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         const channels = (msg.channels as { id: string; playlist?: PlaylistAssignment | null }[]) || [];
         const ch = channels.find((c) => c.id === channelId);
         if (!ch) return;
-        const local = assignmentRef.current;
         const next = ch.playlist || null;
+        // Mid-transition gate — engine's activeEntryId may still be the
+        // PRIOR entry while it transitions to the one the operator
+        // just asked for. Ignore until it matches.
+        if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'mixer')) return;
+        const local = assignmentRef.current;
         const changed =
           (local?.name ?? null) !== (next?.name ?? null) ||
           (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
-        if (changed) refresh();
+        if (changed) {
+          console.log(`[PLAYLIST_DBG] mixer event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
+          refresh();
+        }
       } else if (role === 'deck' && msg.type === 'deck') {
         // Deck event: `channel` is a single object (or null), not an array.
         const ch = msg.channel as { id?: string; playlist?: PlaylistAssignment | null } | null | undefined;
         if (!ch || ch.id !== channelId) return;
-        const local = assignmentRef.current;
         const next = ch.playlist || null;
+        if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'deck')) return;
+        const local = assignmentRef.current;
         const changed =
           (local?.name ?? null) !== (next?.name ?? null) ||
           (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
-        if (changed) refresh();
+        if (changed) {
+          console.log(`[PLAYLIST_DBG] deck event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
+          refresh();
+        }
       } else if (msg.type === 'channelPlaylistData') {
         // Engine emits this whenever a channel's playlist is set or
         // swapped (before the mixer event that announces the
@@ -421,7 +540,15 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           if (msg.channelId === channelId) {
             setPlaylist(pd);
             if (msg.playlist && typeof msg.playlist === 'object') {
-              setAssignment(msg.playlist as PlaylistAssignment);
+              const incoming = msg.playlist as PlaylistAssignment;
+              // Mid-transition gate. If the operator just tapped a new
+              // entry and the engine is still reporting the prior
+              // active id, skip the assignment swap so the UI stays
+              // on the requested entry instead of bouncing.
+              if (!shouldSuppressReconcile(incoming.activeEntryId ?? null, 'channelPlaylistData')) {
+                console.log(`[PLAYLIST_DBG] channelPlaylistData → setAssignment activeEntryId=${incoming.activeEntryId}`);
+                setAssignment(incoming);
+              }
             }
           }
         }
@@ -458,7 +585,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         }
       }
     });
-  }, [role, channelId, refresh, flashSaved]);
+  }, [role, channelId, refresh, flashSaved, shouldSuppressReconcile]);
 
   // ── Actions ─────────────────────────────────────────────────────────
   // Switch this channel to a different playlist.
@@ -535,10 +662,15 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     // refresh in the background — if the server rejects we roll back
     // and surface the error.
     const prev = assignment;
+    pendingActiveEntryIdRef.current = entryId;
+    armPendingWatchdog();
+    console.log(`[PLAYLIST_DBG] handleEntryTap: from=${assignment.activeEntryId} to=${entryId}, pending set`);
     setAssignment({ ...assignment, activeEntryId: entryId });
     try {
       const res = await setChannelPlaylistEntry(role, channelId, entryId);
+      console.log(`[PLAYLIST_DBG] POST returned ok=${res.ok}, pending=${pendingActiveEntryIdRef.current}`);
       if (!res.ok) {
+        clearPending();
         setAssignment(prev);   // roll back optimistic flip
         // 409 = "swap already in flight" (engine rejects taps during
         // an in-flight transition per operator spec). Swallow silently
@@ -551,12 +683,17 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       // Don't await refresh — the WS `mixer` broadcast will reconcile
       // anything the optimistic update missed (e.g. server-side entry
       // capture). Awaiting here is what the operator perceived as lag.
+      // Note: `pendingActiveEntryIdRef` stays set until a broadcast
+      // arrives reporting the new active entry — gates mid-transition
+      // reconciliations that would otherwise bounce the UI back to
+      // the prior entry (see shouldSuppressReconcile above).
       refresh();
     } catch (e) {
+      clearPending();
       setAssignment(prev);
       Alert.alert('Switch failed', (e as Error)?.message || 'Network error');
     }
-  }, [role, assignment, channelId, disabled, refresh]);
+  }, [role, assignment, channelId, disabled, refresh, armPendingWatchdog, clearPending]);
 
   // Add a pattern and persist immediately — no manual SAVE step. The user
   // never has to think "did I save?".
@@ -591,6 +728,56 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     const res = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!res.ok) {
       Alert.alert('Remove failed', res.error || 'Unknown error');
+      await refresh();
+      return;
+    }
+    flashSaved();
+  }, [flashSaved, refresh]);
+
+  // ── Reorder: move an entry one slot up (direction=-1) or down (+1) ──
+  // Operator request (May 2026): re-sequence mid-show without going back
+  // to YAML. Chevron buttons next to each row (one tap = one slot).
+  //
+  // Critical invariants:
+  //   1. The active entry's ID never changes — only the order around it
+  //      shuffles. If the active row IS the one being moved, autopilot
+  //      keeps cycling from the same id (autopilot uses id-based lookup,
+  //      not cursor index — see marsin_engine/lib/api_server.js Autopilot
+  //      callback at ~line 1474).
+  //   2. Per-entry `defaults`, `modulations`, `notes`, `label` ride along
+  //      because we splice the existing entry objects, not new ones.
+  //   3. Optimistic UI: re-render the new order BEFORE the POST resolves.
+  //      The engine's `playlistSaved` WS broadcast reconciles canonical
+  //      state in <10 ms; if the POST fails we restore the prior order
+  //      and surface the error.
+  //   4. Codex P0 — bounds violations throw loudly, no silent clamp:
+  //      a request to move index 0 up (or last index down) is rejected
+  //      at the call site by hiding the button (disabled chevron), so
+  //      this function should never actually receive an out-of-range
+  //      pair. If somehow it does, the assertion fires.
+  const handleMoveEntry = useCallback(async (entryId: string, direction: -1 | 1) => {
+    const cur = playlistRef.current;
+    if (!cur) return;
+    const from = cur.entries.findIndex((e) => e.id === entryId);
+    if (from < 0) throw new Error(`handleMoveEntry: entry not found in playlist: ${entryId}`);
+    const to = from + direction;
+    if (to < 0 || to >= cur.entries.length) {
+      // Off-by-one guard. The chevrons hide at boundaries so this is
+      // a "should never happen" — fail loud per codex P0.
+      throw new Error(`handleMoveEntry: out-of-range move ${from}→${to} in playlist "${cur.name}" (size ${cur.entries.length})`);
+    }
+    if (cur.entries.length < 2) return; // 1-entry playlist: no-op
+    const nextEntries = cur.entries.slice();
+    const [moved] = nextEntries.splice(from, 1);
+    nextEntries.splice(to, 0, moved);
+    // Optimistic: show the new order instantly.
+    const prevEntries = cur.entries;
+    setPlaylist({ ...cur, entries: nextEntries });
+    const res = await savePlaylist({ name: cur.name, entries: nextEntries });
+    if (!res.ok) {
+      // Roll back to the prior order and surface the error.
+      setPlaylist({ ...cur, entries: prevEntries });
+      Alert.alert('Reorder failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -694,24 +881,55 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           </View>
         )}
         {onRefreshConnection && (
-          <TouchableOpacity
-            onPress={onRefreshConnection}
-            accessibilityLabel="Refresh / reconnect to engine"
-            accessibilityRole="button"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={{
-              width: sz.btnH,
-              height: sz.btnH,
-              borderRadius: 6,
-              borderWidth: 1,
-              borderColor: C.ghostBorder,
-              backgroundColor: C.surfaceContainerHigh,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <IconSymbol name="arrow.clockwise" size={sz.btnFont + 4} color={C.primary} />
-          </TouchableOpacity>
+          <>
+            {/* Playlist-edits lock — sits IMMEDIATELY beside refresh
+                so the operator finds it from where they already look.
+                Filled lock icon when engaged; open lock when unlocked.
+                Border tints primary when locked so the state reads
+                across the podium without staring at the icon. Deck
+                only. When locked: chevrons, the + button, and the
+                per-row − button are all hidden. */}
+            <TouchableOpacity
+              onPress={toggleReorderLock}
+              accessibilityLabel={playlistEditsLocked ? 'Unlock playlist edits' : 'Lock playlist edits'}
+              accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{
+                width: sz.btnH,
+                height: sz.btnH,
+                borderRadius: 6,
+                borderWidth: 1,
+                borderColor: playlistEditsLocked ? C.primary : C.ghostBorder,
+                backgroundColor: playlistEditsLocked ? C.primaryContainer : C.surfaceContainerHigh,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <IconSymbol
+                name={playlistEditsLocked ? 'lock.fill' : 'lock.open.fill'}
+                size={sz.btnFont + 2}
+                color={playlistEditsLocked ? C.primary : C.icon}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onRefreshConnection}
+              accessibilityLabel="Refresh / reconnect to engine"
+              accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{
+                width: sz.btnH,
+                height: sz.btnH,
+                borderRadius: 6,
+                borderWidth: 1,
+                borderColor: C.ghostBorder,
+                backgroundColor: C.surfaceContainerHigh,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <IconSymbol name="arrow.clockwise" size={sz.btnFont + 4} color={C.primary} />
+            </TouchableOpacity>
+          </>
         )}
       </View>
 
@@ -764,7 +982,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           </View>
         )}
 
-        {editable && (
+        {editable && !(role === 'deck' && playlistEditsLocked) && (
           <TouchableOpacity
             onPress={() => setShowAddPattern(true)}
             disabled={!playlist}
@@ -811,6 +1029,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               const isActive = assignment?.activeEntryId === e.id;
               const missing = e._missing;
               const paramCount = e.defaults ? Object.keys(e.defaults).length : 0;
+              // Reorder chevrons (slot 5, May 2026): hidden at the
+              // boundaries so the operator can't tap a no-op. A 1-entry
+              // playlist also disables both. Hidden entirely when the
+              // panel is `locked` (read-only show mode) since reordering
+              // would be a destructive edit.
+              const canMoveUp = editable && playlist.entries.length > 1 && idx > 0;
+              const canMoveDown = editable && playlist.entries.length > 1 && idx < playlist.entries.length - 1;
               return (
                 <View
                   key={e.id}
@@ -842,6 +1067,50 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   >
                     {(idx + 1).toString().padStart(2, '0')}
                   </Text>
+                  {editable && !(role === 'deck' && playlistEditsLocked) && (
+                    <View style={{ flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+                      <TouchableOpacity
+                        onPress={canMoveUp ? () => handleMoveEntry(e.id, -1) : undefined}
+                        disabled={!canMoveUp}
+                        hitSlop={{ top: 4, bottom: 0, left: 4, right: 4 }}
+                        style={{
+                          width: sz.btnH - 6,
+                          height: sz.btnH / 2 - 1,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          opacity: canMoveUp ? 1 : 0.2,
+                        }}
+                        accessibilityLabel={`Move ${e.pattern} up`}
+                        accessibilityRole="button"
+                      >
+                        <IconSymbol
+                          name="chevron.up"
+                          size={sz.fontPrimary + 2}
+                          color={isActive ? '#FFF' : C.primary}
+                        />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={canMoveDown ? () => handleMoveEntry(e.id, 1) : undefined}
+                        disabled={!canMoveDown}
+                        hitSlop={{ top: 0, bottom: 4, left: 4, right: 4 }}
+                        style={{
+                          width: sz.btnH - 6,
+                          height: sz.btnH / 2 - 1,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          opacity: canMoveDown ? 1 : 0.2,
+                        }}
+                        accessibilityLabel={`Move ${e.pattern} down`}
+                        accessibilityRole="button"
+                      >
+                        <IconSymbol
+                          name="chevron.down"
+                          size={sz.fontPrimary + 2}
+                          color={isActive ? '#FFF' : C.primary}
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                   <TouchableOpacity
                     onPress={() => handleEntryTap(e.id)}
                     disabled={missing || disabled}
@@ -873,7 +1142,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </Text>
                     )}
                   </TouchableOpacity>
-                  {editable && (
+                  {editable && !(role === 'deck' && playlistEditsLocked) && (
                     <TouchableOpacity
                       onPress={() => handleRemoveEntry(e.id)}
                       style={{
@@ -942,7 +1211,10 @@ interface LibraryModalProps {
 const LibraryModal: React.FC<LibraryModalProps> = ({
   visible, onClose, playlists, currentName, onLoad, onDelete,
   newPlaylistName, setNewPlaylistName, onCreateNew,
-}) => (
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <TouchableOpacity
       activeOpacity={1}
@@ -1005,7 +1277,8 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
       </TouchableOpacity>
     </TouchableOpacity>
   </Modal>
-);
+  );
+};
 
 interface AddPatternModalProps {
   visible: boolean;
@@ -1017,7 +1290,10 @@ interface AddPatternModalProps {
 
 const AddPatternModal: React.FC<AddPatternModalProps> = ({
   visible, onClose, playlistName, allPatterns, onPick,
-}) => (
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <TouchableOpacity
       activeOpacity={1}
@@ -1045,34 +1321,38 @@ const AddPatternModal: React.FC<AddPatternModalProps> = ({
       </TouchableOpacity>
     </TouchableOpacity>
   </Modal>
-);
-
-const modalStyles = {
-  // Full-screen tint: tapping this dismisses the modal.
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center' as const,
-    alignItems: 'center' as const,
-  },
-  // Inner wrapper: noop onPress catches taps so the modal stays open when
-  // the user is interacting with content (textbox, list items, …). No
-  // additional style is needed; the wrapper just exists to swallow taps.
-  cardWrap: {},
-  card: {
-    backgroundColor: C.surfaceContainerLowest,
-    borderRadius: 16,
-    padding: 16,
-    minWidth: 320,
-    maxWidth: '80%' as const,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-  },
-  title: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 12,
-    color: C.secondary,
-    letterSpacing: 1.2,
-    marginBottom: 8,
-  },
+  );
 };
+
+function makeModalStyles(C: Palette) {
+  return {
+    // Full-screen tint: tapping this dismisses the modal.
+    backdrop: {
+      flex: 1,
+      // 'rgba(0,0,0,0.5)' — modal-dimmer tint, identical in both themes.
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center' as const,
+      alignItems: 'center' as const,
+    },
+    // Inner wrapper: noop onPress catches taps so the modal stays open when
+    // the user is interacting with content (textbox, list items, …). No
+    // additional style is needed; the wrapper just exists to swallow taps.
+    cardWrap: {},
+    card: {
+      backgroundColor: C.surfaceContainerLowest,
+      borderRadius: 16,
+      padding: 16,
+      minWidth: 320,
+      maxWidth: '80%' as const,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+    },
+    title: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      color: C.secondary,
+      letterSpacing: 1.2,
+      marginBottom: 8,
+    },
+  };
+}

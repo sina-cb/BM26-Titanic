@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Modal, Pressable, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
@@ -25,8 +25,6 @@ import {
   deleteModulation, fetchPlaylist, ModulationCurve, ModulationMapping,
   ModulationMode, ModulationPolarity, ModulationSourceKey, patchModulation, putModulation,
 } from '@/utils/api';
-
-const C = Colors.light;
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -107,8 +105,14 @@ export function useEntryModulations(
 
 // ── slider name helpers ─────────────────────────────────────────────
 
-function prettySliderName(name: string): string {
+export function prettySliderName(name: string): string {
   return name
+    // Strip optional `_vN` version suffix some patterns put on exports
+    // (e.g. `sliderColorVariation_v2`). Deck stripped these via
+    // `prettySliderName`; mixer LOCAL PARAMS used a different inline
+    // regex that kept them. Unify here so both surfaces read the same
+    // (operator request 2026-05-28).
+    .replace(/_v\d+$/, '')
     .replace(/^(slider|toggle|trigger|hsvPicker)/i, '')
     .replace(/([A-Z])/g, ' $1')
     .trim()
@@ -159,6 +163,7 @@ function ModulationBadges({
   onEdit?: () => void;
   onClear?: () => void;
 }) {
+  const C = usePalette();
   if (!hasMapping && !showAddHint) return null;
   const canEdit = editable && !!onEdit;
   const canClear = hasMapping && editable && !!onClear;
@@ -215,33 +220,40 @@ function ModulationBadges({
   );
 }
 
-// ── shared ghost-overlay handle on a slider track ──────────────────
+// ── shared ghost-overlay fill bar on a slider track ──────────────────
 //
-// Replaced the original 3 px vertical line ghost (May 2026: operator
-// reported "green line on green wash" was unreadable) with a hollow
-// handle shaped like the primary fader thumb. The hollow stroke +
-// MOD_GREEN colour reads as "modulation is pushing the value HERE"
-// while leaving the track / fill visible behind it. No glow — the
-// glow washed the primary fill out at small sizes.
-function GhostMarker({ ghost }: { ghost: number | null }) {
+// History:
+//   - Original: 3 px vertical line (May 2026 → unreadable on the green wash)
+//   - Then: hollow square handle (May 2026, ugly + sat at left=0% any
+//     time the engine reported modulated=0)
+//   - Now: a slider-style green fill running from 0 to ghost-position,
+//     mimicking the primary fader fill underneath but in MOD_GREEN.
+//     Reads as "the engine is currently driving the parameter to HERE."
+//     A 2 px solid green right edge anchors the endpoint so it stays
+//     visible even when ghost ≈ 0.
+//
+// Renders inside a `position: relative` container that's sized to the
+// slider track (height + width). The translucent fill composites over
+// the operator-set base fill so both values stay visible.
+function GhostMarker({
+  ghost,
+  borderRadius = 12,
+}: { ghost: number | null; borderRadius?: number }) {
   if (ghost === null) return null;
-  const GHOST_W = 14;
-  const GHOST_H = 18;
+  const pct = Math.min(100, Math.max(0, ghost * 100));
   return (
     <View
       pointerEvents="none"
       style={{
         position: 'absolute',
-        left: `${Math.min(100, Math.max(0, ghost * 100))}%`,
-        top: 3,
-        height: GHOST_H,
-        width: GHOST_W,
-        marginLeft: -GHOST_W / 2,
-        backgroundColor: 'transparent',
-        borderWidth: 2,
-        borderColor: MOD_GREEN,
-        borderRadius: 4,
-        opacity: 0.85,
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: `${pct}%`,
+        backgroundColor: 'rgba(0,168,107,0.45)',
+        borderRightWidth: 2,
+        borderRightColor: MOD_GREEN,
+        borderRadius,
       }}
     />
   );
@@ -328,18 +340,23 @@ type ModulatedSliderProps = {
 function ModulatedSliderImpl({
   exportItem, onChangeBase, playlistName, entryId, mapping, live, onChanged,
 }: ModulatedSliderProps) {
+  const C = usePalette();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const niceName = prettySliderName(exportItem.name);
   const base = exportItem.v0 ?? 0.5;
-  // Ghost only when there's a live modulationState frame for this
-  // target AND the divergence from base is at least 0.01 (kills
-  // sub-pixel jitter that would otherwise make the hollow-handle
-  // ghost flicker on/off every render). The mapping's enabled state
-  // is enforced server-side — the engine omits disabled mappings
-  // from the modulationState frame, so an enabled-only mapping
-  // satisfies the `live && diff` predicate here implicitly.
+  // Ghost only when the engine ACTUALLY reports modulated ≠ base.
+  // Operator report 2026-05-28: pre-fix the gate compared engine
+  // `modulated` against the local UI `base`. With a silent audio
+  // input the engine sent `{base:0, modulated:0}` (no real
+  // modulation) and the box parked at left:0% because abs(0 - 0.5)
+  // crossed the threshold against the local 0.5 base. The fix:
+  // also require the engine's own `live.base` to diverge from
+  // `live.modulated`, so a silent / not-yet-driven mapping never
+  // paints a ghost.
   const ghost = live
     && live.modulated !== undefined
+    && live.base !== undefined
+    && Math.abs(live.modulated - live.base) >= 0.01
     && Math.abs(live.modulated - base) >= 0.01
     ? live.modulated
     : null;
@@ -507,6 +524,7 @@ type PopoverProps = {
 export function ModulationPopover({
   paramName, targetParameter, playlistName, entryId, existing, onClose, onChanged,
 }: PopoverProps) {
+  const C = usePalette();
   const [source, setSource] = useState<ModulationSourceKey>(existing?.source.key ?? 'micLow');
   const [mode, setMode] = useState<ModulationMode>(existing?.mode ?? 'offset');
   const [polarity, setPolarity] = useState<ModulationPolarity>(existing?.polarity ?? 'unipolar');
@@ -785,6 +803,7 @@ export function ModulationPopover({
 }
 
 function PickerRow({ label, children }: { label: string; children: React.ReactNode }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>{label}</Text>
@@ -796,6 +815,7 @@ function PickerRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 function Chip({ active, onPress, children }: { active: boolean; onPress: () => void; children: React.ReactNode }) {
+  const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -818,6 +838,7 @@ function Chip({ active, onPress, children }: { active: boolean; onPress: () => v
 }
 
 function NumberInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const C = usePalette();
   return (
     <TextInput
       value={value}

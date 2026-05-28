@@ -11,18 +11,18 @@
 //      "accept from anyone" (the engine documents this in OscListener).
 //   5. METRICS — bindings count + per-sec rx/mapped/dropped (read-only)
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
+import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { fetchOscConfig, patchOscConfig, getApiBaseAsync } from '@/utils/api';
 import { useOscStatus } from '@/hooks/useEngineState';
 
-const C = Colors.light;
 const ACCENT_AUTO = '#1b9e77';
 
 interface OscConfig {
@@ -30,32 +30,51 @@ interface OscConfig {
   port: number | null;
   host: string | null;
   gainMax: number | null;
-  allowedSenders: Array<{ name: string; ip: string }>;
+  allowedSenders: { name: string; ip: string }[];
   bindingsCount: number;
   running: boolean;
   status?: any;
 }
 
-const CARD = {
-  ...globalStyles.card,
-  padding: 20,
-  marginBottom: 20,
-  alignSelf: 'stretch',
-  ...globalStyles.ambientShadow,
-} as const;
+function makeCard(C: Palette, globalStyles: GlobalStyles) {
+  return {
+    ...globalStyles.card,
+    padding: 20,
+    marginBottom: 20,
+    alignSelf: 'stretch' as const,
+    ...globalStyles.ambientShadow,
+  };
+}
 
-const SUB_CARD = {
-  backgroundColor: C.surfaceContainerLow,
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: C.ghostBorder,
-  padding: 14,
-  marginTop: 12,
-} as const;
+function makeSubCard(C: Palette) {
+  return {
+    backgroundColor: C.surfaceContainerLow,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    padding: 14,
+    marginTop: 12,
+  } as const;
+}
+
+function makeInputStyle(C: Palette) {
+  return {
+    backgroundColor: C.surfaceContainerLowest,
+    color: C.text,
+    height: 44,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontFamily: 'Inter_400Regular' as const,
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+  };
+}
 
 function SectionHeader({ icon, title, hint, right }: {
   icon: string; title: string; hint?: string; right?: React.ReactNode;
 }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
       <View style={{
@@ -80,6 +99,7 @@ function SectionHeader({ icon, title, hint, right }: {
 }
 
 function SubHeader({ title, right }: { title: string; right?: React.ReactNode }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -93,6 +113,7 @@ function SubHeader({ title, right }: { title: string; right?: React.ReactNode })
 function MasterToggle({ on, busy, onPress, label, subtitle }: {
   on: boolean; busy?: boolean; onPress: () => void; label: string; subtitle?: string;
 }) {
+  const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -128,19 +149,12 @@ function MasterToggle({ on, busy, onPress, label, subtitle }: {
   );
 }
 
-const INPUT_STYLE = {
-  backgroundColor: C.surfaceContainerLowest,
-  color: C.text,
-  height: 44,
-  borderRadius: 8,
-  paddingHorizontal: 12,
-  fontFamily: 'Inter_400Regular' as const,
-  fontSize: 14,
-  borderWidth: 1,
-  borderColor: C.ghostBorder,
-};
-
 export default function OscConfigScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
+  const SUB_CARD = useMemo(() => makeSubCard(C), [C]);
+  const INPUT_STYLE = useMemo(() => makeInputStyle(C), [C]);
   const liveStatus = useOscStatus();
   const [cfg, setCfg] = useState<OscConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -153,7 +167,7 @@ export default function OscConfigScreen() {
   const [hostDraft, setHostDraft] = useState<string>('');
 
   // Allowed-senders editing — same model: stage locally, commit explicitly.
-  const [sendersDraft, setSendersDraft] = useState<Array<{ name: string; ip: string }>>([]);
+  const [sendersDraft, setSendersDraft] = useState<{ name: string; ip: string }[]>([]);
   const [newSenderName, setNewSenderName] = useState('');
   const [newSenderIp, setNewSenderIp] = useState('');
 

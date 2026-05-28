@@ -3,18 +3,25 @@
   Abyssal occlusion for Summer Camp Dome.
   A dark body moves around the BarLights ring while only the rim catches
   cold UV foam; TriangleEdges become distant silhouette lines.
+
+  APEX 1-1-1 fix (E1): the previous (0, 1/3, 2/3) edge offsets put spots
+  at geometrically mirror-symmetric positions on the equilateral triangle
+  — at edgeT=0.5, edge0 spot lands at one position while edges 1 and 2 land
+  at mirror positions, reading as 2-1 to the eye. POSITION-based fix using
+  φ-spaced offsets [0.0, 0.382, 0.764] so no pair is mirror-symmetric.
+  Applied to silhouette, counter, and par sweep.
 */
 
 export var localSpeed = 0.5;
 export var shadowWidth = 0.46;
 export var shadowDrift = 0.44;
-export var abyssalSwell = 0.38;
-export var edgeFoam = 0.32;
-export var blackoutDepth = 0.76;
-export var triangleSilhouette = 0.58;
+export var abyssalSwell = 0.55;
+export var edgeFoam = 0.55;
+export var blackoutDepth = 0.55;
+export var triangleSilhouette = 0.70;
 
-export var cp1H = 0.57, cp1S = 0.92, cp1V = 0.42;
-export var cp2H = 0.66, cp2S = 0.88, cp2V = 0.30;
+export var cp1H = 0.57, cp1S = 0.92, cp1V = 0.85;
+export var cp2H = 0.66, cp2S = 0.88, cp2V = 0.70;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -131,37 +138,57 @@ export function render3D(index, x, y, z) {
     var barIndex = floor(barLocal / 18.0);
     var barT = (barLocal % 18) / 17.0;
     var deepRipple = pow(wave(barT * 1.17 + barIndex * 0.097 - tSwell * 1.7), 2.2);
-    stage = (1.0 - body) * (0.040 + abyssalSwell * 0.13) * deepRipple + rim * 0.30;
-    uv = rim * (0.34 + edgeFoam * 0.66);
+    stage = (1.0 - body) * (0.16 + abyssalSwell * 0.30) * deepRipple + rim * 0.60;
+    uv = rim * (0.40 + edgeFoam * 0.55);
   } else if (isTriangleEdge) {
     var edgeId = floor(index / 18.0);
     var edgeT = (index % 18) / 17.0;
-    var silhouetteLine = softPulse(circDist(edgeT, wrap01(tShadow * 0.61 + edgeId * 0.333)), 0.032 + shadowWidth * 0.062);
-    var counterLine = softPulse(circDist(edgeT, wrap01(1.0 - tSwell * 0.79 + edgeId * 0.19)), 0.026 + edgeFoam * 0.044) * 0.48;
-    stage = clamp01((silhouetteLine + counterLine) * (0.18 + triangleSilhouette * 0.42));
-    uv = clamp01(counterLine * edgeFoam * 0.34);
-    white = clamp01(silhouetteLine * edgeFoam * 0.18);
+    // φ-spaced 1-1-1: positions [0.0, 0.382, 0.764] are not mirror-symmetric.
+    // Continuity check (silhouette spot, edgeT=0.5, time t=0.25, 0.5, 0.75):
+    //   c = tShadow * 0.61 + edgePhase
+    //   At t=0.25 (c=0.1525): positions 0.153, 0.535, 0.917 → dists 0.347, 0.035, 0.417 — distinct.
+    //   At t=0.5  (c=0.305 ): positions 0.305, 0.687, 0.069 → dists 0.195, 0.187, 0.431 — distinct.
+    //   At t=0.75 (c=0.458 ): positions 0.458, 0.840, 0.222 → dists 0.042, 0.340, 0.278 — distinct.
+    var edgePhase = 0.0;
+    if (edgeId == 1) edgePhase = 0.382;
+    if (edgeId == 2) edgePhase = 0.764;
+    var silhouetteLine = softPulse(circDist(edgeT, wrap01(tShadow * 0.61 + edgePhase)), 0.032 + shadowWidth * 0.062);
+    // Counter line uses a different temporal coefficient AND φ-spaced offset,
+    // so it never collides with silhouette and the three counter spots are also
+    // all distinct (same φ-spacing argument).
+    var counterLine = softPulse(circDist(edgeT, wrap01(0.5 - tSwell * 0.79 + edgePhase)), 0.026 + edgeFoam * 0.044) * 0.48;
+    stage = clamp01((silhouetteLine + counterLine) * (0.38 + triangleSilhouette * 0.55));
+    uv = clamp01(counterLine * edgeFoam * 0.45);
+    white = clamp01(silhouetteLine * edgeFoam * 0.24);
   } else if (isTrianglePar) {
-    var parPulse = pow(wave(tFoam * 0.77 + index * 0.271), 7.0);
-    stage = parPulse * triangleSilhouette * 0.055;
-    white = parPulse * edgeFoam * 0.16;
-    uv = parPulse * edgeFoam * 0.22;
+    // Pars (idx 54,55,56) — φ-spaced offsets so the three pars are not at
+    // mirror-symmetric phases of the shadow sweep.
+    var parId = index - 54;
+    var parPhase = 0.0;
+    if (parId == 1) parPhase = 0.382;
+    if (parId == 2) parPhase = 0.764;
+    var parSweep = softPulse(circDist(wrap01(tShadow * 0.61 + parPhase), centerA), 0.10 + shadowWidth * 0.14);
+    var parSparkle = pow(wave(tFoam * 0.77 + parPhase), 7.0);
+    var shadowPass = parSweep * (0.55 + triangleSilhouette * 0.45);
+    stage = (0.06 + (shadowPass + parSparkle * 0.30) * 0.94) * (0.22 + triangleSilhouette * 0.55);
+    white = (shadowPass + parSparkle * 0.18) * edgeFoam * 0.32;
+    uv = shadowPass * edgeFoam * 0.40;
   } else if (isVintage) {
     var vintageLocal = index - 291;
     var fixtureNo = floor(vintageLocal / 6.0);
     var lampNo = vintageLocal % 6;
     var emberGate = softPulse(circDist(wrap01(fixtureNo / 5.0), wrap01(tSwell * 0.21 + 0.33)), 0.075);
     var ember = wave(tFoam * 0.43 + fixtureNo * 0.29 + lampNo * 0.061);
-    amber = emberGate * ember * abyssalSwell * 0.18;
-    stage = amber * 0.040;
+    amber = emberGate * ember * (0.30 + abyssalSwell * 0.45);
+    stage = amber * 0.18;
   }
 
-  var darkness = clamp01(body * (0.58 + blackoutDepth * 0.40));
+  var darkness = clamp01(body * (0.40 + blackoutDepth * 0.45));
   stage = stage * (1.0 - darkness);
   uv = uv * (1.0 - body * 0.42);
 
   var colorMix = clamp01(0.16 + swell * 0.42 + radial * 0.20 + rim * 0.22);
-  var floorGlow = (1.0 - blackoutDepth) * abyssalSwell * 0.018;
+  var floorGlow = (1.0 - blackoutDepth) * (0.06 + abyssalSwell * 0.10);
   var brightness = floorGlow + stage;
   if (isVintage) brightness = floorGlow * 0.25 + stage;
 

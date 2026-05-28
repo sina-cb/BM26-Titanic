@@ -13,10 +13,9 @@
 
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
 import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
-
-const C = Colors.light;
 
 // Visual mapping. We keep these in one place so the pill body and
 // the sheet header agree on color semantics.
@@ -27,12 +26,20 @@ const C = Colors.light;
 //   unmapped  → orange/error (packets are arriving but addresses
 //               don't match any binding — config mistake)
 //   live      → green/primary (values are flowing into the CPC)
-const STATE_STYLES: Record<OscPillState['state'], { bg: string; fg: string; border: string }> = {
-  off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-  idle:     { bg: '#fff3cd',              fg: '#7a5300',   border: '#e0b400' },
-  unmapped: { bg: '#f8d7da',              fg: '#842029',   border: C.error },
-  live:     { bg: C.primaryContainer,     fg: '#003a44',   border: C.primary },
-};
+//
+// '#fff3cd' / '#7a5300' / '#f8d7da' / '#842029' / '#003a44' are
+// semantic-state literals intentionally pinned across both themes — the
+// "OSC unmapped" / "OSC idle" badges should look the same regardless of
+// the operator's light/dark preference so the colour reads as a status
+// signal, not a chrome accent.
+function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string }> {
+  return {
+    off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
+    idle:     { bg: '#fff3cd',              fg: '#7a5300',   border: '#e0b400' },
+    unmapped: { bg: '#f8d7da',              fg: '#842029',   border: C.error },
+    live:     { bg: C.primaryContainer,     fg: '#003a44',   border: C.primary },
+  };
+}
 
 interface Props {
   /** Optional compact variant for tight horizontal space. */
@@ -40,28 +47,44 @@ interface Props {
 }
 
 export function OscStatusPill({ compact = false }: Props) {
+  const C = usePalette();
   const status = useOscStatus();
   const [sheetVisible, setSheetVisible] = useState(false);
+
+  // Tile dimensions mirror BpmTile / ColorPairButton so the COLORS · BPM
+  // · OSC cluster reads as one row of compact status tiles, distinct
+  // from the SPEED / SIZE sliders to the left. Operator request
+  // 2026-05-28.
+  const w = compact ? 60 : 86;
+  const TILE_HEIGHT = 48;
 
   if (!status) {
     // First frame before any WS message lands — placeholder that
     // doesn't shift layout once real data arrives.
     return (
       <View style={{
-        paddingHorizontal: compact ? 6 : 8, paddingVertical: 3,
-        borderRadius: 10, borderWidth: 1,
-        backgroundColor: C.surfaceContainerHigh,
+        width: w, height: TILE_HEIGHT,
+        paddingVertical: 4, paddingHorizontal: 6,
+        borderRadius: 8, borderWidth: 1,
+        backgroundColor: C.surface,
         borderColor: C.ghostBorder,
+        justifyContent: 'space-between',
       }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>OSC</Text>
+        </View>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, textTransform: 'uppercase',
-        }}>OSC …</Text>
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          color: C.icon, textAlign: 'center',
+        }}>…</Text>
       </View>
     );
   }
 
-  const styles = STATE_STYLES[status.state];
+  const styles = makeStateStyles(C)[status.state];
 
   return (
     <>
@@ -70,20 +93,33 @@ export function OscStatusPill({ compact = false }: Props) {
         accessibilityLabel={`OSC listener status: ${status.state}, ${status.label}`}
         accessibilityRole="button"
         style={{
-          flexDirection: 'row', alignItems: 'center', gap: 4,
-          paddingHorizontal: compact ? 6 : 10, paddingVertical: 3,
-          borderRadius: 10, borderWidth: 1,
-          backgroundColor: styles.bg, borderColor: styles.border,
+          width: w, height: TILE_HEIGHT,
+          paddingVertical: 4, paddingHorizontal: 6,
+          borderRadius: 8, borderWidth: 1,
+          // Subtle bg tinted toward the state, but not flooded — keeps
+          // the tile readable next to the other globals-cluster boxes.
+          // The border + dot do the heavy state-signal lifting.
+          backgroundColor: status.state === 'off' ? C.surface : styles.bg,
+          borderColor: styles.border,
+          justifyContent: 'space-between',
         }}
       >
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: styles.fg, textTransform: 'uppercase',
-        }}>OSC</Text>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: styles.fg,
-        }}>{status.label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: styles.fg, textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>OSC</Text>
+          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: styles.border }} />
+        </View>
+        <Text
+          numberOfLines={1}
+          style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+            color: styles.fg, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.6,
+          }}
+        >
+          {status.label}
+        </Text>
       </TouchableOpacity>
 
       <OscDiagnosticSheet
@@ -104,8 +140,9 @@ interface SheetProps {
 }
 
 function OscDiagnosticSheet({ visible, onClose, status }: SheetProps) {
+  const C = usePalette();
   const { state, stats } = status;
-  const styles = STATE_STYLES[state];
+  const styles = makeStateStyles(C)[state];
   const referenceTime = stats.now ?? Date.now();
   const lastSeenSeconds = stats.lastSeenMs === 0
     ? '—'
@@ -199,6 +236,7 @@ function OscDiagnosticSheet({ visible, onClose, status }: SheetProps) {
 }
 
 function Row({ label, value }: { label: string; value: string }) {
+  const C = usePalette();
   return (
     <View style={{
       flexDirection: 'row', justifyContent: 'space-between',

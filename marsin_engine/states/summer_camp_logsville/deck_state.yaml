@@ -1,0 +1,35 @@
+channel:
+  id: ch_base
+  name: Base
+  pattern: 75_timber_mill_clockwork
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  locked: false
+  faderLocked: false
+  localControls:
+    '1037917937':
+      v0: 0.63
+      v1: 0
+      v2: 0
+    '2021015560':
+      v0: 0.35
+      v1: 0
+      v2: 0
+  playlist:
+    name: default
+    activeEntryId: e_default_47_75_timber_mill_clockwork
+    cursor: 44
+    autopilot:
+      active: false
+      delay_s: 1
+      shuffle: false
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+transitionConfig:
+  enabled: false
+  mode: trans_color_burst
+  durationMs: 500
+  shuffle: true

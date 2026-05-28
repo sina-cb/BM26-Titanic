@@ -75,6 +75,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // docs/31: engine-owned scheduler. Broadcasts on every create / patch
+  // / delete / fire / stop / error. Small payload, low frequency
+  // (operator-driven CRUD + at most one tick at SCHEDULER_TICK_MS=250 ms
+  // when a row state-machines), so /ws/control is the right home next
+  // to the GEM messages it semantically relates to.
+  scheduledTasks:              TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,

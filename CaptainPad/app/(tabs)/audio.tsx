@@ -47,8 +47,9 @@ import { useFocusEffect } from 'expo-router';
 // native dep mid-cycle. See the rework brief, 2026-05-26.
 import Svg, { Polyline } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
+import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import {
@@ -59,8 +60,7 @@ import {
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type AudioStatusDevice, type OscPillState } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 
-const C = Colors.light;
-// "Auto-driven" accent — mirrors Colors.light.tertiary in theme.ts.
+// "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
 // isn't yet picked up by the consuming module's checker.
 const ACCENT_AUTO = '#1b9e77';
@@ -86,7 +86,7 @@ interface AudioConfig {
 // the UI refuses to let them cross (each slider's bound moves to keep
 // them at least 1 BPM apart). Mirrors the registry range in
 // marsin_engine/lib/param_center.js.
-const BPM_MIN_ABS = 60;
+const BPM_MIN_ABS = 50;
 const BPM_MAX_ABS = 180;
 
 interface AudioDevice {
@@ -103,27 +103,37 @@ interface AudioDevice {
 // Match the Config tab's card layout: rounded surface, ghostBorder,
 // ambient shadow, generous padding. Sub-cards (used inside the live
 // data sections) are slightly inset and use the lower surface tier.
+//
+// Factory functions: the active palette flips at runtime when the
+// operator toggles dark mode, so these styles can't be captured at
+// module load. Components call them inside a `useMemo` keyed on the
+// palette.
 
-const CARD = {
-  ...globalStyles.card,
-  padding: 20,
-  marginBottom: 20,
-  alignSelf: 'stretch',
-  ...globalStyles.ambientShadow,
-} as const;
+function makeCard(palette: Palette, globalStyles: GlobalStyles) {
+  return {
+    ...globalStyles.card,
+    padding: 20,
+    marginBottom: 20,
+    alignSelf: 'stretch' as const,
+    ...globalStyles.ambientShadow,
+  };
+}
 
-const SUB_CARD = {
-  backgroundColor: C.surfaceContainerLow,
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: C.ghostBorder,
-  padding: 14,
-  marginTop: 12,
-} as const;
+function makeSubCard(C: Palette) {
+  return {
+    backgroundColor: C.surfaceContainerLow,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    padding: 14,
+    marginTop: 12,
+  } as const;
+}
 
 function SectionHeader({ icon, title, hint, right }: {
   icon: string; title: string; hint?: string; right?: React.ReactNode;
 }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
       <View style={{
@@ -148,6 +158,7 @@ function SectionHeader({ icon, title, hint, right }: {
 }
 
 function SubHeader({ title, right }: { title: string; right?: React.ReactNode }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -173,6 +184,7 @@ type FaderRowProps = {
 };
 
 function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit }: FaderRowProps) {
+  const C = usePalette();
   const [draftNorm, setDraftNorm] = useState<number | null>(null);
   const lastValRef = useRef<number>(value);
 
@@ -236,6 +248,7 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 function MasterToggle({ on, busy, onPress, label, subtitle, accent = ACCENT_AUTO }: {
   on: boolean; busy?: boolean; onPress: () => void; label: string; subtitle?: string; accent?: string;
 }) {
+  const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -276,6 +289,7 @@ function MasterToggle({ on, busy, onPress, label, subtitle, accent = ACCENT_AUTO
 function MicPickerRow({ device, isCurrent, onPress, busy }: {
   device: AudioDevice; isCurrent: boolean; onPress: () => void; busy?: boolean;
 }) {
+  const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -338,25 +352,38 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
 // `<liveKey>Raw` mirror; `postKey` is the gained `<liveKey>`. Module-scope
 // so array identity is stable — keeps the live-key set pinned across
 // renders (avoids useLiveParamValues key-set churn).
+// Accent is stored as a *token reference* rather than a raw colour so the
+// meter follows light/dark mode. `'auto'` and `'primary'` resolve from
+// the active palette at render time; literal hex strings are also
+// supported for any future fixed-colour slot.
+type SignalAccent = 'auto' | 'primary' | 'error' | string;
+
 type SignalSlot = {
   label: string;
   rawKey: string;
   postKey: string;
-  accent: string;
+  accent: SignalAccent;
 };
 
-const MIC_SIGNALS = [
-  { label: 'LOW',  rawKey: 'micLowRaw',  postKey: 'micLow',  accent: ACCENT_AUTO },
-  { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: ACCENT_AUTO },
-  { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: ACCENT_AUTO },
-  { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: C.error },
-] as const satisfies readonly SignalSlot[];
+const MIC_SIGNALS: readonly SignalSlot[] = [
+  { label: 'LOW',  rawKey: 'micLowRaw',  postKey: 'micLow',  accent: 'auto' },
+  { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: 'auto' },
+  { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: 'auto' },
+  { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: 'error' },
+];
 
-const STEMS_SIGNALS = [
-  { label: 'VOC', rawKey: 'stemsVocalsRaw', postKey: 'stemsVocals', accent: '#006875' },
-  { label: 'BAS', rawKey: 'stemsBassRaw',   postKey: 'stemsBass',   accent: '#006875' },
-  { label: 'DRM', rawKey: 'stemsDrumsRaw',  postKey: 'stemsDrums',  accent: '#006875' },
-] as const satisfies readonly SignalSlot[];
+const STEMS_SIGNALS: readonly SignalSlot[] = [
+  { label: 'VOC', rawKey: 'stemsVocalsRaw', postKey: 'stemsVocals', accent: 'primary' },
+  { label: 'BAS', rawKey: 'stemsBassRaw',   postKey: 'stemsBass',   accent: 'primary' },
+  { label: 'DRM', rawKey: 'stemsDrumsRaw',  postKey: 'stemsDrums',  accent: 'primary' },
+];
+
+function resolveAccent(accent: SignalAccent, palette: Palette): string {
+  if (accent === 'auto') return ACCENT_AUTO;
+  if (accent === 'primary') return palette.primary;
+  if (accent === 'error') return palette.error;
+  return accent;
+}
 
 const ALL_SIGNALS: readonly SignalSlot[] = [...MIC_SIGNALS, ...STEMS_SIGNALS];
 
@@ -415,6 +442,8 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
   postSamples: readonly number[];
   bufferLen: number;
 }) {
+  const C = usePalette();
+  const accentColor = resolveAccent(slot.accent, C);
   const rv = Math.max(0, Math.min(1, raw));
   const pv = Math.max(0, Math.min(1, post));
   const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
@@ -447,7 +476,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${rv * 100}%`, backgroundColor: slot.accent,
+          width: `${rv * 100}%`, backgroundColor: accentColor,
           opacity: 0.5,
         }} />
       </View>
@@ -469,7 +498,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
             <Polyline
               points={rawPoints}
               fill="none"
-              stroke={slot.accent}
+              stroke={accentColor}
               strokeOpacity={0.55}
               strokeWidth={1}
             />
@@ -481,7 +510,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 8 }}>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: slot.accent, letterSpacing: 0.6,
+          color: accentColor, letterSpacing: 0.6,
         }}>POST</Text>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
@@ -496,7 +525,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${pv * 100}%`, backgroundColor: slot.accent,
+          width: `${pv * 100}%`, backgroundColor: accentColor,
         }} />
       </View>
       <View style={{
@@ -517,7 +546,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
             <Polyline
               points={postPoints}
               fill="none"
-              stroke={slot.accent}
+              stroke={accentColor}
               strokeWidth={1.5}
             />
           ) : null}
@@ -530,6 +559,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
 function WindowPicker({ value, onChange }: {
   value: number; onChange: (s: number) => void;
 }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
       {WINDOW_OPTIONS_S.map(s => {
@@ -556,6 +586,7 @@ function WindowPicker({ value, onChange }: {
 }
 
 function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn' }) {
+  const C = usePalette();
   const palette =
     tone === 'on'   ? { bg: ACCENT_AUTO,            fg: '#000',        border: ACCENT_AUTO } :
     tone === 'warn' ? { bg: '#f8d7da',              fg: '#842029',     border: C.error } :
@@ -580,6 +611,8 @@ function PinnedAudioMeters({
   audioStatus: AudioStatus | null;
   oscStatus: OscPillState | null;
 }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   // Per-key live subscription. The 7 raw + 7 post audio keys + tempoBpm
   // participate in the equality check, so this strip re-renders only
   // when one of THESE values actually ticks. The body below never
@@ -788,6 +821,7 @@ function PinnedAudioMeters({
 function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
   bpmSyncOn: boolean; oscMissing: boolean; oscState: string | null;
 }) {
+  const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
   const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   if (!bpmSyncOn) return null;
@@ -822,6 +856,7 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 // tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
 // re-render on every tempo tick.
 function BpmInlineReadout() {
+  const C = usePalette();
   const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
   const bpm = live.tempoBpm;
@@ -861,6 +896,9 @@ function CompactBpmCard({
   oscMissing: boolean;
   oscState: string | null;
 }) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
   const minVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMin ?? BPM_MIN_ABS));
   const maxVal = Math.max(BPM_MIN_ABS, Math.min(BPM_MAX_ABS, sp.bpmSpeedMax ?? BPM_MAX_ABS));
   return (
@@ -967,6 +1005,9 @@ function MicNotFoundBanner({
   onPickDevice: (d: AudioStatusDevice) => void;
   onExpandSettings: () => void;
 }) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
   const err = audioStatus?.error;
   // Hide cleanly when healthy or for any non-coded error (legacy free-form
   // strings continue to surface inline in the MICROPHONE picker card).
@@ -1133,6 +1174,8 @@ const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 // screen, so the operator never sees the spinner stick.
 
 export default function AudioAnalysisScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const status = useAudioStatus();
   const oscStatus = useOscStatus();
   const [cfg, setCfg] = useState<AudioConfig | null>(null);
@@ -1194,12 +1237,21 @@ function AudioConfigBody({
   oscStatus: ReturnType<typeof useOscStatus>;
   reload: () => Promise<void>;
 }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
+  const SUB_CARD = useMemo(() => makeSubCard(C), [C]);
   const [patchError, setPatchError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [devices, setDevices] = useState<AudioDevice[] | null>(null);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Ref to the page-level ScrollView so "Open Settings" on the cross-
+  // machine mic banner can scroll the (off-screen) SETTINGS disclosure
+  // at the bottom into view. Without this the operator taps the button
+  // and sees no visible change — the card expanded, but below the fold.
+  const scrollRef = useRef<ScrollView | null>(null);
   // SETTINGS collapse — Phase 6, default collapsed. AsyncStorage roams
   // the operator's preference across rebuilds. We start collapsed and
   // the effect below may flip to false if AsyncStorage has a stored
@@ -1333,6 +1385,17 @@ function AudioConfigBody({
       .catch(() => { /* benign — persistence is best-effort */ });
     setPickerOpen(true);
     if (!devices) loadDevices();
+    // The SETTINGS disclosure lives at the bottom of the page; without
+    // this scroll the operator taps the banner's "Open Settings" and
+    // sees nothing change because the expanded card is below the fold.
+    // Two RAF ticks (then a fallback timeout) wait for the disclosure
+    // body to render so scrollToEnd lands on the now-tall content.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+    setTimeout(() => { scrollRef.current?.scrollToEnd({ animated: true }); }, 200);
   }, [devices, loadDevices]);
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -1366,6 +1429,7 @@ function AudioConfigBody({
           component — the body below never reads liveParams. */}
       <PinnedAudioMeters audioStatus={status} oscStatus={oscStatus} />
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 32, paddingBottom: 80 }}
       >

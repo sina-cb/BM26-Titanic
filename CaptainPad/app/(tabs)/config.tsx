@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Linking, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { globalStyles } from '@/styles/globalStyles';
-import { Colors } from '@/constants/theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
+import { usePalette, useTheme, ThemeMode } from '@/hooks/use-theme';
+import { THEMES, THEME_ORDER } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
 import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/hooks/useServerDiscovery';
@@ -16,6 +17,8 @@ import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/h
 const SUBNET_OVERRIDE_KEY = '@CaptainPad:subnetOverride';
 
 export default function ConfigScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [ip, setIp] = useState('');
   const [saved, setSaved] = useState(false);
   const [connResult, setConnResult] = useState<ConnectionResult | null>(null);
@@ -120,10 +123,10 @@ export default function ConfigScreen() {
   };
 
   const statusColor = connResult === null 
-    ? Colors.light.icon
+    ? C.icon
     : connResult.ok 
       ? '#34C759' 
-      : Colors.light.error;
+      : C.error;
 
   const statusLabel = connResult === null 
     ? 'NOT TESTED'
@@ -138,8 +141,8 @@ export default function ConfigScreen() {
       <ScrollView contentContainerStyle={{ padding: 48, alignItems: 'center' }} style={{ flex: 1 }}>
         
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 48, gap: 16 }}>
-           <IconSymbol name="gear" size={32} color={Colors.light.primary} />
-           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 32, color: Colors.light.text, letterSpacing: 2 }}>
+           <IconSymbol name="gear" size={32} color={C.primary} />
+           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 32, color: C.text, letterSpacing: 2 }}>
              CONFIGURATION
            </Text>
         </View>
@@ -161,7 +164,7 @@ export default function ConfigScreen() {
               </Text>
             </View>
             {connResult?.ok && connResult.latencyMs !== undefined && (
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary }}>
                 {connResult.latencyMs}ms
               </Text>
             )}
@@ -170,18 +173,18 @@ export default function ConfigScreen() {
           {/* Show server details if connected */}
           {connResult?.ok && connResult.data && (
             <View style={{ 
-              backgroundColor: Colors.light.surfaceContainerLow, 
+              backgroundColor: C.surfaceContainerLow, 
               borderRadius: 8, padding: 12, gap: 4,
-              borderWidth: 1, borderColor: Colors.light.ghostBorder 
+              borderWidth: 1, borderColor: C.ghostBorder 
             }}>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary }}>
-                Pattern: <Text style={{ color: Colors.light.primary, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activePattern || '—'}</Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary }}>
+                Pattern: <Text style={{ color: C.primary, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activePattern || '—'}</Text>
               </Text>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary }}>
-                Model: <Text style={{ color: Colors.light.text, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activeModel || '—'}</Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary }}>
+                Model: <Text style={{ color: C.text, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activeModel || '—'}</Text>
               </Text>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary }}>
-                Scene: <Text style={{ color: Colors.light.text, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activeScene || '—'}</Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary }}>
+                Scene: <Text style={{ color: C.text, fontFamily: 'Inter_600SemiBold' }}>{connResult.data.activeScene || '—'}</Text>
               </Text>
             </View>
           )}
@@ -193,7 +196,7 @@ export default function ConfigScreen() {
               borderRadius: 8, padding: 12, 
               borderWidth: 1, borderColor: 'rgba(186, 26, 26, 0.3)' 
             }}>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.error }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.error }}>
                 {connResult.error}
               </Text>
             </View>
@@ -204,7 +207,7 @@ export default function ConfigScreen() {
             disabled={isTesting}
             style={{
               marginTop: 16,
-              backgroundColor: isTesting ? Colors.light.surfaceContainerHigh : Colors.light.primaryContainer,
+              backgroundColor: isTesting ? C.surfaceContainerHigh : C.primaryContainer,
               paddingVertical: 14,
               paddingHorizontal: 24,
               borderRadius: 10,
@@ -212,18 +215,21 @@ export default function ConfigScreen() {
               ...globalStyles.ambientShadow
             }}
           >
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: Colors.light.text }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text }}>
               {isTesting ? 'TESTING...' : 'TEST CONNECTION'}
             </Text>
           </TouchableOpacity>
         </View>
 
+        {/* ── Section 1b: Appearance (dark / light / system) ────────────── */}
+        <AppearancePicker />
+
         {/* ── Section 2: Network Discovery ──────────────────────────────── */}
         <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24, marginBottom: 24 }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <IconSymbol name="antenna.radiowaves.left.and.right" size={24} color={Colors.light.primary} />
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: Colors.light.text }}>
+              <IconSymbol name="antenna.radiowaves.left.and.right" size={24} color={C.primary} />
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text }}>
                 NETWORK DISCOVERY
               </Text>
             </View>
@@ -234,7 +240,7 @@ export default function ConfigScreen() {
               interfaces are active, so the operator needs a way to
               point the scan at the real show subnet (e.g. "10.1.1"). */}
           <View style={{ marginBottom: 12 }}>
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: Colors.light.secondary, marginBottom: 6, letterSpacing: 0.6 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, marginBottom: 6, letterSpacing: 0.6 }}>
               SUBNET (/24 PREFIX) — leave blank to auto-detect
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -242,7 +248,7 @@ export default function ConfigScreen() {
                 value={subnetInput}
                 onChangeText={setSubnetInput}
                 placeholder="e.g. 10.1.1"
-                placeholderTextColor={Colors.light.icon}
+                placeholderTextColor={C.icon}
                 editable={!discovery.scanning}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -251,12 +257,12 @@ export default function ConfigScreen() {
                   flex: 1,
                   fontFamily: 'SpaceGrotesk_700Bold',
                   fontSize: 14,
-                  color: Colors.light.text,
+                  color: C.text,
                   paddingHorizontal: 12, paddingVertical: 10,
                   borderRadius: 8,
                   borderWidth: 1,
-                  borderColor: subnetInputValid ? Colors.light.ghostBorder : Colors.light.error,
-                  backgroundColor: Colors.light.surfaceContainerLowest,
+                  borderColor: subnetInputValid ? C.ghostBorder : C.error,
+                  backgroundColor: C.surfaceContainerLowest,
                 }}
               />
               <TouchableOpacity
@@ -265,21 +271,21 @@ export default function ConfigScreen() {
                 style={{
                   paddingHorizontal: 12, paddingVertical: 10,
                   borderRadius: 8, borderWidth: 1,
-                  borderColor: Colors.light.ghostBorder,
+                  borderColor: C.ghostBorder,
                   opacity: (discovery.scanning || !discovery.autoDetectedIp) ? 0.4 : 1,
                 }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: Colors.light.secondary, letterSpacing: 0.6 }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, letterSpacing: 0.6 }}>
                   AUTO
                 </Text>
               </TouchableOpacity>
             </View>
             {!subnetInputValid ? (
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.light.error, marginTop: 4 }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.error, marginTop: 4 }}>
                 Invalid — use three octets, e.g. 10.1.1
               </Text>
             ) : discovery.autoDetectedIp ? (
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.light.icon, marginTop: 4 }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon, marginTop: 4 }}>
                 iOS sees this iPad as {discovery.autoDetectedIp}
               </Text>
             ) : null}
@@ -290,7 +296,7 @@ export default function ConfigScreen() {
             onPress={handleScan}
             disabled={!subnetInputValid && !discovery.scanning}
             style={{
-              backgroundColor: discovery.scanning ? Colors.light.error : Colors.light.primary,
+              backgroundColor: discovery.scanning ? C.error : C.primary,
               paddingVertical: 14,
               paddingHorizontal: 24,
               borderRadius: 10,
@@ -311,19 +317,19 @@ export default function ConfigScreen() {
           {/* Scan Progress */}
           {discovery.scanning && (
             <View style={{ marginTop: 16 }}>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.light.secondary, marginBottom: 8 }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginBottom: 8 }}>
                 Scanning {discovery.subnet ? `${discovery.subnet}.0/24` : 'subnet'}... ({scanProgressPercent}%)
               </Text>
               <View style={{ 
                 height: 6, 
-                backgroundColor: Colors.light.surfaceContainerHigh, 
+                backgroundColor: C.surfaceContainerHigh, 
                 borderRadius: 3, 
                 overflow: 'hidden' 
               }}>
                 <View style={{ 
                   height: '100%', 
                   width: `${scanProgressPercent}%`, 
-                  backgroundColor: Colors.light.primary, 
+                  backgroundColor: C.primary, 
                   borderRadius: 3 
                 }} />
               </View>
@@ -338,7 +344,7 @@ export default function ConfigScreen() {
               borderRadius: 8, padding: 12, 
               borderWidth: 1, borderColor: 'rgba(186, 26, 26, 0.3)' 
             }}>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.error }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.error }}>
                 {discovery.error}
               </Text>
             </View>
@@ -347,7 +353,7 @@ export default function ConfigScreen() {
           {/* Scan Complete - No Results */}
           {!discovery.scanning && discovery.progress === 1 && discovery.servers.length === 0 && !discovery.error && (
             <View style={{ marginTop: 12, padding: 12 }}>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, textAlign: 'center' }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, textAlign: 'center' }}>
                 No MarsinEngine instances found on {discovery.subnet ? `${discovery.subnet}.0/24` : 'subnet'}.
               </Text>
             </View>
@@ -356,7 +362,7 @@ export default function ConfigScreen() {
           {/* Discovered Server Cards */}
           {discovery.servers.length > 0 && (
             <View style={{ marginTop: 16, gap: 12 }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.secondary }}>
                 DISCOVERED ({discovery.servers.length})
               </Text>
               {discovery.servers.map(server => {
@@ -366,11 +372,11 @@ export default function ConfigScreen() {
                     key={server.ip}
                     onPress={() => handleSelectServer(server)}
                     style={{
-                      backgroundColor: isCurrentServer ? 'rgba(0, 99, 155, 0.08)' : Colors.light.surfaceContainerLow,
+                      backgroundColor: isCurrentServer ? 'rgba(0, 99, 155, 0.08)' : C.surfaceContainerLow,
                       borderRadius: 12,
                       padding: 16,
                       borderWidth: isCurrentServer ? 2 : 1,
-                      borderColor: isCurrentServer ? Colors.light.primary : Colors.light.ghostBorder,
+                      borderColor: isCurrentServer ? C.primary : C.ghostBorder,
                       ...globalStyles.ambientShadow
                     }}
                   >
@@ -384,30 +390,30 @@ export default function ConfigScreen() {
                           shadowOpacity: 0.8,
                           shadowRadius: 4,
                         }} />
-                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: Colors.light.text }}>
+                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>
                           {server.name}
                         </Text>
                       </View>
-                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.light.secondary }}>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary }}>
                         {server.latencyMs}ms
                       </Text>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.light.primary }}>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: C.primary }}>
                         {server.ip}:{6968}
                       </Text>
                       {isCurrentServer && (
-                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: Colors.light.primary }}>
+                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary }}>
                           ACTIVE
                         </Text>
                       )}
                     </View>
                     <View style={{ flexDirection: 'row', gap: 16, marginTop: 6 }}>
-                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.light.secondary }}>
-                        Pattern: <Text style={{ color: Colors.light.text }}>{server.activePattern}</Text>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary }}>
+                        Pattern: <Text style={{ color: C.text }}>{server.activePattern}</Text>
                       </Text>
-                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.light.secondary }}>
-                        Model: <Text style={{ color: Colors.light.text }}>{server.activeModel}</Text>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary }}>
+                        Model: <Text style={{ color: C.text }}>{server.activeModel}</Text>
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -419,25 +425,25 @@ export default function ConfigScreen() {
 
         {/* ── Section 3: Engine API Base URL ────────────────────────────── */}
         <View style={[globalStyles.card, { alignSelf: 'stretch', alignItems: 'flex-start', padding: 32, marginBottom: 24 }]}>
-           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: Colors.light.secondary, marginBottom: 4 }}>
+           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.secondary, marginBottom: 4 }}>
              ENGINE API BASE URL
            </Text>
-           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.light.icon, marginBottom: 16 }}>
+           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginBottom: 16 }}>
              Currently resolved: {getApiBase()}
            </Text>
            
            <TextInput
              style={{
                width: '100%',
-               backgroundColor: Colors.light.surfaceContainerLowest,
-               color: Colors.light.text,
+               backgroundColor: C.surfaceContainerLowest,
+               color: C.text,
                height: 56,
                borderRadius: 12,
                paddingHorizontal: 16,
                fontFamily: 'Inter_400Regular',
                fontSize: 18,
                borderWidth: 1,
-               borderColor: Colors.light.ghostBorder,
+               borderColor: C.ghostBorder,
                marginBottom: 24
              }}
              value={ip}
@@ -445,14 +451,14 @@ export default function ConfigScreen() {
              autoCapitalize="none"
              autoCorrect={false}
              placeholder={getDefaultApiBase()}
-             placeholderTextColor={Colors.light.icon}
+             placeholderTextColor={C.icon}
            />
 
            <View style={{ flexDirection: 'row', gap: 16 }}>
              <TouchableOpacity 
                onPress={handleSave}
                style={{
-                 backgroundColor: Colors.light.primary,
+                 backgroundColor: C.primary,
                  paddingVertical: 16,
                  paddingHorizontal: 32,
                  borderRadius: 12,
@@ -469,13 +475,13 @@ export default function ConfigScreen() {
                style={{
                  backgroundColor: 'transparent',
                  borderWidth: 1,
-                 borderColor: Colors.light.primary,
+                 borderColor: C.primary,
                  paddingVertical: 16,
                  paddingHorizontal: 32,
                  borderRadius: 12,
                }}
              >
-               <Text style={{ color: Colors.light.primary, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16 }}>
+               <Text style={{ color: C.primary, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16 }}>
                  RESET TO YAML
                </Text>
              </TouchableOpacity>
@@ -486,16 +492,16 @@ export default function ConfigScreen() {
         <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24 }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <IconSymbol name="exclamationmark.triangle.fill" size={20} color="#FF9500" />
-            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: Colors.light.text }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text }}>
               iPAD LOCAL NETWORK PERMISSION
             </Text>
           </View>
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, lineHeight: 20, marginBottom: 16 }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, lineHeight: 20, marginBottom: 16 }}>
             If you see &quot;UNREACHABLE&quot; but the server is running, your iPad may have denied Local Network access. 
-            Go to <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.text }}>Settings → Privacy & Security → Local Network</Text> and 
-            ensure <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.primary }}>CaptainPad</Text> is toggled ON.
+            Go to <Text style={{ fontFamily: 'Inter_600SemiBold', color: C.text }}>Settings → Privacy & Security → Local Network</Text> and 
+            ensure <Text style={{ fontFamily: 'Inter_600SemiBold', color: C.primary }}>CaptainPad</Text> is toggled ON.
           </Text>
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.light.secondary, lineHeight: 20 }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, lineHeight: 20 }}>
             On first launch after a fresh install, iOS will show a permission dialog — tap &quot;Allow&quot; to enable local network communication.
             If you previously denied it, delete and reinstall the app to reset the permission, or enable it manually in Settings.
           </Text>
@@ -519,6 +525,94 @@ export default function ConfigScreen() {
         </View>
 
       </ScrollView>
+    </View>
+  );
+}
+
+// ── AppearancePicker ──────────────────────────────────────────────────
+// LIGHT / DARK / SYSTEM toggle. Persists to AsyncStorage via the
+// ThemeProvider; takes effect across every tab the next paint and
+// survives cold launches.
+//
+// Order intentionally matches the operator's mental model — LIGHT is
+// the historical default, DARK is the late-night option Sina asked for
+// (eye strain on the dim podium), SYSTEM is the "I trust iOS" option.
+function AppearancePicker() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const { mode, scheme, setMode } = useTheme();
+
+  // Source of truth for pickable themes is `THEMES` in theme.ts — add
+  // a palette there and it shows up here automatically. SYSTEM is the
+  // odd one out (not a theme, a delegation) and renders last.
+  const themeOptions: { value: ThemeMode; label: string; hint: string }[] =
+    THEME_ORDER.map((id) => ({ value: id, label: THEMES[id].label, hint: THEMES[id].hint }));
+  const options: { value: ThemeMode; label: string; hint: string }[] = [
+    ...themeOptions,
+    { value: 'system', label: 'SYSTEM', hint: `Follow the iPad's setting (currently ${scheme}).` },
+  ];
+
+  return (
+    <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24, marginBottom: 24 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <IconSymbol name="circle.lefthalf.filled" size={24} color={C.primary} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 1 }}>
+          APPEARANCE
+        </Text>
+      </View>
+
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, marginBottom: 16, lineHeight: 18 }}>
+        Choose the theme for every CaptainPad surface. The preference is saved on this iPad and survives restarts.
+      </Text>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {options.map((opt) => {
+          const active = opt.value === mode;
+          return (
+            <TouchableOpacity
+              key={opt.value}
+              onPress={() => setMode(opt.value)}
+              accessibilityLabel={`Set appearance to ${opt.label}`}
+              accessibilityRole="button"
+              style={{
+                // 5+ options no longer fit a single row across an iPad
+                // Pro split-view; flex-wrap onto a second line and let
+                // each pill be its content-width with a sensible min.
+                minWidth: 110,
+                flexGrow: 1,
+                flexBasis: '18%',
+                paddingVertical: 14,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? C.primary : C.ghostBorder,
+                backgroundColor: active ? C.primaryContainer : C.surfaceContainerLow,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 13,
+                color: active ? C.primary : C.text,
+                letterSpacing: 1.2,
+              }}>
+                {opt.label}
+              </Text>
+              {active ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.primary, marginTop: 4 }}>
+                  ACTIVE
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Per-option hint for the currently-selected mode. Reads at a
+          glance without making the operator chase tooltips. */}
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginTop: 14 }}>
+        {options.find((o) => o.value === mode)?.hint ?? ''}
+      </Text>
     </View>
   );
 }

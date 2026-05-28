@@ -301,6 +301,70 @@ test('Mixer channel playlist assignment + entry switching', async () => {
   await api('DELETE', `/mixer/channels/${channelId}`);
 });
 
+test('Reorder: POST /playlists with new entry order persists and preserves activeEntryId', async () => {
+  // Operator request (slot 5, May 2026): re-sequence entries mid-show
+  // without going back to YAML. Load test_show onto the deck, switch
+  // to its middle entry, then send back the SAME entries in a new
+  // order. The reorder must:
+  //   (1) persist to disk (next GET returns the new order),
+  //   (2) leave activeEntryId untouched,
+  //   (3) update the channel.cursor to reflect the active entry's
+  //       new index in the reordered list.
+  let r = await api('POST', '/playlists', {
+    name: 'test_show',
+    entries: [
+      { id: 'e_a', pattern: '13_sparkle', label: 'Sparkle slow', defaults: {} },
+      { id: 'e_b', pattern: '13_sparkle', label: 'Sparkle fast', defaults: {} },
+      { id: 'e_c', pattern: '08_ocean_liner', label: 'Ocean', defaults: {} },
+    ],
+  });
+  assert.equal(r.status, 200);
+  r = await api('POST', '/deck/playlist', { name: 'test_show' });
+  assert.equal(r.status, 200);
+  // Activate the middle entry so we can prove cursor tracking later.
+  r = await api('POST', '/deck/playlist/entry', { entryId: 'e_b' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.playlist.activeEntryId, 'e_b');
+  // Pre-reorder cursor: e_b is at index 1.
+  let deck = await api('GET', '/deck/playlist');
+  assert.equal(deck.data.cursor, 1);
+
+  // Reorder: move e_b to the END. New order: [e_a, e_c, e_b].
+  r = await api('POST', '/playlists', {
+    name: 'test_show',
+    entries: [
+      { id: 'e_a', pattern: '13_sparkle', label: 'Sparkle slow', defaults: {} },
+      { id: 'e_c', pattern: '08_ocean_liner', label: 'Ocean', defaults: {} },
+      { id: 'e_b', pattern: '13_sparkle', label: 'Sparkle fast', defaults: {} },
+    ],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  // (1) Order persists on disk.
+  r = await api('GET', '/playlists/test_show');
+  assert.deepEqual(r.data.entries.map(e => e.id), ['e_a', 'e_c', 'e_b']);
+  // (2) Active entry id is unchanged.
+  deck = await api('GET', '/deck/playlist');
+  assert.equal(deck.data.activeEntryId, 'e_b');
+  // (3) Cursor moved to the new index (was 1, now 2).
+  assert.equal(deck.data.cursor, 2);
+});
+
+test('Reorder: 1-entry playlist accepts a same-order save (no-op semantics)', async () => {
+  let r = await api('POST', '/playlists', {
+    name: 'mini_show',
+    entries: [{ id: 'only', pattern: '13_sparkle', label: 'only', defaults: {} }],
+  });
+  assert.equal(r.status, 200);
+  r = await api('POST', '/playlists', {
+    name: 'mini_show',
+    entries: [{ id: 'only', pattern: '13_sparkle', label: 'only', defaults: {} }],
+  });
+  assert.equal(r.status, 200);
+  r = await api('GET', '/playlists/mini_show');
+  assert.equal(r.data.entries.length, 1);
+  await api('DELETE', '/playlists/mini_show');
+});
+
 test('DELETE /playlists/default is rejected', async () => {
   const r = await api('DELETE', '/playlists/default');
   assert.equal(r.status, 400);

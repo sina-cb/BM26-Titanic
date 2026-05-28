@@ -27,10 +27,30 @@ export function sliderColorVariation(v) { colorVariation = v; }
 export function sliderBlackoutTexture(v) { blackoutTexture = v; }
 
 var beatPhase = 0.0;
+// Continuity: each orbit gets its own time() base so the angle fed into
+// sin/cos is exactly time(s)*TAU (period-2π safe across wraps). Previously
+// b2 = beatPhase*TAU*r2 with r2=-1.5 jumped by -3π per wrap → cos(b2) flips
+// sign every period (visible orbit-2 flicker).
+var b1 = 0.0, b2 = 0.0, b3 = 0.0;
+// Extra wrap-clean phases for wave() color drifts in render3D (each is a
+// non-integer multiple of beatPhase in the original — would jump at wrap).
+var beatPhase041 = 0.0, beatPhase073 = 0.0, beatPhase117 = 0.0;
 
 export function beforeRender(delta) {
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  beatPhase = time(0.05 / localMultiplier); 
+  beatPhase = time(0.05 / localMultiplier);
+  // |r_k| sets rate; sign sets direction. time(s/|r_k|) wraps cleanly.
+  // Guard against r=0 (would stall the orbit, not crash) with a small floor.
+  var s = 0.05 / localMultiplier;
+  var ar1 = max(abs(r1), 0.001);
+  var ar2 = max(abs(r2), 0.001);
+  var ar3 = max(abs(r3), 0.001);
+  b1 = time(s / ar1) * 6.28318 * (r1 >= 0.0 ? 1.0 : -1.0);
+  b2 = time(s / ar2) * 6.28318 * (r2 >= 0.0 ? 1.0 : -1.0);
+  b3 = time(s / ar3) * 6.28318 * (r3 >= 0.0 ? 1.0 : -1.0);
+  beatPhase041 = time(s / 0.41);
+  beatPhase073 = time(s / 0.73);
+  beatPhase117 = time(s / 1.17);
 }
 
 export function render3D(index, wx, wy, wz) {
@@ -38,10 +58,6 @@ export function render3D(index, wx, wy, wz) {
   var ny = wy / 6.5; 
   nx = max(0.0, min(1.0, nx));
   ny = max(0.0, min(1.0, ny));
-
-  var b1 = beatPhase * 6.28318 * r1;
-  var b2 = beatPhase * 6.28318 * r2;
-  var b3 = beatPhase * 6.28318 * r3;
 
   var ax1 = 0.5 + orbit1 * cos(b1);
   var ay1 = 0.5 + orbit1 * sin(b1);
@@ -70,7 +86,7 @@ export function render3D(index, wx, wy, wz) {
 
   var attractorBlend = (influence2 + influence3 * 0.52) / influenceTotal;
   var verticalGradient = ny * 0.24 + nx * 0.10;
-  var orbitalGradient = wave((d1 - d2) * 1.7 + d3 * 0.9 + beatPhase * 0.41) * 0.22;
+  var orbitalGradient = wave((d1 - d2) * 1.7 + d3 * 0.9 + beatPhase041) * 0.22;
   var tVal = max(0.0, min(1.0, attractorBlend * 0.68 + verticalGradient + orbitalGradient));
 
   var dh = cp2H - cp1H;
@@ -80,8 +96,8 @@ export function render3D(index, wx, wy, wz) {
   var sat = cp1S + (cp2S - cp1S) * tVal;
   var maxVal = cp1V + (cp2V - cp1V) * tVal;
 
-  var colorWaveA = wave(nx * 2.7 + ny * 1.9 + beatPhase * 0.73);
-  var colorWaveB = wave((d1 - d2 + d3) * 1.8 - beatPhase * 1.17);
+  var colorWaveA = wave(nx * 2.7 + ny * 1.9 + beatPhase073);
+  var colorWaveB = wave((d1 - d2 + d3) * 1.8 - beatPhase117);
   var orbitHue = (colorWaveA - 0.5) * colorVariation * 0.22;
   var attractorHue = (colorWaveB - 0.5) * colorVariation * 0.12;
   hue += orbitHue + attractorHue + (tVal - 0.5) * colorVariation * 0.10;

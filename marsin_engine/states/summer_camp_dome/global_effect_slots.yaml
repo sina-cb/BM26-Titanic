@@ -15,9 +15,9 @@ slots:
     paramsOverride: {}
   - slotId: 3
     enabled: true
-    label: Fogger
-    effectId: fogger
-    presetId: default
+    label: Soft Afterimage
+    effectId: feedbackTrails
+    presetId: soft_afterimage
     behavior: toggle
     paramsOverride: {}
   - slotId: 4

@@ -19,8 +19,13 @@ export function sliderReach(v) { reach = 0.18 + v * 0.55; }
 export function sliderFocus(v) { focus = 1.2 + v * 5.5; }
 export function sliderTrailBlend(v) { trailBlend = v; }
 
-var p = 0.0;
-var q = 0.0;
+// ── Continuity: each attractor harmonic gets its own time() base, scaled at
+//   call time, so the angle is always time(s)*TAU with NO further fractional
+//   multiplier on the wrapping phase. sin(time(s)*TAU) is C0-continuous across
+//   the 1→0 wrap because sin(0)=sin(TAU). The previous form (p = time*TAU then
+//   sin(p*1.37+0.8), etc.) jumped every period: sin(2π*1.37+0.8)→sin(0.8).
+var pA = 0.0, pB = 0.0, pC = 0.0, pD = 0.0, pE = 0.0, pF = 0.0;
+var qA = 0.0, qB = 0.0, qC = 0.0, qD = 0.0, qE = 0.0;
 var currentScale = 0.15;
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
@@ -58,8 +63,21 @@ function _hsv2rgb2() {
 export function beforeRender(delta) {
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   currentScale = 0.15 / localMultiplier;
-  p = time(currentScale) * 6.2831853;
-  q = time(currentScale * 0.53) * 6.2831853;
+  // Each harmonic uses its own time() base scaled here, so the per-harmonic
+  // angle is exactly time(s_k)*TAU — wraps cleanly with no fractional jump.
+  // Scale for k× a base time(s0) is s0/k (smaller scale = faster wrap).
+  // Bases: p0 = time(currentScale), q0 = time(currentScale * 0.53).
+  pA = time(currentScale) * 6.2831853;              // was sin(p)         — k=1
+  pB = time(currentScale / 1.37) * 6.2831853;       // was sin(p*1.37+..) — k=1.37
+  pC = time(currentScale / 0.73) * 6.2831853;       // was sin(p*0.73+..) — k=0.73
+  pD = time(currentScale / 1.91) * 6.2831853;       // was sin(p*1.91-..) — k=1.91
+  pE = time(currentScale / 1.21) * 6.2831853;       // was sin(p*1.21-..) — k=1.21
+  pF = time(currentScale / 0.61) * 6.2831853;       // was sin(p*0.61+..) — k=0.61
+  qA = time(currentScale * 0.53) * 6.2831853;       // base q             — k=1
+  qB = time(currentScale * 0.53 / 0.7) * 6.2831853; // was cos(q*0.7)     — k=0.7
+  qC = time(currentScale * 0.53 / 1.9) * 6.2831853; // was sin(q*1.9)     — k=1.9
+  qD = time(currentScale * 0.53 / 0.5) * 6.2831853; // was cos(q*0.5)     — k=0.5
+  qE = time(currentScale * 0.53 / 0.4) * 6.2831853; // was q*0.4 in mix
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -70,14 +88,14 @@ export function render3D(index, x, y, z) {
   nx = max(0.0, min(1.0, nx));
   ny = max(0.0, min(1.0, ny));
 
-  var ax = 0.5 + reach * sin(p) * cos(q * 0.7);
-  var ay = 0.5 + reach * sin(p * 1.37 + 0.8) * 0.62 + sin(q * 1.9) * 0.09;
+  var ax = 0.5 + reach * sin(pA) * cos(qB);
+  var ay = 0.5 + reach * sin(pB + 0.8) * 0.62 + sin(qC) * 0.09;
 
-  var bx = 0.5 + reach * sin(p * 0.73 + 2.1) * 0.75;
-  var by = 0.5 + reach * sin(p * 1.91 - q * 0.4) * 0.55;
+  var bx = 0.5 + reach * sin(pC + 2.1) * 0.75;
+  var by = 0.5 + reach * sin(pD - qE) * 0.55;
 
-  var cx = 0.5 + reach * sin(p * 1.21 - 1.4) * cos(q * 0.5) * 0.8;
-  var cy = 0.5 + reach * sin(p * 0.61 + q + 1.2) * 0.58;
+  var cx = 0.5 + reach * sin(pE - 1.4) * cos(qD) * 0.8;
+  var cy = 0.5 + reach * sin(pF + qA + 1.2) * 0.58;
 
   var dA = hypot(nx - ax, ny - ay);
   var dB = hypot(nx - bx, ny - by);

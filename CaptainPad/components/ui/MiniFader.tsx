@@ -1,9 +1,7 @@
 import React from 'react';
 import { View, Text } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-
-const C = Colors.light;
 
 type MiniFaderProps = {
   label: string;
@@ -21,6 +19,7 @@ type MiniFaderProps = {
 };
 
 export const MiniFader = ({ label, value, onChange, fillColor, badge, disabled }: MiniFaderProps) => {
+  const C = usePalette();
   const bar = fillColor || (disabled ? C.secondary : C.primaryFixedDim);
   return (
     <View style={{ marginBottom: 6, opacity: disabled ? 0.5 : 1 }}>

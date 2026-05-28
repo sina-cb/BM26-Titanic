@@ -10,6 +10,12 @@ import { PlaylistManager } from './playlist_manager.js';
 import { validateModulationMapping } from './modulation_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
+import {
+  ScheduledTaskService,
+  ScheduledTaskValidationError,
+  ON_DURATION_PRESETS_MS,
+  INTERVAL_PRESETS_MS,
+} from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
 
 /**
@@ -327,6 +333,33 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
   }
+
+  // ── Scheduler service (docs/31_scheduled_tasks.md v3) ───────────────
+  // Engine-owned task list that fires (effectId, presetId) bindings
+  // from the global effect library on a timer ("hazer 10s every 1m").
+  // The schedule keeps running even when CaptainPad is closed, asleep,
+  // or disconnected — the engine is the source of truth. Persisted to
+  // states/<model>/scheduled_tasks.yaml. Dispatch goes through
+  // GlobalEffectSlotManager.dispatchEffectAction — slot-less direct
+  // route, no GEM slot reservation (v3 change).
+  const scheduledTaskService = new ScheduledTaskService({
+    stateDir,
+    slotManager: globalEffectSlotManager,
+    broadcast: broadcastWs,
+    getFrameIndex: () => (engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0),
+  });
+  try {
+    scheduledTaskService.loadFromDisk();
+    if (scheduledTaskService.list().length > 0) {
+      console.log(`  ✅ Scheduled tasks: restored ${scheduledTaskService.list().length} from disk`);
+    }
+  } catch (err) {
+    // Codex P0: hand-edited YAML with off-preset values must crash boot
+    // loudly rather than silently dropping the bad row.
+    console.error(`[ScheduledTasks] failed to load scheduled_tasks.yaml: ${err.message}`);
+    process.exit(1);
+  }
+  scheduledTaskService.start();
 
   // After loading saved CPC values, push them to all boot-created channels.
   // This must happen after the channels have been primed with beginFrame(0)
@@ -1917,6 +1950,74 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       } catch (e) {
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
+
+    // ── Scheduled tasks (docs/31_scheduled_tasks.md) ────────────────
+    // Engine-owned schedule that fires GEM slots on a timer. CaptainPad
+    // is a thin client over these endpoints + the `scheduledTasks` WS
+    // broadcast. All validation errors return 400 with a human-readable
+    // message — never silently clamp (codex P0).
+    } else if (req.method === 'GET' && req.url === '/scheduled-tasks') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        tasks: scheduledTaskService.list(),
+        presets: {
+          onDurationMs: [...ON_DURATION_PRESETS_MS],
+          intervalMs:   [...INTERVAL_PRESETS_MS],
+        },
+      }));
+    } else if (req.method === 'POST' && req.url === '/scheduled-tasks') {
+      readBody(data => {
+        try {
+          const task = scheduledTaskService.create(data || {});
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ task }));
+        } catch (e) {
+          const code = e instanceof ScheduledTaskValidationError ? 400 : 500;
+          res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if ((req.method === 'PATCH' || req.method === 'DELETE' || req.method === 'POST')
+               && req.url.startsWith('/scheduled-tasks/')) {
+      // The id path uses URL-safe characters; allow letters, digits,
+      // dash, underscore (covers crypto.randomUUID() output + the
+      // operator-friendly slugs the doc shows in YAML examples).
+      const m = req.url.match(/^\/scheduled-tasks\/([A-Za-z0-9_-]+)(?:\/(fire-now|stop))?$/);
+      if (!m) { res.writeHead(404); return res.end('Not Found'); }
+      const id = m[1];
+      const sub = m[2] || null;
+
+      try {
+        if (req.method === 'PATCH' && !sub) {
+          readBody(data => {
+            try {
+              const task = scheduledTaskService.patch(id, data || {});
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ task }));
+            } catch (e) {
+              const code = e instanceof ScheduledTaskValidationError ? 400 : 500;
+              res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
+            }
+          });
+        } else if (req.method === 'DELETE' && !sub) {
+          scheduledTaskService.delete(id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } else if (req.method === 'POST' && sub === 'fire-now') {
+          const task = scheduledTaskService.fireNow(id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ task }));
+        } else if (req.method === 'POST' && sub === 'stop') {
+          const task = scheduledTaskService.stop(id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ task }));
+        } else {
+          res.writeHead(404); res.end('Not Found');
+        }
+      } catch (e) {
+        const code = e instanceof ScheduledTaskValidationError ? 400 : 500;
+        res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
+      }
+
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
@@ -2705,6 +2806,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             notes: e.notes ?? null,
           }));
           const saved = playlistManager.save({ name: data.name, entries });
+          // Re-sync per-channel cursor for any channel whose playlist
+          // points at the saved name (operator reorder, slot 5 May
+          // 2026). `cursor` is a display index used in WS broadcasts;
+          // autopilot itself uses id-based lookup so it doesn't need
+          // this, but if we leave cursor stale a UI consumer reading
+          // it from the mixer broadcast (or a future code path that
+          // honours it) would point at the wrong row. activeEntryId
+          // is intentionally NOT touched — the operator's currently
+          // playing pattern keeps playing; only the surrounding order
+          // shifts.
+          for (const ch of mixer.channels) {
+            if (!ch.playlist || ch.playlist.name !== saved.name) continue;
+            const activeId = ch.playlist.activeEntryId;
+            if (!activeId) continue;
+            const newIdx = saved.entries.findIndex(e => e.id === activeId);
+            // newIdx === -1 means the active entry was removed from
+            // the playlist by this save (delete path, not a reorder).
+            // Leave cursor as-is; that path is exercised by the
+            // existing handleRemoveEntry flow, which separately
+            // advances the active entry when needed.
+            if (newIdx >= 0) ch.playlist.cursor = newIdx;
+          }
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'ok', playlist: saved }));
           // Two broadcasts so clients can react narrowly:

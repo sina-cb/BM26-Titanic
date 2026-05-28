@@ -4,9 +4,14 @@
 // Design rules:
 //   * Filter at the OS level by SERVICE UUID (handled in client.ts);
 //     we only display what comes through that filter.
-//   * Stable sort: bucket-by-RSSI in 5 dBm steps so two radios at
-//     similar signal don't keep swapping rows. Tiebreaker is firstSeen
-//     so the order is deterministic across renders.
+//   * Stable sort: ALPHABETICAL by advertised name (case-insensitive),
+//     with the BLE device id as the tiebreaker. RSSI is deliberately
+//     NOT part of the sort key — RSSI jitters by several dBm every
+//     advertisement and was causing rows to slide out from under the
+//     operator's finger. Name + id are both invariant across scan
+//     ticks for the same physical device, so the row stays put.
+//     Unnamed devices sort to the bottom, ordered by id, so they
+//     never outrank a named tcon_* radio.
 //   * "Paired" badge shows on devices we've successfully connected to
 //     in this app session (see store.ts pairedDeviceIds for the
 //     intent / scope).
@@ -32,14 +37,17 @@ import { useFormFactor, MAX_CONTENT_WIDTH } from "./layout";
 import { C, F, R, S } from "./theme";
 
 /**
- * Width of the "RSSI bucket" used to stabilise the device-list sort
- * order. Two devices whose smoothed RSSI is within RSSI_BUCKET_DBM of
- * each other are considered "equally close" and ordered by first-seen
- * timestamp — that's what stops the list from visibly twitching when
- * two radios sit on the table next to each other and their RSSI swaps
- * back and forth by 1-3 dBm. A clearly closer radio still floats up.
+ * Returns a normalised name suitable for stable alphabetical sorting,
+ * or `null` if the advertisement carried no usable local name. Trimmed
+ * + lowercased so "tcon_sina" and " TCON_Sina " collapse to the same
+ * sort key. Anything that normalises to empty is treated as unnamed
+ * and sorted to the bottom of the list (see `list` memo below).
  */
-const RSSI_BUCKET_DBM = 5;
+function nameSortKey(name: string | undefined | null): string | null {
+  if (name == null) return null;
+  const trimmed = name.trim().toLowerCase();
+  return trimmed.length === 0 ? null : trimmed;
+}
 
 /**
  * Open iOS Settings → Bluetooth. Apps cannot remove BLE bonds, so the
@@ -149,16 +157,28 @@ export function ScanScreen({
     };
   }, [ble, setConn, upsertDiscovered]);
 
-  // Memoised so the sort + bucket maths only re-run when the dict
-  // identity changes (the store no-ops upserts that produce identical
-  // entries — see store.ts upsertDiscovered).
+  // Memoised so the sort only re-runs when the dict identity changes
+  // (the store no-ops upserts that produce identical entries — see
+  // store.ts upsertDiscovered). Sort keys are name + id, both of which
+  // are invariant across scan ticks for the same device — RSSI is
+  // deliberately excluded so the row the operator is reaching for
+  // doesn't slide as signal strength fluctuates. Unnamed devices are
+  // pushed below all named ones and ordered by id.
   const list = useMemo(() => {
     const arr = Object.values(discovered);
     arr.sort((a, b) => {
-      const bucketA = Math.round(a.rssi / RSSI_BUCKET_DBM) * RSSI_BUCKET_DBM;
-      const bucketB = Math.round(b.rssi / RSSI_BUCKET_DBM) * RSSI_BUCKET_DBM;
-      if (bucketA !== bucketB) return bucketB - bucketA; // closer first
-      return a.firstSeenMs - b.firstSeenMs; // stable tiebreak
+      const nameA = nameSortKey(a.name);
+      const nameB = nameSortKey(b.name);
+      if (nameA !== null && nameB !== null) {
+        if (nameA !== nameB) return nameA < nameB ? -1 : 1;
+      } else if (nameA !== null) {
+        return -1; // named devices outrank unnamed
+      } else if (nameB !== null) {
+        return 1;
+      }
+      // tiebreaker: BLE id (UUID on iOS, MAC on Android — stable per device)
+      if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+      return 0;
     });
     return arr;
   }, [discovered]);

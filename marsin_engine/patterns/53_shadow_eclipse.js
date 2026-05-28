@@ -2,6 +2,16 @@
   shadow_eclipse
   Black-sun corona: a wide moving shadow eats the ring while two bright rims
   and a triangle-stage corona flare outline the eclipse.
+
+  APEX 1-1-1 fix (E1): switched from (0, 1/3, 2/3) to φ-spaced edge offsets
+  [0.0, 0.382, 0.764]. The previous spacing put corona arm positions at
+  mirror-symmetric points of the equilateral triangle, reading as 2-1.
+  φ-spacing breaks that mirror symmetry. Also, the per-edge flare wave
+  modulator `wave(coronaPhase * 0.7 + edgePhase)` with (1/3, 2/3) offsets
+  produced wave-fold collisions at moments when 2*coronaPhase*0.7 ≈ 0 (the
+  symmetric-through-wave anti-pattern called out in the spec). φ-spacing
+  removes that pairing as well.
+  TrianglePars now use the same φ-spacing.
 */
 
 export var localSpeed = 0.5;
@@ -66,16 +76,42 @@ export function render3D(index, x, y, z) {
   } else if (isEdge) {
     var edgeId = floor(index / 18.0);
     var edgeT = (index % 18) / 17.0;
-    var coronaArm = softPulse(circDist(edgeT, wrap01(center + edgeId * 0.333)), 0.030 + rimWidth * 0.060);
-    var flare = coronaArm * (0.45 + 0.55 * wave(coronaPhase * 0.7 + edgeId * 0.19));
+    // φ-spaced 1-1-1: [0.0, 0.382, 0.764]. Continuity check (edgeT=0.5; t makes
+    // `center` advance; sample center = 0.0, 0.25, 0.5):
+    //   center=0.0 : positions 0.000, 0.382, 0.764 → dists 0.500, 0.118, 0.264 — distinct.
+    //   center=0.25: positions 0.250, 0.632, 0.014 → dists 0.250, 0.132, 0.486 — distinct.
+    //   center=0.5 : positions 0.500, 0.882, 0.264 → dists 0.000, 0.382, 0.236 — distinct.
+    var edgePhase = 0.0;
+    if (edgeId == 1) edgePhase = 0.382;
+    if (edgeId == 2) edgePhase = 0.764;
+    var coronaArm = softPulse(circDist(edgeT, wrap01(center + edgePhase)), 0.030 + rimWidth * 0.060);
+    // Flare modulator: with φ-spaced offsets, wave(coronaPhase * 0.7 + edgePhase)
+    // no longer folds to a pair — wave(x+0.382) and wave(x+0.764) are not equal
+    // (unlike wave(x+1/3)=wave(x+2/3) at x=0).
+    var flare = coronaArm * (0.45 + 0.55 * wave(coronaPhase * 0.7 + edgePhase));
     stage = flare * (0.22 + coronaPulse * 0.56);
     white = flare * coronaPulse;
     uv = coronaArm * 0.16;
   } else if (isPar) {
-    var core = pow(wave(coronaPhase * 1.31 + index * 0.27), 7.0);
-    stage = (rim + core) * coronaPulse * 0.06;
-    white = clamp01(rim * coronaPulse + core * coronaPulse * 0.55);
-    uv = rim * 0.22;
+    // Pars (idx 54,55,56) — φ-spaced offsets; the previous parPhase computed
+    // distance = circDist(center+parPhase, parPhase+0.5) = |center-0.5| for ALL
+    // par ids, so all three pars were identical (a hard 3-1 collapse). The fix
+    // gives each par a unique target theta.
+    var parId = index - 54;
+    var parPhase = 0.0;
+    if (parId == 1) parPhase = 0.382;
+    if (parId == 2) parPhase = 0.764;
+    // Each par "owns" a different theta target (0.0, 0.5, 0.25 — also unique-pairwise)
+    // so they brighten at distinct moments of the orbit.
+    var parTarget = 0.0;
+    if (parId == 1) parTarget = 0.5;
+    if (parId == 2) parTarget = 0.25;
+    var parPass = softPulse(circDist(center, parTarget), 0.18 + rimWidth * 0.10);
+    var core = pow(wave(coronaPhase * 0.55 + parPhase), 7.0);
+    var combo = clamp01(parPass * (0.45 + coronaPulse * 0.45) + core * 0.35);
+    stage = (rim * 0.40 + combo) * coronaPulse * 0.18;
+    white = clamp01(rim * coronaPulse * 0.6 + combo * coronaPulse * 0.85);
+    uv = (rim + combo) * 0.22;
   } else if (isVintage) {
     amber = rim * vintageBloom * wave(coronaPhase * 0.42 + index * 0.047);
     stage = amber * 0.060;

@@ -1,33 +1,33 @@
 /*
-  24_chromatic_murmuration.js
-  Flocking colour storm — strict cp1<->cp2 in RGB-space. The previous
-  hsv()-based mix could traverse non-palette hues at narrow saturations;
-  RGB-lerp guarantees output stays on the cp1<->cp2 line.
+  22_abyssal_sway_garden.js
+  An underwater garden of vertical fronds swaying in a slow abyssal current.
+  Each frond bends laterally with low-freq drift; phosphorescent tips
+  flicker at the top, deep blue-green base palette fades into the dark.
 */
 
 export var localSpeed = 0.5;
-export var flockReach = 0.36;
-export var flockFocus = 4.0;
-export var filamentDensity = 7.0;
-export var contrast = 2.2;
-export var afterglow = 0.18;
+export var frondDensity = 7.0;
+export var swayAmplitude = 0.35;
+export var tipGlow = 0.55;
+export var baseDarkness = 0.55;
+export var currentRate = 0.5;
 
-export var cp1H = 0.62, cp1S = 0.94, cp1V = 1.0;
-export var cp2H = 0.03, cp2S = 0.94, cp2V = 1.0;
+export var cp1H = 0.55, cp1S = 0.95, cp1V = 1.0; // deep abyssal blue
+export var cp2H = 0.38, cp2S = 0.95, cp2V = 1.0; // bioluminescent green
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderFlockReach(v) { flockReach = 0.12 + v * 0.55; }
-export function sliderFlockFocus(v) { flockFocus = 1.5 + v * 7.0; }
-export function sliderFilamentDensity(v) { filamentDensity = 2.0 + v * 16.0; }
-export function sliderContrast(v) { contrast = 0.8 + v * 5.5; }
-export function sliderAfterglow(v) { afterglow = v * 0.45; }
+export function sliderFrondDensity(v) { frondDensity = 3.0 + v * 14.0; }
+export function sliderSwayAmplitude(v) { swayAmplitude = v * 0.7; }
+export function sliderTipGlow(v) { tipGlow = v; }
+export function sliderBaseDarkness(v) { baseDarkness = v; }
+export function sliderCurrentRate(v) { currentRate = v; }
 
-var orbitA = 0.0;
-var orbitB = 0.0;
-var orbitC = 0.0;
-var currentScale = 0.18;
+var tCurrent = 0.0;
+var tFlicker = 0.0;
+var tTide = 0.0;
+var currentScale = 0.04;
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -63,10 +63,13 @@ function _hsv2rgb2() {
 
 export function beforeRender(delta) {
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  currentScale = 0.18 / localMultiplier;
-  orbitA = time(currentScale) * 6.2831853;
-  orbitB = time(currentScale * 0.41) * 6.2831853;
-  orbitC = time(currentScale * 0.67) * 6.2831853;
+  currentScale = 0.04 / localMultiplier;
+  // Slow sway current — primary phase that bends every frond.
+  tCurrent = time(currentScale * (0.45 + currentRate * 1.2)) * 6.2831853;
+  // Fast phosphorescent flicker on frond tips.
+  tFlicker = time(currentScale * 0.18) * 6.2831853;
+  // Very slow tide — long-period vertical breath of the whole garden.
+  tTide = time(currentScale * 4.7);
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -77,30 +80,42 @@ export function render3D(index, x, y, z) {
   nx = max(0.0, min(1.0, nx));
   ny = max(0.0, min(1.0, ny));
 
-  var ax = 0.5 + flockReach * sin(orbitA + sin(orbitB) * 0.6) * 0.75;
-  var ay = 0.5 + flockReach * cos(orbitB * 1.3 - orbitC * 0.2) * 0.68;
-  var bx = 0.5 + flockReach * cos(orbitA * 0.8 + 2.2) * 0.86;
-  var by = 0.5 + flockReach * sin(orbitC * 1.6 + orbitA * 0.3) * 0.6;
-  var cx = 0.5 + flockReach * sin(orbitB * 1.9 - 1.1) * 0.66;
-  var cy = 0.5 + flockReach * cos(orbitA * 1.4 + orbitC) * 0.72;
+  // Per-frond lateral sway — fronds higher up bend more (cantilever).
+  // The "kelp in current" feel comes from sway scaling with ny^2.
+  var bend = sin(tCurrent + nx * 4.0) * swayAmplitude * ny * ny;
+  var bendSlow = sin(tCurrent * 0.41 + nx * 2.3) * swayAmplitude * ny * 0.5;
+  var swayedX = nx + bend + bendSlow;
 
-  var dA = hypot(nx - ax, ny - ay);
-  var dB = hypot(nx - bx, ny - by);
-  var dC = hypot(nx - cx, ny - cy);
+  // Vertical fronds: a phase pattern in x produces tall thin stalks.
+  // Irrational density offset per frond avoids visible repeat.
+  var frondPhase = swayedX * frondDensity + sin(swayedX * 11.7) * 0.13;
+  var frond = wave(frondPhase);
+  // Sharpen into stalks — soft sides, bright spine.
+  frond = pow(frond, 2.6);
 
-  var aGlow = pow(max(0.0, 1.0 - dA * flockFocus), contrast);
-  var bGlow = pow(max(0.0, 1.0 - dB * flockFocus), contrast);
-  var cGlow = pow(max(0.0, 1.0 - dC * flockFocus), contrast);
+  // Vertical falloff: dark base, bright top (kelp grows toward the light).
+  var heightWeight = pow(ny, 1.2);
+  var body = frond * heightWeight;
 
-  var ribbon = wave((dA - dB + dC) * filamentDensity + time(currentScale * 0.27));
-  var shadow = wave((nx * 1.3 - ny * 0.8) + time(currentScale * 0.13));
-  var v = min(1.0, afterglow + aGlow * 0.75 + bGlow * 0.65 + cGlow * 0.6 + pow(ribbon, contrast) * 0.28);
-  v *= 0.82 + shadow * 0.18;
+  // Phosphorescent tip flicker — localized to top 35% of each frond,
+  // jittered per-frond so tips don't all flicker in unison.
+  var tipBand = pow(max(0.0, ny - 0.62) / 0.38, 1.5);
+  var flick = wave(tFlicker + swayedX * 7.3 + ny * 2.1);
+  flick = pow(flick, 4.0);
+  var tipFlicker = tipBand * flick * tipGlow * frond;
 
-  // Blend factor in [0,1]: how much of the rig leans toward attractors b/c
-  // (cp2) vs attractor a (cp1).
-  var totalGlow = aGlow + bGlow + cGlow;
-  var tVal = totalGlow > 0.0 ? ((bGlow + cGlow) / totalGlow) : 0.0;
+  // Long slow tide breath — whole garden brightens/dims over ~30s.
+  var tide = 0.8 + sin(tTide * 6.2831853) * 0.2;
+
+  // Dark abyssal floor — base of garden is genuinely dark.
+  var darkFloor = (1.0 - heightWeight) * baseDarkness;
+  var v = body * 0.85 + tipFlicker;
+  v = v * tide - darkFloor * 0.5;
+  v = max(0.0, min(1.0, v));
+
+  // Palette: base of frond leans cp1 (deep blue), tips lean cp2
+  // (bioluminescent green). Flickers push hard toward cp2.
+  var tVal = heightWeight * 0.55 + tipFlicker * 0.8;
   tVal = max(0.0, min(1.0, tVal));
 
   var r = (pr1 + (pr2 - pr1) * tVal) * v;

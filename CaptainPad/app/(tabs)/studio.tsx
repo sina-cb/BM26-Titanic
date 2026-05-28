@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvoidingView, Platform, SafeAreaView, useWindowDimensions } from 'react-native';
-import { globalStyles } from '@/styles/globalStyles';
-import { Colors } from '@/constants/theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
 
 export default function StudioScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [patterns, setPatterns] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<string>('');
   const [code, setCode] = useState<string>('// Select a pattern to edit');
@@ -117,7 +119,7 @@ export default function StudioScreen() {
       <View style={globalStyles.leftPane}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32 }}>
           <Text style={globalStyles.headline}>Files</Text>
-          <IconSymbol name="curlybraces" size={24} color={Colors.light.secondary} />
+          <IconSymbol name="curlybraces" size={24} color={C.secondary} />
         </View>
 
         <ScrollView contentContainerStyle={{ gap: 16 }}>
@@ -126,17 +128,17 @@ export default function StudioScreen() {
               <View style={[
                   globalStyles.card, 
                   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-                  activeFile === ptn ? { borderColor: Colors.light.primary, borderWidth: 2 } : {}
+                  activeFile === ptn ? { borderColor: C.primary, borderWidth: 2 } : {}
               ]}>
-                <Text style={{ fontFamily: 'Inter_600SemiBold', color: activeFile === ptn ? Colors.light.primary : Colors.light.text }}>{ptn}</Text>
-                <IconSymbol name="chevron.right" size={20} color={activeFile === ptn ? Colors.light.primary : Colors.light.icon} />
+                <Text style={{ fontFamily: 'Inter_600SemiBold', color: activeFile === ptn ? C.primary : C.text }}>{ptn}</Text>
+                <IconSymbol name="chevron.right" size={20} color={activeFile === ptn ? C.primary : C.icon} />
               </View>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
         <TouchableOpacity onPress={loadPatterns} style={{ marginTop: 32, padding: 16, alignItems: 'center', ...globalStyles.surfaceLowest, ...globalStyles.ambientShadow }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.primary }}>REFRESH DISK</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary }}>REFRESH DISK</Text>
         </TouchableOpacity>
       </View>
 
@@ -157,15 +159,15 @@ export default function StudioScreen() {
               onPress={() => handleSave()}
               disabled={runBusy || !activeFile}
               style={{
-                backgroundColor: (!activeFile || runBusy) ? Colors.light.surfaceContainerHigh : Colors.light.primaryContainer,
+                backgroundColor: (!activeFile || runBusy) ? C.surfaceContainerHigh : C.primaryContainer,
                 paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8,
                 opacity: (!activeFile || runBusy) ? 0.55 : 1,
                 ...globalStyles.ambientShadow,
               }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text }}>{runBusy ? 'RUNNING…' : 'RUN'}</Text>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text }}>{runBusy ? 'RUNNING…' : 'RUN'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setIsEditing(true)} disabled={!activeFile} style={{ backgroundColor: activeFile ? '#00daf3' : Colors.light.surfaceContainerHigh, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, ...globalStyles.ambientShadow }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: activeFile ? '#FFF' : Colors.light.secondary }}>EDIT</Text>
+            <TouchableOpacity onPress={() => setIsEditing(true)} disabled={!activeFile} style={{ backgroundColor: activeFile ? '#00daf3' : C.surfaceContainerHigh, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, ...globalStyles.ambientShadow }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: activeFile ? '#FFF' : C.secondary }}>EDIT</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -279,8 +281,8 @@ export default function StudioScreen() {
               {/* Right/Bottom Column - Compiler Logs */}
               <View style={{ flex: isPortrait ? 1 : 10, backgroundColor: '#111', margin: 16, marginTop: isPortrait ? 8 : 16, marginLeft: isPortrait ? 16 : 0, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#333', overflow: 'hidden' }}>
                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                   <IconSymbol name="terminal" size={16} color={Colors.light.secondary} />
-                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.secondary, fontSize: 13 }}>COMPILER LOGS</Text>
+                   <IconSymbol name="terminal" size={16} color={C.secondary} />
+                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 13 }}>COMPILER LOGS</Text>
                  </View>
                  <ScrollView>
                    <Text style={{ fontFamily: 'Courier', color: '#00daf3', fontSize: 12, lineHeight: 18 }}>

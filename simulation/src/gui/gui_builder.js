@@ -37,6 +37,89 @@ import { Iceberg } from "../fixtures/iceberg.js";
 // Use the setters imported above to update them so animate.js sees changes.
 const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simBrightness", "simSurfaceReflectance"];
 
+// Shared compact "🔖 Metadata (V2)" panel for fixture editor cards.
+// Single source of truth — used by every fixture-rendering path (regular PARs,
+// trace-generated PARs, DMX instances, LED strands, icebergs) so the metadata
+// UI is consistent and ALWAYS rendered. Returns refs to the inputs in case a
+// caller needs to push external updates (e.g. trace-generated fixtures whose
+// fixtureId is auto-derived from the DMX patch).
+//
+// `parentChildrenEl` must be the `.children` element of the host lil-gui card
+// (so the panel sits inside the open/close folder body).
+function appendMetadataPanelV2(parentChildrenEl, config, opts) {
+  if (!parentChildrenEl) return null;
+  if (config.controllerId === undefined) config.controllerId = 0;
+  if (config.sectionId === undefined) config.sectionId = 0;
+  if (config.fixtureId === undefined) config.fixtureId = 0;
+  if (config.viewMask === undefined) config.viewMask = 0;
+
+  const onChange = (opts && opts.onChange) || (() => {
+    if (typeof window !== 'undefined' && window.debounceAutoSave) window.debounceAutoSave();
+  });
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:2px 8px 6px;';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'margin-bottom:3px;';
+  header.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">🔖 Metadata (V2)</span>`;
+  wrap.appendChild(header);
+
+  const mkLabel = (text) => {
+    const s = document.createElement('span');
+    s.style.cssText = 'color:#777;font-size:9px;';
+    s.textContent = text;
+    return s;
+  };
+  const mkInput = (value, max, onInput) => {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
+    inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+    inp.onchange = () => { onInput(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
+    return inp;
+  };
+
+  const fireChange = () => {
+    if (typeof window !== 'undefined' && window.invalidateMarsinBatchCache) {
+      window.invalidateMarsinBatchCache('metadata');
+    }
+    onChange();
+  };
+
+  const row1 = document.createElement('div');
+  row1.style.cssText = 'display:flex;gap:4px;align-items:center;margin-bottom:2px;';
+  row1.appendChild(mkLabel('Ctrl:'));
+  const ctrlInp = mkInput(config.controllerId, 255, (v) => { config.controllerId = v; fireChange(); });
+  row1.appendChild(ctrlInp);
+  row1.appendChild(mkLabel('Sect:'));
+  const sectInp = mkInput(config.sectionId, 255, (v) => { config.sectionId = v; fireChange(); });
+  row1.appendChild(sectInp);
+  wrap.appendChild(row1);
+
+  const row2 = document.createElement('div');
+  row2.style.cssText = 'display:flex;gap:4px;align-items:center;';
+  row2.appendChild(mkLabel('Fix ID:'));
+  const fixInp = mkInput(config.fixtureId, 65535, (v) => { config.fixtureId = v; fireChange(); });
+  row2.appendChild(fixInp);
+  row2.appendChild(mkLabel('View:'));
+  const viewInp = mkInput(config.viewMask, 65535, (v) => { config.viewMask = v; fireChange(); });
+  row2.appendChild(viewInp);
+  wrap.appendChild(row2);
+
+  parentChildrenEl.appendChild(wrap);
+
+  return {
+    root: wrap,
+    inputs: { controllerId: ctrlInp, sectionId: sectInp, fixtureId: fixInp, viewMask: viewInp },
+    refresh() {
+      ctrlInp.value = config.controllerId;
+      sectInp.value = config.sectionId;
+      fixInp.value = config.fixtureId;
+      viewInp.value = config.viewMask;
+    },
+  };
+}
+
 export
 function setupGUI() {
   const gui = new GUI({ title: "🔦 Lighting Controls", width: 300 });
@@ -989,7 +1072,7 @@ function setupGUI() {
     // ─── Compact toolbar row: Collapse All | Select All | Clear All ───
     const toolbarDiv = document.createElement('div');
     toolbarDiv.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
-    const btnStyle = 'flex:1;padding:3px 0;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;';
+    const btnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
     const btnHover = 'background:#3a3a3a';
 
     const collapseBtn = document.createElement('button');
@@ -1051,16 +1134,21 @@ function setupGUI() {
       if (plChildrenCleanup) {
         plChildrenCleanup.querySelectorAll('.auto-patch-wrap').forEach(el => el.remove());
       }
+      // Stack vertically — labels like "🎯 Auto-Patch All Unpatched" need
+      // the full panel width to render without truncation.
       const autoPatchWrap = document.createElement('div');
       autoPatchWrap.className = 'auto-patch-wrap';
-      autoPatchWrap.style.cssText = 'display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #333;';
+      autoPatchWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:4px 6px;border-bottom:1px solid #333;';
+      const apBtnBase = 'width:100%;padding:5px 8px;border:none;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
       const autoPatchBtn = document.createElement('button');
       autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
-      autoPatchBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#1a2a3a;color:#6af;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
-      
+      autoPatchBtn.title = 'Auto-Patch All Unpatched';
+      autoPatchBtn.style.cssText = apBtnBase + 'background:#1a2a3a;color:#6af;';
+
       const clearPatchBtn = document.createElement('button');
       clearPatchBtn.textContent = '❌ Clear All Patches';
-      clearPatchBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      clearPatchBtn.title = 'Clear All Patches';
+      clearPatchBtn.style.cssText = apBtnBase + 'background:#3a1a1a;color:#f66;';
       clearPatchBtn.onclick = () => {
         if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
         pushUndo();
@@ -1127,7 +1215,8 @@ function setupGUI() {
       };
       const clearMetaBtn = document.createElement('button');
       clearMetaBtn.textContent = '🔄 Clear Metadata';
-      clearMetaBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a2a1a;color:#fa0;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;';
+      clearMetaBtn.title = 'Clear Metadata';
+      clearMetaBtn.style.cssText = apBtnBase + 'background:#3a2a1a;color:#fa0;';
       clearMetaBtn.onclick = () => {
         pushUndo();
         const configs = gatherAllConfigs(params);
@@ -1271,6 +1360,39 @@ function setupGUI() {
                 debounceAutoSave();
               });
 
+              // Color / intensity / angle / penumbra — same controls the
+              // hand-placed-fixture editor at line ~1720 exposes. Operator
+              // report 2026-05-29: UkingPar and other generator-laid-out
+              // fixtures didn't expose intensity in the per-fixture panel
+              // (only Name + DMX patch + Metadata), so the operator
+              // couldn't tune their brightness in the sim. These four
+              // controls mirror the regular editor exactly so the two
+              // surfaces feel identical.
+              if (config.color === undefined) config.color = '#ffaa44';
+              if (config.intensity === undefined) config.intensity = 5;
+              if (config.angle === undefined) config.angle = 20;
+              if (config.penumbra === undefined) config.penumbra = 0.5;
+              genFixFolder.addColor(config, 'color').onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+              genFixFolder.add(config, 'intensity', 0, 200, 0.5).onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+              genFixFolder.add(config, 'angle', 5, 90, 1).onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+              genFixFolder.add(config, 'penumbra', 0, 1, 0.05).onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+
               // Generator info — styled DOM label instead of lil-gui controller
               const infoDiv = document.createElement('div');
               infoDiv.style.cssText = 'padding:2px 8px 4px;color:#888;font-size:9px;font-style:italic;';
@@ -1291,9 +1413,14 @@ function setupGUI() {
               if (config.fixtureId === undefined) config.fixtureId = Math.min(65535, config.dmxUniverse * 1000 + config.dmxAddress);
               if (config.viewMask === undefined) config.viewMask = 0;
 
+              // `meta` is set after the metadata panel is appended below; the
+              // forward reference is resolved at autoFixtureId() call-time.
+              let meta = null;
               const autoFixtureId = () => {
                 config.fixtureId = Math.min(65535, config.dmxUniverse * 1000 + config.dmxAddress);
-                if (fixtureIdDisplay) fixtureIdDisplay.textContent = config.fixtureId;
+                if (meta && meta.inputs && meta.inputs.fixtureId) {
+                  meta.inputs.fixtureId.value = config.fixtureId;
+                }
                 if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
               };
 
@@ -1356,43 +1483,12 @@ function setupGUI() {
 
               if (genChildren) genChildren.appendChild(patchDiv);
 
-              // 🔖 V2 Metadata — compact DOM controls
-              const metaDiv = document.createElement('div');
-              metaDiv.style.cssText = 'padding:2px 8px 6px;';
-
-              const metaHeader = document.createElement('div');
-              metaHeader.style.cssText = 'margin-bottom:3px;';
-              metaHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">🔖 Metadata (V2)</span>`;
-              metaDiv.appendChild(metaHeader);
-
-              const metaRow1 = document.createElement('div');
-              metaRow1.style.cssText = 'display:flex;gap:4px;align-items:center;margin-bottom:2px;';
-              const metaChanged = () => {
-                if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
-                debounceAutoSave();
-              };
-
-              metaRow1.appendChild(mkLabel('Ctrl:'));
-              metaRow1.appendChild(mkInput(config.controllerId, 255, (v) => { config.controllerId = v; metaChanged(); }));
-              metaRow1.appendChild(mkLabel('Sect:'));
-              metaRow1.appendChild(mkInput(config.sectionId, 255, (v) => { config.sectionId = v; metaChanged(); }));
-              metaDiv.appendChild(metaRow1);
-
-              const metaRow2 = document.createElement('div');
-              metaRow2.style.cssText = 'display:flex;gap:4px;align-items:center;';
-              metaRow2.appendChild(mkLabel('Fix ID:'));
-              // fixtureId is auto-computed, show as read-only display
-              const fixtureIdDisplay = document.createElement('span');
-              fixtureIdDisplay.style.cssText = 'color:#6af;font-size:10px;font-weight:600;min-width:32px;';
-              fixtureIdDisplay.textContent = config.fixtureId;
-              fixtureIdDisplay.title = 'Auto: Universe × 1000 + Address';
-              metaRow2.appendChild(fixtureIdDisplay);
-
-              metaRow2.appendChild(mkLabel('View:'));
-              metaRow2.appendChild(mkInput(config.viewMask, 65535, (v) => { config.viewMask = v; metaChanged(); }));
-              metaDiv.appendChild(metaRow2);
-
-              if (genChildren) genChildren.appendChild(metaDiv);
+              meta = appendMetadataPanelV2(genChildren, config, { onChange: debounceAutoSave });
+              // Trace-generated fixtures auto-default fixtureId from DMX patch
+              // on creation; the input is editable so users can override.
+              if (meta && meta.inputs && meta.inputs.fixtureId) {
+                meta.inputs.fixtureId.title = 'Defaulted to Universe × 1000 + Address; editable.';
+              }
             } catch (err) {
               console.warn(`[GUI] Error creating generated fixture ${index} UI:`, err);
             }
@@ -1405,7 +1501,13 @@ function setupGUI() {
         // ─── Group toolbar (2 rows) ───
         const gtbWrap = document.createElement('div');
         gtbWrap.style.cssText = 'padding:2px 6px 4px;';
-        const gBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+        // `min-width:0` is required so a flex child can shrink below its
+        // intrinsic content width — without it, "✏ Rename" / "✕ Delete"
+        // would push past the button's flex column. The ellipsis chain
+        // (white-space + overflow + text-overflow) makes any future label
+        // overflow render as `Re…` inside the button frame instead of
+        // visually leaking past the right border.
+        const gBtnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
 
         // Row 1: Select All | Visible toggle
         const row1 = document.createElement('div');
@@ -1702,17 +1804,9 @@ function setupGUI() {
             selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
           });
 
-          // V2 Metadata
-          const metaFolder = idxFolder.addFolder("🔖 Metadata (V2)");
-          metaFolder.close();
-          const metaChanged = () => {
-            if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
-            debounceAutoSave();
-          };
-          metaFolder.add(config, 'controllerId', 0, 255, 1).name('Controller ID').onChange(metaChanged);
-          metaFolder.add(config, 'sectionId', 0, 255, 1).name('Section ID').onChange(metaChanged);
-          metaFolder.add(config, 'fixtureId', 0, 255, 1).name('Fixture ID').onChange(metaChanged);
-          metaFolder.add(config, 'viewMask', 0, 65535, 1).name('View Mask').onChange(metaChanged);
+          // 🔖 Metadata (V2) — compact DOM panel (shared helper, see top of file)
+          const idxChildrenForMeta = idxFolder.domElement.querySelector('.children');
+          appendMetadataPanelV2(idxChildrenForMeta, config, { onChange: debounceAutoSave });
 
           // ── 📡 DMX Patch — compact DOM controls ──
           if (config.dmxUniverse === undefined) config.dmxUniverse = 0;
@@ -3101,6 +3195,12 @@ function setupGUI() {
             selectThisLight(); window.syncDmxFromConfig(index);
           });
 
+          // 🔖 Metadata (V2) — compact DOM panel (shared helper). Required so
+          // sectionId/fixtureId/viewMask written to the model export are
+          // operator-visible and editable for DMX instances too.
+          const idxChildrenForMeta = idxFolder.domElement.querySelector('.children');
+          appendMetadataPanelV2(idxChildrenForMeta, config, { onChange: debounceAutoSave });
+
           const actDiv = document.createElement('div');
           actDiv.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;';
           const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
@@ -3267,21 +3367,9 @@ function setupGUI() {
         endF.add(strand, 'endY', -100, 100, 0.5).name('Y').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
         endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
 
-        // V2 Metadata
-        if (strand.controllerId === undefined) strand.controllerId = 0;
-        if (strand.sectionId === undefined) strand.sectionId = 0;
-        if (strand.fixtureId === undefined) strand.fixtureId = 0;
-        if (strand.viewMask === undefined) strand.viewMask = 0;
-        const strandMetaFolder = sFolder.addFolder('🔖 Metadata (V2)');
-        strandMetaFolder.close();
-        const strandMetaChanged = () => {
-          if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
-          debounceAutoSave();
-        };
-        strandMetaFolder.add(strand, 'controllerId', 0, 255, 1).name('Controller ID').onChange(strandMetaChanged);
-        strandMetaFolder.add(strand, 'sectionId', 0, 255, 1).name('Section ID').onChange(strandMetaChanged);
-        strandMetaFolder.add(strand, 'fixtureId', 0, 255, 1).name('Fixture ID').onChange(strandMetaChanged);
-        strandMetaFolder.add(strand, 'viewMask', 0, 65535, 1).name('View Mask').onChange(strandMetaChanged);
+        // 🔖 Metadata (V2) — compact DOM panel (shared helper)
+        const sChildrenForMeta = sFolder.domElement.querySelector('.children');
+        appendMetadataPanelV2(sChildrenForMeta, strand, { onChange: debounceAutoSave });
 
         // Delete button
         const actDiv = document.createElement('div');
@@ -3569,6 +3657,12 @@ function setupGUI() {
         offsetF.add(berg, 'towerOffsetX', -20, 20, 0.1).name('Offset X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
         offsetF.add(berg, 'towerOffsetY', -20, 20, 0.1).name('Offset Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
         offsetF.add(berg, 'towerOffsetZ', -20, 20, 0.1).name('Offset Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
+
+        // 🔖 Metadata (V2) — compact DOM panel (shared helper). Iceberg LEDs
+        // are exported with sId/fId/vMask too (see pixelblaze_model_exporter.js
+        // berg branch), so the operator must be able to set them here.
+        const bChildrenForMeta = bFolder.domElement.querySelector('.children');
+        appendMetadataPanelV2(bChildrenForMeta, berg, { onChange: debounceAutoSave });
 
         // Delete
         const actDiv = document.createElement('div');

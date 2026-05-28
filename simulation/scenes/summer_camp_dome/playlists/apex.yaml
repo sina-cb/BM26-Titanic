@@ -1,0 +1,982 @@
+schemaVersion: 1
+name: apex
+entries:
+  - id: e_1779962098551_1009
+    pattern: 02_phase_cathedral
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.54
+      sliderCount: 0.63
+      sliderSharpness: 0.35
+      sliderDirection: 0.77
+    modulations:
+      - id: mod_apex_02_micLow_count
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderCount
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.25
+        curve: linear
+      - id: mod_apex_02_micKick_sharpness
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSharpness
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow adds rings, micKick sharpens on hit.'
+  - id: e_1779962098552_1740
+    pattern: 05_orbital_attractor_field
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.66
+      sliderFalloff: 0.26
+      sliderFocus: 0.13
+      sliderColorVariation: 0.12
+    modulations:
+      - id: mod_apex_05_micKick_focus
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFocus
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+      - id: mod_apex_05_micHigh_colorVariation
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderColorVariation
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick snaps focus, micHigh spreads color.'
+  - id: e_1779962098553_2471
+    pattern: 06_neon_elevator
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.83
+      sliderSteps: 0.36
+      sliderThickness: 0.6
+      sliderBloom: 0.11
+      sliderElevatorRandomness: 0.74
+    modulations:
+      - id: mod_apex_06_micKick_bloom
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderBloom
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: exp
+      - id: mod_apex_06_micMid_steps
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderSteps
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+    notes: 'Audio: micKick blooms on each kick, micMid adds steps.'
+  - id: e_1779962098554_3202
+    pattern: 09_cyclone
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.78
+      sliderDensity: 0.27
+      sliderParticleSize: 0.27
+    modulations:
+      - id: mod_apex_09_micMid_density
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderDensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_09_micKick_particleSize
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderParticleSize
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micMid grows confetti density, micKick fattens particles.'
+  - id: e_1779962098555_3933
+    pattern: 10_chasers
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderParticleCount: 0.43
+      sliderTailLength: 0.24
+    modulations:
+      - id: mod_apex_10_stemsDrums_particleCount
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderParticleCount
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_10_stemsBass_tailLength
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderTailLength
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeOut
+    notes: 'Audio: stemsDrums adds chasers, stemsBass extends tails.'
+  - id: e_1779962098556_4664
+    pattern: 13_sparkle
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.68
+      sliderSparkleSpeedTrim: 0.09
+      sliderSparkleDensity: 0.89
+      sliderSparkleIntensity: 0.7
+      sliderSparkleSize: 0.4
+      sliderBackgroundLevel: 0.09
+      sliderWhiteGlint: 0.86
+      sliderAmberGlint: 0.88
+      sliderUvGlint: 0.89
+    modulations:
+      - id: mod_apex_13_micHigh_sparkleIntensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSparkleIntensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_apex_13_micKick_sparkleSize
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSparkleSize
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micHigh brightens sparkle, micKick swells sparkle size.'
+  - id: e_1779962098557_5395
+    pattern: 23_prismatic_strange_attractors
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_23_micLow_orbitReach
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderOrbitReach
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_apex_23_micKick_whiteCore
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderWhiteCore
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow extends orbit reach, micKick punches white core.'
+  - id: e_1779880200009_1762
+    pattern: 40_ghost_ship_reveal
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_40_micLow_revealWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderRevealWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.25
+        curve: easeOut
+      - id: mod_apex_40_micHigh_beaconSparkle
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderBeaconSparkle
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micLow widens reveal beam, micHigh sparkles beacon (hats).'
+  - id: e_1779880200011_8734
+    pattern: 41_ghost_aurora
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_41_micLow_driftChaos
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderDriftChaos
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: linear
+      - id: mod_apex_41_micMid_curtainWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderCurtainWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: easeOut
+    notes: 'Audio: micLow turbulates drift, micMid fattens curtain.'
+  - id: e_1779880200010_5298
+    pattern: 42_boiler_glow
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_42_micLow_boilerHeat
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBoilerHeat
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_42_micKick_steamFlash
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSteamFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+    notes: 'Audio: micLow fires boiler heat, micKick flashes steam release.'
+  - id: e_1779880200012_3650
+    pattern: 43_sea_floor_shadow
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_43_micLow_abyssalSwell
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAbyssalSwell
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_43_micKick_edgeFoam
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderEdgeFoam
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+    notes: 'Audio: micLow swells abyss, micKick crashes foam.'
+  - id: e_1779880200006_4173
+    pattern: 44_apex_gyro_vortex
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_44_micLow_vortexSpeed
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderVortexSpeed
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: easeOut
+      - id: mod_apex_44_micHigh_uvIntensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderUvIntensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+    notes: 'Audio: micLow spins vortex, micHigh lifts UV blacklight trail.'
+  - id: e_1779880200007_6028
+    pattern: 45_engine_room_clockwork
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_45_micLow_pistonStroke
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderPistonStroke
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_45_micMid_boilerHeat
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderBoilerHeat
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micLow thumps pistons, micMid heats boiler glow.'
+  - id: e_1779880200016_9483
+    pattern: 46_dome_lockdown
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_46_micKick_openImpact
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderOpenImpact
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: exp
+      - id: mod_apex_46_micHigh_edgeUv
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderEdgeUv
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick punches door-open flare, micHigh lifts UV edge.'
+  - id: e_1779880200001_3017
+    pattern: 47_apex_perimeter_ping
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_47_micKick_pingImpact
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPingImpact
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+      - id: mod_apex_47_micLow_trailDecay
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderTrailDecay
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick punches each ping, micLow lengthens trail.'
+  - id: e_1779880200017_4019
+    pattern: 48_titanic_sos_beacon
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_48_micLow_responseGlow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderResponseGlow
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_apex_48_micHigh_echoWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderEchoWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: easeOut
+    notes: >-
+      Audio: micLow lifts response glow, micHigh widens echo (brightness/color
+      only — NO morse-rate mod, strobe safety).
+  - id: e_1779880200002_5882
+    pattern: 49_boiler_pressure_release
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_49_stemsBass_pressure
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderPressure
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: linear
+      - id: mod_apex_49_stemsDrums_ventFlash
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderVentFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.55
+        curve: exp
+    notes: 'Audio: stemsBass builds pressure, stemsDrums flashes vents.'
+  - id: e_1779880200003_7144
+    pattern: 50_iceberg_fracture
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_50_micKick_fractureDensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFractureDensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+      - id: mod_apex_50_micLow_aftershockWarmth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAftershockWarmth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeOut
+    notes: 'Audio: micKick cracks fractures, micLow warms aftershock.'
+  - id: e_1779880200004_2906
+    pattern: 51_abyssal_searchlight
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_51_micKick_sweepImpact
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSweepImpact
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+      - id: mod_apex_51_micMid_gimbalDrift
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderGimbalDrift
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick flashes beam head, micMid wobbles gimbal.'
+  - id: e_1779880200008_9415
+    pattern: 52_iceberg_shear_line
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_52_stemsBass_advance
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderAdvance
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_apex_52_stemsVocals_warmthRetreat
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsVocals
+        target:
+          scope: pattern
+          parameter: sliderWarmthRetreat
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: easeOut
+    notes: >-
+      Audio: stemsBass advances blade, stemsVocals brightens warm side on
+      vocals.
+  - id: e_1779880200013_7086
+    pattern: 53_shadow_eclipse
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_53_stemsBass_shadowSize
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderShadowSize
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_apex_53_stemsDrums_coronaPulse
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderCoronaPulse
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+    notes: 'Audio: stemsBass grows eclipse shadow, stemsDrums pulses corona.'
+  - id: e_1779880200014_2421
+    pattern: 54_boiler_fire_overdrive
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_54_micLow_flameHeight
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderFlameHeight
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_apex_54_micKick_heatFlash
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderHeatFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.55
+        curve: exp
+    notes: 'Audio: micLow pumps flame, micKick flashes apex heat.'
+  - id: e_1779880200015_5957
+    pattern: 55_stardust_dome
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_55_micKick_starCore
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderStarCore
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: exp
+      - id: mod_apex_55_micHigh_particleDensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderParticleDensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeOut
+    notes: 'Audio: micKick twinkles star core, micHigh dusts particles.'
+  - id: e_1779880200005_8351
+    pattern: 56_stage_mirror_axis
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_apex_56_micLow_orbitSpeed
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderOrbitSpeed
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_apex_56_micKick_stageFocus
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderStageFocus
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow drives orbit, micKick flares stage focus.'
+  - id: e_1779963534025_1500
+    pattern: 63_dome_phyllotaxis_bloom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.12
+      sliderBloomGrowth: 0.67
+      sliderArmCount: 0.34
+      sliderSeedSize: 0.48
+      sliderBreathDepth: 0.75
+      sliderCenterImpact: 0.18
+      sliderVintageWarm: 0.26
+      sliderBlackoutDepth: 0.8
+      sliderAudioBass: 0
+      sliderAudioMid: 0
+      sliderAudioHigh: 0
+    modulations:
+      - id: mod_dome_apex_63_micLow_bass
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAudioBass
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_dome_apex_63_micMid_mid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderAudioMid
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+    notes: 'Audio: micLow->bass, micMid->mid'
+  - id: e_1779963534026_1991
+    pattern: 65_dome_kick_shockwave
+    label: null
+    defaults: {}
+    modulations:
+      - id: mod_dome_apex_65_micKick_kick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderAudioKick
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+      - id: mod_dome_apex_65_micLow_bass
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAudioBass
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick->kick, micLow->bass'

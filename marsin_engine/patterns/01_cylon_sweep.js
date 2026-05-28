@@ -8,6 +8,13 @@ export var eyeWidth = 0.15;
 export var bgBrightness = 0.05;
 export var globalDir = 1.0;
 
+// audio_brightness: playlist binds a CPC source here (e.g. micLow). At 0 the
+// pattern renders identically to before; at 1.0 the rgb output is scaled by
+// up to ~2.5x (rgb() clamps anything that saturates). Codex P0: no fallback —
+// at slider 0 there's simply no audio boost, the rest of the pattern is
+// unchanged. Prototype for the catalog-wide audio_brightness convention.
+export var audioBrightness = 0.0;
+
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Classic Red default
 export var cp2H = 0.6, cp2S = 1.0, cp2V = 0.5; // Blue background default
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
@@ -21,6 +28,7 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderBeamWidth(v) { eyeWidth = 0.05 + v * 0.3; }
 export function sliderBackgroundGlow(v) { bgBrightness = v * 0.3; }
 export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+export function sliderAudioBrightness(v) { audioBrightness = v; }
 
 var scanT = 0.0;
 
@@ -92,5 +100,10 @@ export function render3D(index, x, y, z) {
   var g = (pg2 * bgScale) + (pg1 - pg2 * bgScale) * intensity;
   var b = (pb2 * bgScale) + (pb1 - pb2 * bgScale) * intensity;
 
-  rgb(r, g, b);
+  // audio_brightness gain — multiplicative pump on the final colour. At 0 this
+  // is a no-op (1.0x); at full slider (1.0) the rgb output is scaled by 2.5x
+  // and rgb() clamps anything beyond saturation. Prototype that other
+  // patterns will copy once we like the feel.
+  var audioGain = 1.0 + audioBrightness * 1.5;
+  rgb(r * audioGain, g * audioGain, b * audioGain);
 }

@@ -23,11 +23,9 @@
  */
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-
-const C = Colors.light;
 
 // ── TimerPillBar ────────────────────────────────────────────────────────
 // Horizontal scrollable row of preset pills. Replaces the system Picker
@@ -59,13 +57,23 @@ export function TimerPillBar({
   onChange,
   formatter,
   label,
+  compact = false,
 }: {
   presets: number[];
   value: number;
   onChange: (v: number) => void;
   formatter: (v: number) => string;
   label?: string;
+  // Compact = mixer-strip variant: smaller pills so the row fits next to
+  // the Transition button + style picker without horizontal-scroll
+  // overshoot. Default false preserves the deck panel's roomier sizing.
+  compact?: boolean;
 }) {
+  const C = usePalette();
+  const pillMinWidth = compact ? 36 : 48;
+  const pillPaddingX = compact ? 8 : 12;
+  const pillPaddingY = compact ? 6 : 8;
+  const pillFontSize = compact ? 11 : 12;
   return (
     <View style={{ width: '100%' }}>
       {label ? (
@@ -79,7 +87,7 @@ export function TimerPillBar({
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 6, paddingRight: 8 }}
+        contentContainerStyle={{ gap: compact ? 4 : 6, paddingRight: 8 }}
       >
         {presets.map((preset) => {
           const active = preset === value;
@@ -90,9 +98,9 @@ export function TimerPillBar({
               accessibilityRole="button"
               accessibilityLabel={`Set to ${formatter(preset)}`}
               style={{
-                minWidth: 48,
-                paddingHorizontal: 12,
-                paddingVertical: 8,
+                minWidth: pillMinWidth,
+                paddingHorizontal: pillPaddingX,
+                paddingVertical: pillPaddingY,
                 borderRadius: 8,
                 borderWidth: 1,
                 borderColor: active ? C.primary : C.ghostBorder,
@@ -103,7 +111,7 @@ export function TimerPillBar({
             >
               <Text style={{
                 fontFamily: 'SpaceGrotesk_700Bold',
-                fontSize: 12,
+                fontSize: pillFontSize,
                 color: active ? '#FFF' : C.text,
                 letterSpacing: 0.5,
               }}>
@@ -164,6 +172,7 @@ export function TransitionStylePicker({
   onSelect: (id: string) => void;
   disabled?: boolean;
 }) {
+  const C = usePalette();
   const [open, setOpen] = useState(false);
   const currentMeta = TRANSITION_OPTIONS.find((o) => o.id === current) || TRANSITION_OPTIONS[0];
 
@@ -272,6 +281,8 @@ export function DeckTransitionControls({
   shuffle: boolean;
   onChange: (patch: { enabled?: boolean; mode?: string; durationMs?: number; shuffle?: boolean }) => void;
 }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const styleDisabled = shuffle; // when shuffle is on, the picked mode is ignored
 
   // Card-internal header — moved INSIDE the card (May 2026 compaction)

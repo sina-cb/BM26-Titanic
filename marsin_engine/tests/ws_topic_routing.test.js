@@ -95,6 +95,7 @@ test('UI/state events ride /ws/control', () => {
     'mixerTransitionRejected',
     'globalEffectSlots',
     'globalEffectMacroStatus',
+    'scheduledTasks',
     'playlistLibrary',
     'playlistSaved',
     'playlistDeleted',

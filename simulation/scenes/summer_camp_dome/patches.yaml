@@ -16,27 +16,27 @@ patches:
     fixtureId: 3
     viewMask: 0
   UkingPar 23:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 1
     controllerId: 1
-    sectionId: 2
+    sectionId: 4
     fixtureId: 5
     viewMask: 0
   UkingPar 24:
-    controllerIp: 10.1.1.102
+    controllerIp: ''
     dmxUniverse: 2
     dmxAddress: 11
-    controllerId: 1
-    sectionId: 2
+    controllerId: 0
+    sectionId: 4
     fixtureId: 5
     viewMask: 0
   UkingPar 25:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 21
     controllerId: 1
-    sectionId: 2
+    sectionId: 4
     fixtureId: 6
     viewMask: 0
   TEFogMachine 26:
@@ -48,7 +48,7 @@ patches:
     fixtureId: 1
     viewMask: 0
   BarLights 1:
-    controllerIp: 10.1.1.10
+    controllerIp: ''
     dmxUniverse: 10
     dmxAddress: 239
     controllerId: 1
@@ -56,18 +56,18 @@ patches:
     fixtureId: 2
     viewMask: 0
   BarLights 2:
-    controllerIp: 10.1.1.10
+    controllerIp: ''
     dmxUniverse: 2
     dmxAddress: 226
-    controllerId: 1
+    controllerId: 0
     sectionId: 2
     fixtureId: 3
     viewMask: 0
   BarLights 3:
-    controllerIp: 10.1.1.10
+    controllerIp: ''
     dmxUniverse: 2
     dmxAddress: 107
-    controllerId: 1
+    controllerId: 0
     sectionId: 2
     fixtureId: 4
     viewMask: 0
@@ -152,7 +152,7 @@ patches:
     fixtureId: 14
     viewMask: 0
   VintageLights 1:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 41
     controllerId: 1
@@ -160,7 +160,7 @@ patches:
     fixtureId: 15
     viewMask: 0
   VintageLights 2:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 74
     controllerId: 1

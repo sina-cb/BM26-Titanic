@@ -92,7 +92,7 @@ function buildControllerIdMap() {
 
 **GUI impact:**
 - The `controllerId` field in the 🔖 Metadata (V2) folder becomes **read-only** (auto-computed)
-- Show the source IP next to it: `Ctrl: 3  (10.1.1.102)`
+- Show the source IP next to it: `Ctrl: 3  (10.1.1.10)`
 - If `controllerIp` is empty, show: `Ctrl: 0  (no IP)`
 
 **Real-world example:**
@@ -100,7 +100,7 @@ function buildControllerIdMap() {
 | Controller IP | Auto ID | Fixtures |
 |---|---|---|
 | `10.1.1.101` | 1 | Right Front Wall Generator 1-5 |
-| `10.1.1.102` | 2 | Right Top Chimney 1-9 |
+| `10.1.1.10` | 2 | Right Top Chimney 1-9 |
 | `10.1.1.103` | 3 | Left Center Auditorium 1-6 |
 | *(empty)* | 0 | Any unpatched fixture |
 

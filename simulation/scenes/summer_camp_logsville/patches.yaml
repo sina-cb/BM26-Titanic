@@ -1,289 +1,289 @@
 patches:
   TowerFrontRight:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 2
+    dmxAddress: 1
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 1
     viewMask: 0
   TowerFrontLeft:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 2
+    dmxAddress: 120
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 2
     viewMask: 0
   TowerLeftFront:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 2
+    dmxAddress: 239
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 3
     viewMask: 0
   TowerLeftBack:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 2
+    dmxAddress: 358
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 4
     viewMask: 0
   TowerRightBack:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 3
+    dmxAddress: 1
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 5
     viewMask: 0
   TowerRightFront:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 3
+    dmxAddress: 120
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 6
     viewMask: 0
   TowerBackLeft:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 3
+    dmxAddress: 239
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 7
     viewMask: 0
   TowerBackRight:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 3
+    dmxAddress: 358
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 1
+    fixtureId: 8
     viewMask: 0
   TowerFrontRightVintage:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 3
+    dmxAddress: 477
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 9
     viewMask: 0
   TowerFrontLeftVintage:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 1
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 10
     viewMask: 0
   TowerBackRightVintage:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 34
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 11
     viewMask: 0
   TowerBackLeftVintage:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 67
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 12
     viewMask: 0
   WallVintageLights 1:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 100
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 13
     viewMask: 0
   WallVintageLights 2:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 133
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 14
     viewMask: 0
   WallVintageLights 3:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 166
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 15
     viewMask: 0
   WallVintageLights 4:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 199
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 16
     viewMask: 0
   WallVintageLights 5:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 232
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 17
     viewMask: 0
   WallVintageLights 6:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 265
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 3
+    fixtureId: 18
     viewMask: 0
   Redwoods1 1:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 298
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 19
     viewMask: 0
   Redwoods1 2:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 308
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 20
     viewMask: 0
   Redwoods1 3:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 318
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 21
     viewMask: 0
   Redwoods1 4:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 328
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 22
     viewMask: 0
   Redwoods1 5:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 338
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 23
     viewMask: 0
   Redwoods1 6:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 348
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 4
+    fixtureId: 24
     viewMask: 0
   Redwoods2 1:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 358
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 25
     viewMask: 0
   Redwoods2 2:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 368
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 26
     viewMask: 0
   Redwoods2 3:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 378
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 27
     viewMask: 0
   Redwoods2 4:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 388
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 28
     viewMask: 0
   Redwoods2 5:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 398
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 29
     viewMask: 0
   Redwoods2 6:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 408
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 5
+    fixtureId: 30
     viewMask: 0
   Redwoods3 1:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 418
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 31
     viewMask: 0
   Redwoods3 2:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 428
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 32
     viewMask: 0
   Redwoods3 3:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 438
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 33
     viewMask: 0
   Redwoods3 4:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 448
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 34
     viewMask: 0
   Redwoods3 5:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 458
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 35
     viewMask: 0
   Redwoods3 6:
     controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    dmxUniverse: 4
+    dmxAddress: 468
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 6
+    fixtureId: 36
     viewMask: 0
