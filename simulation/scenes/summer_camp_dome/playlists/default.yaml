@@ -300,7 +300,12 @@ entries:
   - id: e_default_45_72_outpost_campfire
     pattern: 72_outpost_campfire
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderFlickerSpeed: 0
+      sliderCampfireHeat: 0
+      sliderWoodSparkle: 0
+      sliderUvIntensity: 0
     modulations: []
     notes: null
   - id: e_default_46_73_redwood_shadow_breath

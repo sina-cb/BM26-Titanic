@@ -48,7 +48,7 @@ patches:
     fixtureId: 1
     viewMask: 0
   BarLights 1:
-    controllerIp: ''
+    controllerIp: 10.1.1.10
     dmxUniverse: 10
     dmxAddress: 239
     controllerId: 1
@@ -56,7 +56,7 @@ patches:
     fixtureId: 2
     viewMask: 0
   BarLights 2:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 226
     controllerId: 1
@@ -64,7 +64,7 @@ patches:
     fixtureId: 3
     viewMask: 0
   BarLights 3:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 107
     controllerId: 1

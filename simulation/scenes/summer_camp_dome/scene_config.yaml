@@ -222,7 +222,7 @@ parLights:
       'y': 1.5
       z: 0
       rotX: -40.60129464500447
-      rotY: -89.99999999999999
+      rotY: -90
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -251,7 +251,7 @@ parLights:
       z: 8.229838658936565
       rotX: -40.60129464500447
       rotY: -145.3846153846154
-      rotZ: 0
+      rotZ: -2.0945189489002795e-15
       traceGenerated: true
     - group: BarLights
       name: BarLights 4
@@ -265,7 +265,7 @@ parLights:
       z: 9.92708874098054
       rotX: -40.60129464500447
       rotY: -173.0769230769231
-      rotZ: 0
+      rotZ: 5.236297372250699e-16
       traceGenerated: true
     - group: BarLights
       name: BarLights 5
@@ -279,7 +279,7 @@ parLights:
       z: 9.350162426854148
       rotX: -40.60129464500447
       rotY: 159.23076923076923
-      rotZ: 0
+      rotZ: 2.0945189489002795e-15
       traceGenerated: true
     - group: BarLights
       name: BarLights 6

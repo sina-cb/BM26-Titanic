@@ -1,45 +1,33 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 17_rolling_color_dunes
+  pattern: 08_ocean_liner
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
+    '23515769':
+      v0: 0.92
+      v1: 0
+      v2: 0
     '1037917937':
-      v0: 0.54
+      v0: 0.8
       v1: 0
       v2: 0
-    '1544917751':
-      v0: 0.22
+    '3651408529':
+      v0: 0.47
       v1: 0
       v2: 0
-    '2380827328':
-      v0: 0.36
-      v1: 0
-      v2: 0
-    '2444828941':
-      v0: 0.42
-      v1: 0
-      v2: 0
-    '2907612615':
-      v0: 0.48
-      v1: 0
-      v2: 0
-    '3672202131':
-      v0: 0.58
-      v1: 0
-      v2: 0
-    '3706400219':
-      v0: 0.64
+    '4193208886':
+      v0: 0.31
       v1: 0
       v2: 0
   playlist:
-    name: default
-    activeEntryId: e_default_17_17_rolling_color_dunes
-    cursor: 17
+    name: fast
+    activeEntryId: e_1779867336212_2923
+    cursor: 8
     autopilot:
       active: false
       delay_s: 30

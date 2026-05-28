@@ -8,14 +8,14 @@ effects:
   vintageWhiteBypassDimmer: true
   blastWhiteBypassDimmer: false
 params:
-  revision: 716668
+  revision: 76260
   sourceLock: null
   params:
     speed:
-      value: 0.3972499847412109
+      value: 0.41991666158040364
       lastSource: bpm-sync
       lastOrigin: bpm-sync:auto
-      lastRevision: 716300
+      lastRevision: 76246
     size:
       value: 0.28
       lastSource: init
@@ -31,17 +31,17 @@ params:
         h: 0.66
         s: 1
         v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 143005
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
     colorPalette2:
       value:
         h: 0.33
         s: 1
         v: 1
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 143006
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
     stemsVocalsGain:
       value: 1
       lastSource: init
@@ -58,80 +58,80 @@ params:
       lastOrigin: init
       lastRevision: 8
     stemsVocals:
-      value: 0.0006940626772120595
+      value: 0.14585617184638977
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716667
+      lastRevision: 76259
     stemsBass:
       value: 0
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716663
+      lastRevision: 66071
     stemsDrums:
-      value: 0.014547714032232761
+      value: 0.0011698717717081308
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716665
+      lastRevision: 76257
     stemsVocalsRaw:
-      value: 0.0006940626772120595
+      value: 0.14585617184638977
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716668
+      lastRevision: 76260
     stemsBassRaw:
       value: 0
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716664
+      lastRevision: 66072
     stemsDrumsRaw:
-      value: 0.014547714032232761
+      value: 0.0011698717717081308
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716666
+      lastRevision: 76258
     tempoBpm:
-      value: 107.66999816894531
+      value: 110.38999938964844
       lastSource: osc
       lastOrigin: osc:127.0.0.1:53425
-      lastRevision: 716299
+      lastRevision: 76245
     micLow:
-      value: 0.0005614513925371702
+      value: 8.576252504686813e-19
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716649
+      lastRevision: 76235
     micMid:
-      value: 0.07729048882740308
+      value: 0.28394238226249036
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716650
+      lastRevision: 76236
     micHigh:
-      value: 0.0034325620255044815
+      value: 0.018217747715395586
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716651
+      lastRevision: 76237
     micKick:
-      value: 0
+      value: 1
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716652
+      lastRevision: 76238
     micLowRaw:
-      value: 0.015543056124956031
+      value: 3.1197699712500364e-91
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716653
+      lastRevision: 76239
     micMidRaw:
-      value: 0.04464164062622248
+      value: 0.00003288217359638799
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716654
+      lastRevision: 76240
     micHighRaw:
-      value: 0.24711037474327796
+      value: 0.000002881236281195895
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716655
+      lastRevision: 76241
     micKickRaw:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 716656
+      lastRevision: 76242
     micLowGain:
       value: 1
       lastSource: init

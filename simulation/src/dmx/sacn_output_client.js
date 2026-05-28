@@ -60,7 +60,7 @@ export class SacnOutputClient {
   /**
    * Send a DMX universe frame to a specific controller.
    * @param {number} universeId — sACN universe (1-63999)
-   * @param {string} controllerIp — Unicast destination (e.g. '10.1.1.102')
+   * @param {string} controllerIp — Unicast destination (e.g. '10.1.1.10')
    * @param {number} priority — sACN priority (0-200)
    * @param {Uint8Array} dmxBuffer — 512-byte DMX frame
    */

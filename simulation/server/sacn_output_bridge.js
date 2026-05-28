@@ -7,7 +7,7 @@
  *
  * Binary protocol (from browser):
  *   Byte 0-1:   Universe number (uint16 LE)
- *   Byte 2-5:   Controller IPv4 (4 bytes, e.g. 10.1.1.102)
+ *   Byte 2-5:   Controller IPv4 (4 bytes, e.g. 10.1.1.10)
  *   Byte 6:     Priority (uint8)
  *   Byte 7-518: DMX data (512 bytes)
  *   Total: 519 bytes

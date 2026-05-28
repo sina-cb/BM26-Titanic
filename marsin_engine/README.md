@@ -38,7 +38,7 @@ node engine.js --list
 node engine.js --pattern test/fire --model titanic --fps 60 --priority 150
 
 # Send directly to a physical controller
-node engine.js --pattern bioluminescence --model test_bench --dest 10.1.1.102
+node engine.js --pattern bioluminescence --model test_bench --dest 10.1.1.10
 
 # Compile-only test (no sACN output)
 node engine.js --pattern rainbow --model test_bench --dry-run
@@ -295,7 +295,7 @@ The engine sends sACN to `127.0.0.1` by default, which is picked up by the simul
 To send to **real hardware** instead:
 
 ```bash
-node engine.js --pattern bioluminescence --model titanic --dest 10.1.1.102
+node engine.js --pattern bioluminescence --model titanic --dest 10.1.1.10
 ```
 
 ### Priority System
