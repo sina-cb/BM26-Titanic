@@ -252,11 +252,69 @@ export class GlobalEffectSlotManager {
     const slot = this.getSlot(slotId);
     if (!slot) throw new Error(`Invalid slotId: ${slotId}`);
     const resolved = resolveSlotBinding({ slot });
+    this._dispatchResolved({ resolved, action, frameIndex, nowMs, slotIdForError: slotId });
+  }
 
+  /**
+   * Slot-less dispatch surface used by the engine-owned scheduler
+   * (docs/31_scheduled_tasks.md v3). Resolves the effectId/presetId
+   * against the library directly — no GEM slot involved — merges
+   * `params` over the preset's defaults, and routes through the
+   * same `_dispatch*` helpers as the slot path so behavior parity
+   * is guaranteed.
+   *
+   * Throws if the effectId or presetId is missing in the library, if
+   * the requested behavior isn't supported, or if a safety-tier guard
+   * trips. Callers catch and surface to the operator.
+   *
+   * @param {object} args
+   * @param {string} args.effectId
+   * @param {string} args.presetId
+   * @param {string} args.action      'activate'|'deactivate'|'trigger'|'down'|'up'
+   * @param {Record<string,any>} [args.params] — per-call overrides; merged over preset defaults
+   * @param {number} args.frameIndex
+   * @param {number} args.nowMs
+   * @param {string} [args.behavior]  — override resolution (defaults to preset.defaultBehavior)
+   */
+  dispatchEffectAction({ effectId, presetId, action, params = {}, frameIndex, nowMs, behavior }) {
+    const effect = GLOBAL_EFFECT_LIBRARY[effectId];
+    if (!effect) throw new Error(`Unknown effectId: ${effectId}`);
+    const preset = effect.presets && effect.presets[presetId];
+    if (!preset) throw new Error(`Unknown presetId '${presetId}' for effect '${effectId}'`);
+
+    // Validate overrides through the same gate slot resolution uses,
+    // then merge so task.params wins over preset defaults (docs/31 §"Scheduler tick").
+    const sanitized = validateParams(effectId, params || {});
+    const mergedParams = { ...preset.params, ...sanitized };
+
+    const chosenBehavior = behavior || preset.defaultBehavior;
+    if (!effect.behaviorTypes.includes(chosenBehavior)) {
+      throw new Error(`Effect '${effectId}' does not support behavior '${chosenBehavior}'`);
+    }
+
+    const safetyTier = preset.safetyTier || SAFETY_TIERS.NORMAL;
+
+    // Build a resolved descriptor shaped like the one resolveSlotBinding
+    // produces, so the existing _dispatch* helpers (which read .slotId,
+    // .presetId, .params, .behavior off the resolved object) work
+    // unchanged. slotId=null because there is no slot.
+    const resolved = {
+      slotId: null,
+      effectId,
+      presetId,
+      label: preset.label || effectId,
+      behavior: chosenBehavior,
+      params: mergedParams,
+      safetyTier,
+    };
+    this._dispatchResolved({ resolved, action, frameIndex, nowMs, slotIdForError: 'scheduler' });
+  }
+
+  _dispatchResolved({ resolved, action, frameIndex, nowMs, slotIdForError }) {
     // Hard server-side guard: expert_burst can ONLY be 'trigger' / 'burst'-equivalent.
     if (resolved.safetyTier === SAFETY_TIERS.EXPERT_BURST && (action === 'toggle' || action === 'hold')) {
       throw new Error(
-        `Slot ${slotId} preset '${resolved.presetId}' is safety tier 'expert_burst'; ` +
+        `Slot ${slotIdForError} preset '${resolved.presetId}' is safety tier 'expert_burst'; ` +
         `action '${action}' is not allowed`
       );
     }

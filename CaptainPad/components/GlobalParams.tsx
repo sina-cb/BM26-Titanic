@@ -1,17 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { setDeckChannelControl, sendControl } from '@/utils/api';
 import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
-import { ModulatedSlider, useEntryModulations, useModulationState } from '@/components/Modulation';
+import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
 import { engineEvents } from '@/utils/engineEvents';
 
-const C = Colors.light;
-
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
+  const C = usePalette();
   // Always read from the centralized engine-state hook so external
   // writers (PortWatch over LoRa, scripts hitting /control directly,
   // …) flow through to the UI without depending on per-tab WS state.
@@ -53,7 +52,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           {baseSliders.map((exp: MixerChannelExport) => (
             <View key={exp.id} style={{ width: 180 }}>
               <MiniFader
-                label={exp.name.replace(/_v\d+$/, '').replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
+                label={prettySliderName(exp.name)}
                 value={exp.v0 !== undefined ? exp.v0 : 0.5}
                 onChange={(v: number) => {
                   // Legacy /control endpoint targets the deck base
@@ -191,6 +190,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 // of locals.
 
 function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
+  const C = usePalette();
   return (
     <View style={{
       paddingHorizontal: 6, paddingVertical: 1,
@@ -265,6 +265,7 @@ export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
 }
 
 function MatchedButton({ name, cpcLabel }: { name: string; cpcLabel?: string }) {
+  const C = usePalette();
   const label = name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 12);
   return (
     <View style={{

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
@@ -8,11 +8,10 @@ import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, DualSwatch } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
-const C = Colors.light;
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
 // landing in every consumer's TS server cache. Mirrors the value in
-// constants/theme.ts → Colors.light.tertiary.
+// constants/theme.ts → C.tertiary.
 const ACCENT_AUTO = '#1b9e77';
 
 // Live state flows through the module-level `useEngineState`
@@ -20,6 +19,7 @@ const ACCENT_AUTO = '#1b9e77';
 // a `wsRef` prop for sending sharedParam writes; that's now
 // `engineEvents.send(...)` via `updateParamCenter`.
 export const CPCControls = () => {
+  const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const defaultParams = useMemo(() => ({
@@ -217,6 +217,7 @@ export const CPCControls = () => {
             <ColorPairButton
               h1={params.colorPalette1?.h ?? 0}
               h2={params.colorPalette2?.h ?? 0.5}
+              isPortrait={isPortrait}
               onPress={() => setColorPickerOpen(true)}
             />
 
@@ -319,30 +320,41 @@ export const CPCControls = () => {
  * tap-target on the iPad. Shows both global hues as a split-circle
  * preview + a "COLORS" caption; opens the tabbed picker on tap.
  */
-function ColorPairButton({ h1, h2, onPress }: { h1: number; h2: number; onPress: () => void }) {
+// Compact-tile shape shared by COLORS / BPM / OSC. Operator review
+// 2026-05-28 — these three should read as one cluster (visual signal +
+// status cluster) distinct from the SPEED/SIZE sliders.
+const GLOBALS_TILE_WIDTH_PORTRAIT  = 60;
+const GLOBALS_TILE_WIDTH_LANDSCAPE = 86;
+const GLOBALS_TILE_HEIGHT = 48;
+
+function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: number; isPortrait: boolean; onPress: () => void }) {
+  const C = usePalette();
+  const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
   return (
-    <View>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', marginBottom: 2 }}>COLORS</Text>
-      <TouchableOpacity
-        onPress={onPress}
-        accessibilityLabel="Open colour picker"
-        accessibilityRole="button"
-        style={{
-          minWidth: 96, paddingHorizontal: 10, paddingVertical: 6,
-          borderRadius: 10, borderWidth: 1, borderColor: C.ghostBorder,
-          backgroundColor: C.surface,
-          flexDirection: 'row', alignItems: 'center', gap: 10,
-        }}
-      >
-        <DualSwatch h1={h1} h2={h2} size={32} />
+    <TouchableOpacity
+      onPress={onPress}
+      accessibilityLabel="Open colour picker"
+      accessibilityRole="button"
+      style={{
+        width: w, height: GLOBALS_TILE_HEIGHT,
+        paddingVertical: 4, paddingHorizontal: 6,
+        borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+        backgroundColor: C.surface,
+        justifyContent: 'space-between',
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-          color: C.text, letterSpacing: 0.6,
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8,
         }}>
-          EDIT
+          COLORS
         </Text>
-      </TouchableOpacity>
-    </View>
+      </View>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <DualSwatch h1={h1} h2={h2} size={22} />
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -374,6 +386,7 @@ function LiveMeterColumn({ isPortrait, top, bot }: {
   top: { label: string; value: number; accent?: boolean };
   bot?: { label: string; value: number; accent?: boolean };
 }) {
+  const C = usePalette();
   const cellMinWidth = isPortrait ? 56 : 80;
   return (
     <View style={{
@@ -395,6 +408,7 @@ function LiveMeterColumn({ isPortrait, top, bot }: {
 }
 
 function CompactMeterRow({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  const C = usePalette();
   const v = Math.max(0, Math.min(1, value));
   return (
     <View>
@@ -430,32 +444,33 @@ function CompactMeterRow({ label, value, accent }: { label: string; value: numbe
 // operator can tell at a glance whether the upstream LX tempo
 // source is live.
 function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean; synced?: boolean }) {
+  const C = usePalette();
   const hasSignal = bpm > 0;
-  const cellWidth = isPortrait ? 60 : 86;
+  const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
   // Green border + dot when BPM is auto-driving speed, so the
   // operator can spot from across the venue whether the show is
   // currently hands-on or beat-locked.
   const accent = synced ? ACCENT_AUTO : hasSignal ? C.primary : C.ghostBorder;
   return (
     <View style={{
-      width: cellWidth,
+      width: w, height: GLOBALS_TILE_HEIGHT,
       paddingVertical: 4, paddingHorizontal: 6,
       borderRadius: 8, borderWidth: 1, borderColor: synced ? ACCENT_AUTO : C.ghostBorder,
       backgroundColor: C.surface,
       justifyContent: 'space-between',
     }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: synced ? ACCENT_AUTO : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-          {synced ? 'BPM ●' : 'BPM'}
+          BPM
         </Text>
         <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent }} />
       </View>
       <Text style={{
         fontFamily: 'SpaceGrotesk_700Bold',
-        fontSize: isPortrait ? 20 : 24,
+        fontSize: 20,
         color: hasSignal ? C.text : C.icon,
         textAlign: 'center',
-        lineHeight: isPortrait ? 24 : 28,
+        lineHeight: 22,
       }}>
         {hasSignal ? Math.round(bpm) : '—'}
       </Text>
@@ -480,6 +495,7 @@ function CollapsedGlobalsSummary({
   size: number; h1: number; h2: number; bpm: number;
   onEditColors: () => void;
 }) {
+  const C = usePalette();
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
       <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} accent={speedFill} badge={speedBadge} />
@@ -517,6 +533,7 @@ function CollapsedAudioSummary({
 }
 
 function CollapsedReadout({ label, value, accent, badge }: { label: string; value: number; accent?: string; badge?: string }) {
+  const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
@@ -529,6 +546,7 @@ function CollapsedReadout({ label, value, accent, badge }: { label: string; valu
 }
 
 function CollapsedMeter({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  const C = usePalette();
   const v = Math.max(0, Math.min(1, value));
   return (
     <View style={{ flex: 1, minWidth: 36, maxWidth: 70, flexDirection: 'row', alignItems: 'center', gap: 4 }}>

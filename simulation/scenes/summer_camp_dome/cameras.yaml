@@ -9,16 +9,6 @@ presets:
       x: 0
       'y': 4
       z: -0.0
-  - name: Aerial
-    key: aerial
-    position:
-      x: -1.272
-      'y': 40.24
-      z: -10.424
-    target:
-      x: -0.996
-      'y': 3.814
-      z: -0.668
   - name: Side
     key: side
     position:
@@ -29,3 +19,23 @@ presets:
       x: -0.915
       'y': -0.744
       z: -0.273
+  - name: Aerial Side
+    key: aerial-side
+    position:
+      x: 17.306
+      'y': 22.369
+      z: -24.861
+    target:
+      x: -0.639
+      'y': 1.559
+      z: -4.495
+  - name: Top
+    key: top
+    position:
+      x: -1.272
+      'y': 40.24
+      z: -10.424
+    target:
+      x: -0.996
+      'y': 3.814
+      z: -0.668

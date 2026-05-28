@@ -3,18 +3,33 @@
   Layered aurora curtains for Summer Camp Dome.
   BarLights carry flowing vertical ribbons; TriangleEdges are a luminous horizon;
   Vintage lamps only catch soft human warmth at curtain crossings.
+
+  Apex polish (D4 — light touch):
+  - Default cp1V/cp2V bumped to 0.78/0.72 (Rule 4 brightness defaults).
+  - Default blackoutDepth dropped from 0.68 to 0.40 (Rule 4: <=0.4).
+  - TrianglePars now also receive a slow drifting "ghost glow" so they always
+    breathe instead of relying solely on stochastic above-threshold hits
+    (Rule 2 — pars must be actively used, not pure background).
+  - Par phases use parId/3.0 explicitly (Rule 1).
+
+  E2 par visibility push (par-hue + bright defaults):
+  - Each par holds its own distinct aurora HUE (parHue anchored at parId/3
+    plus slow drift) so the 3 pars carry three different colours.
+  - Par brightness now 0.18 floor + 0.55..0.90 peak (Rule B prominence) — was
+    clamped to ~0.10 by the dampened brightness formula.
+  - Par white/UV mapped to their own ghost so they always breathe in W/U too.
 */
 
 export var localSpeed = 0.5;
 export var curtainWidth = 0.36;
 export var driftChaos = 0.42;
-export var blackoutDepth = 0.68;
+export var blackoutDepth = 0.40;
 export var rimShimmer = 0.34;
 export var triangleGain = 0.72;
 export var humanWarmth = 0.28;
 
-export var cp1H = 0.47, cp1S = 0.88, cp1V = 0.62;
-export var cp2H = 0.76, cp2S = 0.84, cp2V = 0.52;
+export var cp1H = 0.47, cp1S = 0.88, cp1V = 0.78;
+export var cp2H = 0.76, cp2S = 0.84, cp2V = 0.72;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -144,10 +159,22 @@ export function render3D(index, x, y, z) {
   }
 
   var parHit = 0.0;
+  var parHue = 0.0;
   if (isTrianglePar) {
-    var parSeed = wave(tShimmer * 1.41 + index * 0.173 + theta * 0.77);
-    parHit = parSeed > (0.82 - rimShimmer * 0.28) ? parSeed : 0.0;
-    parHit = clamp01(parHit * triangleGain);
+    var parId = index - 54;                       // 0, 1, 2
+    var parPhase = parId / 3.0;                   // Rule 1: 0, 1/3, 2/3
+    // Each par holds its own aurora HUE drifting slowly (Rule C — aurora role).
+    // Three distinct hues anchored at parId, with a slow drift that keeps them
+    // independent. parHue is fed into the color mix downstream so pars carry
+    // visibly different aurora colours.
+    parHue = wrap01(parPhase + 0.18 * wave(tDrift * 0.27 + parPhase));
+    // Always-on ghost glow drifting between the 3 pars so they never go dark
+    // (Rule B floor ≥ 0.18).
+    var parGhost = 0.42 + 0.32 * wave(tDrift * 0.43 + parPhase + curlB * 0.12);
+    // Stochastic shimmer hits on top of the ghost.
+    var parSeed = wave(tShimmer * 1.41 + parId * 0.79 + tCurl * 0.31);
+    var parPop = parSeed > (0.78 - rimShimmer * 0.32) ? parSeed * 0.85 : 0.0;
+    parHit = clamp01((parGhost + parPop * 0.55) * (0.65 + triangleGain * 0.45));
   }
 
   var vintageGlow = 0.0;
@@ -169,9 +196,13 @@ export function render3D(index, x, y, z) {
 
   var darkFloor = (1.0 - blackoutDepth) * 0.026;
   var colorMix = clamp01(0.10 + wave(theta * 0.61 + heightWave * 0.73 - tCurl * 0.72) * 0.62 + ribbonB * 0.22);
+  // Pars get their own hue anchor so each par carries a distinct aurora colour.
+  if (isTrianglePar) colorMix = clamp01(parHue + ribbonB * 0.10);
   var brightness = darkFloor + stage * (0.18 + curtainWidth * 0.42);
   if (isTriangleEdge) brightness = darkFloor * 0.45 + edgeStage * (0.16 + triangleGain * 0.25);
-  if (isTrianglePar) brightness = darkFloor * 0.20 + parHit * 0.10;
+  // Pars: prominent brightness (Rule B). Floor ≥ ~0.18 even at low parHit so the
+  // par lights always read a colour; peak well above 0.40 at moderate triangleGain.
+  if (isTrianglePar) brightness = 0.18 + parHit * (0.55 + triangleGain * 0.35);
   if (isVintage) brightness = darkFloor * 0.18 + vintageGlow * 0.16;
 
   var r = (pr1 + (pr2 - pr1) * colorMix) * brightness;
@@ -181,8 +212,11 @@ export function render3D(index, x, y, z) {
   var shimmerLine = wave(tShimmer * 3.31 + theta * 2.17 + y * 0.29 + index * 0.017);
   var rim = clamp01((barRim + edgeRim + parHit * 0.45) * rimShimmer * (0.45 + shimmerLine * 0.55));
   var w = isApex ? clamp01(rim * (0.36 + triangleGain * 0.42)) : clamp01(rim * 0.18);
+  // Pars carry an extra white anchored to their own ghost so they breathe in white too.
+  if (isTrianglePar) w = clamp01(parHit * (0.25 + triangleGain * 0.35) + rim * 0.25);
   var a = isVintage ? clamp01(vintageGlow) : 0.0;
   var u = clamp01((barRim * 0.62 + edgeStage * 0.38 + parHit * 0.22) * (0.18 + rimShimmer * 0.72));
+  if (isTrianglePar) u = clamp01(parHit * 0.22 + (1.0 - parHue) * 0.10);
 
   rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(a), clamp01(u));
 }

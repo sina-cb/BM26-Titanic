@@ -1,2 +1,25 @@
 master: 1
-channels: []
+channels:
+  - id: ch_1779962445726_0
+    name: New Layer
+    pattern: 01_cylon_sweep
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls: {}
+    playlist:
+      name: default
+      activeEntryId: e_default_1_01_cylon_sweep
+      cursor: 1
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false

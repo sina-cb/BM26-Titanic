@@ -18,6 +18,9 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  // Playlist reorder (slot 5, May 2026): up/down nudges on each entry row.
+  'chevron.up': 'keyboard-arrow-up',
+  'chevron.down': 'keyboard-arrow-down',
   'slider.vertical.3': 'tune',
   'desktopcomputer': 'monitor',
   'shippingbox.fill': 'local-shipping',
@@ -45,6 +48,16 @@ const MAPPING = {
   'network': 'lan',
   'plus.circle': 'add-circle-outline',
   'trash': 'delete-outline',
+  // Scheduler tab (docs/31): sidebar icon + per-row controls. The
+  // calendar+clock pairing reads as "this fires later, automatically".
+  'calendar.badge.clock': 'event',
+  'play.fill': 'play-arrow',
+  'pause.fill': 'pause',
+  'stop.fill': 'stop',
+  'circle': 'radio-button-unchecked',
+  'checkmark.circle.fill': 'check-circle',
+  'wifi.slash': 'wifi-off',
+  'shuffle': 'shuffle',
 } as IconMapping;
 
 /**

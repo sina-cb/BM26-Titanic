@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, AppState } from 'react-native';
-import { globalStyles } from '@/styles/globalStyles';
-import { Colors } from '@/constants/theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
@@ -28,6 +28,8 @@ import { engineVizEvents } from '@/utils/engineVizEvents';
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [isOn, setIsOn] = React.useState(initialValue > 0.5);
   React.useEffect(() => { setIsOn(initialValue > 0.5) }, [initialValue]);
   return (
@@ -36,10 +38,10 @@ const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, na
       style={[
         globalStyles.macroButton, 
         { flexBasis: '30%' }, 
-        isOn ? { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary } : {}
+        isOn ? { backgroundColor: C.primary, borderColor: C.primary } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : Colors.light.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : C.text, textAlign: 'center' }}>
         {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
       </Text>
     </TouchableOpacity>
@@ -47,6 +49,8 @@ const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, na
 };
 
 const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onChange: Function }) => {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [isPressed, setIsPressed] = React.useState(false);
   return (
     <TouchableOpacity 
@@ -56,10 +60,10 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
       style={[
         globalStyles.macroButton, 
         { flexBasis: '30%' }, 
-        isPressed ? { backgroundColor: Colors.light.error, borderColor: Colors.light.error } : {}
+        isPressed ? { backgroundColor: C.error, borderColor: C.error } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : Colors.light.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : C.text, textAlign: 'center' }}>
         {name.replace(/toggle|trigger/i, '').substring(0, 10).toUpperCase()}
       </Text>
     </TouchableOpacity>
@@ -67,31 +71,39 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
 };
 
 // ── Connection Status Banner ────────────────────────────────────────────
-const OfflineBanner = ({ error }: { error: string }) => (
-  <View style={{ 
-    backgroundColor: 'rgba(186, 26, 26, 0.12)', 
-    borderColor: Colors.light.error, 
-    borderWidth: 1, 
-    borderRadius: 12, 
-    padding: 16, 
-    marginBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12
-  }}>
-    <IconSymbol name="wifi.slash" size={24} color={Colors.light.error} />
-    <View style={{ flex: 1 }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 14 }}>
-        ENGINE OFFLINE
-      </Text>
-      <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.error, fontSize: 12, marginTop: 4 }}>
-        {error || 'Cannot reach MarsinEngine. Check Config tab for IP settings.'}
-      </Text>
+const OfflineBanner = ({ error }: { error: string }) => {
+  const C = usePalette();
+  return (
+    <View style={{
+      // 'rgba(186, 26, 26, 0.12)' — translucent error wash; reads as
+      // alarm on both light and dark surfaces, so we keep it as a
+      // literal rather than burning a palette token.
+      backgroundColor: 'rgba(186, 26, 26, 0.12)',
+      borderColor: C.error,
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12
+    }}>
+      <IconSymbol name="wifi.slash" size={24} color={C.error} />
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 14 }}>
+          ENGINE OFFLINE
+        </Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12, marginTop: 4 }}>
+          {error || 'Cannot reach MarsinEngine. Check Config tab for IP settings.'}
+        </Text>
+      </View>
     </View>
-  </View>
-);
+  );
+};
 
 export default function ControlDeckScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -130,6 +142,15 @@ export default function ControlDeckScreen() {
   // away to the mixer tells the engine to finalize the swap, so when we
   // come back this flag is stale by definition.
   const [deckSwapInFlight, setDeckSwapInFlight] = useState(false);
+
+  // Last engine-picked transition mode. When shuffle is enabled the
+  // engine rolls a new style per swap (pickRandomTransitionMode in
+  // api_server.js) and broadcasts it on `deckSwapStarted`. Without
+  // this state the picker dropdown was stuck showing the operator's
+  // pre-shuffle pick forever — operator report 2026-05-29: "the
+  // dropdown doesn't change per transition." With this we surface the
+  // actually-used mode so the operator can see what just played.
+  const [lastSwapMode, setLastSwapMode] = useState<string | null>(null);
 
   // Parent-owned playlist library (May 2026 refactor — see mixer.tsx
   // for the full rationale). Fetched once on mount, then refreshed
@@ -184,8 +205,12 @@ export default function ControlDeckScreen() {
         }));
       } else if (msg.type === 'deckSwapStarted') {
         setDeckSwapInFlight(true);
+        const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
+        if (typeof tm === 'string') setLastSwapMode(tm);
       } else if (msg.type === 'deckSwapComplete') {
         setDeckSwapInFlight(false);
+        const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
+        if (typeof tm === 'string') setLastSwapMode(tm);
       }
     });
     const unsubStatus = engineEvents.subscribeStatus((s) => {
@@ -290,7 +315,7 @@ export default function ControlDeckScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+    <View style={{ flex: 1, backgroundColor: C.background }}>
       {/* Top bar: title + connection status + master fader. Matches the
           Marsin Mixer header layout, minus channel-add buttons. */}
       <DeckTopBar isConnected={isConnected} />
@@ -298,7 +323,7 @@ export default function ControlDeckScreen() {
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.light.icon }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: C.icon }}>
             DECK MAIN
           </Text>
         </View>
@@ -335,7 +360,7 @@ export default function ControlDeckScreen() {
               />
             </View>
           ) : (
-            <Text style={{ color: Colors.light.secondary, fontStyle: 'italic' }}>
+            <Text style={{ color: C.secondary, fontStyle: 'italic' }}>
               Waiting for deck…
             </Text>
           )}
@@ -363,19 +388,19 @@ export default function ControlDeckScreen() {
                 free-standing label + its 8px margin used to occupy. Same
                 typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
                 10pt / 1.2 tracking / secondary / uppercase). */}
-            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: Colors.light.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
+            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
               {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
                   costs zero extra vertical height — the label rides the
                   baseline of the tallest control next to it. */}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: Colors.light.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
                   <TouchableOpacity
                     onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? Colors.light.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : Colors.light.ghostBorder }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : C.ghostBorder }}
                   >
-                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : Colors.light.text} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : Colors.light.text, fontSize: 12 }}>
+                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : C.text} />
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : C.text, fontSize: 12 }}>
                       {isPlaylistActive ? 'PAUSE' : 'PLAY'}
                     </Text>
                   </TouchableOpacity>
@@ -387,8 +412,8 @@ export default function ControlDeckScreen() {
                   accessibilityRole="switch"
                   accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
                 >
-                  <IconSymbol name="shuffle" size={16} color={isShuffle ? Colors.light.primary : Colors.light.icon} />
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? Colors.light.primary : Colors.light.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
+                  <IconSymbol name="shuffle" size={16} color={isShuffle ? C.primary : C.icon} />
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
                 </TouchableOpacity>
               </View>
 
@@ -411,7 +436,12 @@ export default function ControlDeckScreen() {
                 enabled. */}
             <DeckTransitionControls
               enabled={deckTxConfig.enabled}
-              mode={deckTxConfig.mode}
+              // When shuffle is on, show the actually-rolled style from
+              // the engine's most-recent broadcast instead of the
+              // operator's pre-shuffle pick (which the engine ignores
+              // in shuffle mode anyway). Falls back to the config mode
+              // before any swap has happened.
+              mode={deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode}
               durationMs={deckTxConfig.durationMs}
               shuffle={deckTxConfig.shuffle}
               onChange={handleDeckTxChange}
@@ -433,7 +463,7 @@ export default function ControlDeckScreen() {
                 const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
 
                 return (
-                  <View key={channel.id} style={{ width: '100%', backgroundColor: Colors.light.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: Colors.light.ghostBorder }}>
+                  <View key={channel.id} style={{ width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder }}>
                     {/* D6 trigger: ◎ ALL pill next to the entry label.
                         Disabled when no deck playlist is loaded — the
                         AllModulationsPanel renders an empty state in
@@ -476,7 +506,7 @@ export default function ControlDeckScreen() {
                     </View>
 
                     <View style={{ marginBottom: 16 }}>
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: Colors.light.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 

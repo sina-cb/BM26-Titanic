@@ -26,7 +26,7 @@ universes.yaml
     ├── Fixture: "bar_1"  (Endyshow 240W, start addr 1)
     └── Fixture: "bar_2"  (Endyshow 240W, start addr 136)
 
-Universe: "port_side"  (10.1.1.102, Art-Net universe 0)
+Universe: "port_side"  (10.1.1.10, Art-Net universe 0)
     ├── Fixture: "par_1"  (UKing RGBWAU, start addr 1)
     ├── Fixture: "par_2"  (UKing RGBWAU, start addr 11)
     └── ...
@@ -127,7 +127,7 @@ universes:
   - id: "port_side"
     name: "Port Side Par Array"
     controller:
-      ip: "10.1.1.102"
+      ip: "10.1.1.10"
       port: 6454
       universe: 0
       subnet: 0

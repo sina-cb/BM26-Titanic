@@ -1,0 +1,17 @@
+scheduledTasks:
+  - id: 3027b888-6082-4b0a-bf62-65da93195ba3
+    label: uvBlast / default
+    effectId: uvBlast
+    presetId: default
+    enabled: false
+    mode: duration
+    onDurationMs: 2000
+    intervalMs: 5000
+  - id: e34b718c-3548-4f01-b150-d83919455e77
+    label: fogger / default
+    effectId: fogger
+    presetId: default
+    enabled: false
+    mode: duration
+    onDurationMs: 60000
+    intervalMs: 60000

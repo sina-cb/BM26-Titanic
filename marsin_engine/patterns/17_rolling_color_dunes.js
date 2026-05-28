@@ -8,9 +8,9 @@ export var localSpeed = 0.5;
 export var duneScale = 0.42;
 export var duneContrast = 0.48;
 export var orbitDrift = 0.36;
-export var blackoutDepth = 0.58;
-export var stageSurf = 0.64;
-export var amberWarmth = 0.22;
+export var blackoutDepth = 0.35;
+export var stageSurf = 0.70;
+export var amberWarmth = 0.40;
 
 export var cp1H = 0.08, cp1S = 0.88, cp1V = 0.78;
 export var cp2H = 0.47, cp2S = 0.88, cp2V = 0.72;
@@ -126,33 +126,33 @@ export function render3D(index, x, y, z) {
     var barIndex = floor((index - 57) / 18.0);
     var sandRipple = wave(barT * 1.45 - rollPhase * 1.9 + barIndex * 0.137 + shearA * 0.31);
     var brokenLane = pow(wave(barIndex * 0.271 + barT * 2.3 + driftPhase * 1.61), 3.8);
-    stage = dune * (0.18 + sandRipple * 0.50 + brokenLane * 0.32);
-    stage = stage * (1.0 - valley * blackoutDepth * 0.78);
-    stage = stage * (0.55 + shardGate * 0.45);
-    uv = pow(stage, 2.0) * 0.16;
+    stage = dune * (0.30 + sandRipple * 0.50 + brokenLane * 0.32);
+    stage = stage * (1.0 - valley * blackoutDepth * 0.55);
+    stage = stage * (0.65 + shardGate * 0.35);
+    uv = pow(stage, 2.0) * 0.20;
   } else if (isEdge) {
     var edgeId = floor(index / 18.0);
     var edgeT = (index % 18) / 17.0;
     var surfA = softPulse(circDist(edgeT, wrap01(rollPhase * 0.52 + wave(driftPhase + edgeId * 0.17) * 0.23 + edgeId * 0.333)), 0.040 + stageSurf * 0.080);
     var surfB = softPulse(circDist(edgeT, wrap01(1.0 - driftPhase * 1.8 + edgeId * 0.19 + contourB * 0.10)), 0.026 + duneScale * 0.060) * 0.52;
-    stage = clamp01((surfA + surfB) * (0.28 + stageSurf * 0.72));
-    white = surfA * stageSurf * 0.36;
-    uv = surfB * 0.20;
+    stage = clamp01((surfA + surfB) * (0.45 + stageSurf * 0.55));
+    white = surfA * stageSurf * 0.42;
+    uv = surfB * 0.24;
   } else if (isPar) {
     var parHit = pow(wave(shimmerPhase + index * 0.27), 7.0);
-    stage = parHit * stageSurf * 0.070;
-    white = parHit * stageSurf * 0.38;
+    stage = (0.08 + parHit * 0.92) * (0.22 + stageSurf * 0.55);
+    white = parHit * stageSurf * 0.45;
   } else if (isVintage) {
     var vintageLocal = index - 291;
     var ember = wave(shimmerPhase * 0.47 + vintageLocal * 0.059);
     var bank = softPulse(circDist(wrap01(floor(vintageLocal / 6.0) / 5.0), wrap01(driftPhase * 0.38)), 0.11 + duneScale * 0.08);
-    amber = (0.018 + bank * ember * 0.35) * amberWarmth;
-    stage = amber * 0.10;
+    amber = (0.060 + bank * ember * 0.50) * amberWarmth;
+    stage = amber * 0.30;
   }
 
   var colorBlend = clamp01(0.14 + contourB * 0.28 + contourC * 0.22 + contourD * 0.18 + foldX * 0.10 + dune * 0.26);
-  var darkFloor = (1.0 - blackoutDepth) * 0.018;
-  var brightness = darkFloor + stage * (0.26 + duneContrast * 0.30);
+  var darkFloor = (1.0 - blackoutDepth) * 0.045;
+  var brightness = darkFloor + stage * (0.55 + duneContrast * 0.45);
   if (isVintage) brightness = darkFloor * 0.35 + stage;
   if (isPar) brightness = darkFloor * 0.20 + stage;
 

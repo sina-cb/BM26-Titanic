@@ -598,8 +598,8 @@ entries:
       sliderUvIntensity: 1
     modulations: []
     notes: null
-  - id: e_default_49_77_tower_canopy_ping
-    pattern: 77_tower_canopy_ping
+  - id: e_default_49_77_tree_canopy_ping
+    pattern: 77_tree_canopy_ping
     label: null
     defaults:
       sliderLocalSpeed: 0.5
@@ -629,8 +629,8 @@ entries:
       sliderCoolingAfterglow: 1
     modulations: []
     notes: null
-  - id: e_default_52_80_canopy_fracture
-    pattern: 80_canopy_fracture
+  - id: e_default_52_80_tree_canopy_fracture
+    pattern: 80_tree_canopy_fracture
     label: null
     defaults:
       sliderLocalSpeed: 0.81

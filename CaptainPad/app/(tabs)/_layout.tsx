@@ -4,13 +4,13 @@ import { View, TouchableOpacity, Text, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { usePalette } from '@/hooks/use-theme';
 import { RigProvider } from '@/components/RigGlobals';
 import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
+  const palette = usePalette();
   return (
     <View style={{
       width: 112,
@@ -18,21 +18,21 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
       position: 'absolute',
       left: 0,
       top: 0,
-      backgroundColor: 'rgba(255,255,255,0.6)',
+      backgroundColor: palette.sidebarBackground,
       paddingVertical: 32,
       alignItems: 'center',
       zIndex: 50,
-      shadowColor: '#191c1d',
+      shadowColor: palette.text,
       shadowOffset: { width: 10, height: 0 },
       shadowOpacity: 0.03,
       shadowRadius: 30,
       elevation: 5,
     }}>
       <View style={{ marginBottom: 48, alignItems: 'center' }}>
-        <IconSymbol name="house.fill" size={36} color="#191c1d" /> 
+        <IconSymbol name="house.fill" size={36} color={palette.text} />
         {/* Used house.fill since sailing isn't mapped, user can map later */}
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, marginTop: 8 }}>6969</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: '#00daf3', textAlign: 'center', marginTop: 2 }}>CAPTAIN{'\n'}PAD</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, marginTop: 8, color: palette.text }}>6969</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: palette.primaryFixedDim, textAlign: 'center', marginTop: 2 }}>CAPTAIN{'\n'}PAD</Text>
       </View>
 
       <ScrollView
@@ -57,21 +57,21 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
               paddingVertical: 16,
               marginBottom: 16,
               borderRadius: 16,
-              backgroundColor: isFocused ? 'rgba(0, 229, 255, 0.1)' : 'transparent',
+              backgroundColor: isFocused ? palette.sidebarActiveBackground : 'transparent',
               borderWidth: isFocused ? 1 : 0,
-              borderColor: 'rgba(0, 229, 255, 0.3)',
+              borderColor: palette.sidebarActiveBorder,
             }}>
                <IconSymbol
                  name={iconName}
                  size={32}
-                 color={isFocused ? '#00daf3' : '#bac9cc'}
+                 color={isFocused ? palette.primaryFixedDim : palette.tabIconDefault}
                />
                <Text style={{
                  fontFamily: 'SpaceGrotesk_700Bold',
                  fontSize: 10,
                  marginTop: 8,
                  textTransform: 'uppercase',
-                 color: isFocused ? '#00daf3' : '#bac9cc'
+                 color: isFocused ? palette.primaryFixedDim : palette.tabIconDefault
                }}>{options.title}</Text>
             </TouchableOpacity>
           )
@@ -82,16 +82,16 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
 }
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const palette = usePalette();
 
   return (
     <RigProvider>
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: palette.background }}>
         <Tabs
           tabBar={(props) => <CustomSideBar {...props} />}
           screenOptions={{
             headerShown: false,
-            sceneStyle: { marginLeft: 112 }, // Shifts the screens to the right of the sidebar
+            sceneStyle: { marginLeft: 112, backgroundColor: palette.background }, // Shifts the screens to the right of the sidebar
           }}>
           <Tabs.Screen
             name="mixer"
@@ -134,6 +134,13 @@ export default function TabLayout() {
             options={{
               title: 'Monitor',
               tabBarIconName: 'desktopcomputer',
+            } as any}
+          />
+          <Tabs.Screen
+            name="scheduler"
+            options={{
+              title: 'Scheduler',
+              tabBarIconName: 'calendar.badge.clock',
             } as any}
           />
           <Tabs.Screen

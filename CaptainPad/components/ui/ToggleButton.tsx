@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { TouchableOpacity, Text } from 'react-native';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
 
 export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [isOn, setIsOn] = useState(initialValue > 0.5);
   useEffect(() => { setIsOn(initialValue > 0.5) }, [initialValue]);
   
@@ -13,10 +15,10 @@ export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: num
       style={[
         globalStyles.macroButton, 
         { flexBasis: '30%' }, 
-        isOn ? { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary } : {}
+        isOn ? { backgroundColor: C.primary, borderColor: C.primary } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : Colors.light.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : C.text, textAlign: 'center' }}>
         {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
       </Text>
     </TouchableOpacity>
@@ -24,6 +26,8 @@ export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: num
 };
 
 export const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onChange: Function }) => {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [isPressed, setIsPressed] = useState(false);
   
   return (
@@ -34,10 +38,10 @@ export const MomentaryButton = ({ id, name, onChange }: { id: number, name: stri
       style={[
         globalStyles.macroButton, 
         { flexBasis: '30%' }, 
-        isPressed ? { backgroundColor: Colors.light.error, borderColor: Colors.light.error } : {}
+        isPressed ? { backgroundColor: C.error, borderColor: C.error } : {}
       ]}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : Colors.light.text, textAlign: 'center' }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : C.text, textAlign: 'center' }}>
         {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
       </Text>
     </TouchableOpacity>

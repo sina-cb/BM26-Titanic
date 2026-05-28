@@ -1,14 +1,13 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useMemo, useEffect, useState, useCallback, useRef } from 'react';
+import { Palette } from '@/constants/theme';
 import { View, Text, TextInput, Alert, Platform } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import {
   fetchPlaylist, savePlaylist, fetchMixerChannelPlaylist,
   PlaylistData, PlaylistAssignment,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
-
-const C = Colors.light;
 
 // Time we wait after the last keystroke before persisting. Long enough to feel
 // like one save per edit-burst, short enough that walking away from an iPad
@@ -53,6 +52,8 @@ interface Props {
 }
 
 export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, locked }) => {
+  const C = usePalette();
+  const styles = useMemo(() => makeStyles(C), [C]);
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(null);
   const [playlist, setPlaylist] = useState<PlaylistData | null>(null);
   const [draft, setDraft] = useState('');
@@ -109,7 +110,7 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
   useEffect(() => {
     return engineEvents.subscribe((msg: EngineMessage) => {
       if (msg.type === 'mixer') {
-        const channels = (msg.channels as Array<{ id: string; playlist?: PlaylistAssignment | null }>) || [];
+        const channels = (msg.channels as { id: string; playlist?: PlaylistAssignment | null }[]) || [];
         const ch = channels.find((c) => c.id === channelId);
         if (!ch) return;
         const local = assignmentRef.current;
@@ -275,13 +276,19 @@ export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, loc
   );
 };
 
-const Badge: React.FC<{ text: string }> = ({ text }) => (
-  <View style={styles.badge}>
-    <Text style={styles.badgeText}>{text}</Text>
-  </View>
-);
+const Badge: React.FC<{ text: string }> = ({ text }) => {
+  const C = usePalette();
+  const styles = useMemo(() => makeStyles(C), [C]);
+  return (
+    <View style={styles.badge}>
+      <Text style={styles.badgeText}>{text}</Text>
+    </View>
+  );
+};
 
-const styles = {
+
+function makeStyles(C: Palette) {
+  return {
   row: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
@@ -327,4 +334,5 @@ const styles = {
     marginTop: 2,
     paddingHorizontal: 8,
   },
-} as const;
+};
+}

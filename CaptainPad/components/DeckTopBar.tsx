@@ -13,14 +13,13 @@
 // WS binding. Writes go through `updateMixerMaster` and are
 // throttled to ~30 Hz to keep slow Wi-Fi from queueing PATCHes.
 
-import React, { useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { View, Text, useWindowDimensions } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { useMaster } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
-
-const C = Colors.light;
 
 interface Props {
   /** Connection state passed in from the deck screen. */
@@ -30,6 +29,8 @@ interface Props {
 }
 
 export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const master = useMaster();
@@ -51,9 +52,11 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 16 }}>
         <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>{title}</Text>
         <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
-          <View style={[styles.statusDot, !isConnected && { backgroundColor: C.error }]} />
+          <View style={[styles.statusDot, !isConnected && { backgroundColor: palette.error }]} />
           {!isPortrait && (
-            <Text style={[styles.labelCaps, { color: isConnected ? '#00a86b' : C.error }]}>
+            // '#00a86b' (MOD_GREEN) is the "connected/ok" green, intentionally
+            // hardcoded — reads as success on both light and dark surfaces.
+            <Text style={[styles.labelCaps, { color: isConnected ? '#00a86b' : palette.error }]}>
               {isConnected ? 'CONNECTED' : 'OFFLINE'}
             </Text>
           )}
@@ -80,59 +83,62 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
 }
 
 // Style tokens lifted from mixer.tsx so the two tabs match pixel-for-pixel.
-const styles = {
-  header: {
-    height: 64,
-    backgroundColor: C.surfaceContainerLow,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    justifyContent: 'space-between' as const,
-    paddingHorizontal: 24,
-  },
-  brandText: {
-    color: C.primary,
-    fontSize: 20,
-    fontFamily: 'SpaceGrotesk_700Bold',
-    letterSpacing: -0.5,
-  },
-  statusBadge: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 8,
-    backgroundColor: C.surfaceContainerHigh,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-  },
-  statusDot: {
-    width: 8, height: 8, borderRadius: 4,
-    backgroundColor: '#00a86b',
-  },
-  labelCaps: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 10,
-    letterSpacing: 1.2,
-    color: C.secondary,
-    textTransform: 'uppercase' as const,
-  },
-  displayMono: {
-    fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 18,
-    color: C.primary,
-  },
-  faderTrack: {
-    height: 16,
-    backgroundColor: C.surfaceContainerHigh,
-    borderRadius: 4,
-  },
-  faderFill: {
-    position: 'absolute' as const,
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: C.primaryFixedDim,
-    borderRadius: 4,
-  },
-};
+function makeStyles(C: Palette) {
+  return {
+    header: {
+      height: 64,
+      backgroundColor: C.surfaceContainerLow,
+      borderBottomWidth: 1,
+      borderBottomColor: C.ghostBorder,
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      justifyContent: 'space-between' as const,
+      paddingHorizontal: 24,
+    },
+    brandText: {
+      color: C.primary,
+      fontSize: 20,
+      fontFamily: 'SpaceGrotesk_700Bold',
+      letterSpacing: -0.5,
+    },
+    statusBadge: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 8,
+      backgroundColor: C.surfaceContainerHigh,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+    },
+    statusDot: {
+      width: 8, height: 8, borderRadius: 4,
+      // '#00a86b' MOD_GREEN — works on both themes (matches the connected label).
+      backgroundColor: '#00a86b',
+    },
+    labelCaps: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 1.2,
+      color: C.secondary,
+      textTransform: 'uppercase' as const,
+    },
+    displayMono: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 18,
+      color: C.primary,
+    },
+    faderTrack: {
+      height: 16,
+      backgroundColor: C.surfaceContainerHigh,
+      borderRadius: 4,
+    },
+    faderFill: {
+      position: 'absolute' as const,
+      left: 0, top: 0, bottom: 0,
+      backgroundColor: C.primaryFixedDim,
+      borderRadius: 4,
+    },
+  };
+}

@@ -1,0 +1,169 @@
+blackout: false
+effects: {}
+params:
+  revision: 364264
+  sourceLock: null
+  params:
+    speed:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 1
+    size:
+      value: 0.5
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 2
+    rotate:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 3
+    colorPalette1:
+      value:
+        h: 0.64
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
+    colorPalette2:
+      value:
+        h: 0.9
+        s: 1
+        v: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
+    stemsVocalsGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 6
+    stemsBassGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 7
+    stemsDrumsGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 8
+    stemsVocals:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 9
+    stemsBass:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 10
+    stemsDrums:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 11
+    stemsVocalsRaw:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 12
+    stemsBassRaw:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 13
+    stemsDrumsRaw:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 14
+    tempoBpm:
+      value: 0
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 15
+    micLow:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364257
+    micMid:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364258
+    micHigh:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364259
+    micKick:
+      value: 5.e-324
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364260
+    micLowRaw:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364261
+    micMidRaw:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364262
+    micHighRaw:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364263
+    micKickRaw:
+      value: 0
+      lastSource: audio
+      lastOrigin: audio:mic
+      lastRevision: 364264
+    micLowGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 24
+    micMidGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 25
+    micHighGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 26
+    micKickGain:
+      value: 1
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 27
+    bpmSpeedSync:
+      value: 0
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 364104
+    bpmSpeedMin:
+      value: 60
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 29
+    bpmSpeedMax:
+      value: 160
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 30
+dimmers:
+  '1': 0.2633928571428571
+  '2': 0.3839285714285714
+  '3': 0.2991071428571429
+  '4': 1
+  '5': 1
+  '6': 1

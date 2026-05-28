@@ -1540,6 +1540,149 @@ export async function fetchGlobalEffectLibrary(): Promise<ApiResult<{ effects: R
   }
 }
 
+// ── Scheduled tasks (docs/31 v3) ───────────────────────────────────────
+// Engine-owned scheduler. Each task binds to (effectId, presetId) from
+// the global effect library and fires on a server-side 250 ms tick. The
+// scheduler keeps running while the iPad is asleep / closed; CaptainPad
+// is purely a UI surface. See the Phase 1 engine report
+// (.agent/02_reports/202605/20260527_2_scheduler_engine.md) for the
+// full wire contract and the docs/31_scheduled_tasks.md design doc.
+//
+// All optimistic state lives in the caller — these helpers just
+// surface the engine's response (or its 400 error message) so the
+// codex P0 "no fallback behaviors" rule holds (no retry-on-400, no
+// silent clamp).
+
+export type ScheduledTaskStatus = 'disabled' | 'armed' | 'firing' | 'error';
+
+export type ScheduledTask = {
+  id: string;
+  label: string;
+  effectId: string;
+  presetId: string;
+  params: Record<string, number | string | boolean | null> | null;
+  enabled: boolean;
+  mode: 'duration';
+  onDurationMs: number;
+  intervalMs: number;
+  nextFireAtMs: number | null;
+  firingUntilMs: number | null;
+  lastFiredAtMs: number | null;
+  lastStoppedAtMs: number | null;
+  status: ScheduledTaskStatus;
+  lastError: string | null;
+  lastMissedAtMs: number | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type ScheduledTaskPresets = {
+  onDurationMs: number[];
+  intervalMs: number[];
+};
+
+export type ScheduledTaskCreate = {
+  label?: string;
+  effectId: string;
+  presetId: string;
+  params?: Record<string, number | string | boolean | null>;
+  enabled: boolean;
+  mode: 'duration';
+  onDurationMs: number;
+  intervalMs: number;
+};
+
+export type ScheduledTaskPatch = Partial<{
+  label: string;
+  effectId: string;
+  presetId: string;
+  params: Record<string, number | string | boolean | null> | null;
+  enabled: boolean;
+  onDurationMs: number;
+  intervalMs: number;
+}>;
+
+export async function fetchScheduledTasks(): Promise<ApiResult<{ tasks: ScheduledTask[]; presets: ScheduledTaskPresets }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('fetch-scheduled-tasks', 'Failed to fetch scheduled tasks:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function createScheduledTask(body: ScheduledTaskCreate): Promise<ApiResult<{ task: ScheduledTask }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchScheduledTask(id: string, partial: ScheduledTaskPatch): Promise<ApiResult<{ task: ScheduledTask }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteScheduledTask(id: string): Promise<ApiResult<{ ok: true }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function fireScheduledTaskNow(id: string): Promise<ApiResult<{ task: ScheduledTask }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks/${encodeURIComponent(id)}/fire-now`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function stopScheduledTask(id: string): Promise<ApiResult<{ task: ScheduledTask }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/scheduled-tasks/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Playlist modulation CRUD (docs/26 Phase 1A) ──────────────────────────
 // Endpoints expose mappings scoped to (playlist, item, mappingId). All
 // validation lives in the engine; these wrappers surface 4xx errors as

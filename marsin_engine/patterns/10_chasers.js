@@ -16,12 +16,12 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderParticleCount(v) { particleCount = 1.0 + floor(v * 20.0); }
 export function sliderTailLength(v) { tailLength = 0.02 + v * 0.3; }
 
-var t1;
 var localMultiplier = 1.0;
 
 export function beforeRender(delta) {
   localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  t1 = time(0.05 / localMultiplier);
+  // Per-particle time() bases are created in render (need speedVar); no
+  // shared t1 anymore — it produced position teleports on each wrap.
 }
 
 export function render(index) {
@@ -37,7 +37,12 @@ export function render(index) {
      var dir = sin(pSeed * 3.1) > 0.0 ? 1.0 : -1.0;
      var speedVar = 0.5 + ((sin(pSeed * 7.9) * 0.5 + 0.5) * 1.0);
      var randomStart = sin(pSeed * 11.3) * 0.5 + 0.5;
-     var currentPos = randomStart + (t1 * dir * speedVar * 2.0);
+     // Continuity: per-particle time() wraps at integer position boundaries
+     // (currentPos folds via wrappedDist below). Old form (t1 * dir * speedVar
+     // * 2) jumped by 2*speedVar (non-integer) every wrap of the shared t1 →
+     // particles teleported every ~3 s.
+     var posPhase = time((0.05 / localMultiplier) / (2.0 * speedVar)) * dir;
+     var currentPos = randomStart + posPhase;
      
      var lifeSpeed = (0.03 + (sin(pSeed * 17.1) * 0.5 + 0.5) * 0.04) / localMultiplier;
      var lifePhase = time(lifeSpeed) + (p * 0.1234);

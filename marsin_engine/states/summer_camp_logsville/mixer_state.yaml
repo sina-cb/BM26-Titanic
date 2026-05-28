@@ -1,0 +1,115 @@
+master: 1
+channels:
+  - id: ch_1779965917946_0
+    name: New Layer
+    pattern: 04_beat_folded_helix
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: true
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '23515769':
+        v0: 0.78
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.46
+        v1: 0
+        v2: 0
+      '1323486710':
+        v0: 0.69
+        v1: 0
+        v2: 0
+      '2582994715':
+        v0: 0.69
+        v1: 0
+        v2: 0
+      '4066641464':
+        v0: 0.81
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_4_04_beat_folded_helix
+      cursor: 4
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+  - id: ch_1779993727365_0
+    name: New Layer
+    pattern: 08_ocean_liner
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    locked: true
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '23515769':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.79
+        v1: 0
+        v2: 0
+      '3651408529':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '4193208886':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_8_08_ocean_liner
+      cursor: 8
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+  - id: ch_1779993751514_1
+    name: New Layer
+    pattern: 00_golden_hour_wash
+    mode: blend_screen
+    fader: 0.46
+    enabled: true
+    locked: true
+    faderLocked: true
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '682166867':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.7
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false

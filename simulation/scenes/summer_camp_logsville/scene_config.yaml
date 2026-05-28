@@ -364,7 +364,7 @@ parLights:
       name: Redwoods1 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 9
@@ -378,7 +378,7 @@ parLights:
       name: Redwoods1 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 7.5
@@ -392,7 +392,7 @@ parLights:
       name: Redwoods1 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 4.500000000000001
@@ -406,7 +406,7 @@ parLights:
       name: Redwoods1 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 3
@@ -420,7 +420,7 @@ parLights:
       name: Redwoods1 5
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 4.499999999999998
@@ -434,7 +434,7 @@ parLights:
       name: Redwoods1 6
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 7.5
@@ -448,7 +448,7 @@ parLights:
       name: Redwoods2 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -4
@@ -462,7 +462,7 @@ parLights:
       name: Redwoods2 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -5.5
@@ -476,7 +476,7 @@ parLights:
       name: Redwoods2 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -8.5
@@ -490,7 +490,7 @@ parLights:
       name: Redwoods2 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -10
@@ -504,7 +504,7 @@ parLights:
       name: Redwoods2 5
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -8.500000000000002
@@ -518,7 +518,7 @@ parLights:
       name: Redwoods2 6
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: -5.5
@@ -532,7 +532,7 @@ parLights:
       name: Redwoods3 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 23
@@ -546,7 +546,7 @@ parLights:
       name: Redwoods3 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 21.5
@@ -560,7 +560,7 @@ parLights:
       name: Redwoods3 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 18.5
@@ -574,7 +574,7 @@ parLights:
       name: Redwoods3 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 17
@@ -588,7 +588,7 @@ parLights:
       name: Redwoods3 5
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 18.5
@@ -602,7 +602,7 @@ parLights:
       name: Redwoods3 6
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 10
+      intensity: 20
       angle: 30
       penumbra: 0.5
       x: 21.5
@@ -616,7 +616,7 @@ ledStrands:
   _section:
     label: 💡 LED Strands
     type: ledStrandArray
-    collapsed: false
+    collapsed: true
   strandsEnabled:
     value: true
     label: Master Enabled

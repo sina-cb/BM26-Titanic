@@ -95,9 +95,16 @@ export class GlobalEffectsController {
 
   // ── Legacy methods ────────────────────────────────────────────────
   setEffect(effectName, state) {
-    if (this.effects.hasOwnProperty(effectName) || effectName.includes('Bypass')) {
-      this.effects[effectName] = !!state;
+    // Codex P0: a typo in effectName must not silently no-op. Pre-fix
+    // any `setEffect('horm', true)` (or similar) returned without
+    // touching state, hiding the bug. Now: throw with a useful
+    // message; callers (slot dispatcher, scheduler, /effect endpoint)
+    // already surface to the operator.
+    const known = this.effects.hasOwnProperty(effectName) || effectName.includes('Bypass');
+    if (!known) {
+      throw new Error(`setEffect: unknown effect '${effectName}'`);
     }
+    this.effects[effectName] = !!state;
   }
 
   initFromModel(effectsArray) {
@@ -366,12 +373,20 @@ export class GlobalEffectsController {
 
   stopStrobe({ immediate = false, nowMs = null } = {}) {
     const time = nowMs ?? performance.now();
-    if (!immediate && this.strobeActive && this.strobeConfig) {
+    // Fade-out is opt-in via the preset's `fadeOutMs > 0`. Default is
+    // immediate stop — the prior 1000 ms default fade caused operator
+    // confusion ("can't turn off the strobe") because scheduled OFFs
+    // and manual GEM-tap OFFs both pretended to ignore the request
+    // while the rig kept pulsing through the fade tail. Strobe presets
+    // in the library don't set fadeOutMs today, so this restores the
+    // expected snap-off behavior. Any future preset that wants a soft
+    // fade sets `params.fadeOutMs: <ms>` and it still works.
+    const fadeMs = this.strobeConfig?.fadeOutMs;
+    if (!immediate && this.strobeActive && this.strobeConfig && typeof fadeMs === 'number' && fadeMs > 0) {
       this.strobeFadingOut = true;
       this.strobeFadeStartMs = time;
-      const fadeMs = this.strobeConfig.fadeOutMs ?? 1000;
       this.strobeFadeDurationMs = fadeMs;
-    } else if (immediate || !this.strobeFadingOut) {
+    } else {
       this.strobeFadingOut = false;
       this.strobeConfig = null;
       this.strobeBurstEndFrame = null;

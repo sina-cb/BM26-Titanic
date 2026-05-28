@@ -37,8 +37,8 @@ import {
   PanResponder, LayoutChangeEvent, GestureResponderEvent,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
@@ -50,8 +50,6 @@ import {
   type AudioChainOp, type AudioChainsMap, type AudioChainCatalog,
 } from '@/utils/api';
 import { useSharedParamValues, useParamRange } from '@/hooks/useEngineState';
-
-const C = Colors.light;
 
 // docs/29 §Chain config — engine ships these 7 signal keys; iPad mirrors
 // the order so the operator's mental model (mic first, then stems)
@@ -121,13 +119,15 @@ function loadCatalog(): Promise<CatalogLoadResult> {
 
 // ── Card frame ─────────────────────────────────────────────────────────────
 
-const CARD = {
-  ...globalStyles.card,
-  padding: 20,
-  marginBottom: 20,
-  alignSelf: 'stretch' as const,
-  ...globalStyles.ambientShadow,
-};
+function makeCard(globalStyles: GlobalStyles) {
+  return {
+    ...globalStyles.card,
+    padding: 20,
+    marginBottom: 20,
+    alignSelf: 'stretch' as const,
+    ...globalStyles.ambientShadow,
+  };
+}
 
 // ── Param ranges that drive the per-op sliders ────────────────────────────
 //
@@ -309,6 +309,7 @@ function useSignalChainFrame(signalKey: string): SignalChainFrame | null {
 function MiniMeter({ label, value, color, firing }: {
   label: string; value: number; color: string; firing?: boolean;
 }) {
+  const C = usePalette();
   const v = Math.max(0, Math.min(1, value));
   return (
     <View style={{ flex: 1 }}>
@@ -352,6 +353,7 @@ function OpParamSlider({
   onDrag: (v: number) => void;
   onCommit: (v: number) => void;
 }) {
+  const C = usePalette();
   const [draftNorm, setDraftNorm] = useState<number | null>(null);
   const lastValRef = useRef<number>(value);
   const span = Math.max(0.0001, max - min);
@@ -421,6 +423,7 @@ function OpParamSlider({
 // the engine's paramSchema via `useParamRange` (falls back to [0, 2]
 // per the pre-Phase 5 convention).
 function ParamKeyGainRow({ paramKey }: { paramKey: string }) {
+  const C = usePalette();
   const [gMin, gMax] = useParamRange(paramKey, [0, 2]);
   const span = Math.max(0.0001, gMax - gMin);
   const live = useSharedParamValues(useMemo(() => ({ [paramKey]: 1 }), [paramKey])) as Record<string, number>;
@@ -505,6 +508,7 @@ function PillPicker({
   value: string;
   onPick: (v: string) => void;
 }) {
+  const C = usePalette();
   return (
     <View style={{ marginBottom: 8 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -558,6 +562,7 @@ function BooleanToggle({
   hint?: string;
   onPick: (v: boolean) => void;
 }) {
+  const C = usePalette();
   return (
     <View style={{ marginBottom: 8 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -620,6 +625,7 @@ function OpParams({
   catalog: AudioChainCatalog | null;
   onPatchParam: (paramPatch: Record<string, number | string | boolean>) => void;
 }) {
+  const C = usePalette();
   // docs/29 §Interactions + Codex P0: when catalog is loaded but doesn't
   // describe this op type, surface the gap to the operator. The picker
   // wouldn't have OFFERED an unknown op, so this only fires if the engine
@@ -986,6 +992,7 @@ function OpRow({
   onDragEnd: () => void;
   rowHeightRef: (h: number) => void;
 }) {
+  const C = usePalette();
   // PanResponder bound to the drag handle. Capture-phase so we win
   // against ScrollView's vertical pan. Move callback reports the
   // cumulative dy to the parent, which translates rows of indices.
@@ -1099,6 +1106,8 @@ function OpPicker({
   catalogError: string | null;
   onRetryCatalog: () => void;
 }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
       <Pressable
@@ -1266,6 +1275,8 @@ function SignalChainEditor({
   onError: (msg: string) => void;
   onRetryCatalog: () => void;
 }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const frame = useSignalChainFrame(signalKey);
   const previewById = useMemo(() => {
     const out: Record<string, { pre: number; post: number; firing?: boolean }> = {};
@@ -1694,6 +1705,7 @@ function SignalChainRow({
   onError: (msg: string) => void;
   onRetryCatalog: () => void;
 }) {
+  const C = usePalette();
   const isLoaded = Array.isArray(chain);
   const ops = chain ?? [];
 
@@ -1797,6 +1809,7 @@ type AnalyzerHandlers = {
 };
 
 function AnalyzerSubHeader({ title, hint }: { title: string; hint?: string }) {
+  const C = usePalette();
   return (
     <View style={{ marginBottom: 8 }}>
       <Text style={{
@@ -1813,6 +1826,7 @@ function AnalyzerSubHeader({ title, hint }: { title: string; hint?: string }) {
 }
 
 function AnalyzerHint({ text }: { text: string }) {
+  const C = usePalette();
   return (
     <Text style={{
       fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10,
@@ -1863,6 +1877,7 @@ function AnalyzerSection({
   handlers: AnalyzerHandlers;
   onRetryCfg: () => void;
 }) {
+  const C = usePalette();
   // Only micKick has a per-signal analyzer section now. The crossover
   // edges and envelope/gate live in the engine as a SINGLE GLOBAL FFT
   // instance — rendering them inside each mic band's editor was
@@ -1986,6 +2001,7 @@ function SharedMicAnalyzerSection({
   handlers: AnalyzerHandlers;
   onRetryCfg: () => void;
 }) {
+  const C = usePalette();
   if (!cfg) {
     return (
       <View style={{
@@ -2088,6 +2104,9 @@ export function AudioChainsCard({
   onCommitAudioConfigField: (group: 'bands' | 'kick', field: string, value: number) => void;
   onRetryAudioConfig: () => void;
 }) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const CARD = useMemo(() => makeCard(globalStyles), [globalStyles]);
   const [chains, setChains] = useState<AudioChainsMap | null>(null);
   const [catalog, setCatalog] = useState<AudioChainCatalog | null>(_catalogCache);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(_catalogCache == null);

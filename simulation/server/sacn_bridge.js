@@ -104,13 +104,21 @@ try { WebSocketServer = require('ws').Server; } catch (e) {
 }
 
 // ── Build Outward Network Map (Option B) ───────────────────────────────
-const outgoingSenders = new Map(); // universe -> Map<ip, Sender>
+// `outgoingSenders` is universe -> Map<ip, entry>. Each entry wraps the
+// underlying sacn Sender along with per-target dedup state so we don't spam
+// `[sACN Bridge] Relay Error: send EHOSTDOWN <ip>:5568` once per inbound
+// frame (≈30+/s) when a controller is offline. Same pattern as
+// sacn_output_bridge.js — log on first occurrence and on transition, then
+// suppress identical errors and emit a single heartbeat per
+// RELAY_ERROR_LOG_INTERVAL_MS until the target recovers.
+const outgoingSenders = new Map();
+const RELAY_ERROR_LOG_INTERVAL_MS = 30000;
 
 function loadRoutesForScene(sName) {
   // Clear old
   for (const uMap of outgoingSenders.values()) {
-    for (const sender of uMap.values()) {
-      try { sender.close(); } catch(e){}
+    for (const entry of uMap.values()) {
+      try { entry.sender.close(); } catch(e){}
     }
   }
   outgoingSenders.clear();
@@ -128,12 +136,20 @@ function loadRoutesForScene(sName) {
              if (!outgoingSenders.has(u)) outgoingSenders.set(u, new Map());
              const uMap = outgoingSenders.get(u);
              if (!uMap.has(ip)) {
-               uMap.set(ip, new Sender({ 
-                 universe: u, 
+               const sender = new Sender({
+                 universe: u,
                  useUnicastDestination: ip,
                  reuseAddr: true,
                  port: SACN_UDP_PORT
-               }));
+               });
+               uMap.set(ip, {
+                 sender,
+                 universe: u,
+                 ip,
+                 lastErrorMsg: null,
+                 lastErrorLoggedAt: 0,
+                 errorsSinceLog: 0,
+               });
                console.log(`[sACN Bridge] Route Created: Universe ${u} -> Unicast ${ip}`);
                routeCount++;
              }
@@ -252,9 +268,40 @@ function routeFrame(universe, priority, payload) {
   // 1. Relay to physical sACN devices directly
   const ipTargets = outgoingSenders.get(universe);
   if (ipTargets) {
-    for (const sender of ipTargets.values()) {
-      sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
-            .catch(err => console.error(`[sACN Bridge] Relay Error: ${err.message}`));
+    for (const entry of ipTargets.values()) {
+      entry.sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
+        .then(() => {
+          // Healthy send. If we were in a failure streak, log recovery once
+          // (with the suppressed-error count) and reset dedup state.
+          if (entry.lastErrorMsg) {
+            const burst = entry.errorsSinceLog;
+            const tail = burst > 0 ? ` (after ${burst} suppressed errors)` : '';
+            console.log(`[sACN Bridge] ✅ Recovered U${entry.universe}→${entry.ip}${tail}`);
+            entry.lastErrorMsg = null;
+            entry.lastErrorLoggedAt = 0;
+            entry.errorsSinceLog = 0;
+          }
+        })
+        .catch(err => {
+          const now = Date.now();
+          const msg = err.message;
+          if (msg !== entry.lastErrorMsg) {
+            const transition = entry.lastErrorMsg
+              ? ` (was: ${entry.lastErrorMsg})`
+              : '';
+            console.error(`[sACN Bridge] ⚠ Relay error U${entry.universe}→${entry.ip}: ${msg}${transition}`);
+            entry.lastErrorMsg = msg;
+            entry.lastErrorLoggedAt = now;
+            entry.errorsSinceLog = 0;
+          } else if (now - entry.lastErrorLoggedAt >= RELAY_ERROR_LOG_INTERVAL_MS) {
+            const suppressed = entry.errorsSinceLog;
+            console.error(`[sACN Bridge] ⚠ Still failing U${entry.universe}→${entry.ip}: ${msg} (${suppressed} suppressed in last ${Math.round((now - entry.lastErrorLoggedAt) / 1000)}s)`);
+            entry.lastErrorLoggedAt = now;
+            entry.errorsSinceLog = 0;
+          } else {
+            entry.errorsSinceLog++;
+          }
+        });
     }
   }
 

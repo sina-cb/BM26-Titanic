@@ -205,7 +205,7 @@ async function loadModel(modelName, bustCache = false) {
   const viewMasksPath = path.join(__dirname, 'models', `${modelName}.viewmasks.js`);
   if (fs.existsSync(viewMasksPath)) {
     try {
-      const vmUrl = 'file://' + viewMasksPath + (bustCache ? `?t=${Date.now()}` : '');
+      const vmUrl = 'file://' + viewMasksPath;
       const vmMod = await import(vmUrl);
       if (Array.isArray(vmMod.viewMasks)) {
         viewMasks = vmMod.viewMasks;

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, PanResponder, Animated } from 'react-native';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
 
 interface Props {
   id: number;
@@ -17,6 +17,8 @@ interface Props {
 }
 
 export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, suffix = '', isColor = false, onChange, onDragStart, onDragEnd }: Props) {
+  const palette = usePalette();
+  const globalStyles = useGlobalStyles();
   const [value, setValue] = useState(initialValue);
 
   // Sync state if backend feeds new loaded boundaries
@@ -92,14 +94,14 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
   return (
     <View style={{ alignItems: 'center', gap: 24, width: 80 }}>
       <View style={{ alignItems: 'center' }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: Colors.light.secondary }}>{label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, color: Colors.light.text }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: palette.secondary }}>{label}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 24, color: palette.text }}>
           {value.toFixed(2)}{suffix}
         </Text>
       </View>
       
       {/* Track Background */}
-      <View style={{ height: trackHeight, width: 32, backgroundColor: Colors.light.surfaceContainerHigh, borderRadius: 16, alignItems: 'center' }}>
+      <View style={{ height: trackHeight, width: 32, backgroundColor: palette.surfaceContainerHigh, borderRadius: 16, alignItems: 'center' }}>
         {/* The Track Canvas */}
         <View style={{ height: trackHeight, width: '100%', alignItems: 'center' }}>
           <Animated.View
@@ -109,7 +111,9 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
               top: 0,
               width: 64,
               height: handleHeight,
-              ...globalStyles.surfaceLowest,
+              backgroundColor: palette.faderKnob,
+              borderWidth: 1,
+              borderColor: palette.ghostBorder,
               borderRadius: 12,
               justifyContent: 'center',
               alignItems: 'center',
@@ -120,7 +124,7 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
             <View style={{ 
                width: isColor ? 48 : 32, 
                height: isColor ? 16 : 4, 
-               backgroundColor: isColor ? `hsl(${Math.round(((value - min) / (max - min)) * 360)}, 100%, 50%)` : Colors.light.primaryFixedDim, 
+               backgroundColor: isColor ? `hsl(${Math.round(((value - min) / (max - min)) * 360)}, 100%, 50%)` : palette.primaryFixedDim, 
                borderRadius: isColor ? 8 : 2 
             }} />
           </Animated.View>

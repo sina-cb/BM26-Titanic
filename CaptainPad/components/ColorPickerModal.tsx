@@ -17,11 +17,9 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView } from 'react-native';
-import { Colors } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { getCachedColorPalettes, updateParamCenter, warmColorPalettesCache } from '@/utils/api';
-
-const C = Colors.light;
 
 // Picker policy: hue-only. Every write pins S=V=1.0. Stage lights
 // should stay punchy; if we ever want stage-dim, do it as a separate
@@ -51,6 +49,7 @@ export function ColorPickerModal({
   initialTab?: Tab;
   onClose: () => void;
 }) {
+  const C = usePalette();
   const [tab, setTab] = useState<Tab>(initialTab);
   const [h1, setH1] = useState(initialH1);
   const [h2, setH2] = useState(initialH2);
@@ -168,6 +167,7 @@ export function ColorPickerModal({
 // ── Sub-components ─────────────────────────────────────────────────────
 
 function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const C = usePalette();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -192,6 +192,7 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
  * the modal — a single tap is the whole interaction.
  */
 function PresetsTab({ presets, onPick }: { presets: ColorPalettePreset[]; onPick: (p: ColorPalettePreset) => void }) {
+  const C = usePalette();
   return (
     <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
       {presets.map((p) => (
@@ -231,6 +232,7 @@ function ManualTab({ h1, h2, setH1, setH2 }: {
   h1: number; h2: number;
   setH1: (v: number) => void; setH2: (v: number) => void;
 }) {
+  const C = usePalette();
   return (
     <View style={{ gap: 16 }}>
       <HueRow label="Colour 1" h={h1} setH={setH1} />
@@ -243,6 +245,7 @@ function ManualTab({ h1, h2, setH1, setH2 }: {
 }
 
 function HueRow({ label, h, setH }: { label: string; h: number; setH: (v: number) => void }) {
+  const C = usePalette();
   return (
     <View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -266,6 +269,7 @@ function HueRow({ label, h, setH }: { label: string; h: number; setH: (v: number
  * need an SVG dependency.
  */
 export function DualSwatch({ h1, h2, size }: { h1: number; h2: number; size: number }) {
+  const C = usePalette();
   const r = size / 2;
   return (
     <View style={{

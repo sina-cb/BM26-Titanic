@@ -24,9 +24,14 @@ export function sliderFilamentDensity(v) { filamentDensity = 2.0 + v * 16.0; }
 export function sliderContrast(v) { contrast = 0.8 + v * 5.5; }
 export function sliderAfterglow(v) { afterglow = v * 0.45; }
 
+// ── Continuity: same fix as patterns 20/23 — per-harmonic time() bases so
+//   each sin/cos angle is time(s)*TAU with no fractional multiplier on a
+//   wrapping phase (would otherwise jump by sin(2π*k+c)−sin(c) per wrap).
 var orbitA = 0.0;
 var orbitB = 0.0;
 var orbitC = 0.0;
+var orbitB13 = 0.0, orbitC02 = 0.0, orbitA08 = 0.0;
+var orbitC16 = 0.0, orbitA03 = 0.0, orbitB19 = 0.0, orbitA14 = 0.0;
 var currentScale = 0.18;
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
@@ -67,6 +72,14 @@ export function beforeRender(delta) {
   orbitA = time(currentScale) * 6.2831853;
   orbitB = time(currentScale * 0.41) * 6.2831853;
   orbitC = time(currentScale * 0.67) * 6.2831853;
+  // Per-harmonic bases for the k-multiplied phases in render3D. Scale s/k.
+  orbitB13 = time(currentScale * 0.41 / 1.3) * 6.2831853;
+  orbitC02 = time(currentScale * 0.67 / 0.2) * 6.2831853;
+  orbitA08 = time(currentScale / 0.8) * 6.2831853;
+  orbitC16 = time(currentScale * 0.67 / 1.6) * 6.2831853;
+  orbitA03 = time(currentScale / 0.3) * 6.2831853;
+  orbitB19 = time(currentScale * 0.41 / 1.9) * 6.2831853;
+  orbitA14 = time(currentScale / 1.4) * 6.2831853;
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -78,11 +91,11 @@ export function render3D(index, x, y, z) {
   ny = max(0.0, min(1.0, ny));
 
   var ax = 0.5 + flockReach * sin(orbitA + sin(orbitB) * 0.6) * 0.75;
-  var ay = 0.5 + flockReach * cos(orbitB * 1.3 - orbitC * 0.2) * 0.68;
-  var bx = 0.5 + flockReach * cos(orbitA * 0.8 + 2.2) * 0.86;
-  var by = 0.5 + flockReach * sin(orbitC * 1.6 + orbitA * 0.3) * 0.6;
-  var cx = 0.5 + flockReach * sin(orbitB * 1.9 - 1.1) * 0.66;
-  var cy = 0.5 + flockReach * cos(orbitA * 1.4 + orbitC) * 0.72;
+  var ay = 0.5 + flockReach * cos(orbitB13 - orbitC02) * 0.68;
+  var bx = 0.5 + flockReach * cos(orbitA08 + 2.2) * 0.86;
+  var by = 0.5 + flockReach * sin(orbitC16 + orbitA03) * 0.6;
+  var cx = 0.5 + flockReach * sin(orbitB19 - 1.1) * 0.66;
+  var cy = 0.5 + flockReach * cos(orbitA14 + orbitC) * 0.72;
 
   var dA = hypot(nx - ax, ny - ay);
   var dB = hypot(nx - bx, ny - by);

@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { Palette } from '@/constants/theme';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions, Alert } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { globalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
+import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { useFocusEffect } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
@@ -21,14 +22,14 @@ import { engineVizEvents } from '@/utils/engineVizEvents';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
+import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 import { MiniFader } from '@/components/ui/MiniFader';
+import { TimerWheel } from '@/components/ui/TimerWheel';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
-  GhostMarker,
+  GhostMarker, prettySliderName,
 } from '@/components/Modulation';
-
-const C = Colors.light;
 
 // HorizontalFader moved to shared ui
 
@@ -38,6 +39,9 @@ const C = Colors.light;
 
 // ── Blend Mode Picker Modal ────────────────────────────────────────────
 const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }: any) => {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
@@ -73,6 +77,9 @@ function MixerLocalParams({ channel, onControlChange }: {
   channel: { id: string; exports?: any[]; playlist?: { name?: string; activeEntryId?: string } | null };
   onControlChange: (channelId: string, controlId: number, value: number) => void;
 }) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const playlistName = channel.playlist?.name ?? null;
   const entryId = channel.playlist?.activeEntryId ?? null;
   const { mappings } = useEntryModulations(playlistName, entryId);
@@ -91,11 +98,19 @@ function MixerLocalParams({ channel, onControlChange }: {
     <View style={{ gap: 4 }}>
       {exps.map((exp: any) => {
         const matched = !!exp.cpcOwned;
-        const niceLabel = exp.name.replace(/_v\d+$/, '').toUpperCase().substring(0, 12);
+        const niceLabel = prettySliderName(exp.name);
         const hasMapping = !matched && !!mappingByTarget[exp.name];
         const live = !matched ? modulationLive[exp.name] : null;
         const base = exp.v0 !== undefined ? exp.v0 : 0.5;
-        const ghost = live && live.modulated !== undefined && live.modulated !== base
+        // Engine must report BOTH a defined base AND modulated, with
+        // both diverging from the operator-set base, before we paint
+        // a ghost. Prevents the "green box at left:0% on silence"
+        // bug (see Modulation.tsx ModulatedSliderImpl for full notes).
+        const ghost = live
+          && live.modulated !== undefined
+          && live.base !== undefined
+          && Math.abs(live.modulated - live.base) >= 0.01
+          && Math.abs(live.modulated - base) >= 0.01
           ? live.modulated : null;
         return (
           <View key={exp.id}>
@@ -132,10 +147,11 @@ function MixerLocalParams({ channel, onControlChange }: {
                   left: 0, right: 0,
                   // MiniFader track starts after the label row (~14 px
                   // total of label + 2 px margin). The track is 16 px
-                  // tall. Position the marker over the track.
+                  // tall, borderRadius 8. Position + size match so the
+                  // green ghost fill aligns to the underlying track.
                   top: 14, height: 16,
                 }} pointerEvents="none">
-                  <GhostMarker ghost={ghost} />
+                  <GhostMarker ghost={ghost} borderRadius={8} />
                 </View>
               ) : null}
             </View>
@@ -158,10 +174,22 @@ function MixerLocalParams({ channel, onControlChange }: {
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
 const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, playlistLibrary, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
-  const [transTime, setTransTime] = useState(String(channel.transitionTime || 1.0));
+  // Transition duration is stored as ms-integers (matching the deck's
+  // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
+  // equality lights up consistently. Engine wire format is seconds
+  // (float), converted at the boundary. Codex P0: if the engine ever
+  // omits transitionTime we want to know — fail loudly rather than
+  // silently substitute 1.0.
+  if (typeof channel.transitionTime !== 'number' || !Number.isFinite(channel.transitionTime)) {
+    throw new Error(`ChannelStrip: channel ${channel.id} missing numeric transitionTime (got ${channel.transitionTime})`);
+  }
+  const [transTimeMs, setTransTimeMs] = useState<number>(Math.round(channel.transitionTime * 1000));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
   // Per-strip refresh nonce. Tapping the ↻ arrow on the channel name row
   // bumps this, which propagates to the PlaylistPanel via the
@@ -428,21 +456,32 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         <View style={styles.transitionBar}>
           <TouchableOpacity
             style={[styles.toggleBtn, styles.transitionBtn]}
-            onPress={() => onTransition && onTransition(channel.id, parseFloat(transTime) || 2.0, transMode, channel.mode)}>
+            onPress={() => onTransition && onTransition(channel.id, transTimeMs / 1000, transMode, channel.mode)}>
             <Text style={[styles.labelCaps, { color: '#FFF' }]}>Transition</Text>
           </TouchableOpacity>
           <View style={[styles.transitionDetails, { flex: 1 }]}>
-            <TouchableOpacity style={[styles.modeDropdown, { flex: 1, height: 32, justifyContent: 'center' }]} onPress={() => setShowTransPicker(true)}>
+            <TouchableOpacity style={[styles.modeDropdown, { height: 32, justifyContent: 'center', minWidth: 88 }]} onPress={() => setShowTransPicker(true)}>
               <Text style={[styles.valueReadout, { color: C.primary, fontSize: 11 }]}>{transMode.replace('trans_', '').toUpperCase()} ▾</Text>
             </TouchableOpacity>
-            <TextInput
-              style={[styles.displayMono, { width: 40, textAlign: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, height: 32, fontSize: 13 }]}
-              value={transTime}
-              onChangeText={setTransTime}
-              onEndEditing={() => onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionTime: parseFloat(transTime) || 2.0 })}
-              keyboardType="numeric"
-            />
-            <Text style={[styles.labelCaps, { width: 10 }]}>s</Text>
+            {/* Touch-only duration picker: vertical wheel of preset
+                durations, modeled after the iPhone alarm/clock time
+                spinner. Selected preset sits in the highlighted center
+                band; rows above/below dim. Snap-to-row with no
+                free-form numeric entry — keyboard never opens.
+                Operator brief 2026-05-27 round 2. */}
+            <View style={{ flex: 1 }}>
+              <TimerWheel
+                presets={TRANSITION_DURATION_PRESETS_MS}
+                value={transTimeMs}
+                onChange={(ms) => {
+                  setTransTimeMs(ms);
+                  if (onTransitionSettingsChange) {
+                    onTransitionSettingsChange(channel.id, { transitionTime: ms / 1000 });
+                  }
+                }}
+                formatter={(ms) => (ms < 1000 ? `${ms}ms` : `${ms % 1000 === 0 ? ms / 1000 : (ms / 1000).toFixed(1)}s`)}
+              />
+            </View>
           </View>
         </View>
       )}
@@ -453,6 +492,9 @@ ChannelStrip.displayName = 'ChannelStrip';
 
 // ── Main Mixer Screen ──────────────────────────────────────────────────
 export default function MixerScreen() {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const [channels, setChannels] = useState<any[]>([]);
@@ -1352,7 +1394,9 @@ export default function MixerScreen() {
 }
 
 // ── Styles (Using Colors.light for consistency with other tabs) ────────
-const styles = StyleSheet.create({
+
+function makeStyles(C: Palette, globalStyles: GlobalStyles) {
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: C.background,
@@ -1671,3 +1715,4 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 });
+}

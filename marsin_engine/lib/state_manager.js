@@ -107,6 +107,14 @@ export class StateManager {
     }
     if (globalEffectsController && globalsState.effects) {
       for (const [effect, state] of Object.entries(globalsState.effects)) {
+        // Bypass-dimmer flags are session-scoped — never restored from
+        // disk. Otherwise the operator's mid-show "bypass dimmer for
+        // this one cue" flag leaks into the next session, leading to
+        // surprise dimmer-rack-ignored fires when the scheduler (or
+        // anyone else) reactivates the effect. The dimmer-rack
+        // BypassCheckbox is the live source of truth; if the operator
+        // wants bypass at boot they tick it again.
+        if (effect.endsWith('BypassDimmer')) continue;
         globalEffectsController.setEffect(effect, state);
       }
     }
@@ -194,6 +202,19 @@ export class StateManager {
 
   saveGlobalsState(globalsState, paramCenter) {
     if (paramCenter) globalsState.params = paramCenter.getCanonicalState();
-    this.save('globals_state.yaml', globalsState);
+    // Strip session-scoped bypass-dimmer flags before write — they
+    // must not survive restarts (see applyGlobalsState for rationale).
+    // We clone the effects map so we don't mutate the live in-memory
+    // state the operator is currently looking at.
+    const out = { ...globalsState };
+    if (out.effects && typeof out.effects === 'object') {
+      const filtered = {};
+      for (const [k, v] of Object.entries(out.effects)) {
+        if (k.endsWith('BypassDimmer')) continue;
+        filtered[k] = v;
+      }
+      out.effects = filtered;
+    }
+    this.save('globals_state.yaml', out);
   }
 }

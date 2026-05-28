@@ -6,11 +6,11 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  device: audio=Microphone (Amazon USB Streaming Mic)
-  deviceLabel: Microphone (Amazon USB Streaming Mic)
-  deviceId: dshow-audio-Microphone (Amazon USB Streaming Mic)
-  inputFormat: dshow
-  platform: win32
+  device: ':0'
+  deviceLabel: My iPhone Microphone
+  deviceId: avfoundation-audio-0
+  inputFormat: avfoundation
+  platform: darwin
 enabled: true
 chains:
   micLow:

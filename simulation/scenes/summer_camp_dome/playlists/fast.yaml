@@ -1,12 +1,10 @@
 schemaVersion: 1
 name: fast
 entries:
-  - id: e_1779867301090_4918
+  - id: e_1779962242732_2348
     pattern: 00_golden_hour_wash
     label: null
-    defaults:
-      sliderLocalSpeed: 0.51
-      sliderNoiseScale: 0.74
+    defaults: {}
     modulations: []
     notes: null
   - id: e_1779867302456_6652
@@ -16,9 +14,27 @@ entries:
       sliderLocalSpeed: 0.81
       sliderBeamWidth: 0.82
       sliderBackgroundGlow: 0.08
-      sliderDirection: 0.87
-    modulations: []
-    notes: null
+      sliderDirection: 0.67
+      sliderAudioBrightness: 0.36
+    modulations:
+      - id: mod_fast_dome_01_micKick_beamWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderBeamWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - -0.2
+        curve: exp
+    notes: >-
+      Audio: micKick scrolls beam width, micLow drives audio_brightness (overall
+      gain).
   - id: e_1779867303967_6983
     pattern: 02_phase_cathedral
     label: null
@@ -27,18 +43,78 @@ entries:
       sliderCount: 0.63
       sliderSharpness: 0.35
       sliderDirection: 0.77
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_02_micLow_count
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderCount
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.25
+        curve: linear
+      - id: mod_fast_dome_02_micKick_sharpness
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSharpness
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow adds rings, micKick sharpens on hit.'
   - id: e_1779867305954_4007
     pattern: 03_dual_axis_crush
     label: null
     defaults:
       sliderLocalSpeed: 0.77
       sliderCount: 0.57
-      sliderBeamWidth: 0.27
+      sliderBeamWidth: 0.21
       sliderDirection: 0.89
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_03_micKick_count
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderCount
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: exp
+      - id: mod_fast_dome_03_micMid_beamWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderBeamWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.25
+        curve: linear
+    notes: 'Audio: micKick crushes more beams, micMid fattens beam.'
   - id: e_1779867308004_9375
     pattern: 04_beat_folded_helix
     label: null
@@ -49,12 +125,12 @@ entries:
       sliderContrast: 0.89
       sliderOverallBrightness: 0.02
     modulations:
-      - id: mod_sliderOverallBrightness_micMid
+      - id: mod_fast_dome_04_micKick_overallBrightness
         type: continuous
         enabled: true
         source:
           scope: cpc
-          key: micMid
+          key: micKick
         target:
           scope: pattern
           parameter: sliderOverallBrightness
@@ -62,9 +138,24 @@ entries:
         polarity: unipolar
         range:
           - 0
+          - 0.45
+        curve: exp
+      - id: mod_fast_dome_04_micLow_twistFreq
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderTwistFreq
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
           - 0.3
         curve: linear
-    notes: null
+    notes: 'Audio: micKick blasts helix brightness from dark, micLow twists.'
   - id: e_1779867309525_57
     pattern: 05_orbital_attractor_field
     label: null
@@ -73,8 +164,38 @@ entries:
       sliderFalloff: 0.26
       sliderFocus: 0.13
       sliderColorVariation: 0.12
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_05_micKick_focus
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFocus
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+      - id: mod_fast_dome_05_micHigh_colorVariation
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderColorVariation
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick snaps focus, micHigh spreads color.'
   - id: e_1779867311147_8515
     pattern: 06_neon_elevator
     label: null
@@ -84,37 +205,77 @@ entries:
       sliderThickness: 0.6
       sliderBloom: 0.11
       sliderElevatorRandomness: 0.74
-    modulations: []
-    notes: null
-  - id: e_1779867313101_9047
-    pattern: 07_shimmer
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.9
-      sliderShimmerSpeedTrim: 0.64
-      sliderDensity: 0.92
-      sliderBreathing: 0.47
-    modulations: []
-    notes: null
-  - id: e_1779867336212_2923
-    pattern: 08_ocean_liner
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.8
-      sliderContrast: 0.92
-      sliderWindowCount: 0.31
-      sliderWindowFocus: 0.47
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_06_micKick_bloom
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderBloom
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: exp
+      - id: mod_fast_dome_06_micMid_steps
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderSteps
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+    notes: 'Audio: micKick blooms on each kick, micMid adds steps.'
   - id: e_1779867338303_9612
     pattern: 09_cyclone
     label: null
     defaults:
       sliderLocalSpeed: 0.78
-      sliderDensity: 0.27
-      sliderParticleSize: 0.27
-    modulations: []
-    notes: null
+      sliderDensity: 0.31
+      sliderParticleSize: 0.2
+    modulations:
+      - id: mod_fast_dome_09_micMid_density
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderDensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_fast_dome_09_micKick_particleSize
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderParticleSize
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micMid grows confetti density, micKick fattens particles.'
   - id: e_1779867340915_6882
     pattern: 10_chasers
     label: null
@@ -122,8 +283,38 @@ entries:
       sliderLocalSpeed: 0.53
       sliderParticleCount: 0.43
       sliderTailLength: 0.24
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_10_stemsDrums_particleCount
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderParticleCount
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_fast_dome_10_stemsBass_tailLength
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderTailLength
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeOut
+    notes: 'Audio: stemsDrums adds chasers, stemsBass extends tails.'
   - id: e_1779867357926_1338
     pattern: 13_sparkle
     label: null
@@ -137,197 +328,408 @@ entries:
       sliderWhiteGlint: 0.86
       sliderAmberGlint: 0.88
       sliderUvGlint: 0.89
-    modulations: []
-    notes: null
-  - id: e_1779867360207_7301
-    pattern: 14_lunar_current
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.66
-      sliderDensity: 0.18
-      sliderWhiteLift: 0.77
-      sliderUvLift: 0.86
-    modulations: []
-    notes: null
-  - id: e_1779867362463_1410
-    pattern: 15_silk_prism_ribbons
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.68
-      sliderRibbonCount: 0.44
-      sliderSoftness: 0.75
-    modulations: []
-    notes: null
-  - id: e_1779867365062_3625
-    pattern: 16_ghost_tide_uv
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.52
-      sliderTideWidth: 0.75
-      sliderWhiteLevel: 0.88
-      sliderUvLevel: 0.86
-    modulations: []
-    notes: null
-  - id: e_1779867369410_1613
-    pattern: 17_rolling_color_dunes
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.8
-      sliderDuneScale: 0.75
-      sliderDuneContrast: 0.3
-      sliderOrbitDrift: 0.46
-      sliderBlackoutDepth: 0.19
-      sliderStageSurf: 0.55
-      sliderAmberWarmth: 0.61
-    modulations: []
-    notes: null
-  - id: e_1779867372871_2455
-    pattern: 18_deep_space_lattice
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867377200_4554
-    pattern: 19_swaying_lattice_ballet
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867380419_6713
-    pattern: 20_parametric_sway_field
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867383836_3730
-    pattern: 21_pelagic_manta_rays
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867387493_6968
-    pattern: 22_abyssal_sway_garden
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_13_micHigh_sparkleIntensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderSparkleIntensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_fast_dome_13_micKick_sparkleSize
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSparkleSize
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micHigh brightens sparkle, micKick swells sparkle size.'
   - id: e_1779867390826_4471
     pattern: 23_prismatic_strange_attractors
     label: null
     defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_23_micLow_orbitReach
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderOrbitReach
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_fast_dome_23_micKick_whiteCore
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderWhiteCore
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow extends orbit reach, micKick punches white core.'
   - id: e_1779867394210_1923
     pattern: 24_chromatic_murmuration
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867396439_9386
-    pattern: 25_heartbeat
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_24_stemsBass_flockReach
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderFlockReach
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.3
+        curve: linear
+      - id: mod_fast_dome_24_stemsDrums_flockFocus
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderFlockFocus
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: exp
+    notes: 'Audio: stemsBass widens flock, stemsDrums tightens focus.'
   - id: e_1779867399687_641
     pattern: 40_ghost_ship_reveal
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867404712_7908
-    pattern: 41_ghost_aurora
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_40_micLow_revealWidth
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderRevealWidth
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.25
+        curve: easeOut
+      - id: mod_fast_dome_40_micKick_lanternGlow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderLanternGlow
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow widens beam reveal, micKick flashes lantern glow.'
   - id: e_1779867408401_8422
     pattern: 42_boiler_glow
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867412545_1079
-    pattern: 43_sea_floor_shadow
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_42_micLow_boilerHeat
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBoilerHeat
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_fast_dome_42_micKick_steamFlash
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSteamFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+    notes: 'Audio: micLow fires boiler heat, micKick flashes steam release.'
   - id: e_1779867419969_1957
     pattern: 44_apex_gyro_vortex
     label: null
     defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_44_micLow_vortexSpeed
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderVortexSpeed
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: easeOut
+      - id: mod_fast_dome_44_micKick_sweepImpact
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderSweepImpact
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.45
+        curve: exp
+    notes: 'Audio: micLow spins vortex faster, micKick punches sweep impact.'
   - id: e_1779867423028_7906
     pattern: 45_engine_room_clockwork
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867426024_2624
-    pattern: 46_dome_lockdown
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867430529_4189
-    pattern: 47_apex_perimeter_ping
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867434509_1850
-    pattern: 48_titanic_sos_beacon
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867442543_1239
-    pattern: 49_boiler_pressure_release
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_45_micLow_pistonStroke
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderPistonStroke
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_fast_dome_45_micKick_tickDecay
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderTickDecay
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow thumps pistons, micKick punches tick decay.'
   - id: e_1779867447664_7848
     pattern: 50_iceberg_fracture
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867451689_6897
-    pattern: 51_abyssal_searchlight
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    modulations:
+      - id: mod_fast_dome_50_micKick_fractureDensity
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderFractureDensity
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+      - id: mod_fast_dome_50_micHigh_branchSpread
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderBranchSpread
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick cracks more fractures, micHigh spreads branches.'
   - id: e_1779867456512_8275
     pattern: 52_iceberg_shear_line
     label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867460234_1458
-    pattern: 53_shadow_eclipse
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    defaults:
+      sliderLocalSpeed: 0.74
+      sliderShearAngle: 0.24
+      sliderShearWidth: 0.27
+      sliderAdvance: 0.49
+      sliderSubmergeDepth: 0
+      sliderWarmthRetreat: 0
+      sliderTriangleBlade: 0
+    modulations:
+      - id: mod_fast_dome_52_micLow_advance
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAdvance
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: linear
+      - id: mod_fast_dome_52_micKick_triangleBlade
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderTriangleBlade
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: exp
+    notes: 'Audio: micLow advances blade, micKick flashes apex blade.'
   - id: e_1779867465305_8292
     pattern: 54_boiler_fire_overdrive
     label: null
     defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867470396_6889
-    pattern: 55_stardust_dome
+    modulations:
+      - id: mod_fast_dome_54_stemsBass_flameHeight
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsBass
+        target:
+          scope: pattern
+          parameter: sliderFlameHeight
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_fast_dome_54_stemsDrums_heatFlash
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: stemsDrums
+        target:
+          scope: pattern
+          parameter: sliderHeatFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+    notes: 'Audio: stemsBass pumps flame height, stemsDrums flashes heat.'
+  - id: e_1779963534030_3955
+    pattern: 65_dome_kick_shockwave
     label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779867476112_9697
-    pattern: 56_stage_mirror_axis
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
+    defaults:
+      sliderLocalSpeed: 0.71
+      sliderShockSpeed: 0.16
+      sliderRingWidth: 0.43
+      sliderImpact: 0.72
+      sliderEchoes: 0.28
+      sliderVoidDepth: 0.87
+    modulations:
+      - id: mod_dome_fast_65_micKick_kick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderAudioKick
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: exp
+      - id: mod_dome_fast_65_micLow_bass
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAudioBass
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: 'Audio: micKick->kick, micLow->bass'

@@ -16,7 +16,7 @@ server:
 playlist:
   active: false
   delay_s: '1'
-  shuffle: true
+  shuffle: false
 web_client:
   enabled: false
   port: 6967

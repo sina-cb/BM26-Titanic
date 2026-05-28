@@ -27,9 +27,15 @@ export function sliderWhiteCore(v) { whiteCore = v; }
 export function sliderUvGhost(v) { uvGhost = v; }
 export function sliderColorSpread(v) { colorSpread = 0.2 + v * 1.4; }
 
+// ── Continuity: each attractor harmonic needs its own time() base so the
+//   wave/sin argument is time(s)*TAU with NO fractional multiplier on the
+//   wrapping phase. Without this, sin(phaseA*1.37 + ...) jumps every period
+//   by sin(2π*1.37+c)→sin(c). See pattern 20 for the same fix.
 var phaseA = 0.0;
 var phaseB = 0.0;
 var phaseC = 0.0;
+var phaseA137 = 0.0, phaseB171 = 0.0, phaseA063 = 0.0;
+var phaseC193 = 0.0, phaseA03 = 0.0, phaseB07 = 0.0;
 var currentScale = 0.16;
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
@@ -70,6 +76,15 @@ export function beforeRender(delta) {
   phaseA = time(currentScale) * 6.2831853;
   phaseB = time(currentScale * 0.47) * 6.2831853;
   phaseC = time(currentScale * 0.29) * 6.2831853;
+  // Per-harmonic time() bases: scale s/k gives a k× rate phase that wraps
+  // cleanly. Old code did phaseA*1.37 etc. → fractional-multiple-of-2π jumps
+  // at every wrap, visible as periodic flicker on the attractor positions.
+  phaseA137 = time(currentScale / 1.37) * 6.2831853;
+  phaseB171 = time(currentScale * 0.47 / 1.71) * 6.2831853;
+  phaseA063 = time(currentScale / 0.63) * 6.2831853;
+  phaseC193 = time(currentScale * 0.29 / 1.93) * 6.2831853;
+  phaseA03  = time(currentScale / 0.3) * 6.2831853;
+  phaseB07  = time(currentScale * 0.47 / 0.7) * 6.2831853;
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -83,11 +98,11 @@ export function render3D(index, x, y, z) {
   nz = max(0.0, min(1.0, nz));
 
   var ax = 0.5 + orbitReach * sin(phaseA + sin(phaseB) * 0.8) * 0.9;
-  var ay = 0.5 + orbitReach * sin(phaseA * 1.37 + phaseC) * 0.68;
-  var bx = 0.5 + orbitReach * sin(phaseB * 1.71 - 1.4) * 0.8;
-  var by = 0.5 + orbitReach * cos(phaseA * 0.63 + phaseB) * 0.62;
-  var cx = 0.5 + orbitReach * cos(phaseC * 1.93 + phaseA * 0.3) * 0.74;
-  var cy = 0.5 + orbitReach * sin(phaseC - phaseB * 0.7) * 0.7;
+  var ay = 0.5 + orbitReach * sin(phaseA137 + phaseC) * 0.68;
+  var bx = 0.5 + orbitReach * sin(phaseB171 - 1.4) * 0.8;
+  var by = 0.5 + orbitReach * cos(phaseA063 + phaseB) * 0.62;
+  var cx = 0.5 + orbitReach * cos(phaseC193 + phaseA03) * 0.74;
+  var cy = 0.5 + orbitReach * sin(phaseC - phaseB07) * 0.7;
 
   var dA = hypot(nx - ax, ny - ay);
   var dB = hypot(nx - bx, ny - by);

@@ -18,11 +18,17 @@ export function sliderLineSoftness(v) { lineSoftness = 1.0 + v * 5.0; }
 
 var phaseA = 0.0;
 var phaseB = 0.0;
+var phaseAd = 0.0;
 
 export function beforeRender(delta) {
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
   phaseA = time(0.028 / localMultiplier);
   phaseB = time(0.011 / localMultiplier);
+  // Continuity: the diagonal wave uses phaseA * 0.7 — multiplying a wrapping
+  // time() by a non-integer makes the wave argument jump by 0.7 mod 1 every
+  // period. Drive the 0.7× phase from its own time() base instead (smaller
+  // scale = faster, so 0.028/0.7 matches the original visual rate cleanly).
+  phaseAd = time(0.028 / 0.7 / localMultiplier);
 }
 
 export function render3D(index, x, y, z) {
@@ -33,7 +39,7 @@ export function render3D(index, x, y, z) {
 
   var gridX = wave(nx * latticeScale + phaseA);
   var gridY = wave(ny * latticeScale * 0.72 - phaseB);
-  var diagonal = wave((nx - ny) * latticeScale * 0.38 + phaseA * 0.7);
+  var diagonal = wave((nx - ny) * latticeScale * 0.38 + phaseAd);
 
   var lattice = max(gridX * gridY, diagonal * 0.65);
   lattice = pow(lattice, lineSoftness);

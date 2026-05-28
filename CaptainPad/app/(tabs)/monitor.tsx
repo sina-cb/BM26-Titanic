@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { globalStyles } from '@/styles/globalStyles';
-import { Colors } from '@/constants/theme';
+import { useGlobalStyles } from '@/styles/globalStyles';
+import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { getApiBaseAsync, testConnection } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 
 export default function MonitorScreen() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
   const [activePattern, setActivePattern] = useState<string>('...');
   const [sceneName, setSceneName] = useState<string>('Loading...');
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
@@ -60,7 +62,7 @@ export default function MonitorScreen() {
   }, []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+    <View style={{ flex: 1, backgroundColor: C.background }}>
       {/* HUD Overlay */}
       <View style={{
         position: 'absolute',
@@ -73,11 +75,11 @@ export default function MonitorScreen() {
         ...globalStyles.ambientShadow,
         ...globalStyles.ghostBorder
       }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.text, fontSize: 16 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 16 }}>
            SIMULATION MONITOR
         </Text>
-        <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, fontSize: 12, marginTop: 4 }}>Scene: {sceneName}</Text>
-        <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.primaryFixedDim, fontSize: 12, marginTop: 2 }}>Pattern: {activePattern}</Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 12, marginTop: 4 }}>Scene: {sceneName}</Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.primaryFixedDim, fontSize: 12, marginTop: 2 }}>Pattern: {activePattern}</Text>
         <Text style={{ fontFamily: 'Inter_400Regular', color: isConnected ? 'green' : 'red', fontSize: 12, marginTop: 2 }}>
             Engine: {isConnected === null ? 'CHECKING...' : (isConnected ? 'ONLINE' : 'OFFLINE')}
         </Text>
@@ -85,17 +87,17 @@ export default function MonitorScreen() {
 
       {/* Main Content */}
       {isConnected === false ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.light.surface, padding: 48 }}>
-          <IconSymbol name="wifi.slash" size={48} color={Colors.light.error} />
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 24, marginTop: 24 }}>ENGINE OFFLINE</Text>
-          <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, marginTop: 12, textAlign: 'center', lineHeight: 22 }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.surface, padding: 48 }}>
+          <IconSymbol name="wifi.slash" size={48} color={C.error} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 24, marginTop: 24 }}>ENGINE OFFLINE</Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, marginTop: 12, textAlign: 'center', lineHeight: 22 }}>
             Cannot reach MarsinEngine at:{'\n'}
-            <Text style={{ fontFamily: 'Inter_600SemiBold', color: Colors.light.text }}>{apiBase || '(not configured)'}</Text>
+            <Text style={{ fontFamily: 'Inter_600SemiBold', color: C.text }}>{apiBase || '(not configured)'}</Text>
           </Text>
-          <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
             {connectionError}
           </Text>
-          <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.icon, marginTop: 24, textAlign: 'center', fontSize: 13 }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, marginTop: 24, textAlign: 'center', fontSize: 13 }}>
             Check the Config tab for IP settings and iPad Local Network permissions.
           </Text>
         </View>
@@ -103,23 +105,23 @@ export default function MonitorScreen() {
         <WebView 
           ref={webViewRef}
           source={{ uri: streamUrl }} 
-          style={{ flex: 1, backgroundColor: Colors.light.surface }}
+          style={{ flex: 1, backgroundColor: C.surface }}
           javaScriptEnabled={true}
           domStorageEnabled={true}
           mediaPlaybackRequiresUserAction={false}
           allowsInlineMediaPlayback={true}
           renderError={() => (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.light.surface }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.error, fontSize: 24 }}>STREAM OFFLINE</Text>
-              <Text style={{ fontFamily: 'Inter_400Regular', color: Colors.light.secondary, marginTop: 8 }}>
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.surface }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 24 }}>STREAM OFFLINE</Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, marginTop: 8 }}>
                 Ensure WebGL Simulation is running.
               </Text>
             </View>
           )}
         />
       ) : (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.light.surface }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: Colors.light.secondary, fontSize: 18 }}>CONNECTING...</Text>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.surface }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 18 }}>CONNECTING...</Text>
         </View>
       )}
     </View>

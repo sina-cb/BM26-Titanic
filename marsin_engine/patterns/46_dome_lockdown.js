@@ -1,44 +1,39 @@
 /*
-  dome_door_spin
-  Door-opening reveal for Summer Camp Dome.
+  46_dome_lockdown.js
+  Security-lockdown reveal: red/amber rotating beacons on each edge (1-1-1
+  cascade) sweep the dome while bars run security-strobe chases at <=3 Hz.
+  TrianglePars flash red as alarm indicators in a 1-1-1 offset cascade.
+  Blackout phase is brief, deliberate punctuation (<=25% of cycle, slider).
 
-  Motion:
-  - Starts mostly closed / dark.
-  - A circular door opens from the front.
-  - The whole pattern slowly spins after opening.
-  - spinDirection controls direction:
-      0.0 = reverse
-      0.5 = mostly still
-      1.0 = forward
+  E2 par visibility push: each par now holds a per-par amber simmer between
+  flashes so the alarm indicators are always glowing, with an undampened
+  brightness path that lets ON-flashes punch (floor ≥ 0.20, peak ≥ 0.80).
 */
 
 export var localSpeed = 0.5;
-export var tierDelay = 0.36;
-export var doorWidth = 0.42;
-export var openImpact = 0.55;
-export var holdBlackout = 0.35;
-export var edgeUv = 0.34;
-export var triangleLead = 0.68;
-
-export var spinSpeed = 0.42;
+export var beaconWidth = 0.45;
+export var beaconPunch = 0.78;
+export var strobeRate = 0.45;       // mapped to <= 3 Hz on bars
+export var alarmCadence = 0.55;     // par flash cadence (Hz mapped)
 export var spinDirection = 1.0;
-export var doorOpenSoftness = 0.46;
+export var holdBlackout = 0.15;     // 0..0.25 of cycle blacked out
+export var amberMix = 0.45;
+export var blackoutDepth = 0.30;    // never lets the rig fully die
 
-export var cp1H = 0.60, cp1S = 0.88, cp1V = 0.46;
-export var cp2H = 0.03, cp2S = 0.94, cp2V = 0.38;
+export var cp1H = 0.00, cp1S = 0.96, cp1V = 0.85;   // red
+export var cp2H = 0.08, cp2S = 0.92, cp2V = 0.80;   // amber/orange
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderTierDelay(v) { tierDelay = v; }
-export function sliderDoorWidth(v) { doorWidth = v; }
-export function sliderOpenImpact(v) { openImpact = v; }
-export function sliderHoldBlackout(v) { holdBlackout = v; }
-export function sliderEdgeUv(v) { edgeUv = v; }
-export function sliderTriangleLead(v) { triangleLead = v; }
-export function sliderSpinSpeed(v) { spinSpeed = v; }
+export function sliderBeaconWidth(v) { beaconWidth = v; }
+export function sliderBeaconPunch(v) { beaconPunch = v; }
+export function sliderStrobeRate(v) { strobeRate = v; }
+export function sliderAlarmCadence(v) { alarmCadence = v; }
 export function sliderSpinDirection(v) { spinDirection = v; }
-export function sliderDoorOpenSoftness(v) { doorOpenSoftness = v; }
+export function sliderHoldBlackout(v) { holdBlackout = v; }
+export function sliderAmberMix(v) { amberMix = v; }
+export function sliderBlackoutDepth(v) { blackoutDepth = v; }
 
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
@@ -50,13 +45,12 @@ function _hsv2rgb1() {
   var pv = cp1V * (1 - cp1S);
   var qv = cp1V * (1 - fv * cp1S);
   var tv = cp1V * (1 - (1 - fv) * cp1S);
-
-  if (iv == 0) { pr1 = cp1V; pg1 = tv; pb1 = pv; }
-  else if (iv == 1) { pr1 = qv; pg1 = cp1V; pb1 = pv; }
-  else if (iv == 2) { pr1 = pv; pg1 = cp1V; pb1 = tv; }
-  else if (iv == 3) { pr1 = pv; pg1 = qv; pb1 = cp1V; }
-  else if (iv == 4) { pr1 = tv; pg1 = pv; pb1 = cp1V; }
-  else { pr1 = cp1V; pg1 = pv; pb1 = qv; }
+  if      (iv == 0) { pr1 = cp1V; pg1 = tv;   pb1 = pv;   }
+  else if (iv == 1) { pr1 = qv;   pg1 = cp1V; pb1 = pv;   }
+  else if (iv == 2) { pr1 = pv;   pg1 = cp1V; pb1 = tv;   }
+  else if (iv == 3) { pr1 = pv;   pg1 = qv;   pb1 = cp1V; }
+  else if (iv == 4) { pr1 = tv;   pg1 = pv;   pb1 = cp1V; }
+  else              { pr1 = cp1V; pg1 = pv;   pb1 = qv;   }
 }
 
 function _hsv2rgb2() {
@@ -66,57 +60,37 @@ function _hsv2rgb2() {
   var pv = cp2V * (1 - cp2S);
   var qv = cp2V * (1 - fv * cp2S);
   var tv = cp2V * (1 - (1 - fv) * cp2S);
-
-  if (iv == 0) { pr2 = cp2V; pg2 = tv; pb2 = pv; }
-  else if (iv == 1) { pr2 = qv; pg2 = cp2V; pb2 = pv; }
-  else if (iv == 2) { pr2 = pv; pg2 = cp2V; pb2 = tv; }
-  else if (iv == 3) { pr2 = pv; pg2 = qv; pb2 = cp2V; }
-  else if (iv == 4) { pr2 = tv; pg2 = pv; pb2 = cp2V; }
-  else { pr2 = cp2V; pg2 = pv; pb2 = qv; }
+  if      (iv == 0) { pr2 = cp2V; pg2 = tv;   pb2 = pv;   }
+  else if (iv == 1) { pr2 = qv;   pg2 = cp2V; pb2 = pv;   }
+  else if (iv == 2) { pr2 = pv;   pg2 = cp2V; pb2 = tv;   }
+  else if (iv == 3) { pr2 = pv;   pg2 = qv;   pb2 = cp2V; }
+  else if (iv == 4) { pr2 = tv;   pg2 = pv;   pb2 = cp2V; }
+  else              { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
 }
 
-function clamp01(v) {
-  if (v < 0.0) return 0.0;
-  if (v > 1.0) return 1.0;
-  return v;
-}
+function clamp01(v) { if (v < 0.0) return 0.0; if (v > 1.0) return 1.0; return v; }
+function wrap01(v) { v = v % 1.0; if (v < 0.0) v += 1.0; return v; }
+function circDist(a, b) { var d = abs(a - b); if (d > 0.5) d = 1.0 - d; return d; }
+function softPulse(dist, width) { var xVal = clamp01(1.0 - dist / width); return xVal * xVal * (3.0 - 2.0 * xVal); }
 
-function wrap01(v) {
-  v = v % 1.0;
-  if (v < 0.0) v += 1.0;
-  return v;
-}
-
-function circDist(a, b) {
-  var d = abs(a - b);
-  if (d > 0.5) d = 1.0 - d;
-  return d;
-}
-
-function softPulse(dist, width) {
-  var xVal = clamp01(1.0 - dist / width);
-  return xVal * xVal * (3.0 - 2.0 * xVal);
-}
-
-function ease01(v) {
-  v = clamp01(v);
-  return v * v * (3.0 - 2.0 * v);
-}
-
-var tDoor = 0.0;
-var tSpin = 0.0;
-var tBreath = 0.0;
+var tCycle = 0.0;     // door / blackout-hold cycle
+var tBeacon = 0.0;    // beacon rotation
+var tStrobe = 0.0;    // bar strobe phase (Hz capped)
+var tAlarm = 0.0;     // par alarm phase
 
 export function beforeRender(delta) {
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
   var dt = (delta / 1310.72) * localMult;
+  var dir = spinDirection * 2.0 - 1.0;        // -1..+1
 
-  tDoor = wrap01(tDoor + dt * (0.095 + tierDelay * 0.34));
-
-  var dir = spinDirection * 2.0 - 1.0;
-  tSpin = wrap01(tSpin + dt * dir * (0.035 + spinSpeed * 0.42));
-
-  tBreath = wrap01(tBreath + dt * (0.18 + openImpact * 0.55));
+  tCycle  = wrap01(tCycle  + dt * 0.040);     // slow lockdown breath
+  tBeacon = wrap01(tBeacon + dt * dir * (0.35 + 0.50));
+  // Cap strobe at ~3 Hz. delta is ms, so cap = 3 cycles/sec * dt-in-seconds.
+  // 1 unit of tStrobe per call here scales with (delta/1000) * Hz.
+  var strobeHz = strobeRate * 3.0;            // 0..3 Hz hard cap (Rule 5)
+  tStrobe = wrap01(tStrobe + (delta / 1000.0) * strobeHz);
+  var alarmHz = 0.4 + alarmCadence * 2.0;     // 0.4..2.4 Hz
+  tAlarm = wrap01(tAlarm + (delta / 1000.0) * alarmHz);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -127,153 +101,110 @@ export function render3D(index, x, y, z) {
   var isTrianglePar = sectionId == 2 && y > 2.0;
   var isBar = sectionId == 2 && y <= 2.0;
   var isVintage = sectionId == 3;
-  var isApex = isTriangleEdge || isTrianglePar;
 
-  var theta0 = wrap01((atan2(z, x) / PI2) + 0.5);
+  var theta = wrap01((atan2(z, x) / PI2) + 0.5);
 
-  // Whole-pattern spin.
-  var spinAmount = tSpin;
-  var theta = wrap01(theta0 + spinAmount);
+  // Blackout phase: deliberate, capped to <=25% of the cycle.
+  var holdSpan = 0.05 + clamp01(holdBlackout) * 0.20;   // 5..25% (Rule 4 cap)
+  var inBlackout = (tCycle < holdSpan) ? 1.0 : 0.0;
+  // Soft envelope on entry/exit so we don't snap (Rule 5 safety + look).
+  var blackoutGate = 1.0;
+  if (inBlackout > 0.5) {
+    var distFromEdge = tCycle;
+    var fadeIn = clamp01(distFromEdge / 0.04);
+    var fadeOut = clamp01((holdSpan - distFromEdge) / 0.04);
+    var soft = fadeIn; if (fadeOut < soft) soft = fadeOut;
+    blackoutGate = 1.0 - soft;
+  }
 
-  // Door cycle:
-  // 0.00 - 0.18 blackout / closed
-  // 0.18 - 0.58 door opens
-  // 0.58 - 1.00 open spin
-  var closedHold = 0.10 + holdBlackout * 0.20;
-  var openStart = closedHold;
-  var openEnd = openStart + 0.26 + doorOpenSoftness * 0.22;
-
-  var rawOpen = (tDoor - openStart) / (openEnd - openStart);
-  var doorOpen = ease01(rawOpen);
-
-  // Keep it from snapping black at the loop point.
-  var loopFade = 1.0 - softPulse(circDist(tDoor, 0.0), 0.025 + holdBlackout * 0.035);
-  doorOpen = doorOpen * loopFade;
-
-  var doorCenterA = wrap01(0.25 + spinAmount * 0.35);
-  var doorCenterB = wrap01(0.75 + spinAmount * 0.35);
-
-  // Closed doors are narrow slits; open doors widen into a full reveal.
-  var doorEdgeWidth = 0.018 + doorWidth * 0.12;
-  var doorRevealWidth = 0.040 + doorWidth * 0.38 * doorOpen;
-
-  var doorA = softPulse(circDist(theta, doorCenterA), doorRevealWidth);
-  var doorB = softPulse(circDist(theta, doorCenterB), doorRevealWidth) * 0.78;
-  var doorEdgeA = softPulse(circDist(theta, wrap01(doorCenterA + doorRevealWidth * 0.85)), doorEdgeWidth);
-  var doorEdgeB = softPulse(circDist(theta, wrap01(doorCenterB - doorRevealWidth * 0.85)), doorEdgeWidth);
-
-  var doorField = clamp01(doorA + doorB);
-  var doorEdge = clamp01(doorEdgeA + doorEdgeB);
-
-  // Soft rotating background motion after the door opens.
-  var spiralA = wave(theta * 1.2 + y * 0.055 - tSpin * 1.9);
-  var spiralB = wave(theta * 2.7 - y * 0.035 + tBreath * 0.9);
-  var spinTexture = clamp01(spiralA * 0.68 + spiralB * 0.32);
-
-  var openGlow = doorOpen * (0.28 + spinTexture * 0.72);
-  var stage = 0.0;
-  var white = 0.0;
-  var amber = 0.0;
-  var uv = 0.0;
+  // During blackout, the rig is intentionally suppressed but a faint baseline
+  // amber pulse stays alive (Codex P0: deliberate dim, not "fall back").
+  var stage = 0.0, white = 0.0, amber = 0.0, uv = 0.0;
+  var mixv = 0.0;
 
   if (isTriangleEdge) {
     var edgeId = floor(index / 18.0);
     var edgeT = (index % 18) / 17.0;
+    // 3 counter-rotating beacons, one per edge (Rule 1: 1-1-1 cascade).
+    var edgeSign = (edgeId == 1) ? -1.0 : 1.0;
+    var beaconPhase = wrap01(tBeacon * edgeSign + edgeId / 3.0);
+    var beam = softPulse(abs(edgeT - beaconPhase), 0.025 + beaconWidth * 0.090);
+    // Each edge gets its own rotating "tail" so motion reads clear.
+    var tail = softPulse(abs(edgeT - wrap01(beaconPhase - 0.08 * edgeSign)), 0.060) * 0.45;
 
-    var tierPhase = wrap01(tDoor - edgeId * (0.025 + tierDelay * 0.030));
-    var edgeOpen = ease01((tierPhase - openStart) / (openEnd - openStart));
+    stage = clamp01((beam * (0.65 + beaconPunch * 0.35) + tail * 0.50) * blackoutGate);
+    white = clamp01(beam * beaconPunch * 0.70 * blackoutGate);
+    amber = clamp01(tail * amberMix * 0.55 * blackoutGate);
+    mixv  = clamp01(edgeId / 2.0 + beam * 0.30);
+  } else if (isTrianglePar) {
+    // Alarm cascade: each par flashes on its own offset (1-1-1, Rule 2 active).
+    // E2 push: alarms now hold a persistent red/amber baseline between flashes
+    // so the corner indicators are always visible, with a strong ON peak.
+    var parId = index - 54;
+    var phase = wrap01(tAlarm + parId / 3.0);
+    // Square-ish pulse with soft edges; ON for ~25% of cycle.
+    var on = (phase < 0.25) ? 1.0 : 0.0;
+    var soft = on;
+    if (on > 0.5) {
+      var p = phase / 0.25;
+      // ease-in-out so it's not a hard square (>=3Hz safety since alarmHz<=2.4).
+      soft = 1.0 - softPulse(abs(p - 0.5), 0.5) * 0.3;
+    }
+    // Off-phase amber simmer per par (each par at its own slow phase) so the
+    // alarm indicator is always glowing dimly (Rule B floor ≥ 0.18).
+    var simmer = 0.22 + 0.18 * wave(tCycle * 6.0 + parId * 0.41);
+    soft = soft * blackoutGate;
+    var simmerLit = simmer * blackoutGate;
 
-    var edgeSweep = softPulse(
-      circDist(edgeT, wrap01(edgeOpen + edgeId * 0.14)),
-      0.030 + triangleLead * 0.085
-    );
-
-    var edgeBackSweep = softPulse(
-      circDist(edgeT, wrap01(1.0 - edgeOpen * 0.82 + edgeId * 0.19)),
-      0.022 + doorWidth * 0.050
-    ) * 0.42;
-
-    stage = clamp01(
-      (edgeSweep * 0.72 + edgeBackSweep * 0.34 + doorField * 0.28) *
-      (0.28 + triangleLead * 0.84) *
-      edgeOpen
-    );
-
-    white = clamp01((edgeSweep * 0.42 + doorEdge * 0.34) * openImpact);
-    uv = clamp01((edgeBackSweep * 0.55 + doorEdge * 0.28) * edgeUv);
-  }
-
-  else if (isBar) {
+    stage = clamp01(simmerLit + soft * (0.55 + beaconPunch * 0.45));
+    white = clamp01(soft * 0.25);              // mostly red-amber, not white
+    amber = clamp01(simmerLit * 0.45 + soft * (0.30 + amberMix * 0.50));
+    mixv  = parId / 2.0;
+  } else if (isBar) {
     var barLocal = index - 57;
     var barIndex = floor(barLocal / 18.0);
     var barT = (barLocal % 18) / 17.0;
 
-    var tier = barIndex / 13.0;
-    var delayedDoor = ease01((tDoor - openStart - tier * (0.030 + tierDelay * 0.045)) / (openEnd - openStart));
+    // Strobe gate (<=3 Hz): square with 50% duty.
+    var strobeOn = (tStrobe < 0.5) ? 1.0 : 0.0;
+    // Chase head running along each bar — different speed than strobe so it
+    // looks like a security-light scan rather than a flat flash.
+    var chaseHead = wrap01(tBeacon * 1.7 + barIndex * 0.077);
+    var chase = softPulse(abs(barT - chaseHead), 0.045 + beaconWidth * 0.060);
+    // Azimuthal beacon hit on bars when one of the rotating beacons sweeps by.
+    var azBeacon0 = softPulse(circDist(theta, wrap01(tBeacon)), 0.05 + beaconWidth * 0.08);
+    var azBeacon1 = softPulse(circDist(theta, wrap01(-tBeacon + 0.333)), 0.05 + beaconWidth * 0.08);
+    var azBeacon2 = softPulse(circDist(theta, wrap01(tBeacon * 0.7 + 0.667)), 0.05 + beaconWidth * 0.08);
+    var azMax = azBeacon0; if (azBeacon1 > azMax) azMax = azBeacon1; if (azBeacon2 > azMax) azMax = azBeacon2;
 
-    var localFlow = wave(barT * (1.1 + doorWidth) - tSpin * 1.3 + barIndex * 0.061);
-    var verticalOpen = softPulse(circDist(barT, delayedDoor), 0.035 + doorWidth * 0.075);
+    // Persistent red baseline so bars never go dark (Rule 3).
+    var baseline = 0.18 + 0.08 * wave(barT * 4.0 + barIndex * 0.13 + tBeacon);
+    var strobeKick = strobeOn * strobeRate * 0.55;
 
-    stage = clamp01(
-      (doorField * (0.46 + localFlow * 0.36) + verticalOpen * 0.42) *
-      delayedDoor *
-      (0.55 + openGlow * 0.65)
-    );
-
-    white = clamp01((doorEdge * 0.22 + verticalOpen * 0.20) * openImpact);
-    uv = clamp01((doorEdge * 0.46 + verticalOpen * 0.28 + doorField * 0.12) * edgeUv);
-  }
-
-  else if (isTrianglePar) {
-    var parBreath = pow(wave(tBreath * 0.82 + theta * 0.9 + index * 0.21), 3.4);
-
-    stage = clamp01(
-      (doorEdge * 0.42 + doorField * 0.24 + parBreath * 0.16) *
-      triangleLead *
-      doorOpen
-    ) * 0.12;
-
-    white = clamp01((doorEdge * 0.55 + parBreath * 0.18) * openImpact);
-    uv = clamp01((doorField * 0.25 + parBreath * 0.16) * edgeUv);
-  }
-
-  else if (isVintage) {
+    stage = clamp01((baseline + chase * 0.70 + azMax * 0.75 + strobeKick) * blackoutGate);
+    white = clamp01((chase * 0.35 + strobeKick * 0.50) * blackoutGate);
+    amber = clamp01((azMax * amberMix * 0.45) * blackoutGate);
+    mixv  = clamp01(barIndex / 13.0 + azMax * 0.40);
+  } else if (isVintage) {
     var vintageLocal = index - 291;
     var fixtureNo = floor(vintageLocal / 6.0);
-    var lampNo = vintageLocal % 6;
-
-    var vintageTheta = wrap01(fixtureNo / 5.0 + lampNo * 0.017 + spinAmount * 0.22);
-    var warmDoor = softPulse(circDist(vintageTheta, doorCenterA), doorRevealWidth * 0.72);
-    var warmDoorB = softPulse(circDist(vintageTheta, doorCenterB), doorRevealWidth * 0.60) * 0.55;
-    var filament = wave(tBreath * 0.42 + fixtureNo * 0.27 + lampNo * 0.071);
-
-    amber = clamp01((warmDoor + warmDoorB) * (0.12 + filament * 0.18) * doorOpen);
-    stage = amber * 0.060;
+    // Soft warm flicker that survives blackout for "emergency lighting" feel.
+    var filament = 0.45 + 0.30 * wave(tCycle * 4.0 + fixtureNo * 0.31);
+    amber = clamp01(filament * (0.30 + amberMix * 0.40));
+    stage = amber * 0.15;
+    mixv = fixtureNo / 4.0;
   }
 
-  var colorMix = clamp01(
-    0.14 +
-    theta * 0.22 +
-    spinTexture * 0.36 +
-    doorField * 0.24
-  );
+  // Floor glow — never let the rig die. Pulled down (but not off) in blackout.
+  var floorGlow = (1.0 - blackoutDepth) * 0.022 * (0.35 + 0.65 * blackoutGate);
+  var brightness = floorGlow + stage * (0.55 + beaconPunch * 0.25);
+  if (isVintage) brightness = floorGlow * 0.40 + stage;
+  // Pars: stronger curve so the alarm flashes punch and the simmer is visible.
+  if (isTrianglePar) brightness = 0.14 * blackoutGate + stage * (0.78 + beaconPunch * 0.22);
 
-  var floorGlow = (1.0 - holdBlackout) * 0.010 * doorOpen;
-  var brightness = floorGlow + stage * (0.24 + doorWidth * 0.30);
+  var r = (pr1 + (pr2 - pr1) * mixv) * brightness;
+  var g = (pg1 + (pg2 - pg1) * mixv) * brightness;
+  var b = (pb1 + (pb2 - pb1) * mixv) * brightness * 0.30;     // red/amber bias
 
-  if (isVintage) brightness = floorGlow * 0.22 + stage;
-  if (isTrianglePar) brightness = floorGlow * 0.16 + stage;
-
-  var r = (pr1 + (pr2 - pr1) * colorMix) * brightness;
-  var g = (pg1 + (pg2 - pg1) * colorMix) * brightness;
-  var b = (pb1 + (pb2 - pb1) * colorMix) * brightness;
-
-  rgbwau(
-    clamp01(r),
-    clamp01(g),
-    clamp01(b),
-    clamp01(white),
-    clamp01(amber),
-    clamp01(uv)
-  );
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(white), clamp01(amber), clamp01(uv));
 }
