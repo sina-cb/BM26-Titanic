@@ -25,6 +25,66 @@ function resolveSceneCamerasPath(sceneName) {
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SAVE_PORT = serverConfig.save_port || 6970;
 
+// ─── Static manifests (single source of truth for the client) ───────────
+// The simulation client (main.js, pattern_editor.js) discovers the scene
+// and pattern lists by fetching these JSON files — same path in dev and
+// production (GitHub Pages). No localhost fetch, no hardcoded fallback
+// (see .agent/00_gol/00_codex.md P0). We regenerate them here after every
+// mutation so the dev experience stays "live" without two client code paths.
+const SCENE_MANIFEST_PATH = path.join(SCENES_ROOT, 'manifest.json');
+const PATTERN_MANIFEST_PATH = path.join(ENGINE_ROOT, 'patterns', 'manifest.json');
+
+function listScenes() {
+  if (!fs.existsSync(SCENES_ROOT)) return [];
+  const scenes = [];
+  for (const entry of fs.readdirSync(SCENES_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const cfgPath = path.join(SCENES_ROOT, entry.name, 'scene_config.yaml');
+    if (fs.existsSync(cfgPath)) scenes.push(entry.name);
+  }
+  return scenes.sort();
+}
+
+function listPatterns() {
+  const patternsDir = path.join(ENGINE_ROOT, 'patterns');
+  if (!fs.existsSync(patternsDir)) return [];
+  const names = fs.readdirSync(patternsDir, { withFileTypes: true })
+    .filter(e => e.isFile() && e.name.endsWith('.js') && !e.name.startsWith('test_') && e.name !== 'test.js')
+    .map(e => e.name.replace(/\.js$/, ''));
+  const numbered = names.filter(n => /^\d/.test(n)).sort((a, b) => {
+    const na = parseInt(a, 10);
+    const nb = parseInt(b, 10);
+    return na - nb || a.localeCompare(b);
+  });
+  const named = names.filter(n => !/^\d/.test(n)).sort();
+  return [...numbered, ...named];
+}
+
+function writeSceneManifest() {
+  try {
+    fs.mkdirSync(SCENES_ROOT, { recursive: true });
+    fs.writeFileSync(SCENE_MANIFEST_PATH, JSON.stringify(listScenes(), null, 2) + '\n');
+    console.log(`[SAVE SERVER] Regenerated ${SCENE_MANIFEST_PATH}`);
+  } catch (err) {
+    console.error(`[SAVE SERVER] Failed to regenerate scene manifest: ${err.message}`);
+  }
+}
+
+function writePatternManifest() {
+  try {
+    fs.mkdirSync(path.join(ENGINE_ROOT, 'patterns'), { recursive: true });
+    fs.writeFileSync(PATTERN_MANIFEST_PATH, JSON.stringify(listPatterns(), null, 2) + '\n');
+    console.log(`[SAVE SERVER] Regenerated ${PATTERN_MANIFEST_PATH}`);
+  } catch (err) {
+    console.error(`[SAVE SERVER] Failed to regenerate pattern manifest: ${err.message}`);
+  }
+}
+
+// Refresh both manifests at startup so a fresh clone has accurate lists
+// even before any save endpoint is hit.
+writeSceneManifest();
+writePatternManifest();
+
 http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -114,8 +174,10 @@ http.createServer((req, res) => {
 
         // Write cleaned scene_config.yaml
         fs.writeFileSync(outPath, yaml.dump(sceneConfig, { lineWidth: -1 }));
-        
+
         console.log(`[SAVE SERVER] ✅ Wrote ${commonPath} and ${outPath}`);
+        // Saving may create a new scene directory; keep the manifest live.
+        writeSceneManifest();
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Write error:`, e);
@@ -172,6 +234,7 @@ http.createServer((req, res) => {
         fs.mkdirSync(path.join(ENGINE_ROOT, 'patterns'), { recursive: true });
         fs.writeFileSync(outPath, code);
         console.log(`[SAVE SERVER] Saved pattern: ${outPath}`);
+        writePatternManifest();
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Pattern save error:`, e);
@@ -191,6 +254,7 @@ http.createServer((req, res) => {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
           console.log(`[SAVE SERVER] Deleted pattern: ${filePath}`);
+          writePatternManifest();
           res.end('Deleted');
         } else {
           res.statusCode = 404;
@@ -203,11 +267,11 @@ http.createServer((req, res) => {
       }
     });
   } else if (req.method === 'GET' && req.url === '/list-patterns') {
+    // The simulation client now reads the static manifest directly, but we
+    // keep this endpoint for ad-hoc tooling. Source of truth is listPatterns().
     try {
-      const patternsDir = path.join(ENGINE_ROOT, 'patterns');
-      const files = fs.existsSync(patternsDir) ? fs.readdirSync(patternsDir).filter(f => f.endsWith('.js')).map(f => f.replace(/\.js$/, '')) : [];
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify(files));
+      res.end(JSON.stringify(listPatterns()));
     } catch (e) {
       res.statusCode = 500;
       res.end('Error');
@@ -240,20 +304,11 @@ http.createServer((req, res) => {
       }
     });
   } else if (req.method === 'GET' && pathname === '/list-scenes') {
+    // The simulation client now reads the static manifest directly, but we
+    // keep this endpoint for ad-hoc tooling. Source of truth is listScenes().
     try {
-      const scenes = [];
-      if (fs.existsSync(SCENES_ROOT)) {
-        for (const entry of fs.readdirSync(SCENES_ROOT, { withFileTypes: true })) {
-          if (entry.isDirectory()) {
-            const cfgPath = path.join(SCENES_ROOT, entry.name, 'scene_config.yaml');
-            if (fs.existsSync(cfgPath)) {
-              scenes.push(entry.name);
-            }
-          }
-        }
-      }
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify(scenes));
+      res.end(JSON.stringify(listScenes()));
     } catch (e) {
       res.statusCode = 500;
       res.end('Error');

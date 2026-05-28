@@ -431,9 +431,15 @@ function setupSceneIndicator() {
   // Add the active scene implicitly first to avoid empty dropdown while loading
   select.innerHTML = `<option value="${active}" selected>${active}</option>`;
 
-  // Fetch true list
-  fetch('http://localhost:6970/list-scenes')
-    .then(r => r.json())
+  // Single source of truth: the static manifest committed alongside the scenes.
+  // Same path in dev and prod (no localhost fallback) — see .agent/00_gol/00_codex.md P0.
+  // The dev save-server regenerates this file after any mutation, so it stays live.
+  const manifestUrl = './scenes/manifest.json';
+  fetch(manifestUrl)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
     .then(scenes => {
       let html = '';
       scenes.forEach(s => {
@@ -442,7 +448,7 @@ function setupSceneIndicator() {
       });
       select.innerHTML = html;
     })
-    .catch(err => console.warn('[Scene] Failed to load scenes list:', err));
+    .catch(err => console.error(`[Scene] Failed to load scenes manifest at ${manifestUrl}:`, err));
 
   select.addEventListener('change', (e) => {
     const val = e.target.value;
