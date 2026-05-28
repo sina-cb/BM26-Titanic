@@ -12,6 +12,8 @@
  *   Total: 519 bytes
  */
 
+import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
+
 const RECONNECT_DELAY_MS = 3000;
 const DEFAULT_PRIORITY = 100;
 
@@ -39,6 +41,13 @@ export class SacnOutputClient {
   /** Enable the output client and connect to the bridge. */
   enable() {
     if (this._enabled) return;
+    // Static host: no bridge, no ws:// from https://. Refuse to enable so the
+    // reconnect loop in _connect() never starts and the toggle UI doesn't
+    // pretend the connection succeeded.
+    if (isStaticHost()) {
+      logStaticHostSkip('sACN OUT enable (port 6972)');
+      return;
+    }
     this._enabled = true;
     console.log('[sACN Out] Enabling — connecting to', this.wsUrl);
     this._connect();
@@ -184,16 +193,29 @@ export function getSacnOutput(wsUrl) {
     _instance = new SacnOutputClient(wsUrl || null);
     window.sacnOutput = _instance; // Expose for console debugging
 
+    // Static host (HTTPS Pages): the sACN bridge is unreachable and a ws://
+    // socket from an https:// page is mixed-content blocked anyway. Leave the
+    // singleton in its disabled, never-connected state so calls to enable()
+    // are no-ops and we don't spam the console.
+    if (isStaticHost()) {
+      logStaticHostSkip('sACN OUT bridge (port 6972)');
+      return _instance;
+    }
+
     if (!wsUrl) {
       const host = window.location.hostname || 'localhost';
-      fetch('/simulation/config.yaml')
+      // Resolve the WebSocket port from the dev server's config.yaml (served
+      // at the root of simulation/). Use a relative URL so the path works
+      // regardless of where the page is mounted; absolute "/simulation/..."
+      // breaks under a non-root base path.
+      fetch('config.yaml')
         .then((r) => r.text())
         .then((txt) => {
           const match = txt.match(/sacn_output_port:\s*(\d+)/);
           const port = match ? match[1] : '6972';
           _instance.wsUrl = `ws://${host}:${port}`;
 
-          const el = document.querySelector('.sacn-title:contains("OUT")') || 
+          const el = document.querySelector('.sacn-title:contains("OUT")') ||
                      [...document.querySelectorAll('.sacn-title')].find(e => e.innerText.includes('OUT'));
           if (el) el.innerText = `📡 sACN OUT Monitor (${port})`;
 

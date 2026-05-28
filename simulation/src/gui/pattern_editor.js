@@ -9,6 +9,7 @@ import {
 } from "../core/state.js";
 import { MarsinEngine } from "../core/marsin_engine.js";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
 const patternEngine = new MarsinEngine();
@@ -195,6 +196,10 @@ function styleAsHueSlider(controller) {
 
 // Post global parameter updates to the engine API
 function postGlobal(key, value) {
+  if (isStaticHost()) {
+    logStaticHostSkip('engine /param-center POST (port 6968)');
+    return;
+  }
   fetch(`http://${window.location.hostname}:6968/param-center`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -228,18 +233,22 @@ async function ensureGlobalParamsGui() {
   if (paramGuiInstance) return;
 
   let globalParams = {};
-  try {
-    const res = await fetch(`http://${window.location.hostname}:6968/param-center`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.params) {
-        for (const k in data.params) {
-          globalParams[k] = data.params[k].value;
+  if (isStaticHost()) {
+    logStaticHostSkip('engine /param-center GET (port 6968)');
+  } else {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:6968/param-center`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.params) {
+          for (const k in data.params) {
+            globalParams[k] = data.params[k].value;
+          }
         }
       }
+    } catch (err) {
+      console.warn("[CPC] Engine offline — using default global params");
     }
-  } catch (err) {
-    console.warn("[CPC] Engine offline — using default global params");
   }
   for (const k in CPC_DEFAULTS) {
     if (!(k in globalParams)) globalParams[k] = CPC_DEFAULTS[k];
@@ -430,6 +439,20 @@ export function setupPatternEditor() {
   const presetsEl = document.getElementById('pe-presets');
   if (!panel || !textarea) return;
 
+  // Static host: pattern persistence requires the dev save-server (port 6970),
+  // which is unreachable from a deployed Pages site. Mark the buttons disabled
+  // so users get instant feedback instead of clicking into a console error.
+  const staticHost = isStaticHost();
+  if (staticHost) {
+    [saveBtn, addBtn, delBtn].forEach(btn => {
+      if (!btn) return;
+      btn.disabled = true;
+      btn.style.opacity = '0.4';
+      btn.style.cursor = 'not-allowed';
+      btn.title = 'Read-only deployment — pattern editing requires the local dev server';
+    });
+  }
+
   // Compile button
   compileBtn.addEventListener('click', compileEditorCode);
 
@@ -473,6 +496,10 @@ export function setupPatternEditor() {
 
   // Save: write editor code back to the selected pattern file
   saveBtn.addEventListener('click', async () => {
+    if (staticHost) {
+      logStaticHostSkip('save-pattern (port 6970)');
+      return;
+    }
     const code = textarea.value;
     if (!selectedPattern) {
       const name = prompt('Pattern name (lowercase, e.g. "my_pattern"):');
@@ -501,6 +528,10 @@ export function setupPatternEditor() {
 
   // Add: create a new pattern
   addBtn.addEventListener('click', async () => {
+    if (staticHost) {
+      logStaticHostSkip('save-pattern (port 6970)');
+      return;
+    }
     const name = prompt('New pattern name (lowercase, e.g. "strobe"):');
     if (!name) return;
     const key = name.toLowerCase().replace(/\s+/g, '_');
@@ -525,6 +556,10 @@ export function setupPatternEditor() {
 
   // Delete: remove the selected pattern
   delBtn.addEventListener('click', async () => {
+    if (staticHost) {
+      logStaticHostSkip('delete-pattern (port 6970)');
+      return;
+    }
     if (!selectedPattern) return;
     if (!confirm(`Delete pattern "${selectedPattern}"?`)) return;
     try {

@@ -13,6 +13,8 @@
  *   Byte 3-514: DMX data (512 bytes)
  */
 
+import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
+
 const RECONNECT_DELAY_MS = 3000;
 const SACN_SOURCE_ID = 'sacn_in';
 const SACN_DEFAULT_PRIORITY = 200; // Higher than pixelblaze (100)
@@ -47,6 +49,12 @@ export class SacnInputSource {
    */
   enable() {
     if (this._enabled) return;
+    // Static host: no bridge, no ws:// from https://. Refuse to enable so the
+    // reconnect loop in _connect() never starts.
+    if (isStaticHost()) {
+      logStaticHostSkip('sACN IN enable (port 6971)');
+      return;
+    }
     this._enabled = true;
     console.log('[sACN Input] Enabling — connecting to', this.wsUrl);
     this._connect();
@@ -228,15 +236,23 @@ export function getSacnInput(wsUrl) {
     _instance = new SacnInputSource(wsUrl || null);
     window.sacnInput = _instance; // Expose for console debugging
 
+    if (isStaticHost()) {
+      logStaticHostSkip('sACN IN bridge (port 6971)');
+      return _instance;
+    }
+
     if (!wsUrl) {
       const host = window.location.hostname || 'localhost';
-      fetch('/simulation/config.yaml')
+      // Resolve the WebSocket port from the dev server's config.yaml. Use a
+      // relative URL so the path is correct under a non-root base path; the
+      // previous absolute "/simulation/config.yaml" 404'd on github.io/<repo>/.
+      fetch('config.yaml')
         .then((r) => r.text())
         .then((txt) => {
           const match = txt.match(/sacn_port:\s*(\d+)/);
           const port = match ? match[1] : '6971';
           _instance.wsUrl = `ws://${host}:${port}`;
-          
+
           // Also update the UI header dynamically if exists
           const el = document.querySelector('.sacn-title');
           if (el && el.innerText.includes('sACN IN')) {
@@ -248,7 +264,7 @@ export function getSacnInput(wsUrl) {
           }
         })
         .catch((e) => {
-          console.warn('[sACN Input] Could not fetch server_config.yaml, falling back to 6971');
+          console.warn('[sACN Input] Could not fetch server_config.yaml, using default port 6971');
           _instance.wsUrl = `ws://${host}:6971`;
           if (_instance._enabled && !_instance._connected) _instance._connect();
         });

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
+import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -289,11 +290,20 @@ export function saveModelJS() {
 
   const modelJS = lines.join('\n');
   const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
-  fetch(`http://localhost:6970/save-model${sceneParam}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: modelJS,
-  }).catch(err => console.warn('[PB] Failed to save model:', err));
+
+  // Static host has no save-server (port 6970) — skip both POSTs cleanly.
+  // Build the effects model below so window state is still updated; just
+  // don't try to persist either back to disk over a transport that can't
+  // reach localhost.
+  if (isStaticHost()) {
+    logStaticHostSkip('save-model POSTs (port 6970)');
+  } else {
+    fetch(`http://localhost:6970/save-model${sceneParam}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: modelJS,
+    }).catch(err => console.warn('[PB] Failed to save model:', err));
+  }
 
   // Build and save effects model
   const effectsLines = [
@@ -302,20 +312,22 @@ export function saveModelJS() {
     '',
     'export const specialEffects = [',
   ];
-  
+
   specialEffects.forEach(fx => {
     const patchStr = fx.patch ? `{ universe: ${fx.patch.universe}, addr: ${fx.patch.addr}, footprint: ${fx.patch.footprint} }` : 'null';
     const chStr = fx.channels ? JSON.stringify(fx.channels) : 'null';
     effectsLines.push(`  { id: '${fx.id}', kind: '${fx.kind}', fixtureType: '${fx.fixtureType}', name: '${fx.name}', group: '${fx.group}', patch: ${patchStr}, channels: ${chStr}, controlGroup: '${fx.controlGroup}' },`);
   });
-  
+
   effectsLines.push('];');
   effectsLines.push('');
-  
+
   const effectsJS = effectsLines.join('\n');
-  fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: effectsJS,
-  }).catch(err => console.warn('[PB] Failed to save effects model:', err));
+  if (!isStaticHost()) {
+    fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: effectsJS,
+    }).catch(err => console.warn('[PB] Failed to save effects model:', err));
+  }
 }

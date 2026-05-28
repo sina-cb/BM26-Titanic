@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import yaml from "js-yaml";
 import { camera, controls, cameraPresets, setCameraPresets } from "../core/state.js";
+import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── HUD Frame ──────────────────────────────────────────────────────────
 export function setupHUD() {
@@ -146,6 +147,10 @@ export function animateCamera(viewName) {
 }
 
 export function saveCameraPresets() {
+  if (isStaticHost()) {
+    logStaticHostSkip('save-cameras (port 6970)');
+    return;
+  }
   const yamlStr = yaml.dump({ presets: cameraPresets });
   const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
   fetch(`http://localhost:6970/save-cameras${sceneParam}`, {

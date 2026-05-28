@@ -27,6 +27,7 @@ import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./sr
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
+import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -358,21 +359,37 @@ Promise.all([
 
   await init();
 
-  // Check engine health, fallback to pixelblaze if unavailable
-  fetch(`http://${window.location.hostname}:6968/status`)
-    .then(r => r.json())
-    .catch(async () => {
-      const { params, setLightingMode } = await import("./src/core/state.js");
-      if (params.lightingMode === 'sacn_in') {
-        console.warn("[Sim] Engine offline or mixed-content blocked. Falling back to native Pixelblaze mode.");
-        params.lightingMode = 'pixelblaze';
-        setLightingMode('pixelblaze');
-        if (window.guiInstance) window.guiInstance.controllersRecursive().forEach(c => c.updateDisplay());
-        if (window.onLightingChange) window.onLightingChange();
-      }
-    });
+  // Check engine health and pin lighting mode if the engine is unreachable.
+  // On a static host (HTTPS, no dev stack) the engine API is unreachable by
+  // construction — switch to native Pixelblaze immediately and skip the
+  // mixed-content fetch that would otherwise spam the console.
+  if (isStaticHost()) {
+    logStaticHostSkip('engine status check (port 6968)');
+    const { params, setLightingMode } = await import("./src/core/state.js");
+    if (params.lightingMode === 'sacn_in') {
+      params.lightingMode = 'pixelblaze';
+      setLightingMode('pixelblaze');
+      if (window.guiInstance) window.guiInstance.controllersRecursive().forEach(c => c.updateDisplay());
+      if (window.onLightingChange) window.onLightingChange();
+    }
+  } else {
+    fetch(`http://${window.location.hostname}:6968/status`)
+      .then(r => r.json())
+      .catch(async () => {
+        const { params, setLightingMode } = await import("./src/core/state.js");
+        if (params.lightingMode === 'sacn_in') {
+          console.warn("[Sim] Engine offline. Switching to native Pixelblaze mode.");
+          params.lightingMode = 'pixelblaze';
+          setLightingMode('pixelblaze');
+          if (window.guiInstance) window.guiInstance.controllersRecursive().forEach(c => c.updateDisplay());
+          if (window.onLightingChange) window.onLightingChange();
+        }
+      });
+  }
 
-  // Generate initial model file for Pixelblaze patterns
+  // Generate initial model file for Pixelblaze patterns. On static hosts there
+  // is no save-server to receive the POST, so the call is skipped at the
+  // exporter level — see pixelblaze_model_exporter.js.
   if (window.saveModelJS) window.saveModelJS();
 
   // Restore camera view from saved state

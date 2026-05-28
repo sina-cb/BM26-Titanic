@@ -10,6 +10,7 @@ import {
 } from "./state.js";
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
+import { isStaticHost, logStaticHostSkip } from "./static_host.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
 import { updateLightPool } from "./light_pool.js";
@@ -373,7 +374,12 @@ export function animate() {
     window.triggerSacnBlackout = async () => {
       const btn = document.getElementById('sacn-out-blackout-btn');
       const nextState = !window._sacnBlackoutActivated;
-      
+
+      if (isStaticHost()) {
+        logStaticHostSkip('engine /global-blackout (port 6968)');
+        return;
+      }
+
       try {
         if (btn) btn.style.opacity = '0.5';
         const response = await fetch(`http://${window.location.hostname}:6968/global-blackout`, {

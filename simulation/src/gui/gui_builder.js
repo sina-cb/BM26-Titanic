@@ -28,6 +28,7 @@ import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js
 import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
+import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { Iceberg } from "../fixtures/iceberg.js";
@@ -173,18 +174,23 @@ function setupGUI() {
       .replace(/^config:/m, '\n# ─── Configuration ────────────────────────────────────────────────────────\nconfig:');
 
     const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
-    fetch(`http://localhost:6970/save${sceneParam}`, {
-      method: "POST",
-      body: yamlStr,
-    })
-      .then(() => {
-        console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
-        showSaveToast();
-        if (window.PatchManager) window.PatchManager.notifySacnBridge();
+    if (isStaticHost()) {
+      logStaticHostSkip('save scene config (port 6970)');
+    } else {
+      fetch(`http://localhost:6970/save${sceneParam}`, {
+        method: "POST",
+        body: yamlStr,
       })
-      .catch((err) => console.error("Failed to write config:", err));
+        .then(() => {
+          console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
+          showSaveToast();
+          if (window.PatchManager) window.PatchManager.notifySacnBridge();
+        })
+        .catch((err) => console.error("Failed to write config:", err));
+    }
 
-    // Also export the pixel model for Pixelblaze patterns
+    // Also export the pixel model for Pixelblaze patterns. The exporter has
+    // its own static-host gate around the POST, so calling it is safe.
     saveModelJS();
   }
 
@@ -1596,13 +1602,19 @@ function setupGUI() {
                 }, 200);
               }
 
-              // Call the central Engine API (best-effort, engine may not be running)
-              const host = window.location.hostname;
-              fetch(`http://${host}:6968/global-effect`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ effect: 'fogger', state: !!state })
-              }).catch(() => {}); // silently ignore if engine not running
+              // Call the central Engine API (best-effort, engine may not be running).
+              // On a static host the API is unreachable and the fetch is mixed-content
+              // blocked, so skip it instead of letting the browser log the failure.
+              if (isStaticHost()) {
+                logStaticHostSkip('engine /global-effect (port 6968)');
+              } else {
+                const host = window.location.hostname;
+                fetch(`http://${host}:6968/global-effect`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ effect: 'fogger', state: !!state })
+                }).catch(() => {}); // silently ignore if engine not running
+              }
             };
             const startFog = (e) => { e.preventDefault(); toggleFog(true); };
             const stopFog = () => toggleFog(false);
