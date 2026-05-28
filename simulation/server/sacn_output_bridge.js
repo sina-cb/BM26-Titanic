@@ -40,9 +40,16 @@ try {
 
 const STALE_SENDER_MS = 15000; // Close senders after 15s of no data
 const SOURCE_NAME = 'BM26-Simulation';
+const ERROR_LOG_INTERVAL_MS = 30000; // Re-log a still-failing sender at most this often
 
 // ── Sender Pool ──────────────────────────────────────────────────────────────
-// Key: "universe:ip" → { sender, lastUsed }
+// Key: "universe:ip" → {
+//   sender,
+//   lastUsed,
+//   lastErrorMsg,        // null when healthy, string of last err.message when failing
+//   lastErrorLoggedAt,   // ms timestamp of the most recent log line for this error
+//   errorsSinceLog,      // count of identical errors suppressed since lastErrorLoggedAt
+// }
 const senderPool = new Map();
 
 function getSender(universe, ip) {
@@ -59,12 +66,18 @@ function getSender(universe, ip) {
         priority: 100,
       },
     });
-    entry = { sender, lastUsed: Date.now() };
+    entry = {
+      sender,
+      lastUsed: Date.now(),
+      lastErrorMsg: null,
+      lastErrorLoggedAt: 0,
+      errorsSinceLog: 0,
+    };
     senderPool.set(key, entry);
     console.log(`[Bridge] ✨ New sender: U${universe} → ${ip}`);
   }
   entry.lastUsed = Date.now();
-  return entry.sender;
+  return entry;
 }
 
 // Clean up stale senders periodically
@@ -123,13 +136,47 @@ wss.on('connection', (ws, req) => {
       payload[ch + 1] = dmx[ch];
     }
 
-    const sender = getSender(universe, ip);
-    sender.send({
+    const entry = getSender(universe, ip);
+    entry.sender.send({
       payload,
       sourceName: SOURCE_NAME,
       priority,
+    }).then(() => {
+      // First success after a streak of failures: surface the recovery once
+      // and reset the dedupe state so future failures will log immediately.
+      if (entry.lastErrorMsg) {
+        const burst = entry.errorsSinceLog;
+        const tail = burst > 0 ? ` (after ${burst} suppressed errors)` : '';
+        console.log(`[Bridge] ✅ Recovered U${universe}→${ip}${tail}`);
+        entry.lastErrorMsg = null;
+        entry.lastErrorLoggedAt = 0;
+        entry.errorsSinceLog = 0;
+      }
     }).catch(err => {
-      console.error(`[Bridge] Send error U${universe}→${ip}: ${err.message}`);
+      // Per-(universe,ip,err.message) cooldown so a downed controller doesn't
+      // flood the terminal at sACN frame rate. Real failures still surface,
+      // they just don't repeat 30+ times per second.
+      const now = Date.now();
+      const msg = err.message;
+      if (msg !== entry.lastErrorMsg) {
+        // New error class (or first-ever failure) — log it immediately.
+        const transition = entry.lastErrorMsg
+          ? ` (was: ${entry.lastErrorMsg})`
+          : '';
+        console.error(`[Bridge] ⚠ Send error U${universe}→${ip}: ${msg}${transition}`);
+        entry.lastErrorMsg = msg;
+        entry.lastErrorLoggedAt = now;
+        entry.errorsSinceLog = 0;
+      } else if (now - entry.lastErrorLoggedAt >= ERROR_LOG_INTERVAL_MS) {
+        // Same error class still happening — periodic heartbeat with the
+        // count we suppressed in this window.
+        const suppressed = entry.errorsSinceLog;
+        console.error(`[Bridge] ⚠ Still failing U${universe}→${ip}: ${msg} (${suppressed} suppressed in last ${Math.round((now - entry.lastErrorLoggedAt) / 1000)}s)`);
+        entry.lastErrorLoggedAt = now;
+        entry.errorsSinceLog = 0;
+      } else {
+        entry.errorsSinceLog++;
+      }
     });
 
     frameCount++;
