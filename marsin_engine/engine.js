@@ -132,20 +132,20 @@ function loadPattern(name) {
 }
 
 // ── Model Loader ──────────────────────────────────────────────────────────
-async function loadModel(modelName) {
+async function loadModel(modelName, bustCache = false) {
   const modelPath = path.join(__dirname, 'models', `${modelName}.js`);
   if (!fs.existsSync(modelPath)) {
     throw new Error(`Model not found: ${modelPath}\nRun the simulation and save the model first.`);
   }
   // Dynamic ESM import
-  const modelUrl = 'file://' + modelPath;
+  const modelUrl = 'file://' + modelPath + (bustCache ? `?t=${Date.now()}` : '');
   const mod = await import(modelUrl);
 
   const effectsPath = path.join(__dirname, 'models', `${modelName}.effects.js`);
   let specialEffects = [];
   try {
     if (fs.existsSync(effectsPath)) {
-      const effectsUrl = 'file://' + effectsPath;
+      const effectsUrl = 'file://' + effectsPath + (bustCache ? `?t=${Date.now()}` : '');
       const effectsMod = await import(effectsUrl);
       specialEffects = effectsMod.specialEffects || [];
     }
@@ -205,7 +205,7 @@ async function loadModel(modelName) {
   const viewMasksPath = path.join(__dirname, 'models', `${modelName}.viewmasks.js`);
   if (fs.existsSync(viewMasksPath)) {
     try {
-      const vmUrl = 'file://' + viewMasksPath;
+      const vmUrl = 'file://' + viewMasksPath + (bustCache ? `?t=${Date.now()}` : '');
       const vmMod = await import(vmUrl);
       if (Array.isArray(vmMod.viewMasks)) {
         viewMasks = vmMod.viewMasks;
@@ -890,6 +890,64 @@ async function main() {
   // strobe phase anchors to the right frame).
   engineCore.getFrameIndex = () => loop.frameCount;
   console.log(`  ▶ Rendering "${opts.pattern}" at ${opts.fps} fps → sACN [${universeIds.join(', ')}] (WASM MarsinVM)\n`);
+
+  // 7a. Smart Model Hot Reload
+  let modelReloadTimer = null;
+  const modelsDir = path.join(__dirname, 'models');
+  if (fs.existsSync(modelsDir)) {
+    fs.watch(modelsDir, (eventType, filename) => {
+      if (!filename || (!filename.endsWith(`${opts.modelName}.js`) && !filename.endsWith(`${opts.modelName}.effects.js`) && !filename.endsWith(`${opts.modelName}.viewmasks.js`))) return;
+      if (modelReloadTimer) clearTimeout(modelReloadTimer);
+      modelReloadTimer = setTimeout(async () => {
+        try {
+          const newModel = await loadModel(opts.modelName, true);
+          
+          const oldStr = JSON.stringify({ p: model.pixels, e: model.specialEffects, v: model.viewMasks });
+          const newStr = JSON.stringify({ p: newModel.pixels, e: newModel.specialEffects, v: newModel.viewMasks });
+          if (oldStr === newStr) return; // No meaningful change
+          
+          console.log(`\n  🔄 Model changed on disk. Hot-reloading...`);
+          if (newModel.pixelCount !== model.pixelCount) {
+             console.log(`  ⚠️ Pixel count changed (${model.pixelCount} -> ${newModel.pixelCount}). Hot reload ignored. Please restart the engine.`);
+             return;
+          }
+
+          // Apply new data in place
+          for(let i = 0; i < model.pixelCount; i++) {
+             Object.assign(model.pixels[i], newModel.pixels[i]);
+          }
+          model.specialEffects = newModel.specialEffects;
+          model.viewMasks = newModel.viewMasks;
+
+          wasmHost.setCoords(model.pixels);
+          wasmHost.setPixelMeta(model.pixels.map(px => ({
+            controllerId: px.cId || 0,
+            sectionId: px.sId || 0,
+            fixtureId: px.fId || 0,
+            viewMask: px.vMask || 0
+          })));
+          
+          globalEffectsController.initFromModel(model.specialEffects || model.pixels);
+          
+          const registerUniverse = (patch) => {
+            if (patch && patch.universe) {
+              if (!universeIds.includes(patch.universe)) {
+                universeIds.push(patch.universe);
+                dmxRouter.addUniverse(patch.universe);
+                sacnOut.addUniverse(patch.universe);
+              }
+            }
+          };
+          for (const px of model.pixels) if (px.patch) registerUniverse(px.patch);
+          for (const fx of (model.specialEffects || [])) if (fx.patch) registerUniverse(fx.patch);
+          
+          console.log(`  ✅ Model hot-reloaded seamlessly.`);
+        } catch (err) {
+          console.warn(`  ⚠️ Model hot-reload failed: ${err.message}`);
+        }
+      }, 250);
+    });
+  }
 
   loop.start();
 

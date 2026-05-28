@@ -1,17 +1,33 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 46_dome_lockdown
+  pattern: 08_ocean_liner
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
-  localControls: {}
+  localControls:
+    '23515769':
+      v0: 0.92
+      v1: 0
+      v2: 0
+    '1037917937':
+      v0: 0.8
+      v1: 0
+      v2: 0
+    '3651408529':
+      v0: 0.47
+      v1: 0
+      v2: 0
+    '4193208886':
+      v0: 0.31
+      v1: 0
+      v2: 0
   playlist:
     name: fast
-    activeEntryId: e_1779867426024_2624
-    cursor: 30
+    activeEntryId: e_1779867336212_2923
+    cursor: 8
     autopilot:
       active: false
       delay_s: 30

@@ -1342,7 +1342,7 @@ function setupGUI() {
               const ipInput = document.createElement('input');
               ipInput.type = 'text';
               ipInput.value = config.controllerIp || '';
-              ipInput.placeholder = '10.1.1.102';
+              ipInput.placeholder = '10.1.1.10';
               ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
               ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
               ipRow.appendChild(ipInput);
@@ -1760,7 +1760,7 @@ function setupGUI() {
           const ipInput = document.createElement('input');
           ipInput.type = 'text';
           ipInput.value = config.controllerIp || '';
-          ipInput.placeholder = '10.1.1.102';
+          ipInput.placeholder = '10.1.1.10';
           ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
           ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
           ipRow.appendChild(ipInput);

@@ -1,6 +1,6 @@
 patches:
   Par 1:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 1
     controllerId: 1
@@ -8,7 +8,7 @@ patches:
     fixtureId: 1
     viewMask: 0
   Par 2:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 11
     controllerId: 1
@@ -16,7 +16,7 @@ patches:
     fixtureId: 2
     viewMask: 0
   Par 3:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 21
     controllerId: 1
@@ -24,7 +24,7 @@ patches:
     fixtureId: 3
     viewMask: 0
   Par 4:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 31
     controllerId: 1
@@ -32,7 +32,7 @@ patches:
     fixtureId: 4
     viewMask: 0
   Vintage Left:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 41
     controllerId: 1
@@ -40,7 +40,7 @@ patches:
     fixtureId: 5
     viewMask: 0
   Vintage Right:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 74
     controllerId: 1
@@ -48,7 +48,7 @@ patches:
     fixtureId: 6
     viewMask: 0
   Bar Left:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 107
     controllerId: 1
@@ -56,7 +56,7 @@ patches:
     fixtureId: 7
     viewMask: 0
   Bar Right:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 226
     controllerId: 1
@@ -64,7 +64,7 @@ patches:
     fixtureId: 8
     viewMask: 0
   ChauvetHaze4D 10:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 1
     dmxAddress: 511
     controllerId: 1
@@ -72,7 +72,7 @@ patches:
     fixtureId: 9
     viewMask: 0
   TEFogMachine 10:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 1
     dmxAddress: 512
     controllerId: 1

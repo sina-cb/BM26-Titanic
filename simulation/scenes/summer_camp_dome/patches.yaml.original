@@ -40,7 +40,7 @@ patches:
     fixtureId: 1
     viewMask: 0
   BarLights 1:
-    controllerIp: 10.1.1.102
+    controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 1
     controllerId: 1
