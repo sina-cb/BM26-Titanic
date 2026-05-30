@@ -153,7 +153,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    value: 1, 2, 3, 4, 5, 6, 7, 10
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 10000
@@ -162,7 +162,7 @@ colorWave:
     max: 30000
     step: 1000
   sacn_high_priority:
-    value: 160
+    value: 100
     label: 📡 High Priority Threshold
     min: 100
     max: 200
@@ -176,23 +176,23 @@ colorWave:
 config:
   _section:
     label: 💾 Configuration
-    collapsed: true
+    collapsed: false
   autoSave:
     value: false
     label: Auto-Save on Change
 _camera:
   position:
-    x: 12.1068
-    'y': 7.6825
-    z: -11.557
+    x: 0.8078
+    'y': 34.0069
+    z: -11.1501
   target:
-    x: 8.1252
-    'y': 1.9463
-    z: 5.0606
+    x: 2.2097
+    'y': 13.088
+    z: 7.5243
 _patternEditor:
   x: 0
   'y': 0
   width: 0
   height: 0
-  collapsed: false
+  collapsed: true
   autoRun: true
