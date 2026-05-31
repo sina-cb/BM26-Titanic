@@ -601,62 +601,6 @@ parLights:
       rotY: 0
       rotZ: 0
       traceGenerated: true
-    - group: Line 6
-      name: Line 6 1
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: -3
-      'y': 0.5
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 2
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 3.5
-      'y': 0.6666666666666666
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 3
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 10
-      'y': 0.8333333333333333
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 4
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 16.5
-      'y': 1
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
 ledStrands:
   _section:
     label: 💡 LED Strands
@@ -787,30 +731,6 @@ traces:
     lightAngle: 30
     groupName: WallVintageLightsTop
     fixtureType: VintageLed
-    generated: true
-    controllerIp: ''
-    fixtureRotOffX: 0
-    fixtureRotOffY: 0
-    fixtureRotOffZ: 0
-    locked: false
-  - name: Line 6
-    shape: line
-    startX: -3
-    startY: 0.5
-    startZ: 0
-    endX: 16.5
-    endY: 1
-    endZ: 0
-    spacing: 5
-    aimMode: direction
-    aimX: -2.609716964471062
-    aimY: -0.20344403169297243
-    aimZ: -4.211898175863379
-    lightColor: '#ffaa44'
-    lightIntensity: 10
-    lightAngle: 30
-    groupName: Line 6
-    fixtureType: ShehdsBar
     generated: true
     controllerIp: ''
     fixtureRotOffX: 0

@@ -143,9 +143,9 @@ parLights:
       x: 8.5
       'y': 3
       z: 8.309875232585572
-      rotX: -80.00000000000017
-      rotY: -90.00000000000016
-      rotZ: -3.663216883927333e-14
+      rotX: -80.00000000000014
+      rotY: -90.00000000000007
+      rotZ: -7.326433767854684e-14
     - group: TowerBars
       name: TowerRightBack
       fixtureType: ShehdsBar
@@ -156,9 +156,9 @@ parLights:
       x: 5
       'y': 3
       z: 8.040498854381248
-      rotX: -80.00000000000014
-      rotY: 90.0000000000006
-      rotZ: -4.0295385723200507e-13
+      rotX: -80.00000000000017
+      rotY: 90.00000000000067
+      rotZ: -4.3958602607127995e-13
     - group: TowerVintageLights
       name: TowerFrontRightVintage
       fixtureType: VintageLed
@@ -169,7 +169,7 @@ parLights:
       x: 5.049758203708605
       'y': 3.0678628544504076
       z: 6.669003175692958
-      rotX: -55
+      rotX: -55.000000000000014
       rotY: 41.50527312808761
       rotZ: 5.545127867695251e-15
     - group: TowerVintageLights
@@ -183,7 +183,7 @@ parLights:
       'y': 3.0678628544504076
       z: 6.669003175692958
       rotX: -55.000000000000014
-      rotY: -51.82815281392245
+      rotY: -51.82815281392246
       rotZ: 5.545127867695253e-15
     - group: TowerVintageLights
       name: TowerBackRightVintage
@@ -192,9 +192,9 @@ parLights:
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: 5.070230842503877
-      'y': 3.0678628544504076
-      z: 9.948598948898022
+      x: 5
+      'y': 3
+      z: 10
       rotX: -59.99999999999999
       rotY: 138.7300186117625
       rotZ: 0
@@ -237,62 +237,6 @@ parLights:
       rotX: -0.0
       rotY: 0
       rotZ: 0
-    - group: Line 6
-      name: Line 6 1
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: -3
-      'y': 0.5
-      z: 0
-      rotX: -9.607757082724715
-      rotY: -0.2486888552585848
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 2
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 3.5
-      'y': 0.6666666666666666
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 3
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 10
-      'y': 0.8333333333333333
-      z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
-      rotZ: 1.489700686984738
-      traceGenerated: true
-    - group: Line 6
-      name: Line 6 4
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 16.5
-      'y': 1
-      z: 0
-      rotX: -9.607757082724715
-      rotY: -0.2486888552585848
-      rotZ: 1.489700686984738
-      traceGenerated: true
     - group: WallVintageLights
       name: WallVintageLights 1
       fixtureType: VintageLed
@@ -387,7 +331,7 @@ parLights:
       x: 9
       'y': 3
       z: 21
-      rotX: -39.80557109226519
+      rotX: -39.80557109226518
       rotY: 89.99999999999997
       rotZ: -39.805571092265176
       traceGenerated: true
@@ -403,7 +347,7 @@ parLights:
       z: 23.598076211353316
       rotX: -39.805571092265176
       rotY: 29.999999999999993
-      rotZ: -11.081962544938206
+      rotZ: -11.081962544938204
       traceGenerated: true
     - group: Redwoods1
       name: Redwoods1 3
@@ -416,8 +360,8 @@ parLights:
       'y': 3
       z: 23.598076211353316
       rotX: -39.8055710922652
-      rotY: -29.99999999999998
-      rotZ: 11.081962544938206
+      rotY: -29.999999999999986
+      rotZ: 11.081962544938204
       traceGenerated: true
     - group: Redwoods1
       name: Redwoods1 4
@@ -429,7 +373,7 @@ parLights:
       x: 3
       'y': 3
       z: 21
-      rotX: -39.80557109226519
+      rotX: -39.80557109226518
       rotY: -89.99999999999997
       rotZ: 39.805571092265176
       traceGenerated: true
@@ -681,8 +625,8 @@ parLights:
       x: 16.5
       'y': 1
       z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
+      rotX: -9.607757082724715
+      rotY: -0.2486888552585848
       rotZ: 1.489700686984738
       traceGenerated: true
 ledStrands:

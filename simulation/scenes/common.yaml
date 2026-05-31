@@ -129,7 +129,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -182,17 +182,17 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 0.8078
-    'y': 34.0069
-    z: -11.1501
+    x: 22.6644
+    'y': 17.3768
+    z: 5.5052
   target:
-    x: 2.2097
-    'y': 13.088
-    z: 7.5243
+    x: 9.4022
+    'y': -0.0604
+    z: 2.4564
 _patternEditor:
   x: 0
-  'y': 0
-  width: 0
-  height: 0
+  'y': 42
+  width: 400
+  height: 34
   collapsed: true
   autoRun: true

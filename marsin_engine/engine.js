@@ -180,6 +180,7 @@ async function loadModel(modelName, bustCache = false) {
     'TriangleEdges': 0x01,
     'ParLights': 0x01,
     'TowerBars': 0x01,
+    'DJ Lights': 0x01,
     'TrianglePars': 0x02,
     'TowerVintageLights': 0x02,
     'BarLights': 0x04,

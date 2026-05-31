@@ -10,7 +10,7 @@ patches:
   TowerLeftFront:
     controllerIp: 10.1.1.40
     dmxUniverse: 10
-    dmxAddress: 1
+    dmxAddress: 2
     controllerId: 0
     sectionId: 1
     fixtureId: 3
@@ -60,7 +60,7 @@ patches:
     dmxUniverse: 5
     dmxAddress: 200
     controllerId: 0
-    sectionId: 0
+    sectionId: 7
     fixtureId: 0
     viewMask: 0
   DJLightRight:
@@ -68,40 +68,8 @@ patches:
     dmxUniverse: 5
     dmxAddress: 220
     controllerId: 0
-    sectionId: 0
+    sectionId: 7
     fixtureId: 0
-    viewMask: 0
-  Line 6 1:
-    controllerIp: 10.1.1.17
-    dmxUniverse: 2
-    dmxAddress: 1
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 2001
-    viewMask: 0
-  Line 6 2:
-    controllerIp: 10.1.1.17
-    dmxUniverse: 2
-    dmxAddress: 130
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 2130
-    viewMask: 0
-  Line 6 3:
-    controllerIp: 10.1.1.18
-    dmxUniverse: 3
-    dmxAddress: 130
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 3130
-    viewMask: 0
-  Line 6 4:
-    controllerIp: 10.1.1.18
-    dmxUniverse: 3
-    dmxAddress: 1
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 3001
     viewMask: 0
   WallVintageLights 1:
     controllerIp: 10.1.1.17
