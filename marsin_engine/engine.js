@@ -190,8 +190,6 @@ async function loadModel(modelName, bustCache = false) {
     'LedBarsWall': 0x04,
     'VintageLights': 0x08,
     'Redwoods1': 0x08,
-    'Redwoods2': 0x10,
-    'Redwoods3': 0x20,
   };
 
   for (const px of mod.pixels) {

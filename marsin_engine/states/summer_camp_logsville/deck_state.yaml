@@ -1,37 +1,29 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 01_cylon_sweep
+  pattern: 12_breathing
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
+    '149283354':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '370771973':
+      v0: 0.45
+      v1: 0
+      v2: 0
     '1037917937':
-      v0: 0.81
-      v1: 0
-      v2: 0
-    '1278139614':
-      v0: 0.11
-      v1: 0
-      v2: 0
-    '2347831200':
-      v0: 0.59
-      v1: 0
-      v2: 0
-    '2571730692':
-      v0: 0.35
-      v1: 0
-      v2: 0
-    '3994789032':
-      v0: 0.71
+      v0: 0.7
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_1_01_cylon_sweep
-    cursor: 1
+    activeEntryId: e_default_12_12_breathing
+    cursor: 12
     autopilot:
       active: false
       delay_s: 15

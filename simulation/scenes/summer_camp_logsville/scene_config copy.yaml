@@ -405,7 +405,7 @@ parLights:
       rotY: 149.99999999999997
       rotZ: -106.99052439091474
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 1
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -419,7 +419,7 @@ parLights:
       rotY: 76.574337235283
       rotZ: -35.074777167064106
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 2
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -433,7 +433,7 @@ parLights:
       rotY: 25.116714304678357
       rotZ: -9.074765922377873
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 3
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -447,7 +447,7 @@ parLights:
       rotY: -23.38771846978638
       rotZ: 8.522870346526272
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 4
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -461,7 +461,7 @@ parLights:
       rotY: -76.04357158354665
       rotZ: 35.66309740064611
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 5
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -475,7 +475,7 @@ parLights:
       rotY: -142.37337763842916
       rotZ: 109.9310663244672
       traceGenerated: true
-    - group: Redwoods2
+    - group: Redwoods1
       name: Redwoods2 6
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -489,7 +489,7 @@ parLights:
       rotY: 140.11940926575082
       rotZ: -105.42500229978407
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 1
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -503,7 +503,7 @@ parLights:
       rotY: 89.99999999999997
       rotZ: -44.99999999999999
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 2
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -517,7 +517,7 @@ parLights:
       rotY: 21.05172443537292
       rotZ: -8.14336553121091
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 3
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -531,7 +531,7 @@ parLights:
       rotY: -37.58908946897495
       rotZ: 13.114188560391758
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 4
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -545,7 +545,7 @@ parLights:
       rotY: -89.99999999999999
       rotZ: 35.53767779197438
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 5
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -559,7 +559,7 @@ parLights:
       rotY: -142.41091053102502
       rotZ: 89.56619493142804
       traceGenerated: true
-    - group: Redwoods3
+    - group: Redwoods1
       name: Redwoods3 6
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -679,7 +679,7 @@ traces:
     lightColor: '#ffaa44'
     lightIntensity: 10
     lightAngle: 30
-    groupName: Redwoods2
+    groupName: Redwoods1
     fixtureType: UkingPar
     generated: true
     controllerIp: ''
@@ -705,7 +705,7 @@ traces:
     lightColor: '#ffaa44'
     lightIntensity: 10
     lightAngle: 30
-    groupName: Redwoods3
+    groupName: Redwoods1
     fixtureType: UkingPar
     generated: true
     controllerIp: ''
