@@ -211,7 +211,7 @@ parLights:
       rotX: -60.00000000000005
       rotY: -132.01857479625406
       rotZ: 1.2722218725854084e-14
-    - group: DJ Lights
+    - group: DJLights
       name: DJLightLeft
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -224,7 +224,7 @@ parLights:
       rotX: -0.0
       rotY: 0
       rotZ: 0
-    - group: DJ Lights
+    - group: DJLights
       name: DJLightRight
       fixtureType: UkingPar
       color: '#ffaa44'

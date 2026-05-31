@@ -1,7 +1,7 @@
 blackout: false
 effects: {}
 params:
-  revision: 32
+  revision: 34
   sourceLock: null
   params:
     speed:
@@ -21,20 +21,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.66
+        h: 0.91
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 31
+      lastRevision: 33
     colorPalette2:
       value:
-        h: 0.33
+        h: 0.45
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 32
+      lastRevision: 34
     stemsVocalsGain:
       value: 1
       lastSource: init
@@ -161,11 +161,13 @@ params:
       lastOrigin: init
       lastRevision: 30
 dimmers:
-  '1': 0
-  '2': 0.1339285714285714
+  '1': 0.1026785714285714
+  '2': 0.0982142857142857
   '3': 0.2991071428571429
-  '4': 0.0357142857142857
-  '5': 0.0892857142857143
-  '6': 0.0357142857142857
-  '7': 0.0625
-  '255': 0.008928571428571397
+  '4': 1
+  '5': 0
+  '6': 0
+  '7': 0
+  '8': 0.1919642857142857
+  '9': 1
+  '255': 0.1026785714285714

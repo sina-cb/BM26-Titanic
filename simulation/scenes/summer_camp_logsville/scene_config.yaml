@@ -143,9 +143,9 @@ parLights:
       x: 8.5
       'y': 3
       z: 8.309875232585572
-      rotX: -80.00000000000014
-      rotY: -90.00000000000007
-      rotZ: -7.326433767854684e-14
+      rotX: -80.00000000000017
+      rotY: -90.00000000000016
+      rotZ: -3.663216883927333e-14
     - group: TowerBars
       name: TowerRightBack
       fixtureType: ShehdsBar
@@ -156,9 +156,9 @@ parLights:
       x: 5
       'y': 3
       z: 8.040498854381248
-      rotX: -80.00000000000017
-      rotY: 90.00000000000067
-      rotZ: -4.3958602607127995e-13
+      rotX: -80.00000000000014
+      rotY: 90.0000000000006
+      rotZ: -4.0295385723200765e-13
     - group: TowerVintageLights
       name: TowerFrontRightVintage
       fixtureType: VintageLed
@@ -169,9 +169,9 @@ parLights:
       x: 5.049758203708605
       'y': 3.0678628544504076
       z: 6.669003175692958
-      rotX: -55.000000000000014
-      rotY: 41.50527312808761
-      rotZ: 5.545127867695251e-15
+      rotX: -55.00000000000003
+      rotY: 41.505273128087616
+      rotZ: 5.545127867695253e-15
     - group: TowerVintageLights
       name: TowerFrontLeftVintage
       fixtureType: VintageLed
@@ -247,8 +247,8 @@ parLights:
       x: -5
       'y': 2
       z: 0
-      rotX: 0
-      rotY: 354.28940686250036
+      rotX: -0.0
+      rotY: -5.7105931374996475
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -261,8 +261,8 @@ parLights:
       x: -0.1999999999999993
       'y': 2
       z: 0
-      rotX: 0
-      rotY: 354.28940686250036
+      rotX: -0.0
+      rotY: -5.7105931374996475
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -303,8 +303,8 @@ parLights:
       x: 14.200000000000003
       'y': 2
       z: 0
-      rotX: 0
-      rotY: 354.28940686250036
+      rotX: -0.0
+      rotY: -5.7105931374996475
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -553,7 +553,7 @@ parLights:
       angle: 30
       penumbra: 0.5
       x: 8.099713113318899
-      'y': 5
+      'y': 3
       z: 0
       rotX: -35.72021350847793
       rotY: 0
@@ -567,7 +567,7 @@ parLights:
       angle: 30
       penumbra: 0.5
       x: 16.32906321924115
-      'y': 5
+      'y': 3.5
       z: 0
       rotX: -35.72021350847793
       rotY: 0
@@ -583,8 +583,8 @@ parLights:
       x: -3
       'y': 0.5
       z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
+      rotX: -9.607757082724715
+      rotY: -0.2486888552585848
       rotZ: 1.489700686984738
       traceGenerated: true
     - group: LedBarsWall
@@ -597,8 +597,8 @@ parLights:
       x: 3.5
       'y': 0.6666666666666666
       z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
+      rotX: -9.607757082724715
+      rotY: -0.2486888552585848
       rotZ: 1.489700686984738
       traceGenerated: true
     - group: LedBarsWall
@@ -611,8 +611,8 @@ parLights:
       x: 10
       'y': 0.8333333333333333
       z: 0
-      rotX: -9.607757082724717
-      rotY: -0.24868885525858486
+      rotX: -9.607757082724715
+      rotY: -0.2486888552585848
       rotZ: 1.489700686984738
       traceGenerated: true
     - group: LedBarsWall

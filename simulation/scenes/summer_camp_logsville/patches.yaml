@@ -3,15 +3,15 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 10
     dmxAddress: 130
-    controllerId: 0
+    controllerId: 1
     sectionId: 1
     fixtureId: 1
     viewMask: 0
   TowerLeftFront:
     controllerIp: 10.1.1.40
     dmxUniverse: 10
-    dmxAddress: 2
-    controllerId: 0
+    dmxAddress: 0
+    controllerId: 1
     sectionId: 1
     fixtureId: 3
     viewMask: 0
@@ -19,7 +19,7 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 10
     dmxAddress: 260
-    controllerId: 0
+    controllerId: 1
     sectionId: 1
     fixtureId: 5
     viewMask: 0
@@ -27,7 +27,7 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 100
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 9
     viewMask: 0
@@ -35,7 +35,7 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 50
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 10
     viewMask: 0
@@ -43,7 +43,7 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 150
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 11
     viewMask: 0
@@ -51,7 +51,7 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 1
-    controllerId: 0
+    controllerId: 1
     sectionId: 2
     fixtureId: 12
     viewMask: 0
@@ -59,17 +59,17 @@ patches:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 200
-    controllerId: 0
+    controllerId: 1
     sectionId: 7
-    fixtureId: 0
+    fixtureId: 1
     viewMask: 0
   DJLightRight:
     controllerIp: 10.1.1.40
     dmxUniverse: 5
     dmxAddress: 220
-    controllerId: 0
+    controllerId: 1
     sectionId: 7
-    fixtureId: 0
+    fixtureId: 2
     viewMask: 0
   WallVintageLights 1:
     controllerIp: 10.1.1.17
@@ -83,7 +83,7 @@ patches:
     controllerIp: 10.1.1.17
     dmxUniverse: 2
     dmxAddress: 310
-    controllerId: 0
+    controllerId: 2
     sectionId: 3
     fixtureId: 2310
     viewMask: 0
@@ -91,7 +91,7 @@ patches:
     controllerIp: 10.1.1.17
     dmxUniverse: 2
     dmxAddress: 360
-    controllerId: 0
+    controllerId: 2
     sectionId: 3
     fixtureId: 2360
     viewMask: 0
@@ -99,7 +99,7 @@ patches:
     controllerIp: 10.1.1.18
     dmxUniverse: 3
     dmxAddress: 360
-    controllerId: 0
+    controllerId: 3
     sectionId: 3
     fixtureId: 3360
     viewMask: 0
@@ -107,7 +107,7 @@ patches:
     controllerIp: 10.1.1.18
     dmxUniverse: 3
     dmxAddress: 310
-    controllerId: 0
+    controllerId: 3
     sectionId: 3
     fixtureId: 3310
     viewMask: 0
@@ -115,7 +115,7 @@ patches:
     controllerIp: 10.1.1.18
     dmxUniverse: 3
     dmxAddress: 260
-    controllerId: 0
+    controllerId: 3
     sectionId: 3
     fixtureId: 3260
     viewMask: 0
@@ -123,7 +123,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 80
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6080
     viewMask: 0
@@ -131,7 +131,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 60
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6060
     viewMask: 0
@@ -139,7 +139,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 40
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6040
     viewMask: 0
@@ -147,7 +147,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 20
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6020
     viewMask: 0
@@ -155,7 +155,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 1
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6001
     viewMask: 0
@@ -163,7 +163,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 100
-    controllerId: 0
+    controllerId: 4
     sectionId: 4
     fixtureId: 6100
     viewMask: 0
@@ -171,7 +171,7 @@ patches:
     controllerIp: 10.1.1.55
     dmxUniverse: 7
     dmxAddress: 40
-    controllerId: 0
+    controllerId: 5
     sectionId: 5
     fixtureId: 7040
     viewMask: 0
@@ -179,7 +179,7 @@ patches:
     controllerIp: 10.1.1.55
     dmxUniverse: 7
     dmxAddress: 20
-    controllerId: 0
+    controllerId: 5
     sectionId: 5
     fixtureId: 7020
     viewMask: 0
@@ -187,7 +187,7 @@ patches:
     controllerIp: 10.1.1.55
     dmxUniverse: 7
     dmxAddress: 1
-    controllerId: 0
+    controllerId: 5
     sectionId: 5
     fixtureId: 7001
     viewMask: 0
@@ -195,7 +195,7 @@ patches:
     controllerIp: 10.1.1.55
     dmxUniverse: 7
     dmxAddress: 60
-    controllerId: 0
+    controllerId: 5
     sectionId: 5
     fixtureId: 7060
     viewMask: 0
@@ -203,7 +203,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 200
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6200
     viewMask: 0
@@ -211,7 +211,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 180
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6180
     viewMask: 0
@@ -219,7 +219,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 160
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6160
     viewMask: 0
@@ -227,7 +227,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 160
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6160
     viewMask: 0
@@ -235,7 +235,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 140
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6140
     viewMask: 0
@@ -243,7 +243,7 @@ patches:
     controllerIp: 10.1.1.10
     dmxUniverse: 6
     dmxAddress: 220
-    controllerId: 0
+    controllerId: 4
     sectionId: 6
     fixtureId: 6220
     viewMask: 0
@@ -251,47 +251,47 @@ patches:
     controllerIp: 10.1.1.18
     dmxUniverse: 3
     dmxAddress: 460
-    controllerId: 0
-    sectionId: 0
+    controllerId: 3
+    sectionId: 1
     fixtureId: 3460
     viewMask: 0
   WallVintageLightsTop 2:
     controllerIp: 10.1.1.18
     dmxUniverse: 3
     dmxAddress: 410
-    controllerId: 0
-    sectionId: 0
+    controllerId: 3
+    sectionId: 1
     fixtureId: 3410
     viewMask: 0
   LedBarsWall 1:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    controllerIp: 10.1.1.17
+    dmxUniverse: 2
+    dmxAddress: 1
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 3
     viewMask: 0
   LedBarsWall 2:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    controllerIp: 10.1.1.17
+    dmxUniverse: 2
+    dmxAddress: 130
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 2130
     viewMask: 0
   LedBarsWall 3:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    controllerIp: 10.1.1.18
+    dmxUniverse: 3
+    dmxAddress: 130
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 3130
     viewMask: 0
   LedBarsWall 4:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
+    controllerIp: 10.1.1.18
+    dmxUniverse: 3
+    dmxAddress: 1
     controllerId: 0
-    sectionId: 0
-    fixtureId: 0
+    sectionId: 2
+    fixtureId: 3001
     viewMask: 0
