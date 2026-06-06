@@ -5,19 +5,19 @@ effects:
   vintageWhite: false
   uvBlast: false
 params:
-  revision: 77840
+  revision: 966319
   sourceLock: null
   params:
     speed:
-      value: 0.6700833638509115
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 1
+      value: 0.28
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 965975
     size:
       value: 0.28
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 2
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 115
     rotate:
       value: 0
       lastSource: init
@@ -25,20 +25,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.07
+        h: 0.64
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 77687
+      lastRevision: 498781
     colorPalette2:
       value:
-        h: 0.8
+        h: 0.9
         s: 1
         v: 1
       lastSource: api
       lastOrigin: api
-      lastRevision: 77688
+      lastRevision: 498782
     stemsVocalsGain:
       value: 1
       lastSource: init
@@ -55,12 +55,12 @@ params:
       lastOrigin: init
       lastRevision: 8
     stemsVocals:
-      value: 0.07755997031927109
+      value: 0.0014853003667667508
       lastSource: init
       lastOrigin: init
       lastRevision: 9
     stemsBass:
-      value: 0
+      value: 0.02844400145113468
       lastSource: init
       lastOrigin: init
       lastRevision: 10
@@ -70,12 +70,12 @@ params:
       lastOrigin: init
       lastRevision: 11
     stemsVocalsRaw:
-      value: 0.07755997031927109
+      value: 0.0014853003667667508
       lastSource: init
       lastOrigin: init
       lastRevision: 12
     stemsBassRaw:
-      value: 0
+      value: 0.02844400145113468
       lastSource: init
       lastOrigin: init
       lastRevision: 13
@@ -85,50 +85,50 @@ params:
       lastOrigin: init
       lastRevision: 14
     tempoBpm:
-      value: 140.41000366210938
+      value: 150.13999938964844
       lastSource: init
       lastOrigin: init
       lastRevision: 15
     micLow:
-      value: 0.00031085463640036335
+      value: 1.0053938631066764e-29
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77833
+      lastRevision: 966312
     micMid:
-      value: 0.39554755820967236
+      value: 1.5799903463597627e-114
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77834
+      lastRevision: 966313
     micHigh:
-      value: 0.0267800352197866
+      value: 5.e-324
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77835
+      lastRevision: 966314
     micKick:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77836
+      lastRevision: 966315
     micLowRaw:
-      value: 2.4880796676501337e-9
+      value: 8.350657863959889e-167
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77837
+      lastRevision: 966316
     micMidRaw:
-      value: 0.13912947092039143
+      value: 5.031503150060874e-167
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77838
+      lastRevision: 966317
     micHighRaw:
-      value: 0.026878800020322058
+      value: 5.e-324
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77839
+      lastRevision: 966318
     micKickRaw:
       value: 0
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 77840
+      lastRevision: 966319
     micLowGain:
       value: 1
       lastSource: init
@@ -165,8 +165,8 @@ params:
       lastOrigin: init
       lastRevision: 30
 dimmers:
-  '1': 0.0982142857142857
-  '2': 0.1026785714285714
-  '3': 0.0982142857142857
-  '4': 0.1071428571428571
+  '1': 0.2321428571428571
+  '2': 0.3080357142857143
+  '3': 0.2678571428571429
+  '4': 0.3660714285714286
 controlLock: null

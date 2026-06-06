@@ -121,14 +121,14 @@ parLights:
     label: Show Generators
   fixtures:
     - group: TriangleEdges
-      name: ShehdsBar 21
+      name: ShehdsBar 54
       fixtureType: ShehdsBar
       color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
       x: -0.34992128010745205
-      'y': 2.83722289418119
+      'y': 2.5
       z: 5.16815858009418
       rotX: -0.0
       rotY: 0
@@ -153,7 +153,7 @@ parLights:
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: -0.8262602458616368
+      x: -0.7448054919903544
       'y': 3.535042521895957
       z: 5.190285683104403
       rotX: -0.0
@@ -173,19 +173,6 @@ parLights:
       rotY: 0
       rotZ: 0
     - group: TrianglePars
-      name: UkingPar 24
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 20
-      penumbra: 0.5
-      x: -0.5488360276612336
-      'y': 3.510445308520201
-      z: 6.800656661125617
-      rotX: -59.529289996461
-      rotY: 0
-      rotZ: 0
-    - group: TrianglePars
       name: UkingPar 25
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -198,15 +185,28 @@ parLights:
       rotX: -59.645707765494386
       rotY: 0
       rotZ: 0
-    - group: Fogger
-      name: TEFogMachine 26
-      fixtureType: TEFogMachine
+    - group: TriangleEdges
+      name: ShehdsBar 2
+      fixtureType: ShehdsBar
       color: '#ffaa44'
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: 0
-      'y': 1.5
+      x: -0.3364236028168859
+      'y': 2.949275770276158
+      z: 5.16815858009418
+      rotX: -0.0
+      rotY: 0
+      rotZ: 0
+    - group: Fogger
+      name: ChauvetHaze4D 24
+      fixtureType: ChauvetHaze4D
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 1
+      'y': 1
       z: 6
       rotX: 0
       rotY: 0
@@ -218,11 +218,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 10
+      x: 4.5480679169723315
       'y': 1.5
-      z: 0
-      rotX: -40.60129464500447
-      rotY: -90
+      z: -8.905901314443529
+      rotX: -142.14635354864927
+      rotY: -27.05250355696975
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -232,11 +232,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 8.8545602565321
+      x: 9.513392877409316
       'y': 1.5
-      z: 4.647231720437686
-      rotX: -40.60129464500447
-      rotY: -117.69230769230772
+      z: -3.081453546633095
+      rotX: -142.14635354864927
+      rotY: -72.05250355696982
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -246,11 +246,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 5.680647467311558
+      x: 8.905901314443529
       'y': 1.5
-      z: 8.229838658936565
-      rotX: -40.60129464500447
-      rotY: -145.3846153846154
+      z: 4.548067916972331
+      rotX: -142.14635354864927
+      rotY: -117.05250355696977
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -260,11 +260,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 1.20536680255323
+      x: 3.081453546633095
       'y': 1.5
-      z: 9.92708874098054
-      rotX: -40.60129464500447
-      rotY: -173.0769230769231
+      z: 9.513392877409316
+      rotX: -142.14635354864927
+      rotY: -162.0525035569698
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -274,11 +274,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -3.5460488704253565
+      x: -4.548067916972331
       'y': 1.5
-      z: 9.350162426854148
-      rotX: -40.60129464500447
-      rotY: 159.23076923076923
+      z: 8.905901314443529
+      rotX: -142.14635354864927
+      rotY: 152.94749644303025
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -288,11 +288,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -7.485107481711012
+      x: -9.513392877409318
       'y': 1.5
-      z: 6.631226582407952
-      rotX: -40.60129464500447
-      rotY: 131.53846153846152
+      z: 3.081453546633097
+      rotX: -142.14635354864927
+      rotY: 107.94749644303022
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -302,11 +302,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -9.70941817426052
+      x: -8.905901314443529
       'y': 1.5
-      z: 2.393156642875577
-      rotX: -40.60129464500447
-      rotY: 103.84615384615384
+      z: -4.54806791697233
+      rotX: -142.14635354864927
+      rotY: 62.947496443030246
       rotZ: 0
       traceGenerated: true
     - group: BarLights
@@ -316,81 +316,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -9.709418174260522
+      x: -3.0814535466330972
       'y': 1.5
-      z: -2.3931566428755744
-      rotX: -40.60129464500447
-      rotY: 76.15384615384619
-      rotZ: 0
-      traceGenerated: true
-    - group: BarLights
-      name: BarLights 9
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: -7.48510748171101
-      'y': 1.5
-      z: -6.631226582407953
-      rotX: -40.60129464500447
-      rotY: 48.461538461538474
-      rotZ: 0
-      traceGenerated: true
-    - group: BarLights
-      name: BarLights 10
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: -3.546048870425359
-      'y': 1.5
-      z: -9.350162426854148
-      rotX: -40.60129464500447
-      rotY: 20.769230769230806
-      rotZ: 0
-      traceGenerated: true
-    - group: BarLights
-      name: BarLights 11
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 1.205366802553232
-      'y': 1.5
-      z: -9.92708874098054
-      rotX: -40.60129464500447
-      rotY: -6.923076923076924
-      rotZ: 0
-      traceGenerated: true
-    - group: BarLights
-      name: BarLights 12
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 5.680647467311556
-      'y': 1.5
-      z: -8.229838658936565
-      rotX: -40.60129464500447
-      rotY: -34.61538461538463
-      rotZ: 0
-      traceGenerated: true
-    - group: BarLights
-      name: BarLights 13
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 8.8545602565321
-      'y': 1.5
-      z: -4.647231720437684
-      rotX: -40.60129464500447
-      rotY: -62.30769230769232
+      z: -9.513392877409316
+      rotX: -142.14635354864927
+      rotY: 17.9474964430302
       rotZ: 0
       traceGenerated: true
     - group: VintageLights
@@ -400,11 +330,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 8
+      x: 7.5175409662872665
       'y': 2.5
-      z: 0
+      z: -2.73616114660535
       rotX: -162.6459753637387
-      rotY: -89.99999999999999
+      rotY: -69.99999999999999
       rotZ: 0
       traceGenerated: true
     - group: VintageLights
@@ -414,11 +344,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 2.4721359549995796
+      x: 7.2504622962931995
       'y': 2.5
-      z: 7.608452130361228
+      z: 3.380946093925594
       rotX: -162.6459753637387
-      rotY: -162
+      rotY: -115.00000000000003
       rotZ: 0
       traceGenerated: true
     - group: VintageLights
@@ -428,11 +358,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -6.472135954999579
+      x: 2.7361611466053506
       'y': 2.5
-      z: 4.702282018339786
+      z: 7.5175409662872665
       rotX: -162.6459753637387
-      rotY: 126
+      rotY: -159.99999999999997
       rotZ: 0
       traceGenerated: true
     - group: VintageLights
@@ -442,11 +372,11 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -6.4721359549995805
+      x: -3.380946093925594
       'y': 2.5
-      z: -4.702282018339784
+      z: 7.2504622962931995
       rotX: -162.6459753637387
-      rotY: 54
+      rotY: 155.00000000000003
       rotZ: 0
       traceGenerated: true
     - group: VintageLights
@@ -456,11 +386,53 @@ parLights:
       intensity: 10
       angle: 30
       penumbra: 0.5
-      x: 2.472135954999578
+      x: -7.5175409662872665
       'y': 2.5
-      z: -7.608452130361229
+      z: 2.736161146605351
       rotX: -162.6459753637387
-      rotY: -18
+      rotY: 110.00000000000007
+      rotZ: 0
+      traceGenerated: true
+    - group: VintageLights
+      name: VintageLights 6
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -7.2504622962932
+      'y': 2.5
+      z: -3.3809460939255938
+      rotX: -162.6459753637387
+      rotY: 64.99999999999999
+      rotZ: 0
+      traceGenerated: true
+    - group: VintageLights
+      name: VintageLights 7
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -2.7361611466053515
+      'y': 2.5
+      z: -7.517540966287266
+      rotX: -162.6459753637387
+      rotY: 20
+      rotZ: 0
+      traceGenerated: true
+    - group: VintageLights
+      name: VintageLights 8
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.380946093925593
+      'y': 2.5
+      z: -7.2504622962932
+      rotX: -162.6459753637387
+      rotY: -25.000000000000018
       rotZ: 0
       traceGenerated: true
 ledStrands:
@@ -477,12 +449,12 @@ traces:
     shape: circle
     radius: 10
     arc: 360
-    spacing: 5
+    spacing: 8
     x: 0
     'y': 1.5
     z: 0
     rotX: -0.0
-    rotY: 0
+    rotY: 62.94749644303021
     rotZ: 0
     aimMode: direction_yz_locked
     aimX: 13.5
@@ -503,12 +475,12 @@ traces:
     shape: circle
     radius: 8
     arc: 360
-    spacing: 10
+    spacing: 6
     x: 0
     'y': 2.5
     z: 0
     rotX: -0.0
-    rotY: 0
+    rotY: 20.000000000000007
     rotZ: 0
     aimMode: lookAt_yz_locked
     aimX: 0
