@@ -9,20 +9,17 @@
       content="Interactive 3D lighting simulation for the Burning Man 2026 Titanic Honoraria structure"
     />
     <link rel="stylesheet" href="style.css" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap"
-      rel="stylesheet"
-    />
+    <link href="./vendor/fonts/inter/inter.css" rel="stylesheet" />
 
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.webgpu.min.js",
-          "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.webgpu.min.js",
-          "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.tsl.min.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/",
-          "js-yaml": "https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/+esm",
-          "chroma-js": "https://cdn.jsdelivr.net/npm/chroma-js@3.1.2/+esm"
+          "three": "./vendor/three/build/three.webgpu.min.js",
+          "three/webgpu": "./vendor/three/build/three.webgpu.min.js",
+          "three/tsl": "./vendor/three/build/three.tsl.min.js",
+          "three/addons/": "./vendor/three/examples/jsm/",
+          "js-yaml": "./vendor/js-yaml/js-yaml.mjs",
+          "chroma-js": "./vendor/chroma-js/index.js"
         }
       }
     </script>
