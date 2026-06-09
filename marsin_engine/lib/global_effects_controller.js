@@ -27,7 +27,6 @@ import { strobeEffect } from '../effects/strobe.js';
 import { dropHitEffect } from '../effects/dropHit.js';
 import { colorWashEffect } from '../effects/colorWash.js';
 import { feedbackTrailsEffect } from '../effects/feedbackTrails.js';
-import { djLightsEffect } from '../effects/djLights.js';
 
 export class GlobalEffectsController {
   constructor(config = {}) {
@@ -46,26 +45,6 @@ export class GlobalEffectsController {
     this.foggers = [];
     this.horns = [];
     this.fires = [];
-
-    // DJ Lights: group-targeted color override.
-    this.djLightsConfig = {
-      enabled: false,
-      color: [1.0, 0.41, 0.71, 0.0, 0.0, 0.0], // Hot Pink default
-      brightness: 0.3,
-    };
-    // Load djLights defaults from config.yaml if present.
-    if (config && config.djLights) {
-      const dj = config.djLights;
-      if (Array.isArray(dj.color) && dj.color.length === 6) {
-        this.djLightsConfig.color = dj.color.map(v => Math.max(0, Math.min(1, Number(v) || 0)));
-      }
-      if (typeof dj.brightness === 'number') {
-        this.djLightsConfig.brightness = Math.max(0, Math.min(1, dj.brightness));
-      }
-      if (typeof dj.enabled === 'boolean') {
-        this.djLightsConfig.enabled = dj.enabled;
-      }
-    }
 
     // ── Macro runtime state (transient on boot per §8) ──────────────
     this.frameRate = (config && config.engine && config.engine.fps) || 40;
@@ -357,24 +336,6 @@ export class GlobalEffectsController {
         });
       }
     }
-
-    // HACK: DJ Lights always-on override — runs LAST so no macro
-    // (color wash, strobe, trails, drop hit) can overwrite it.
-    // The DJ pars always show the static color from config.yaml.
-    if (this.djLightsConfig.brightness > 0) {
-      const c = this.djLightsConfig.color;
-      const b = this.djLightsConfig.brightness;
-      for (let i = 0; i < pixels.length; i++) {
-        if (pixels[i].group === 'DJLights') {
-          pixels[i].r = c[0] * b;
-          pixels[i].g = c[1] * b;
-          pixels[i].b = c[2] * b;
-          pixels[i].w = (c[3] || 0) * b;
-          pixels[i].a = (c[4] || 0) * b;
-          pixels[i].u = (c[5] || 0) * b;
-        }
-      }
-    }
   }
 
   get dropHitActive() { return this.dropHits.length > 0; }
@@ -551,21 +512,6 @@ export class GlobalEffectsController {
     throw new Error(`triggerGenericMacro: not implemented for effect '${_args.effectId}'`);
   }
 
-  // ── DJ Lights control ──────────────────────────────────────────────
-  /**
-   * Enable/disable DJ lights color override, optionally updating color
-   * and brightness. When called with just (true), uses current config.
-   */
-  setDjLights(enabled, color6 = null, brightness = null) {
-    this.djLightsConfig.enabled = !!enabled;
-    if (color6 && Array.isArray(color6) && color6.length === 6) {
-      this.djLightsConfig.color = color6.map(v => Math.max(0, Math.min(1, Number(v) || 0)));
-    }
-    if (typeof brightness === 'number') {
-      this.djLightsConfig.brightness = Math.max(0, Math.min(1, brightness));
-    }
-  }
-
   // ── Status snapshot ───────────────────────────────────────────────
   getStatus() {
     return {
@@ -588,7 +534,6 @@ export class GlobalEffectsController {
         active: this.dropHitActive,
         count: this.dropHits.length,
       },
-      djLights: { ...this.djLightsConfig },
       // Legacy rig-globals state surfaced here too so CaptainPad's
       // RigContext consumers (dimmer_rack bypass checkboxes) can
       // mirror engine-side changes without a separate /globals poll.
@@ -620,7 +565,6 @@ export class GlobalEffectsController {
       this.setEffect(k, false);
     }
     this.setColorWash(false, null, 0, 'tint', { immediate: true });
-    this.djLightsConfig.enabled = false;
   }
 }
 

@@ -14,7 +14,6 @@ import { vintageWhiteEffect } from '../effects/vintageWhite.js';
 import { blastWhiteEffect } from '../effects/blastWhite.js';
 import { uvBlastEffect } from '../effects/uvBlast.js';
 import { foggerEffect } from '../effects/fogger.js';
-import { djLightsEffect } from '../effects/djLights.js';
 
 /** Safety tiers, in increasing strictness. */
 export const SAFETY_TIERS = Object.freeze({
@@ -111,27 +110,6 @@ export const GLOBAL_EFFECT_LIBRARY = {
       },
     },
     apply: foggerEffect.apply,
-  },
-
-  djLights: {
-    id: 'djLights',
-    name: 'DJ Lights',
-    category: 'legacy',
-    behaviorTypes: ['toggle'],
-    singleton: true,
-    safetySensitive: false,
-    legacyEffectId: 'djLights',
-    presets: {
-      hot_pink: {
-        label: 'Hot Pink 30%',
-        params: {
-          color: [1.0, 0.41, 0.71, 0.0, 0.0, 0.0],
-          brightness: 0.3,
-        },
-        defaultBehavior: 'toggle',
-      },
-    },
-    apply: djLightsEffect.apply,
   },
 
   // ── Modern macro effects ─────────────────────────────────────────
@@ -469,14 +447,6 @@ export function validateParams(effectId, params = {}) {
     case 'uvBlast': {
       if (out.bypassDimmer !== undefined && typeof out.bypassDimmer !== 'boolean') {
         throw new Error(`${effectId}.bypassDimmer must be a boolean`);
-      }
-      break;
-    }
-    case 'djLights': {
-      if (out.color !== undefined) validateColor6(out.color);
-      if (out.brightness !== undefined) {
-        if (!isFiniteNumber(out.brightness)) throw new Error('djLights.brightness must be a number');
-        out.brightness = clamp01(out.brightness);
       }
       break;
     }
