@@ -41,6 +41,7 @@ export const DEFAULT_SLOT_CONFIG = [
   { slotId: 10, enabled: true, label: 'Fogger',         effectId: 'fogger',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
   { slotId: 11, enabled: true, label: 'Long Trails',    effectId: 'feedbackTrails', presetId: 'long_afterimage', behavior: 'toggle',  paramsOverride: {} },
   { slotId: 12, enabled: true, label: 'Cosmic Trails',  effectId: 'feedbackTrails', presetId: 'cosmic_trails',   behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 13, enabled: true, label: 'DJ Lights',       effectId: 'djLights',       presetId: 'hot_pink',        behavior: 'toggle',  paramsOverride: {} },
 ];
 
 export const MIN_SLOTS = 1;
@@ -235,6 +236,8 @@ export class GlobalEffectSlotManager {
         return !!c.effects.uvBlast;
       case 'fogger':
         return !!c.effects.fogger;
+      case 'djLights':
+        return !!c.djLightsConfig.enabled;
       default:
         return false;
     }
@@ -343,6 +346,9 @@ export class GlobalEffectSlotManager {
       case 'fogger':
         this._dispatchLegacy({ resolved, action });
         return;
+      case 'djLights':
+        this._dispatchDjLights({ resolved, action });
+        return;
       default:
         this.controller.triggerGenericMacro({
           effectId: resolved.effectId,
@@ -444,6 +450,23 @@ export class GlobalEffectSlotManager {
       this.controller.setFeedbackTrails(true, resolved.presetId, resolved.params, {
         slotId: resolved.slotId,
       });
+    }
+  }
+
+  _dispatchDjLights({ resolved, action }) {
+    const c = this.controller;
+    const isOn = c.djLightsConfig.enabled;
+    let next;
+    if (action === 'deactivate' || action === 'up') next = false;
+    else if (action === 'activate' || action === 'down' || action === 'trigger') next = true;
+    else if (action === 'toggle' || action === undefined) next = !isOn;
+    else next = !isOn;
+
+    if (next) {
+      const p = resolved.params;
+      c.setDjLights(true, p.color, p.brightness);
+    } else {
+      c.setDjLights(false);
     }
   }
 }

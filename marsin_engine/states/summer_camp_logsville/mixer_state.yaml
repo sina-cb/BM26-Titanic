@@ -1,28 +1,122 @@
 master: 1
 channels:
   - id: ch_1779965917946_0
-    name: New Layer
-    pattern: 00_golden_hour_wash
+    name: Fast
+    pattern: 01_cylon_sweep
     mode: blend_screen
-    fader: 0.09
+    fader: 1
     enabled: true
-    locked: true
+    locked: false
     faderLocked: false
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '682166867':
-        v0: 0.5
+      '1037917937':
+        v0: 0.76
         v1: 0
         v2: 0
-      '1037917937':
-        v0: 0.7
+      '1278139614':
+        v0: 0.24
+        v1: 0
+        v2: 0
+      '2347831200':
+        v0: 0.59
+        v1: 0
+        v2: 0
+      '2571730692':
+        v0: 0.46
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.71
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_0_00_golden_hour_wash
-      cursor: 0
+      activeEntryId: e_default_1_01_cylon_sweep
+      cursor: 1
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+  - id: ch_1780204882661_0
+    name: Slow
+    pattern: 01_cylon_sweep
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '1037917937':
+        v0: 0.76
+        v1: 0
+        v2: 0
+      '1278139614':
+        v0: 0.24
+        v1: 0
+        v2: 0
+      '2347831200':
+        v0: 0.59
+        v1: 0
+        v2: 0
+      '2571730692':
+        v0: 0.46
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.71
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_1_01_cylon_sweep
+      cursor: 1
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+  - id: ch_1780204891814_1
+    name: Default
+    pattern: 02_phase_cathedral
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '149283354':
+        v0: 0.83
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.54
+        v1: 0
+        v2: 0
+      '1323486710':
+        v0: 0.23
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 1
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_2_02_phase_cathedral
+      cursor: 2
       autopilot:
         active: false
         delay_s: 30

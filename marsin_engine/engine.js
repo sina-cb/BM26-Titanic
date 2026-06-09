@@ -111,6 +111,7 @@ function parseArgs() {
         process.exit(0);
     }
   }
+  opts._config = config;
   return opts;
 }
 
@@ -452,6 +453,26 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
+
+    // HACK: DJ Lights always-on static color override.
+    // Runs after ALL effects + dimmers, right before DMX encoding.
+    if (globalEffectsController && globalEffectsController.djLightsConfig) {
+      const djCfg = globalEffectsController.djLightsConfig;
+      if (djCfg.brightness > 0) {
+        const c = djCfg.color;
+        const b = djCfg.brightness;
+        for (let j = 0; j < model.pixels.length; j++) {
+          if (model.pixels[j].group === 'DJLights' || model.pixels[j].group === 'DJ Lights') {
+            model.pixels[j].r = c[0] * b;
+            model.pixels[j].g = c[1] * b;
+            model.pixels[j].b = c[2] * b;
+            model.pixels[j].w = (c[3] || 0) * b;
+            model.pixels[j].a = (c[4] || 0) * b;
+            model.pixels[j].u = (c[5] || 0) * b;
+          }
+        }
+      }
+    }
 
     // Map to DMX (writes directly into dmxRouter's _read buffer via getFullFrame)
     mapPixelsToSacn(model.pixels, dmxRouter);
@@ -818,6 +839,7 @@ async function main() {
   // the engine's actual frame grid.
   const globalEffectsController = new GlobalEffectsController({
     engine: { fps: opts.fps },
+    djLights: opts._config.djLights || undefined,
   });
   globalEffectsController.initFromModel(model.specialEffects || model.pixels);
   // Slot manager owns the 6 performance-slot bindings. Default config

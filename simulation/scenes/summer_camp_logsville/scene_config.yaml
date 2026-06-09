@@ -211,7 +211,7 @@ parLights:
       rotX: -60.00000000000005
       rotY: -132.01857479625406
       rotZ: 1.2722218725854084e-14
-    - group: DJLights
+    - group: DJ Lights
       name: DJLightLeft
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -224,7 +224,7 @@ parLights:
       rotX: -0.0
       rotY: 0
       rotZ: 0
-    - group: DJLights
+    - group: DJ Lights
       name: DJLightRight
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -247,8 +247,8 @@ parLights:
       x: -5
       'y': 2
       z: 0
-      rotX: -0.0
-      rotY: -5.7105931374996475
+      rotX: 0
+      rotY: 354.28940686250036
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -261,8 +261,8 @@ parLights:
       x: -0.1999999999999993
       'y': 2
       z: 0
-      rotX: -0.0
-      rotY: -5.7105931374996475
+      rotX: 0
+      rotY: 354.28940686250036
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -303,8 +303,8 @@ parLights:
       x: 14.200000000000003
       'y': 2
       z: 0
-      rotX: -0.0
-      rotY: -5.7105931374996475
+      rotX: 0
+      rotY: 354.28940686250036
       rotZ: 0
       traceGenerated: true
     - group: WallVintageLights
@@ -405,7 +405,7 @@ parLights:
       rotY: 149.99999999999997
       rotZ: -106.99052439091474
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods2
       name: Redwoods2 1
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -419,7 +419,7 @@ parLights:
       rotY: 76.574337235283
       rotZ: -35.074777167064106
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods2
       name: Redwoods2 2
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -433,7 +433,7 @@ parLights:
       rotY: 0.9279470872123877
       rotZ: -0.3268025891659251
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods2
       name: Redwoods2 3
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -447,7 +447,7 @@ parLights:
       rotY: -76.04357158354665
       rotZ: 35.66309740064611
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods2
       name: Redwoods2 4
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -461,7 +461,7 @@ parLights:
       rotY: 178.47486186445084
       rotZ: -176.9337775378601
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 1
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -475,7 +475,7 @@ parLights:
       rotY: 90
       rotZ: -45
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 2
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -489,7 +489,7 @@ parLights:
       rotY: 21.05172443537292
       rotZ: -8.14336553121091
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 3
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -503,7 +503,7 @@ parLights:
       rotY: -37.58908946897495
       rotZ: 13.114188560391758
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 4
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -517,7 +517,7 @@ parLights:
       rotY: -90
       rotZ: 35.53767779197438
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 5
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -531,7 +531,7 @@ parLights:
       rotY: -142.41091053102505
       rotZ: 89.56619493142807
       traceGenerated: true
-    - group: Redwoods1
+    - group: Redwoods3
       name: Redwoods3 6
       fixtureType: UkingPar
       color: '#ffaa44'
@@ -553,7 +553,7 @@ parLights:
       angle: 30
       penumbra: 0.5
       x: 8.099713113318899
-      'y': 3
+      'y': 5
       z: 0
       rotX: -35.72021350847793
       rotY: 0
@@ -567,7 +567,7 @@ parLights:
       angle: 30
       penumbra: 0.5
       x: 16.32906321924115
-      'y': 3.5
+      'y': 5
       z: 0
       rotX: -35.72021350847793
       rotY: 0
@@ -583,8 +583,8 @@ parLights:
       x: -3
       'y': 0.5
       z: 0
-      rotX: -9.607757082724715
-      rotY: -0.2486888552585848
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
       rotZ: 1.489700686984738
       traceGenerated: true
     - group: LedBarsWall
@@ -611,8 +611,8 @@ parLights:
       x: 10
       'y': 0.8333333333333333
       z: 0
-      rotX: -9.607757082724715
-      rotY: -0.2486888552585848
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
       rotZ: 1.489700686984738
       traceGenerated: true
     - group: LedBarsWall
@@ -625,10 +625,23 @@ parLights:
       x: 16.5
       'y': 1
       z: 0
-      rotX: -9.607757082724715
-      rotY: -0.2486888552585848
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
       rotZ: 1.489700686984738
       traceGenerated: true
+    - group: Fogger
+      name: TEFogMachine 39
+      fixtureType: TEFogMachine
+      color: '#ffaa44'
+      intensity: 0
+      angle: 20
+      penumbra: 0.5
+      x: 0
+      'y': 1.5
+      z: 0
+      rotX: 0
+      rotY: 0
+      rotZ: 0
 ledStrands:
   _section:
     label: 💡 LED Strands
@@ -707,7 +720,7 @@ traces:
     lightColor: '#ffaa44'
     lightIntensity: 10
     lightAngle: 30
-    groupName: Redwoods1
+    groupName: Redwoods2
     fixtureType: UkingPar
     generated: true
     controllerIp: ''
@@ -733,7 +746,7 @@ traces:
     lightColor: '#ffaa44'
     lightIntensity: 10
     lightAngle: 30
-    groupName: Redwoods1
+    groupName: Redwoods3
     fixtureType: UkingPar
     generated: true
     controllerIp: ''
