@@ -8,7 +8,10 @@
  *   node agent_render.js --view front     Navigate to a specific view and capture
  *
  * Flags:
- *   --keep-alive   Keep the browser window open after capturing
+ *   --keep-alive          Keep the browser window open after capturing
+ *   --show-ui             Keep the menus/panels visible in captures (hidden by default)
+ *   --viewport WxH        Screenshot resolution (default 1920x1080; use 1280x720 on
+ *                         software-rendered/headless machines — see note at VIEWPORT)
  *
  * Browser reuse: When --open is running, render commands (--current, --view, default)
  * automatically connect to the existing browser instead of launching a new one.
@@ -22,7 +25,7 @@ const fs = require('fs');
 const yaml = require('js-yaml');
 
 // --- Config ---
-const PRESET_YAML = path.join(__dirname, '..', 'config', 'scene_preset_cameras.yaml');
+const PRESET_YAML = path.join(__dirname, '..', 'scenes', 'titanic', 'cameras.yaml');
 function loadPresetKeys() {
   try {
     const doc = yaml.load(fs.readFileSync(PRESET_YAML, 'utf8'));
@@ -33,16 +36,34 @@ function loadPresetKeys() {
   }
 }
 const ALL_VIEWS = loadPresetKeys();
-const SIM_URL = 'http://127.0.0.1:6969/simulation/?scene=titanic&profile=full';
+// renderer=webgl: headless/CI machines run on SwiftShader, where the WebGPU
+// backend initializes and then loses its device (black canvas). The WebGL2
+// backend is stable under SwiftShader; on real GPUs the visual difference is
+// acceptable for layout/regression checks.
+const SIM_URL = 'http://127.0.0.1:6969/simulation/?scene=titanic&profile=full&renderer=webgl';
 const OUTPUT_DIR = path.join(__dirname, '..', '..', '.agent_renders');
-const VIEWPORT = { width: 1920, height: 1080 };
-const WINDOW_SIZE = { width: 2112, height: 1188 };
+
+// --viewport WxH: SwiftShader (software GL on headless/CI machines) loses the
+// WebGL context on close-up views at 1920x1080; 1280x720 stays stable there.
+function parseViewport() {
+  const i = process.argv.indexOf('--viewport');
+  if (i === -1) return { width: 1920, height: 1080 };
+  const m = /^(\d+)x(\d+)$/.exec(process.argv[i + 1] || '');
+  if (!m) {
+    console.error('❌ Invalid --viewport value, expected WxH (e.g. 1280x720).');
+    process.exit(1);
+  }
+  return { width: Number(m[1]), height: Number(m[2]) };
+}
+const VIEWPORT = parseViewport();
+const WINDOW_SIZE = { width: VIEWPORT.width + 192, height: VIEWPORT.height + 108 };
 const CAMERA_SETTLE_MS = 3000;
 const ENDPOINT_FILE = path.join(__dirname, '.puppeteer-endpoint');
 
 // --- CLI Parsing ---
 const args = process.argv.slice(2);
 const KEEP_ALIVE = args.includes('--keep-alive');
+const SHOW_UI = args.includes('--show-ui');
 const OPEN_ONLY = args.includes('--open');
 const CURRENT_ONLY = args.includes('--current');
 const RELOAD = args.includes('--reload');
@@ -81,7 +102,7 @@ async function launchBrowser() {
       '--enable-webgl2',
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan',
-      '--use-gl=swiftshader',
+      '--use-angle=swiftshader',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
@@ -143,26 +164,43 @@ async function loadSimulation(page) {
   await new Promise(r => setTimeout(r, 5000));
 }
 
+const UI_PANEL_IDS = [
+  'hud-frame',
+  'info-panel',
+  'pattern-editor-panel',
+  'sacn-in-monitor-panel',
+  'sacn-out-monitor-panel',
+  'view-presets',
+  'gui-panel',
+  'unpatched-warning',
+];
+
 async function hideUI(page) {
-  await page.evaluate(() => {
-    // Hide our main React UI wrapper
-    const hud = document.getElementById('hud-main');
-    if (hud) hud.style.display = 'none';
-  });
+  await page.evaluate((ids) => {
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    }
+    document.querySelectorAll('.lil-gui').forEach((el) => { el.style.display = 'none'; });
+  }, UI_PANEL_IDS);
 }
 
 async function showUI(page) {
-  await page.evaluate(() => {
-    const hud = document.getElementById('hud-main');
-    if (hud) hud.style.display = '';
-  });
+  await page.evaluate((ids) => {
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = '';
+    }
+    document.querySelectorAll('.lil-gui').forEach((el) => { el.style.display = ''; });
+  }, UI_PANEL_IDS);
   await new Promise(r => setTimeout(r, 1000));
 }
 
 async function clickView(page, viewName) {
   const clicked = await page.evaluate((vn) => {
-    if (window._headlessApi && window._headlessApi.setCameraView) {
-      return window._headlessApi.setCameraView(vn);
+    if (typeof window.animateCamera === 'function') {
+      window.animateCamera(vn);
+      return true;
     }
     return false;
   }, viewName);
@@ -336,8 +374,8 @@ async function main() {
     process.exit(0);
   }
 
-  // For all capture modes, hide UI first
-  await hideUI(page);
+  // For all capture modes, hide UI first (unless --show-ui keeps the menus)
+  if (!SHOW_UI) await hideUI(page);
 
   // === MODE: --current ===
   if (CURRENT_ONLY) {

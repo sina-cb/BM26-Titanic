@@ -132,3 +132,8 @@ marsin_engine/bin/
 # keeps those crash artifacts out of git regardless.
 simulation/scenes/*/playlists/hil_*.yaml
 
+
+# Vendored offline browser assets — the generic build/ rule above would
+# otherwise swallow the pinned three.js builds needed for playa offline mode.
+!simulation/vendor/three/build/
+!simulation/vendor/three/build/**
