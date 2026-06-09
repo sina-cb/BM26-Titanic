@@ -76,6 +76,24 @@ On headless machines wrap with `xvfb-run -a`, use `--viewport 1280x720`
 (SwiftShader loses the WebGL context at 1080p on close-up views), and always
 **visually inspect** the PNGs before reporting success.
 
+## Full-stack smoke (sim + engine + CaptainPad)
+
+Follow `.agent/01_skills/05_full_stack_smoke.md` to bring up the whole chain
+and prove every link with screenshots:
+
+```text
+CaptainPad web :6967 → ws → marsin_engine :6968 → sACN → simulation :6969-:6972
+```
+
+Startup order: sim (`cd simulation && npm start`) → engine
+(`cd marsin_engine && node engine.js --model test_bench --pattern
+01_cylon_sweep`, model must match the sim scene) → CaptainPad web
+(`cd CaptainPad && npm run web:build && npm run web:serve`). Verify: sACN IN
+monitor Connected (capture with `--show-ui`), two frames showing the pattern
+animating, CaptainPad header `● CONNECTED` with live data. The engine writes
+runtime state into tracked `marsin_engine/states/` files — expected residue;
+report it, don't commit or silently revert it.
+
 ## Working etiquette
 
 - The codex (`00_codex.md`) is maintained by Sina only — never edit it.
