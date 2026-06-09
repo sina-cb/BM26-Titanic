@@ -14,9 +14,9 @@ vis:
 server:
   port: 6968
 playlist:
-  active: false
-  delay_s: '1'
-  shuffle: false
+  active: true
+  delay_s: '15'
+  shuffle: true
 web_client:
   enabled: false
   port: 6967

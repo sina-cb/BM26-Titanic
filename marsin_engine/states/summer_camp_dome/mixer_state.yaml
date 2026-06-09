@@ -1,20 +1,36 @@
-master: 1
+master: 0.3
 channels:
   - id: ch_1779962445726_0
-    name: New Layer
-    pattern: 01_cylon_sweep
+    name: Fast
+    pattern: 03_dual_axis_crush
     mode: blend_screen
-    fader: 1
+    fader: 0.15
     enabled: true
-    locked: false
+    locked: true
     faderLocked: false
     transitionMode: trans_crossfade
     transitionTime: 1
-    localControls: {}
+    localControls:
+      '1037917937':
+        v0: 0.77
+        v1: 0
+        v2: 0
+      '1323486710':
+        v0: 0.38
+        v1: 0
+        v2: 0
+      '2571730692':
+        v0: 0.21
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.89
+        v1: 0
+        v2: 0
     playlist:
-      name: default
-      activeEntryId: e_default_1_01_cylon_sweep
-      cursor: 1
+      name: fast
+      activeEntryId: e_1779867305954_4007
+      cursor: 2
       autopilot:
         active: false
         delay_s: 30
@@ -22,4 +38,43 @@ channels:
     viewSelection:
       type: all
       target: null
+      invert: false
+  - id: ch_1780106460563_2
+    name: New Layer
+    pattern: 05_orbital_attractor_field
+    mode: blend_over
+    fader: 0.18
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '1037917937':
+        v0: 0.11
+        v1: 0
+        v2: 0
+      '1217857879':
+        v0: 0.12
+        v1: 0
+        v2: 0
+      '3612063211':
+        v0: 0.26
+        v1: 0
+        v2: 0
+      '3909762385':
+        v0: 0.13
+        v1: 0
+        v2: 0
+    playlist:
+      name: apex
+      activeEntryId: e_1779962098552_1740
+      cursor: 1
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: viewMask
+      target: Apex
       invert: false

@@ -5,8 +5,8 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.51
-      sliderNoiseScale: 0.74
+      sliderLocalSpeed: 0.15
+      sliderNoiseScale: 0.25
     modulations:
       - id: mod_slow_dome_00_micLow_noiseScale
         type: continuous
@@ -43,10 +43,10 @@ entries:
     pattern: 07_shimmer
     label: null
     defaults:
-      sliderLocalSpeed: 0.9
-      sliderShimmerSpeedTrim: 0.64
-      sliderDensity: 0.17
-      sliderBreathing: 0.47
+      sliderLocalSpeed: 0.46
+      sliderShimmerSpeedTrim: 0.83
+      sliderDensity: 0.56
+      sliderBreathing: 0.85
     modulations:
       - id: mod_slow_dome_07_micHigh_density
         type: continuous
@@ -83,10 +83,10 @@ entries:
     pattern: 08_ocean_liner
     label: null
     defaults:
-      sliderLocalSpeed: 0.8
-      sliderContrast: 0.92
-      sliderWindowCount: 0.31
-      sliderWindowFocus: 0.47
+      sliderLocalSpeed: 0.38
+      sliderContrast: 0.84
+      sliderWindowCount: 0.7
+      sliderWindowFocus: 0.74
     modulations:
       - id: mod_slow_dome_08_micLow_windowFocus
         type: continuous
@@ -122,7 +122,11 @@ entries:
   - id: e_1779880100001_4471
     pattern: 11_bioluminescence
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDensity: 0
+      sliderUvGlow: 0
+      sliderPartyMode: 0
     modulations:
       - id: mod_slow_dome_11_micLow_density
         type: continuous
@@ -158,7 +162,10 @@ entries:
   - id: e_1779880100002_3812
     pattern: 12_breathing
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.82
+      sliderRipple: 0.07
+      sliderSharpness: 0.7
     modulations:
       - id: mod_slow_dome_12_micLow_sharpness
         type: continuous
@@ -195,8 +202,8 @@ entries:
     pattern: 14_lunar_current
     label: null
     defaults:
-      sliderLocalSpeed: 0.66
-      sliderDensity: 0.18
+      sliderLocalSpeed: 0.63
+      sliderDensity: 0.25
       sliderWhiteLift: 0.77
       sliderUvLift: 0.86
     modulations:
@@ -235,7 +242,7 @@ entries:
     pattern: 15_silk_prism_ribbons
     label: null
     defaults:
-      sliderLocalSpeed: 0.68
+      sliderLocalSpeed: 0.48
       sliderRibbonCount: 0.44
       sliderSoftness: 0.75
     modulations:
@@ -314,7 +321,7 @@ entries:
     pattern: 17_rolling_color_dunes
     label: null
     defaults:
-      sliderLocalSpeed: 0.8
+      sliderLocalSpeed: 0.5
       sliderDuneScale: 0.75
       sliderDuneContrast: 0.3
       sliderOrbitDrift: 0.46
@@ -356,7 +363,10 @@ entries:
   - id: e_1779867372871_2455
     pattern: 18_deep_space_lattice
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.49
+      sliderLatticeScale: 0
+      sliderLineSoftness: 0
     modulations:
       - id: mod_slow_dome_18_micLow_latticeScale
         type: continuous
@@ -464,7 +474,10 @@ entries:
   - id: e_1779867396439_9386
     pattern: 25_heartbeat
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.27
+      sliderDormantGlow: 0
+      sliderRippleSweep: 0
     modulations:
       - id: mod_slow_dome_25_micLow_dormantGlow
         type: continuous
@@ -536,7 +549,14 @@ entries:
   - id: e_1779867412545_1079
     pattern: 43_sea_floor_shadow
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderShadowWidth: 0.67
+      sliderShadowDrift: 0
+      sliderAbyssalSwell: 0
+      sliderEdgeFoam: 0
+      sliderBlackoutDepth: 0.72
+      sliderTriangleSilhouette: 0
     modulations:
       - id: mod_slow_dome_43_micLow_abyssalSwell
         type: continuous
@@ -569,6 +589,20 @@ entries:
           - 0.5
         curve: exp
     notes: 'Audio: micLow swells abyss, micKick crashes foam.'
+  - id: e_1780048983943_17
+    pattern: 45_engine_room_clockwork
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.75
+      sliderGearSharpness: 0.86
+      sliderPistonStroke: 0.78
+      sliderDriveShaft: 0.84
+      sliderBarTickDensity: 0.83
+      sliderBoilerHeat: 0.8
+      sliderPauseAmount: 0.74
+      sliderBlackoutDepth: 0.81
+    modulations: []
+    notes: null
   - id: e_1779867460234_1458
     pattern: 53_shadow_eclipse
     label: null

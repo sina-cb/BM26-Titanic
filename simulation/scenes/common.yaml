@@ -70,7 +70,7 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: pixel_mapping
     label: 💡 Lighting Profile
     options:
       - edit
@@ -129,7 +129,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -156,19 +156,19 @@ colorWave:
     value: 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
-    value: 10000
+    value: 1000
     label: 📡 Source Lockout (ms)
     min: 1000
     max: 30000
     step: 1000
   sacn_high_priority:
-    value: 160
+    value: 100
     label: 📡 High Priority Threshold
     min: 100
     max: 200
     step: 10
   sacn_stale_ms:
-    value: 2000
+    value: 500
     label: 📡 Source Stale (ms)
     min: 500
     max: 10000
@@ -182,17 +182,17 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 12.1068
-    'y': 7.6825
-    z: -11.557
+    x: 4.9045
+    'y': 5.0373
+    z: -5.9999
   target:
-    x: 8.1252
-    'y': 1.9463
-    z: 5.0606
+    x: -1.1492
+    'y': 4.1794
+    z: 5.199
 _patternEditor:
   x: 0
-  'y': 0
-  width: 0
-  height: 0
+  'y': 42
+  width: 400
+  height: 520
   collapsed: false
   autoRun: true

@@ -1,193 +1,185 @@
 patches:
-  ShehdsBar 21:
-    controllerIp: ''
-    dmxUniverse: 10
+  ShehdsBar 54:
+    controllerIp: 10.1.1.15
+    dmxUniverse: 6
     dmxAddress: 1
+    controllerId: 0
+    sectionId: 1
+    fixtureId: 2
+    viewMask: 0
+  ShehdsBar 21:
+    controllerIp: 10.1.1.15
+    dmxUniverse: 6
+    dmxAddress: 390
     controllerId: 0
     sectionId: 1
     fixtureId: 2
     viewMask: 0
   ShehdsBar 22:
-    controllerIp: ''
-    dmxUniverse: 10
-    dmxAddress: 120
+    controllerIp: 10.1.1.15
+    dmxUniverse: 6
+    dmxAddress: 260
     controllerId: 0
     sectionId: 1
     fixtureId: 3
     viewMask: 0
   UkingPar 23:
-    controllerIp: 10.1.1.10
-    dmxUniverse: 2
-    dmxAddress: 1
+    controllerIp: 10.1.1.13
+    dmxUniverse: 5
+    dmxAddress: 400
     controllerId: 1
-    sectionId: 4
-    fixtureId: 5
-    viewMask: 0
-  UkingPar 24:
-    controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 11
-    controllerId: 0
     sectionId: 4
     fixtureId: 5
     viewMask: 0
   UkingPar 25:
-    controllerIp: 10.1.1.10
+    controllerIp: 10.1.1.14
     dmxUniverse: 2
-    dmxAddress: 21
+    dmxAddress: 400
     controllerId: 1
     sectionId: 4
     fixtureId: 6
     viewMask: 0
-  TEFogMachine 26:
-    controllerIp: ''
-    dmxUniverse: 10
-    dmxAddress: 512
+  ShehdsBar 2:
+    controllerIp: 10.1.1.15
+    dmxUniverse: 6
+    dmxAddress: 130
     controllerId: 0
     sectionId: 1
-    fixtureId: 1
-    viewMask: 0
-  BarLights 1:
-    controllerIp: ''
-    dmxUniverse: 10
-    dmxAddress: 239
-    controllerId: 1
-    sectionId: 2
     fixtureId: 2
     viewMask: 0
+  ChauvetHaze4D 24:
+    controllerIp: 10.1.1.13
+    dmxUniverse: 1
+    dmxAddress: 511
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  BarLights 1:
+    controllerIp: 10.1.1.12
+    dmxUniverse: 4
+    dmxAddress: 260
+    controllerId: 1
+    sectionId: 2
+    fixtureId: 4260
+    viewMask: 0
   BarLights 2:
-    controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 226
+    controllerIp: 10.1.1.12
+    dmxUniverse: 4
+    dmxAddress: 130
     controllerId: 0
     sectionId: 2
-    fixtureId: 3
+    fixtureId: 4130
     viewMask: 0
   BarLights 3:
-    controllerIp: ''
-    dmxUniverse: 2
-    dmxAddress: 107
+    controllerIp: 10.1.1.12
+    dmxUniverse: 4
+    dmxAddress: 1
     controllerId: 0
     sectionId: 2
-    fixtureId: 4
+    fixtureId: 4001
     viewMask: 0
   BarLights 4:
-    controllerIp: ''
-    dmxUniverse: 10
-    dmxAddress: 358
+    controllerIp: 10.1.1.13
+    dmxUniverse: 5
+    dmxAddress: 1
     controllerId: 0
     sectionId: 2
-    fixtureId: 5
+    fixtureId: 5001
     viewMask: 0
   BarLights 5:
-    controllerIp: ''
-    dmxUniverse: 11
+    controllerIp: 10.1.1.14
+    dmxUniverse: 20
     dmxAddress: 1
     controllerId: 0
     sectionId: 2
-    fixtureId: 6
+    fixtureId: 20001
     viewMask: 0
   BarLights 6:
-    controllerIp: ''
-    dmxUniverse: 11
-    dmxAddress: 120
+    controllerIp: 10.1.1.11
+    dmxUniverse: 3
+    dmxAddress: 1
     controllerId: 0
     sectionId: 2
-    fixtureId: 7
+    fixtureId: 3001
     viewMask: 0
   BarLights 7:
-    controllerIp: ''
-    dmxUniverse: 11
-    dmxAddress: 239
+    controllerIp: 10.1.1.11
+    dmxUniverse: 3
+    dmxAddress: 130
     controllerId: 0
     sectionId: 2
-    fixtureId: 8
+    fixtureId: 3130
     viewMask: 0
   BarLights 8:
-    controllerIp: ''
-    dmxUniverse: 11
-    dmxAddress: 358
+    controllerIp: 10.1.1.11
+    dmxUniverse: 3
+    dmxAddress: 260
     controllerId: 0
     sectionId: 2
-    fixtureId: 9
-    viewMask: 0
-  BarLights 9:
-    controllerIp: ''
-    dmxUniverse: 12
-    dmxAddress: 1
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 10
-    viewMask: 0
-  BarLights 10:
-    controllerIp: ''
-    dmxUniverse: 12
-    dmxAddress: 120
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 11
-    viewMask: 0
-  BarLights 11:
-    controllerIp: ''
-    dmxUniverse: 12
-    dmxAddress: 239
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 12
-    viewMask: 0
-  BarLights 12:
-    controllerIp: ''
-    dmxUniverse: 12
-    dmxAddress: 358
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 13
-    viewMask: 0
-  BarLights 13:
-    controllerIp: ''
-    dmxUniverse: 13
-    dmxAddress: 1
-    controllerId: 0
-    sectionId: 2
-    fixtureId: 14
+    fixtureId: 3260
     viewMask: 0
   VintageLights 1:
-    controllerIp: 10.1.1.10
-    dmxUniverse: 2
-    dmxAddress: 41
+    controllerIp: 10.1.1.12
+    dmxUniverse: 4
+    dmxAddress: 400
     controllerId: 1
     sectionId: 3
-    fixtureId: 15
+    fixtureId: 4400
     viewMask: 0
   VintageLights 2:
-    controllerIp: 10.1.1.10
-    dmxUniverse: 2
-    dmxAddress: 74
+    controllerIp: 10.1.1.13
+    dmxUniverse: 5
+    dmxAddress: 165
     controllerId: 1
     sectionId: 3
-    fixtureId: 16
+    fixtureId: 5165
     viewMask: 0
   VintageLights 3:
-    controllerIp: ''
-    dmxUniverse: 13
-    dmxAddress: 120
+    controllerIp: 10.1.1.13
+    dmxUniverse: 5
+    dmxAddress: 125
     controllerId: 0
     sectionId: 3
-    fixtureId: 17
+    fixtureId: 5125
     viewMask: 0
   VintageLights 4:
-    controllerIp: ''
-    dmxUniverse: 13
-    dmxAddress: 153
+    controllerIp: 10.1.1.14
+    dmxUniverse: 2
+    dmxAddress: 125
     controllerId: 0
     sectionId: 3
-    fixtureId: 18
+    fixtureId: 2125
     viewMask: 0
   VintageLights 5:
-    controllerIp: ''
-    dmxUniverse: 13
-    dmxAddress: 186
+    controllerIp: 10.1.1.14
+    dmxUniverse: 2
+    dmxAddress: 165
     controllerId: 0
     sectionId: 3
-    fixtureId: 19
+    fixtureId: 2165
+    viewMask: 0
+  VintageLights 6:
+    controllerIp: 10.1.1.11
+    dmxUniverse: 3
+    dmxAddress: 400
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 3400
+    viewMask: 0
+  VintageLights 7:
+    controllerIp: 10.1.1.11
+    dmxUniverse: 3
+    dmxAddress: 450
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 3450
+    viewMask: 0
+  VintageLights 8:
+    controllerIp: 10.1.1.12
+    dmxUniverse: 4
+    dmxAddress: 450
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 4450
     viewMask: 0

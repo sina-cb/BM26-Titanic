@@ -6,11 +6,11 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  device: ':0'
-  deviceLabel: My iPhone Microphone
-  deviceId: avfoundation-audio-0
-  inputFormat: avfoundation
-  platform: darwin
+  device: audio=Microphone Array (Realtek(R) Audio)
+  deviceLabel: Microphone Array (Realtek(R) Audio)
+  deviceId: dshow-audio-Microphone Array (Realtek(R) Audio)
+  inputFormat: dshow
+  platform: win32
 enabled: true
 chains:
   micLow:

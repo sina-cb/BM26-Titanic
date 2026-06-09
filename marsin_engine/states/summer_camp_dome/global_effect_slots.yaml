@@ -8,37 +8,37 @@ slots:
     paramsOverride: {}
   - slotId: 2
     enabled: true
-    label: Ghost Ship
-    effectId: feedbackTrails
-    presetId: ghost_ship
+    label: UV Blast
+    effectId: uvBlast
+    presetId: default
     behavior: toggle
     paramsOverride: {}
   - slotId: 3
+    enabled: true
+    label: Fogger
+    effectId: fogger
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 4
     enabled: true
     label: Soft Afterimage
     effectId: feedbackTrails
     presetId: soft_afterimage
     behavior: toggle
     paramsOverride: {}
-  - slotId: 4
+  - slotId: 5
     enabled: true
     label: Vintage Burst
     effectId: dropHit
     presetId: vintage_burst
     behavior: trigger
     paramsOverride: {}
-  - slotId: 5
-    enabled: true
-    label: Iceberg Flash
-    effectId: dropHit
-    presetId: iceberg_flash
-    behavior: trigger
-    paramsOverride: {}
   - slotId: 6
     enabled: true
-    label: 10 Hz Hard
-    effectId: strobe
-    presetId: hard_10hz
+    label: Long Afterimage
+    effectId: feedbackTrails
+    presetId: long_afterimage
     behavior: toggle
     paramsOverride: {}
   - slotId: 7
