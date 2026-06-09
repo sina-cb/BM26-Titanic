@@ -21,8 +21,8 @@ kick:
   refractoryMs: 140
   decayMs: 120
 capture:
-  device: ':1'
-  deviceLabel: MacBook Pro Microphone
-  deviceId: avfoundation-audio-1
-  inputFormat: avfoundation
-  platform: darwin
+  device: audio=Microphone Array (2- Realtek(R) Audio)
+  deviceLabel: Microphone Array (2- Realtek(R) Audio)
+  deviceId: dshow-audio-Microphone Array (2- Realtek(R) Audio)
+  inputFormat: dshow
+  platform: win32

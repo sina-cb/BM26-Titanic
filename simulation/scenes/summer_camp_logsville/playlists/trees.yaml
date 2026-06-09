@@ -1,20 +1,3 @@
 schemaVersion: 1
 name: trees
-entries:
-  - id: e_1779993791214_7890
-    pattern: 80_tree_canopy_fracture
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1779993803694_7934
-    pattern: 85_redwood_starry_canopy
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.7
-      sliderStarEnergy: 0
-      sliderTowerSpin: 0
-      sliderWallHit: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
+entries: []

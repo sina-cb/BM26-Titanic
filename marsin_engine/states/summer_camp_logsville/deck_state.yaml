@@ -1,7 +1,7 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 75_timber_mill_clockwork
+  pattern: 06_neon_elevator
   mode: blend_screen
   fader: 1
   enabled: true
@@ -9,27 +9,35 @@ channel:
   faderLocked: false
   localControls:
     '1037917937':
-      v0: 0.63
+      v0: 0.3
       v1: 0
       v2: 0
-    '2021015560':
-      v0: 0.35
+    '1225222055':
+      v0: 0.79
+      v1: 0
+      v2: 0
+    '1628509418':
+      v0: 0.43
+      v1: 0
+      v2: 0
+    '3772320662':
+      v0: 0.74
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_47_75_timber_mill_clockwork
-    cursor: 44
+    activeEntryId: e_default_6_06_neon_elevator
+    cursor: 6
     autopilot:
-      active: false
-      delay_s: 1
-      shuffle: false
+      active: true
+      delay_s: 15
+      shuffle: true
   viewSelection:
     type: all
     target: null
     invert: false
 transitionConfig:
-  enabled: false
+  enabled: true
   mode: trans_color_burst
-  durationMs: 500
+  durationMs: 200
   shuffle: true
