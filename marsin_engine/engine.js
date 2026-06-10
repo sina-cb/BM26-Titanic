@@ -35,6 +35,7 @@ import { listAudioDevices, findConfiguredDevice } from './lib/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
+import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
@@ -189,11 +190,26 @@ async function loadModel(modelName, bustCache = false) {
   // by name then no-op and CaptainPad hides the "VIEW MASKS" section
   // of the picker. See docs/27 §3.1 and docs/13 §4.5.
   //
+  // The sidecar may ALSO export a `groupBits` object pinning the base
+  // group → bit mapping explicitly:
+  //
+  //   export const groupBits = { 'TowerBars': 0x01, 'DJ Lights': 0x04 };
+  //
+  // Declared mappings are the contract pattern code compiles against,
+  // so they are strictly validated against the loaded model: a model
+  // group missing from the table, a table key absent from the model,
+  // a non-power-of-two/duplicate bit, or a collision with a preset's
+  // explicit bit all throw. Without a declared mapping the engine
+  // falls back to deterministic first-appearance assignment (fine for
+  // models nothing depends on yet — pin the logged table into the
+  // sidecar once patterns are written against it).
+  //
   // Loaded BEFORE base-group bit assignment because explicit bits must
   // be reserved so dynamic assignment routes around them. A broken
   // sidecar throws — a model whose view presets fail to load must not
   // boot looking healthy (codex P0: no fallbacks, fail loudly).
   let declaredViewMasks = [];
+  let declaredGroupBits = null;
   let viewMasksSource = null;
   const viewMasksPath = path.join(__dirname, 'models', `${modelName}.viewmasks.js`);
   if (fs.existsSync(viewMasksPath)) {
@@ -203,9 +219,11 @@ async function loadModel(modelName, bustCache = false) {
       throw new Error(`Viewmasks sidecar ${viewMasksPath} must export a viewMasks array`);
     }
     declaredViewMasks = vmMod.viewMasks;
+    if (vmMod.groupBits !== undefined) declaredGroupBits = vmMod.groupBits;
     viewMasksSource = path.basename(viewMasksPath);
   } else if (Array.isArray(mod.viewMasks)) {
     declaredViewMasks = mod.viewMasks;
+    if (mod.groupBits !== undefined) declaredGroupBits = mod.groupBits;
     viewMasksSource = `${modelName}.js (inline)`;
   }
 
@@ -244,51 +262,91 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
-  // ── Dynamic base group → bit assignment ──────────────────────────
-  // Derived from the model itself: each distinct pixel `group` gets the
-  // lowest free power-of-two bit, in order of first appearance in the
-  // pixels array (stable — the simulator export writes pixels in a
-  // fixed order). Bits explicitly reserved by sidecar presets are
-  // skipped so those stay stable for the patterns that hardcode them.
+  // ── Base group → bit assignment ───────────────────────────────────
+  // The sidecar's declared `groupBits` table is authoritative when
+  // present (it's the contract pattern code compiles against). Without
+  // one, bits are derived from the model: each distinct pixel `group`
+  // gets the lowest free power-of-two bit, in order of first appearance
+  // in the pixels array (stable — the simulator export writes pixels in
+  // a fixed order). Bits explicitly reserved by sidecar presets are
+  // skipped/refused so those stay stable for the patterns that
+  // reference them.
   //
-  // A hardcoded group→bit table is forbidden here: it silently left
-  // vMask = 0 on every pixel of any model whose group names weren't in
-  // the table, which killed all view-mask selection for the whole rig
+  // A hardcoded group→bit table is forbidden in the ENGINE: it silently
+  // left vMask = 0 on every pixel of any model whose group names weren't
+  // in the table, which killed all view-mask selection for the whole rig
   // at a deployment.
   //
   // JS bitwise ops are 32-bit signed, and vMask crosses into the WASM
   // runtime as Int32 — bit 30 (0x40000000) is the highest safe bit.
-  const groupBits = {};
-  let nextCandidateBit = 1;
-  const takeNextFreeBit = (what) => {
-    while ((nextCandidateBit & reservedMask) !== 0) nextCandidateBit *= 2;
-    if (nextCandidateBit > 0x40000000) {
-      throw new Error(`Out of view-mask bits while assigning ${what} — a model supports at most 31 ` +
-        `distinct group/preset bits`);
-    }
-    const bit = nextCandidateBit;
-    nextCandidateBit *= 2;
-    return bit;
-  };
-
+  const modelGroups = [];
   for (const px of mod.pixels) {
     if (!px) continue;
     px.vMask = px.vMask ?? 0;
     px.viewMask = px.viewMask ?? 0;
-    if (typeof px.group === 'string' && px.group.length > 0) {
-      if (groupBits[px.group] === undefined) {
-        groupBits[px.group] = takeNextFreeBit(`group '${px.group}'`);
-      }
-      // Mirror both the abbrev (vMask) and full (viewMask) keys — the
-      // rest of the engine reads vMask, but pattern code may still
-      // read viewMask per docs/13.
-      px.vMask |= groupBits[px.group];
-      px.viewMask = px.vMask;
+    if (typeof px.group === 'string' && px.group.length > 0 && !modelGroups.includes(px.group)) {
+      modelGroups.push(px.group);
     }
   }
 
+  let groupBits;
+  if (declaredGroupBits !== null) {
+    if (typeof declaredGroupBits !== 'object' || Array.isArray(declaredGroupBits)) {
+      throw new Error(`groupBits in ${viewMasksSource} must be an object mapping group name → bit`);
+    }
+    let usedMask = reservedMask;
+    for (const [group, bit] of Object.entries(declaredGroupBits)) {
+      if (!Number.isInteger(bit) || bit <= 0 || (bit & (bit - 1)) !== 0 || bit > 0x40000000) {
+        throw new Error(`groupBits['${group}'] in ${viewMasksSource} must be a positive power of two ` +
+          `≤ 0x40000000, got ${bit}`);
+      }
+      if ((usedMask & bit) !== 0) {
+        throw new Error(`groupBits['${group}'] in ${viewMasksSource} reuses bit 0x${bit.toString(16)} ` +
+          `(already taken by another group or an explicit preset bit)`);
+      }
+      usedMask |= bit;
+    }
+    // Strict two-way coverage: drift between the declared contract and
+    // the regenerated model must be loud, not a silently dead group.
+    const declaredNames = Object.keys(declaredGroupBits);
+    const missing = modelGroups.filter(g => declaredGroupBits[g] === undefined);
+    const stale = declaredNames.filter(g => !modelGroups.includes(g));
+    if (missing.length > 0 || stale.length > 0) {
+      const parts = [];
+      if (missing.length > 0) parts.push(`model group(s) missing from the table: ${missing.join(', ')}`);
+      if (stale.length > 0) parts.push(`table key(s) not in the model: ${stale.join(', ')}`);
+      throw new Error(`groupBits in ${viewMasksSource} is out of sync with model '${modelName}' — ` +
+        parts.join('; '));
+    }
+    groupBits = { ...declaredGroupBits };
+  } else {
+    groupBits = {};
+    let nextCandidateBit = 1;
+    for (const group of modelGroups) {
+      while ((nextCandidateBit & reservedMask) !== 0) nextCandidateBit *= 2;
+      if (nextCandidateBit > 0x40000000) {
+        throw new Error(`Out of view-mask bits while assigning group '${group}' — a model supports ` +
+          `at most 31 distinct group/preset bits`);
+      }
+      groupBits[group] = nextCandidateBit;
+      nextCandidateBit *= 2;
+    }
+  }
+
+  for (const px of mod.pixels) {
+    if (!px || typeof px.group !== 'string' || px.group.length === 0) continue;
+    // Mirror both the abbrev (vMask) and full (viewMask) keys — the
+    // rest of the engine reads vMask, but pattern code may still
+    // read viewMask per docs/13.
+    px.vMask |= groupBits[px.group];
+    px.viewMask = px.vMask;
+  }
+
   const groupNames = Object.keys(groupBits);
-  console.log(`[Model] Assigned view-mask bits to ${groupNames.length} group(s) from the model:`);
+  const bitsOrigin = declaredGroupBits !== null
+    ? `pinned by ${viewMasksSource}`
+    : 'derived from the model — pin them in the sidecar before writing patterns against them';
+  console.log(`[Model] View-mask bits for ${groupNames.length} group(s) (${bitsOrigin}):`);
   for (const g of groupNames) {
     console.log(`[Model]   0x${groupBits[g].toString(16).padStart(8, '0')}  ${g}`);
   }
@@ -347,7 +405,14 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
-  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits };
+  // {MASK_NAME: bit} table WasmHost injects into pattern source at
+  // compile time, so patterns reference masks by name instead of magic
+  // numbers. Built here (and only here) so sanitized-name collisions
+  // surface at model load, not at first compile.
+  const maskConstants = buildMaskConstants({ groupBits, viewMasks });
+  console.log(`[Model] Pattern constants: ${Object.keys(maskConstants).join(', ') || '(none)'}`);
+
+  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits, maskConstants };
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
@@ -778,6 +843,10 @@ async function main() {
     process.exit(1);
   }
 
+  // Model-derived MASK_* constants must be registered before ANY
+  // compile (boot pattern, mixer channels, live edits, blends).
+  wasmHost.setMaskConstants(model.maskConstants);
+
   console.log(`  Compiling pattern...`);
   const result = wasmHost.compile(patternCode);
   if (!result.ok) {
@@ -1011,8 +1080,14 @@ async function main() {
         try {
           const newModel = await loadModel(opts.modelName, true);
           
-          const oldStr = JSON.stringify({ p: model.pixels, e: model.specialEffects, v: model.viewMasks });
-          const newStr = JSON.stringify({ p: newModel.pixels, e: newModel.specialEffects, v: newModel.viewMasks });
+          // groupBits is part of the comparison: a sidecar edit that only
+          // renumbers the pinned table changes neither pixels nor presets
+          // in a detectable way here, but stale MASK_* constants would
+          // keep being injected into every later compile.
+          // (maskConstants derives from groupBits + viewMasks, so these
+          // three fields cover it.)
+          const oldStr = JSON.stringify({ p: model.pixels, e: model.specialEffects, v: model.viewMasks, g: model.groupBits });
+          const newStr = JSON.stringify({ p: newModel.pixels, e: newModel.specialEffects, v: newModel.viewMasks, g: newModel.groupBits });
           if (oldStr === newStr) return; // No meaningful change
           
           console.log(`\n  🔄 Model changed on disk. Hot-reloading...`);
@@ -1028,6 +1103,8 @@ async function main() {
           model.specialEffects = newModel.specialEffects;
           model.viewMasks = newModel.viewMasks;
           model.groupBits = newModel.groupBits;
+          model.maskConstants = newModel.maskConstants;
+          wasmHost.setMaskConstants(model.maskConstants);
 
           wasmHost.setCoords(model.pixels);
           wasmHost.setPixelMeta(model.pixels.map(px => ({

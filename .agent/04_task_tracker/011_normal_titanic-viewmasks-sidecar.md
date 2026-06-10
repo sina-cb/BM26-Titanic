@@ -9,10 +9,12 @@
 - **Updated:** 2026-06-10
 
 ## Description
-The engine now derives base group→bit assignments dynamically from the
-model, so the titanic's 30 groups all have real `vMask` bits — but the
-model has no `.viewmasks.js` sidecar yet, so CaptainPad's "VIEW MASKS"
-picker section is empty and patterns can't target named composites.
+UPDATE 2026-06-10: `titanic.viewmasks.js` now exists and pins all 30
+group bits (`export const groupBits`), so the bit contract is locked
+and patterns can already target base groups by name
+(`viewMask & MASK_BERG_ALPHA` — constants injected at compile time).
+Remaining work: pick and add the composite presets, which is what fills
+CaptainPad's "VIEW MASKS" picker section.
 
 With the new sidecar format, composites are one-liners by group name,
 e.g.:

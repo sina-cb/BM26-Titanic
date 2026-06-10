@@ -1,0 +1,46 @@
+// View-mask sidecar for the Titanic model.
+//
+// `groupBits` pins the base group → bit contract pattern code compiles
+// against; the engine validates it against the loaded model and fails
+// loudly on drift (docs/13 §4.5.1). Patterns reference these by
+// sanitized constant name (e.g. `viewMask & MASK_BERG_ALPHA`) — the
+// engine injects the values at compile time, so renumbering here is
+// safe as long as patterns use the names, not raw numbers.
+//
+// Composite presets (e.g. Bergs, Chimneys, SmallSails) are still to be
+// chosen — see .agent/04_task_tracker/011_normal_titanic-viewmasks-sidecar.md.
+
+export const groupBits = {
+  'Right Front Wall Generator':       0x00000001,
+  'Right Top Chimney Generator':      0x00000002,
+  'Right Front Deck Generator':       0x00000004,
+  'Right Center Auditorium Generator': 0x00000008,
+  'Left Back Wall':                   0x00000010,
+  'Right Back Wall Generator':        0x00000020,
+  'Left Front Wall Generator':        0x00000040,
+  'Left Top Chimney Generator':       0x00000080,
+  'Left Front Deck Generator':        0x00000100,
+  'Left Center Auditorium':           0x00000200,
+  'Left_Front_Left':                  0x00000400,
+  'Left_Back_Left':                   0x00000800,
+  'Left_Back_Right':                  0x00001000,
+  'Left_Front_Right':                 0x00002000,
+  'Right_Back_Left':                  0x00004000,
+  'Right_Back_Right':                 0x00008000,
+  'Right_Front_Right':                0x00010000,
+  'Right_Front_Left':                 0x00020000,
+  'Small_Left_4':                     0x00040000,
+  'Small_Left_3':                     0x00080000,
+  'Small_Left_2':                     0x00100000,
+  'Small_Left_1':                     0x00200000,
+  'Small_Right_4':                    0x00400000,
+  'Small_Right_3':                    0x00800000,
+  'Small_Right_2':                    0x01000000,
+  'Small_Right_1':                    0x02000000,
+  'Berg Alpha':                       0x04000000,
+  'Berg Beta':                        0x08000000,
+  'Berg Gamma':                       0x10000000,
+  'Berg Delta':                       0x20000000,
+};
+
+export const viewMasks = [];

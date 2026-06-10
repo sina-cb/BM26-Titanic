@@ -2,6 +2,8 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+import { injectMaskConstants } from './view_mask_constants.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -9,6 +11,11 @@ export class WasmHost {
   constructor() {
     this.Module = null;
     this.pixelCount = 0;
+
+    // Model-derived {MASK_NAME: bit} table injected into pattern source
+    // at compile time (see view_mask_constants.js). Set by the engine
+    // after loadModel and refreshed on model hot-reload.
+    this.maskConstants = {};
 
     // Pointers and Views
     this.coordPtr = 0;
@@ -64,8 +71,22 @@ export class WasmHost {
     this.coordView = new Float32Array(this.Module.HEAPF32.buffer, this.coordPtr, this.pixelCount * 3);
   }
 
+  setMaskConstants(constants) {
+    this.maskConstants = constants || {};
+  }
+
+  // Every compile path (boot pattern, mixer channels, live-edit API,
+  // blends/transitions) funnels through here, so MASK_* name resolution
+  // is uniform: referenced-but-undeclared constants are prepended as
+  // integer `var` declarations, unknown names fail the compile loudly.
   compile(code) {
-    const handle = this._compile(code);
+    let source;
+    try {
+      source = injectMaskConstants(code, this.maskConstants);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    const handle = this._compile(source);
     if (handle === 0) {
       return { ok: false, error: this._getError() };
     }

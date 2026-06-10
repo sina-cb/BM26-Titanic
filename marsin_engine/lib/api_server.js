@@ -2186,10 +2186,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
         viewMasks,
-        // Dynamic group→bit table the engine derived from this model at
-        // load time (docs/13 §4.5.1). Surfaced so operators and tools can
-        // verify the assignment instead of guessing at bit values.
+        // Group→bit table for this model (pinned by the sidecar or
+        // derived at load time — docs/13 §4.5.1) and the MASK_* pattern
+        // constants built from it. Surfaced so operators, tools, and
+        // pattern authors can verify the assignment instead of guessing
+        // at bit values.
         groupBits: (model && model.groupBits) || {},
+        maskConstants: (model && model.maskConstants) || {},
         pixelCount: pixels.length,
       }));
     }

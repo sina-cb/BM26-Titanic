@@ -87,3 +87,39 @@
   as simple `groups` entries.
 - Consider injecting `MASK_<NAME>` constants into pattern source at
   compile time so patterns stop hardcoding preset bits entirely.
+
+## Addendum (same day): pinned `groupBits` + `MASK_*` injection
+
+Sina's review concern: derived first-appearance bits are deterministic
+but *implicit* — reordering fixtures in the sim scene and re-exporting
+would silently renumber the bits patterns hardcode. Decision: sidecars
+own the contract (the MarsinLED/WASM `viewBit("name")` intrinsic is
+deferred). Second pass on the same branch:
+
+- **Pinned `groupBits`:** sidecars now export an explicit
+  `groupBits = { '<group>': bit }` table. The engine validates it
+  strictly against the loaded model (two-way coverage, power-of-two
+  unique bits, no preset collisions — all throw) and uses it verbatim.
+  Derived first-appearance assignment remains only for sidecar-less
+  models, logged with a "pin me" hint.
+- **All four models pinned**, including a new `titanic.viewmasks.js`
+  locking the 30 titanic groups (no composite presets yet — task 011).
+- **`MASK_*` constants in patterns:** `WasmHost.compile` (the single
+  choke point for boot, mixer, live-edit API, and blend compiles)
+  resolves referenced-but-undeclared `MASK_<NAME>` identifiers against
+  the model's table (`lib/view_mask_constants.js`) and prepends them as
+  one `var` line. Unknown name → loud compile error listing the model's
+  known constants. A pattern's own `var MASK_X = ...` wins, so the 28
+  Logsville patterns are untouched and still compile (verified with a
+  live dry-run of `85_redwood_starry_canopy`).
+- API: `/model/view-selection-options` additionally returns
+  `maskConstants`.
+- Probed the real MarsinScript compiler first: duplicate `var`
+  declarations are legal, undefined variables are a compile error —
+  the injection design leans on both.
+
+Validation (second pass): 15/15 new unit tests
+(`tests/view_mask_constants.test.js`, includes two end-to-end compiles
+through the real WASM compiler), 33/33 mixer masking tests, dry-run
+exit 0 on all four models with pinned tables logged, Logsville pattern
+compile OK, `node --check` + `git diff --check` clean.
