@@ -160,6 +160,22 @@ function reachableUrls(port) {
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
   const localControlKinds = new Set([1, 2, 3, 6]);
+
+  /**
+   * Distinct fixture-group names declared by the loaded model, sorted
+   * for stable UI ordering. Source list for the Dimmer Rack's FIXED
+   * COLORS picker and the validation gate for PUT /group-fixed-colors
+   * (docs/32 §2.4).
+   */
+  function listModelGroups() {
+    const seen = new Set();
+    if (model && Array.isArray(model.pixels)) {
+      for (const px of model.pixels) {
+        if (px && typeof px.group === 'string' && px.group.length > 0) seen.add(px.group);
+      }
+    }
+    return [...seen].sort();
+  }
   // Monotonic suffix for new-channel ids — guards against two POSTs in
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
@@ -1794,6 +1810,63 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url === '/dimmers') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(globalsState.dimmers || {}));
+
+    // ── Group fixed colors (docs/32) ─────────────────────────────────
+    // Per-group color locks driven by the CaptainPad Dimmer Rack.
+    // GET    /group-fixed-colors          → { groups, overrides }
+    // PUT    /group-fixed-colors/:group   → set/replace override
+    // DELETE /group-fixed-colors/:group   → clear override
+    // Group names are URL-encoded in the path (names may have spaces).
+    } else if (req.method === 'GET' && req.url === '/group-fixed-colors') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        groups: listModelGroups(),
+        overrides: globalEffectsController ? globalEffectsController.groupFixedColors : {},
+      }));
+    } else if ((req.method === 'PUT' || req.method === 'DELETE')
+               && req.url.startsWith('/group-fixed-colors/')) {
+      const m = req.url.match(/^\/group-fixed-colors\/(.+)$/);
+      if (!m) { res.writeHead(404); return res.end('Not Found'); }
+      if (!globalEffectsController) {
+        res.writeHead(503); return res.end(JSON.stringify({ error: 'effects controller not initialized' }));
+      }
+      let group;
+      try {
+        group = decodeURIComponent(m[1]);
+      } catch (e) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: `bad group encoding: ${e.message}` }));
+      }
+      if (req.method === 'DELETE') {
+        const removed = globalEffectsController.clearGroupFixedColor(group);
+        if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
+        stateManager.saveGlobalsState(globalsState);
+        broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'ok', group, removed }));
+      }
+      readBody(data => {
+        try {
+          // Reject unknown groups loudly — a typo'd group name must not
+          // become a silent no-op override (codex P0).
+          const known = listModelGroups();
+          if (!known.includes(group)) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `unknown group '${group}' (model groups: ${known.join(', ')})` }));
+          }
+          globalEffectsController.setGroupFixedColor(group, data.color, data.brightness);
+          if (!globalsState.groupFixedColors) globalsState.groupFixedColors = {};
+          globalsState.groupFixedColors[group] = {
+            color: [...data.color],
+            brightness: data.brightness,
+          };
+          stateManager.saveGlobalsState(globalsState);
+          broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', group, override: globalEffectsController.groupFixedColors[group] }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else if (req.method === 'POST' && req.url === '/section-brightness') {
       readBody(data => {
         if (data.sectionId === undefined || data.brightness === undefined) {

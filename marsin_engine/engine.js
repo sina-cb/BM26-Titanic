@@ -450,6 +450,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       });
     }
 
+    // Group fixed-color locks (docs/32): repaint operator-locked groups
+    // AFTER all macros (a locked group must not flicker with the show)
+    // but BEFORE intensity/blackout below, so the master cutoffs always
+    // keep the final say. Single application point — replaces the
+    // summer-camp djLights hack's duplicated post-intensity path.
+    if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
+
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
 

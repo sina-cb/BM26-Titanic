@@ -75,6 +75,10 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // docs/32: per-group fixed-color override table. Broadcast on every
+  // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
+  // FIXED COLORS chips. Low volume, operator-driven.
+  groupFixedColors:            TOPICS.CONTROL,
   // docs/31: engine-owned scheduler. Broadcasts on every create / patch
   // / delete / fire / stop / error. Small payload, low frequency
   // (operator-driven CRUD + at most one tick at SCHEDULER_TICK_MS=250 ms
