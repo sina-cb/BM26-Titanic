@@ -101,23 +101,80 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   row2.appendChild(mkLabel('Fix ID:'));
   const fixInp = mkInput(config.fixtureId, 65535, (v) => { config.fixtureId = v; fireChange(); });
   row2.appendChild(fixInp);
-  row2.appendChild(mkLabel('View:'));
-  const viewInp = mkInput(config.viewMask, 65535, (v) => { config.viewMask = v; fireChange(); });
-  row2.appendChild(viewInp);
   wrap.appendChild(row2);
+
+  // ── View Membership Chips ──
+  const viewRow = document.createElement('div');
+  viewRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:4px;';
+  viewRow.appendChild(mkLabel('Views:'));
+  const chipsContainer = document.createElement('span');
+  chipsContainer.style.cssText = 'display:inline-flex;flex-wrap:wrap;gap:2px;';
+  viewRow.appendChild(chipsContainer);
+  wrap.appendChild(viewRow);
+
+  function _hex(bit) { return '0x' + bit.toString(16).toUpperCase(); }
+
+  function renderViewChips() {
+    chipsContainer.innerHTML = '';
+    const reg = window.__viewRegistry || { custom: [] };
+    const views = reg.custom || [];
+    if (views.length === 0) {
+      const none = document.createElement('span');
+      none.style.cssText = 'color:#555;font-size:9px;font-style:italic;';
+      none.textContent = 'no views defined';
+      chipsContainer.appendChild(none);
+      return;
+    }
+    views.forEach(view => {
+      const active = ((config.viewMask || 0) & view.bit) !== 0;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.textContent = view.name;
+      chip.title = active
+        ? `Click to remove from "${view.name}" (${_hex(view.bit)})`
+        : `Click to add to "${view.name}" (${_hex(view.bit)})`;
+      chip.style.cssText =
+        'padding:1px 5px;border-radius:3px;font-size:9px;font-family:inherit;cursor:pointer;border:1px solid;transition:all 0.15s;' +
+        (active
+          ? 'background:rgba(240,192,96,0.25);color:#f0c060;border-color:rgba(240,192,96,0.5);'
+          : 'background:rgba(60,60,60,0.5);color:#666;border-color:#444;');
+      chip.onmouseenter = () => { chip.style.opacity = '0.8'; };
+      chip.onmouseleave = () => { chip.style.opacity = '1'; };
+      chip.onclick = (e) => {
+        e.stopPropagation();
+        if (active) {
+          config.viewMask = (config.viewMask || 0) & ~view.bit;
+        } else {
+          config.viewMask = (config.viewMask || 0) | view.bit;
+        }
+        fireChange();
+        renderViewChips();
+        if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+      };
+      chipsContainer.appendChild(chip);
+    });
+  }
+  renderViewChips();
 
   parentChildrenEl.appendChild(wrap);
 
-  return {
+  const panel = {
     root: wrap,
-    inputs: { controllerId: ctrlInp, sectionId: sectInp, fixtureId: fixInp, viewMask: viewInp },
+    inputs: { controllerId: ctrlInp, sectionId: sectInp, fixtureId: fixInp },
     refresh() {
       ctrlInp.value = config.controllerId;
       sectInp.value = config.sectionId;
       fixInp.value = config.fixtureId;
-      viewInp.value = config.viewMask;
+      renderViewChips();
     },
   };
+
+  // Register for global refresh from Views panel assign/unassign
+  if (!window.__metadataPanelRegistry) window.__metadataPanelRegistry = [];
+  window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+  window.__metadataPanelRegistry.push(panel);
+
+  return panel;
 }
 
 export
@@ -334,6 +391,9 @@ function setupGUI() {
     }
     chip.textContent = '● UNSAVED CHANGES';
     chip.style.opacity = dirty ? '1' : '0';
+    if (window.refreshViewMasksPanel) {
+      window.refreshViewMasksPanel();
+    }
   }
   window._setSceneDirty = _setSceneDirty;
 

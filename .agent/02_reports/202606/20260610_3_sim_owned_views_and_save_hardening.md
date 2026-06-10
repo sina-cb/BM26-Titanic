@@ -108,4 +108,26 @@ Fixes (all in `gui_builder.js` / `save-server.js`):
 - Task 012: Logsville patches use universe 7, absent from
   `sacn_universes` — PatchManager flags it on every boot.
 - Task 011 (still open): pick titanic composite views — now trivial in
-  the Views panel.
+  `views.yaml` or via the panel.
+
+---
+
+## Continuation / Final Polish (Handoff)
+
+We debugged and fixed the remaining interactive bugs, updated the 3D isolation preview mechanics, integrated view membership editing in the main lil-gui metadata cards, and resolved stability/memory residue issues:
+
+### 1. Fixed 3D View Isolation Preview (Lights & Glow Dots Now Hiding)
+* **LightPool SpotLights:** Direct checking of `window.__activePreviewView` in `_collectLightRequests()` (`light_pool.js`) makes the spotlight pool immune to mutable/volatile state resets on the fixture group instances. Only member fixtures request lights during isolation.
+* **ModelFixture SpotLights:** Direct visibility toggling correctly propagates through `setVisibility`.
+* **Iceberg Floodlights:** Updated `Iceberg.setVisibility()` (`iceberg.js`) to hide its internal floodlights during isolation, dynamically restoring standard properties upon exit.
+* **InstancedMesh (Glow Dots):** Updated the raw flush loop in `animate.js` to check if active preview isolation is active, forcing non-member pixel colors to 0 (black). This successfully hides the glowing dots in the viewport.
+* **Fog Machines:** Excluded from isolation across all components.
+
+### 2. View Membership Editing (lil-gui Chips)
+* Added interactive view chips in metadata panels (`appendMetadataPanelV2` in `gui_builder.js`) for toggling membership masks on the fly.
+* Registered panels in a global registry `window.__metadataPanelRegistry`.
+* Added automatic panel refreshes in `view_masks_editor.js` on view renaming, deleting, group addition/removal, and custom view creation to ensure instant UI sync.
+* Filtered registry to keep only `.isConnected` elements, eliminating memory leaks when folders are dynamically destroyed/rebuilt.
+
+### 3. Verification & Regressions
+* Ran the tap-based test suite (`node --test tests/fog_regression.test.js`) and verified it passes cleanly.

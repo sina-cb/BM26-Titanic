@@ -428,9 +428,22 @@ function _collectLightRequests() {
   // Only collect if analytic lighting is enabled
   if (profileDef.render.analyticLightMode === 'none') return requests;
 
+  const activeView = window.__activePreviewView;
   const fixtureList = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
   for (const fixture of fixtureList) {
-    if (!fixture || !fixture.group || !fixture.group.visible) continue;
+    if (!fixture || !fixture.group) continue;
+
+    // Fog machines are infrastructure — always show their lights if any
+    const isFog = fixture.config && 
+                  (fixture.config.type === 'TEFogMachine' || fixture.config.type === 'ChauvetHaze4D');
+
+    if (activeView && !isFog) {
+      const isBitMember = ((fixture.config.viewMask || 0) & activeView.bit) !== 0;
+      const isGroupMember = activeView.groups && activeView.groups.includes(fixture.config.group);
+      if (!isBitMember && !isGroupMember) continue;
+    } else {
+      if (!fixture.group.visible) continue;
+    }
     if (!fixture.pixels || !Array.isArray(fixture.pixels)) continue;
 
     const config = fixture.config;

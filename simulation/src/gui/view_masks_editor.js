@@ -9,7 +9,7 @@
  * group membership is stored on the view itself. The model exporter
  * turns all of it into `<scene>.viewmasks.js` for the engine.
  */
-import { params, selectedFixtureIndices } from "../core/state.js";
+import { params, selectedFixtureIndices } from '../core/state.js';
 import {
   reconcileGroupBits,
   renameGroup,
@@ -17,8 +17,11 @@ import {
   setCustomViewBit,
   removeCustomView,
   listPixelGroups,
-} from "../dmx/view_registry.js";
-import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
+  nextFreeBit,
+} from '../dmx/view_registry.js';
+import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
+
+window.__activePreviewView = null;
 
 function fixtureList() {
   return (params.dmxFixtures && params.dmxFixtures.length > 0) ? params.dmxFixtures : params.parLights;
@@ -51,6 +54,198 @@ function markChanged() {
   if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
 }
 
+// ── Custom DOM Modals ────────────────────────────────────────────────
+function showCustomModal({ title, placeholder, value = '', onConfirm }) {
+  const overlay = document.createElement('div');
+  overlay.className = 'vm-modal-overlay';
+
+  const card = document.createElement('div');
+  card.className = 'vm-modal-card';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'vm-modal-title';
+  titleEl.textContent = title;
+  card.appendChild(titleEl);
+
+  const input = document.createElement('input');
+  input.className = 'vm-modal-input';
+  input.type = 'text';
+  input.placeholder = placeholder;
+  input.value = value;
+  input.setAttribute('value', value);
+  card.appendChild(input);
+
+  const actions = document.createElement('div');
+  actions.className = 'vm-modal-actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'vm-modal-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick = () => {
+    overlay.remove();
+  };
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'vm-modal-btn vm-modal-btn-primary';
+  confirmBtn.textContent = 'OK';
+  confirmBtn.onclick = () => {
+    onConfirm(input.value);
+    overlay.remove();
+  };
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(confirmBtn);
+  card.appendChild(actions);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  input.focus();
+  input.select();
+
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      confirmBtn.click();
+    } else if (e.key === 'Escape') {
+      cancelBtn.click();
+    }
+  };
+}
+
+function showCustomConfirm({ title, text, onConfirm }) {
+  const overlay = document.createElement('div');
+  overlay.className = 'vm-modal-overlay';
+
+  const card = document.createElement('div');
+  card.className = 'vm-modal-card';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'vm-modal-title';
+  titleEl.textContent = title;
+  card.appendChild(titleEl);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'vm-modal-body';
+  bodyEl.textContent = text;
+  card.appendChild(bodyEl);
+
+  const actions = document.createElement('div');
+  actions.className = 'vm-modal-actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'vm-modal-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick = () => {
+    overlay.remove();
+  };
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'vm-modal-btn vm-modal-btn-danger';
+  confirmBtn.textContent = 'Delete';
+  confirmBtn.onclick = () => {
+    onConfirm();
+    overlay.remove();
+  };
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(confirmBtn);
+  card.appendChild(actions);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  confirmBtn.focus();
+
+  overlay.onkeydown = (e) => {
+    if (e.key === 'Escape') {
+      cancelBtn.click();
+    } else if (e.key === 'Enter') {
+      confirmBtn.click();
+    }
+  };
+}
+
+// ── 3D View Isolation Preview ────────────────────────────────────────
+export function applyViewMaskIsolation() {
+  const activeView = window.__activePreviewView;
+  let indicator = document.getElementById('vm-isolation-hud');
+
+  if (activeView) {
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'vm-isolation-hud';
+      document.body.appendChild(indicator);
+    }
+    indicator.innerHTML = `<span>👁 VIEW ISOLATION ACTIVE: <strong>${activeView.name}</strong></span><button class="vm-hud-clear">Exit Preview ✕</button>`;
+    indicator.className = 'vm-isolation-hud-active';
+    
+    // Add exit handler
+    const clearBtn = indicator.querySelector('.vm-hud-clear');
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        window.__activePreviewView = null;
+        applyViewMaskIsolation();
+        window.refreshViewMasksPanel();
+      };
+    }
+  } else {
+    if (indicator) {
+      indicator.remove();
+    }
+  }
+
+  // Compile list of all fixtures
+  const list = [
+    ...(window.parFixtures || []),
+    ...(window.dmxSceneFixtures || []),
+    ...(window.ledStrandFixtures || []),
+    ...(window.icebergFixtures || [])
+  ];
+
+  list.forEach(f => {
+    if (!f) return;
+
+    // Fog machines are infrastructure — always visible, never isolated
+    const isFog = f.config.hasOwnProperty('type') && (f.config.type === 'TEFogMachine' || f.config.type === 'ChauvetHaze4D');
+    if (isFog) {
+      f.setVisibility(true);
+      return;
+    }
+
+    if (!activeView) {
+      // Restore default visibility based on master/profile/params settings
+      const isStrand = f.config.hasOwnProperty('startX');
+      const isIceberg = f.config.hasOwnProperty('peakCount');
+
+      if (isStrand) {
+        f.setVisibility(params.strandsEnabled !== false);
+      } else if (isIceberg) {
+        f.setVisibility(params.icebergsEnabled !== false);
+      } else {
+        const masterEnabled = params.dmxEnabled !== false && params.parsEnabled !== false;
+        f.setVisibility(masterEnabled, params.conesEnabled !== false);
+      }
+      // Clear isolation flag so light pool resumes normal operation
+      f._viewIsolated = false;
+      return;
+    }
+
+    // Isolate membership
+    const isBitMember = ((f.config.viewMask || 0) & activeView.bit) !== 0;
+    const isGroupMember = activeView.groups && activeView.groups.includes(f.config.group);
+    const isMember = isBitMember || isGroupMember;
+
+    if (isMember) {
+      f.setVisibility(true, params.conesEnabled !== false);
+      f._viewIsolated = false;
+    } else {
+      f.setVisibility(false, false);
+      // Flag for the light pool to skip this fixture even though
+      // group.visible may flicker during frame updates
+      f._viewIsolated = true;
+    }
+  });
+}
+
+// ── Views Editor Setup ───────────────────────────────────────────────
 export function setupViewMasksEditor() {
   const panel = document.getElementById('view-masks-panel');
   if (!panel) return;
@@ -105,21 +300,43 @@ export function setupViewMasksEditor() {
       body.appendChild(renderCustomView(reg, view));
     }
 
+    // Add buttons/toolbar at the bottom
     const addBtn = document.createElement('button');
     addBtn.className = 'vm-btn vm-add';
     addBtn.textContent = '+ New View';
     addBtn.onclick = () => {
-      const name = prompt('View name (becomes MASK_* constant in patterns):');
-      if (!name) return;
-      try {
-        addCustomView(reg, name);
-        markChanged();
-        render();
-      } catch (err) {
-        alert(err.message);
-      }
+      showCustomModal({
+        title: 'Enter view name (becomes MASK_* constant):',
+        placeholder: 'e.g. Chimneys',
+        onConfirm: (name) => {
+          const trimmed = String(name || '').trim();
+          if (trimmed.length === 0) return;
+          try {
+            addCustomView(reg, trimmed);
+            markChanged();
+            render();
+            refreshMetadataPanels();
+          } catch (err) {
+            showCustomModal({ title: 'Error', value: err.message, onConfirm: () => {} });
+          }
+        }
+      });
     };
     body.appendChild(addBtn);
+
+    // Save configuration button inside the Views panel
+    const saveBtn = document.createElement('button');
+    const isDirty = window.__sceneDirty || false;
+    saveBtn.className = isDirty ? 'vm-btn vm-save vm-dirty' : 'vm-btn vm-save';
+    saveBtn.textContent = isDirty ? '💾 Save Configuration *' : '💾 Save Configuration';
+    saveBtn.title = isDirty ? 'Unsaved changes! Click to save configuration files.' : 'Configuration saved to disk.';
+    saveBtn.onclick = () => {
+      if (window.exportConfig) {
+        window.exportConfig();
+        setTimeout(() => render(), 400);
+      }
+    };
+    body.appendChild(saveBtn);
 
     const hint = document.createElement('div');
     hint.className = 'vm-hint';
@@ -131,27 +348,46 @@ export function setupViewMasksEditor() {
     const card = document.createElement('div');
     card.className = 'vm-card';
 
-    // Row 1: name + bit (both editable)
+    // Highlight card if isolated/previewing
+    const isIsolated = window.__activePreviewView && window.__activePreviewView.bit === view.bit;
+    if (isIsolated) {
+      card.classList.add('vm-card-previewing');
+    }
+
+    // Row 1: name + bit (both editable) + preview eye toggle
     const row1 = document.createElement('div');
     row1.className = 'vm-row';
+
     const nameInp = document.createElement('input');
     nameInp.className = 'vm-input vm-name';
     nameInp.value = view.name;
+    nameInp.setAttribute('value', view.name);
     nameInp.title = 'View name';
     nameInp.onchange = () => {
       const next = nameInp.value.trim();
       if (next.length === 0 || reg.custom.some(v => v !== view && v.name === next)) {
-        alert(next.length === 0 ? 'View name must not be empty' : `A view named '${next}' already exists`);
-        nameInp.value = view.name;
+        showCustomModal({
+          title: 'Invalid Name',
+          value: next.length === 0 ? 'View name must not be empty' : `A view named '${next}' already exists`,
+          onConfirm: () => {
+            nameInp.value = view.name;
+            nameInp.setAttribute('value', view.name);
+          }
+        });
         return;
       }
       view.name = next;
+      nameInp.setAttribute('value', next);
       markChanged();
+      render();
+      refreshMetadataPanels();
     };
+
     const bitInp = document.createElement('input');
     bitInp.className = 'vm-input vm-bit';
     bitInp.value = hex(view.bit);
-    bitInp.title = 'Mask bit (power of two). Patterns hardcoding this value must be updated if changed.';
+    bitInp.setAttribute('value', hex(view.bit));
+    bitInp.title = 'Mask bit (power of two).';
     bitInp.onchange = () => {
       const parsed = parseInt(bitInp.value, bitInp.value.trim().toLowerCase().startsWith('0x') ? 16 : 10);
       try {
@@ -166,13 +402,37 @@ export function setupViewMasksEditor() {
         }
         markChanged();
         render();
+        refreshMetadataPanels();
       } catch (err) {
-        alert(err.message);
-        bitInp.value = hex(view.bit);
+        showCustomModal({
+          title: 'Invalid Bit',
+          value: err.message,
+          onConfirm: () => {
+            bitInp.value = hex(view.bit);
+            bitInp.setAttribute('value', hex(view.bit));
+          }
+        });
       }
     };
+
+    // 3D Preview isolation button
+    const prevBtn = document.createElement('button');
+    prevBtn.className = isIsolated ? 'vm-btn-prev active' : 'vm-btn-prev';
+    prevBtn.textContent = isIsolated ? '👁' : '👁‍🗨';
+    prevBtn.title = isIsolated ? 'Clear preview isolation' : 'Preview/Isolate this view in 3D';
+    prevBtn.onclick = () => {
+      if (isIsolated) {
+        window.__activePreviewView = null;
+      } else {
+        window.__activePreviewView = view;
+      }
+      applyViewMaskIsolation();
+      render();
+    };
+
     row1.appendChild(nameInp);
     row1.appendChild(bitInp);
+    row1.appendChild(prevBtn);
     card.appendChild(row1);
 
     // Row 2: group membership chips + add-group dropdown
@@ -187,15 +447,19 @@ export function setupViewMasksEditor() {
         view.groups.splice(view.groups.indexOf(g), 1);
         markChanged();
         render();
+        refreshMetadataPanels();
       };
       row2.appendChild(chip);
     }
+
     const groupSel = document.createElement('select');
     groupSel.className = 'vm-select';
     const placeholder = document.createElement('option');
     placeholder.value = '';
     placeholder.textContent = '+ group…';
     groupSel.appendChild(placeholder);
+    
+    // Add existing pixel groups
     for (const g of pixelGroups()) {
       if (view.groups.includes(g)) continue;
       const opt = document.createElement('option');
@@ -203,11 +467,47 @@ export function setupViewMasksEditor() {
       opt.textContent = g;
       groupSel.appendChild(opt);
     }
+    
+    // Add + custom group... option
+    const customGroupOpt = document.createElement('option');
+    customGroupOpt.value = '__custom__';
+    customGroupOpt.textContent = '+ custom group...';
+    groupSel.appendChild(customGroupOpt);
+
     groupSel.onchange = () => {
       if (!groupSel.value) return;
-      view.groups.push(groupSel.value);
-      markChanged();
-      render();
+
+      if (groupSel.value === '__custom__') {
+        groupSel.selectedIndex = 0;
+        showCustomModal({
+          title: 'Enter custom group name:',
+          placeholder: 'e.g. SmallSails',
+          onConfirm: (typedGroupName) => {
+            const trimmed = String(typedGroupName || '').trim();
+            if (trimmed.length > 0) {
+              if (!view.groups.includes(trimmed)) {
+                view.groups.push(trimmed);
+                
+                // Keep the groupBit mapping stable by ensuring it has a bit
+                if (reg.groupBits[trimmed] === undefined) {
+                  const bit = nextFreeBit(reg);
+                  if (bit !== 0) {
+                    reg.groupBits[trimmed] = bit;
+                  }
+                }
+                markChanged();
+                render();
+                refreshMetadataPanels();
+              }
+            }
+          }
+        });
+      } else {
+        view.groups.push(groupSel.value);
+        markChanged();
+        render();
+        refreshMetadataPanels();
+      }
     };
     row2.appendChild(groupSel);
     card.appendChild(row2);
@@ -236,6 +536,10 @@ export function setupViewMasksEditor() {
       }
       markChanged();
       refreshCount();
+      // Refresh lil-gui metadata panels so view chips update
+      if (window.__metadataPanelRegistry) {
+        window.__metadataPanelRegistry.forEach(p => { try { p.refresh(); } catch(_) {} });
+      }
     };
 
     const unassignBtn = document.createElement('button');
@@ -249,6 +553,10 @@ export function setupViewMasksEditor() {
       }
       markChanged();
       refreshCount();
+      // Refresh lil-gui metadata panels so view chips update
+      if (window.__metadataPanelRegistry) {
+        window.__metadataPanelRegistry.forEach(p => { try { p.refresh(); } catch(_) {} });
+      }
     };
 
     const delBtn = document.createElement('button');
@@ -256,13 +564,24 @@ export function setupViewMasksEditor() {
     delBtn.textContent = '🗑';
     delBtn.title = 'Delete view (clears its bit from all fixtures)';
     delBtn.onclick = () => {
-      if (!confirm(`Delete view '${view.name}'? Its bit ${hex(view.bit)} is cleared from all fixtures.`)) return;
-      for (const f of fixtureList()) {
-        if (f) f.viewMask = (f.viewMask || 0) & ~view.bit;
-      }
-      removeCustomView(reg, view);
-      markChanged();
-      render();
+      showCustomConfirm({
+        title: 'Delete View',
+        text: `Delete view '${view.name}'? Its bit ${hex(view.bit)} is cleared from all fixtures.`,
+        onConfirm: () => {
+          for (const f of fixtureList()) {
+            if (f) f.viewMask = (f.viewMask || 0) & ~view.bit;
+          }
+          // Turn off isolation preview if we deleted the isolated view
+          if (window.__activePreviewView && window.__activePreviewView.bit === view.bit) {
+            window.__activePreviewView = null;
+            applyViewMaskIsolation();
+          }
+          removeCustomView(reg, view);
+          markChanged();
+          render();
+          refreshMetadataPanels();
+        }
+      });
     };
 
     row3.appendChild(count);
@@ -293,4 +612,13 @@ export function setupViewMasksEditor() {
       render();
     }
   };
+}
+
+function refreshMetadataPanels() {
+  if (window.__metadataPanelRegistry) {
+    window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+    window.__metadataPanelRegistry.forEach(p => {
+      try { p.refresh(); } catch(_) {}
+    });
+  }
 }

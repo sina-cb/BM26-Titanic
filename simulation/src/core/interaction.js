@@ -252,7 +252,12 @@ export function onPointerDown(event) {
   if (
     event.button !== 0 ||
     event.target.tagName === "INPUT" ||
-    event.target.closest(".lil-gui")
+    event.target.tagName === "SELECT" ||
+    event.target.tagName === "BUTTON" ||
+    event.target.closest(".lil-gui") ||
+    event.target.closest("#view-masks-panel") ||
+    event.target.closest(".vm-modal-overlay") ||
+    event.target.closest("#vm-isolation-hud")
   )
     return;
 

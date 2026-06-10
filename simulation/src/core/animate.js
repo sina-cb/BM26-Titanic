@@ -330,21 +330,26 @@ export function animate() {
      for (let i = 0; i < count; i++) {
         const entry = _batchRenderList[i];
         
-        let rn = 0, gn = 0, bn = 0;
-        
-        if (!window._patchesActive) {
-           // All-unpatched direct mode: show pattern colors
-           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
-        } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
-           // Mixed mode: unpatched pixels stay black
-           rn = 0; gn = 0; bn = 0;
-        } else {
-           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
-        }
+         let rn = 0, gn = 0, bn = 0;
+         
+         const activeView = window.__activePreviewView;
+         const isIsolated = activeView && !(((entry.vMask || 0) & activeView.bit) !== 0 || (activeView.groups && activeView.groups.includes(entry.group)));
+
+         if (!isIsolated) {
+            if (!window._patchesActive) {
+               // All-unpatched direct mode: show pattern colors
+               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+            } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
+               // Mixed mode: unpatched pixels stay black
+               rn = 0; gn = 0; bn = 0;
+            } else {
+               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+            }
+         }
         
         const [previewR, previewG, previewB] = scaleSimulationPreviewRgb(rn, gn, bn);
         _pixelColorCache.setRGB(previewR, previewG, previewB);
