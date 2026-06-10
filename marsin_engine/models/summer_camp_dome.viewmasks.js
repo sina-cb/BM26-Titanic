@@ -1,25 +1,18 @@
 // View-mask sidecar for the Summer Camp Dome model.
 //
 // This sidecar defines composite view masks for the dome.
-// Base groups are automatically mapped to bits by the engine at boot time.
-
-/** Inclusive range [start, end]. */
-function range(start, end) {
-  const arr = [];
-  for (let i = start; i <= end; i++) arr.push(i);
-  return arr;
-}
+// Base groups get their bits dynamically from the engine at load time
+// (docs/13 §4.5.1); composites reference those groups BY NAME so they
+// survive model regeneration and group renames.
 
 export const viewMasks = [
   // ── Composite presets ───────────────────────────────────────────
   {
-    name:  'Apex',
-    bit:   0x03,                       // TriangleEdges | TrianglePars
-    pixelIndices: range(0, 56),
+    name:   'Apex',
+    groups: ['TriangleEdges', 'TrianglePars'],
   },
   {
-    name:  'AllButApex',
-    bit:   0x0C,                       // BarLights | VintageLights (all but apex)
-    pixelIndices: range(57, 320),
+    name:   'AllButApex',
+    groups: ['BarLights', 'VintageLights'],
   },
 ];

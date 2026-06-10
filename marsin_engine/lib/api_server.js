@@ -2186,6 +2186,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
         viewMasks,
+        // Dynamic group→bit table the engine derived from this model at
+        // load time (docs/13 §4.5.1). Surfaced so operators and tools can
+        // verify the assignment instead of guessing at bit values.
+        groupBits: (model && model.groupBits) || {},
         pixelCount: pixels.length,
       }));
     }
