@@ -127,20 +127,7 @@ parLights:
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: 6
-      'y': 3
-      z: 6.5
-      rotX: -70
-      rotY: 0
-      rotZ: 0
-    - group: TowerBars
-      name: TowerFrontLeft
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 7.5
+      x: 6.689501670873074
       'y': 3
       z: 6.5
       rotX: -70
@@ -155,23 +142,10 @@ parLights:
       penumbra: 0.5
       x: 8.5
       'y': 3
-      z: 7.5
-      rotX: -80.0000000000001
-      rotY: -90.00000000000007
-      rotZ: -3.663216883927284e-14
-    - group: TowerBars
-      name: TowerLeftBack
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 8.5
-      'y': 3
-      z: 9
-      rotX: -80.0000000000001
-      rotY: -90.00000000000007
-      rotZ: -3.663216883927284e-14
+      z: 8.309875232585572
+      rotX: -80.00000000000017
+      rotY: -90.00000000000016
+      rotZ: -3.663216883927333e-14
     - group: TowerBars
       name: TowerRightBack
       fixtureType: ShehdsBar
@@ -181,49 +155,10 @@ parLights:
       penumbra: 0.5
       x: 5
       'y': 3
-      z: 9
-      rotX: -80.0000000000001
-      rotY: 90.00000000000053
-      rotZ: -3.663216883927284e-13
-    - group: TowerBars
-      name: TowerRightFront
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 5
-      'y': 3
-      z: 7.5
-      rotX: -80.0000000000001
-      rotY: 90.00000000000044
-      rotZ: -3.480056039730924e-13
-    - group: TowerBars
-      name: TowerBackLeft
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 7.5
-      'y': 3
-      z: 10
-      rotX: -75.00000000000001
-      rotY: -179.99999999999997
-      rotZ: -2.6186715604073143e-14
-    - group: TowerBars
-      name: TowerBackRight
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: 6
-      'y': 3
-      z: 10
-      rotX: -75.00000000000001
-      rotY: -179.99999999999997
-      rotZ: -2.6186715604073136e-14
+      z: 8.040498854381248
+      rotX: -80.00000000000014
+      rotY: 90.0000000000006
+      rotZ: -4.0295385723200765e-13
     - group: TowerVintageLights
       name: TowerFrontRightVintage
       fixtureType: VintageLed
@@ -234,9 +169,9 @@ parLights:
       x: 5.049758203708605
       'y': 3.0678628544504076
       z: 6.669003175692958
-      rotX: -55
-      rotY: 41.50527312808761
-      rotZ: 0
+      rotX: -55.00000000000003
+      rotY: 41.505273128087616
+      rotZ: 5.545127867695253e-15
     - group: TowerVintageLights
       name: TowerFrontLeftVintage
       fixtureType: VintageLed
@@ -248,8 +183,8 @@ parLights:
       'y': 3.0678628544504076
       z: 6.669003175692958
       rotX: -55.000000000000014
-      rotY: -51.82815281392245
-      rotZ: 0
+      rotY: -51.82815281392246
+      rotZ: 5.545127867695253e-15
     - group: TowerVintageLights
       name: TowerBackRightVintage
       fixtureType: VintageLed
@@ -257,9 +192,9 @@ parLights:
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: 5.070230842503877
-      'y': 3.0678628544504076
-      z: 9.948598948898022
+      x: 5
+      'y': 3
+      z: 10
       rotX: -59.99999999999999
       rotY: 138.7300186117625
       rotZ: 0
@@ -275,7 +210,33 @@ parLights:
       z: 9.948598948898022
       rotX: -60.00000000000005
       rotY: -132.01857479625406
-      rotZ: 6.361109362927035e-15
+      rotZ: 1.2722218725854084e-14
+    - group: DJ Lights
+      name: DJLightLeft
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 7.422965986131673
+      'y': 1.5
+      z: 6.450692644851269
+      rotX: -0.0
+      rotY: 0
+      rotZ: 0
+    - group: DJ Lights
+      name: DJLightRight
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 5.108211940012689
+      'y': 1.5
+      z: 6.250381843892892
+      rotX: -0.0
+      rotY: 0
+      rotZ: 0
     - group: WallVintageLights
       name: WallVintageLights 1
       fixtureType: VintageLed
@@ -364,7 +325,7 @@ parLights:
       name: Redwoods1 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 9
@@ -378,7 +339,7 @@ parLights:
       name: Redwoods1 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 7.5
@@ -392,7 +353,7 @@ parLights:
       name: Redwoods1 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 4.500000000000001
@@ -406,7 +367,7 @@ parLights:
       name: Redwoods1 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 3
@@ -420,7 +381,7 @@ parLights:
       name: Redwoods1 5
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 4.499999999999998
@@ -434,7 +395,7 @@ parLights:
       name: Redwoods1 6
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 7.5
@@ -448,91 +409,63 @@ parLights:
       name: Redwoods2 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -4
+      x: 29.80472889280884
       'y': 3
-      z: 21
-      rotX: -40.601294645004465
-      rotY: 89.99999999999999
-      rotZ: -40.60129464500445
+      z: -17.434008125051907
+      rotX: -43.6354553514565
+      rotY: 76.574337235283
+      rotZ: -35.074777167064106
       traceGenerated: true
     - group: Redwoods2
       name: Redwoods2 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -5.5
+      x: 26.80472889280884
       'y': 3
-      z: 23.598076211353316
-      rotX: -42.45824594505142
-      rotY: 37.589089468974954
-      rotZ: -15.061786034770735
+      z: -14.434008125051907
+      rotX: -38.801601538031846
+      rotY: 0.9279470872123877
+      rotZ: -0.3268025891659251
       traceGenerated: true
     - group: Redwoods2
       name: Redwoods2 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -8.5
+      x: 23.80472889280884
       'y': 3
-      z: 23.598076211353316
-      rotX: -47.13989160014094
-      rotY: -21.051724435372922
-      rotZ: 9.26859433835115
+      z: -17.434008125051907
+      rotX: -44.72446641329507
+      rotY: -76.04357158354665
+      rotZ: 35.66309740064611
       traceGenerated: true
     - group: Redwoods2
       name: Redwoods2 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
-      x: -10
+      x: 26.80472889280884
       'y': 3
-      z: 21
-      rotX: -50.19442890773479
-      rotY: -89.99999999999996
-      rotZ: 50.19442890773478
-      traceGenerated: true
-    - group: Redwoods2
-      name: Redwoods2 5
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 30
-      penumbra: 0.5
-      x: -8.500000000000002
-      'y': 3
-      z: 18.401923788646684
-      rotX: -47.13989160014092
-      rotY: -158.94827556462707
-      rotZ: 133.86150801580473
-      traceGenerated: true
-    - group: Redwoods2
-      name: Redwoods2 6
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 20
-      angle: 30
-      penumbra: 0.5
-      x: -5.5
-      'y': 3
-      z: 18.401923788646684
-      rotX: -42.458245945051395
-      rotY: 142.41091053102505
-      rotZ: -97.5580789132697
+      z: -20.434008125051907
+      rotX: -52.88326823835898
+      rotY: 178.47486186445084
+      rotZ: -176.9337775378601
       traceGenerated: true
     - group: Redwoods3
       name: Redwoods3 1
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 23
@@ -546,7 +479,7 @@ parLights:
       name: Redwoods3 2
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 21.5
@@ -560,7 +493,7 @@ parLights:
       name: Redwoods3 3
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 18.5
@@ -574,7 +507,7 @@ parLights:
       name: Redwoods3 4
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 17
@@ -588,7 +521,7 @@ parLights:
       name: Redwoods3 5
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 18.5
@@ -602,7 +535,7 @@ parLights:
       name: Redwoods3 6
       fixtureType: UkingPar
       color: '#ffaa44'
-      intensity: 20
+      intensity: 10
       angle: 30
       penumbra: 0.5
       x: 21.5
@@ -612,6 +545,103 @@ parLights:
       rotY: 158.9482755646271
       rotZ: -128.25381549608548
       traceGenerated: true
+    - group: WallVintageLightsTop
+      name: WallVintageLightsTop 1
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 8.099713113318899
+      'y': 5
+      z: 0
+      rotX: -35.72021350847793
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+    - group: WallVintageLightsTop
+      name: WallVintageLightsTop 2
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 16.32906321924115
+      'y': 5
+      z: 0
+      rotX: -35.72021350847793
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+    - group: LedBarsWall
+      name: LedBarsWall 1
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -3
+      'y': 0.5
+      z: 0
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
+      rotZ: 1.489700686984738
+      traceGenerated: true
+    - group: LedBarsWall
+      name: LedBarsWall 2
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.5
+      'y': 0.6666666666666666
+      z: 0
+      rotX: -9.607757082724715
+      rotY: -0.2486888552585848
+      rotZ: 1.489700686984738
+      traceGenerated: true
+    - group: LedBarsWall
+      name: LedBarsWall 3
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 10
+      'y': 0.8333333333333333
+      z: 0
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
+      rotZ: 1.489700686984738
+      traceGenerated: true
+    - group: LedBarsWall
+      name: LedBarsWall 4
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 16.5
+      'y': 1
+      z: 0
+      rotX: -9.607757082724717
+      rotY: -0.24868885525858486
+      rotZ: 1.489700686984738
+      traceGenerated: true
+    - group: Fogger
+      name: TEFogMachine 39
+      fixtureType: TEFogMachine
+      color: '#ffaa44'
+      intensity: 0
+      angle: 20
+      penumbra: 0.5
+      x: 0
+      'y': 1.5
+      z: 0
+      rotX: 0
+      rotY: 0
+      rotZ: 0
 ledStrands:
   _section:
     label: 💡 LED Strands
@@ -676,17 +706,17 @@ traces:
     shape: circle
     radius: 3
     arc: 360
-    spacing: 3
-    x: -7
+    spacing: 5
+    x: 26.80472889280884
     'y': 3
-    z: 21
+    z: -17.434008125051907
     rotX: -0.0
     rotY: 0
     rotZ: 0
     aimMode: lookAt
-    aimX: -7.5
+    aimX: 26.74430470921199
     aimY: 0
-    aimZ: 21
+    aimZ: -18.164552724416478
     lightColor: '#ffaa44'
     lightIntensity: 10
     lightAngle: 30
@@ -718,6 +748,54 @@ traces:
     lightAngle: 30
     groupName: Redwoods3
     fixtureType: UkingPar
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: WallVintageLightsTop
+    shape: line
+    startX: 8.099713113318899
+    startY: 5
+    startZ: 0
+    endX: 16.32906321924115
+    endY: 5
+    endZ: 0
+    spacing: 3.5
+    aimMode: direction
+    aimX: 8.04234123202508
+    aimY: 3.324925916781887
+    aimZ: -2.329377665239148
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: WallVintageLightsTop
+    fixtureType: VintageLed
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: LedBarsWall
+    shape: line
+    startX: -3
+    startY: 0.5
+    startZ: 0
+    endX: 16.5
+    endY: 1
+    endZ: 0
+    spacing: 5
+    aimMode: direction
+    aimX: -2.609716964471062
+    aimY: -0.20344403169297243
+    aimZ: -4.211898175863379
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: LedBarsWall
+    fixtureType: ShehdsBar
     generated: true
     controllerIp: ''
     fixtureRotOffX: 0

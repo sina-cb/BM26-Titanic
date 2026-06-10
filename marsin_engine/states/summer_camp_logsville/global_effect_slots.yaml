@@ -1,9 +1,9 @@
 slots:
   - slotId: 1
     enabled: true
-    label: 4 Hz Sync
+    label: 2 Hz Pulse
     effectId: strobe
-    presetId: sync_4hz
+    presetId: pulse_2hz
     behavior: toggle
     paramsOverride: {}
   - slotId: 2
@@ -15,30 +15,30 @@ slots:
     paramsOverride: {}
   - slotId: 3
     enabled: true
-    label: Fogger
-    effectId: fogger
+    label: Vintage White
+    effectId: vintageWhite
     presetId: default
     behavior: toggle
     paramsOverride: {}
   - slotId: 4
     enabled: true
-    label: Soft Afterimage
+    label: Ghost Trails
     effectId: feedbackTrails
-    presetId: soft_afterimage
+    presetId: ghost_ship
     behavior: toggle
     paramsOverride: {}
   - slotId: 5
     enabled: true
-    label: Vintage Burst
+    label: Iceberg Flash
     effectId: dropHit
-    presetId: vintage_burst
+    presetId: iceberg_flash
     behavior: trigger
     paramsOverride: {}
   - slotId: 6
     enabled: true
-    label: Long Afterimage
-    effectId: feedbackTrails
-    presetId: long_afterimage
+    label: Fogger
+    effectId: fogger
+    presetId: default
     behavior: toggle
     paramsOverride: {}
   - slotId: 7
@@ -67,5 +67,19 @@ slots:
     label: Fogger
     effectId: fogger
     presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 11
+    enabled: true
+    label: Long Trails
+    effectId: feedbackTrails
+    presetId: long_afterimage
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 12
+    enabled: true
+    label: Cosmic Trails
+    effectId: feedbackTrails
+    presetId: cosmic_trails
     behavior: toggle
     paramsOverride: {}

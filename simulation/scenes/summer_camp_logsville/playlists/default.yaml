@@ -5,17 +5,17 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.7
-      sliderNoiseScale: 0.5
+      sliderLocalSpeed: 0.46
+      sliderNoiseScale: 0.93
     modulations: []
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.81
-      sliderBeamWidth: 0.35
-      sliderBackgroundGlow: 0.11
+      sliderLocalSpeed: 0.89
+      sliderBeamWidth: 0.46
+      sliderBackgroundGlow: 0.24
       sliderDirection: 0.71
       sliderAudioBrightness: 0.59
     modulations: []
@@ -24,8 +24,8 @@ entries:
     pattern: 02_phase_cathedral
     label: null
     defaults:
-      sliderLocalSpeed: 0.77
-      sliderCount: 0.88
+      sliderLocalSpeed: 0.54
+      sliderCount: 0.23
       sliderSharpness: 0.83
       sliderDirection: 1
     modulations: []
@@ -34,7 +34,7 @@ entries:
     pattern: 03_dual_axis_crush
     label: null
     defaults:
-      sliderLocalSpeed: 0.77
+      sliderLocalSpeed: 0.39
       sliderCount: 0.26
       sliderBeamWidth: 0.77
       sliderDirection: 0.2
@@ -44,7 +44,7 @@ entries:
     pattern: 04_beat_folded_helix
     label: null
     defaults:
-      sliderLocalSpeed: 0.46
+      sliderLocalSpeed: 0.26
       sliderCount: 0.69
       sliderTwistFreq: 0.81
       sliderContrast: 0.78
@@ -66,7 +66,7 @@ entries:
     pattern: 06_neon_elevator
     label: null
     defaults:
-      sliderLocalSpeed: 0.83
+      sliderLocalSpeed: 0.3
       sliderSteps: 0.43
       sliderThickness: 0.79
       sliderBloom: 0.74
@@ -76,28 +76,18 @@ entries:
     pattern: 07_shimmer
     label: null
     defaults:
-      sliderLocalSpeed: 0.86
-      sliderShimmerSpeedTrim: 0.79
-      sliderDensity: 0.8
-      sliderBreathing: 0.69
-    modulations: []
-    notes: null
-  - id: e_default_8_08_ocean_liner
-    pattern: 08_ocean_liner
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.79
-      sliderContrast: 0.5
-      sliderWindowCount: 0.5
-      sliderWindowFocus: 0.5
+      sliderLocalSpeed: 0.91
+      sliderShimmerSpeedTrim: 0.65
+      sliderDensity: 0.88
+      sliderBreathing: 0
     modulations: []
     notes: null
   - id: e_default_9_09_cyclone
     pattern: 09_cyclone
     label: null
     defaults:
-      sliderLocalSpeed: 0.81
-      sliderDensity: 0.7
+      sliderLocalSpeed: 0.79
+      sliderDensity: 0.27
       sliderParticleSize: 0.29
     modulations: []
     notes: null
@@ -105,8 +95,8 @@ entries:
     pattern: 10_chasers
     label: null
     defaults:
-      sliderLocalSpeed: 0.71
-      sliderParticleCount: 0.23
+      sliderLocalSpeed: 0.45
+      sliderParticleCount: 0.19
       sliderTailLength: 0.21
     modulations: []
     notes: null
@@ -114,7 +104,7 @@ entries:
     pattern: 11_bioluminescence
     label: null
     defaults:
-      sliderLocalSpeed: 0.87
+      sliderLocalSpeed: 0.28
       sliderDensity: 0.23
       sliderUvGlow: 1
       sliderPartyMode: 0.8
@@ -124,7 +114,7 @@ entries:
     pattern: 12_breathing
     label: null
     defaults:
-      sliderLocalSpeed: 0.7
+      sliderLocalSpeed: 0.46
       sliderRipple: 0.45
       sliderSharpness: 0.5
     modulations: []
@@ -133,15 +123,15 @@ entries:
     pattern: 13_sparkle
     label: null
     defaults:
-      sliderLocalSpeed: 0.7
-      sliderSparkleSpeedTrim: 0.68
-      sliderSparkleDensity: 0.82
-      sliderSparkleIntensity: 0.88
-      sliderSparkleSize: 0
-      sliderBackgroundLevel: 0
+      sliderLocalSpeed: 0
+      sliderSparkleSpeedTrim: 0.89
+      sliderSparkleDensity: 0.64
+      sliderSparkleIntensity: 0.8
+      sliderSparkleSize: 0.71
+      sliderBackgroundLevel: 0.02
       sliderWhiteGlint: 0
       sliderAmberGlint: 0
-      sliderUvGlint: 0
+      sliderUvGlint: 1
       sliderBackgroundMotion: 0
     modulations: []
     notes: null
@@ -149,7 +139,7 @@ entries:
     pattern: 14_lunar_current
     label: null
     defaults:
-      sliderLocalSpeed: 0.65
+      sliderLocalSpeed: 0.4
       sliderDensity: 0.23
       sliderWhiteLift: 0.74
       sliderUvLift: 1
@@ -159,16 +149,16 @@ entries:
     pattern: 15_silk_prism_ribbons
     label: null
     defaults:
-      sliderLocalSpeed: 0.88
-      sliderRibbonCount: 0.6
-      sliderSoftness: 0.89
+      sliderLocalSpeed: 0.67
+      sliderRibbonCount: 0.33
+      sliderSoftness: 0
     modulations: []
     notes: null
   - id: e_default_16_16_ghost_tide_uv
     pattern: 16_ghost_tide_uv
     label: null
     defaults:
-      sliderLocalSpeed: 0.63
+      sliderLocalSpeed: 0.34
       sliderTideWidth: 0.85
       sliderWhiteLevel: 0.85
       sliderUvLevel: 1
@@ -179,7 +169,7 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.72
-      sliderDuneScale: 0.72
+      sliderDuneScale: 0.34
       sliderDuneContrast: 0.73
       sliderOrbitDrift: 0.77
       sliderBlackoutDepth: 0.28
@@ -191,7 +181,7 @@ entries:
     pattern: 18_deep_space_lattice
     label: null
     defaults:
-      sliderLocalSpeed: 0.63
+      sliderLocalSpeed: 0.4
       sliderLatticeScale: 0.51
       sliderLineSoftness: 0.8
     modulations: []
@@ -200,8 +190,8 @@ entries:
     pattern: 19_swaying_lattice_ballet
     label: null
     defaults:
-      sliderLocalSpeed: 0.53
-      sliderLatticeScale: 0.81
+      sliderLocalSpeed: 0.3
+      sliderLatticeScale: 0.79
       sliderSwayAmount: 0.85
       sliderNodeSoftness: 0.79
       sliderCounterPhase: 0.76
@@ -214,7 +204,7 @@ entries:
     defaults:
       sliderLocalSpeed: 0.76
       sliderReach: 0.21
-      sliderFocus: 0.76
+      sliderFocus: 0.74
       sliderTrailBlend: 0.83
     modulations: []
     notes: null
@@ -222,7 +212,7 @@ entries:
     pattern: 21_pelagic_manta_rays
     label: null
     defaults:
-      sliderLocalSpeed: 0.95
+      sliderLocalSpeed: 0.23
       sliderRaySpan: 0.2
       sliderDepthFocus: 0.75
       sliderWhiteFoam: 0.77
@@ -248,717 +238,19 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.7
-      sliderFlockReach: 0.87
-      sliderFlockFocus: 0.76
-      sliderFilamentDensity: 0.5
-      sliderContrast: 0.93
-      sliderAfterglow: 0.38
+      sliderFlockReach: 0.43
+      sliderFlockFocus: 0.72
+      sliderFilamentDensity: 0.25
+      sliderContrast: 0.55
+      sliderAfterglow: 0.1
     modulations: []
     notes: null
   - id: e_default_25_25_heartbeat
     pattern: 25_heartbeat
     label: null
     defaults:
-      sliderLocalSpeed: 0.54
+      sliderLocalSpeed: 0.8
       sliderDormantGlow: 0.41
       sliderRippleSweep: 0.66
-    modulations: []
-    notes: null
-  - id: e_default_26_40_ghost_ship_reveal
-    pattern: 40_ghost_ship_reveal
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.76
-      sliderRevealWidth: 0
-      sliderOrbitDrift: 0
-      sliderBlackoutDepth: 0
-      sliderLanternGlow: 0.3
-      sliderBeaconSparkle: 0
-      sliderUvTrail: 0
-      sliderSpinMotion: 0
-      sliderHullDarkness: 0
-      sliderPortBrightness: 0
-    modulations: []
-    notes: null
-  - id: e_default_27_41_ghost_aurora
-    pattern: 41_ghost_aurora
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.66
-      sliderCurtainWidth: 0.8
-      sliderDriftChaos: 0
-      sliderBlackoutDepth: 0
-      sliderRimShimmer: 0.25
-      sliderTriangleGain: 0
-      sliderHumanWarmth: 0.3
-    modulations: []
-    notes: null
-  - id: e_default_28_42_boiler_glow
-    pattern: 42_boiler_glow
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.78
-      sliderBoilerHeat: 0.68
-      sliderFlickerComplexity: 0.72
-      sliderVentWidth: 0
-      sliderSteamFlash: 0
-      sliderTriangleRPM: 0
-      sliderBlackoutDepth: 0
-      sliderFlashRate: 0
-    modulations: []
-    notes: null
-  - id: e_default_29_43_sea_floor_shadow
-    pattern: 43_sea_floor_shadow
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.78
-      sliderShadowWidth: 0.67
-      sliderShadowDrift: 0
-      sliderAbyssalSwell: 0.71
-      sliderEdgeFoam: 0
-      sliderBlackoutDepth: 0
-      sliderTriangleSilhouette: 0
-    modulations: []
-    notes: null
-  - id: e_default_30_44_apex_gyro_vortex
-    pattern: 44_apex_gyro_vortex
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.74
-      sliderVortexSpeed: 0.45
-      sliderSweepImpact: 0.3
-      sliderHullGlow: 0.35
-      sliderUvIntensity: 1
-      sliderVortexWidth: 0
-      sliderArmPhase: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_31_45_engine_room_clockwork
-    pattern: 45_engine_room_clockwork
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.86
-      sliderGearSharpness: 0.7
-      sliderPistonStroke: 0.84
-      sliderDriveShaft: 0.8
-      sliderBarTickDensity: 0.78
-      sliderBoilerHeat: 0.83
-      sliderPauseAmount: 0.84
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_33_47_apex_perimeter_ping
-    pattern: 47_apex_perimeter_ping
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.8
-      sliderPingWidth: 0
-      sliderGhostMix: 0
-      sliderCoronaImpact: 0
-      sliderTrailDecay: 0
-      sliderRingEcho: 0
-      sliderVintageMidpoint: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_35_49_boiler_pressure_release
-    pattern: 49_boiler_pressure_release
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.73
-      sliderPressure: 0.4
-      sliderReleaseThreshold: 0
-      sliderVentWidth: 0
-      sliderHeatBloom: 0.5
-      sliderVentFlash: 0.25
-      sliderCoolingAfterglow: 1
-      sliderSteamRise: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_36_50_iceberg_fracture
-    pattern: 50_iceberg_fracture
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.71
-      sliderFractureDensity: 0.77
-      sliderBranchSpread: 0.19
-      sliderStrikeDecay: 0.22
-      sliderAftershockWarmth: 0.77
-      sliderLaneCount: 0.77
-      sliderShardJag: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_37_51_abyssal_searchlight
-    pattern: 51_abyssal_searchlight
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.81
-      sliderBeamWidth: 0.8
-      sliderBeamReach: 0.28
-      sliderBeamPunch: 0
-      sliderTrailLength: 0
-      sliderSwirlMix: 0
-      sliderVintageBleed: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_38_52_iceberg_shear_line
-    pattern: 52_iceberg_shear_line
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.77
-      sliderShearAngle: 0
-      sliderShearWidth: 0
-      sliderAdvance: 0
-      sliderSubmergeDepth: 0
-      sliderWarmthRetreat: 0
-      sliderTriangleBlade: 0
-    modulations: []
-    notes: null
-  - id: e_default_39_53_shadow_eclipse
-    pattern: 53_shadow_eclipse
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.72
-      sliderShadowSize: 0
-      sliderRimWidth: 0
-      sliderOrbitEccentricity: 0
-      sliderCoronaPulse: 0
-      sliderVintageBloom: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_40_54_boiler_fire_overdrive
-    pattern: 54_boiler_fire_overdrive
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderFireSpeed: 0.5
-      sliderFlameHeight: 0.65
-      sliderHeatFlash: 0.3
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_41_55_stardust_dome
-    pattern: 55_stardust_dome
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderStarBrightness: 0.6
-      sliderRingEnergy: 0.5
-      sliderWallHit: 0.45
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_42_70_forest_canopy_reveal
-    pattern: 70_forest_canopy_reveal
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.74
-      sliderCanopyGlow: 1
-      sliderTreeSpread: 0.6
-      sliderShimmer: 0.6
-      sliderBlackoutDepth: 0.58
-    modulations: []
-    notes: null
-  - id: e_default_43_71_tree_aurora
-    pattern: 71_tree_aurora
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.82
-      sliderAuroraHeight: 0.6
-      sliderWindShimmer: 0.25
-      sliderCabinWarmth: 0.3
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_44_72_outpost_campfire
-    pattern: 72_outpost_campfire
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.75
-      sliderFlickerSpeed: 0.16
-      sliderCampfireHeat: 0.5
-      sliderWoodSparkle: 0.2
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_45_73_tree_shadow_breath
-    pattern: 73_tree_shadow_breath
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.72
-      sliderShadowDepth: 1
-      sliderCanopySwell: 0.4
-      sliderEdgeShimmer: 0.25
-      sliderRingSpread: 0
-      sliderAudioMid: 0
-    modulations: []
-    notes: null
-  - id: e_default_46_74_lookout_gyro_vortex
-    pattern: 74_lookout_gyro_vortex
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.85
-      sliderVortexSpeed: 0.45
-      sliderSweepImpact: 0.3
-      sliderOutpostGlow: 0.35
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_47_75_timber_mill_clockwork
-    pattern: 75_timber_mill_clockwork
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.63
-      sliderGearSpeed: 0.5
-      sliderTickSharpness: 0.45
-      sliderBoilerHeat: 0.35
-      sliderPulleyAdvance: 0
-      sliderUvIntensity: 1
-      sliderAudioBass: 0
-    modulations: []
-    notes: null
-  - id: e_default_48_76_outpost_lockdown
-    pattern: 76_outpost_lockdown
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.76
-      sliderBeaconWidth: 0
-      sliderAlarmHeat: 0
-      sliderPerimeterWash: 0
-      sliderStrobeRate: 0
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_49_77_tree_canopy_ping
-    pattern: 77_tree_canopy_ping
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.85
-      sliderPingGlow: 0.88
-      sliderRippleWidth: 0.86
-      sliderCrownImpact: 0.83
-      sliderTrailDepth: 0.82
-    modulations: []
-    notes: null
-  - id: e_default_50_78_woodland_trident_sweep
-    pattern: 78_woodland_trident_sweep
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.82
-      sliderSweepWidth: 0.35
-      sliderSweepImpact: 0.45
-      sliderProngSpread: 0
-      sliderTrailGlow: 0
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_51_79_mill_pressure_release
-    pattern: 79_mill_pressure_release
-    label: null
-    defaults:
-      sliderLocalSpeed: 1
-      sliderPressure: 0.42
-      sliderBoilerHeat: 0
-      sliderVentFlash: 0.25
-      sliderCoolingAfterglow: 1
-    modulations: []
-    notes: null
-  - id: e_default_52_80_tree_canopy_fracture
-    pattern: 80_tree_canopy_fracture
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.78
-      sliderFractureAmount: 0.79
-      sliderBranchSharpness: 0.5
-      sliderAftershock: 0.25
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_default_56_84_outpost_ember_overdrive
-    pattern: 84_outpost_ember_overdrive
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderEmberSpeed: 0.5
-      sliderEmberHeight: 0.65
-      sliderHeatFlash: 0.3
-      sliderUvIntensity: 1
-    modulations: []
-    notes: null
-  - id: e_default_55_83_shadow_canopy_eclipse
-    pattern: 83_shadow_canopy_eclipse
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderEclipseDepth: 0.65
-      sliderCoronaBloom: 0.4
-      sliderRimShimmer: 1
-    modulations: []
-    notes: null
-  - id: e_default_57_85_redwood_starry_canopy
-    pattern: 85_redwood_starry_canopy
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.8
-      sliderStarEnergy: 0
-      sliderTowerSpin: 0
-      sliderWallHit: 0.45
-      sliderBlackoutDepth: 0
-    modulations: []
-    notes: null
-  - id: e_1779963534033_5428
-    pattern: 96_logsville_ember_storm
-    label: null
-    defaults: {}
-    modulations:
-      - id: mod_logs_default_96_micKick_kick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderAudioKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: exp
-      - id: mod_logs_default_96_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-    notes: 'Audio: micKick->kick, micLow->bass'
-  - id: e_1779963534034_5919
-    pattern: 100_logsville_root_to_canopy_pulse
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.91
-      sliderCycleSpeed: 0.8
-      sliderPulseIntensity: 0
-      sliderCanopyApexBoost: 0
-      sliderBlackoutDepth: 0
-      sliderUvIntensity: 0
-      sliderAudioBass: 0
-      sliderAudioKick: 0
-      sliderAudioMid: 0
-    modulations:
-      - id: mod_logs_default_100_micKick_kick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderAudioKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: exp
-      - id: mod_logs_default_100_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-    notes: 'Audio: micKick->kick, micLow->bass'
-  - id: e_1779963534035_6410
-    pattern: 110_logsville_giant_pixel_chase
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.78
-      sliderSectionFloor: 0.39
-      sliderNeighborWeight: 0.7
-      sliderStepSmoothness: 0.66
-      sliderVintageMix: 0.61
-      sliderSectionCount: 0.61
-      sliderChaseMode: 0.66
-      sliderAudioKick: 0.33
-      sliderAudioBass: 0.42
-      sliderAudioHigh: 0
-    modulations:
-      - id: mod_logs_default_110_micKick_kick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderAudioKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: exp
-      - id: mod_logs_default_110_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-    notes: 'Audio: micKick->kick, micLow->bass'
-  - id: e_1779963534036_6901
-    pattern: 111_logsville_giant_pixel_heartbeat
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.78
-      sliderSectionFloor: 0.48
-      sliderNeighborWeight: 0.73
-      sliderPopBrightness: 0.41
-      sliderPopDecay: 0.72
-      sliderVintageMix: 0.54
-      sliderSectionCount: 0.81
-      sliderHeartbeatPattern: 0.64
-      sliderAudioKick: 0.12
-      sliderAudioBass: 0.31
-      sliderAudioMid: 0.28
-    modulations:
-      - id: mod_logs_default_111_micKick_kick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderAudioKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: exp
-      - id: mod_logs_default_111_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-    notes: 'Audio: micKick->kick, micLow->bass'
-  - id: e_1779963534037_7392
-    pattern: 112_logsville_giant_call_response
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.75
-      sliderSectionFloor: 0.46
-      sliderNeighborWeight: 0.66
-      sliderTurnBrightness: 0.76
-      sliderTurnDecay: 0.66
-      sliderVintageMix: 0.48
-      sliderSectionCount: 0.62
-      sliderConversation: 0.88
-      sliderAudioBass: 0.17
-      sliderAudioMid: 0.22
-      sliderAudioKick: 0.2
-    modulations:
-      - id: mod_logs_default_112_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-      - id: mod_logs_default_112_micMid_mid
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micMid
-        target:
-          scope: pattern
-          parameter: sliderAudioMid
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-    notes: 'Audio: micLow->bass, micMid->mid'
-  - id: e_logs_default_113_tower_column_breath
-    pattern: 113_tower_column_breath
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.5
-      sliderBreathRate: 0.4
-      sliderBandWidth: 0.32
-      sliderBrightness: 0.95
-      sliderBaselineFloor: 0.12
-      sliderVintageGlow: 0.45
-      sliderSteamboatWhite: 0.55
-      sliderAudioBass: 0
-      sliderAudioMid: 0
-    modulations:
-      - id: mod_logs_default_113_micLow_bass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderAudioBass
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-      - id: mod_logs_default_113_micMid_mid
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micMid
-        target:
-          scope: pattern
-          parameter: sliderAudioMid
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.3
-        curve: linear
-    notes: 'Audio: micLow->bass, micMid->mid; slow tower-only breath'
-  - id: e_logs_default_114_tower_ring_chase
-    pattern: 114_tower_ring_chase
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.33
-      sliderRingRate: 0.56
-      sliderWedgeWidth: 0.16
-      sliderTrailLength: 0.45
-      sliderBrightness: 1
-      sliderDirection: 1
-      sliderBaselineFloor: 0.06
-      sliderVintageWash: 0.5
-      sliderAudioKick: 0
-      sliderAudioHigh: 0
-    modulations:
-      - id: mod_logs_default_114_micKick_kick
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderAudioKick
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.6
-        curve: exp
-      - id: mod_logs_default_114_micHigh_high
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micHigh
-        target:
-          scope: pattern
-          parameter: sliderAudioHigh
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: linear
-    notes: 'Audio: micKick->kick, micHigh->high; snappy tower-only ring chase'
-  - id: e_1779993304184_9336
-    pattern: 115_tower_lighthouse_sweep
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.86
-      sliderBeamGlow: 0.27
-      sliderBeamWidth: 0.83
-      sliderTrail: 0.8
-      sliderBlackoutDepth: 0.86
-    modulations: []
-    notes: null
-  - id: e_1779993318537_3862
-    pattern: 116_tower_cathedral_organ
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.79
-      sliderOrganGlow: 0.43
-      sliderChordSpread: 0.66
-      sliderShimmer: 0.59
-      sliderBlackoutDepth: 0.64
-    modulations: []
-    notes: null
-  - id: e_1779993323031_7740
-    pattern: 117_tower_molten_elevator
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.77
-      sliderMoltenGlow: 0.64
-      sliderSweepWidth: 0.2
-      sliderDripTrail: 0.69
-      sliderBlackoutDepth: 0.77
-    modulations: []
-    notes: null
-  - id: e_default_58_rainbow
-    pattern: rainbow
-    label: null
-    defaults: {}
     modulations: []
     notes: null

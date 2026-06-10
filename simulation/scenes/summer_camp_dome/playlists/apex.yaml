@@ -45,10 +45,11 @@ entries:
     pattern: 05_orbital_attractor_field
     label: null
     defaults:
-      sliderLocalSpeed: 0.66
+      sliderLocalSpeed: 0.11
       sliderFalloff: 0.26
       sliderFocus: 0.13
       sliderColorVariation: 0.12
+      sliderBlackoutTexture: 0
     modulations:
       - id: mod_apex_05_micKick_focus
         type: continuous
@@ -392,7 +393,14 @@ entries:
   - id: e_1779880200012_3650
     pattern: 43_sea_floor_shadow
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.68
+      sliderShadowWidth: 0
+      sliderShadowDrift: 0
+      sliderAbyssalSwell: 0
+      sliderEdgeFoam: 0
+      sliderBlackoutDepth: 0
+      sliderTriangleSilhouette: 0
     modulations:
       - id: mod_apex_43_micLow_abyssalSwell
         type: continuous
@@ -828,7 +836,14 @@ entries:
   - id: e_1779880200015_5957
     pattern: 55_stardust_dome
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0
+      sliderStarCore: 0.21
+      sliderParticleDensity: 0
+      sliderOrbitSpeed: 0.77
+      sliderRingWidth: 0
+      sliderWallHit: 0
+      sliderBlackoutDepth: 0
     modulations:
       - id: mod_apex_55_micKick_starCore
         type: continuous

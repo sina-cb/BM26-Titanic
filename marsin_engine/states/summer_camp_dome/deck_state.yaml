@@ -1,7 +1,7 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 03_dual_axis_crush
+  pattern: 09_cyclone
   mode: blend_screen
   fader: 1
   enabled: true
@@ -9,35 +9,31 @@ channel:
   faderLocked: false
   localControls:
     '1037917937':
-      v0: 0.77
+      v0: 0.78
       v1: 0
       v2: 0
-    '1323486710':
-      v0: 0.57
+    '3032072768':
+      v0: 0.12
       v1: 0
       v2: 0
-    '2571730692':
-      v0: 0.21
-      v1: 0
-      v2: 0
-    '3994789032':
-      v0: 0.89
+    '3680310977':
+      v0: 0.09
       v1: 0
       v2: 0
   playlist:
     name: fast
-    activeEntryId: e_1779867305954_4007
-    cursor: 3
+    activeEntryId: e_1779867338303_9612
+    cursor: 6
     autopilot:
-      active: false
-      delay_s: 30
-      shuffle: false
+      active: true
+      delay_s: 15
+      shuffle: true
   viewSelection:
     type: all
     target: null
     invert: false
 transitionConfig:
-  enabled: false
+  enabled: true
   mode: trans_crossfade
-  durationMs: 1000
+  durationMs: 500
   shuffle: false

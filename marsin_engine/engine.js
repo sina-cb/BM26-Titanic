@@ -180,14 +180,16 @@ async function loadModel(modelName, bustCache = false) {
     'TriangleEdges': 0x01,
     'ParLights': 0x01,
     'TowerBars': 0x01,
+    'DJ Lights': 0x01,
+    'DJLights': 0x01,
     'TrianglePars': 0x02,
     'TowerVintageLights': 0x02,
     'BarLights': 0x04,
     'WallVintageLights': 0x04,
+    'WallVintageLightsTop': 0x04,
+    'LedBarsWall': 0x04,
     'VintageLights': 0x08,
     'Redwoods1': 0x08,
-    'Redwoods2': 0x10,
-    'Redwoods3': 0x20,
   };
 
   for (const px of mod.pixels) {

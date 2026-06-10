@@ -11,11 +11,11 @@ entries:
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.81
-      sliderBeamWidth: 0.82
-      sliderBackgroundGlow: 0.08
+      sliderLocalSpeed: 0.71
+      sliderBeamWidth: 0.39
+      sliderBackgroundGlow: 0.01
       sliderDirection: 0.67
-      sliderAudioBrightness: 0.36
+      sliderAudioBrightness: 0.1
     modulations:
       - id: mod_fast_dome_01_micKick_beamWidth
         type: continuous
@@ -35,52 +35,12 @@ entries:
     notes: >-
       Audio: micKick scrolls beam width, micLow drives audio_brightness (overall
       gain).
-  - id: e_1779867303967_6983
-    pattern: 02_phase_cathedral
-    label: null
-    defaults:
-      sliderLocalSpeed: 0.54
-      sliderCount: 0.63
-      sliderSharpness: 0.35
-      sliderDirection: 0.77
-    modulations:
-      - id: mod_fast_dome_02_micLow_count
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderCount
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.25
-        curve: linear
-      - id: mod_fast_dome_02_micKick_sharpness
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderSharpness
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: exp
-    notes: 'Audio: micLow adds rings, micKick sharpens on hit.'
   - id: e_1779867305954_4007
     pattern: 03_dual_axis_crush
     label: null
     defaults:
       sliderLocalSpeed: 0.77
-      sliderCount: 0.57
+      sliderCount: 0.38
       sliderBeamWidth: 0.21
       sliderDirection: 0.89
     modulations:
@@ -119,11 +79,11 @@ entries:
     pattern: 04_beat_folded_helix
     label: null
     defaults:
-      sliderLocalSpeed: 0.25
-      sliderCount: 0.23
-      sliderTwistFreq: 0.06
-      sliderContrast: 0.89
-      sliderOverallBrightness: 0.02
+      sliderLocalSpeed: 0.06
+      sliderCount: 0.36
+      sliderTwistFreq: 0.17
+      sliderContrast: 0.85
+      sliderOverallBrightness: 0.03
     modulations:
       - id: mod_fast_dome_04_micKick_overallBrightness
         type: continuous
@@ -160,10 +120,11 @@ entries:
     pattern: 05_orbital_attractor_field
     label: null
     defaults:
-      sliderLocalSpeed: 0.66
-      sliderFalloff: 0.26
-      sliderFocus: 0.13
+      sliderLocalSpeed: 0.11
+      sliderFalloff: 0.41
+      sliderFocus: 0.83
       sliderColorVariation: 0.12
+      sliderBlackoutTexture: 0.27
     modulations:
       - id: mod_fast_dome_05_micKick_focus
         type: continuous
@@ -200,11 +161,10 @@ entries:
     pattern: 06_neon_elevator
     label: null
     defaults:
-      sliderLocalSpeed: 0.83
-      sliderSteps: 0.36
-      sliderThickness: 0.6
-      sliderBloom: 0.11
-      sliderElevatorRandomness: 0.74
+      sliderLocalSpeed: 0.71
+      sliderSteps: 0.28
+      sliderThickness: 0.73
+      sliderBloom: 0.06
     modulations:
       - id: mod_fast_dome_06_micKick_bloom
         type: continuous
@@ -242,8 +202,8 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.78
-      sliderDensity: 0.31
-      sliderParticleSize: 0.2
+      sliderDensity: 0.09
+      sliderParticleSize: 0.12
     modulations:
       - id: mod_fast_dome_09_micMid_density
         type: continuous
@@ -280,8 +240,8 @@ entries:
     pattern: 10_chasers
     label: null
     defaults:
-      sliderLocalSpeed: 0.53
-      sliderParticleCount: 0.43
+      sliderLocalSpeed: 0.3
+      sliderParticleCount: 0.13
       sliderTailLength: 0.24
     modulations:
       - id: mod_fast_dome_10_stemsDrums_particleCount
@@ -320,14 +280,15 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.68
-      sliderSparkleSpeedTrim: 0.09
-      sliderSparkleDensity: 0.89
+      sliderSparkleSpeedTrim: 0.15
+      sliderSparkleDensity: 0.57
       sliderSparkleIntensity: 0.7
       sliderSparkleSize: 0.4
       sliderBackgroundLevel: 0.09
       sliderWhiteGlint: 0.86
       sliderAmberGlint: 0.88
       sliderUvGlint: 0.89
+      sliderBackgroundMotion: 0
     modulations:
       - id: mod_fast_dome_13_micHigh_sparkleIntensity
         type: continuous
@@ -363,7 +324,15 @@ entries:
   - id: e_1779867390826_4471
     pattern: 23_prismatic_strange_attractors
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.48
+      sliderChaos: 0.14
+      sliderOrbitReach: 0.51
+      sliderContrast: 0.71
+      sliderDarkFloor: 0.41
+      sliderWhiteCore: 0.3
+      sliderUvGhost: 0.35
+      sliderColorSpread: 0.19
     modulations:
       - id: mod_fast_dome_23_micLow_orbitReach
         type: continuous
@@ -396,46 +365,20 @@ entries:
           - 0.4
         curve: exp
     notes: 'Audio: micLow extends orbit reach, micKick punches white core.'
-  - id: e_1779867394210_1923
-    pattern: 24_chromatic_murmuration
-    label: null
-    defaults: {}
-    modulations:
-      - id: mod_fast_dome_24_stemsBass_flockReach
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: stemsBass
-        target:
-          scope: pattern
-          parameter: sliderFlockReach
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.3
-        curve: linear
-      - id: mod_fast_dome_24_stemsDrums_flockFocus
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: stemsDrums
-        target:
-          scope: pattern
-          parameter: sliderFlockFocus
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: exp
-    notes: 'Audio: stemsBass widens flock, stemsDrums tightens focus.'
   - id: e_1779867399687_641
     pattern: 40_ghost_ship_reveal
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.78
+      sliderRevealWidth: 0.29
+      sliderOrbitDrift: 0.3
+      sliderBlackoutDepth: 0.31
+      sliderLanternGlow: 0.68
+      sliderBeaconSparkle: 0.86
+      sliderUvTrail: 0
+      sliderSpinMotion: 0
+      sliderHullDarkness: 0
+      sliderPortBrightness: 0
     modulations:
       - id: mod_fast_dome_40_micLow_revealWidth
         type: continuous
@@ -468,46 +411,18 @@ entries:
           - 0.4
         curve: exp
     notes: 'Audio: micLow widens beam reveal, micKick flashes lantern glow.'
-  - id: e_1779867408401_8422
-    pattern: 42_boiler_glow
-    label: null
-    defaults: {}
-    modulations:
-      - id: mod_fast_dome_42_micLow_boilerHeat
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderBoilerHeat
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-      - id: mod_fast_dome_42_micKick_steamFlash
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderSteamFlash
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.5
-        curve: exp
-    notes: 'Audio: micLow fires boiler heat, micKick flashes steam release.'
   - id: e_1779867419969_1957
     pattern: 44_apex_gyro_vortex
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.63
+      sliderVortexSpeed: 0.45
+      sliderSweepImpact: 0.53
+      sliderHullGlow: 0.17
+      sliderUvIntensity: 0.12
+      sliderVortexWidth: 0.63
+      sliderArmPhase: 0.17
+      sliderBlackoutDepth: 0.76
     modulations:
       - id: mod_fast_dome_44_micLow_vortexSpeed
         type: continuous
@@ -540,46 +455,18 @@ entries:
           - 0.45
         curve: exp
     notes: 'Audio: micLow spins vortex faster, micKick punches sweep impact.'
-  - id: e_1779867423028_7906
-    pattern: 45_engine_room_clockwork
-    label: null
-    defaults: {}
-    modulations:
-      - id: mod_fast_dome_45_micLow_pistonStroke
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micLow
-        target:
-          scope: pattern
-          parameter: sliderPistonStroke
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: linear
-      - id: mod_fast_dome_45_micKick_tickDecay
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micKick
-        target:
-          scope: pattern
-          parameter: sliderTickDecay
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.4
-        curve: exp
-    notes: 'Audio: micLow thumps pistons, micKick punches tick decay.'
   - id: e_1779867447664_7848
     pattern: 50_iceberg_fracture
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.56
+      sliderFractureDensity: 0.22
+      sliderBranchSpread: 0.33
+      sliderStrikeDecay: 0.34
+      sliderAftershockWarmth: 0.63
+      sliderLaneCount: 0.31
+      sliderShardJag: 0
+      sliderBlackoutDepth: 0
     modulations:
       - id: mod_fast_dome_50_micKick_fractureDensity
         type: continuous
@@ -616,13 +503,13 @@ entries:
     pattern: 52_iceberg_shear_line
     label: null
     defaults:
-      sliderLocalSpeed: 0.74
-      sliderShearAngle: 0.24
-      sliderShearWidth: 0.27
-      sliderAdvance: 0.49
-      sliderSubmergeDepth: 0
-      sliderWarmthRetreat: 0
-      sliderTriangleBlade: 0
+      sliderLocalSpeed: 0.79
+      sliderShearAngle: 0.34
+      sliderShearWidth: 0.13
+      sliderAdvance: 0.29
+      sliderSubmergeDepth: 0.38
+      sliderWarmthRetreat: 0.38
+      sliderTriangleBlade: 0.07
     modulations:
       - id: mod_fast_dome_52_micLow_advance
         type: continuous
@@ -695,9 +582,9 @@ entries:
     pattern: 65_dome_kick_shockwave
     label: null
     defaults:
-      sliderLocalSpeed: 0.71
+      sliderLocalSpeed: 1
       sliderShockSpeed: 0.16
-      sliderRingWidth: 0.43
+      sliderRingWidth: 0.58
       sliderImpact: 0.72
       sliderEchoes: 0.28
       sliderVoidDepth: 0.87
