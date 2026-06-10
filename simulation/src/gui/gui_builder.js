@@ -114,6 +114,11 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
 
   function _hex(bit) { return '0x' + bit.toString(16).toUpperCase(); }
 
+  // READ-ONLY membership indicators: editing happens deliberately in
+  // the Views panel (Assign/Unassign sel., group chips) — a stray
+  // click in a fixture card must never silently rewrite a view.
+  // Membership is the EFFECTIVE one the engine resolves: the fixture's
+  // own viewMask bit OR its group being attached to the view.
   function renderViewChips() {
     chipsContainer.innerHTML = '';
     const reg = window.__viewRegistry || { custom: [] };
@@ -126,31 +131,19 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
       return;
     }
     views.forEach(view => {
-      const active = ((config.viewMask || 0) & view.bit) !== 0;
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.textContent = view.name;
+      const byBit = ((config.viewMask || 0) & view.bit) !== 0;
+      const byGroup = Array.isArray(view.groups) && view.groups.includes(config.group);
+      const active = byBit || byGroup;
+      const chip = document.createElement('span');
+      chip.textContent = byGroup && !byBit ? `${view.name} ⛓` : view.name;
       chip.title = active
-        ? `Click to remove from "${view.name}" (${_hex(view.bit)})`
-        : `Click to add to "${view.name}" (${_hex(view.bit)})`;
+        ? `Member of "${view.name}" (${_hex(view.bit)})${byGroup ? ` via group '${config.group}'` : ''} — edit in the Views panel`
+        : `Not in "${view.name}" (${_hex(view.bit)}) — assign in the Views panel`;
       chip.style.cssText =
-        'padding:1px 5px;border-radius:3px;font-size:9px;font-family:inherit;cursor:pointer;border:1px solid;transition:all 0.15s;' +
+        'padding:1px 5px;border-radius:3px;font-size:9px;font-family:inherit;cursor:default;user-select:none;border:1px solid;' +
         (active
           ? 'background:rgba(240,192,96,0.25);color:#f0c060;border-color:rgba(240,192,96,0.5);'
           : 'background:rgba(60,60,60,0.5);color:#666;border-color:#444;');
-      chip.onmouseenter = () => { chip.style.opacity = '0.8'; };
-      chip.onmouseleave = () => { chip.style.opacity = '1'; };
-      chip.onclick = (e) => {
-        e.stopPropagation();
-        if (active) {
-          config.viewMask = (config.viewMask || 0) & ~view.bit;
-        } else {
-          config.viewMask = (config.viewMask || 0) | view.bit;
-        }
-        fireChange();
-        renderViewChips();
-        if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-      };
       chipsContainer.appendChild(chip);
     });
   }
@@ -338,6 +331,10 @@ function setupGUI() {
           _setSceneDirty(false);
           showSaveToast();
           if (window.PatchManager) window.PatchManager.notifySacnBridge();
+          // Resync every fixture card's "Views:" chips with the
+          // just-persisted registry + membership state.
+          if (window.refreshMetadataPanels) window.refreshMetadataPanels();
+          if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
         })
         .catch((err) => {
           // Stay dirty: the indicator keeps shouting until a save lands.

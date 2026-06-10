@@ -53,6 +53,9 @@ function memberCount(view) {
 function markChanged() {
   if (window.debounceAutoSave) window.debounceAutoSave();
   if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('metadata');
+  // Every views/membership mutation also syncs the per-fixture
+  // "Views:" chip rows in the lil-gui metadata cards.
+  refreshMetadataPanels();
 }
 
 // ── Custom DOM Modals ────────────────────────────────────────────────
@@ -627,3 +630,6 @@ function refreshMetadataPanels() {
     });
   }
 }
+// Global so the save path (gui_builder.exportConfig) can resync the
+// per-fixture chip rows after a confirmed save.
+window.refreshMetadataPanels = refreshMetadataPanels;
