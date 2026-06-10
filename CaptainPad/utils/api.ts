@@ -355,6 +355,71 @@ export async function fetchDimmerGroups(): Promise<ApiResult<Record<string, numb
   }
 }
 
+// ── Group fixed colors (docs/32) ──────────────────────────────────────────
+// Per-group color locks owned by the Dimmer Rack's FIXED COLORS strip.
+// The engine validates everything (unknown group / bad color / bad
+// brightness → 400 with a human-readable message), so these helpers
+// surface the response body on failure instead of a bare status code.
+
+export type GroupFixedColorOverride = {
+  color: number[];      // RGBWAU, each 0..1
+  brightness: number;   // 0..1
+};
+
+export type GroupFixedColorsState = {
+  groups: string[];
+  overrides: Record<string, GroupFixedColorOverride>;
+};
+
+export async function fetchGroupFixedColors(): Promise<ApiResult<GroupFixedColorsState>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/group-fixed-colors`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-group-fixed-colors', 'Failed to fetch group fixed colors:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setGroupFixedColor(
+  group: string,
+  color: number[],
+  brightness: number,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/group-fixed-colors/${encodeURIComponent(group)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color, brightness }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`set-group-fixed-color-${group}`, `Failed to set fixed color for group ${group}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function clearGroupFixedColor(group: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/group-fixed-colors/${encodeURIComponent(group)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`clear-group-fixed-color-${group}`, `Failed to clear fixed color for group ${group}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function setGlobalBlackout(state: boolean): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/global-blackout`, {
