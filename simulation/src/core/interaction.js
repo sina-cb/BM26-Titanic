@@ -365,10 +365,12 @@ export function onPointerDown(event) {
       deselectAllFixtures();
     }
     syncGuiFolders();
+    if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
+    if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
   }
 }
 

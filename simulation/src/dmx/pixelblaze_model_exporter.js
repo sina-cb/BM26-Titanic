@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
+import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./view_registry.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -329,5 +330,25 @@ export function saveModelJS() {
       headers: { 'Content-Type': 'text/plain' },
       body: effectsJS,
     }).catch(err => console.warn('[PB] Failed to save effects model:', err));
+  }
+
+  // Build and save the view-masks sidecar from the scene-owned view
+  // registry, in the SAME pass as the model so the two can never drift
+  // apart (the engine throws on any mismatch at load). Skipped when the
+  // pixel map was skipped (fixtures mid-rebuild) — a sidecar generated
+  // from an empty pixel list would wipe real membership data.
+  if (window.__viewRegistry && pixels.length > 0) {
+    // Reconcile from the PIXELS just generated — the exact group set
+    // the engine will validate the sidecar against.
+    reconcileGroupBits(window.__viewRegistry, listPixelGroups(pixels));
+    const sceneName = window.__activeScene || 'titanic';
+    const viewmasksJS = buildViewmasksSidecarJS(window.__viewRegistry, pixels, sceneName);
+    if (!isStaticHost()) {
+      fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=viewmasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: viewmasksJS,
+      }).catch(err => console.warn('[PB] Failed to save viewmasks sidecar:', err));
+    }
   }
 }

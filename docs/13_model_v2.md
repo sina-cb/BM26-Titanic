@@ -371,6 +371,8 @@ Model files (`*.js`) in `marsin_engine/models/` are **auto-generated** by the si
 
 To maintain creative control and custom view definitions without having to hand-edit individual pixel coordinate definitions in the generator, the system uses companion **sidecar files** named `<modelName>.viewmasks.js`.
 
+**The simulation scene is the source of truth for view masks.** Each scene has a `views.yaml` (managed by the sim's **Views panel**) holding the pinned `groupBits` table and named custom views; custom-view fixture membership lives in each fixture's `viewMask` bitfield (patches.yaml). The model exporter regenerates `<scene>.viewmasks.js` together with the model in the same pass, so the sidecar can never go stale relative to the pixels. Do not hand-edit the sidecars — they are clobbered on every export, exactly like the model files.
+
 At load time, the engine resolves the base `group → bit` table for the model, preferring an explicit contract over derivation:
 
 1. **Pinned (preferred):** the sidecar exports a `groupBits` object mapping every group name to its bit. This is the contract pattern code compiles against, so it is strictly validated against the loaded model — a model group missing from the table, a stale table key the model no longer has, a non-power-of-two or duplicate bit, or a collision with a preset's explicit bit all **throw at load time**.
@@ -389,7 +391,7 @@ Because individual base groups (e.g. `TriangleEdges`, `TowerBars`) are already p
 
 #### 4.5.3 Sidecar File Format & Examples
 
-Sidecar files are located in `marsin_engine/models/` and export `groupBits` (the pinned base-group contract, §4.5.1) plus a `viewMasks` array of presets. Three preset shapes are accepted:
+Sidecar files are located in `marsin_engine/models/` and export `groupBits` (the pinned base-group contract, §4.5.1) plus a `viewMasks` array of presets. They are **auto-generated** from the scene's `views.yaml` by the simulator's model export — author views in the sim's Views panel, not here. Three preset shapes are accepted by the engine:
 
 ```javascript
 // View-mask sidecar for the Summer Camp Dome model.

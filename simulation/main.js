@@ -26,6 +26,7 @@ import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
+import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
@@ -33,6 +34,7 @@ import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
+import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 
@@ -231,6 +233,7 @@ const _sceneConfigPath = `scenes/${_activeScene}/scene_config.yaml`;
 const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
+const _viewsPath = `scenes/${_activeScene}/views.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
@@ -239,13 +242,14 @@ Promise.all([
   fetch(_commonConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_viewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -299,8 +303,28 @@ Promise.all([
 
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
+
+      // Scene-owned view registry (views.yaml): group→bit contract +
+      // named custom views. Attached to the config tree so it rides the
+      // normal save POST (the save server splits it back out into
+      // views.yaml, like patches.yaml). Reconciled against the actual
+      // fixtures so new groups get bits and removed groups free theirs.
+      let viewsTree = null;
+      if (viewsYaml) {
+        try {
+          viewsTree = yaml.load(viewsYaml)?.views || null;
+        } catch (err) {
+          console.error(`Failed to parse ${_viewsPath}:`, err);
+        }
+      }
+      window.initialParams.views = createViewRegistry(viewsTree);
+      window.__viewRegistry = window.initialParams.views;
+
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
+      // No reconcile here: bits are reconciled against the EXPORTED
+      // PIXELS (the engine's validation universe) inside saveModelJS,
+      // which boot calls right after init.
     }
   } catch (err) {
     console.warn(`Failed to parse ${_sceneConfigPath}:`, err);
@@ -407,6 +431,7 @@ Promise.all([
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
     setupPatternEditor();
+    setupViewMasksEditor();
     setupSacnInMonitor();
     setupSacnOutMonitor();
     setupSceneIndicator();

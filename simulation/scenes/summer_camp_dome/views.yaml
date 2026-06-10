@@ -1,0 +1,17 @@
+views:
+  groupBits:
+    TriangleEdges: 0x01
+    TrianglePars: 0x02
+    BarLights: 0x04
+    VintageLights: 0x08
+  custom:
+    - name: Apex
+      bit: 0x10
+      groups:
+        - TriangleEdges
+        - TrianglePars
+    - name: AllButApex
+      bit: 0x20
+      groups:
+        - BarLights
+        - VintageLights

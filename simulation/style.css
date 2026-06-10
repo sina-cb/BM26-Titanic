@@ -1337,3 +1337,200 @@ body.edit-mode-active #engine-params-panel {
   font-size: 0.5rem;
   border-radius: 2px;
 }
+
+/* ─── Views editor panel ─────────────────────────────────────────────── */
+#view-masks-panel {
+  position: fixed;
+  top: 65px;
+  right: 360px;
+  width: 300px;
+  max-height: 70vh;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 20, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(240, 192, 96, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#view-masks-panel.hidden {
+  display: none;
+}
+
+#view-masks-panel.collapsed .vm-body {
+  display: none;
+}
+
+.vm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.vm-header:active {
+  cursor: grabbing;
+}
+
+.vm-title {
+  flex: 1;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: rgba(240, 192, 96, 0.8);
+  text-transform: uppercase;
+}
+
+.vm-body {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.vm-section-title {
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: rgba(240, 192, 96, 0.55);
+  margin: 8px 0 4px;
+}
+
+.vm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 10px;
+  color: #d0d0d0;
+}
+
+.vm-row .vm-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vm-row .vm-bit {
+  color: rgba(240, 192, 96, 0.7);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+}
+
+.vm-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 5px;
+  margin-bottom: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vm-input {
+  background: #1c1c28;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 5px;
+}
+
+.vm-input.vm-bit {
+  width: 70px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.vm-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 4px 0;
+}
+
+.vm-chip {
+  background: rgba(240, 192, 96, 0.12);
+  border: 1px solid rgba(240, 192, 96, 0.25);
+  border-radius: 8px;
+  color: rgba(240, 192, 96, 0.85);
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.vm-chip:hover {
+  background: rgba(240, 96, 96, 0.18);
+  border-color: rgba(240, 96, 96, 0.4);
+  color: #f08080;
+}
+
+.vm-select {
+  background: #1c1c28;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #999;
+  font-size: 9px;
+  padding: 1px 3px;
+  cursor: pointer;
+}
+
+.vm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.vm-count {
+  flex: 1;
+  font-size: 9px;
+  color: #888;
+}
+
+.vm-btn {
+  background: rgba(240, 192, 96, 0.1);
+  border: 1px solid rgba(240, 192, 96, 0.25);
+  border-radius: 4px;
+  color: rgba(240, 192, 96, 0.85);
+  font-size: 9px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.vm-btn:hover {
+  background: rgba(240, 192, 96, 0.22);
+}
+
+.vm-btn.vm-add {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px;
+}
+
+.vm-btn.vm-danger {
+  background: rgba(240, 96, 96, 0.08);
+  border-color: rgba(240, 96, 96, 0.3);
+  color: #e08080;
+}
+
+.vm-btn.vm-danger:hover {
+  background: rgba(240, 96, 96, 0.2);
+}
+
+.vm-hint {
+  font-size: 8.5px;
+  color: #666;
+  line-height: 1.4;
+  margin-top: 8px;
+}
