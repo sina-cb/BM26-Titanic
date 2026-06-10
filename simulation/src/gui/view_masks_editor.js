@@ -18,6 +18,7 @@ import {
   removeCustomView,
   listPixelGroups,
   nextFreeBit,
+  isEffectsOnlyFixture,
 } from '../dmx/view_registry.js';
 import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
 
@@ -203,10 +204,14 @@ export function applyViewMaskIsolation() {
   list.forEach(f => {
     if (!f) return;
 
-    // Fog machines are infrastructure — always visible, never isolated
-    const isFog = f.config.hasOwnProperty('type') && (f.config.type === 'TEFogMachine' || f.config.type === 'ChauvetHaze4D');
-    if (isFog) {
+    // Effects fixtures (fog/haze/horn/fire) are infrastructure —
+    // always visible, never isolated. Checked via the shared predicate:
+    // configs carry the type under `type` OR `fixtureType`, and the
+    // previous `config.type ===` check missed the latter, sweeping
+    // foggers into isolation.
+    if (isEffectsOnlyFixture(f.config)) {
       f.setVisibility(true);
+      f._viewIsolated = false;
       return;
     }
 

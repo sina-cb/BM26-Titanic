@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { scene, camera, modelRadius, renderer, params } from './state.js';
 import { getProfileDef } from './profile_registry.js';
+import { isEffectsOnlyFixture } from '../dmx/view_registry.js';
 
 // ── Pool Configuration ──────────────────────────────────────────────────
 const _urlParams = new URLSearchParams(window.location.search);
@@ -433,9 +434,10 @@ function _collectLightRequests() {
   for (const fixture of fixtureList) {
     if (!fixture || !fixture.group) continue;
 
-    // Fog machines are infrastructure — always show their lights if any
-    const isFog = fixture.config && 
-                  (fixture.config.type === 'TEFogMachine' || fixture.config.type === 'ChauvetHaze4D');
+    // Effects fixtures (fog/haze/horn/fire) are infrastructure — always
+    // show their lights if any. The shared predicate covers both the
+    // `type` and `fixtureType` config keys.
+    const isFog = isEffectsOnlyFixture(fixture.config);
 
     if (activeView && !isFog) {
       const isBitMember = ((fixture.config.viewMask || 0) & activeView.bit) !== 0;

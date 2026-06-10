@@ -26,6 +26,18 @@
 
 export const MAX_BIT = 0x40000000;
 
+/**
+ * Effects-only fixture types (foggers/hazers/horns/fire) never become
+ * pixels — the exporter routes them to the `.effects.js` companion —
+ * so they neither consume view bits nor participate in view isolation.
+ * Mirrors the exporter's routing predicate; configs may carry the type
+ * under `type` or `fixtureType` depending on origin.
+ */
+export function isEffectsOnlyFixture(config) {
+  const t = String((config && (config.type || config.fixtureType)) || '');
+  return t.includes('Fog') || t === 'ChauvetHaze4D' || t.includes('Horn') || t.includes('Fire');
+}
+
 export function isPowerOfTwoBit(bit) {
   return Number.isInteger(bit) && bit > 0 && bit <= MAX_BIT && (bit & (bit - 1)) === 0;
 }

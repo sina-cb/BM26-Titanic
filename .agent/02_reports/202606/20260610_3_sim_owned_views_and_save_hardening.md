@@ -131,3 +131,41 @@ We debugged and fixed the remaining interactive bugs, updated the 3D isolation p
 
 ### 3. Verification & Regressions
 * Ran the tap-based test suite (`node --test tests/fog_regression.test.js`) and verified it passes cleanly.
+
+---
+
+## Continuation 2: isolation actually hides everything + real-UI proof
+
+Picked up after the Antigravity agent's isolation work. Root causes
+found and fixed for "lights and bodies still visible":
+
+1. **Instanced glow dots are opaque `MeshBasicMaterial`** — blackening
+   a non-member instance leaves a solid black sphere, and in the
+   default `pixel_mapping` profile those dots ARE the fixture bodies.
+   Fix (`animate.js`): while isolation is active, non-member instance
+   matrices are zero-scaled every frame (membership can change live via
+   Assign/Unassign), with exactly one restore pass on exit.
+2. **Fog exclusion checked `config.type` only** — configs may carry
+   `fixtureType` instead, so foggers were swept into isolation. Added
+   shared `isEffectsOnlyFixture()` to `view_registry.js` (mirrors the
+   exporter's routing predicate) and used it in both
+   `applyViewMaskIsolation` and `light_pool._collectLightRequests`.
+3. **Window pointer handler ate panel clicks** (the "UI is not doing
+   much" report): every Views-panel click fell through to the
+   raycaster, clearing the selection AND re-rendering the panel —
+   destroying the clicked button before its click event fired. Fixed in
+   `interaction.js` (panel/modal/HUD ids excluded); merged with the
+   Antigravity agent's independent fix of the same bug during rebase.
+
+Verification (all driven through the REAL UI, no API shortcuts):
+- Isolation on test_bench default profile: exactly the member pixels
+  remain visible (40/52), 12 non-members zero-scaled, fog machines
+  stay, HUD exit restores everything (matrices + bodies). Assertions +
+  screenshots in `.agent_renders/iso2_*.png`.
+- Full operator workflow, 13/13: 👁 button → + New View via custom
+  modal → group chips on new AND pre-existing views → real canvas
+  click selects a fixture → selection survives panel clicks → Assign
+  sets the bit → save lands in views.yaml → delete + save cleans disk.
+- `npm run check` 2/2, `node --check` on all touched files,
+  `git diff --check` clean. Test residue (URL renderer override
+  persisted into common.yaml by saves) restored to webgpu by hand.
