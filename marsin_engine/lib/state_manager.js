@@ -123,6 +123,14 @@ export class StateManager {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
+    if (globalEffectsController && globalsState.groupFixedColors) {
+      // Route through the validating setter so a hand-edited bad YAML
+      // entry fails loudly here (caught + logged by the boot caller)
+      // instead of silently half-applying (docs/32 §2.5).
+      for (const [group, ov] of Object.entries(globalsState.groupFixedColors)) {
+        globalEffectsController.setGroupFixedColor(group, ov.color, ov.brightness);
+      }
+    }
   }
 
   saveMixerState(mixer) {

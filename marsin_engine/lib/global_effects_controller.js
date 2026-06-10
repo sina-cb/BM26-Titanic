@@ -22,11 +22,13 @@ import {
   SAFETY_TIERS,
   MAX_BURST_MS,
   validateParams,
+  validateColor6,
 } from './global_effect_library.js';
 import { strobeEffect } from '../effects/strobe.js';
 import { dropHitEffect } from '../effects/dropHit.js';
 import { colorWashEffect } from '../effects/colorWash.js';
 import { feedbackTrailsEffect } from '../effects/feedbackTrails.js';
+import { groupFixedColorEffect } from '../effects/group_fixed_color.js';
 
 export class GlobalEffectsController {
   constructor(config = {}) {
@@ -91,6 +93,15 @@ export class GlobalEffectsController {
     };
     this.feedbackTrailBuffer = null;
     this.feedbackTrailPixelCount = 0;
+
+    // Group fixed colors (docs/32). Per-group color locks set from the
+    // CaptainPad Dimmer Rack. Presence in the table === active — no
+    // separate `enabled` flag (the summer-camp djLights hack kept one
+    // and the apply path ignored it, leaving the lights stuck on).
+    // Shape: { [groupName]: { color: number[6], brightness: 0..1 } }.
+    // PERSISTENT rig state (globals_state.yaml), like the dimmers —
+    // intentionally NOT cleared by panicStop().
+    this.groupFixedColors = {};
   }
 
   // ── Legacy methods ────────────────────────────────────────────────
@@ -496,6 +507,59 @@ export class GlobalEffectsController {
     }
   }
 
+  // ── Group fixed colors (docs/32) ──────────────────────────────────
+
+  /**
+   * Lock a fixture group to a fixed RGBWAU color at a given brightness.
+   * Replaces any existing override for the group. Throws on invalid
+   * input — codex P0: a typo'd payload must fail loudly, never
+   * half-apply.
+   *
+   * `brightness: 0` is valid and locks the group dark (per-group
+   * blackout). Group-name existence in the model is validated by the
+   * API layer (which owns the model); the controller validates shape.
+   */
+  setGroupFixedColor(group, color6, brightness) {
+    if (typeof group !== 'string' || group.length === 0) {
+      throw new Error('setGroupFixedColor: group must be a non-empty string');
+    }
+    validateColor6(color6);
+    if (typeof brightness !== 'number' || !Number.isFinite(brightness) ||
+        brightness < 0 || brightness > 1) {
+      throw new Error(`setGroupFixedColor: brightness=${brightness} out of range [0..1]`);
+    }
+    this.groupFixedColors[group] = {
+      color: [...color6],
+      brightness,
+    };
+  }
+
+  /**
+   * Remove a group's fixed-color override. Idempotent — returns true
+   * when an override was actually removed, false when none existed.
+   */
+  clearGroupFixedColor(group) {
+    if (typeof group !== 'string' || group.length === 0) {
+      throw new Error('clearGroupFixedColor: group must be a non-empty string');
+    }
+    if (!Object.prototype.hasOwnProperty.call(this.groupFixedColors, group)) {
+      return false;
+    }
+    delete this.groupFixedColors[group];
+    return true;
+  }
+
+  /**
+   * Per-frame pipeline stage (docs/32 §2.2). Called by engine.js AFTER
+   * applyMacros() (locked groups must not be repainted by wash /
+   * trails / strobe) and BEFORE IntensityController.apply() (section
+   * dimmers + blackout keep the final say).
+   */
+  applyGroupFixedColors(pixels) {
+    if (Object.keys(this.groupFixedColors).length === 0) return;
+    groupFixedColorEffect.apply({ pixels, overrides: this.groupFixedColors });
+  }
+
   _ensureFeedbackBuffer(pixelCount) {
     if (!this.feedbackTrailBuffer || this.feedbackTrailPixelCount !== pixelCount) {
       this.feedbackTrailBuffer = new Float32Array(pixelCount * 6);
@@ -534,6 +598,9 @@ export class GlobalEffectsController {
         active: this.dropHitActive,
         count: this.dropHits.length,
       },
+      // Per-group fixed-color locks (docs/32) — deep-cloned so status
+      // consumers can't mutate the live table.
+      groupFixedColors: JSON.parse(JSON.stringify(this.groupFixedColors)),
       // Legacy rig-globals state surfaced here too so CaptainPad's
       // RigContext consumers (dimmer_rack bypass checkboxes) can
       // mirror engine-side changes without a separate /globals poll.
