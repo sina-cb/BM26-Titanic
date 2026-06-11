@@ -44,3 +44,6 @@ with live next-channel hint), group bulk add, filterable unmapped tray,
 pointer-guard registration. Verified by real-UI puppeteer smoke
 (screenshots inspected). Shared-universe color bands folded into task
 016's polish. See `.agent/02_reports/202606/20260611_2_controller_mapping_impl.md`.
+
+2026-06-11 (later): `+ group…` bulk add removed per operator decision 11
+(a group spans 6-15 controllers; per-fixture mapping only).

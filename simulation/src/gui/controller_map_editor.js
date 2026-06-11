@@ -648,9 +648,6 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
   actions.appendChild(fromListBtn);
 
   if (!isEffectsPort) {
-    const groupBtn = renderGroupAdd(controller, port);
-    if (groupBtn) actions.appendChild(groupBtn);
-
     const gapBtn = document.createElement('button');
     gapBtn.className = 'cm-btn';
     gapBtn.textContent = '+ gap';
@@ -691,38 +688,10 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
   return actions;
 }
 
-function renderGroupAdd(controller, port) {
-  const mapped = mappedFixtures(registry());
-  const groups = new Map(); // group → ordered configs
-  for (const config of allConfigs()) {
-    if (mapped.has(config.name)) continue;
-    if (isGlobalEffect(config.fixtureType || config.type || '')) continue;
-    const group = config.group || '';
-    if (!group) continue;
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push(config);
-  }
-  if (groups.size === 0) return null;
-
-  const select = document.createElement('select');
-  select.className = 'vm-select';
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = '+ group…';
-  select.appendChild(placeholder);
-  for (const [group, configs] of groups) {
-    const opt = document.createElement('option');
-    opt.value = group;
-    opt.textContent = `${group} (${configs.length})`;
-    select.appendChild(opt);
-  }
-  select.onchange = () => {
-    if (!select.value) return;
-    const names = groups.get(select.value).map(c => c.name);
-    addNamesToPort(controller, port, names);
-  };
-  return select;
-}
+// NOTE: there is deliberately NO group-level add on a port — on the
+// real rig a single group spans 6–15 controllers (operator decision,
+// 2026-06-11). Mapping is strictly per-fixture; groups exist in the
+// tray only as a filter.
 
 function addNamesToPort(controller, port, names) {
   const snapshot = snapshotRegistry();

@@ -313,7 +313,7 @@ panel ID added (lesson learned: this is the bug class that made the Views panel
 │ ┌─ Bow PKnight ── 10.1.1.10 ──────────────── [+port] [🗑] ┐ │
 │ │ ▸ Port 1 · U2 @1   ████████████░░░░░░  40/512 [👁] [🗑]  │ │
 │ │     1 ▪Par 1   11 ▪Par 2   21 ▪Par 3   31 ▪Par 4        │ │
-│ │     [+ from selection] [+ from list] [+ group] [+ gap]  │ │
+│ │     [+ from selection] [+ from list] [+ gap]             │ │
 │ │ ▸ Port 2 · U3 @1   ███░░░░░░░░░░░░░░░  66/512 [👁] [🗑]  │ │
 │ │ ▸ Port 3 · U3 @200 ░░░░░██░░░░░░░░░░░  10/512 [👁] [🗑]  │ │
 │ │ ▸ Port 4 · U1 ✨effects  Haze@510 Fog@512    [👁] [🗑]  │ │
@@ -373,10 +373,11 @@ Element notes:
    manual click) *and* appends it to the chain immediately — one click per fixture,
    in the order you click. `Esc` or clicking elsewhere exits pick mode.
 
-**Bulk path** — `[+ group]` on a port: appends all unmapped fixtures of a chosen
-group to that chain (group picker; spatial sort optional). This is the
-auto-patcher's one useful behavior, kept and made visible: "these 20 strand
-fixtures all hang off Port 2" is three clicks.
+**No group-level add** — on the real rig a single group spans **6–15
+controllers** (operator decision, 2026-06-11), so a "map this group to this
+port" shortcut would be wrong far more often than right. Mapping is strictly
+per-fixture; groups appear only as a *filter* in the unmapped tray (type a group
+name, then click through its fixtures in cable order).
 
 Both flows are append-based and incremental: map four pars, look up at the 3D view,
 confirm, continue. No staging area, no apply button, no modes beyond the transient
@@ -520,6 +521,9 @@ land-able; phases 1+2 alone already beat today's workflow.
 9. **Port count**: default 4, unbounded.
 10. **Universe numbering**: next-free auto-suggest on port add; no base-numbering
     convention.
+11. **No group-level port assignment** — a single group spans 6–15 controllers on
+    the real rig, so mapping is strictly per-fixture; groups are a tray filter
+    only.
 
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
 moving the Chauvet to 510–511.)*

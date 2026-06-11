@@ -153,3 +153,10 @@
    closes task 012.
 4. **019**: full titanic 61-fixture mapping dry run + round-trip
    identity check via the real UI.
+
+## Addendum (same day)
+
+Operator correction after delivery: on the real rig a single group spans
+6–15 controllers, so the `+ group…` bulk add on a port was removed —
+mapping is strictly per-fixture (groups remain a tray filter only).
+Decision 11 in docs/33.
