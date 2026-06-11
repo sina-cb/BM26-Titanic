@@ -27,6 +27,7 @@ import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./sr
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
+import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
@@ -35,6 +36,7 @@ import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
+import { setupControllerMapEditor } from "./src/gui/controller_map_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
@@ -244,6 +246,7 @@ const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
 const _viewsPath = `scenes/${_activeScene}/views.yaml`;
+const _controllersPath = `scenes/${_activeScene}/controllers.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
 // Deliberate boot halt: paints a fullscreen explanation and flags the
@@ -270,13 +273,14 @@ Promise.all([
   fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_viewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_controllersPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -303,6 +307,23 @@ Promise.all([
     fatalBootError(
       `${_viewsPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
       `Fix the file (or delete it to start the scene with no views) and reload. ` +
+      `Nothing has been overwritten.`, err);
+    return;
+  }
+
+  // Scene-owned controller mapping (controllers.yaml, docs/33) — same
+  // hard-stop philosophy as views.yaml: a present-but-broken file must
+  // halt the boot (the next auto-save would rewrite controllers.yaml
+  // from a half-loaded registry, destroying the operator's mapping).
+  // A MISSING controllers.yaml is the legitimate "no mapping yet" case.
+  let _controllerRegistry;
+  try {
+    const controllersTree = controllersYaml ? yaml.load(controllersYaml) : null;
+    _controllerRegistry = createControllerRegistry(controllersTree);
+  } catch (err) {
+    fatalBootError(
+      `${_controllersPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
+      `Fix the file (or delete it to start the scene with no controller mapping) and reload. ` +
       `Nothing has been overwritten.`, err);
     return;
   }
@@ -348,6 +369,50 @@ Promise.all([
         }
       }
 
+      // Controller mapping projection (docs/33): when a mapping exists,
+      // the mapper owns ALL patch fields — derived for mapped fixtures,
+      // unpatched ('' / 0 / 0) for everything else. Runs BEFORE first
+      // render so patches.yaml drift is corrected at load, loudly.
+      // Also syncs the in-memory patch tree so later applyPatches()
+      // calls (fixture rebuilds) re-apply the projection, not stale
+      // on-disk values.
+      window.__controllerRegistry = _controllerRegistry;
+      window.projectControllerMappings = function (configs) {
+        const registry = window.__controllerRegistry;
+        if (!registry || !registryIsActive(registry)) return { violations: [], drift: [] };
+        const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
+        const result = projectOntoConfigs(registry, configs, pins);
+        if (window.__globalPatchTree) {
+          for (const config of configs) {
+            if (!config || !config.name) continue;
+            window.__globalPatchTree[config.name] = {
+              controllerIp: config.controllerIp || '',
+              dmxUniverse: config.dmxUniverse || 0,
+              dmxAddress: config.dmxAddress || 0,
+              controllerId: config.controllerId || 0,
+              sectionId: config.sectionId || 0,
+              fixtureId: config.fixtureId || 0,
+              viewMask: config.viewMask || 0,
+            };
+          }
+        }
+        window.__controllerViolations = result.violations;
+        for (const v of result.violations) {
+          console.error(`[Controllers] ✋ ${v.message}`);
+        }
+        for (const d of result.drift) {
+          console.warn(`[Controllers] patches.yaml drift corrected for '${d.name}': ` +
+            `U${d.before.dmxUniverse}:${d.before.dmxAddress}@${d.before.controllerIp || '—'} → ` +
+            `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
+        }
+        return result;
+      };
+      const _bootConfigs = [];
+      if (window.initialParams.parLights?.fixtures) _bootConfigs.push(...window.initialParams.parLights.fixtures);
+      if (Array.isArray(window.initialParams.dmxLights)) _bootConfigs.push(...window.initialParams.dmxLights);
+      if (window.initialParams.dmxLights?.fixtures) _bootConfigs.push(...window.initialParams.dmxLights.fixtures);
+      window.projectControllerMappings(_bootConfigs);
+
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
 
@@ -356,6 +421,10 @@ Promise.all([
       // splits it back out into views.yaml, like patches.yaml).
       window.initialParams.views = _viewRegistry;
       window.__viewRegistry = _viewRegistry;
+
+      // Attach the controller registry the same way — save-server.js
+      // splits it back out into controllers.yaml.
+      window.initialParams.controllers = _controllerRegistry;
 
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
@@ -475,6 +544,7 @@ Promise.all([
     }
     setupPatternEditor();
     setupViewMasksEditor();
+    setupControllerMapEditor();
     if (IS_MODERN_UI) {
       initModernSacnMonitors();
     } else {

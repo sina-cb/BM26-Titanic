@@ -1860,3 +1860,417 @@ body.edit-mode-active #engine-params-panel {
   border-color: color-mix(in srgb, var(--error) 50%, transparent);
   color: var(--error);
 }
+
+/* ─── Controller Mapping panel (docs/33) ─────────────────────────────── */
+#controller-map-panel {
+  position: fixed;
+  top: 65px;
+  right: 360px;
+  width: 380px;
+  max-height: 78vh;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 12, 22, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(96, 192, 240, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#controller-map-panel.hidden {
+  display: none;
+}
+
+#controller-map-panel.collapsed .cm-body {
+  display: none;
+}
+
+#controller-map-panel .vm-header {
+  border-bottom: 1px solid rgba(96, 192, 240, 0.14);
+}
+
+#controller-map-panel .vm-title {
+  color: rgba(96, 192, 240, 0.85);
+}
+
+.cm-header-status {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.cm-header-status.cm-warn {
+  background: rgba(240, 192, 96, 0.15);
+  border: 1px solid rgba(240, 192, 96, 0.4);
+  color: #f0c060;
+}
+
+.cm-header-status.cm-ok {
+  background: rgba(51, 204, 51, 0.12);
+  border: 1px solid rgba(51, 204, 51, 0.35);
+  color: #6e6;
+}
+
+.cm-body {
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 10px;
+  color: #d0d0d0;
+}
+
+.cm-banner {
+  background: rgba(240, 96, 96, 0.1);
+  border: 1px solid rgba(240, 96, 96, 0.35);
+  border-radius: 6px;
+  color: #f09090;
+  font-size: 9px;
+  line-height: 1.45;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+}
+
+.cm-controller {
+  border: 1px solid rgba(96, 192, 240, 0.14);
+  border-radius: 8px;
+  padding: 6px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cm-controller-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.cm-input {
+  background: #161a26;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 5px;
+  min-width: 0;
+}
+
+.cm-input.cm-invalid {
+  border-color: rgba(240, 96, 96, 0.7);
+  background: rgba(60, 16, 16, 0.5);
+}
+
+.cm-input.cm-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.cm-input.cm-ip {
+  width: 92px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+}
+
+.cm-input.cm-num {
+  width: 44px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+}
+
+.cm-port {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 4px 2px 5px;
+}
+
+.cm-port.cm-port-picking {
+  background: rgba(96, 192, 240, 0.08);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(96, 192, 240, 0.45);
+}
+
+.cm-port-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cm-port-label {
+  font-weight: 600;
+  color: rgba(96, 192, 240, 0.85);
+  white-space: nowrap;
+}
+
+.cm-port-label.cm-effects {
+  color: rgba(240, 160, 240, 0.85);
+}
+
+.cm-occupancy {
+  flex: 1;
+  height: 9px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+  min-width: 50px;
+}
+
+.cm-occupancy .cm-occ-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(96, 192, 240, 0.55);
+}
+
+.cm-occupancy .cm-occ-seg.cm-occ-gap {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.cm-occupancy .cm-occ-seg.cm-occ-invalid {
+  background: rgba(240, 96, 96, 0.75);
+}
+
+.cm-occ-count {
+  font-size: 8.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #889;
+  white-space: nowrap;
+}
+
+.cm-occ-count.cm-occ-over {
+  color: #f08080;
+  font-weight: 700;
+}
+
+.cm-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 4px 0 3px;
+}
+
+.cm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(96, 192, 240, 0.1);
+  border: 1px solid rgba(96, 192, 240, 0.3);
+  border-radius: 8px;
+  color: #bce0f5;
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: grab;
+  user-select: none;
+}
+
+.cm-chip .cm-chip-addr {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  color: rgba(96, 192, 240, 0.9);
+  font-weight: 700;
+}
+
+.cm-chip .cm-chip-x {
+  cursor: pointer;
+  color: rgba(240, 96, 96, 0);
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.cm-chip:hover .cm-chip-x {
+  color: rgba(240, 96, 96, 0.85);
+}
+
+.cm-chip.cm-chip-invalid {
+  border-color: rgba(240, 96, 96, 0.6);
+  background: rgba(240, 96, 96, 0.1);
+  color: #f0a0a0;
+  text-decoration: line-through;
+}
+
+.cm-chip.cm-chip-gap {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #999;
+  font-style: italic;
+}
+
+.cm-chip.cm-chip-pinned {
+  border-color: rgba(240, 160, 240, 0.45);
+  background: rgba(240, 160, 240, 0.08);
+  color: #e8c8e8;
+  cursor: default;
+}
+
+.cm-chip.cm-chip-selected {
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 160, 0.8);
+}
+
+.cm-chip.cm-drag-over {
+  box-shadow: inset 2px 0 0 rgba(96, 192, 240, 0.9);
+}
+
+.cm-port-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.cm-btn {
+  background: rgba(96, 192, 240, 0.1);
+  border: 1px solid rgba(96, 192, 240, 0.28);
+  border-radius: 4px;
+  color: rgba(96, 192, 240, 0.9);
+  font-size: 9px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.cm-btn:hover {
+  background: rgba(96, 192, 240, 0.22);
+}
+
+.cm-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.cm-btn.cm-danger {
+  background: rgba(240, 96, 96, 0.08);
+  border-color: rgba(240, 96, 96, 0.3);
+  color: #e08080;
+}
+
+.cm-btn.cm-danger:hover {
+  background: rgba(240, 96, 96, 0.2);
+}
+
+.cm-btn.cm-add {
+  display: block;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 4px;
+}
+
+.cm-error-chip {
+  display: inline-block;
+  background: rgba(240, 96, 96, 0.12);
+  border: 1px solid rgba(240, 96, 96, 0.4);
+  border-radius: 6px;
+  color: #f09090;
+  font-size: 8.5px;
+  padding: 1px 6px;
+  margin: 2px 0;
+}
+
+.cm-tray {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 6px;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.cm-tray.cm-tray-picking {
+  border-color: rgba(96, 192, 240, 0.5);
+  background: rgba(96, 192, 240, 0.05);
+}
+
+.cm-tray-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.cm-tray-title {
+  flex: 1;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: rgba(96, 192, 240, 0.6);
+  text-transform: uppercase;
+}
+
+.cm-tray-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.cm-tray-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: #aaa;
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-tray-chip:hover {
+  background: rgba(96, 192, 240, 0.18);
+  border-color: rgba(96, 192, 240, 0.45);
+  color: #cde8f8;
+}
+
+.cm-fully-patched {
+  text-align: center;
+  color: #6e6;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 6px;
+}
+
+.cm-hint {
+  font-size: 8.5px;
+  color: #666;
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+#cm-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(14, 18, 30, 0.96);
+  border: 1px solid rgba(96, 192, 240, 0.4);
+  border-radius: 8px;
+  color: #cde8f8;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 8px 14px;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+}
+
+#cm-toast.cm-toast-error {
+  border-color: rgba(240, 96, 96, 0.55);
+  color: #f0a0a0;
+}
+
+#cm-toast button {
+  background: rgba(96, 192, 240, 0.15);
+  border: 1px solid rgba(96, 192, 240, 0.4);
+  border-radius: 4px;
+  color: #9fd4f0;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 700;
+  padding: 2px 10px;
+  cursor: pointer;
+}

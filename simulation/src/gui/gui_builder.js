@@ -1283,11 +1283,30 @@ function setupGUI() {
       autoPatchBtn.title = 'Auto-Patch All Unpatched';
       autoPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--tint) 15%, var(--surface));color:var(--tint);';
 
+      // With a controller mapping present the mapper owns ALL patch
+      // fields (docs/33) — two writers would fight, so the legacy
+      // auto-patch path is disabled, not just discouraged. Full removal
+      // is task 017.
+      const mapperActive = window.__controllerRegistry &&
+        window.__controllerRegistry.controllers.length > 0;
+      if (mapperActive) {
+        autoPatchBtn.disabled = true;
+        autoPatchBtn.style.opacity = '0.4';
+        autoPatchBtn.style.cursor = 'default';
+        autoPatchBtn.title = 'Disabled — patches are derived from the Controller Mapping. ' +
+          'Use the 🎛 Controllers panel.';
+      }
+
       const clearPatchBtn = document.createElement('button');
       clearPatchBtn.textContent = '❌ Clear All Patches';
       clearPatchBtn.title = 'Clear All Patches';
       clearPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);';
       clearPatchBtn.onclick = () => {
+        if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
+          alert('Patches are derived from the Controller Mapping — clear the mapping in the ' +
+            '🎛 Controllers panel instead.');
+          return;
+        }
         if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
         pushUndo();
         
@@ -1618,6 +1637,17 @@ function setupGUI() {
               ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
               ipRow.appendChild(ipInput);
               patchDiv.appendChild(ipRow);
+
+              // With a controller mapping present, patch fields are
+              // PROJECTED (docs/33) — display-only here, edited in the
+              // 🎛 Controllers panel. Kills the double-entry bug class.
+              if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
+                for (const lockedInput of [uniInput, addrInput, ipInput]) {
+                  lockedInput.disabled = true;
+                  lockedInput.title = 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.';
+                  lockedInput.style.opacity = '0.6';
+                }
+              }
 
               if (genChildren) genChildren.appendChild(patchDiv);
 
@@ -2012,6 +2042,17 @@ function setupGUI() {
           ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
           ipRow.appendChild(ipInput);
           patchDiv.appendChild(ipRow);
+
+          // With a controller mapping present, patch fields are
+          // PROJECTED (docs/33) — display-only here, edited in the
+          // 🎛 Controllers panel. Kills the double-entry bug class.
+          if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
+            for (const lockedInput of [uniInput, addrInput, ipInput]) {
+              lockedInput.disabled = true;
+              lockedInput.title = 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.';
+              lockedInput.style.opacity = '0.6';
+            }
+          }
 
           const idxChildren = idxFolder.domElement.querySelector('.children');
           if (idxChildren) idxChildren.appendChild(patchDiv);
@@ -3877,6 +3918,14 @@ function setupGUI() {
   viewsBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--primary) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--primary) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--primary);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
   viewsBtn.onclick = () => { if (window.toggleViewMasksPanel) window.toggleViewMasksPanel(); };
   saveDiv.appendChild(viewsBtn);
+
+  // Controller mapping panel toggle — hardware topology editor
+  // (controllers.yaml, docs/33). The only place patch fields are edited.
+  const controllersBtn = document.createElement('button');
+  controllersBtn.textContent = '🎛  Controllers';
+  controllersBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(96,192,240,0.25);border-radius:8px;background:rgba(24,40,60,0.3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(96,192,240,0.85);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  controllersBtn.onclick = () => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); };
+  saveDiv.appendChild(controllersBtn);
 
   const guiChildren = gui.domElement.querySelector('.children');
   if (guiChildren) guiChildren.appendChild(saveDiv);

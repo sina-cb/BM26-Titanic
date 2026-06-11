@@ -2,7 +2,7 @@
 
 - **ID:** 014
 - **Priority:** IMPORTANT
-- **Status:** OPEN
+- **Status:** DONE
 - **Source:** docs/33_controller_mapping.md (phase 1)
 - **Location:** simulation/src/dmx/controller_registry.js (new), simulation/main.js, simulation/server/save-server.js
 - **Created:** 2026-06-11
@@ -37,3 +37,11 @@ and hooks fixture renames to update chain references atomically.
 Everything else (panel UI, 3D linkage, auto-patcher removal) builds on
 this contract. The titanic scene ships with all 61 fixtures unpatched
 and no safe way to patch them on playa.
+
+## Resolution
+Implemented 2026-06-11 (branch claude/nice-cerf-bl2jnk). `controller_registry.js`
+with full packing/validation/projection contract + metadata assignment;
+controllers.yaml load (boot hard-stop on broken file) in main.js with
+pre-render projection + patch-tree sync; save-server extraction via the
+atomic-write path; 26 unit tests (28/28 suite green). See
+`.agent/02_reports/202606/20260611_2_controller_mapping_impl.md`.

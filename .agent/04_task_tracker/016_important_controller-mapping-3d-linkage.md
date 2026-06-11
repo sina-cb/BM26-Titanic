@@ -30,4 +30,11 @@ For a daisy chain, the numbered polyline is the difference between
 path before powering anything.
 
 ## Notes
-Depends on tasks 014 and 015.
+Depends on tasks 014 and 015 (done 2026-06-11).
+
+2026-06-11 — partial work landed with phases 1+2: chip→3D selection,
+hover flash-highlight (chips + tray), selected-chip ring, selection-order
+capture. Remaining: mapped/unmapped tint, port isolation eye, chain
+polyline + numbered sprites, unmapped isolation, shared-universe color
+bands (moved here from 015).
+

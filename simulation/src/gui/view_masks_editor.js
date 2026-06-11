@@ -60,7 +60,8 @@ function markChanged() {
 }
 
 // ── Custom DOM Modals ────────────────────────────────────────────────
-function showCustomModal({ title, placeholder, value = '', onConfirm }) {
+// Exported for reuse by sibling panels (controller_map_editor.js).
+export function showCustomModal({ title, placeholder, value = '', onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'vm-modal-overlay';
 
@@ -116,7 +117,7 @@ function showCustomModal({ title, placeholder, value = '', onConfirm }) {
   };
 }
 
-function showCustomConfirm({ title, text, onConfirm }) {
+export function showCustomConfirm({ title, text, onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'vm-modal-overlay';
 

@@ -2,7 +2,7 @@
 
 - **ID:** 017
 - **Priority:** IMPORTANT
-- **Status:** OPEN
+- **Status:** IN_PROGRESS
 - **Source:** docs/33_controller_mapping.md (phase 4)
 - **Location:** simulation/src/gui/gui_builder.js, simulation/src/dmx/auto_patcher.js (to delete), .agent/00_gol/10_auto_patcher.md
 - **Created:** 2026-06-11
@@ -31,4 +31,14 @@ this feature exists to kill; the legacy button writes fields the panel
 owns.
 
 ## Notes
-Depends on tasks 014 and 015.
+Depends on tasks 014 and 015 (done 2026-06-11).
+
+2026-06-11 — partial work landed with phases 1+2: fixture-card patch
+fields disabled with "Derived from Controller Mapping" tooltip when a
+mapping exists; legacy 🎯 Auto-Patch button disabled and ❌ Clear All
+Patches refuses under an active mapping (two-writers problem closed);
+metadata assignment already moved into the projection pass (014);
+rename hook live. Remaining: delete auto_patcher.js (registry still
+imports getFootprint/isGlobalEffect/gatherAllConfigs from it), retire
+spec .agent/00_gol/10 (Sina sign-off).
+

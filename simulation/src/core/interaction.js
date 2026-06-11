@@ -261,6 +261,7 @@ export function onPointerDown(event) {
     event.target.closest(".vm-modal-overlay") ||
     event.target.closest(
       "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
+      "#controller-map-panel, #cm-toast, " +
       "#sacn-in-monitor-panel, #sacn-out-monitor-panel, #view-presets, #info-panel"
     )
   )
@@ -376,11 +377,13 @@ export function onPointerDown(event) {
     }
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
   }
 }
 

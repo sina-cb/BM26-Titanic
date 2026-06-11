@@ -83,7 +83,7 @@ Controller "Bow PKnight"  (10.1.1.10)          ← physical box, one IP
 ├── Port 3 → Universe 3            @ 200       ← SAME universe, split across ports
 │     chain: Vintage Rear
 └── Port 4 → Universe 1  (effects) pinned      ← reserved universe, pinned addresses
-      Haze 1 @ 511 · Fog 1 @ 512
+      Haze 1 @ 510 · Fog 1 @ 512
 ```
 
 - **Controller** — a physical DMX node. Has a human name, an IP, a **stable `id`**
@@ -173,8 +173,10 @@ in the mapping:
 - A port carrying universe 1 is an **effects port**: its entries are **pinned**,
   not packed — `{ fixture: <name>, at: <address> }`.
 - The canonical pin table stays in `simulation/config.yaml → global_effects`
-  (already present and operator-confirmed):
-  **`ChauvetHaze4D` → U1 @ 511**, **`TEFogMachine` → U1 @ 512**.
+  (operator-confirmed 2026-06-11):
+  **`ChauvetHaze4D` → U1 @ 510 (2 ch → 510–511)**, **`TEFogMachine` → U1 @ 512**.
+  No overlap: the Chauvet's 2-channel footprint ends at 511, the TE fogger sits
+  alone on 512.
   The mapping **validates every effects entry against this table** — an effect
   fixture mapped anywhere else, or at any other address, is a violation.
 - Non-effect fixtures can never be mapped on universe 1; effect fixtures can never
@@ -199,6 +201,7 @@ Scene-owned, next to `views.yaml` and `patches.yaml`:
 
 ```yaml
 # simulation/scenes/<scene>/controllers.yaml
+nextControllerId: 2            # monotonic — guarantees ids are never reused
 controllers:
   - id: 1                      # stable, never reused after delete
     name: Bow PKnight
@@ -228,7 +231,7 @@ controllers:
         universe: 1            # effects port — pinned entries only
         chain:
           - fixture: Haze 1
-            at: 511
+            at: 510
           - fixture: Fog 1
             at: 512
 ```
@@ -313,7 +316,7 @@ panel ID added (lesson learned: this is the bug class that made the Views panel
 │ │     [+ from selection] [+ from list] [+ group] [+ gap]  │ │
 │ │ ▸ Port 2 · U3 @1   ███░░░░░░░░░░░░░░░  66/512 [👁] [🗑]  │ │
 │ │ ▸ Port 3 · U3 @200 ░░░░░██░░░░░░░░░░░  10/512 [👁] [🗑]  │ │
-│ │ ▸ Port 4 · U1 ✨effects  Haze@511 Fog@512    [👁] [🗑]  │ │
+│ │ ▸ Port 4 · U1 ✨effects  Haze@510 Fog@512    [👁] [🗑]  │ │
 │ └──────────────────────────────────────────────────────────┘ │
 │                                                             │
 │ ┌─ Unmapped fixtures (filter: [______]) ──────────────────┐ │
@@ -431,7 +434,7 @@ invalid state*) so live patch fields are never garbage.
 | A universe belongs to exactly one controller (one IP) | red chip on both ports, names the collision |
 | Same-universe port ranges (startAddress + packed span) must not overlap | both bars red with the overlap region highlighted; higher port's chain struck through (projects unpatched) |
 | Chain packing fits within channels 1–512 | occupancy bar red, overflowing chips struck through, export blocked |
-| Universe 1 ⇔ effects only; effects pinned per `config.yaml → global_effects` (Chauvet @511, TE Fog @512) | red chip naming the expected pin; offending fixture projects unpatched |
+| Universe 1 ⇔ effects only; effects pinned per `config.yaml → global_effects` (Chauvet @510, TE Fog @512) | red chip naming the expected pin; offending fixture projects unpatched |
 | Fixture in ≤ 1 chain | structurally impossible via UI; load-time validation throws listing duplicates |
 | Controller IPs unique + well-formed | red border + chip; controller's fixtures project unpatched |
 | Chain references resolve to existing fixtures | load-time: loud console error + panel banner listing orphans; orphans render as red chips, one click to drop; entries after an orphan project unpatched |
@@ -499,8 +502,8 @@ land-able; phases 1+2 alone already beat today's workflow.
 1. **Channel budget is 512 everywhere.** No per-universe reserved tail; the old
    `DMX_RESERVED_CHANNELS` convention is retired.
 2. **Universe 1 is reserved for special effects**, enforced in the mapping.
-   Pins per `config.yaml → global_effects`: ChauvetHaze4D @ U1:511,
-   TEFogMachine @ U1:512.
+   Pins per `config.yaml → global_effects`: ChauvetHaze4D @ U1:510 (2 ch →
+   510–511), TEFogMachine @ U1:512.
 3. **Invalid states project to unpatched** (`''/0/0`) per the deterministic table
    above — `patches.yaml` never carries an out-of-range or conflicting address.
    (Delegated decision, optimized for loud-but-recoverable production failure.)
@@ -518,10 +521,5 @@ land-able; phases 1+2 alone already beat today's workflow.
 10. **Universe numbering**: next-free auto-suggest on port add; no base-numbering
     convention.
 
-## Remaining open questions (for Sina)
-
-1. **Chauvet/TE pin overlap**: `ChauvetHaze4D` has a 2-channel footprint, so
-   @511 it occupies 511–512 — overlapping the TE fogger @512. This is pre-existing
-   in `config.yaml` and effects are exempt from overlap validation among
-   themselves, so the design encodes it as given — but confirm the hardware really
-   wants this (or the Chauvet runs a 1-channel mode in practice).
+*(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
+moving the Chauvet to 510–511.)*
