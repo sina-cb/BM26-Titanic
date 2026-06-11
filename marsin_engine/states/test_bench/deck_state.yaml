@@ -1,37 +1,33 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 72_outpost_campfire
+  pattern: 80_tree_canopy_fracture
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '738786121':
-      v0: 1
-      v1: 0
-      v2: 0
     '1037917937':
-      v0: 0.5
+      v0: 0.81
       v1: 0
       v2: 0
-    '1094958888':
-      v0: 0.4
+    '1176417386':
+      v0: 0.48
       v1: 0
       v2: 0
-    '2171166648':
-      v0: 0.2
+    '3904555625':
+      v0: 0.43
       v1: 0
       v2: 0
-    '2534462144':
-      v0: 0.5
+    '4257441711':
+      v0: 0.81
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_44_72_outpost_campfire
-    cursor: 44
+    activeEntryId: e_default_52_80_tree_canopy_fracture
+    cursor: 52
     autopilot:
       active: false
       delay_s: 1
