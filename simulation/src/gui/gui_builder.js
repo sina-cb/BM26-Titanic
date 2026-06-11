@@ -135,7 +135,7 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
       const byGroup = Array.isArray(view.groups) && view.groups.includes(config.group);
       const active = byBit || byGroup;
       const chip = document.createElement('span');
-      chip.textContent = byGroup && !byBit ? `${view.name} ⛓` : view.name;
+      chip.textContent = byGroup && !byBit ? `${view.name} (grp)` : view.name;
       chip.title = active
         ? `Member of "${view.name}" (${_hex(view.bit)})${byGroup ? ` via group '${config.group}'` : ''} — edit in the Views panel`
         : `Not in "${view.name}" (${_hex(view.bit)}) — assign in the Views panel`;
