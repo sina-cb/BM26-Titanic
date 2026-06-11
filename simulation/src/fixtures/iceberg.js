@@ -542,6 +542,13 @@ export class Iceberg {
     if (this.wireMesh) this.wireMesh.visible = visible && this.config.showWireframe !== false;
     if (this.ledLines) this.ledLines.visible = visible;
     this.hitbox.visible = visible;
+    if (this.floodLight) {
+      if (!visible) {
+        this.floodLight.visible = false;
+      } else {
+        this.updateFloodlightProps();
+      }
+    }
   }
 
   // ─── Live toggle faces/wireframe without full rebuild ───

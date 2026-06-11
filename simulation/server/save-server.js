@@ -25,6 +25,30 @@ function resolveSceneCamerasPath(sceneName) {
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SAVE_PORT = serverConfig.save_port || 6970;
 
+// Atomic + durable write: write to a sibling temp file, fsync it, then
+// rename over the target. A crash mid-write can no longer leave a
+// truncated yaml/model behind for the next boot to load as "stale but
+// parseable" state, and the fsync makes the rename survive a power cut
+// (the playa runs on generators). On any failure the temp file is
+// removed before rethrowing, so crash residue never lands next to
+// tracked files.
+function writeFileAtomic(targetPath, contents) {
+  const tmpPath = `${targetPath}.tmp-${process.pid}`;
+  try {
+    const fd = fs.openSync(tmpPath, 'w');
+    try {
+      fs.writeSync(fd, contents);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    fs.rmSync(tmpPath, { force: true });
+    throw err;
+  }
+}
+
 // ─── Static manifests (single source of truth for the client) ───────────
 // The simulation client (main.js, pattern_editor.js) discovers the scene
 // and pattern lists by fetching these JSON files — same path in dev and
@@ -149,10 +173,24 @@ http.createServer((req, res) => {
           }
 
           // Write extracted patches.yaml
-          fs.writeFileSync(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
+          writeFileAtomic(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
           console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} (${Object.keys(patches.patches).length} fixture(s))`);
-          
+
           // Re-serialize the cleaned structural tree
+          body = yaml.dump(configTree, { lineWidth: -1 });
+        }
+
+        // Decouple the view registry into its own views.yaml (same
+        // pattern as patches.yaml): the client attaches it to the
+        // config tree as `views`, we split it back out so the
+        // structural scene_config.yaml stays free of it.
+        if (configTree && configTree.views && typeof configTree.views === 'object') {
+          const viewsPath = path.join(path.dirname(outPath), 'views.yaml');
+          writeFileAtomic(viewsPath, yaml.dump({ views: configTree.views }, { lineWidth: -1 }));
+          console.log(`[SAVE SERVER] ✅ Wrote ${viewsPath} ` +
+            `(${Object.keys(configTree.views.groupBits || {}).length} group(s), ` +
+            `${(configTree.views.custom || []).length} custom view(s))`);
+          delete configTree.views;
           body = yaml.dump(configTree, { lineWidth: -1 });
         }
 
@@ -170,10 +208,10 @@ http.createServer((req, res) => {
 
         // Write common.yaml
         const commonPath = path.join(SCENES_ROOT, 'common.yaml');
-        fs.writeFileSync(commonPath, yaml.dump(commonConfig, { lineWidth: -1 }));
+        writeFileAtomic(commonPath, yaml.dump(commonConfig, { lineWidth: -1 }));
 
         // Write cleaned scene_config.yaml
-        fs.writeFileSync(outPath, yaml.dump(sceneConfig, { lineWidth: -1 }));
+        writeFileAtomic(outPath, yaml.dump(sceneConfig, { lineWidth: -1 }));
 
         console.log(`[SAVE SERVER] ✅ Wrote ${commonPath} and ${outPath}`);
         // Saving may create a new scene directory; keep the manifest live.
@@ -286,13 +324,21 @@ http.createServer((req, res) => {
           res.end('Missing scene parameter');
           return;
         }
-        // Determine model filename based on active scene
-        const isEffects = parsedUrl.searchParams.get('type') === 'effects';
-        const modelFilename = isEffects ? `${sceneName}.effects.js` : `${sceneName}.js`;
+        // Determine model filename based on active scene. `type` picks
+        // the companion file: effects (foggers/horns) or viewmasks (the
+        // group→bit + named-views sidecar the engine validates against).
+        // Scene name is sanitized exactly like the /save endpoint — a
+        // raw query param must never become a path segment.
+        const safeScene = sceneName.replace(/[^a-z0-9_-]/gi, '_');
+        const type = parsedUrl.searchParams.get('type');
+        const suffix = type === 'effects' ? '.effects.js'
+          : type === 'viewmasks' ? '.viewmasks.js'
+          : '.js';
+        const modelFilename = `${safeScene}${suffix}`;
         const outDir = path.join(ENGINE_ROOT, 'models');
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
-        fs.writeFileSync(outPath, body);
+        writeFileAtomic(outPath, body);
 
         console.log(`[Save] Wrote model data to ${outPath}`);
         res.writeHead(200);

@@ -1,0 +1,16 @@
+views:
+  groupBits:
+    ParLights: 1
+    VintageLights: 2
+    BarLights: 4
+  custom:
+    - name: ParsBars
+      bit: 8
+      groups:
+        - ParLights
+        - BarLights
+    - name: ParsVintages
+      bit: 16
+      groups:
+        - ParLights
+        - VintageLights

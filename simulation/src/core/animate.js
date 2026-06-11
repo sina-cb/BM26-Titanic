@@ -49,6 +49,13 @@ let _pixelInstancedMesh = null;
 const _pixelMatrixCache = new THREE.Matrix4();
 const _pixelColorCache = new THREE.Color();
 const _pixelTransformObj = new THREE.Object3D(); // For easy local-to-world extraction
+// View-isolation state for the instanced dots: blackening a non-member
+// instance is not enough — the dot material is opaque MeshBasicMaterial,
+// so a black instance renders as a solid black sphere (a visible
+// "body"). While isolation is active we zero-scale non-member instance
+// matrices every frame (membership can change live via Assign/Unassign),
+// and run exactly one restore pass when isolation exits.
+let _isolationWasActive = false;
 
 /** Increment cache version — call when topology, position, or metadata changes. */
 window.invalidateMarsinBatchCache = function(reason) {
@@ -327,24 +334,42 @@ export function animate() {
   // Streams all colors computed in the current frame straight to GPU
   if (_pixelInstancedMesh && getProfileDef(params.lightingProfile).mappingEnabled) {
      const count = _batchRenderList.length;
+     const activeView = window.__activePreviewView;
+     // Update instance matrices while isolating (and once on exit to
+     // restore) — see _isolationWasActive above for why color alone
+     // can't hide the dots.
+     const touchMatrices = !!activeView || _isolationWasActive;
+     const globalScale = params.globalPixelScale || 1.0;
      for (let i = 0; i < count; i++) {
         const entry = _batchRenderList[i];
-        
-        let rn = 0, gn = 0, bn = 0;
-        
-        if (!window._patchesActive) {
-           // All-unpatched direct mode: show pattern colors
-           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
-        } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
-           // Mixed mode: unpatched pixels stay black
-           rn = 0; gn = 0; bn = 0;
-        } else {
-           rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-           gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-           bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
-        }
+
+         let rn = 0, gn = 0, bn = 0;
+
+         const isIsolated = activeView && !(((entry.vMask || 0) & activeView.bit) !== 0 || (activeView.groups && activeView.groups.includes(entry.group)));
+
+         if (touchMatrices) {
+            const worldRadius = (entry.pixelSize || 14) * 0.001 * globalScale;
+            _pixelTransformObj.position.set(entry.wx, entry.wy, entry.wz);
+            _pixelTransformObj.scale.setScalar(isIsolated ? 0 : worldRadius);
+            _pixelTransformObj.updateMatrix();
+            _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+         }
+
+         if (!isIsolated) {
+            if (!window._patchesActive) {
+               // All-unpatched direct mode: show pattern colors
+               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+            } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
+               // Mixed mode: unpatched pixels stay black
+               rn = 0; gn = 0; bn = 0;
+            } else {
+               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
+               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
+               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+            }
+         }
         
         const [previewR, previewG, previewB] = scaleSimulationPreviewRgb(rn, gn, bn);
         _pixelColorCache.setRGB(previewR, previewG, previewB);
@@ -354,6 +379,11 @@ export function animate() {
      if (_pixelInstancedMesh.instanceColor) {
          _pixelInstancedMesh.instanceColor.needsUpdate = true;
      }
+     if (touchMatrices) {
+         _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
+         _pixelTransformObj.scale.setScalar(1);
+     }
+     _isolationWasActive = !!activeView;
      _pixelInstancedMesh.visible = true;
   } else if (_pixelInstancedMesh) {
      _pixelInstancedMesh.visible = false;

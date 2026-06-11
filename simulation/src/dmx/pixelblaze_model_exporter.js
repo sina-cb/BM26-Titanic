@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
+import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./view_registry.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -291,21 +292,7 @@ export function saveModelJS() {
   const modelJS = lines.join('\n');
   const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
 
-  // Static host has no save-server (port 6970) — skip both POSTs cleanly.
-  // Build the effects model below so window state is still updated; just
-  // don't try to persist either back to disk over a transport that can't
-  // reach localhost.
-  if (isStaticHost()) {
-    logStaticHostSkip('save-model POSTs (port 6970)');
-  } else {
-    fetch(`http://localhost:6970/save-model${sceneParam}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: modelJS,
-    }).catch(err => console.warn('[PB] Failed to save model:', err));
-  }
-
-  // Build and save effects model
+  // Build effects model
   const effectsLines = [
     '// Auto-generated Companion Special Effects model — do not edit manually',
     '// Updated: ' + new Date().toISOString(),
@@ -321,13 +308,51 @@ export function saveModelJS() {
 
   effectsLines.push('];');
   effectsLines.push('');
-
   const effectsJS = effectsLines.join('\n');
-  if (!isStaticHost()) {
-    fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
+
+  // Build the view-masks sidecar from the scene-owned view registry, in
+  // the SAME pass as the model so the two can never drift apart (the
+  // engine throws on any mismatch at load), and BEFORE any POST fires:
+  // a sidecar that fails to build (bit exhaustion, a view referencing a
+  // group with no pixels) must abort the model write too — otherwise
+  // model and sidecar split and the engine refuses the model at its
+  // next load. Skipped when the pixel map was skipped (fixtures
+  // mid-rebuild) — a sidecar generated from an empty pixel list would
+  // wipe real membership data.
+  let viewmasksJS = null;
+  if (window.__viewRegistry && pixels.length > 0) {
+    // Reconcile from the PIXELS just generated — the exact group set
+    // the engine will validate the sidecar against.
+    reconcileGroupBits(window.__viewRegistry, listPixelGroups(pixels));
+    // Scene name only stamps the generated header comment; routing uses
+    // sceneParam. '(unknown scene)' is deliberately not a real scene
+    // name so a missing __activeScene can never masquerade as one.
+    viewmasksJS = buildViewmasksSidecarJS(
+      window.__viewRegistry, pixels, window.__activeScene || '(unknown scene)');
+  }
+
+  // Static host has no save-server (port 6970) — everything above still
+  // built (reconcile mutates the live registry), just nothing persists
+  // over a transport that can't reach localhost.
+  if (isStaticHost()) {
+    logStaticHostSkip('save-model POSTs (port 6970)');
+    return;
+  }
+  fetch(`http://localhost:6970/save-model${sceneParam}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: modelJS,
+  }).catch(err => console.warn('[PB] Failed to save model:', err));
+  fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: effectsJS,
+  }).catch(err => console.warn('[PB] Failed to save effects model:', err));
+  if (viewmasksJS !== null) {
+    fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=viewmasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
-      body: effectsJS,
-    }).catch(err => console.warn('[PB] Failed to save effects model:', err));
+      body: viewmasksJS,
+    }).catch(err => console.warn('[PB] Failed to save viewmasks sidecar:', err));
   }
 }

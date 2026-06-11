@@ -26,6 +26,7 @@ import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
+import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
@@ -33,6 +34,7 @@ import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
+import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 
@@ -231,7 +233,25 @@ const _sceneConfigPath = `scenes/${_activeScene}/scene_config.yaml`;
 const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
+const _viewsPath = `scenes/${_activeScene}/views.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
+
+// Deliberate boot halt: paints a fullscreen explanation and flags the
+// bootstrap catch below NOT to fall back to a blank init. Used when
+// continuing would let an auto-save overwrite good on-disk state with
+// state derived from a file we failed to read.
+function fatalBootError(message, err) {
+  window.__fatalBootError = true;
+  console.error('[FATAL BOOT]', message, err || '');
+  const banner = document.createElement('div');
+  banner.id = 'fatal-boot-error';
+  banner.style.cssText =
+    'position:fixed;inset:0;z-index:99999;background:rgba(24,0,0,0.97);color:#f66;' +
+    'font-family:monospace;font-size:14px;line-height:1.5;padding:48px;' +
+    'white-space:pre-wrap;overflow:auto;';
+  banner.textContent = `⛔ SIM BOOT HALTED\n\n${message}`;
+  document.body.appendChild(banner);
+}
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
@@ -239,13 +259,14 @@ Promise.all([
   fetch(_commonConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_viewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -254,6 +275,26 @@ Promise.all([
     } catch (e) {
       console.warn("Failed to parse config.yaml:", e);
     }
+  }
+
+  // Scene-owned view registry (views.yaml) — parsed OUTSIDE the
+  // forgiving scene-config try/catch below, because a corrupt
+  // views.yaml must hard-stop the boot. Continuing with an empty
+  // registry would let the very next auto-save rewrite views.yaml and
+  // the engine sidecar with renumbered bits, silently destroying the
+  // group→bit contract patterns compile against (codex P0: fail
+  // loudly, no fallbacks). A MISSING views.yaml is the legitimate
+  // new-scene case and yields an empty registry.
+  let _viewRegistry;
+  try {
+    const viewsTree = viewsYaml ? (yaml.load(viewsYaml)?.views || null) : null;
+    _viewRegistry = createViewRegistry(viewsTree);
+  } catch (err) {
+    fatalBootError(
+      `${_viewsPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
+      `Fix the file (or delete it to start the scene with no views) and reload. ` +
+      `Nothing has been overwritten.`, err);
+    return;
   }
 
   // Load scene config
@@ -299,8 +340,18 @@ Promise.all([
 
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
+
+      // Attach the view registry (parsed + validated above) to the
+      // config tree so it rides the normal save POST (the save server
+      // splits it back out into views.yaml, like patches.yaml).
+      window.initialParams.views = _viewRegistry;
+      window.__viewRegistry = _viewRegistry;
+
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
+      // No reconcile here: bits are reconciled against the EXPORTED
+      // PIXELS (the engine's validation universe) inside saveModelJS,
+      // which boot calls right after init.
     }
   } catch (err) {
     console.warn(`Failed to parse ${_sceneConfigPath}:`, err);
@@ -407,6 +458,7 @@ Promise.all([
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
     setupPatternEditor();
+    setupViewMasksEditor();
     setupSacnInMonitor();
     setupSacnOutMonitor();
     setupSceneIndicator();
@@ -434,7 +486,14 @@ Promise.all([
       if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
     }
   }
-}).catch(async () => {
+}).catch(async (err) => {
+  // A deliberate boot halt (fatalBootError) must NOT fall back to a
+  // blank init — the banner explains what to fix; booting anyway would
+  // resurrect exactly the silent-overwrite failure it prevents.
+  if (window.__fatalBootError) {
+    console.error('[FATAL BOOT] init skipped:', err);
+    return;
+  }
   await init();
 });
 

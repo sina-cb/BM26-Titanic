@@ -2186,6 +2186,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
         viewMasks,
+        // Group→bit table for this model (pinned by the sidecar or
+        // derived at load time — docs/13 §4.5.1) and the MASK_* pattern
+        // constants built from it. Surfaced so operators, tools, and
+        // pattern authors can verify the assignment instead of guessing
+        // at bit values.
+        groupBits: (model && model.groupBits) || {},
+        maskConstants: (model && model.maskConstants) || {},
         pixelCount: pixels.length,
       }));
     }
@@ -3799,6 +3806,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // pushActiveEntryToModulation() calls in loadPlaylistEntry +
   // deckSwapComplete.
   pushActiveEntryToModulation();
+
+  // Exposed for the engine's model hot-reload path: after the model and
+  // mixer view-mask state are refreshed, push the new mixer/deck state
+  // to connected clients so an already-open CaptainPad re-syncs its
+  // channel strips without a manual reload. (The views PICKER list is
+  // fetched from /model/view-selection-options at mount, which reads
+  // the live model object and is therefore fresh on the next reload.)
+  server.broadcastMixerState = broadcastMixerState;
 
   return server;
 }

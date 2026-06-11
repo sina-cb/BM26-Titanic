@@ -101,23 +101,73 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   row2.appendChild(mkLabel('Fix ID:'));
   const fixInp = mkInput(config.fixtureId, 65535, (v) => { config.fixtureId = v; fireChange(); });
   row2.appendChild(fixInp);
-  row2.appendChild(mkLabel('View:'));
-  const viewInp = mkInput(config.viewMask, 65535, (v) => { config.viewMask = v; fireChange(); });
-  row2.appendChild(viewInp);
   wrap.appendChild(row2);
+
+  // ── View Membership Chips ──
+  const viewRow = document.createElement('div');
+  viewRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:4px;';
+  viewRow.appendChild(mkLabel('Views:'));
+  const chipsContainer = document.createElement('span');
+  chipsContainer.style.cssText = 'display:inline-flex;flex-wrap:wrap;gap:2px;';
+  viewRow.appendChild(chipsContainer);
+  wrap.appendChild(viewRow);
+
+  function _hex(bit) { return '0x' + bit.toString(16).toUpperCase(); }
+
+  // READ-ONLY membership indicators: editing happens deliberately in
+  // the Views panel (Assign/Unassign sel., group chips) — a stray
+  // click in a fixture card must never silently rewrite a view.
+  // Membership is the EFFECTIVE one the engine resolves: the fixture's
+  // own viewMask bit OR its group being attached to the view.
+  function renderViewChips() {
+    chipsContainer.innerHTML = '';
+    const reg = window.__viewRegistry || { custom: [] };
+    const views = reg.custom || [];
+    if (views.length === 0) {
+      const none = document.createElement('span');
+      none.style.cssText = 'color:#555;font-size:9px;font-style:italic;';
+      none.textContent = 'no views defined';
+      chipsContainer.appendChild(none);
+      return;
+    }
+    views.forEach(view => {
+      const byBit = ((config.viewMask || 0) & view.bit) !== 0;
+      const byGroup = Array.isArray(view.groups) && view.groups.includes(config.group);
+      const active = byBit || byGroup;
+      const chip = document.createElement('span');
+      chip.textContent = byGroup && !byBit ? `${view.name} (grp)` : view.name;
+      chip.title = active
+        ? `Member of "${view.name}" (${_hex(view.bit)})${byGroup ? ` via group '${config.group}'` : ''} — edit in the Views panel`
+        : `Not in "${view.name}" (${_hex(view.bit)}) — assign in the Views panel`;
+      chip.style.cssText =
+        'padding:1px 5px;border-radius:3px;font-size:9px;font-family:inherit;cursor:default;user-select:none;border:1px solid;' +
+        (active
+          ? 'background:rgba(240,192,96,0.25);color:#f0c060;border-color:rgba(240,192,96,0.5);'
+          : 'background:rgba(60,60,60,0.5);color:#666;border-color:#444;');
+      chipsContainer.appendChild(chip);
+    });
+  }
+  renderViewChips();
 
   parentChildrenEl.appendChild(wrap);
 
-  return {
+  const panel = {
     root: wrap,
-    inputs: { controllerId: ctrlInp, sectionId: sectInp, fixtureId: fixInp, viewMask: viewInp },
+    inputs: { controllerId: ctrlInp, sectionId: sectInp, fixtureId: fixInp },
     refresh() {
       ctrlInp.value = config.controllerId;
       sectInp.value = config.sectionId;
       fixInp.value = config.fixtureId;
-      viewInp.value = config.viewMask;
+      renderViewChips();
     },
   };
+
+  // Register for global refresh from Views panel assign/unassign
+  if (!window.__metadataPanelRegistry) window.__metadataPanelRegistry = [];
+  window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+  window.__metadataPanelRegistry.push(panel);
+
+  return panel;
 }
 
 export
@@ -211,7 +261,29 @@ function setupGUI() {
 
   // ─── Save / Auto-Save ───
   function exportConfig() {
-    if (window._isAppBooting || window._isRebuildingFixtures) return;
+    if (window._isAppBooting) return;
+    if (window._isRebuildingFixtures) {
+      // Never silently drop a save: the rebuild path re-arms the
+      // debounce when it finishes, but belt-and-braces retry here too —
+      // a swallowed save is exactly how stale scenes shipped on-site.
+      setTimeout(() => { if (window.debounceAutoSave) window.debounceAutoSave(true); }, 500);
+      return;
+    }
+
+    // Export the pixel model + view-mask sidecar FIRST: saveModelJS
+    // reconciles the view registry against the freshly exported pixels,
+    // so the views.yaml serialized below can never pin a group the
+    // sidecar doesn't know about (a crash between the two writes would
+    // otherwise leave them split). Any export failure — bit exhaustion,
+    // a view referencing a pixel-less group — aborts the entire save,
+    // loudly: a half-saved contract is worse than no save.
+    try {
+      saveModelJS();
+    } catch (err) {
+      console.error('Model/sidecar export failed — config save aborted:', err);
+      showSaveToast(`⚠ EXPORT FAILED — NOTHING SAVED: ${err.message}`, true);
+      return;
+    }
 
     reconstructYAML(configTree);
     syncCollapseState(configTree);
@@ -256,6 +328,10 @@ function setupGUI() {
       .replace(/^options:/m, '\n# ─── Options ──────────────────────────────────────────────────────────────\noptions:')
       .replace(/^config:/m, '\n# ─── Configuration ────────────────────────────────────────────────────────\nconfig:');
 
+    // Cache the serialized config so a page unload can flush it with
+    // sendBeacon even if the async fetch below never completes.
+    window.__lastConfigYaml = yamlStr;
+
     const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
     if (isStaticHost()) {
       logStaticHostSkip('save scene config (port 6970)');
@@ -264,17 +340,24 @@ function setupGUI() {
         method: "POST",
         body: yamlStr,
       })
-        .then(() => {
+        .then((res) => {
+          if (!res.ok) throw new Error(`save server responded ${res.status}`);
           console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
+          _setSceneDirty(false);
           showSaveToast();
           if (window.PatchManager) window.PatchManager.notifySacnBridge();
+          // Resync every fixture card's "Views:" chips with the
+          // just-persisted registry + membership state.
+          if (window.refreshMetadataPanels) window.refreshMetadataPanels();
+          if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
         })
-        .catch((err) => console.error("Failed to write config:", err));
+        .catch((err) => {
+          // Stay dirty: the indicator keeps shouting until a save lands.
+          console.error("Failed to write config:", err);
+          showSaveToast('⚠ SAVE FAILED — changes NOT on disk', true);
+        });
     }
 
-    // Also export the pixel model for Pixelblaze patterns. The exporter has
-    // its own static-host gate around the POST, so calling it is safe.
-    saveModelJS();
   }
 
   function saveModelJS() {
@@ -282,19 +365,71 @@ function setupGUI() {
   }
   window.saveModelJS = saveModelJS;
 
-  function showSaveToast() {
+  function showSaveToast(message, isError) {
     let toast = document.getElementById('save-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'save-toast';
-      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a3a1a;border:1px solid #3c3;color:#3c3;padding:6px 20px;border-radius:6px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:6px 20px;border-radius:6px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
       document.body.appendChild(toast);
     }
-    toast.textContent = '✓ Config saved';
+    const ok = !isError;
+    toast.style.background = ok ? '#1a3a1a' : '#3a1a1a';
+    toast.style.border = ok ? '1px solid #3c3' : '1px solid #c33';
+    toast.style.color = ok ? '#3c3' : '#f66';
+    toast.textContent = message || '✓ Config saved';
     toast.style.opacity = '1';
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, ok ? 2000 : 6000);
   }
+
+  // ─── Unsaved-changes tracking ───
+  // Every mutation marks the scene dirty; only a confirmed 200 from the
+  // save server clears it. The chip + beforeunload prompt + sendBeacon
+  // flush close the on-site failure mode where edits made in the last
+  // few seconds (or with auto-save off) evaporated on refresh and the
+  // next load looked "stale".
+  function _setSceneDirty(dirty) {
+    window.__sceneDirty = dirty;
+    let chip = document.getElementById('dirty-indicator');
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'dirty-indicator';
+      chip.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#3a2a1a;border:1px solid #f0c060;color:#f0c060;padding:4px 14px;border-radius:6px;font-family:Inter,sans-serif;font-size:11px;font-weight:600;letter-spacing:0.08em;pointer-events:none;z-index:999;transition:opacity 0.3s;';
+      document.body.appendChild(chip);
+    }
+    chip.textContent = '● UNSAVED CHANGES';
+    chip.style.opacity = dirty ? '1' : '0';
+    if (window.refreshViewMasksPanel) {
+      window.refreshViewMasksPanel();
+    }
+  }
+  window._setSceneDirty = _setSceneDirty;
+
+  window.addEventListener('beforeunload', (e) => {
+    const pendingSave = window.__sceneDirty || !!saveTimeout;
+    if (!pendingSave || window._isAppBooting || isStaticHost()) return;
+    // Best-effort flush of the latest serialized config: sendBeacon is
+    // the only transport guaranteed to survive unload. Re-serialize
+    // first so the beacon carries the newest state, not the last save.
+    try {
+      if (!window._isRebuildingFixtures) {
+        reconstructYAML(configTree);
+        window.__lastConfigYaml = yaml.dump(configTree, { lineWidth: -1, noCompatMode: true });
+      }
+      if (window.__lastConfigYaml && navigator.sendBeacon) {
+        const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
+        navigator.sendBeacon(`http://localhost:6970/save${sceneParam}`,
+          new Blob([window.__lastConfigYaml], { type: 'text/plain' }));
+      }
+    } catch (err) {
+      console.error('Unload flush failed:', err);
+    }
+    // Still prompt: the beacon is fire-and-forget, the operator should
+    // get the chance to stay and save deliberately.
+    e.preventDefault();
+    e.returnValue = '';
+  });
 
   function _showAutoToast(msg) {
     let toast = document.getElementById('auto-patch-toast');
@@ -311,11 +446,15 @@ function setupGUI() {
   }
   window.exportConfig = exportConfig;
 
-  let saveTimeout;
-  function debounceAutoSave() {
-    if (!params.autoSave) return;
+  let saveTimeout = null;
+  function debounceAutoSave(force = false) {
+    // Mark dirty on EVERY mutation, even with auto-save off — the chip
+    // and the beforeunload prompt are what make "I forgot to save"
+    // impossible to miss.
+    _setSceneDirty(true);
+    if (!params.autoSave && !force) return;
     clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(exportConfig, 2000);
+    saveTimeout = setTimeout(() => { saveTimeout = null; exportConfig(); }, 2000);
   }
   window.debounceAutoSave = debounceAutoSave;
 
@@ -1568,6 +1707,9 @@ function setupGUI() {
             params.parLights.forEach((c) => {
               if (c.group === groupName) c.group = newName;
             });
+            // Carry the group's view-mask bit across the rename so
+            // patterns compiled against MASK_* names stay stable.
+            if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, newName);
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
             if (window._setGuiRebuilding) window._setGuiRebuilding(false);
@@ -3729,6 +3871,14 @@ function setupGUI() {
   saveBtn.onmouseleave = () => { saveBtn.style.borderColor = 'rgba(51,204,51,0.25)'; saveBtn.style.background = 'rgba(30,60,30,0.35)'; saveBtn.style.color = 'rgba(120,220,120,0.9)'; saveBtn.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.06),0 2px 8px rgba(0,0,0,0.3)'; };
   saveBtn.onclick = () => { exportConfig(); };
   saveDiv.appendChild(saveBtn);
+
+  // Views panel toggle — named views / group bits editor (views.yaml)
+  const viewsBtn = document.createElement('button');
+  viewsBtn.textContent = '👁  Views';
+  viewsBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(240,192,96,0.25);border-radius:8px;background:rgba(60,48,24,0.3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(240,192,96,0.85);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  viewsBtn.onclick = () => { if (window.toggleViewMasksPanel) window.toggleViewMasksPanel(); };
+  saveDiv.appendChild(viewsBtn);
+
   const guiChildren = gui.domElement.querySelector('.children');
   if (guiChildren) guiChildren.appendChild(saveDiv);
 

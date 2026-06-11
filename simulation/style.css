@@ -1337,3 +1337,422 @@ body.edit-mode-active #engine-params-panel {
   font-size: 0.5rem;
   border-radius: 2px;
 }
+
+/* ─── Views editor panel ─────────────────────────────────────────────── */
+#view-masks-panel {
+  position: fixed;
+  top: 65px;
+  right: 360px;
+  width: 300px;
+  max-height: 70vh;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 20, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(240, 192, 96, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#view-masks-panel.hidden {
+  display: none;
+}
+
+#view-masks-panel.collapsed .vm-body {
+  display: none;
+}
+
+.vm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  flex-shrink: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.vm-header:active {
+  cursor: grabbing;
+}
+
+.vm-title {
+  flex: 1;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: rgba(240, 192, 96, 0.8);
+  text-transform: uppercase;
+}
+
+.vm-body {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.vm-section-title {
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: rgba(240, 192, 96, 0.55);
+  margin: 8px 0 4px;
+}
+
+.vm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 10px;
+  color: #d0d0d0;
+}
+
+.vm-row .vm-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vm-row .vm-bit {
+  color: rgba(240, 192, 96, 0.7);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+}
+
+.vm-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 5px;
+  margin-bottom: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vm-input {
+  background: #1c1c28;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 5px;
+}
+
+.vm-input.vm-bit {
+  width: 70px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.vm-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 4px 0;
+}
+
+.vm-chip {
+  background: rgba(240, 192, 96, 0.12);
+  border: 1px solid rgba(240, 192, 96, 0.25);
+  border-radius: 8px;
+  color: rgba(240, 192, 96, 0.85);
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.vm-chip:hover {
+  background: rgba(240, 96, 96, 0.18);
+  border-color: rgba(240, 96, 96, 0.4);
+  color: #f08080;
+}
+
+.vm-select {
+  background: #1c1c28;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #999;
+  font-size: 9px;
+  padding: 1px 3px;
+  cursor: pointer;
+}
+
+.vm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.vm-count {
+  flex: 1;
+  font-size: 9px;
+  color: #888;
+}
+
+.vm-btn {
+  background: rgba(240, 192, 96, 0.1);
+  border: 1px solid rgba(240, 192, 96, 0.25);
+  border-radius: 4px;
+  color: rgba(240, 192, 96, 0.85);
+  font-size: 9px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.vm-btn:hover {
+  background: rgba(240, 192, 96, 0.22);
+}
+
+.vm-btn.vm-add {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px;
+}
+
+.vm-btn.vm-danger {
+  background: rgba(240, 96, 96, 0.08);
+  border-color: rgba(240, 96, 96, 0.3);
+  color: #e08080;
+}
+
+.vm-btn.vm-danger:hover {
+  background: rgba(240, 96, 96, 0.2);
+}
+
+.vm-hint {
+  font-size: 8.5px;
+  color: #666;
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
+/* ─── Views panel premium styles, modal overlays, save button and HUD ─── */
+.vm-btn.vm-save {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px;
+  background: rgba(30, 60, 30, 0.35);
+  border: 1px solid rgba(51, 204, 51, 0.25);
+  color: rgba(120, 220, 120, 0.9);
+}
+
+.vm-btn.vm-save:hover {
+  background: rgba(40, 80, 40, 0.45);
+  border-color: rgba(51, 204, 51, 0.5);
+  color: #7f7;
+}
+
+.vm-btn.vm-save.vm-dirty {
+  background: rgba(80, 60, 20, 0.45);
+  border-color: rgba(240, 192, 96, 0.5);
+  color: #f0c060;
+  animation: vm-pulse-border 1.5s infinite ease-in-out;
+}
+
+@keyframes vm-pulse-border {
+  0% { box-shadow: 0 0 0 0 rgba(240, 192, 96, 0.3); }
+  50% { box-shadow: 0 0 6px 2px rgba(240, 192, 96, 0.15); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 192, 96, 0.3); }
+}
+
+.vm-btn-prev {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease, transform 0.15s ease;
+}
+
+.vm-btn-prev:hover {
+  color: rgba(240, 192, 96, 0.85);
+  transform: scale(1.15);
+}
+
+.vm-btn-prev.active {
+  color: rgba(240, 192, 96, 1);
+  text-shadow: 0 0 8px rgba(240, 192, 96, 0.6);
+}
+
+.vm-card-previewing {
+  border-color: rgba(240, 192, 96, 0.45) !important;
+  background: rgba(240, 192, 96, 0.04) !important;
+  box-shadow: inset 0 0 8px rgba(240, 192, 96, 0.04), 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* Modal Overlay styling */
+.vm-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(4, 4, 8, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+
+.vm-modal-card {
+  width: 320px;
+  background: rgba(15, 15, 25, 0.95);
+  border: 1px solid rgba(240, 192, 96, 0.25);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: vm-scale-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes vm-scale-in {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.vm-modal-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(240, 192, 96, 0.85);
+}
+
+.vm-modal-body {
+  font-size: 11px;
+  color: #bbb;
+  line-height: 1.5;
+}
+
+.vm-modal-input {
+  background: #141420;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vm-modal-input:focus {
+  border-color: rgba(240, 192, 96, 0.5);
+  box-shadow: 0 0 8px rgba(240, 192, 96, 0.15);
+}
+
+.vm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.vm-modal-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #ccc;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.vm-modal-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.vm-modal-btn-primary {
+  background: rgba(240, 192, 96, 0.15);
+  border-color: rgba(240, 192, 96, 0.35);
+  color: rgba(240, 192, 96, 0.95);
+}
+
+.vm-modal-btn-primary:hover {
+  background: rgba(240, 192, 96, 0.25);
+  border-color: rgba(240, 192, 96, 0.6);
+  color: #f0c060;
+}
+
+.vm-modal-btn-danger {
+  background: rgba(240, 96, 96, 0.15);
+  border-color: rgba(240, 96, 96, 0.3);
+  color: #fca;
+}
+
+.vm-modal-btn-danger:hover {
+  background: rgba(240, 96, 96, 0.25);
+  border-color: rgba(240, 96, 96, 0.5);
+  color: #ff9999;
+}
+
+/* Floating View Isolation HUD styling */
+#vm-isolation-hud {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  background: rgba(240, 192, 96, 0.12);
+  border: 1px solid rgba(240, 192, 96, 0.35);
+  color: rgba(240, 192, 96, 0.9);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  animation: vm-slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes vm-slide-in-right {
+  from { transform: translateX(50px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+#vm-isolation-hud button {
+  background: rgba(240, 192, 96, 0.15);
+  border: 1px solid rgba(240, 192, 96, 0.3);
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 8px;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+
+#vm-isolation-hud button:hover {
+  background: rgba(240, 96, 96, 0.2);
+  border-color: rgba(240, 96, 96, 0.5);
+  color: #ff9999;
+}

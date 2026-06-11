@@ -401,6 +401,36 @@ export class PatternMixer {
   }
 
   /**
+   * Model hot-reload support: swap in the model's refreshed view-mask
+   * dictionary and recompile every channel's pixel mask against the
+   * (in-place updated) model pixels. Without this, the constructor
+   * snapshot is the only copy the mixer ever sees — channels keep
+   * painting the OLD membership after a sim save, and a view created
+   * while the engine runs can never be selected ("Unknown view mask")
+   * even though /model/view-selection-options already lists it.
+   *
+   * A channel whose viewSelection no longer resolves (its view was
+   * deleted/renamed in the sim) keeps its previous compiled mask — the
+   * show must keep rendering on playa — and the error is logged loudly
+   * so the operator re-picks that channel's view in CaptainPad.
+   */
+  setModelViewMasks(viewMasks) {
+    this.viewMasks = Array.isArray(viewMasks)
+      ? viewMasks.filter(vm => vm && typeof vm.name === 'string' && vm.name.length > 0 && Number.isInteger(vm.bit))
+      : [];
+    for (const channel of [this.deckChannel, ...this.mixerChannels]) {
+      if (!channel) continue;
+      try {
+        this.recompileChannelMask(channel);
+      } catch (err) {
+        console.error(`[PatternMixer] Channel '${channel.id}' view selection ` +
+          `${JSON.stringify(channel.viewSelection)} no longer resolves after model reload — ` +
+          `keeping its previous mask; re-pick the view in CaptainPad. (${err.message})`);
+      }
+    }
+  }
+
+  /**
    * Replace a channel's view selection and recompile its mask. Returns
    * true on success, false on unknown channel id. The viewSelection
    * shape MUST be pre-validated by the API layer (validateViewSelection

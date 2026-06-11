@@ -248,11 +248,21 @@ export function onTransformChange() {
 
 // ─── Pointer Down ────────────────────────────────────────────────────────
 export function onPointerDown(event) {
-  // Only handle left clicks, ignore UI clicks
+  // Only handle left clicks, ignore UI clicks. The handler is on
+  // `window`, so clicks inside floating panels would otherwise fall
+  // through to the raycaster — deselecting fixtures and re-rendering
+  // the Views panel mid-click (destroying the button being pressed).
   if (
     event.button !== 0 ||
     event.target.tagName === "INPUT" ||
-    event.target.closest(".lil-gui")
+    event.target.tagName === "SELECT" ||
+    event.target.tagName === "BUTTON" ||
+    event.target.closest(".lil-gui") ||
+    event.target.closest(".vm-modal-overlay") ||
+    event.target.closest(
+      "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
+      "#sacn-in-monitor-panel, #sacn-out-monitor-panel, #view-presets, #info-panel"
+    )
   )
     return;
 
@@ -365,10 +375,12 @@ export function onPointerDown(event) {
       deselectAllFixtures();
     }
     syncGuiFolders();
+    if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
+    if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
   }
 }
 
