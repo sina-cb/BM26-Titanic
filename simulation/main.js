@@ -236,6 +236,23 @@ const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
 const _viewsPath = `scenes/${_activeScene}/views.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
+// Deliberate boot halt: paints a fullscreen explanation and flags the
+// bootstrap catch below NOT to fall back to a blank init. Used when
+// continuing would let an auto-save overwrite good on-disk state with
+// state derived from a file we failed to read.
+function fatalBootError(message, err) {
+  window.__fatalBootError = true;
+  console.error('[FATAL BOOT]', message, err || '');
+  const banner = document.createElement('div');
+  banner.id = 'fatal-boot-error';
+  banner.style.cssText =
+    'position:fixed;inset:0;z-index:99999;background:rgba(24,0,0,0.97);color:#f66;' +
+    'font-family:monospace;font-size:14px;line-height:1.5;padding:48px;' +
+    'white-space:pre-wrap;overflow:auto;';
+  banner.textContent = `⛔ SIM BOOT HALTED\n\n${message}`;
+  document.body.appendChild(banner);
+}
+
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 Promise.all([
   fetch(_sceneConfigPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
@@ -258,6 +275,26 @@ Promise.all([
     } catch (e) {
       console.warn("Failed to parse config.yaml:", e);
     }
+  }
+
+  // Scene-owned view registry (views.yaml) — parsed OUTSIDE the
+  // forgiving scene-config try/catch below, because a corrupt
+  // views.yaml must hard-stop the boot. Continuing with an empty
+  // registry would let the very next auto-save rewrite views.yaml and
+  // the engine sidecar with renumbered bits, silently destroying the
+  // group→bit contract patterns compile against (codex P0: fail
+  // loudly, no fallbacks). A MISSING views.yaml is the legitimate
+  // new-scene case and yields an empty registry.
+  let _viewRegistry;
+  try {
+    const viewsTree = viewsYaml ? (yaml.load(viewsYaml)?.views || null) : null;
+    _viewRegistry = createViewRegistry(viewsTree);
+  } catch (err) {
+    fatalBootError(
+      `${_viewsPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
+      `Fix the file (or delete it to start the scene with no views) and reload. ` +
+      `Nothing has been overwritten.`, err);
+    return;
   }
 
   // Load scene config
@@ -304,21 +341,11 @@ Promise.all([
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
 
-      // Scene-owned view registry (views.yaml): group→bit contract +
-      // named custom views. Attached to the config tree so it rides the
-      // normal save POST (the save server splits it back out into
-      // views.yaml, like patches.yaml). Reconciled against the actual
-      // fixtures so new groups get bits and removed groups free theirs.
-      let viewsTree = null;
-      if (viewsYaml) {
-        try {
-          viewsTree = yaml.load(viewsYaml)?.views || null;
-        } catch (err) {
-          console.error(`Failed to parse ${_viewsPath}:`, err);
-        }
-      }
-      window.initialParams.views = createViewRegistry(viewsTree);
-      window.__viewRegistry = window.initialParams.views;
+      // Attach the view registry (parsed + validated above) to the
+      // config tree so it rides the normal save POST (the save server
+      // splits it back out into views.yaml, like patches.yaml).
+      window.initialParams.views = _viewRegistry;
+      window.__viewRegistry = _viewRegistry;
 
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
@@ -459,7 +486,14 @@ Promise.all([
       if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
     }
   }
-}).catch(async () => {
+}).catch(async (err) => {
+  // A deliberate boot halt (fatalBootError) must NOT fall back to a
+  // blank init — the banner explains what to fix; booting anyway would
+  // resurrect exactly the silent-overwrite failure it prevents.
+  if (window.__fatalBootError) {
+    console.error('[FATAL BOOT] init skipped:', err);
+    return;
+  }
   await init();
 });
 

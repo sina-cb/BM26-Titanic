@@ -251,9 +251,15 @@ async function loadModel(modelName, bustCache = false) {
         `therefore needs an explicit bit`);
     }
     if (hasBit) {
-      if (!Number.isInteger(entry.bit) || entry.bit <= 0 || (entry.bit & (entry.bit - 1)) !== 0) {
+      // Same cap as groupBits below: vMask is Int32 across the WASM
+      // boundary, so 0x40000000 (bit 30) is the highest safe bit.
+      // 0x80000000 passes the power-of-two check via Int32 coercion but
+      // ORs in a NEGATIVE value, and 2^32 silently merges as zero.
+      if (!Number.isInteger(entry.bit) || entry.bit <= 0 || entry.bit > 0x40000000 ||
+          (entry.bit & (entry.bit - 1)) !== 0) {
         throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource}: bit must be a positive ` +
-          `power of two, got ${entry.bit}. Unions of base groups belong in a bit-less groups:[...] entry.`);
+          `power of two ≤ 0x40000000, got ${entry.bit}. Unions of base groups belong in a bit-less ` +
+          `groups:[...] entry.`);
       }
       if ((reservedMask & entry.bit) !== 0) {
         throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses bit 0x${entry.bit.toString(16)}`);

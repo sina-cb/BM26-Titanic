@@ -112,6 +112,9 @@ coverage/
 *.log
 tmp/
 
+# save-server atomic-write temp files (crash residue, auto-cleaned)
+*.tmp-*
+
 marsin_pb/wasm/*-Live-*.js
 marsin_pb/wasm/*-Live-*.wasm
 

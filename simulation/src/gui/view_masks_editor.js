@@ -14,10 +14,11 @@ import {
   reconcileGroupBits,
   renameGroup,
   addCustomView,
+  validateViewName,
   setCustomViewBit,
   removeCustomView,
   listPixelGroups,
-  nextFreeBit,
+  usedBitsMask,
   isEffectsOnlyFixture,
 } from '../dmx/view_registry.js';
 import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
@@ -178,18 +179,25 @@ export function applyViewMaskIsolation() {
       indicator.id = 'vm-isolation-hud';
       document.body.appendChild(indicator);
     }
-    indicator.innerHTML = `<span>👁 VIEW ISOLATION ACTIVE: <strong>${activeView.name}</strong></span><button class="vm-hud-clear">Exit Preview ✕</button>`;
+    // Built with DOM nodes, not an HTML string: the view name is
+    // operator free-text and must never be parsed as markup.
+    indicator.replaceChildren();
+    const label = document.createElement('span');
+    label.textContent = '👁 VIEW ISOLATION ACTIVE: ';
+    const strong = document.createElement('strong');
+    strong.textContent = activeView.name;
+    label.appendChild(strong);
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'vm-hud-clear';
+    clearBtn.textContent = 'Exit Preview ✕';
+    clearBtn.onclick = () => {
+      window.__activePreviewView = null;
+      applyViewMaskIsolation();
+      window.refreshViewMasksPanel();
+    };
+    indicator.appendChild(label);
+    indicator.appendChild(clearBtn);
     indicator.className = 'vm-isolation-hud-active';
-    
-    // Add exit handler
-    const clearBtn = indicator.querySelector('.vm-hud-clear');
-    if (clearBtn) {
-      clearBtn.onclick = () => {
-        window.__activePreviewView = null;
-        applyViewMaskIsolation();
-        window.refreshViewMasksPanel();
-      };
-    }
   } else {
     if (indicator) {
       indicator.remove();
@@ -293,15 +301,29 @@ export function setupViewMasksEditor() {
     for (const [group, bit] of Object.entries(reg.groupBits)) {
       const row = document.createElement('div');
       row.className = 'vm-row';
-      row.innerHTML = `<span class="vm-name" title="${group}">${group}</span>` +
-        `<span class="vm-bit">${hex(bit)}</span>`;
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'vm-name';
+      nameSpan.title = group;
+      nameSpan.textContent = group;
+      const bitSpan = document.createElement('span');
+      bitSpan.className = 'vm-bit';
+      bitSpan.textContent = hex(bit);
+      row.appendChild(nameSpan);
+      row.appendChild(bitSpan);
       body.appendChild(row);
     }
 
-    // Custom views
+    // Custom views. Surface the remaining bit budget: vMask has 31
+    // usable bits and titanic alone pins 30 groups — the operator must
+    // see the ceiling coming, not discover it as a failed save.
+    const usedMask = usedBitsMask(reg);
+    let freeBits = 0;
+    for (let b = 1; b <= 0x40000000; b *= 2) {
+      if ((usedMask & b) === 0) freeBits++;
+    }
     const customTitle = document.createElement('div');
     customTitle.className = 'vm-section-title';
-    customTitle.textContent = `CUSTOM VIEWS — ${reg.custom.length}`;
+    customTitle.textContent = `CUSTOM VIEWS — ${reg.custom.length} · ${freeBits} bit(s) free`;
     body.appendChild(customTitle);
 
     for (const view of reg.custom) {
@@ -373,10 +395,17 @@ export function setupViewMasksEditor() {
     nameInp.title = 'View name';
     nameInp.onchange = () => {
       const next = nameInp.value.trim();
-      if (next.length === 0 || reg.custom.some(v => v !== view && v.name === next)) {
+      try {
+        if (next.length === 0) throw new Error('View name must not be empty');
+        // Full validation (charset, duplicates, MASK_* constant
+        // collisions vs groups and other views) — a name rejected here
+        // costs one retype; rejected at engine load it costs a dead
+        // model on playa.
+        validateViewName(reg, next, view);
+      } catch (err) {
         showCustomModal({
           title: 'Invalid Name',
-          value: next.length === 0 ? 'View name must not be empty' : `A view named '${next}' already exists`,
+          value: err.message,
           onConfirm: () => {
             nameInp.value = view.name;
             nameInp.setAttribute('value', view.name);
@@ -467,7 +496,10 @@ export function setupViewMasksEditor() {
     placeholder.textContent = '+ group…';
     groupSel.appendChild(placeholder);
     
-    // Add existing pixel groups
+    // Only groups that exist in the CURRENT pixel universe are
+    // attachable — the engine validates sidecar views against exactly
+    // that set and refuses the whole model on an unknown group, so a
+    // free-text "custom group" here would be a delayed engine outage.
     for (const g of pixelGroups()) {
       if (view.groups.includes(g)) continue;
       const opt = document.createElement('option');
@@ -475,47 +507,13 @@ export function setupViewMasksEditor() {
       opt.textContent = g;
       groupSel.appendChild(opt);
     }
-    
-    // Add + custom group... option
-    const customGroupOpt = document.createElement('option');
-    customGroupOpt.value = '__custom__';
-    customGroupOpt.textContent = '+ custom group...';
-    groupSel.appendChild(customGroupOpt);
 
     groupSel.onchange = () => {
       if (!groupSel.value) return;
-
-      if (groupSel.value === '__custom__') {
-        groupSel.selectedIndex = 0;
-        showCustomModal({
-          title: 'Enter custom group name:',
-          placeholder: 'e.g. SmallSails',
-          onConfirm: (typedGroupName) => {
-            const trimmed = String(typedGroupName || '').trim();
-            if (trimmed.length > 0) {
-              if (!view.groups.includes(trimmed)) {
-                view.groups.push(trimmed);
-                
-                // Keep the groupBit mapping stable by ensuring it has a bit
-                if (reg.groupBits[trimmed] === undefined) {
-                  const bit = nextFreeBit(reg);
-                  if (bit !== 0) {
-                    reg.groupBits[trimmed] = bit;
-                  }
-                }
-                markChanged();
-                render();
-                refreshMetadataPanels();
-              }
-            }
-          }
-        });
-      } else {
-        view.groups.push(groupSel.value);
-        markChanged();
-        render();
-        refreshMetadataPanels();
-      }
+      view.groups.push(groupSel.value);
+      markChanged();
+      render();
+      refreshMetadataPanels();
     };
     row2.appendChild(groupSel);
     card.appendChild(row2);
@@ -542,12 +540,9 @@ export function setupViewMasksEditor() {
       for (const i of selectedFixtureIndices) {
         if (list[i]) list[i].viewMask = (list[i].viewMask || 0) | view.bit;
       }
+      // markChanged() already resyncs the lil-gui metadata chip rows.
       markChanged();
       refreshCount();
-      // Refresh lil-gui metadata panels so view chips update
-      if (window.__metadataPanelRegistry) {
-        window.__metadataPanelRegistry.forEach(p => { try { p.refresh(); } catch(_) {} });
-      }
     };
 
     const unassignBtn = document.createElement('button');
@@ -561,10 +556,6 @@ export function setupViewMasksEditor() {
       }
       markChanged();
       refreshCount();
-      // Refresh lil-gui metadata panels so view chips update
-      if (window.__metadataPanelRegistry) {
-        window.__metadataPanelRegistry.forEach(p => { try { p.refresh(); } catch(_) {} });
-      }
     };
 
     const delBtn = document.createElement('button');
@@ -626,7 +617,13 @@ function refreshMetadataPanels() {
   if (window.__metadataPanelRegistry) {
     window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
     window.__metadataPanelRegistry.forEach(p => {
-      try { p.refresh(); } catch(_) {}
+      try {
+        p.refresh();
+      } catch (err) {
+        // A broken card must not block the others, but never vanish
+        // silently either (nodejs style §6).
+        console.error('[Views] Metadata panel refresh failed:', err);
+      }
     });
   }
 }

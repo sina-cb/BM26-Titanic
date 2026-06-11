@@ -270,6 +270,21 @@ function setupGUI() {
       return;
     }
 
+    // Export the pixel model + view-mask sidecar FIRST: saveModelJS
+    // reconciles the view registry against the freshly exported pixels,
+    // so the views.yaml serialized below can never pin a group the
+    // sidecar doesn't know about (a crash between the two writes would
+    // otherwise leave them split). Any export failure — bit exhaustion,
+    // a view referencing a pixel-less group — aborts the entire save,
+    // loudly: a half-saved contract is worse than no save.
+    try {
+      saveModelJS();
+    } catch (err) {
+      console.error('Model/sidecar export failed — config save aborted:', err);
+      showSaveToast(`⚠ EXPORT FAILED — NOTHING SAVED: ${err.message}`, true);
+      return;
+    }
+
     reconstructYAML(configTree);
     syncCollapseState(configTree);
 
@@ -343,9 +358,6 @@ function setupGUI() {
         });
     }
 
-    // Also export the pixel model for Pixelblaze patterns. The exporter has
-    // its own static-host gate around the POST, so calling it is safe.
-    saveModelJS();
   }
 
   function saveModelJS() {

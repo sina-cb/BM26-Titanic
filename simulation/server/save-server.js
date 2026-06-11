@@ -25,13 +25,28 @@ function resolveSceneCamerasPath(sceneName) {
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SAVE_PORT = serverConfig.save_port || 6970;
 
-// Atomic write: write to a sibling temp file, then rename over the
-// target. A crash mid-write can no longer leave a truncated yaml/model
-// behind for the next boot to load as "stale but parseable" state.
+// Atomic + durable write: write to a sibling temp file, fsync it, then
+// rename over the target. A crash mid-write can no longer leave a
+// truncated yaml/model behind for the next boot to load as "stale but
+// parseable" state, and the fsync makes the rename survive a power cut
+// (the playa runs on generators). On any failure the temp file is
+// removed before rethrowing, so crash residue never lands next to
+// tracked files.
 function writeFileAtomic(targetPath, contents) {
   const tmpPath = `${targetPath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmpPath, contents);
-  fs.renameSync(tmpPath, targetPath);
+  try {
+    const fd = fs.openSync(tmpPath, 'w');
+    try {
+      fs.writeSync(fd, contents);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    fs.rmSync(tmpPath, { force: true });
+    throw err;
+  }
 }
 
 // ─── Static manifests (single source of truth for the client) ───────────
@@ -312,11 +327,14 @@ http.createServer((req, res) => {
         // Determine model filename based on active scene. `type` picks
         // the companion file: effects (foggers/horns) or viewmasks (the
         // group→bit + named-views sidecar the engine validates against).
+        // Scene name is sanitized exactly like the /save endpoint — a
+        // raw query param must never become a path segment.
+        const safeScene = sceneName.replace(/[^a-z0-9_-]/gi, '_');
         const type = parsedUrl.searchParams.get('type');
         const suffix = type === 'effects' ? '.effects.js'
           : type === 'viewmasks' ? '.viewmasks.js'
           : '.js';
-        const modelFilename = `${sceneName}${suffix}`;
+        const modelFilename = `${safeScene}${suffix}`;
         const outDir = path.join(ENGINE_ROOT, 'models');
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
