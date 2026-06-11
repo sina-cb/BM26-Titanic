@@ -1867,7 +1867,7 @@ body.edit-mode-active #engine-params-panel {
   top: 65px;
   right: 360px;
   width: 380px;
-  max-height: 78vh;
+  max-height: 86vh;
   z-index: 96;
   display: flex;
   flex-direction: column;
@@ -1919,9 +1919,42 @@ body.edit-mode-active #engine-params-panel {
 
 .cm-body {
   padding: 8px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
   font-size: 10px;
   color: #d0d0d0;
+}
+
+/* Controllers get their own scroll region; the violations banner above
+   and the tray/save/hint below stay fixed and reachable at any rig
+   size (15+ controllers, hundreds of fixtures). */
+.cm-main {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 80px;
+}
+
+.cm-toggle {
+  background: none;
+  border: none;
+  color: rgba(96, 192, 240, 0.65);
+  cursor: pointer;
+  font-size: 9px;
+  font-family: inherit;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.cm-toggle:hover {
+  color: #9fd4f0;
+}
+
+.cm-summary {
+  font-size: 8.5px;
+  color: #789;
+  padding: 1px 4px 2px 18px;
 }
 
 .cm-banner {
@@ -1934,6 +1967,9 @@ body.edit-mode-active #engine-params-panel {
   padding: 5px 8px;
   margin-bottom: 6px;
   white-space: pre-wrap;
+  max-height: 96px;
+  overflow-y: auto;
+  flex: 0 0 auto;
 }
 
 .cm-controller {
@@ -2176,6 +2212,7 @@ body.edit-mode-active #engine-params-panel {
   padding: 6px;
   margin-top: 4px;
   background: rgba(255, 255, 255, 0.015);
+  flex: 0 0 auto;
 }
 
 .cm-tray.cm-tray-picking {

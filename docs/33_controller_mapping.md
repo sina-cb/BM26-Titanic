@@ -170,8 +170,14 @@ instantly.
 **Universe 1 is reserved for global effects** (fog, haze, horns, fire). Enforced
 in the mapping:
 
-- A port carrying universe 1 is an **effects port**: its entries are **pinned**,
-  not packed — `{ fixture: <name>, at: <address> }`.
+- Effects are **pinned**, never packed — `{ fixture: <name>, at: <address> }` —
+  and a pinned effect may be attached to **any port** (the entry records which
+  controller/port the fogger is physically cabled to). The projection ignores
+  that port's universe and always emits the pin (`U1:<address>`), and the entry
+  consumes **no channels** on the port's own universe. Adding an effect through
+  the panel pins it automatically ("auto patch the foggers", operator decision
+  2026-06-11); the unmapped tray shows effects (✨) in every pick mode.
+- A port carrying universe 1 itself accepts **only** pinned effects entries.
 - The canonical pin table stays in `simulation/config.yaml → global_effects`
   (operator-confirmed 2026-06-11):
   **`ChauvetHaze4D` → U1 @ 510 (2 ch → 510–511)**, **`TEFogMachine` → U1 @ 512**.
@@ -336,10 +342,17 @@ Element notes:
   overflow or overlap; the bar is **positioned** — a port starting at @200 shows its
   segment where it actually sits in the universe, so split-universe ports read at a
   glance), an isolation eye, delete. Same-universe ports on a controller get a
-  subtle shared color band so the grouping is visible. Adding a port on an
-  already-used universe pre-fills `startAddress` with the next free channel after
-  the existing ranges (a suggestion — stored explicitly, never recomputed behind
-  the operator's back).
+  subtle shared color band so the grouping is visible. **Changing a port's
+  universe to one other ports already carry (any controller) auto-suggests the
+  next free start address** — set into the editable `@` box with a toast, never
+  recomputed behind the operator's back; if the universe has no room at the end
+  for the port's chain, a **full-universe warning** fires instead and nothing
+  moves. Overlap violations carry a one-click **⚡ fix → @N** button. The
+  suggestion reads a **running per-universe end map** maintained in the
+  projection's single pass (O(1) lookups, no rescans). Controllers and ports are
+  **collapsible** (collapsed controllers show a one-line summary); the controller
+  list is its own scroll region while the violations banner, unmapped tray and
+  save button stay fixed — sized for 15+ controllers and hundreds of fixtures.
 - **Chain**: horizontal chips in daisy order, each prefixed with its **computed start
   address**. Chips drag-to-reorder (addresses re-pack live) **and drag across ports**
   to move a fixture to another chain. `✕` on hover to unmap. Gap entries render grey
@@ -524,6 +537,12 @@ land-able; phases 1+2 alone already beat today's workflow.
 11. **No group-level port assignment** — a single group spans 6–15 controllers on
     the real rig, so mapping is strictly per-fixture; groups are a tray filter
     only.
+12. **Effects attach to any port, auto-pinned** — the entry records the physical
+    cabling; the address is always the config.yaml pin on U1 and holds no
+    channels on the port's own universe ("auto patch the foggers").
+13. **Address suggestions are cache-backed** — a running per-universe end map is
+    built in the projection pass; suggestions/full-universe warnings are O(1)
+    and consider every port across all controllers.
 
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
 moving the Chauvet to 510–511.)*

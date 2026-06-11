@@ -466,60 +466,76 @@ export function computeProjection(registry, configsByName, pins) {
       const fixtureType = config.fixtureType || config.type || '';
       const isEffect = isGlobalEffect(fixtureType);
 
-      // ── Universe-1 / effects rules ──────────────────────────────────
-      if (isEffectsPort) {
+      // ── Pinned entries (global effects) — valid on ANY port ─────────
+      // A fogger is physically cabled to some controller port, but its
+      // address is always its config.yaml pin on the effects universe
+      // ("auto patch the foggers", operator decision 2026-06-11). The
+      // entry records the physical attachment; the projection ignores
+      // the port's universe and emits U<pin.universe>:<pin.address>.
+      if (isPinnedEntry(entry)) {
         if (!isEffect) {
-          addViolation('non_effect_on_u1', `'${name}' is not a global effect but is mapped on ` +
-            `universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`,
+          addViolation('pin_not_effect', `'${name}' is pinned but is not a global effect — ` +
+            'only effects (fog/haze/horn/fire) carry pinned addresses; it projects unpatched',
           controller, port);
-          layout.push({ entry, name, address: 0, footprint, valid: false });
+          layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true });
           unpatch(name);
           continue;
         }
         const pin = pins ? pins[fixtureType] : undefined;
-        const pinnedAt = isPinnedEntry(entry) ? entry.at : null;
         if (!pin || !Number.isInteger(pin.address)) {
           addViolation('no_pin', `'${name}' (${fixtureType}) has no pin in config.yaml ` +
             'global_effects — it projects unpatched', controller, port);
-          layout.push({ entry, name, address: 0, footprint, valid: false });
+          layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true });
           unpatch(name);
           continue;
         }
-        if (pinnedAt === null || pinnedAt !== pin.address) {
+        if (entry.at !== pin.address) {
           addViolation('pin_mismatch', `'${name}' (${fixtureType}) must be pinned at ` +
-            `U${pin.universe}:${pin.address} (config.yaml global_effects), found ` +
-            `${pinnedAt === null ? 'a packed entry' : `@${pinnedAt}`} — it projects unpatched`,
-          controller, port);
-          layout.push({ entry, name, address: 0, footprint, valid: false });
+            `U${pin.universe}:${pin.address} (config.yaml global_effects), found @${entry.at} — ` +
+            'it projects unpatched', controller, port);
+          layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true });
           unpatch(name);
           continue;
         }
         if (portDead) {
-          layout.push({ entry, name, address: pin.address, footprint, valid: false });
+          layout.push({ entry, name, address: pin.address, footprint, valid: false, pinned: true });
           unpatch(name);
           continue;
         }
-        layout.push({ entry, name, address: pin.address, footprint, valid: true });
+        layout.push({
+          entry, name, address: pin.address, footprint, valid: true,
+          pinned: true, pinUniverse: pin.universe,
+        });
         fields.set(name, {
           controllerIp: controller.ip,
-          dmxUniverse: EFFECTS_UNIVERSE,
+          dmxUniverse: pin.universe,
           dmxAddress: pin.address,
           controllerId: controller.id,
         });
         continue;
       }
 
-      // ── Normal (packed) port ────────────────────────────────────────
-      if (isEffect) {
-        addViolation('effect_off_u1', `'${name}' is a global effect and can only be mapped on ` +
-          `universe ${EFFECTS_UNIVERSE} — it projects unpatched`, controller, port);
+      // ── Universe-1 rules for packed (string) entries ─────────────────
+      if (isEffectsPort) {
+        if (!isEffect) {
+          addViolation('non_effect_on_u1', `'${name}' is not a global effect but is mapped on ` +
+            `universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`,
+          controller, port);
+        } else {
+          addViolation('pin_mismatch', `'${name}' (${fixtureType}) is a global effect and must ` +
+            'be a pinned entry ({fixture, at}), found a packed entry — it projects unpatched',
+          controller, port);
+        }
         layout.push({ entry, name, address: 0, footprint, valid: false });
         unpatch(name);
         continue;
       }
-      if (isPinnedEntry(entry)) {
-        addViolation('pin_off_u1', `'${name}' is pinned but pinning is only valid on the ` +
-          `effects universe (${EFFECTS_UNIVERSE}) — it projects unpatched`, controller, port);
+
+      // ── Normal (packed) port ────────────────────────────────────────
+      if (isEffect) {
+        addViolation('effect_off_u1', `'${name}' is a global effect and must be a pinned ` +
+          `entry (auto-applied when added via the panel) — it projects unpatched`,
+        controller, port);
         layout.push({ entry, name, address: 0, footprint, valid: false });
         unpatch(name);
         continue;
@@ -580,7 +596,45 @@ export function computeProjection(registry, configsByName, pins) {
     }
   }
 
-  return { fields, violations: [...violations.values()], portLayouts };
+  // ── Running end-of-universe map ───────────────────────────────────────
+  // Built once per projection pass (the projection already visits every
+  // entry) so address suggestions are O(1) lookups instead of a fresh
+  // scan per UI change. Highest occupied channel per universe across
+  // ALL controllers, counting only entries that actually hold their
+  // channels: valid packed fixtures + gaps on the port's universe, and
+  // valid pinned effects on their pin universe.
+  const universeEnds = new Map();
+  const bumpEnd = (universe, end) => {
+    if (end > (universeEnds.get(universe) || 0)) universeEnds.set(universe, end);
+  };
+  for (const { controller, port } of allPortsSorted) {
+    const layout = portLayouts.get(`${controller.id}:${port.port}`);
+    for (const item of layout) {
+      if (!item.valid || item.footprint <= 0) continue;
+      const universe = item.pinned ? (item.pinUniverse || EFFECTS_UNIVERSE) : port.universe;
+      bumpEnd(universe, Math.min(item.address + item.footprint - 1, DMX_UNIVERSE_SIZE));
+    }
+  }
+
+  return { fields, violations: [...violations.values()], portLayouts, universeEnds };
+}
+
+/**
+ * Sum of channels a port's packed chain occupies (gaps included, pinned
+ * effects excluded — they live on the effects universe, not the port's).
+ * Used to test whether a suggested startAddress still fits.
+ */
+export function portPackedWidth(port, configsByName) {
+  let width = 0;
+  for (const entry of port.chain) {
+    if (isGapEntry(entry)) {
+      width += entry.gap;
+    } else if (!isPinnedEntry(entry)) {
+      const config = configsByName.get(entryFixtureName(entry));
+      if (config) width += getFootprint(config);
+    }
+  }
+  return width;
 }
 
 /**

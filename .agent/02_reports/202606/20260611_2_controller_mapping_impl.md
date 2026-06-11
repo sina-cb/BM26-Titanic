@@ -169,3 +169,20 @@ cards live; deleting the last one unlocks them). Also fixed the
 active→inactive transition: deleting the last controller now returns
 every fixture to unpatched instead of leaving the final projection
 behind. Verified with a real-UI run across all 61 titanic cards.
+
+Follow-up (same day, operator asks): (1) changing a port's universe onto
+one already carried by other ports (any controller) auto-suggests the
+next free start address into the editable @ box, with a full-universe
+warning when the chain doesn't fit at the end; overlap violations get a
+one-click "⚡ fix → @N" button. Suggestions read a running per-universe
+end map (`universeEnds`) built inside computeProjection's single pass —
+O(1) lookups, no rescans. (2) Effects (foggers/haze) are now attachable
+to ANY port from the tray and auto-pin at their config.yaml address
+(U1:510/512), consuming no channels on the port's own universe — the
+old pin_off_u1 rule is replaced by pinned-anywhere semantics
+(pin_not_effect guards misuse). (3) Scale pass: collapsible controllers
+(one-line summary) and ports, controller list in its own scroll region,
+capped scrollable violations banner, tray/save always reachable.
+Verified per real-UI runs on titanic (suggestion @239, U-full warning,
+6-controller scroll/collapse layout) and test_bench (overlap fix →
+@21, ChauvetHaze4D auto-pinned 📌U1:510 on a normal port). 31/31 tests.

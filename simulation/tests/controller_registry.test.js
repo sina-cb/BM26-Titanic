@@ -26,6 +26,7 @@ import {
   renameFixtureInChains,
   computeProjection,
   projectOntoConfigs,
+  portPackedWidth,
   isValidIp,
 } from '../src/dmx/controller_registry.js';
 
@@ -218,7 +219,7 @@ test('wrong pin address, packed effect on U1, and non-effect on U1 all unpatch',
   assert.ok(p.violations.some(v => v.code === 'non_effect_on_u1'));
 });
 
-test('an effect fixture on a normal universe unpatches', () => {
+test('a PACKED effect entry on a normal universe unpatches (must be pinned)', () => {
   const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
     { port: 1, universe: 2, chain: ['Fog 1'] },
   ] }] });
@@ -227,6 +228,62 @@ test('an effect fixture on a normal universe unpatches', () => {
   assert.deepEqual(fieldsOf(p, 'Fog 1'),
     { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
   assert.ok(p.violations.some(v => v.code === 'effect_off_u1'));
+});
+
+test('a PINNED effect on any port projects its U1 pin and consumes no port channels', () => {
+  // The fogger is physically cabled to port 1 (universe 3) but its
+  // address is always the config.yaml pin on the effects universe.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [
+      'Par 1',
+      { fixture: 'Fog 1', at: 512 },
+      'Par 2',
+    ] },
+  ] }] });
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2'), fog), PINS);
+  assert.equal(p.violations.length, 0);
+  assert.deepEqual(fieldsOf(p, 'Fog 1'),
+    { controllerIp: '10.0.0.1', dmxUniverse: 1, dmxAddress: 512, controllerId: 1 });
+  // Par 2 packs directly after Par 1 — the pinned fogger holds no
+  // channels on universe 3.
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
+  assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 1 + FP);
+  // A pinned non-effect is still a violation.
+  const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [{ fixture: 'Par 9', at: 100 }] },
+  ] }] });
+  const p2 = computeProjection(r2, configMap(par('Par 9')), PINS);
+  assert.ok(p2.violations.some(v => v.code === 'pin_not_effect'));
+});
+
+test('universeEnds tracks the running end of every universe in one pass', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: ['Par 1', { gap: 33 }, 'Par 2'] }, // ends at 53
+    { port: 2, universe: 3, startAddress: 200, chain: ['Par 3'] },    // ends at 209
+    { port: 3, universe: 3, chain: ['Par 4'] },                       // 1..10 (no overlap)
+    { port: 4, universe: 4, chain: [{ fixture: 'Fog 1', at: 512 }] }, // pin → U1 end 512
+  ] }] });
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const p = computeProjection(r,
+    configMap(par('Par 1'), par('Par 2'), par('Par 3'), par('Par 4'), fog), PINS);
+  assert.equal(p.violations.length, 0);
+  assert.equal(p.universeEnds.get(2), 1 + FP + 33 + FP - 1);
+  assert.equal(p.universeEnds.get(3), 209);
+  assert.equal(p.universeEnds.get(1), 512);
+  assert.equal(p.universeEnds.get(4), undefined, 'pinned fogger holds nothing on U4');
+});
+
+test('portPackedWidth sums fixtures + gaps, skips pinned effects', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: [
+      'Par 1', { gap: 7 }, { fixture: 'Fog 1', at: 512 }, 'Par 2',
+    ] },
+  ] }] });
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const width = portPackedWidth(r.controllers[0].ports[0],
+    configMap(par('Par 1'), par('Par 2'), fog));
+  assert.equal(width, FP + 7 + FP);
 });
 
 // ── Controller-level violations ─────────────────────────────────────────

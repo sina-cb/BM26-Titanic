@@ -24,8 +24,8 @@ import {
   addPort,
   removeController,
   removePort,
-  appendFixtures,
   unmapFixture,
+  portPackedWidth,
   isValidIp,
   isGapEntry,
   isPinnedEntry,
@@ -42,6 +42,9 @@ let pickTarget = null;   // { controllerId, portNum } while pick mode is active
 let trayFilter = '';
 let undoState = null;    // { snapshot, timer } — single-step undo (docs/33)
 let hoverRestore = null; // pending hover flash restore
+let lastProj = null;     // latest computeProjection result (universeEnds cache rides it)
+const collapsedControllers = new Set(); // controller ids
+const collapsedPorts = new Set();       // '<controllerId>:<portNum>' keys
 
 function registry() {
   return window.__controllerRegistry || { nextControllerId: 1, controllers: [] };
@@ -224,7 +227,52 @@ function selectedFixtureNames() {
 // ── Derived render data ─────────────────────────────────────────────────
 
 function projection() {
-  return computeProjection(registry(), configsByName(), pins());
+  lastProj = computeProjection(registry(), configsByName(), pins());
+  return lastProj;
+}
+
+// ── Address suggestions (O(1) via the projection's universeEnds) ────────
+
+function otherPortsCarry(universe, excludeController, excludePort) {
+  for (const controller of registry().controllers) {
+    for (const port of controller.ports) {
+      if (controller === excludeController && port === excludePort) continue;
+      if (port.universe === universe) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Suggested startAddress for `port` on `universe`: one past the highest
+ * channel any OTHER port holds there (all controllers considered).
+ * Returns { start } when the port's chain fits, or { full, end } when
+ * the universe has no room at the end.
+ */
+function suggestStart(universe, controller, port) {
+  const proj = lastProj || projection();
+  let end = 0;
+  if (port.universe !== universe) {
+    // Fast path: the port holds nothing on the target universe yet, so
+    // the running universeEnds cache IS the exclusive end — no scan.
+    end = proj.universeEnds.get(universe) || 0;
+  } else {
+    // Overlap-fix path: exclude this port's own span from the end.
+    for (const other of registry().controllers) {
+      for (const otherPort of other.ports) {
+        if (other === controller && otherPort === port) continue;
+        if (otherPort.universe !== universe) continue;
+        const layout = proj.portLayouts.get(`${other.id}:${otherPort.port}`) || [];
+        for (const item of layout) {
+          if (item.pinned || item.footprint <= 0) continue;
+          end = Math.max(end, item.address + item.footprint - 1);
+        }
+      }
+    }
+  }
+  const width = portPackedWidth(port, configsByName());
+  if (end + Math.max(width, 1) > DMX_UNIVERSE_SIZE) return { full: true, end, width };
+  return { start: end + 1, end, width };
 }
 
 function unmappedNames() {
@@ -268,7 +316,9 @@ function render() {
     headerStatusEl.className = 'cm-header-status cm-ok';
   }
 
-  // Violations banner (all of them, scene-wide — fail loudly).
+  // Violations banner (all of them, scene-wide — fail loudly). Pinned
+  // above the scroll region, capped + scrollable itself so a pile of
+  // violations can't push the controls off screen.
   if (proj.violations.length > 0) {
     const banner = document.createElement('div');
     banner.className = 'cm-banner';
@@ -276,16 +326,22 @@ function render() {
     bodyEl.appendChild(banner);
   }
 
-  // Add controller
+  // Controllers live in their own scroll region; the tray, save button
+  // and hint stay fixed below it so they're always reachable — sized
+  // for rigs with 15+ controllers and hundreds of fixtures.
+  const main = document.createElement('div');
+  main.className = 'cm-main';
+
   const addBtn = document.createElement('button');
   addBtn.className = 'cm-btn cm-add';
   addBtn.textContent = '+ Add Controller';
   addBtn.onclick = showAddControllerModal;
-  bodyEl.appendChild(addBtn);
+  main.appendChild(addBtn);
 
   for (const controller of reg.controllers) {
-    bodyEl.appendChild(renderController(controller, proj));
+    main.appendChild(renderController(controller, proj));
   }
+  bodyEl.appendChild(main);
 
   bodyEl.appendChild(renderTray(unmapped, proj));
 
@@ -318,6 +374,18 @@ function renderController(controller, proj) {
 
   const head = document.createElement('div');
   head.className = 'cm-controller-head';
+
+  const isCollapsed = collapsedControllers.has(controller.id);
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'cm-toggle';
+  toggleBtn.textContent = isCollapsed ? '▸' : '▾';
+  toggleBtn.title = isCollapsed ? 'Expand controller' : 'Collapse controller';
+  toggleBtn.onclick = () => {
+    if (isCollapsed) collapsedControllers.delete(controller.id);
+    else collapsedControllers.add(controller.id);
+    renderIfOpen();
+  };
+  head.appendChild(toggleBtn);
 
   const nameInp = document.createElement('input');
   nameInp.className = 'cm-input cm-name';
@@ -389,6 +457,17 @@ function renderController(controller, proj) {
     card.appendChild(chip);
   }
 
+  if (isCollapsed) {
+    const fixtureCount = controller.ports.reduce(
+      (n, p) => n + p.chain.filter(e => entryFixtureName(e) !== null).length, 0);
+    const universes = [...new Set(controller.ports.map(p => `U${p.universe}`))].join(' ');
+    const summary = document.createElement('div');
+    summary.className = 'cm-summary';
+    summary.textContent = `${controller.ports.length} port(s) · ${fixtureCount} fixture(s) · ${universes}`;
+    card.appendChild(summary);
+    return card;
+  }
+
   for (const port of controller.ports) {
     card.appendChild(renderPort(controller, port, proj));
   }
@@ -410,6 +489,19 @@ function renderPort(controller, port, proj) {
   const head = document.createElement('div');
   head.className = 'cm-port-head';
 
+  const portKey = `${controller.id}:${port.port}`;
+  const portCollapsed = collapsedPorts.has(portKey);
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'cm-toggle';
+  toggleBtn.textContent = portCollapsed ? '▸' : '▾';
+  toggleBtn.title = portCollapsed ? 'Expand port' : 'Collapse port';
+  toggleBtn.onclick = () => {
+    if (portCollapsed) collapsedPorts.delete(portKey);
+    else collapsedPorts.add(portKey);
+    renderIfOpen();
+  };
+  head.appendChild(toggleBtn);
+
   const label = document.createElement('span');
   label.className = 'cm-port-label' + (isEffectsPort ? ' cm-effects' : '');
   label.textContent = `P${port.port} · U`;
@@ -427,7 +519,32 @@ function renderPort(controller, port, proj) {
       uniInp.value = port.universe;
       return;
     }
-    mutate(null, () => { port.universe = next; });
+    if (next === port.universe) return;
+    // Moving onto a universe other ports already carry (any controller):
+    // suggest a collision-free start address — or warn when the universe
+    // has no room at the end for this chain. The @ box stays editable.
+    let note = null;
+    if (next !== EFFECTS_UNIVERSE && otherPortsCarry(next, controller, port)) {
+      const s = suggestStart(next, controller, port);
+      if (s.full) {
+        note = {
+          error: true,
+          msg: `⚠ U${next} is full — used to ch ${s.end}, no room for this chain ` +
+            `(${s.width} ch). Pick another universe or free channels.`,
+        };
+      } else {
+        note = {
+          error: false, start: s.start,
+          msg: `U${next} is used to ch ${s.end} — start address set to @${s.start} ` +
+            '(next free). Edit the @ box to override.',
+        };
+      }
+    }
+    mutate(null, () => {
+      port.universe = next;
+      if (note && !note.error) port.startAddress = note.start;
+    });
+    if (note) showToast(note.msg, { error: note.error, ttl: 8000 });
   };
   head.appendChild(uniInp);
 
@@ -468,6 +585,9 @@ function renderPort(controller, port, proj) {
   let anyInvalid = false;
   for (const item of layout) {
     if (item.footprint <= 0) continue;
+    // Pinned effects live on the effects universe, not this port's —
+    // they only show in the bar when the port IS the effects universe.
+    if (item.pinned && !isEffectsPort) continue;
     const seg = document.createElement('div');
     seg.className = 'cm-occ-seg' +
       (isGapEntry(item.entry) ? ' cm-occ-gap' : '') +
@@ -518,10 +638,33 @@ function renderPort(controller, port, proj) {
     chip.className = 'cm-error-chip';
     chip.textContent = v.message;
     row.appendChild(chip);
+    // One-click conflict resolution: jump the chain to the next free
+    // channel on this universe (all controllers considered).
+    if (v.code === 'overlap') {
+      const s = suggestStart(port.universe, controller, port);
+      if (!s.full) {
+        const fixBtn = document.createElement('button');
+        fixBtn.className = 'cm-btn';
+        fixBtn.textContent = `⚡ fix → @${s.start}`;
+        fixBtn.title = `Set start address to ${s.start}, the next free channel on U${port.universe}`;
+        fixBtn.onclick = () => {
+          mutate(null, () => { port.startAddress = s.start; });
+        };
+        row.appendChild(fixBtn);
+      } else {
+        const full = document.createElement('span');
+        full.className = 'cm-error-chip';
+        full.textContent = `⚠ U${port.universe} has no room at the end ` +
+          `(used to ch ${s.end}, chain needs ${s.width} ch)`;
+        row.appendChild(full);
+      }
+    }
   }
 
-  row.appendChild(renderChain(controller, port, layout));
-  row.appendChild(renderPortActions(controller, port, layout, isEffectsPort, isPicking));
+  if (!collapsedPorts.has(`${controller.id}:${port.port}`)) {
+    row.appendChild(renderChain(controller, port, layout));
+    row.appendChild(renderPortActions(controller, port, layout, isEffectsPort, isPicking));
+  }
   return row;
 }
 
@@ -550,11 +693,11 @@ function renderChain(controller, port, layout) {
       if (!item.valid) chip.classList.add('cm-chip-invalid');
       const addr = document.createElement('span');
       addr.className = 'cm-chip-addr';
-      addr.textContent = `📌${item.entry.at}`;
+      addr.textContent = `📌U${item.pinUniverse || EFFECTS_UNIVERSE}:${item.entry.at}`;
       chip.appendChild(addr);
       chip.appendChild(document.createTextNode(item.name));
-      chip.title = `${item.name} pinned at U${EFFECTS_UNIVERSE}:${item.entry.at} ` +
-        '(config.yaml global_effects)';
+      chip.title = `${item.name} — cabled to this port, auto-patched at ` +
+        `U${item.pinUniverse || EFFECTS_UNIVERSE}:${item.entry.at} (config.yaml global_effects)`;
     } else {
       if (!item.valid) chip.classList.add('cm-chip-invalid');
       const addr = document.createElement('span');
@@ -721,9 +864,31 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
 
 function addNamesToPort(controller, port, names) {
   const snapshot = snapshotRegistry();
-  let rejected = [];
-  let added = [];
-  ({ added, rejected } = appendFixtures(registry(), port, names));
+  const byName = configsByName();
+  const pinTable = pins();
+  const mapped = mappedFixtures(registry());
+  const added = [];
+  const rejected = [];
+  for (const name of names) {
+    const hit = mapped.get(name);
+    if (hit) {
+      rejected.push({ name, where: `${hit.controller.name} · Port ${hit.port.port}` });
+      continue;
+    }
+    const config = byName.get(name);
+    const fixtureType = (config && (config.fixtureType || config.type)) || '';
+    if (isGlobalEffect(fixtureType)) {
+      // Auto-patch: effects enter any port as PINNED entries at their
+      // config.yaml address (a missing pin pins at 0 and is flagged
+      // loudly by the projection — never silently skipped).
+      const pin = pinTable[fixtureType];
+      port.chain.push({ fixture: name, at: pin ? pin.address : 0 });
+    } else {
+      port.chain.push(name);
+    }
+    mapped.set(name, { controller, port });
+    added.push(name);
+  }
   recomputeAndMark();
   renderIfOpen();
   if (rejected.length > 0) {
@@ -758,10 +923,13 @@ function renderTray(unmapped, proj) {
   const title = document.createElement('span');
   title.className = 'cm-tray-title';
   if (pickPort) {
+    // Pinned effects hold no channels on this port's universe — the
+    // running next-channel hint counts packed entries only.
     const layout = proj.portLayouts.get(`${pickController.id}:${pickPort.port}`) || [];
     let nextCh = pickPort.startAddress;
     for (const item of layout) {
-      if (item.footprint > 0) nextCh = Math.max(nextCh, item.address + item.footprint);
+      if (item.pinned || item.footprint <= 0) continue;
+      nextCh = Math.max(nextCh, item.address + item.footprint);
     }
     title.textContent = `adding to ${pickController.name} · Port ${pickPort.port} — next: ch ${nextCh}`;
   } else {
@@ -807,9 +975,11 @@ function renderTray(unmapped, proj) {
     for (const name of unmappedNames()) {
       const config = byName.get(name);
       const isEffect = isGlobalEffect((config && (config.fixtureType || config.type)) || '');
-      // Pick mode filters by port kind: effects ports take only effects,
-      // normal ports never take effects (they could only project unpatched).
-      if (pickPort && (pickingEffects ? !isEffect : isEffect)) continue;
+      // Effects are assignable to ANY port (they record the physical
+      // cabling and auto-pin at their config.yaml address). The only
+      // pick-mode filter left: an effects-universe port takes effects
+      // only — non-effects can never live on U1.
+      if (pickPort && pickingEffects && !isEffect) continue;
       if (needle &&
           !name.toLowerCase().includes(needle) &&
           !String((config && config.group) || '').toLowerCase().includes(needle)) continue;
@@ -818,7 +988,8 @@ function renderTray(unmapped, proj) {
       chip.className = 'cm-tray-chip';
       chip.textContent = (isEffect ? '✨ ' : '▪ ') + name;
       chip.title = pickPort
-        ? `Click to append to ${pickController.name} · Port ${pickPort.port}`
+        ? `Click to append to ${pickController.name} · Port ${pickPort.port}` +
+          (isEffect ? ' (pins automatically on the effects universe)' : '')
         : `${name}${config && config.group ? ` (${config.group})` : ''} — click to locate in 3D`;
       chip.onmouseenter = () => flashFixture(name, true);
       chip.onmouseleave = () => flashFixture(name, false);
@@ -826,14 +997,7 @@ function renderTray(unmapped, proj) {
         if (pickPort) {
           flashFixture(name, false);
           selectFixtureIn3D(name);
-          if (pickingEffects) {
-            const pin = pins()[(config && (config.fixtureType || config.type)) || ''];
-            mutate(null, () => {
-              pickPort.chain.push({ fixture: name, at: pin ? pin.address : 0 });
-            });
-          } else {
-            addNamesToPort(pickController, pickPort, [name]);
-          }
+          addNamesToPort(pickController, pickPort, [name]);
         } else {
           selectFixtureIn3D(name);
         }
