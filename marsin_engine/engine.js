@@ -1121,7 +1121,15 @@ async function main() {
           })));
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);
-          
+
+          // The mixer snapshots the view-mask dictionary at construction
+          // and bakes per-channel pixel masks — refresh both, or running
+          // channels keep painting the old membership and views created
+          // in the sim after engine start can never be selected.
+          // (mixer.pixels === model.pixels — updated in place above —
+          // so the recompile sees the fresh vMask values.)
+          mixer.setModelViewMasks(model.viewMasks);
+
           const registerUniverse = (patch) => {
             if (patch && patch.universe) {
               if (!universeIds.includes(patch.universe)) {
@@ -1134,6 +1142,12 @@ async function main() {
           for (const px of model.pixels) if (px.patch) registerUniverse(px.patch);
           for (const fx of (model.specialEffects || [])) if (fx.patch) registerUniverse(fx.patch);
           
+          // Push the refreshed mixer/deck state to connected CaptainPads
+          // so open sessions re-sync without a manual reload.
+          if (apiServer && typeof apiServer.broadcastMixerState === 'function') {
+            apiServer.broadcastMixerState();
+          }
+
           console.log(`  ✅ Model hot-reloaded seamlessly.`);
         } catch (err) {
           console.warn(`  ⚠️ Model hot-reload failed: ${err.message}`);

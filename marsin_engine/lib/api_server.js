@@ -3807,5 +3807,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // deckSwapComplete.
   pushActiveEntryToModulation();
 
+  // Exposed for the engine's model hot-reload path: after the model and
+  // mixer view-mask state are refreshed, push the new mixer/deck state
+  // to connected clients so an already-open CaptainPad re-syncs its
+  // channel strips without a manual reload. (The views PICKER list is
+  // fetched from /model/view-selection-options at mount, which reads
+  // the live model object and is therefore fresh on the next reload.)
+  server.broadcastMixerState = broadcastMixerState;
+
   return server;
 }

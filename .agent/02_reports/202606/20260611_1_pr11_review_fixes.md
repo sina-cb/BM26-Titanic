@@ -58,3 +58,40 @@ verdict-relevant minors too.
 E2E saves persisted the URL `renderer=webgl` override into `common.yaml` and
 bumped generated-model header timestamps; both hand-restored before commit
 (no `git checkout --`, per codex).
+
+## Continuation: engine hot-reload now refreshes mixer view state
+
+User report: changing views while the engine runs "doesn't reload correctly",
+and CaptainPad didn't get the new views.
+
+Root cause: the model hot-reload (engine.js `fs.watch`) updated the `model`
+object in place — so `GET /model/view-selection-options` (CaptainPad's picker
+source) was already fresh — but **PatternMixer snapshots the view-mask
+dictionary at construction and bakes per-channel `compiledPixelMask`s**, and
+the reload touched neither. Consequences: running channels kept painting the
+OLD membership after a sim save, and selecting a view created after engine
+start compiled against the stale dictionary → "Unknown viewMask … no pixels
+will match" → channel paints nothing.
+
+Fix:
+- `PatternMixer.setModelViewMasks(viewMasks)` (pattern_mixer.js): refreshes
+  the dictionary (constructor filtering) and recompiles every channel's mask
+  (deck + mixer overlays); a selection that no longer resolves keeps its
+  previous mask and logs loudly — the show keeps rendering on playa.
+- engine.js hot-reload calls it after the in-place model update
+  (`mixer.pixels === model.pixels`, so recompile sees fresh vMasks), then
+  pushes `broadcastMixerState()` (newly exposed on the api_server return) so
+  already-connected CaptainPads re-sync without a manual reload.
+
+Verified against a LIVE engine (test_bench + 01_cylon_sweep): baseline views →
+sidecar hot-edited to add `HotProbe` → reload fired, endpoint listed it,
+`PATCH /deck/channel` selecting it returned 200 and stuck → view deleted
+while in use → engine survived, logged `Unknown viewMask name 'HotProbe' …
+Known viewMasks: [ParsBars, ParsVintages]`, API stayed 200, selection
+preserved for re-picking → sidecar restored. Regression: engine dry-run,
+view_mask_constants 20/20, pattern_mixer_masking 33/33.
+
+Residue: `marsin_engine/states/test_bench/deck_state.yaml` churn from the
+live run left uncommitted per CLAUDE.md (my test's `viewSelection:
+HotProbe` was hand-reset to the prior `type: all`; the pattern/param cursor
+churn remains as expected engine residue).
