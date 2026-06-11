@@ -170,6 +170,46 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   return panel;
 }
 
+/**
+ * Register a fixture card's DMX Patch row (U / Addr / IP + status dot)
+ * for global refresh via window.refreshMetadataPanels(). The Controller
+ * Mapping panel projects new patch values into the live configs on
+ * every mutation and save — without this registration the patch inputs
+ * would show stale values until a full GUI rebuild. Also keeps the
+ * locked ("derived") state in sync with whether a mapping exists, so
+ * creating the first controller locks every card live and deleting the
+ * last one unlocks them.
+ */
+function registerPatchRowRefresh(config, { root, uniInput, addrInput, ipInput, updateStatus }) {
+  const applyLockState = () => {
+    const mapperActive = !!(window.__controllerRegistry &&
+      window.__controllerRegistry.controllers.length > 0);
+    for (const inp of [uniInput, addrInput, ipInput]) {
+      inp.disabled = mapperActive;
+      inp.style.opacity = mapperActive ? '0.6' : '';
+      inp.title = mapperActive
+        ? 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.'
+        : '';
+    }
+  };
+  applyLockState();
+
+  const panel = {
+    root,
+    refresh() {
+      uniInput.value = config.dmxUniverse || 0;
+      addrInput.value = config.dmxAddress || 0;
+      ipInput.value = config.controllerIp || '';
+      updateStatus();
+      applyLockState();
+    },
+  };
+  if (!window.__metadataPanelRegistry) window.__metadataPanelRegistry = [];
+  window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+  window.__metadataPanelRegistry.push(panel);
+  return panel;
+}
+
 export
 function setupGUI() {
   const gui = new GUI({ title: "🔦 Lighting Controls", width: 300 });
@@ -1640,14 +1680,11 @@ function setupGUI() {
 
               // With a controller mapping present, patch fields are
               // PROJECTED (docs/33) — display-only here, edited in the
-              // 🎛 Controllers panel. Kills the double-entry bug class.
-              if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
-                for (const lockedInput of [uniInput, addrInput, ipInput]) {
-                  lockedInput.disabled = true;
-                  lockedInput.title = 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.';
-                  lockedInput.style.opacity = '0.6';
-                }
-              }
+              // 🎛 Controllers panel. Registration keeps the values and
+              // the locked state live across mapping changes.
+              registerPatchRowRefresh(config, {
+                root: patchDiv, uniInput, addrInput, ipInput, updateStatus,
+              });
 
               if (genChildren) genChildren.appendChild(patchDiv);
 
@@ -2045,14 +2082,11 @@ function setupGUI() {
 
           // With a controller mapping present, patch fields are
           // PROJECTED (docs/33) — display-only here, edited in the
-          // 🎛 Controllers panel. Kills the double-entry bug class.
-          if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
-            for (const lockedInput of [uniInput, addrInput, ipInput]) {
-              lockedInput.disabled = true;
-              lockedInput.title = 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.';
-              lockedInput.style.opacity = '0.6';
-            }
-          }
+          // 🎛 Controllers panel. Registration keeps the values and
+          // the locked state live across mapping changes.
+          registerPatchRowRefresh(config, {
+            root: patchDiv, uniInput, addrInput, ipInput, updateStatus: updatePatchStatus,
+          });
 
           const idxChildren = idxFolder.domElement.querySelector('.children');
           if (idxChildren) idxChildren.appendChild(patchDiv);

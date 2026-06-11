@@ -68,9 +68,35 @@ function configsByName() {
 
 // ── Projection / change propagation ─────────────────────────────────────
 
+// Tracks whether the mapper owned the patch fields on the previous
+// recompute. projectControllerMappings() deliberately no-ops on an
+// inactive registry (so unmapped scenes keep their stored patches.yaml
+// at boot) — but when the OPERATOR deletes the last controller, the
+// fields the mapping was projecting a moment ago must not linger as a
+// silent lie. The active→inactive transition unpatches everything.
+let mapperWasActive = false;
+
 function recomputeAndMark() {
-  if (window.projectControllerMappings) {
-    window.projectControllerMappings(allConfigs());
+  if (registryIsActive(registry())) {
+    if (window.projectControllerMappings) {
+      window.projectControllerMappings(allConfigs());
+    }
+    mapperWasActive = true;
+  } else if (mapperWasActive) {
+    for (const config of allConfigs()) {
+      config.controllerIp = '';
+      config.dmxUniverse = 0;
+      config.dmxAddress = 0;
+      config.controllerId = 0;
+      if (window.__globalPatchTree && window.__globalPatchTree[config.name]) {
+        Object.assign(window.__globalPatchTree[config.name], {
+          controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0,
+        });
+      }
+    }
+    window.__controllerViolations = [];
+    console.warn('[Controllers] Last controller deleted — all fixtures returned to unpatched');
+    mapperWasActive = false;
   }
   if (window.recomputePatchesActive) window.recomputePatchesActive();
   if (window.debounceAutoSave) window.debounceAutoSave();
@@ -890,6 +916,7 @@ function showAddControllerModal() {
 export function setupControllerMapEditor() {
   panelEl = document.getElementById('controller-map-panel');
   if (!panelEl) return;
+  mapperWasActive = registryIsActive(registry());
   bodyEl = document.getElementById('cm-body');
   headerStatusEl = document.getElementById('cm-header-status');
   const header = document.getElementById('cm-drag-handle');

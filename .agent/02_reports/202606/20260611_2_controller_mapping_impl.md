@@ -160,3 +160,12 @@ Operator correction after delivery: on the real rig a single group spans
 6–15 controllers, so the `+ group…` bulk add on a port was removed —
 mapping is strictly per-fixture (groups remain a tray filter only).
 Decision 11 in docs/33.
+
+Follow-up (same day): fixture-card DMX Patch rows (U / Addr / IP +
+status dot) are now registered with `__metadataPanelRegistry`, so every
+mapping mutation and save refreshes the lil-gui cards in place — values
+AND the locked/derived state (creating the first controller locks all
+cards live; deleting the last one unlocks them). Also fixed the
+active→inactive transition: deleting the last controller now returns
+every fixture to unpatched instead of leaving the final projection
+behind. Verified with a real-UI run across all 61 titanic cards.
