@@ -2,11 +2,11 @@
 
 - **ID:** 020
 - **Priority:** IMPORTANT
-- **Status:** OPEN
+- **Status:** DONE
 - **Source:** operator report 2026-06-11 ("colors messed up from engine to sACN on sim" after remapping all fixtures onto one universe) + code audit
 - **Location:** marsin_engine/engine.js:1078-1156 (hot reload), marsin_engine/engine.js:641-647 (sendFrame collection)
 - **Created:** 2026-06-11
-- **Updated:** 2026-06-11
+- **Updated:** 2026-06-12
 
 ## Description
 The engine's model hot-reload (fs.watch on `models/`) only ever ADDS
@@ -45,6 +45,40 @@ This is the exact "colors messed up, addresses misaligned" failure the
 operator hit after the first real Controller Mapping session, and on
 playa it would present as fixtures frozen on stale colors with no
 indication why.
+
+## Resolution (2026-06-12)
+Both gaps fixed in `marsin_engine/engine.js` (hot-reload handler) +
+`marsin_engine/lib/api_server.js` + a small wiring change in
+`simulation/src/gui/engine_blackout_warning.js`:
+
+1. **Stale universes:** after applying a hot-reloaded model, the handler
+   now computes the set of universes referenced by the new
+   `pixels[].patch` + `specialEffects[].patch`; every universe in
+   `universeIds` no longer referenced gets its router buffer zeroed,
+   ONE final all-zero frame sent (listeners go dark instead of frozen),
+   and is removed from `universeIds` so `sendFrame` stops including it.
+   Sender objects stay alive so a later reload can revive the universe.
+   Log: `🧹 Universe N no longer mapped — sent blackout, stopped
+   transmitting`.
+2. **Loud pixel-count refusal:** `engineCore.modelSync { stale,
+   message }` is set when hot reload is refused (pixel count changed)
+   and cleared on the next successful reload (or when the disk model
+   matches the running model again). Exposed as `modelStale` /
+   `modelStaleMessage` on GET `/status` and in the `type: 'mixer'` WS
+   broadcast. The sim's engine-blackout-warning banner now also renders
+   the stale state ("ENGINE MODEL STALE — RESTART ENGINE" + message);
+   blackout takes precedence and the stale path does not repaint the
+   sACN blackout button.
+
+**Verified live** (engine on test_bench + 00_golden_hour_wash):
+remapped Par 1 U2→U3 (hot reload added U3, UDP sniff on 5568 showed
+U1/U2/U3 at 40 pps), reverted → engine logged the 🧹 line and the sniff
+showed U3 packets stop while U1/U2 continued. Refusal test (removed
+pixel 51): `/status` + WS both carried `modelStale: true` with the
+message; sim screenshot showed the banner; restoring the model cleared
+the flag. `node --check` clean on all touched files; simulation suite
+37/37 green. Model-sync hash indicator (third suggestion) not done —
+follow-up material if still wanted.
 
 ## Notes
 Audit ruled out a systematic skew in the new mapping pipeline itself:
