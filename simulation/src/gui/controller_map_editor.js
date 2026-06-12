@@ -270,14 +270,22 @@ function suggestStart(universe, controller, port) {
     // the running universeEnds cache IS the exclusive end — no scan.
     end = proj.universeEnds.get(universe) || 0;
   } else {
-    // Overlap-fix path: exclude this port's own span from the end.
+    // Overlap-fix path: exclude this port's own PACKED span from the
+    // end — but its manual pins stay put when the chain moves, so they
+    // still count as occupancy (as do other ports' pins on this
+    // universe; effects pins live on U1 and never match here).
     for (const other of registry().controllers) {
       for (const otherPort of other.ports) {
-        if (other === controller && otherPort === port) continue;
-        if (otherPort.universe !== universe) continue;
+        if (otherPort.universe !== universe && otherPort !== port) continue;
+        const isOwn = other === controller && otherPort === port;
         const layout = proj.portLayouts.get(`${other.id}:${otherPort.port}`) || [];
         for (const item of layout) {
-          if (item.pinned || item.footprint <= 0) continue;
+          if (item.footprint <= 0) continue;
+          if (item.pinned) {
+            if (!item.valid || (item.pinUniverse || EFFECTS_UNIVERSE) !== universe) continue;
+          } else if (isOwn) {
+            continue; // own packed/gap entries move with the chain
+          }
           end = Math.max(end, item.address + item.footprint - 1);
         }
       }
@@ -586,6 +594,24 @@ function renderPort(controller, port, proj) {
       mutate(null, () => { port.startAddress = next; });
     };
     head.appendChild(startInp);
+
+    // Live next-free hint: the universe's CURRENT end across all ports
+    // and controllers. A stale startAddress (suggested when the
+    // universe was fuller) otherwise sticks forever — one click moves
+    // the chain to the real next free channel (operator report
+    // 2026-06-12: empty port stuck at @345 on a near-empty universe).
+    const s = suggestStart(port.universe, controller, port);
+    if (!s.full && s.start !== port.startAddress) {
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'cm-btn cm-next-free';
+      nextBtn.textContent = `⚡@${s.start}`;
+      nextBtn.title = `U${port.universe} is occupied to ch ${s.end} (all ports, all ` +
+        `controllers) — click to start this chain at ${s.start}, the next free channel.`;
+      nextBtn.onclick = () => {
+        mutate(null, () => { port.startAddress = s.start; });
+      };
+      head.appendChild(nextBtn);
+    }
   } else {
     const fx = document.createElement('span');
     fx.textContent = '✨';
@@ -601,9 +627,9 @@ function renderPort(controller, port, proj) {
   let anyInvalid = false;
   for (const item of layout) {
     if (item.footprint <= 0) continue;
-    // Pinned effects live on the effects universe, not this port's —
-    // they only show in the bar when the port IS the effects universe.
-    if (item.pinned && !isEffectsPort) continue;
+    // Pins render where they actually live: effects pins on the
+    // effects universe only, manual pins on this port's own universe.
+    if (item.pinned && (item.pinUniverse || EFFECTS_UNIVERSE) !== port.universe) continue;
     const seg = document.createElement('div');
     seg.className = 'cm-occ-seg' +
       (isGapEntry(item.entry) ? ' cm-occ-gap' : '') +
@@ -704,7 +730,7 @@ function renderChain(controller, port, layout) {
           mutate(null, () => { item.entry.gap = next; });
         }
       };
-    } else if (isPinnedEntry(item.entry)) {
+    } else if (isPinnedEntry(item.entry) && !item.manual) {
       chip.classList.add('cm-chip-pinned');
       if (!item.valid) chip.classList.add('cm-chip-invalid');
       const addr = document.createElement('span');
@@ -715,19 +741,26 @@ function renderChain(controller, port, layout) {
       chip.title = `${item.name} — cabled to this port, auto-patched at ` +
         `U${item.pinUniverse || EFFECTS_UNIVERSE}:${item.entry.at} (config.yaml global_effects)`;
     } else {
+      // Packed entry OR manual pin — both carry an editable address
+      // box (docs/33 decision 18: typed address = manual pin, absolute
+      // and conflict-tolerant; red = conflicting but KEPT).
+      const isManual = !!item.manual;
+      if (isManual) chip.classList.add('cm-chip-pinned');
       if (!item.valid) chip.classList.add('cm-chip-invalid');
-      // Manual address box (operator request 2026-06-12): type the
-      // address you want; the editor materializes it as an auto-managed
-      // gap before the fixture, so "order + footprints (+ gaps) ⇒
-      // addresses" stays the single packing rule.
       const addrInp = document.createElement('input');
       addrInp.className = 'cm-chip-addr cm-chip-addr-input';
+      if (item.conflict) addrInp.classList.add('cm-chip-addr-conflict');
       addrInp.type = 'number';
       addrInp.min = '1';
       addrInp.max = String(DMX_UNIVERSE_SIZE);
-      addrInp.value = item.valid ? String(item.address) : '';
+      addrInp.value = isManual ? String(item.entry.at) : (item.valid ? String(item.address) : '');
       addrInp.placeholder = '✗';
-      addrInp.title = `Start address of ${item.name} — edit to pin (a gap is inserted/resized before it)`;
+      addrInp.title = isManual
+        ? `${item.name} — MANUALLY PINNED at U${port.universe}:${item.entry.at}` +
+          (item.conflict ? ' ⚠ CONFLICTS with other channels (kept — manual pins stand)' : '') +
+          '. Type a new address to move it; clear the box to return to automatic packing.'
+        : `Start address of ${item.name} — type ANY address to pin it there (conflicts warn ` +
+          'in red but the pin stands)';
       addrInp.onclick = (e) => e.stopPropagation();
       addrInp.ondragstart = (e) => { e.preventDefault(); e.stopPropagation(); };
       addrInp.onchange = (e) => {
@@ -735,11 +768,13 @@ function renderChain(controller, port, layout) {
         setManualAddress(port, index, parseInt(addrInp.value, 10), item);
       };
       chip.appendChild(addrInp);
-      chip.appendChild(document.createTextNode(item.name));
-      chip.title = item.valid
-        ? `${item.name} — U${port.universe}:${item.address} (${item.footprint} ch). ` +
-          'Click to select in 3D, drag to reorder/move, edit the number to pin its address.'
-        : `${item.name} — projects UNPATCHED (see violations)`;
+      chip.appendChild(document.createTextNode((isManual ? '📌' : '') + item.name));
+      if (!isManual) {
+        chip.title = item.valid
+          ? `${item.name} — U${port.universe}:${item.address} (${item.footprint} ch). ` +
+            'Click to select in 3D, drag to reorder/move, type an address to pin it anywhere.'
+          : `${item.name} — projects UNPATCHED (see violations)`;
+      }
     }
 
     const name = item.name;
@@ -799,40 +834,44 @@ function renderChain(controller, port, layout) {
 }
 
 /**
- * Pin a chain entry's start address by inserting/resizing the gap
- * before it. Moving a fixture EARLIER than its packed position needs
- * the channels before it freed first (shrink/remove gaps, reorder) —
- * that is refused loudly, never silently re-packed.
+ * Manual address entry — the operator's ultimate savior (docs/33
+ * decision 18). Typing ANY address converts the entry to a manual pin
+ * ({fixture, at}): absolute, detached from packing, conflicts WARN
+ * (red address) but the pin always stands. The fixture's old packed
+ * slot becomes an equal-width gap when entries follow it, so nothing
+ * downstream shifts. Clearing the box unpins (back to automatic
+ * packing). Editing an existing pin just moves it.
  */
 function setManualAddress(port, index, target, item) {
+  const entry = port.chain[index];
+  const isManual = isPinnedEntry(entry);
+
+  if (Number.isNaN(target) && isManual) {
+    mutate(`'${item.name}' unpinned — repacks automatically`, () => {
+      port.chain.splice(index, 1, item.name);
+    });
+    return;
+  }
   if (!Number.isInteger(target) || target < 1 || target > DMX_UNIVERSE_SIZE) {
     showToast(`Address must be 1–${DMX_UNIVERSE_SIZE}`, { error: true, ttl: 5000 });
     renderIfOpen();
     return;
   }
-  if (target === item.address) return;
-
-  const prev = index > 0 ? port.chain[index - 1] : null;
-  const prevIsGap = isGapEntry(prev);
-  // Address this entry would pack at if the preceding gap were absent.
-  const base = prevIsGap ? item.address - prev.gap : item.address;
-  const gapNeeded = target - base;
-
-  if (gapNeeded < 0) {
-    showToast(`Can't start '${item.name}' at ${target} — channels up to ${base - 1} are ` +
-      'occupied by the entries before it. Reorder the chain or lower their addresses first.',
-    { error: true, ttl: 8000 });
-    renderIfOpen();
+  if (isManual) {
+    if (target === entry.at) return;
+    mutate(`'${item.name}' pinned at ch ${target}`, () => { entry.at = target; });
     return;
   }
-  mutate(`'${item.name}' pinned at ch ${target}` +
-    (gapNeeded > 0 ? ` (${gapNeeded}-ch gap before it)` : ' (gap removed)'), () => {
-    if (gapNeeded === 0) {
-      if (prevIsGap) port.chain.splice(index - 1, 1);
-    } else if (prevIsGap) {
-      prev.gap = gapNeeded;
-    } else {
-      port.chain.splice(index, 0, { gap: gapNeeded });
+  if (target === item.address) return;
+  mutate(`'${item.name}' MANUALLY pinned at ch ${target} — conflicts warn (red) but the ` +
+    'pin stands; clear the box to repack', () => {
+    // Entries after it keep their addresses: the vacated packed slot
+    // becomes an equal-width gap (same rule as fixture deletion).
+    const hasDownstream = port.chain.slice(index + 1)
+      .some(e => typeof e === 'string' || isGapEntry(e));
+    port.chain.splice(index, 1, { fixture: item.name, at: target });
+    if (hasDownstream && item.footprint > 0) {
+      port.chain.splice(index + 1, 0, { gap: item.footprint });
     }
   });
 }

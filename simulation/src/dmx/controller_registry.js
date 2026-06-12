@@ -28,8 +28,11 @@
  * The projection contract (docs/33 "Projection under invalid state"):
  * a fixture whose derived address cannot be proven valid projects to
  * the unpatched state (''/0/0) with a loud violation — patches.yaml can
- * never contain an out-of-range or conflicting address. Valid fixtures
- * around a violation keep their addresses (loud-but-recoverable).
+ * never contain an out-of-range address. Valid fixtures around a
+ * violation keep their addresses (loud-but-recoverable). ONE deliberate
+ * exception (decision 18): MANUAL pins may carry a conflicting (never
+ * out-of-range) address — flagged with a manual_overlap warning, the
+ * operator's explicit override always stands.
  */
 
 import { getFootprint, isGlobalEffect } from './auto_patcher.js';
@@ -492,7 +495,8 @@ export function computeProjection(registry, configsByName, pins) {
   // be overlap-checked AFTER both are packed. Lower port number wins;
   // the higher port's whole chain projects unpatched (docs/33).
   const universeSpans = new Map(); // universe → [{controller, port, start, end}]
-  const pinnedOccupancy = [];      // valid pins, for the effects-universe collision check
+  const pinnedOccupancy = [];      // valid effects pins, for the effects-universe collision check
+  const manualPins = [];           // valid manual pins, for the warn-only conflict check
 
   for (const { controller, port } of allPortsSorted) {
     const layoutKey = `${controller.id}:${port.port}`;
@@ -538,19 +542,69 @@ export function computeProjection(registry, configsByName, pins) {
       const fixtureType = config.fixtureType || config.type || '';
       const isEffect = isGlobalEffect(fixtureType);
 
-      // ── Pinned entries (global effects) — valid on ANY port ─────────
-      // A fogger is physically cabled to some controller port, but its
-      // address is always its config.yaml pin on the effects universe
-      // ("auto patch the foggers", operator decision 2026-06-11). The
-      // entry records the physical attachment; the projection ignores
-      // the port's universe and emits U<pin.universe>:<pin.address>.
+      // ── Pinned entries ───────────────────────────────────────────────
+      // Two flavors share the {fixture, at} shape:
+      //  • EFFECTS (fog/haze/horn/fire): valid on ANY port, address is
+      //    always the config.yaml pin on the effects universe — the
+      //    entry records the physical cabling (operator decision
+      //    2026-06-11).
+      //  • MANUAL pins (any other fixture, normal ports): the operator
+      //    typed an absolute address — the ultimate savior when packing
+      //    and the physical rig disagree (operator decision 2026-06-12,
+      //    docs/33 decision 18). Detached from the packing cursor;
+      //    conflicts WARN (red in the panel) but the address STANDS.
       if (isPinnedEntry(entry)) {
         if (!isEffect) {
-          addViolation('pin_not_effect', `'${name}' is pinned but is not a global effect — ` +
-            'only effects (fog/haze/horn/fire) carry pinned addresses; it projects unpatched',
-          controller, port);
-          layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true });
-          unpatch(name);
+          if (isEffectsPort) {
+            addViolation('non_effect_on_u1', `'${name}' is not a global effect but is pinned ` +
+              `on universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`,
+            controller, port);
+            layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true, manual: true });
+            unpatch(name);
+            continue;
+          }
+          // Footprint must be REAL to know what the pin occupies — the
+          // no-guess rule applies to pins too, but only kills the pin
+          // itself (it is detached from the chain).
+          if (!getDefinition(fixtureType)) {
+            addViolation('no_definition', `'${name}' (${fixtureType || 'unknown type'}) has no ` +
+              'registered fixture definition — footprint unknown, its manual pin projects ' +
+              'unpatched', controller, port);
+            layout.push({ entry, name, address: entry.at, footprint: 0, valid: false, pinned: true, manual: true });
+            unpatch(name);
+            continue;
+          }
+          if (entry.at < 1 || entry.at + footprint - 1 > DMX_UNIVERSE_SIZE) {
+            addViolation('pin_overflow', `'${name}' manual pin @${entry.at} spans ` +
+              `ch ${entry.at}–${entry.at + footprint - 1} — outside 1–${DMX_UNIVERSE_SIZE}; ` +
+              'it projects unpatched', controller, port);
+            layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
+            unpatch(name);
+            continue;
+          }
+          // A manual pin lives ON the port's universe, so a dead port
+          // (bad IP / contested universe) takes it down too — unlike
+          // effects pins, whose universe is independent.
+          if (portDead) {
+            layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
+            unpatch(name);
+            continue;
+          }
+          const manualItem = {
+            entry, name, address: entry.at, footprint, valid: true,
+            pinned: true, manual: true, pinUniverse: port.universe,
+          };
+          layout.push(manualItem);
+          fields.set(name, {
+            controllerIp: controller.ip,
+            dmxUniverse: port.universe,
+            dmxAddress: entry.at,
+            controllerId: controller.id,
+          });
+          manualPins.push({
+            controller, port, name, item: manualItem,
+            universe: port.universe, start: entry.at, end: entry.at + footprint - 1,
+          });
           continue;
         }
         const pin = pins ? pins[fixtureType] : undefined;
@@ -686,7 +740,10 @@ export function computeProjection(registry, configsByName, pins) {
             `port ${b.port.port}'s chain projects unpatched`, b.controller, b.port);
           // Unpatch the losing chain and mark its layout invalid —
           // EXCEPT pinned effects: they live on the effects universe,
-          // untouched by this port's packed-channel conflict.
+          // untouched by this port's packed-channel conflict. The dead
+          // span no longer occupies channels, so manual pins must not
+          // warn against it.
+          b.dead = true;
           const layout = portLayouts.get(`${b.controller.id}:${b.port.port}`);
           for (const item of layout) {
             if (item.pinned) continue;
@@ -733,13 +790,42 @@ export function computeProjection(registry, configsByName, pins) {
     }
   }
 
+  // ── Manual-pin conflict check (WARN, never unpatch) ──────────────────
+  // Decision 18 (operator, 2026-06-12): a manually pinned address is
+  // operator-sovereign — "that's my ultimate savior". Conflicts with
+  // packed chains, gaps, or other manual pins are flagged loudly (the
+  // panel paints the address red) but the address STANDS; the operator
+  // asked for it by name. Out-of-range is still impossible (checked at
+  // projection above) — only CONFLICTS get the override.
+  for (const mp of manualPins) {
+    const collisions = [];
+    for (const span of universeSpans.get(mp.universe) || []) {
+      if (span.dead) continue;
+      if (mp.start <= span.end && span.start <= mp.end) {
+        collisions.push(`${span.controller.name} port ${span.port.port} (ch ${span.start}–${span.end})`);
+      }
+    }
+    for (const other of manualPins) {
+      if (other === mp || other.universe !== mp.universe) continue;
+      if (mp.start <= other.end && other.start <= mp.end) {
+        collisions.push(`manual pin '${other.name}' @${other.start}`);
+      }
+    }
+    if (collisions.length > 0) {
+      mp.item.conflict = true;
+      addViolation('manual_overlap', `U${mp.universe}: manual pin '${mp.name}' @${mp.start} ` +
+        `(ch ${mp.start}–${mp.end}) overlaps ${collisions.join(', ')} — KEPT (manual pins ` +
+        'always stand); resolve when convenient', mp.controller, mp.port);
+    }
+  }
+
   // ── Running end-of-universe map ───────────────────────────────────────
   // Built once per projection pass (the projection already visits every
   // entry) so address suggestions are O(1) lookups instead of a fresh
   // scan per UI change. Highest occupied channel per universe across
   // ALL controllers, counting only entries that actually hold their
   // channels: valid packed fixtures + gaps on the port's universe, and
-  // valid pinned effects on their pin universe.
+  // valid pins (effects + manual) on their pin universe.
   const universeEnds = new Map();
   const bumpEnd = (universe, end) => {
     if (end > (universeEnds.get(universe) || 0)) universeEnds.set(universe, end);

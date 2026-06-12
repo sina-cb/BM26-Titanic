@@ -260,12 +260,76 @@ test('a PINNED effect on any port projects its U1 pin and consumes no port chann
   // channels on universe 3.
   assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
   assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 1 + FP);
-  // A pinned non-effect is still a violation.
+  // A pinned non-effect on a normal port is a MANUAL pin — legitimate.
   const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
     { port: 1, universe: 3, chain: [{ fixture: 'Par 9', at: 100 }] },
   ] }] });
   const p2 = computeProjection(r2, configMap(par('Par 9')), PINS);
-  assert.ok(p2.violations.some(v => v.code === 'pin_not_effect'));
+  assert.equal(p2.violations.length, 0);
+  assert.deepEqual(fieldsOf(p2, 'Par 9'),
+    { controllerIp: '10.0.0.1', dmxUniverse: 3, dmxAddress: 100, controllerId: 1 });
+});
+
+test('manual pin: absolute address, detached from packing, counts in universeEnds', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [
+      'Par 1',
+      { fixture: 'Par 2', at: 400 },  // manual pin — holds no cursor channels
+      'Par 3',
+    ] },
+  ] }] });
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2'), par('Par 3')), PINS);
+  assert.equal(p.violations.length, 0);
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
+  assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 400);
+  assert.equal(fieldsOf(p, 'Par 2').dmxUniverse, 3, 'manual pin lives on the PORT universe');
+  assert.equal(fieldsOf(p, 'Par 3').dmxAddress, 11, 'packs as if the pin were absent');
+  assert.equal(p.universeEnds.get(3), 409, 'pin end (400+10-1) is the universe end');
+});
+
+test('manual pin conflicts WARN but the pin (and the packed chain) both stand', () => {
+  // Decision 18: the operator override — conflicts paint red, never unpatch.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: ['Par 1', 'Par 2'] },          // packed 1–20
+    { port: 2, universe: 3, startAddress: 100,
+      chain: [{ fixture: 'Par 9', at: 5 }] },                     // pin inside the span
+  ] }] });
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2'), par('Par 9')), PINS);
+  assert.ok(p.violations.some(v => v.code === 'manual_overlap'));
+  assert.equal(fieldsOf(p, 'Par 9').dmxAddress, 5, 'the manual pin STANDS');
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1, 'the packed chain stands too');
+  const item = p.portLayouts.get('1:2').find(i => i.name === 'Par 9');
+  assert.equal(item.conflict, true, 'layout item flags the conflict for the red UI');
+  // Two manual pins overlapping also warn — and both stand.
+  const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [
+      { fixture: 'Par 1', at: 50 },
+      { fixture: 'Par 2', at: 55 },
+    ] },
+  ] }] });
+  const p2 = computeProjection(r2, configMap(par('Par 1'), par('Par 2')), PINS);
+  assert.ok(p2.violations.some(v => v.code === 'manual_overlap'));
+  assert.equal(fieldsOf(p2, 'Par 1').dmxAddress, 50);
+  assert.equal(fieldsOf(p2, 'Par 2').dmxAddress, 55);
+});
+
+test('manual pin hard limits: overflow and U1 still unpatch', () => {
+  // Out-of-range is NOT covered by the override — channel 513 cannot
+  // be sent. Pin at 510 with a 10ch par → 510..519 > 512.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [{ fixture: 'Par 1', at: 510 }] },
+  ] }] });
+  const p = computeProjection(r, configMap(par('Par 1')), PINS);
+  assert.ok(p.violations.some(v => v.code === 'pin_overflow'));
+  assert.deepEqual(fieldsOf(p, 'Par 1'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+  // U1 stays effects-only, pinned or not.
+  const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 1, chain: [{ fixture: 'Par 1', at: 100 }] },
+  ] }] });
+  const p2 = computeProjection(r2, configMap(par('Par 1')), PINS);
+  assert.ok(p2.violations.some(v => v.code === 'non_effect_on_u1'));
+  assert.equal(fieldsOf(p2, 'Par 1').dmxAddress, 0);
 });
 
 test('at: 0 (unpinned WIP) LOADS and projects a loud no_pin / pin_mismatch', () => {

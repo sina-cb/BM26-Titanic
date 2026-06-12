@@ -64,9 +64,10 @@ address-arithmetic session. The Views panel set the UI bar — this panel raises
 
 - No RDM / ArtPoll auto-discovery of controllers (extension point exists in
   `dmx/lib/artnet.js`; wire it later as a "📡 Discover" button).
-- No per-fixture manual address pinning inside a normal chain (chains pack; if you
-  need a hole, model it — see *Gap entries*). The **one exception** is the effects
-  universe, where pinning is mandatory — see *Universe 1: effects*.
+- ~~No per-fixture manual address pinning inside a normal chain~~ — **superseded
+  2026-06-12 by decision 18**: typing an address on a chain chip converts the
+  entry to a manual pin (absolute, conflict-tolerant, warn-only). Effects-universe
+  pinning remains mandatory — see *Universe 1: effects*.
 - No editing of fixture channel modes here — that stays on the fixture card.
 - No replacement of the sACN bridge / engine routing; this is a mapping editor only.
 - No `protocol` field on controllers (sACN unicast is the only output path today;
@@ -567,6 +568,18 @@ land-able; phases 1+2 alone already beat today's workflow.
     count shrink gap-replaces the casualties (decision 16); new extras land
     in the Unmapped tray. The "patches will be reset" regen warning is
     skipped under an active mapping because it no longer applies.
+18. **Manual pins are the operator's ultimate savior** — typing ANY address on
+    a chain chip converts the entry to `{fixture, at}` on the port's own
+    universe: absolute, detached from packing (the vacated slot becomes an
+    equal-width gap so downstream entries hold), and **conflict-tolerant**:
+    overlaps with packed chains, gaps, or other pins raise a `manual_overlap`
+    warning (red address in the panel) but the pin ALWAYS projects — the one
+    deliberate exception to "patches.yaml never carries a conflicting
+    address". Out-of-range (past 512) still unpatches; U1 stays effects-only.
+    Clearing the box returns the fixture to automatic packing. Every port also
+    shows a live `⚡@next` button when its startAddress differs from the
+    universe's current next-free channel (computed across ALL ports and
+    controllers) — stale suggestions no longer stick.
 
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
 moving the Chauvet to 510–511, and is mechanically flagged since decision 14.)*

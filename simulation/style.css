@@ -2338,3 +2338,17 @@ body.edit-mode-active #engine-params-panel {
   border-color: rgba(96, 192, 240, 0.5);
   outline: none;
 }
+
+/* Manual pin whose channels collide with something else — the pin is
+   KEPT (decision 18, operator override); red screams "look at me". */
+.cm-chip-addr-input.cm-chip-addr-conflict {
+  color: #ff5555;
+  font-weight: 700;
+  border-color: rgba(255, 85, 85, 0.7);
+}
+
+/* Live "next free channel on this universe" jump button. */
+.cm-next-free {
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, 0.35);
+}
