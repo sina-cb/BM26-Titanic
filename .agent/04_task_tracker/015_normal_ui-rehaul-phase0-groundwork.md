@@ -21,3 +21,17 @@
 
 - `?ui=legacy` (and default) behavior unchanged; sim auto-checks green.
 - Schema parity test wired into `npm test`.
+
+## Progress 2026-06-12 (session claude/admiring-shannon-4ahh4g)
+
+- [x] Vendored preact@10.29.2, htm@3.1.1, @preact/signals@2.9.1,
+      @preact/signals-core@1.14.2 → `simulation/vendor/{preact,htm,preact_signals}/`
+      + import-map entries.
+- [x] `src/gui/ui_mode.js` — `?ui=modern|legacy` toggle, default legacy;
+      legacy path verified byte-identical in behavior (no modern host
+      mounted, monitors/presets behave as before).
+- [x] Schema oracle: `src/gui/control_schema.js`
+      (`window.__captureControlSchema()`, 700 controls on titanic/full) +
+      `agent_tools/capture_control_schema.cjs` dump tool.
+- [ ] Outstanding: tracked baseline workflow doc for Phase-3 diffing
+      (capture legacy + modern on same scene, diff JSON).
