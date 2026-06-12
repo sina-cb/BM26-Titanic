@@ -35,6 +35,12 @@ function setWarningVisible(visible) {
   document.body.classList.toggle('engine-blackout-active', visible);
   
   window._sacnBlackoutActivated = visible;
+  // CONTRACT: in modern mode this button is rendered by Preact
+  // (modern/sacn_monitor_panel.js) as a fully STATIC subtree — Preact
+  // never diffs its label/styles, so these imperative writes are safe.
+  // If that button ever becomes dynamic (signal-driven label/style),
+  // move the blackout state into the panel's store instead of poking
+  // the DOM from here.
   const btn = document.getElementById('sacn-out-blackout-btn');
   if (btn) {
     if (visible) {

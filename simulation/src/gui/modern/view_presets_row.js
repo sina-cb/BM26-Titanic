@@ -67,7 +67,7 @@ export function ViewPresetsRow() {
     <button class="preset-add" title="Add new camera preset from current view"
             onClick=${addPreset}>+</button>
     ${cameraPresets.map((preset, i) => html`
-      <div class="preset-group" key=${preset.key}>
+      <div class="preset-group" key=${`${preset.key}:${i}`}>
         <button class="preset-name" data-view=${preset.key}
                 title=${`Go to ${preset.name} view`}
                 onClick=${() => animateCameraToPreset(preset)}>

@@ -493,6 +493,13 @@ export class NumberController extends Controller {
     });
     this.$input.addEventListener('pointermove', (e) => {
       if (testingForDrag) {
+        // The press may have ended off-element (no pointerup ever reaches
+        // us pre-capture) — a stale test must not engage a drag on a
+        // buttons-up hover.
+        if ((e.buttons & 1) === 0) {
+          testingForDrag = false;
+          return;
+        }
         const dx = e.clientX - dragStartX;
         const dy = e.clientY - dragStartY;
         if (Math.abs(dy) > 5) {
@@ -529,6 +536,12 @@ export class NumberController extends Controller {
     };
     this.$input.addEventListener('pointerup', endDrag);
     this.$input.addEventListener('pointercancel', endDrag);
+    // Pre-capture, leaving the element must abandon the drag test, and a
+    // capture lost to outside forces must unwind the dragging style.
+    this.$input.addEventListener('pointerleave', () => {
+      if (!dragging) testingForDrag = false;
+    });
+    this.$input.addEventListener('lostpointercapture', endDrag);
   }
 
   _initSlider() {

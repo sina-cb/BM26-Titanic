@@ -14,6 +14,7 @@
  */
 
 import { html } from 'htm/preact';
+import { useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 
 import { FloatingPanel } from './floating_panel.js';
@@ -117,9 +118,15 @@ function StatRow({ label, value, title }) {
 }
 
 function ActivityLog({ store }) {
+  const logRef = useRef(null);
+  const entries = store.log.value;
+  // Legacy pinned the log to the newest entry on every append — keep that.
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [entries]);
   return html`
-    <div class="sacn-log">
-      ${store.log.value.map((e) => html`
+    <div class="sacn-log" ref=${logRef}>
+      ${entries.map((e) => html`
         <div class=${`sacn-entry${e.type !== 'info' ? ` ${e.type}` : ''}`}>${e.time} ${e.msg}</div>
       `)}
     </div>
