@@ -39,6 +39,8 @@ import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
 import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
+import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
+import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -464,6 +466,12 @@ Promise.all([
   // In readonly mode (e.g. iPad Monitor), skip all write-capable subsystems
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
+    // Modern shells must mount BEFORE the legacy setup functions attach
+    // their handlers to the same element ids (see modern/SHELL_NOTES.md).
+    if (IS_MODERN_UI) {
+      initModernPatternEditorShell();
+      initModernViewMasksShell();
+    }
     setupPatternEditor();
     setupViewMasksEditor();
     if (IS_MODERN_UI) {
