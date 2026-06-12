@@ -39,14 +39,14 @@ function setWarningVisible(visible) {
   if (btn) {
     if (visible) {
       btn.textContent = "RESUME";
-      btn.style.background = "#080";
-      btn.style.color = "#fff";
-      btn.style.borderColor = "#0f0";
+      btn.style.background = "var(--tertiary)";
+      btn.style.color = "var(--surface-container-lowest)";
+      btn.style.borderColor = "var(--tertiary)";
     } else {
       btn.textContent = "BLACKOUT";
-      btn.style.background = "rgb(136, 0, 0)";
-      btn.style.color = "rgb(255, 255, 255)";
-      btn.style.borderColor = "rgb(255, 0, 0)";
+      btn.style.background = "var(--error)";
+      btn.style.color = "var(--surface-container-lowest)";
+      btn.style.borderColor = "var(--error-container-border)";
     }
   }
 }

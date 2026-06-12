@@ -90,7 +90,7 @@ export function renderViewPresetsUI() {
         z: Math.round(controls.target.z * 1000) / 1000,
       };
       saveCameraPresets();
-      updateBtn.style.color = '#4f4';
+      updateBtn.style.color = 'var(--ok)';
       setTimeout(() => { updateBtn.style.color = ''; }, 600);
     };
     group.appendChild(updateBtn);

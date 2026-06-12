@@ -51,7 +51,7 @@ function showSpotlightCapToast(requestedSize, cappedSize) {
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'spotlight-cap-toast';
-      toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#3a1a1a;border:1px solid #f66;color:#ffb3b3;padding:10px 24px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;white-space:pre-line;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;max-width:560px;';
+      toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--error) 18%, var(--surface));border:1px solid var(--error-container-border);color:var(--error);padding:10px 24px;border-radius:8px;font-family:var(--font-body);font-size:13px;white-space:pre-line;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;max-width:560px;';
       document.body.appendChild(toast);
     }
     toast.textContent = `spotlights=${requestedSize} exceeds the preview pool cap (${MAX_SPOTLIGHT_POOL_SIZE}). Using ${cappedSize}.`;
