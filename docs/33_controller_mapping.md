@@ -145,7 +145,7 @@ are **projected**:
 | `controllerIp` | owning controller's `ip` |
 | `dmxUniverse` | owning port's `universe` |
 | `dmxAddress` | packing position in the chain (or pinned address on U1) |
-| `controllerId` | owning controller's stable `id` (replaces today's "unique int per IP" heuristic) |
+| `controllerId` | owning controller's **panel ordinal** — its 1-based position in the Controller Mapping panel list (`controllers` array order); renumbered on delete/reorder (decision 20). Unmapped → `0`. The internal stable `id` is never projected |
 | `sectionId` | per fixture group, stable assignment (absorbed from the auto-patcher's `assignMetadata`) |
 | `fixtureId` | monotonic per fixture, stable, never reassigned (absorbed likewise) |
 
@@ -484,7 +484,7 @@ not reframed** — the controller mapper is the only patching path:
   `controller_registry.js` (they're the only parts the mapper needs).
 - **`assignMetadata`'s job moves into the projection pass**: `sectionId` (per
   group, stable), `fixtureId` (monotonic, stable, never reassigned), `controllerId`
-  (controller's stable `id`). Without this, removing the auto-patcher would leave
+  (controller's panel ordinal — decision 20). Without this, removing the auto-patcher would leave
   new fixtures with no section/fixture IDs — the projection pass is now the trigger.
 - The **global-effects pass** becomes the enforced universe-1 pin rule above —
   visible and editable instead of invisible magic. `config.yaml → global_effects`
@@ -499,7 +499,7 @@ not reframed** — the controller mapper is the only patching path:
 
 - **Model exporter / marsin_engine / sidecars**: zero change. They read the same
   per-fixture fields the projection writes. (`controllerId` rides the engine's
-  `Int32Array` metadata buffer — stable never-reused IDs have no width concern.)
+  `Int32Array` metadata buffer — small 1-based ordinals, no width concern.)
 - **sACN output** (`sacn_output_client.js` unicast to `controllerIp`): zero change.
   The "universe belongs to one controller" rule guarantees a universe always
   unicasts to exactly one IP, which is what the output path assumes.
@@ -600,6 +600,17 @@ land-able; phases 1+2 alone already beat today's workflow.
     keeps survivors' stored addresses by name. Legacy packed files migrate
     once at boot, atomically per port, at their previously derived
     addresses.
+20. **Projected `controllerId` is the panel ordinal** (operator 2026-06-12,
+    amends decision 6's "stable id" choice for the PROJECTED field only):
+    the value written onto fixture configs / `patches.yaml` / the exported
+    engine model — including effects pins — is the owning controller's
+    1-based position in the Controller Mapping panel list
+    (`registry.controllers` array order). Unmapped fixtures stay `0`.
+    Deleting or reordering controllers renumbers projected ids on the next
+    projection — explicitly the operator's intent ("defined as the order of
+    the controllers in the panel"); the stable internal `id` (monotonic,
+    never reused) is unchanged and keeps keying `portLayouts`, violations,
+    panel collapse state, and chain ownership.
 
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
 moving the Chauvet to 510–511, and is mechanically flagged since decision 14.)*

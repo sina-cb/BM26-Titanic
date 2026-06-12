@@ -8,7 +8,9 @@
  * tree through save/load, and PROJECTS every fixture's patch fields
  * (`controllerIp`, `dmxUniverse`, `dmxAddress`, `controllerId`) plus
  * metadata (`sectionId`, `fixtureId`) — replacing both hand-typed patch
- * fields and the auto-patcher.
+ * fields and the auto-patcher. The projected `controllerId` is the
+ * controller's 1-based ORDINAL in the panel list (docs/33 decision 20),
+ * not the internal stable id.
  *
  * ALLOCATION MODEL (docs/33 decision 19, operator 2026-06-12): every
  * entry stores its ABSOLUTE address, assigned once at add time from
@@ -497,7 +499,11 @@ export function migrateLegacyChains(registry, configsByName, pins) {
  * }}
  *
  * Every MAPPED fixture gets a `fields` entry — its stored absolute
- * address when provably sendable, unpatched (''/0/0) otherwise.
+ * address when provably sendable, unpatched (''/0/0) otherwise. The
+ * `fields` controllerId is the owning controller's PANEL ORDINAL
+ * (1-based array position, decision 20); everywhere else in this
+ * result (violations, portLayouts keys, universeMaps claims) the
+ * stable internal id is used.
  * `portLayouts` (key `<controllerId>:<portNum>`) carries per-entry
  * validity for the panel UI; `universeMaps` is the full per-universe
  * occupancy (sorted, valid claims only) for the universe bars and the
@@ -523,6 +529,17 @@ export function computeProjection(registry, configsByName, pins) {
   const unpatch = (name) => {
     fields.set(name, { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
   };
+
+  // ── Projected controllerId: the PANEL ORDINAL, not the stable id ─────
+  // The operator matches fixture cards / patches.yaml / the engine model
+  // against the Controller Mapping panel BY EYE, so the projected
+  // controllerId is the controller's 1-based position in the panel list
+  // (registry.controllers array order) — docs/33 decision 20 (operator
+  // 2026-06-12). Deleting or reordering controllers renumbers projected
+  // ids on the next projection; that is the intent. The stable internal
+  // `controller.id` (monotonic, never reused) still keys portLayouts,
+  // violations, universeMaps claims, and panel collapse state.
+  const ordinalOf = new Map(registry.controllers.map((controller, i) => [controller, i + 1]));
 
   // ── Controller-level checks: IP format + uniqueness ──────────────────
   const badControllers = new Set();
@@ -698,7 +715,7 @@ export function computeProjection(registry, configsByName, pins) {
           controllerIp: controller.ip,
           dmxUniverse: pin.universe,
           dmxAddress: pin.address,
-          controllerId: controller.id,
+          controllerId: ordinalOf.get(controller),
         });
         pinnedOccupancy.push({
           controller, port, name, item: pinItem,
@@ -754,7 +771,7 @@ export function computeProjection(registry, configsByName, pins) {
         controllerIp: controller.ip,
         dmxUniverse: port.universe,
         dmxAddress: entry.at,
-        controllerId: controller.id,
+        controllerId: ordinalOf.get(controller),
       });
       claim(port.universe, entry.at, entry.at + footprint - 1, name, item, controller, port);
     }
@@ -848,7 +865,8 @@ export function computeProjection(registry, configsByName, pins) {
  *    the next free id;
  *  - fixtureId: existing positive ids kept, missing ones get the next
  *    free monotonic id;
- *  - controllerId: derived (mapped → controller id, unmapped → 0).
+ *  - controllerId: derived (mapped → controller's panel ordinal,
+ *    1-based array position per docs/33 decision 20, unmapped → 0).
  *
  * Returns { violations, drift, migrated } — `drift` lists fixtures
  * whose stored fields differed from the projection; `migrated` lists
