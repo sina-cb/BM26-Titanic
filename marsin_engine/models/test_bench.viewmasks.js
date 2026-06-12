@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the test_bench model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/test_bench/views.yaml).
-// Updated: 2026-06-11T00:15:13.213Z
+// Updated: 2026-06-12T18:08:05.611Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails

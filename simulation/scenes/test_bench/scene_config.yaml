@@ -179,7 +179,7 @@ parLights:
       intensity: 3
       angle: 45
       penumbra: 0.5
-      x: -1.5
+      x: 0.5
       'y': 1
       z: 1
       rotX: 0.14186528077802948
@@ -192,7 +192,7 @@ parLights:
       intensity: 3
       angle: 45
       penumbra: 0.5
-      x: 2.5
+      x: 1
       'y': 1
       z: 1
       rotX: 0.01024200255279506

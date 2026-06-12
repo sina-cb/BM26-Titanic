@@ -66,7 +66,7 @@ patches:
   ChauvetHaze4D 10:
     controllerIp: 10.1.1.10
     dmxUniverse: 1
-    dmxAddress: 511
+    dmxAddress: 510
     controllerId: 1
     sectionId: 4
     fixtureId: 9
