@@ -442,10 +442,39 @@ test('projection writes derived fields, unpatches unmapped, reports drift', () =
   assert.equal(mapped.controllerIp, '10.0.0.7');
   assert.equal(mapped.dmxUniverse, 2);
   assert.equal(mapped.dmxAddress, 1);
-  assert.equal(mapped.controllerId, 7);
+  assert.equal(mapped.controllerId, 1, 'panel ordinal (decision 20), NOT the stable id 7');
   assert.equal(stale.controllerIp, '');
   assert.equal(stale.dmxUniverse, 0);
   assert.equal(drift.length, 2);
+});
+
+test('projected controllerId is the PANEL ORDINAL, renumbered after a delete', () => {
+  // Decision 20 (operator 2026-06-12): the projected controllerId is the
+  // controller's 1-based position in the Controller Mapping panel list
+  // (registry.controllers array order). After add/delete churn the
+  // operator must see 1, 2, … — never the stable internal ids (3, 5, 7).
+  const r = reg(null);
+  const a = addController(r, { name: 'A', ip: '10.0.0.1' }); // stable id 1
+  const b = addController(r, { name: 'B', ip: '10.0.0.2' }); // stable id 2
+  const c = addController(r, { name: 'C', ip: '10.0.0.3' }); // stable id 3
+  a.ports[0].chain.push({ fixture: 'Par 1', at: 1 });
+  b.ports[0].chain.push({ fixture: 'Par 2', at: 1 });
+  c.ports[0].chain.push({ fixture: 'Fog 1', at: 512 });
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const configs = configMap(par('Par 1'), par('Par 2'), fog);
+
+  const p1 = computeProjection(r, configs, PINS);
+  assert.equal(p1.violations.length, 0);
+  assert.equal(fieldsOf(p1, 'Par 1').controllerId, 1);
+  assert.equal(fieldsOf(p1, 'Par 2').controllerId, 2);
+  assert.equal(fieldsOf(p1, 'Fog 1').controllerId, 3, 'effects pins carry the ordinal too');
+
+  removeController(r, b); // panel now lists A (id 1), C (id 3)
+  const p2 = computeProjection(r, configs, PINS);
+  assert.equal(fieldsOf(p2, 'Par 1').controllerId, 1);
+  assert.equal(p2.fields.has('Par 2'), false, 'unmapped after its controller was deleted');
+  assert.equal(fieldsOf(p2, 'Fog 1').controllerId, 2, 'id-3 controller is SECOND in the panel → 2');
+  assert.equal(r.controllers[1].id, 3, 'the stable internal id itself never renumbers');
 });
 
 test('projectOntoConfigs migrates legacy chains and reports it', () => {
