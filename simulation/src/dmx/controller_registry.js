@@ -55,6 +55,7 @@ import { getDefinition } from './fixture_definition_registry.js';
 
 export const DMX_UNIVERSE_SIZE = 512;   // full budget, channels 1–512 (docs/33 decision 1)
 export const EFFECTS_UNIVERSE = 1;      // reserved for global effects (docs/33 decision 2)
+export const MAX_UNIVERSE = 63999;      // sACN (E1.31) universe ceiling
 export const DEFAULT_PORT_COUNT = 4;
 
 const IP_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -147,9 +148,13 @@ export function createControllerRegistry(tree) {
       seenPortNums.add(portNum);
 
       const universe = rawPort.universe;
-      if (!Number.isInteger(universe) || universe < 1 || universe > 63999) {
+      // Range problems (e.g. > MAX_UNIVERSE) are OPERATIONAL — the
+      // projection flags them loudly and unpatches the port; treating
+      // them as corruption would brick the boot off a panel typo
+      // (cold review 2026-06-12, same class as the at: 0 fix).
+      if (!Number.isInteger(universe) || universe < 1) {
         throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
-          `universe ${universe} must be an integer in 1–63999`);
+          `universe ${universe} must be a positive integer`);
       }
       const startAddress = rawPort.startAddress === undefined ? 1 : rawPort.startAddress;
       if (!Number.isInteger(startAddress) || startAddress < 1 || startAddress > DMX_UNIVERSE_SIZE) {
@@ -276,7 +281,8 @@ export function nextFreeUniverse(registry) {
 
 /** Record a manually-entered universe so allocation never hands it out again. */
 export function noteUniverseUsed(registry, universe) {
-  if (Number.isInteger(universe) && universe + 1 > (registry.nextUniverse || 2)) {
+  if (Number.isInteger(universe) && universe <= MAX_UNIVERSE &&
+      universe + 1 > (registry.nextUniverse || 2)) {
     registry.nextUniverse = universe + 1;
   }
 }
@@ -299,6 +305,10 @@ export function addController(registry, { name, ip }) {
 export function addPort(registry, controller) {
   const portNum = controller.ports.reduce((m, p) => Math.max(m, p.port), 0) + 1;
   const universe = nextFreeUniverse(registry);
+  if (universe > MAX_UNIVERSE) {
+    throw new Error(`[Controllers] Universe allocation exhausted (next would be ` +
+      `${universe} > ${MAX_UNIVERSE})`);
+  }
   registry.nextUniverse = universe + 1;
   const port = { port: portNum, universe, startAddress: 1, chain: [] };
   controller.ports.push(port);
@@ -612,7 +622,14 @@ export function computeProjection(registry, configsByName, pins) {
     const layout = [];
     portLayouts.set(layoutKey, layout);
 
-    const portDead = badControllers.has(controller) || contestedPorts.has(port);
+    const universeOutOfRange = port.universe > MAX_UNIVERSE;
+    if (universeOutOfRange) {
+      addViolation('universe_range', `${controller.name} port ${port.port}: universe ` +
+        `${port.universe} is outside 1–${MAX_UNIVERSE} (the sACN limit) — its fixtures ` +
+        'project unpatched; fix the universe number', controller, port);
+    }
+    const portDead = badControllers.has(controller) || contestedPorts.has(port) ||
+      universeOutOfRange;
     const isEffectsPort = port.universe === EFFECTS_UNIVERSE;
 
     for (const entry of port.chain) {

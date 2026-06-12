@@ -127,6 +127,24 @@ test('at: 0 (unpinned WIP effect) LOADS and projects a loud no_pin / pin_mismatc
     { port: 1, universe: 1, chain: [{ fixture: 'Fog 1', at: -1 }] }] }] }), /pinned entry/);
 });
 
+test('an out-of-range universe LOADS and projects unpatched, loudly', () => {
+  // Cold review 2026-06-12: a panel typo (e.g. 64000) must never brick
+  // the boot — range is operational, not structural (same class as the
+  // at: 0 fix). Only non-positive/non-integer universes are corruption.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 64000, chain: [{ fixture: 'Par 1', at: 1 }] },
+    { port: 2, universe: 2, chain: [{ fixture: 'Par 2', at: 1 }] },
+  ] }] });
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2')), PINS);
+  assert.ok(p.violations.some(v => v.code === 'universe_range'));
+  assert.deepEqual(fieldsOf(p, 'Par 1'), UNPATCHED, 'bad-universe port unpatches');
+  assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 1, 'healthy sibling unaffected');
+  // The high-water mark never burns on garbage values.
+  const r2 = reg(null);
+  noteUniverseUsed(r2, 64000);
+  assert.equal(nextFreeUniverse(r2), 2);
+});
+
 // ── Allocation model: absolute addresses ────────────────────────────────
 
 test('fixtures project at their stored absolute addresses, order is cosmetic', () => {

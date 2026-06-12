@@ -18,6 +18,7 @@ import { params, selectedFixtureIndices } from '../core/state.js';
 import {
   DMX_UNIVERSE_SIZE,
   EFFECTS_UNIVERSE,
+  MAX_UNIVERSE,
   registryIsActive,
   mappedFixtures,
   addController,
@@ -500,11 +501,13 @@ function renderPort(controller, port, proj) {
   uniInp.className = 'cm-input cm-num';
   uniInp.type = 'number';
   uniInp.min = '1';
+  uniInp.max = String(MAX_UNIVERSE);
   uniInp.value = port.universe;
-  uniInp.title = `Universe (${EFFECTS_UNIVERSE} = effects only)`;
+  uniInp.title = `Universe (${EFFECTS_UNIVERSE} = effects only, max ${MAX_UNIVERSE})`;
   uniInp.onchange = () => {
     const next = parseInt(uniInp.value, 10);
-    if (!Number.isInteger(next) || next < 1) {
+    if (!Number.isInteger(next) || next < 1 || next > MAX_UNIVERSE) {
+      showToast(`Universe must be 1–${MAX_UNIVERSE}`, { error: true, ttl: 5000 });
       uniInp.value = port.universe;
       return;
     }
