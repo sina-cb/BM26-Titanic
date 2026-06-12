@@ -1251,6 +1251,6 @@ When picking this up:
 5. **Add a test with every behavior change.** Pattern: copy a test in `tests/test_comms_e2e_sim.py`, swap the verb, assert the engine state changed (and the wire shape of the reply). 30 lines.
 6. **Firmware compile-tests are non-negotiable.** Both `podium_tx` and `server_rx` must build clean after any change in `firmware/`. The Python stack can pretend to work; the binaries must actually build. `firmware/deploy.py` will check the MAC pairing in `.config.nodes.yaml` before flashing anything.
 7. **Out-of-scope reminders.** This subsystem deliberately does NOT own: rate limiting / cooldowns (captain UI), fire-effect commands (Flame Effect Controller has its own firmware on its own transport — see FW-SPEC-001), the long-range hardware control surface internals (separate program; once it ships it joins the mesh as a captain-role client driving the same `cmd` allowlist). Don't reintroduce them here.
-8. **Never commit `marsin_engine/states/test_bench/*.yaml`.** They're runtime state files; the engine writes them on every run. They have no business on this branch.
+8. **`marsin_engine/states/` is the gitignored runtime cache** (since June 2026) — the engine writes it on every run and git never sees it. Tracked defaults live in `marsin_engine/state_defaults/` and only change via an explicit `/state/promote`.
 
 This document is the design. Implementation lands in subsequent commits.

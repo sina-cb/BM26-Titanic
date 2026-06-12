@@ -1,0 +1,6 @@
+# Autopilot runtime state — was the `playlist:` block in config.yaml.
+# Seeded into states/<model>/ at boot; live PLAY/PAUSE/delay/shuffle
+# changes land in the runtime copy, /state/promote writes them back here.
+active: true
+delay_s: '15'
+shuffle: true

@@ -25,7 +25,12 @@ export class StateManager {
   save(filename, state) {
     const filePath = path.join(this.stateDir, filename);
     try {
-      fs.writeFileSync(filePath, yaml.dump(state));
+      // Atomic tmp-then-rename (same pattern as scheduled_tasks.js) so
+      // a crash mid-write can't leave a torn YAML for the next boot.
+      // The `.tmp-<pid>` suffix matches the repo-wide gitignore.
+      const tmp = `${filePath}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, yaml.dump(state));
+      fs.renameSync(tmp, filePath);
     } catch (e) {
       console.warn(`Failed to save state to ${filename}:`, e);
     }

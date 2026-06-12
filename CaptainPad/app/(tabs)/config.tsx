@@ -5,7 +5,11 @@ import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette, useTheme, ThemeMode } from '@/hooks/use-theme';
 import { THEMES, THEME_ORDER } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
+import {
+  getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult,
+  fetchRuntimeStateStatus, promoteRuntimeState, resetRuntimeState,
+  RuntimeStateStatus, RuntimeStateMirrorResult,
+} from '@/utils/api';
 import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/hooks/useServerDiscovery';
 
 // AsyncStorage key for the operator-picked subnet prefix (e.g. "10.1.1").
@@ -220,6 +224,9 @@ export default function ConfigScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Section 1a: Show state (runtime ↔ defaults) ───────────────── */}
+        <ShowStateCard connected={!!connResult?.ok} />
 
         {/* ── Section 1b: Appearance (dark / light / system) ────────────── */}
         <AppearancePicker />
@@ -525,6 +532,177 @@ export default function ConfigScreen() {
         </View>
 
       </ScrollView>
+    </View>
+  );
+}
+
+// ── ShowStateCard ─────────────────────────────────────────────────────
+// Runtime ↔ show-defaults bridge (marsin_engine/lib/runtime_state.js).
+// The engine's live YAML state (mixer / deck / globals / audio /
+// scheduler / autopilot + playlists) lives in a gitignored runtime
+// cache that survives restarts. This card shows whether that cache
+// drifted from the tracked state_defaults/, and offers:
+//   SAVE AS SHOW DEFAULTS → POST /state/promote (runtime → defaults)
+//   RESET TO DEFAULTS     → POST /state/reset   (defaults → runtime,
+//                            takes effect on the next engine restart)
+// Both are two-tap armed buttons instead of Alert.alert confirms —
+// Alert button callbacks don't fire on the web build, and the armed
+// pattern reads better on the podium anyway.
+function ShowStateCard({ connected }: { connected: boolean }) {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const [status, setStatus] = useState<RuntimeStateStatus | null>(null);
+  const [busy, setBusy] = useState<'promote' | 'reset' | null>(null);
+  const [armed, setArmed] = useState<'promote' | 'reset' | null>(null);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const r = await fetchRuntimeStateStatus();
+    if (r.ok && r.data) {
+      setStatus(r.data);
+      setError(null);
+    } else {
+      setStatus(null);
+      setError(r.error || 'Engine unreachable');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (connected) refresh();
+  }, [connected, refresh]);
+
+  // Disarm automatically — a stale armed destructive button is a
+  // mis-tap waiting to happen on a dark podium.
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  const describeResult = (verb: string, r: RuntimeStateMirrorResult) => {
+    const bits: string[] = [];
+    if (r.written.length > 0) bits.push(`${r.written.length} file(s) written`);
+    if (r.removed.length > 0) bits.push(`${r.removed.length} removed`);
+    if (bits.length === 0) bits.push('already in sync — nothing to do');
+    return `${verb}: ${bits.join(', ')}${r.restartRequired ? ' — restart the engine to load it' : ''}`;
+  };
+
+  const handleAction = async (which: 'promote' | 'reset') => {
+    if (armed !== which) {
+      setArmed(which);
+      return;
+    }
+    setArmed(null);
+    setBusy(which);
+    setLastResult(null);
+    try {
+      const r = which === 'promote' ? await promoteRuntimeState() : await resetRuntimeState();
+      if (r.ok && r.data) {
+        setLastResult(describeResult(which === 'promote' ? 'Saved to defaults' : 'Reset from defaults', r.data));
+        setError(null);
+      } else {
+        setError(r.error || `${which} failed`);
+      }
+    } finally {
+      setBusy(null);
+      refresh();
+    }
+  };
+
+  const changedFiles = status ? status.files.filter(f => f.differs || !f.inDefaults || !f.inRuntime) : [];
+
+  return (
+    <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24, marginBottom: 24 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <IconSymbol name="tray.and.arrow.down.fill" size={24} color={C.primary} />
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 1 }}>
+            SHOW STATE
+          </Text>
+        </View>
+        {status && (
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
+            color: status.dirty ? '#FF9500' : '#34C759',
+          }}>
+            {status.dirty ? 'DIFFERS FROM DEFAULTS' : 'MATCHES DEFAULTS'}
+          </Text>
+        )}
+      </View>
+
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, lineHeight: 18, marginBottom: 12 }}>
+        Live tweaks (mixer, deck, parameters, playlists, scheduler, audio) persist on the engine across
+        restarts without touching git. Save them as the new show defaults when the current state is a keeper.
+      </Text>
+
+      {status && changedFiles.length > 0 && (
+        <View style={{
+          backgroundColor: C.surfaceContainerLow, borderRadius: 8, padding: 12,
+          borderWidth: 1, borderColor: C.ghostBorder, marginBottom: 12, gap: 2,
+        }}>
+          {changedFiles.map(f => (
+            <Text key={f.file} style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary }}>
+              {f.differs ? '~' : !f.inDefaults ? '+' : '−'} {f.file}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {error && (
+        <View style={{
+          backgroundColor: 'rgba(186, 26, 26, 0.08)', borderRadius: 8, padding: 12,
+          borderWidth: 1, borderColor: 'rgba(186, 26, 26, 0.3)', marginBottom: 12,
+        }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.error }}>{error}</Text>
+        </View>
+      )}
+
+      {lastResult && (
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: '#34C759', marginBottom: 12 }}>
+          ✓ {lastResult}
+        </Text>
+      )}
+
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <TouchableOpacity
+          onPress={() => handleAction('promote')}
+          disabled={!connected || busy !== null}
+          style={{
+            flex: 1,
+            backgroundColor: armed === 'promote' ? '#FF9500' : C.primary,
+            paddingVertical: 14, borderRadius: 10, alignItems: 'center',
+            flexDirection: 'row', justifyContent: 'center', gap: 8,
+            opacity: (!connected || busy !== null) ? 0.5 : 1,
+            ...globalStyles.ambientShadow,
+          }}
+        >
+          {busy === 'promote' && <ActivityIndicator size="small" color="#FFF" />}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: '#FFF', letterSpacing: 0.6 }}>
+            {busy === 'promote' ? 'SAVING…' : armed === 'promote' ? 'TAP AGAIN TO SAVE' : 'SAVE AS SHOW DEFAULTS'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => handleAction('reset')}
+          disabled={!connected || busy !== null}
+          style={{
+            backgroundColor: armed === 'reset' ? C.error : 'transparent',
+            borderWidth: 1, borderColor: C.error,
+            paddingVertical: 14, paddingHorizontal: 18, borderRadius: 10, alignItems: 'center',
+            flexDirection: 'row', justifyContent: 'center', gap: 8,
+            opacity: (!connected || busy !== null) ? 0.5 : 1,
+          }}
+        >
+          {busy === 'reset' && <ActivityIndicator size="small" color={C.error} />}
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13,
+            color: armed === 'reset' ? '#FFF' : C.error, letterSpacing: 0.6,
+          }}>
+            {busy === 'reset' ? 'RESETTING…' : armed === 'reset' ? 'TAP AGAIN TO RESET' : 'RESET TO DEFAULTS'}
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }

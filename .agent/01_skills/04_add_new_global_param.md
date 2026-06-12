@@ -43,7 +43,7 @@ Edit `marsin_engine/lib/param_center.js`. The registry is the *only* source of t
   range:         [0, 1],                       // [min, max] for clamping
   clamp:         true,                         // reject writes outside range (HSV clamps per-component)
   options:       [0, 0.5, 1.0],                // OPTIONAL — snap to nearest enumerated value
-  persist:       true,                         // write to param_center_state.yaml + reload on boot
+  persist:       true,                         // saved into states/<model>/globals_state.yaml (runtime cache) + reload on boot
   live:          false,                        // mark as high-rate ephemeral signal (audio, OSC stream)
   broadcastHz:   30,                           // upper bound on emissions/sec caused by this key (live params only)
   portWatch:     true,                         // include in LoRa compact_status (false = field-link sensitive)
@@ -234,7 +234,7 @@ Run through this checklist before merging:
 1. **Schema endpoint** — `curl http://<engine>:3000/param-center` shows the key with the correct value and metadata.
 2. **HTTP write** — `curl -X POST http://<engine>:3000/param-center -H 'content-type: application/json' -d '{"myParam":0.7}'` returns the new revision, and a fresh `GET` shows the updated value with `"lastSource":"api"`.
 3. **WS broadcast** — open CaptainPad, move the slider, and confirm a second CaptainPad instance (or the dev tools' WS panel) sees `sharedParams` with the new value.
-4. **Persistence** — if `persist: true`, restart the engine and confirm the value survives (look in `param_center_state.yaml`).
+4. **Persistence** — if `persist: true`, restart the engine and confirm the value survives (look in the `params:` block of `marsin_engine/states/<model>/globals_state.yaml` — the gitignored runtime cache).
 5. **OSC** — if `osc.enabled: true`, send to the canonical address and watch `lastSource: "osc"` in `/param-center`. The OSC pill in CaptainPad should reflect `mapped > 0`.
 6. **Pattern** — load a pattern that imports `sharedFnName`, change the value, and verify LEDs respond.
 7. **PortWatch** — if `portWatch: true`, confirm the key is in the bridge's compact-status payload. If `false`, confirm it is **not**.
@@ -260,7 +260,7 @@ Reverse-order:
 2. Remove pattern usages of `sharedFnName`.
 3. Remove the registry entry.
 4. Remove any custom OSC bindings in `config.yaml`.
-5. (If `persist: true`) the stale entry in `param_center_state.yaml` is ignored on next boot; you can leave it or delete it.
+5. (If `persist: true`) the stale entry in the runtime `globals_state.yaml` is ignored on next boot; you can leave it or delete it.
 6. Drop the tests that referenced the key.
 
 Keep the registry as the canonical map — every other surface is downstream.

@@ -12,11 +12,13 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
 const engineDir = path.resolve(__dirname, '..');
 const SCENE = 'summer_camp_dome';
-const playlistsDir = path.join(repoRoot, 'simulation', 'scenes', SCENE, 'playlists');
+// Playlists + state both live in the gitignored runtime dir now
+// (states/<model>/, seeded from state_defaults/<model>/ at boot) —
+// wiping them here only resets the cache, never tracked files.
 const stateDir = path.join(engineDir, 'states', SCENE);
+const playlistsDir = path.join(stateDir, 'playlists');
 
 let proc = null;
 let port = 6985 + Math.floor(Math.random() * 50);
@@ -56,6 +58,18 @@ before(async () => {
   proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
   proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
   await waitForReady(BASE());
+  // Boot re-seeds deck_state.yaml from state_defaults/<scene>/, whose
+  // summer-camp config has soft deck transitions ENABLED (500 ms
+  // crossfades). This suite fires entry switches back-to-back and
+  // asserts the swap landed synchronously, so force instant swaps via
+  // the public API. Persists into the runtime deck_state, so the
+  // mid-suite engine restarts keep it off.
+  const res = await fetch(BASE() + '/deck/transition-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  if (!res.ok) throw new Error('could not disable deck transitions for the test run');
 });
 
 after(async () => {

@@ -1,11 +1,9 @@
-import fs from 'fs';
-import path from 'path';
-import yaml from 'js-yaml';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
+// Persisted runtime state shape (autopilot_state.yaml). Historically
+// this lived as the `playlist:` block inside config.yaml — which meant
+// every PLAY/PAUSE tap rewrote the engine's tracked settings file. Now
+// the state rides the gitignored runtime dir via an injected store
+// (see api_server.js), and config.yaml is read-only at runtime.
+const DEFAULT_STATE = { active: false, delay_s: '30', shuffle: false };
 
 /**
  * Autopilot daemon — cycles the deck's pattern on a self-rescheduling
@@ -33,54 +31,50 @@ const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
  *   (or immediately if transitions are disabled).
  */
 export class Autopilot {
-  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn) {
+  /**
+   * @param store — { load(): object|null, save(state): void } persistence
+   *   for the autopilot's {active, delay_s, shuffle} state. api_server
+   *   wires this to states/<model>/autopilot_state.yaml via StateManager.
+   */
+  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn, store) {
+    if (!store || typeof store.load !== 'function' || typeof store.save !== 'function') {
+      throw new Error('Autopilot requires a state store ({ load, save })');
+    }
     this.listPatterns = listPatternsFn;
     this.patternsDir = patternsDir;
     this.currentPatternCb = currentPatternCb;
     this.changePattern = changePatternFn;
+    this.store = store;
     this.cycleTimer = null;
     // generation counter: bumped on every state change. A scheduled
     // tick captures the current gen at schedule time and bails on
     // execution if it doesn't match — i.e. someone changed state
     // (pause / new delay / new shuffle pick) between schedule and fire.
     this.generation = 0;
-    this.config = this.loadConfig();
 
-    if (!this.config.playlist) {
-      this.config.playlist = {
-        active: false,
-        delay_s: "30",
-        shuffle: false
-      };
-      this.saveConfig();
-    }
-  }
-
-  loadConfig() {
-    try {
-      if (fs.existsSync(CONFIG_FILE)) {
-        return yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) || {};
-      }
-    } catch(e) {}
-    return {};
-  }
-
-  saveConfig() {
-    try {
-       fs.writeFileSync(CONFIG_FILE, yaml.dump(this.config));
-    } catch(e) {}
+    const loaded = this.store.load();
+    this._state = (loaded && typeof loaded === 'object')
+      ? {
+          active: !!loaded.active,
+          delay_s: String(loaded.delay_s ?? DEFAULT_STATE.delay_s),
+          shuffle: !!loaded.shuffle,
+        }
+      : { ...DEFAULT_STATE };
+    // Write the file on first boot so the state is visible in the
+    // runtime dir (and gets captured by /state/promote) even before
+    // the operator touches the controls.
+    if (!loaded) this.store.save(this._state);
   }
 
   get state() {
-    return this.config.playlist || { active: false, delay_s: "30", shuffle: false };
+    return this._state;
   }
 
   updateState(newState) {
-    if (!this.config.playlist) this.config.playlist = {};
-    if (newState.active !== undefined) this.config.playlist.active = newState.active;
-    if (newState.delay_s !== undefined) this.config.playlist.delay_s = newState.delay_s.toString();
-    if (newState.shuffle !== undefined) this.config.playlist.shuffle = newState.shuffle;
-    this.saveConfig();
+    if (newState.active !== undefined) this._state.active = newState.active;
+    if (newState.delay_s !== undefined) this._state.delay_s = newState.delay_s.toString();
+    if (newState.shuffle !== undefined) this._state.shuffle = newState.shuffle;
+    this.store.save(this._state);
     // Bump generation FIRST so any in-flight tick that's about to
     // execute reads the new generation and bails before doing work.
     this.generation++;

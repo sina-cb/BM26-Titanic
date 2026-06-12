@@ -37,6 +37,7 @@ import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
+import { seedRuntimeState } from './lib/runtime_state.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
@@ -748,6 +749,19 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 async function main() {
   const opts = parseArgs();
   const engineConfig = loadConfig();
+
+  // ── Runtime state seeding ────────────────────────────────────────────
+  // states/<model>/ is the gitignored runtime cache; tracked defaults
+  // live in state_defaults/<model>/. Seed missing runtime files from the
+  // defaults BEFORE anything reads the state dir (audio CLI flags below
+  // are the earliest reader). Existing runtime files are never touched —
+  // live state survives restarts until an explicit /state/reset.
+  if (opts.modelName) {
+    const seeded = seedRuntimeState(opts.modelName);
+    if (seeded.length > 0) {
+      console.log(`  🌱 Runtime state: seeded ${seeded.length} file(s) from state_defaults/${opts.modelName}/`);
+    }
+  }
 
   // ── Audio CLI flags (mic discovery / selection) ─────────────────────────
   // Handled BEFORE the engine boots so --list_mics / --choose_mic /

@@ -58,6 +58,8 @@ const MAPPING = {
   'checkmark.circle.fill': 'check-circle',
   'wifi.slash': 'wifi-off',
   'shuffle': 'shuffle',
+  // SHOW STATE card (CONFIG tab): save-runtime-as-defaults action.
+  'tray.and.arrow.down.fill': 'save-alt',
 } as IconMapping;
 
 /**

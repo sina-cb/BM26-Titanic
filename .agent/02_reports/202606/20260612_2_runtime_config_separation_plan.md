@@ -1,6 +1,6 @@
 # Plan: Runtime / defaults separation for engine YAML state
 
-**Date:** 2026-06-12 · **Author:** agent (planner role) · **Status:** proposal v2 (playlists + param state folded in per Sina), awaiting sign-off
+**Date:** 2026-06-12 · **Author:** agent (planner role) · **Status:** IMPLEMENTED (single PR, same day) — see `20260612_3_runtime_state_implementation.md`
 **Branch:** `claude/runtime-config-separation-p2tnmz`
 
 ## 1. Problem

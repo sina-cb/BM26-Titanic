@@ -869,8 +869,21 @@ export class ParamCenter {
   save() {
     if (this._saveTimer) clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
       this._writeToDisk();
     }, 250);
+  }
+
+  /**
+   * Force any pending debounced save to disk NOW. Used by
+   * POST /state/promote so the promoted snapshot can't miss a CPC
+   * write that was still sitting in the 250 ms debounce window.
+   */
+  flushPendingSave() {
+    if (!this._saveTimer) return;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = null;
+    this._writeToDisk();
   }
 
   _writeToDisk() {
