@@ -28,5 +28,5 @@ patterns every 15 s. Workarounds used: `POST /mixer/view
 
 ## Why it matters
 "Engine runs pattern X" is the basic operator contract; a saved state
-silently overriding it to black is a playa footgun and已 wasted real
+silently overriding it to black is a playa footgun and has wasted real
 debugging time twice.
