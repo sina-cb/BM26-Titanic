@@ -12,8 +12,10 @@ import { render } from 'preact';
 import { html } from 'htm/preact';
 
 import { IS_MODERN_UI } from '../ui_mode.js';
+import { registerPanel } from '../panel_layout.js';
 import {
   SacnInMonitor, SacnOutMonitor, registerSacnGlobals,
+  sacnInStore, sacnOutStore,
 } from './sacn_monitor_panel.js';
 import { ViewPresetsRow } from './view_presets_row.js';
 
@@ -35,6 +37,22 @@ export function initModernSacnMonitors() {
   host.id = 'modern-sacn-monitors';
   document.body.appendChild(host);
   render(html`<${SacnInMonitor} /><${SacnOutMonitor} />`, host);
+
+  // Layout registration with store adapters: collapse state is owned by
+  // the Preact signal (the class attribute is derived from it), so a
+  // restored `collapsed` must flow through the store, not the classList.
+  const inEl = document.getElementById('sacn-in-monitor-panel');
+  if (inEl) {
+    registerPanel(inEl, {
+      applyCollapsed: (c) => { sacnInStore.collapsed.value = c; },
+    });
+  }
+  const outEl = document.getElementById('sacn-out-monitor-panel');
+  if (outEl) {
+    registerPanel(outEl, {
+      applyCollapsed: (c) => { sacnOutStore.collapsed.value = c; },
+    });
+  }
 }
 
 /** Render the preset row into the existing #view-presets container. */

@@ -604,6 +604,16 @@ export function setupViewMasksEditor() {
   window.toggleViewMasksPanel = () => {
     panel.classList.toggle('hidden');
     if (!panel.classList.contains('hidden')) {
+      // Position left of the LIVE Lighting Controls panel (it is
+      // user-resizable, so the CSS right:360px constant goes stale) —
+      // unless the operator has dragged this panel before (inline left
+      // set by a drag or a panel_layout restore wins).
+      if (!panel.style.left) {
+        const guiPanel = document.getElementById('gui-panel');
+        // width + the dock's own 10px viewport inset + a 30px gap.
+        const dockWidth = guiPanel ? guiPanel.getBoundingClientRect().width + 40 : 370;
+        panel.style.right = `${dockWidth}px`;
+      }
       // Reconcile only when the pixel map is available — an empty list
       // mid-rebuild must not wipe the registry's group bits.
       const groups = pixelGroups();

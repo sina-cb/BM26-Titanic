@@ -18,6 +18,9 @@ import { useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 
 import { FloatingPanel } from './floating_panel.js';
+import {
+  TOP_MIN, findFreeSlot, getStoredGeometry, visiblePanelRects,
+} from '../panel_layout.js';
 
 const MAX_LOG_ENTRIES = 20;
 const STATS_POLL_MS = 500;
@@ -83,14 +86,45 @@ function readDirectionStats(source, framesField) {
 }
 
 // ── Stores (module-level: external globals need them before mount) ─────
-export const sacnInStore = createMonitorStore({ collapsedDefault: window.innerWidth <= 768 });
+// Operator decision 2026-06-12: both monitors default collapsed.
+export const sacnInStore = createMonitorStore({ collapsedDefault: true });
 export const sacnOutStore = createMonitorStore({ collapsedDefault: true });
+
+/** Default slot for the IN monitor when it has no operator-saved
+ *  geometry: left dock under the pattern editor, cascaded off any panel
+ *  already occupying that spot. */
+function placeSacnInMonitor() {
+  const el = document.getElementById('sacn-in-monitor-panel');
+  if (!el || getStoredGeometry('sacn-in-monitor-panel')) return;
+  const pe = document.getElementById('pattern-editor-panel');
+  const peVisible = pe && !pe.classList.contains('hidden') && pe.style.display !== 'none';
+  const desiredTop = peVisible
+    ? Math.min(pe.getBoundingClientRect().bottom + 10, window.innerHeight - 90)
+    : TOP_MIN + 8;
+  const rect = el.getBoundingClientRect();
+  const slot = findFreeSlot(
+    {
+      left: 14,
+      top: Math.max(TOP_MIN, desiredTop),
+      width: rect.width || 280,
+      height: rect.height || 34,
+    },
+    visiblePanelRects('sacn-in-monitor-panel'),
+    window.innerWidth, window.innerHeight,
+  );
+  el.style.left = `${slot.left}px`;
+  el.style.top = `${slot.top}px`;
+  el.style.right = 'auto';
+  el.style.bottom = 'auto';
+}
 
 export function registerSacnGlobals() {
   window.showSacnInMonitor = (show) => {
     sacnInStore.visible.value = !!show;
-    if (show) startPolling(sacnInStore, () => readDirectionStats(() => window.sacnInput, 'framesReceived'));
-    else stopPolling(sacnInStore);
+    if (show) {
+      startPolling(sacnInStore, () => readDirectionStats(() => window.sacnInput, 'framesReceived'));
+      requestAnimationFrame(placeSacnInMonitor);
+    } else stopPolling(sacnInStore);
   };
   window.showSacnOutMonitor = (show) => {
     sacnOutStore.visible.value = !!show;

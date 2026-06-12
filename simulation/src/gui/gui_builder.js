@@ -294,19 +294,10 @@ function setupGUI() {
       target: { x: +controls.target.x.toFixed(4), y: +controls.target.y.toFixed(4), z: +controls.target.z.toFixed(4) }
     };
 
-    // Persist pattern editor window state
-    const pePanel = document.getElementById('pattern-editor-panel');
-    if (pePanel) {
-      const rect = pePanel.getBoundingClientRect();
-      configTree._patternEditor = {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        collapsed: pePanel.classList.contains('collapsed'),
-        autoRun: !!(document.getElementById('pe-autorun') && document.getElementById('pe-autorun').checked)
-      };
-    }
+    // Panel geometry is per-machine state, not scene state — it lives in
+    // localStorage now (src/gui/panel_layout.js). Scrub any block left in
+    // configs saved before the 2026-06-12 layout migration.
+    delete configTree._patternEditor;
 
     let yamlStr = yaml.dump(configTree, {
       lineWidth: -1,

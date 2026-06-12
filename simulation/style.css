@@ -662,7 +662,9 @@ body.edit-mode-active #engine-params-panel {
 /* ─── Floating GUI Panel ─── */
 #gui-panel {
   position: fixed;
-  top: 10px;
+  /* Below the HUD top-bar exclusion strip (panel_layout.js TOP_MIN) so the
+     scene/theme selects, LIVE chip, and exit button stay reachable. */
+  top: 44px;
   right: 10px;
   width: 330px;
   height: 80vh;
@@ -845,7 +847,7 @@ body.edit-mode-active #engine-params-panel {
 /* ─── Pattern Editor Panel ─── */
 #pattern-editor-panel {
   position: fixed;
-  top: 65px;
+  top: 52px;
   left: 14px;
   width: 400px;
   height: 520px;
@@ -1177,7 +1179,11 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #sacn-out-monitor-panel {
-  top: 600px; /* positioned perfectly under the pattern editor (65px + 520px + 15px pad) */
+  /* Bottom-anchored: viewport-height-proof, expands upward, and clears the
+     unpatched-warning pill (bottom: 140) and info panel (bottom: 20). A
+     drag or persisted geometry switches it to top-anchoring inline. */
+  top: auto;
+  bottom: 180px;
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {
@@ -1428,7 +1434,10 @@ body.edit-mode-active #engine-params-panel {
 /* ─── Views editor panel ─────────────────────────────────────────────── */
 #view-masks-panel {
   position: fixed;
-  top: 65px;
+  /* Below the isolation HUD slot (top:44, ~32px tall) so the two are
+     never stacked during the isolate-from-views workflow. The right
+     offset is recomputed from the live gui-panel width on toggle. */
+  top: 84px;
   right: 360px;
   width: 300px;
   max-height: 70vh;
@@ -1805,8 +1814,10 @@ body.edit-mode-active #engine-params-panel {
 /* Floating View Isolation HUD styling */
 #vm-isolation-hud {
   position: fixed;
-  top: 12px;
-  right: 12px;
+  /* Below the HUD strip and left of the Lighting Controls dock so it never
+     covers the panel header or the top-bar controls. */
+  top: 44px;
+  right: 350px;
   background: color-mix(in srgb, var(--primary) 12%, var(--surface) 60%);
   border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
   color: var(--primary);

@@ -9,7 +9,9 @@
  */
 
 import { html } from 'htm/preact';
-import { useRef, useCallback } from 'preact/hooks';
+import { useRef, useCallback, useEffect } from 'preact/hooks';
+
+import { TOP_MIN, clampIntoViewport } from '../panel_layout.js';
 
 /**
  * @param {object} props
@@ -30,6 +32,13 @@ export function FloatingPanel({
   const panelRef = useRef(null);
   const dragState = useRef(null);
 
+  // Expanding a bottom-anchored panel grows it upward/downward depending
+  // on anchoring — either way it must stay on-screen and out of the HUD
+  // strip (layout policy, panel_layout.js).
+  useEffect(() => {
+    if (!collapsed && panelRef.current) clampIntoViewport(panelRef.current);
+  }, [collapsed]);
+
   const onHeaderPointerDown = useCallback((e) => {
     if (e.target.tagName === 'BUTTON') return;
     const panel = panelRef.current;
@@ -43,8 +52,9 @@ export function FloatingPanel({
       const s = dragState.current;
       if (!s || !panel) return;
       panel.style.left = `${Math.max(0, Math.min(window.innerWidth - 100, ev.clientX - s.dx))}px`;
-      panel.style.top = `${Math.max(0, Math.min(window.innerHeight - 50, ev.clientY - s.dy))}px`;
+      panel.style.top = `${Math.max(TOP_MIN, Math.min(window.innerHeight - 50, ev.clientY - s.dy))}px`;
       panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
     };
     const onUp = () => {
       dragState.current = null;
