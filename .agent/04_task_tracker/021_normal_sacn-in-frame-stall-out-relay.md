@@ -2,7 +2,7 @@
 
 - **ID:** 021
 - **Priority:** NORMAL
-- **Status:** OPEN
+- **Status:** IN_PROGRESS
 - **Source:** full-stack audit 2026-06-12 (sub-agent run, partial — killed by session limit)
 - **Location:** simulation/server (sACN bridges), simulation/src/core/animate.js:437-473
 - **Created:** 2026-06-12
@@ -38,3 +38,21 @@ mapping bugs to the operator.
 The byte audit itself PASSED: four mapped pars produced well-bounded
 10-channel groups exactly at 1/11/21/31 with zeros elsewhere — the
 mapping → model → engine → wire → sim addressing chain is aligned.
+
+2026-06-12 — instrumentation landed (operator decision: make it
+monitorable rather than guess):
+- IN monitor: new "Last frame" age row; status flips to a red
+  ⚠ STALLED when the socket is connected but frames stop for >2 s,
+  with loud log lines on stall and recovery. The silent 40 s freeze
+  class is now visible at a glance.
+- OUT monitor: new "Mode" row (RELAY engine→controllers vs SIM RENDER
+  local patterns) and a live "Targets" row (U→ip pairs, idle entries
+  age out after 5 s) — the relay is no longer invisible.
+- Diagnosis correction: the sacn_in relay is INTENTIONAL (animate.js
+  comment: "simulation acts as bridge"; on playa the engine unicasts to
+  localhost and the sim is the path to hardware). Do NOT gate it off.
+  Double-send only occurs if the engine's destinations are ALSO pointed
+  at controller IPs — config hygiene, now observable in the panel.
+- Remaining: root cause of the original frame stall (receive client
+  already has reconnect; cause unknown). Re-diagnose with the new
+  indicators + logs if it recurs on the real rig.

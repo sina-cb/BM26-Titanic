@@ -41,6 +41,10 @@ export class SacnInputSource {
       lastUniverse: 0,
       lastPriority: 0,
       activeUniverses: new Set(),
+      // Freshness: the monitor surfaces a STALLED state from this — a
+      // connected socket with aging frames is otherwise invisible
+      // (task 021: frames froze for 40 s with zero indication).
+      lastFrameAt: 0,
     };
   }
 
@@ -211,6 +215,7 @@ export class SacnInputSource {
     this.stats.lastUniverse = universe;
     this.stats.lastPriority = priority;
     this.stats.activeUniverses.add(universe);
+    this.stats.lastFrameAt = Date.now();
 
     const now = performance.now();
     if (now - this._lastLogTime > 5000) {
