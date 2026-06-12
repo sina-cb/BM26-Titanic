@@ -3914,7 +3914,7 @@ function setupGUI() {
   // (controllers.yaml, docs/33). The only place patch fields are edited.
   const controllersBtn = document.createElement('button');
   controllersBtn.textContent = '🎛  Controllers';
-  controllersBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(96,192,240,0.25);border-radius:8px;background:rgba(24,40,60,0.3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(96,192,240,0.85);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  controllersBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--tint) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--tint) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--tint);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
   controllersBtn.onclick = () => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); };
   saveDiv.appendChild(controllersBtn);
 

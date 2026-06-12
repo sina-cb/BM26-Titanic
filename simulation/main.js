@@ -43,6 +43,7 @@ import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
 import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
+import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
 import { registerPanel, registerPanelWhenPresent, getStoredGeometry } from "./src/gui/panel_layout.js";
 import "./src/gui/control_schema.js";
 
@@ -566,6 +567,7 @@ Promise.all([
     if (IS_MODERN_UI) {
       initModernPatternEditorShell();
       initModernViewMasksShell();
+      initModernControllerMapShell();
     }
     setupPatternEditor();
     setupViewMasksEditor();
@@ -627,6 +629,8 @@ Promise.all([
     }
     const masksPanel = document.getElementById('view-masks-panel');
     if (masksPanel) registerPanel(masksPanel);
+    const cmPanel = document.getElementById('controller-map-panel');
+    if (cmPanel) registerPanel(cmPanel);
     if (!IS_MODERN_UI) {
       // Modern monitors register themselves with collapse-store adapters
       // in modern_root.js; legacy panels drive their collapse buttons.
