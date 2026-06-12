@@ -35,8 +35,11 @@ export function createSacnOutput({
     for (const dest of destArray) {
       senders[uid].push(new Sender({
         universe: parseInt(uid, 10),
+        // Destination port only — never pass reuseAddr here. With reuseAddr
+        // the sacn lib binds the sender socket to *:5568 and steals inbound
+        // datagrams from the sim bridge receiver on the same host
+        // (.agent/04_task_tracker/010_important_sacn-5568-bind-contention.md).
         port: 5568,
-        reuseAddr: true,
         useUnicastDestination: dest,
         defaultPacketOptions: {
           sourceName,

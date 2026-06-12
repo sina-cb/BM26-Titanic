@@ -530,6 +530,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function httpPostJson(url, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = http.request(url, {
+      method: 'POST',
+      timeout: 8000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      res.resume();
+      if (res.statusCode >= 200 && res.statusCode < 300) resolve(res.statusCode);
+      else reject(new Error(`POST ${url} → HTTP ${res.statusCode}`));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
 function httpStatus(url) {
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: 4000 }, (res) => {
@@ -697,6 +715,11 @@ async function main() {
   startChild('engine', 'node',
     ['engine.js', '--model', opts.scene, '--pattern', opts.pattern], ENGINE_DIR);
   await waitForHttp('engine api', `http://127.0.0.1:${ports.marsin_engine_port}/status`, 120000);
+  // The engine restores its persisted deck state at boot, which silently
+  // overrides the --pattern CLI flag. Re-assert the requested pattern via the
+  // API so a launch is deterministic.
+  await httpPostJson(`http://127.0.0.1:${ports.marsin_engine_port}/pattern`, { pattern: opts.pattern });
+  log('launcher', `  ✓ engine pattern set to ${opts.pattern}`);
   log('launcher', '✅ Engine is ready.');
 
   // 3. CaptainPad Expo dev server (dev profiles only).

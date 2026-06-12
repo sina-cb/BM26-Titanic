@@ -58,8 +58,9 @@ function getSender(universe, ip) {
   if (!entry) {
     const sender = new Sender({
       universe,
+      // Destination port only — reuseAddr would bind this sender to *:5568
+      // and steal datagrams from the input bridge's Receiver (task 010).
       port: udpPort,
-      reuseAddr: true,
       useUnicastDestination: ip,
       defaultPacketOptions: {
         sourceName: SOURCE_NAME,

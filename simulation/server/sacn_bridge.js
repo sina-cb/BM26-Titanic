@@ -139,7 +139,8 @@ function loadRoutesForScene(sName) {
                const sender = new Sender({
                  universe: u,
                  useUnicastDestination: ip,
-                 reuseAddr: true,
+                 // Destination port only — reuseAddr would bind this sender to
+                 // *:5568 and steal datagrams from our own Receiver (task 010).
                  port: SACN_UDP_PORT
                });
                uMap.set(ip, {
