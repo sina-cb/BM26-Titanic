@@ -450,3 +450,12 @@ scheduled before the first real mapping session.
    option** (not just the horizontal row mounting) — folded into the
    "Titanic Model Finalization" Notion card together with this report's
    missing-groups, naming, views, and patching work.
+4. **LED strand grouping decision**: the LEDs on each side should be
+   consolidated wholesale — ALL strands on a side become ONE group and
+   ONE view in the model ("LEDs Left", "LEDs Right"), so per-strand
+   views stop wasting view-mask space. In the operator's words: "that
+   would merge four views and then on two sides so we merge eight views
+   into two. LEDs left, LEDs right. That's it." Against this report's
+   inventory (16 per-strand auto-bits), side-level consolidation
+   reclaims 14 bits in one move — the quick win the view-mask capacity
+   card should implement first.
