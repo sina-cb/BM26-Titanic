@@ -15,7 +15,10 @@ a pre-playa sanity sweep.
 Related specs/skills: `.agent/00_gol/06` (run sim), `07` (run engine),
 `.agent/01_skills/00_see_the_world.md` (screenshots),
 `05_full_stack_smoke.md` (whole-stack bring-up). Known open issues that
-WILL bite you are flagged inline: tasks `010`, `022`, `023`.
+WILL bite you are flagged inline by repo task id (`010`, `022`, `023`)
+— they live as cards on the Notion *Titanic Lighting - Task Tracker*
+board (see `.agent/00_gol/14_task_tracking.md`); the card bodies carry
+these ids.
 
 ---
 
@@ -166,5 +169,5 @@ All four colors PASSED on test_bench: byte groups identical per
 fixture at addrs 1/11/21/31/41, U1 zeros (effects off), no undriven
 dots (52/52 patched), IN monitor `Connected / LAST FRAME ~20 ms`
 throughout. Evidence pattern: `.agent_renders/solid_<color>.png`.
-Findings filed as tasks 022 (percent scaling), 023 (deck/mixer trap),
-010 (contention confirmed deterministic).
+Findings tracked on the Notion board: tasks 022 (percent scaling),
+023 (deck/mixer trap), 010 (contention confirmed deterministic).

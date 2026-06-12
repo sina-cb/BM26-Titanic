@@ -1,7 +1,9 @@
 # 🎛 Controller Mapping — Design Doc
 
 > **Status:** reviewed with Sina 2026-06-11 — decisions locked in (see *Decision
-> log* at the bottom). Tracked as tasks `014`–`019` in `.agent/04_task_tracker/`.
+> log* at the bottom). Tracked on the Notion board *Titanic Lighting - Task
+> Tracker* (cards carry repo task ids `014`–`019`; see
+> `.agent/00_gol/14_task_tracking.md`).
 
 ## Overview
 
@@ -497,7 +499,8 @@ not reframed** — the controller mapper is the only patching path:
 
 ## Implementation plan
 
-Tracked as `.agent/04_task_tracker/014`–`019`. Each phase is independently
+Tracked on the Notion *Titanic Lighting - Task Tracker* board (repo task ids
+`014`–`019` in the card bodies). Each phase is independently
 land-able; phases 1+2 alone already beat today's workflow.
 
 | Phase | Task | Scope | Files |
