@@ -354,6 +354,11 @@ Promise.all([
       }
     }
     window.__controllerViolations = result.violations;
+    if (result.migrated && result.migrated.length > 0) {
+      console.warn(`[Controllers] migrated ${result.migrated.length} legacy packed entr(ies) ` +
+        'to absolute addresses (docs/33 decision 19) — addresses unchanged, saved with the ' +
+        'next normal save:', result.migrated);
+    }
     for (const v of result.violations) {
       console.error(`[Controllers] ✋ ${v.message}`);
     }

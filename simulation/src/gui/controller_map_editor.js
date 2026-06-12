@@ -24,9 +24,8 @@ import {
   addPort,
   removeController,
   removePort,
-  replaceFixtureWithGap,
+  unmapFixture,
   noteUniverseUsed,
-  portPackedWidth,
   isValidIp,
   isGapEntry,
   isPinnedEntry,
@@ -244,56 +243,23 @@ function projection() {
   return lastProj;
 }
 
-// ── Address suggestions (O(1) via the projection's universeEnds) ────────
-
-function otherPortsCarry(universe, excludeController, excludePort) {
-  for (const controller of registry().controllers) {
-    for (const port of controller.ports) {
-      if (controller === excludeController && port === excludePort) continue;
-      if (port.universe === universe) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Suggested startAddress for `port` on `universe`: one past the highest
- * channel any OTHER port holds there (all controllers considered).
- * Returns { start } when the port's chain fits, or { full, end } when
- * the universe has no room at the end.
- */
-function suggestStart(universe, controller, port) {
+// ── The allocator (docs/33 decision 19) ─────────────────────────────────
+// Addresses are assigned ONCE at add time: one past the end of the
+// universe's full occupancy map (all ports, all controllers — gaps and
+// pins included) and sticky thereafter. Returns an allocate(footprint)
+// function that tracks in-batch allocations, or null when nothing of
+// that size fits at the end (holes are never reused automatically —
+// the operator compacts deliberately; see the Notion backlog card).
+function makeAllocator(universe) {
   const proj = lastProj || projection();
-  let end = 0;
-  if (port.universe !== universe) {
-    // Fast path: the port holds nothing on the target universe yet, so
-    // the running universeEnds cache IS the exclusive end — no scan.
-    end = proj.universeEnds.get(universe) || 0;
-  } else {
-    // Overlap-fix path: exclude this port's own PACKED span from the
-    // end — but its manual pins stay put when the chain moves, so they
-    // still count as occupancy (as do other ports' pins on this
-    // universe; effects pins live on U1 and never match here).
-    for (const other of registry().controllers) {
-      for (const otherPort of other.ports) {
-        if (otherPort.universe !== universe && otherPort !== port) continue;
-        const isOwn = other === controller && otherPort === port;
-        const layout = proj.portLayouts.get(`${other.id}:${otherPort.port}`) || [];
-        for (const item of layout) {
-          if (item.footprint <= 0) continue;
-          if (item.pinned) {
-            if (!item.valid || (item.pinUniverse || EFFECTS_UNIVERSE) !== universe) continue;
-          } else if (isOwn) {
-            continue; // own packed/gap entries move with the chain
-          }
-          end = Math.max(end, item.address + item.footprint - 1);
-        }
-      }
-    }
-  }
-  const width = portPackedWidth(port, configsByName());
-  if (end + Math.max(width, 1) > DMX_UNIVERSE_SIZE) return { full: true, end, width };
-  return { start: end + 1, end, width };
+  let end = proj.universeEnds.get(universe) || 0;
+  return (footprint) => {
+    const width = Math.max(1, footprint | 0);
+    if (end + width > DMX_UNIVERSE_SIZE) return null;
+    const at = end + 1;
+    end += width;
+    return at;
+  };
 }
 
 function unmappedNames() {
@@ -381,9 +347,10 @@ function render() {
 
   const hint = document.createElement('div');
   hint.className = 'cm-hint';
-  hint.textContent = 'Map fixtures by 3D selection (shift-click in order, then “+ sel”) or pick mode ' +
-    '(“+ list”, one click per fixture). Addresses derive from chain order — saved to ' +
-    'controllers.yaml, projected into patches.yaml.';
+  hint.textContent = 'Map fixtures by 3D selection (shift-click, then “+ sel”) or pick mode ' +
+    '(“+ list”). Addresses are assigned at add time from the end of the universe and stick — ' +
+    'type any address to move a fixture (conflicts go red but stand), clear it to send it to ' +
+    'the end. Saved to controllers.yaml, projected into patches.yaml.';
   bodyEl.appendChild(hint);
 }
 
@@ -541,113 +508,65 @@ function renderPort(controller, port, proj) {
       return;
     }
     if (next === port.universe) return;
-    // Moving onto a universe other ports already carry (any controller):
-    // suggest a collision-free start address — or warn when the universe
-    // has no room at the end for this chain. The @ box stays editable.
-    let note = null;
-    if (next !== EFFECTS_UNIVERSE && otherPortsCarry(next, controller, port)) {
-      const s = suggestStart(next, controller, port);
-      if (s.full) {
-        note = {
-          error: true,
-          msg: `⚠ U${next} is full — used to ch ${s.end}, no room for this chain ` +
-            `(${s.width} ch). Pick another universe or free channels.`,
-        };
-      } else {
-        note = {
-          error: false, start: s.start,
-          msg: `U${next} is used to ch ${s.end} — start address set to @${s.start} ` +
-            '(next free). Edit the @ box to override.',
-        };
-      }
-    }
+    const moved = port.chain.filter(e => entryFixtureName(e) !== null).length;
     mutate(null, () => {
       port.universe = next;
-      // Manual entries move the allocation high-water mark too —
+      // Manually typed universes move the allocation high-water mark —
       // a later addPort must never hand this universe out again.
       noteUniverseUsed(registry(), next);
-      if (note && !note.error) port.startAddress = note.start;
     });
-    if (note) showToast(note.msg, { error: note.error, ttl: 8000 });
+    if (moved > 0) {
+      showToast(`${moved} fixture(s) moved to U${next} keeping their addresses — ` +
+        'red = conflict there; retype or clear an address box to fix.', { ttl: 8000 });
+    }
   };
   head.appendChild(uniInp);
 
-  if (!isEffectsPort) {
-    const atLabel = document.createElement('span');
-    atLabel.textContent = '@';
-    atLabel.style.color = '#667';
-    head.appendChild(atLabel);
-
-    const startInp = document.createElement('input');
-    startInp.className = 'cm-input cm-num';
-    startInp.type = 'number';
-    startInp.min = '1';
-    startInp.max = String(DMX_UNIVERSE_SIZE);
-    startInp.value = port.startAddress;
-    startInp.title = 'Chain start address (split-universe ports pack independently)';
-    startInp.onchange = () => {
-      const next = parseInt(startInp.value, 10);
-      if (!Number.isInteger(next) || next < 1 || next > DMX_UNIVERSE_SIZE) {
-        startInp.value = port.startAddress;
-        return;
-      }
-      mutate(null, () => { port.startAddress = next; });
-    };
-    head.appendChild(startInp);
-
-    // Live next-free hint: the universe's CURRENT end across all ports
-    // and controllers. A stale startAddress (suggested when the
-    // universe was fuller) otherwise sticks forever — one click moves
-    // the chain to the real next free channel (operator report
-    // 2026-06-12: empty port stuck at @345 on a near-empty universe).
-    const s = suggestStart(port.universe, controller, port);
-    if (!s.full && s.start !== port.startAddress) {
-      const nextBtn = document.createElement('button');
-      nextBtn.className = 'cm-btn cm-next-free';
-      nextBtn.textContent = `⚡@${s.start}`;
-      nextBtn.title = `U${port.universe} is occupied to ch ${s.end} (all ports, all ` +
-        `controllers) — click to start this chain at ${s.start}, the next free channel.`;
-      nextBtn.onclick = () => {
-        mutate(null, () => { port.startAddress = s.start; });
-      };
-      head.appendChild(nextBtn);
-    }
-  } else {
+  if (isEffectsPort) {
     const fx = document.createElement('span');
     fx.textContent = '✨';
     fx.title = `Universe ${EFFECTS_UNIVERSE} is reserved for effects — pinned addresses only`;
     head.appendChild(fx);
   }
 
-  // Positioned occupancy bar: segments sit where they live in the
-  // universe, so split-universe ports read at a glance (docs/33).
+  // FULL universe map bar (operator request 2026-06-12): every claim
+  // on this port's universe across ALL ports and controllers, placed
+  // where it lives in 1–512. This port's own claims render bright,
+  // siblings' dimmed, conflicts red — fragmentation (holes from
+  // removals) is visible at a glance, and that visibility is the
+  // compaction signal (compaction itself is a deliberate operator
+  // action; Notion backlog card).
   const bar = document.createElement('div');
   bar.className = 'cm-occupancy';
-  let used = 0;
-  let anyInvalid = false;
-  for (const item of layout) {
-    if (item.footprint <= 0) continue;
-    // Pins render where they actually live: effects pins on the
-    // effects universe only, manual pins on this port's own universe.
-    if (item.pinned && (item.pinUniverse || EFFECTS_UNIVERSE) !== port.universe) continue;
+  const claims = proj.universeMaps.get(port.universe) || [];
+  let portUsed = 0;
+  let universeUsed = 0;
+  let anyInvalid = layout.some(i => !i.valid);
+  for (const c of claims) {
+    const width = c.end - c.start + 1;
+    universeUsed += width;
+    const own = c.controllerId === controller.id && c.portNum === port.port;
+    if (own) portUsed += width;
     const seg = document.createElement('div');
     seg.className = 'cm-occ-seg' +
-      (isGapEntry(item.entry) ? ' cm-occ-gap' : '') +
-      (item.valid ? '' : ' cm-occ-invalid');
-    const left = Math.min(100, ((item.address - 1) / DMX_UNIVERSE_SIZE) * 100);
-    const width = Math.min(100 - left, (item.footprint / DMX_UNIVERSE_SIZE) * 100);
+      (c.name === null ? ' cm-occ-gap' : '') +
+      (own ? '' : ' cm-occ-other') +
+      (c.item.conflict ? ' cm-occ-conflict' : '');
+    const left = Math.min(100, ((c.start - 1) / DMX_UNIVERSE_SIZE) * 100);
+    const segWidth = Math.min(100 - left, (width / DMX_UNIVERSE_SIZE) * 100);
     seg.style.left = `${left}%`;
-    seg.style.width = `${Math.max(width, 0.6)}%`;
-    if (item.name) seg.title = `${item.name} @ ${item.address} (${item.footprint} ch)`;
+    seg.style.width = `${Math.max(segWidth, 0.6)}%`;
+    seg.title = `${c.name || `${width}-ch gap`} @ ${c.start}–${c.end} ` +
+      `(${c.controllerName} P${c.portNum})` + (c.item.conflict ? ' ⚠ CONFLICT' : '');
     bar.appendChild(seg);
-    used += item.footprint;
-    if (!item.valid) anyInvalid = true;
   }
   head.appendChild(bar);
 
   const count = document.createElement('span');
   count.className = 'cm-occ-count' + (anyInvalid ? ' cm-occ-over' : '');
-  count.textContent = `${used}/${DMX_UNIVERSE_SIZE}`;
+  count.textContent = `${portUsed}·U${port.universe}:${universeUsed}/${DMX_UNIVERSE_SIZE}`;
+  count.title = `${portUsed} ch on this port · ${universeUsed}/${DMX_UNIVERSE_SIZE} used ` +
+    `on U${port.universe} across all ports`;
   head.appendChild(count);
 
   const delBtn = document.createElement('button');
@@ -680,27 +599,6 @@ function renderPort(controller, port, proj) {
     chip.className = 'cm-error-chip';
     chip.textContent = v.message;
     row.appendChild(chip);
-    // One-click conflict resolution: jump the chain to the next free
-    // channel on this universe (all controllers considered).
-    if (v.code === 'overlap') {
-      const s = suggestStart(port.universe, controller, port);
-      if (!s.full) {
-        const fixBtn = document.createElement('button');
-        fixBtn.className = 'cm-btn';
-        fixBtn.textContent = `⚡ fix → @${s.start}`;
-        fixBtn.title = `Set start address to ${s.start}, the next free channel on U${port.universe}`;
-        fixBtn.onclick = () => {
-          mutate(null, () => { port.startAddress = s.start; });
-        };
-        row.appendChild(fixBtn);
-      } else {
-        const full = document.createElement('span');
-        full.className = 'cm-error-chip';
-        full.textContent = `⚠ U${port.universe} has no room at the end ` +
-          `(used to ch ${s.end}, chain needs ${s.width} ch)`;
-        row.appendChild(full);
-      }
-    }
   }
 
   if (!collapsedPorts.has(`${controller.id}:${port.port}`)) {
@@ -722,7 +620,31 @@ function renderChain(controller, port, layout) {
 
     if (isGapEntry(item.entry)) {
       chip.classList.add('cm-chip-gap');
-      chip.textContent = `⌷ gap ${item.entry.gap}`;
+      if (!item.valid) chip.classList.add('cm-chip-invalid');
+      const gapAddr = document.createElement('input');
+      gapAddr.className = 'cm-chip-addr cm-chip-addr-input';
+      if (item.conflict) gapAddr.classList.add('cm-chip-addr-conflict');
+      gapAddr.type = 'number';
+      gapAddr.min = '1';
+      gapAddr.max = String(DMX_UNIVERSE_SIZE);
+      gapAddr.value = Number.isInteger(item.entry.at) ? String(item.entry.at) : '';
+      gapAddr.placeholder = '✗';
+      gapAddr.title = `Reservation start address — type to move the gap` +
+        (item.conflict ? ' ⚠ CONFLICTS with other channels' : '');
+      gapAddr.onclick = (e) => e.stopPropagation();
+      gapAddr.ondragstart = (e) => { e.preventDefault(); e.stopPropagation(); };
+      gapAddr.onchange = (e) => {
+        e.stopPropagation();
+        const next = parseInt(gapAddr.value, 10);
+        if (!Number.isInteger(next) || next < 1 || next > DMX_UNIVERSE_SIZE) {
+          showToast(`Address must be 1–${DMX_UNIVERSE_SIZE}`, { error: true, ttl: 5000 });
+          renderIfOpen();
+          return;
+        }
+        mutate(null, () => { item.entry.at = next; });
+      };
+      chip.appendChild(gapAddr);
+      chip.appendChild(document.createTextNode(`⌷ gap ${item.entry.gap}`));
       chip.title = `Reserved ${item.entry.gap} channel(s) at ${item.address} — click to edit width`;
       chip.onclick = () => {
         const next = parseInt(window.prompt(`Gap width (channels):`, item.entry.gap), 10);
@@ -741,11 +663,10 @@ function renderChain(controller, port, layout) {
       chip.title = `${item.name} — cabled to this port, auto-patched at ` +
         `U${item.pinUniverse || EFFECTS_UNIVERSE}:${item.entry.at} (config.yaml global_effects)`;
     } else {
-      // Packed entry OR manual pin — both carry an editable address
-      // box (docs/33 decision 18: typed address = manual pin, absolute
-      // and conflict-tolerant; red = conflicting but KEPT).
-      const isManual = !!item.manual;
-      if (isManual) chip.classList.add('cm-chip-pinned');
+      // Fixture chip: the address box IS the address (allocation
+      // model, docs/33 decision 19) — auto-assigned at add time, type
+      // ANY address to move it (conflicts paint red but always stand),
+      // clear the box to re-allocate at the universe end.
       if (!item.valid) chip.classList.add('cm-chip-invalid');
       const addrInp = document.createElement('input');
       addrInp.className = 'cm-chip-addr cm-chip-addr-input';
@@ -753,14 +674,11 @@ function renderChain(controller, port, layout) {
       addrInp.type = 'number';
       addrInp.min = '1';
       addrInp.max = String(DMX_UNIVERSE_SIZE);
-      addrInp.value = isManual ? String(item.entry.at) : (item.valid ? String(item.address) : '');
+      addrInp.value = Number.isInteger(item.entry.at) ? String(item.entry.at) : '';
       addrInp.placeholder = '✗';
-      addrInp.title = isManual
-        ? `${item.name} — MANUALLY PINNED at U${port.universe}:${item.entry.at}` +
-          (item.conflict ? ' ⚠ CONFLICTS with other channels (kept — manual pins stand)' : '') +
-          '. Type a new address to move it; clear the box to return to automatic packing.'
-        : `Start address of ${item.name} — type ANY address to pin it there (conflicts warn ` +
-          'in red but the pin stands)';
+      addrInp.title = `${item.name} — U${port.universe}:${item.entry.at} (${item.footprint} ch)` +
+        (item.conflict ? ' ⚠ CONFLICTS with other channels (kept — explicit addresses stand)' : '') +
+        '. Type ANY address to move it; clear the box to send it to the end of the universe.';
       addrInp.onclick = (e) => e.stopPropagation();
       addrInp.ondragstart = (e) => { e.preventDefault(); e.stopPropagation(); };
       addrInp.onchange = (e) => {
@@ -768,13 +686,11 @@ function renderChain(controller, port, layout) {
         setManualAddress(port, index, parseInt(addrInp.value, 10), item);
       };
       chip.appendChild(addrInp);
-      chip.appendChild(document.createTextNode((isManual ? '📌' : '') + item.name));
-      if (!isManual) {
-        chip.title = item.valid
-          ? `${item.name} — U${port.universe}:${item.address} (${item.footprint} ch). ` +
-            'Click to select in 3D, drag to reorder/move, type an address to pin it anywhere.'
-          : `${item.name} — projects UNPATCHED (see violations)`;
-      }
+      chip.appendChild(document.createTextNode(item.name));
+      chip.title = item.valid
+        ? `${item.name} — U${port.universe}:${item.entry.at} (${item.footprint} ch). ` +
+          'Click to select in 3D, drag to move between ports (the address travels with it).'
+        : `${item.name} — projects UNPATCHED (see violations)`;
     }
 
     const name = item.name;
@@ -835,20 +751,25 @@ function renderChain(controller, port, layout) {
 
 /**
  * Manual address entry — the operator's ultimate savior (docs/33
- * decision 18). Typing ANY address converts the entry to a manual pin
- * ({fixture, at}): absolute, detached from packing, conflicts WARN
- * (red address) but the pin always stands. The fixture's old packed
- * slot becomes an equal-width gap when entries follow it, so nothing
- * downstream shifts. Clearing the box unpins (back to automatic
- * packing). Editing an existing pin just moves it.
+ * decisions 18/19). Every fixture entry already carries its absolute
+ * address; typing ANY value moves it there (conflicts paint red but
+ * always stand). Clearing the box re-allocates it at the end of the
+ * universe — the "just put it somewhere clean" gesture.
  */
 function setManualAddress(port, index, target, item) {
   const entry = port.chain[index];
-  const isManual = isPinnedEntry(entry);
 
-  if (Number.isNaN(target) && isManual) {
-    mutate(`'${item.name}' unpinned — repacks automatically`, () => {
-      port.chain.splice(index, 1, item.name);
+  if (Number.isNaN(target)) {
+    const allocate = makeAllocator(port.universe);
+    const at = allocate(item.footprint);
+    if (at === null) {
+      showToast(`U${port.universe} has no room at the end for '${item.name}' ` +
+        `(${item.footprint} ch) — type an address into a hole instead`, { error: true, ttl: 8000 });
+      renderIfOpen();
+      return;
+    }
+    mutate(`'${item.name}' sent to the end of U${port.universe} — ch ${at}`, () => {
+      entry.at = at;
     });
     return;
   }
@@ -857,23 +778,8 @@ function setManualAddress(port, index, target, item) {
     renderIfOpen();
     return;
   }
-  if (isManual) {
-    if (target === entry.at) return;
-    mutate(`'${item.name}' pinned at ch ${target}`, () => { entry.at = target; });
-    return;
-  }
-  if (target === item.address) return;
-  mutate(`'${item.name}' MANUALLY pinned at ch ${target} — conflicts warn (red) but the ` +
-    'pin stands; clear the box to repack', () => {
-    // Entries after it keep their addresses: the vacated packed slot
-    // becomes an equal-width gap (same rule as fixture deletion).
-    const hasDownstream = port.chain.slice(index + 1)
-      .some(e => typeof e === 'string' || isGapEntry(e));
-    port.chain.splice(index, 1, { fixture: item.name, at: target });
-    if (hasDownstream && item.footprint > 0) {
-      port.chain.splice(index + 1, 0, { gap: item.footprint });
-    }
-  });
+  if (target === entry.at) return;
+  mutate(`'${item.name}' moved to ch ${target}`, () => { entry.at = target; });
 }
 
 function handleChipDrop(event, targetController, targetPort, targetIndex) {
@@ -930,12 +836,18 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
     const gapBtn = document.createElement('button');
     gapBtn.className = 'cm-btn';
     gapBtn.textContent = '+ gap';
-    gapBtn.title = 'Reserve channels mid-chain (a fixture not in the sim, or headroom)';
+    gapBtn.title = 'Reserve channels for hardware not modeled in the sim (allocated at the ' +
+      'universe end; type its address box to move it)';
     gapBtn.onclick = () => {
       const width = parseInt(window.prompt('Gap width (channels):', '10'), 10);
-      if (Number.isInteger(width) && width >= 1) {
-        mutate(null, () => { port.chain.push({ gap: width }); });
+      if (!Number.isInteger(width) || width < 1) return;
+      const allocate = makeAllocator(port.universe);
+      const at = allocate(width);
+      if (at === null) {
+        showToast(`U${port.universe} has no room at the end for a ${width}-ch gap`, { error: true, ttl: 6000 });
+        return;
       }
+      mutate(null, () => { port.chain.push({ gap: width, at }); });
     };
     actions.appendChild(gapBtn);
   } else {
@@ -977,6 +889,7 @@ function addNamesToPort(controller, port, names) {
   const byName = configsByName();
   const pinTable = pins();
   const mapped = mappedFixtures(registry());
+  const allocate = makeAllocator(port.universe);
   const added = [];
   const rejected = [];
   for (const name of names) {
@@ -994,7 +907,16 @@ function addNamesToPort(controller, port, names) {
       const pin = pinTable[fixtureType];
       port.chain.push({ fixture: name, at: pin ? pin.address : 0 });
     } else {
-      port.chain.push(name);
+      // Allocation model (decision 19): the address is assigned NOW,
+      // one past the end of the universe's occupancy across ALL ports
+      // and controllers, and sticky from here on.
+      const footprint = config ? getFootprint(config) : 0;
+      const at = allocate(footprint);
+      if (at === null) {
+        rejected.push({ name, where: `U${port.universe} full at the end (${footprint} ch needed)` });
+        continue;
+      }
+      port.chain.push({ fixture: name, at });
     }
     mapped.set(name, { controller, port });
     added.push(name);
@@ -1036,15 +958,11 @@ function renderTray(unmapped, proj) {
   const title = document.createElement('span');
   title.className = 'cm-tray-title';
   if (pickPort) {
-    // Pinned effects hold no channels on this port's universe — the
-    // running next-channel hint counts packed entries only.
-    const layout = proj.portLayouts.get(`${pickController.id}:${pickPort.port}`) || [];
-    let nextCh = pickPort.startAddress;
-    for (const item of layout) {
-      if (item.pinned || item.footprint <= 0) continue;
-      nextCh = Math.max(nextCh, item.address + item.footprint);
-    }
-    title.textContent = `adding to ${pickController.name} · Port ${pickPort.port} — next: ch ${nextCh}`;
+    // Live allocator preview: the next add lands one past the end of
+    // the universe's occupancy (all ports, all controllers).
+    const nextCh = (proj.universeEnds.get(pickPort.universe) || 0) + 1;
+    title.textContent = `adding to ${pickController.name} · Port ${pickPort.port} ` +
+      `(U${pickPort.universe}) — next: ch ${nextCh}`;
   } else {
     title.textContent = `Unmapped fixtures (${unmapped.length})`;
   }
@@ -1229,36 +1147,23 @@ export function setupControllerMapEditor() {
   window.refreshControllerMapPanel = renderIfOpen;
 
   // gui_builder calls this when fixture configs are DELETED (single
-  // remove, trace delete, regeneration shrink). Each mapped casualty's
-  // chain entry becomes an equal-width gap so every fixture after it
-  // keeps its exact address — a delete must never re-address the rest
-  // of the chain (the physical fixtures are still cabled and
-  // addressed). Pinned effects just drop (they hold no port channels).
+  // remove, trace delete, regeneration shrink). Addresses are absolute
+  // (allocation model, decision 19), so the entry simply drops —
+  // nothing else can shift; the freed channels become a visible hole
+  // in the universe map until the operator compacts deliberately.
   window.controllerMappingFixturesRemoved = (configs) => {
     if (!registryIsActive(registry())) return;
-    const gapped = [];
-    const unpinned = [];
+    const removed = [];
     for (const config of configs || []) {
       if (!config || typeof config.name !== 'string' || config.name.length === 0) continue;
-      const result = replaceFixtureWithGap(registry(), config.name, getFootprint(config));
-      if (result === 'gapped') gapped.push(config.name);
-      else if (result === 'unpinned') unpinned.push(config.name);
+      if (unmapFixture(registry(), config.name)) removed.push(config.name);
     }
-    if (gapped.length === 0 && unpinned.length === 0) return;
-    if (gapped.length > 0) {
-      console.warn(`[Controllers] ${gapped.length} deleted fixture(s) replaced with ` +
-        `equal-width gap(s) — chain addresses unchanged:`, gapped);
-    }
-    if (unpinned.length > 0) {
-      console.warn('[Controllers] deleted pinned effect(s) removed from their chain:', unpinned);
-    }
+    if (removed.length === 0) return;
+    console.warn(`[Controllers] ${removed.length} deleted fixture(s) unmapped — ` +
+      'their channels are free again (visible as holes in the universe map):', removed);
     recomputeAndMark();
     renderIfOpen();
-    if (gapped.length > 0) {
-      showToast(`${gapped.length} deleted fixture(s) → reserved gap(s); ` +
-        'chain addresses unchanged. Remove the gaps in the 🎛 panel to repack.',
-      { ttl: 8000 });
-    }
+    showToast(`${removed.length} deleted fixture(s) unmapped — channels freed`, { ttl: 6000 });
   };
 
   window.toggleControllerMapPanel = () => {

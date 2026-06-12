@@ -2347,8 +2347,14 @@ body.edit-mode-active #engine-params-panel {
   border-color: rgba(255, 85, 85, 0.7);
 }
 
-/* Live "next free channel on this universe" jump button. */
-.cm-next-free {
-  color: #ffd166;
-  border-color: rgba(255, 209, 102, 0.35);
+/* Universe map bar: claims from OTHER ports render dimmed so this
+   port's own fixtures pop while fragmentation stays readable. */
+.cm-occ-seg.cm-occ-other {
+  opacity: 0.32;
+}
+
+/* Overlapping claims (kept by design — addresses are explicit). */
+.cm-occ-seg.cm-occ-conflict {
+  background: #f55 !important;
+  opacity: 1;
 }

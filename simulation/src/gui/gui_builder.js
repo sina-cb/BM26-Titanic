@@ -2027,9 +2027,9 @@ function setupGUI() {
             pushUndo();
             const removed = params.parLights[index];
             params.parLights.splice(index, 1);
-            // Mapped fixture deleted → its chain entry becomes an
-            // equal-width gap so the rest of the chain keeps its
-            // addresses (controller_map_editor owns the details).
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts
+            // (controller_map_editor owns the details).
             if (window.controllerMappingFixturesRemoved) {
               window.controllerMappingFixturesRemoved([removed]);
             }
@@ -2604,8 +2604,8 @@ function setupGUI() {
       // Regeneration contract with the controller mapping (operator
       // request 2026-06-12): names are stable per index ("<group> N"),
       // so survivors keep their chain entries and re-project to the
-      // SAME addresses; only fixtures lost to a count shrink are
-      // gap-replaced (addresses after them stay put). New extras land
+      // SAME addresses; fixtures lost to a count shrink just drop
+      // (addresses are absolute — nothing shifts). New extras land
       // in the Unmapped tray.
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
       const previousGenerated = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
@@ -2795,7 +2795,7 @@ function setupGUI() {
       trace.generated = true;
 
       // Count shrink: fixtures whose names no longer exist were
-      // deleted — gap-replace their chain entries (the hook reprojects
+      // deleted — drop their mapping entries (the hook reprojects
       // and re-renders the panel itself).
       const survivingNames = new Set();
       for (let n = 1; n <= pts.length; n++) survivingNames.add(`${groupName} ${n}`);
@@ -3162,8 +3162,8 @@ function setupGUI() {
             const groupName = trace.groupName || trace.name;
             const removedConfigs = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
             params.parLights = params.parLights.filter(l => !(l.group === groupName && l.traceGenerated));
-            // Mapped fixtures deleted with the trace → gap-replace
-            // their chain entries; downstream addresses stay put.
+            // Mapped fixtures deleted with the trace → their mapping
+            // entries drop; addresses are absolute, nothing shifts.
             if (window.controllerMappingFixturesRemoved) {
               window.controllerMappingFixturesRemoved(removedConfigs);
             }
@@ -3379,8 +3379,8 @@ function setupGUI() {
             pushUndo();
             const removed = params.dmxFixtures[index];
             params.dmxFixtures.splice(index, 1);
-            // Mapped fixture deleted → gap-replace its chain entry so
-            // the rest of the chain keeps its addresses.
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts.
             if (window.controllerMappingFixturesRemoved) {
               window.controllerMappingFixturesRemoved([removed]);
             }

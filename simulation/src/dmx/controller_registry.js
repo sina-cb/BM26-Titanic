@@ -3,12 +3,20 @@
  *
  * The simulation is the source of truth for the physical control
  * hardware topology (docs/33): controllers (IP + stable id) → ports
- * (universe + startAddress) → chains (daisy-chain fixture order). The
+ * (universe) → chains (which jack each fixture hangs off). The
  * registry lives in the scene's `controllers.yaml`, rides the config
  * tree through save/load, and PROJECTS every fixture's patch fields
  * (`controllerIp`, `dmxUniverse`, `dmxAddress`, `controllerId`) plus
  * metadata (`sectionId`, `fixtureId`) — replacing both hand-typed patch
  * fields and the auto-patcher.
+ *
+ * ALLOCATION MODEL (docs/33 decision 19, operator 2026-06-12): every
+ * entry stores its ABSOLUTE address, assigned once at add time from
+ * the end of the universe's occupancy map and sticky thereafter.
+ * Ports are pure cable topology — chain order never influences
+ * addresses, exactly like the physical rig. Holes from removals stay
+ * (waste, never reshuffle); the panel's universe bars expose the
+ * fragmentation.
  *
  * Shape (mirrors controllers.yaml):
  *   {
@@ -16,14 +24,17 @@
  *     nextUniverse: <int>,                // monotonic — universes never reused either
  *     controllers: [
  *       { id, name, ip, ports: [
- *           { port, universe, startAddress, chain: [
- *               '<fixture name>'           // packed entry
- *               | { gap: <channels> }      // packed spacer
- *               | { fixture, at }          // pinned entry (effects, U1)
+ *           { port, universe, chain: [
+ *               { fixture, at }            // fixture at absolute address
+ *               | { gap: <channels>, at }  // absolute channel reservation
  *           ] },
  *       ] },
  *     ],
  *   }
+ *
+ * Legacy files (packed string entries + per-port startAddress) are
+ * converted once by migrateLegacyChains() at exactly their previously
+ * derived addresses — upgrading moves nothing.
  *
  * The projection contract (docs/33 "Projection under invalid state"):
  * a fixture whose derived address cannot be proven valid projects to
@@ -159,6 +170,13 @@ export function createControllerRegistry(tree) {
           if (!Number.isInteger(entry.gap) || entry.gap < 1) {
             throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
               `gap width ${entry.gap} must be an integer ≥ 1`);
+          }
+          // `at` is the gap's absolute address; absent = legacy packed
+          // gap (migrated at boot). Range problems are operational
+          // (projection flags them), only a broken TYPE is structural.
+          if (entry.at !== undefined && !Number.isInteger(entry.at)) {
+            throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
+              `gap address ${entry.at} must be an integer`);
           }
         } else if (isPinnedEntry(entry)) {
           // at: 0 is the legitimate "no pin known" state — the panel
@@ -333,31 +351,6 @@ export function appendFixtures(registry, port, names) {
   return { added, rejected };
 }
 
-/**
- * A DELETED fixture's chain entry becomes an equal-width gap, so every
- * entry after it keeps its exact address — deleting one fixture must
- * never re-address the rest of its chain (the physical fixtures are
- * still cabled and addressed; operator decision 2026-06-12). The gap
- * shows in the panel as reserved channels the operator removes
- * deliberately. Pinned entries hold no port channels and are simply
- * dropped. Returns 'gapped' | 'unpinned' | false (not mapped).
- */
-export function replaceFixtureWithGap(registry, name, footprint) {
-  for (const controller of registry.controllers) {
-    for (const port of controller.ports) {
-      const i = port.chain.findIndex(e => entryFixtureName(e) === name);
-      if (i < 0) continue;
-      if (isPinnedEntry(port.chain[i])) {
-        port.chain.splice(i, 1);
-        return 'unpinned';
-      }
-      port.chain.splice(i, 1, { gap: Math.max(1, footprint | 0) });
-      return 'gapped';
-    }
-  }
-  return false;
-}
-
 /** Remove one fixture (by name) from whatever chain holds it. */
 export function unmapFixture(registry, name) {
   for (const controller of registry.controllers) {
@@ -406,11 +399,90 @@ export function renameFixtureInChains(registry, oldName, newName) {
   return false;
 }
 
-// ── Packing + projection ────────────────────────────────────────────────
+/**
+ * One-time conversion of LEGACY packed chains (string entries and gaps
+ * without `at`, addressed by chain order from the port's old
+ * startAddress) into the allocation model's absolute entries
+ * ({fixture, at} / {gap, at}) — at exactly the addresses the old
+ * packing derived, so upgrading moves nothing. Idempotent: ports with
+ * no legacy entries are untouched beyond dropping the now-meaningless
+ * startAddress. An entry whose footprint cannot be proven (missing
+ * fixture or definition) STOPS migration for the rest of its chain —
+ * addresses after it were always undefined; the projection flags the
+ * stragglers loudly (`unallocated`) and the next call retries. Effects
+ * strings convert to their config.yaml pin (or at: 0 → loud no_pin),
+ * mirroring what the panel would write.
+ * Returns the migrated fixture names for the caller to log.
+ */
+export function migrateLegacyChains(registry, configsByName, pins) {
+  const migrated = [];
+  for (const controller of registry.controllers) {
+    for (const port of controller.ports) {
+      const isEffectsPort = port.universe === EFFECTS_UNIVERSE;
+      const hasLegacy = port.chain.some(e =>
+        typeof e === 'string' || (isGapEntry(e) && !Number.isInteger(e.at)));
+      if (!hasLegacy) {
+        delete port.startAddress;
+        continue;
+      }
+      if (isEffectsPort) continue; // packed entries on U1 were invalid then and now
+
+      // ATOMIC per port: resolve EVERY legacy entry first, apply only
+      // if all succeed. A partial conversion would poison a later
+      // retry — the packing cursor cannot resume past converted
+      // entries without misreading operator manual pins (which never
+      // advanced the old cursor).
+      let cursor = Number.isInteger(port.startAddress) ? port.startAddress : 1;
+      const plan = []; // [index, replacementEntry, label]
+      let resolvable = true;
+      for (let i = 0; i < port.chain.length; i++) {
+        const entry = port.chain[i];
+        if (isGapEntry(entry)) {
+          if (Number.isInteger(entry.at)) continue; // already absolute — no cursor effect then
+          plan.push([i, { gap: entry.gap, at: cursor }, `(${entry.gap}-ch gap @${cursor})`]);
+          cursor += entry.gap;
+          continue;
+        }
+        if (typeof entry === 'string') {
+          const config = configsByName.get(entry);
+          const fixtureType = config ? (config.fixtureType || config.type || '') : '';
+          if (isGlobalEffect(fixtureType)) {
+            // Packed effects were invalid in the old model too — pin
+            // them the way the panel would (they held no packed
+            // channels, so the cursor is unaffected).
+            const pin = pins ? pins[fixtureType] : undefined;
+            plan.push([i, { fixture: entry, at: pin ? pin.address : 0 }, entry]);
+            continue;
+          }
+          if (!config || !getDefinition(fixtureType)) {
+            // Footprint unknowable — old packing addresses after it
+            // were always undefined. Never guess: leave the WHOLE port
+            // legacy and retry on the next call.
+            resolvable = false;
+            break;
+          }
+          plan.push([i, { fixture: entry, at: cursor }, entry]);
+          cursor += getFootprint(config);
+          continue;
+        }
+        // Pinned entries held no packed channels in the old model.
+      }
+      if (!resolvable) continue;
+      for (const [i, replacement, label] of plan) {
+        port.chain[i] = replacement;
+        migrated.push(label);
+      }
+      delete port.startAddress;
+    }
+  }
+  return migrated;
+}
+
+// ── Projection (allocation model) ───────────────────────────────────────
 
 /**
  * Compute the full projection of a registry onto a set of fixture
- * configs.
+ * configs (allocation model, docs/33 decision 19).
  *
  * @param {Object} registry
  * @param {Map<string, Object>} configsByName - fixture name → config
@@ -420,12 +492,16 @@ export function renameFixtureInChains(registry, oldName, newName) {
  *   fields: Map<string, {controllerIp, dmxUniverse, dmxAddress, controllerId}>,
  *   violations: Array<{code, message, controllerId, port}>,
  *   portLayouts: Map<string, Array<{entry, name, address, footprint, valid}>>,
+ *   universeEnds: Map<number, number>,
+ *   universeMaps: Map<number, Array<{start, end, name, item, controllerId, portNum, effect}>>,
  * }}
  *
- * Every MAPPED fixture gets a `fields` entry — derived when provably
- * valid, unpatched (''/0/0) otherwise. `portLayouts` (key
- * `<controllerId>:<portNum>`) carries per-entry computed addresses and
- * validity for the panel UI, including gaps.
+ * Every MAPPED fixture gets a `fields` entry — its stored absolute
+ * address when provably sendable, unpatched (''/0/0) otherwise.
+ * `portLayouts` (key `<controllerId>:<portNum>`) carries per-entry
+ * validity for the panel UI; `universeMaps` is the full per-universe
+ * occupancy (sorted, valid claims only) for the universe bars and the
+ * allocator; `universeEnds` is its running end per universe.
  */
 export function computeProjection(registry, configsByName, pins) {
   const fields = new Map();
@@ -490,13 +566,29 @@ export function computeProjection(registry, configsByName, pins) {
     }
   }
 
-  // ── Per-port packing ──────────────────────────────────────────────────
-  // Spans are registered per universe so same-universe sibling ports can
-  // be overlap-checked AFTER both are packed. Lower port number wins;
-  // the higher port's whole chain projects unpatched (docs/33).
-  const universeSpans = new Map(); // universe → [{controller, port, start, end}]
-  const pinnedOccupancy = [];      // valid effects pins, for the effects-universe collision check
-  const manualPins = [];           // valid manual pins, for the warn-only conflict check
+  // ── Per-entry projection (allocation model, docs/33 decision 19) ────
+  // Every fixture entry carries its ABSOLUTE address ({fixture, at});
+  // gaps carry {gap, at}. Nothing is derived from chain order — ports
+  // are pure cable topology, exactly like the physical rig (addresses
+  // live on the fixtures, the daisy chain only carries signal). The
+  // projection validates each entry, builds the FULL per-universe
+  // occupancy map (rendered as the universe bar on every port), and
+  // flags overlaps as WARNINGS — every address is explicit operator
+  // state, so a conflict paints red and stands, it is never silently
+  // unpatched. Hard unpatches that remain: outside 1–512, U1 rules,
+  // missing definition, orphan, bad/duplicate IP, contested universe,
+  // and unmigrated legacy entries.
+  const occupancy = new Map();  // universe → claims for the map + overlap sweep
+  const pinnedOccupancy = [];   // valid effects pins (gang-fire-aware check)
+
+  const claim = (universe, start, end, name, item, controller, port, effect) => {
+    if (!occupancy.has(universe)) occupancy.set(universe, []);
+    occupancy.get(universe).push({
+      start, end, name, item,
+      controllerId: controller.id, controllerName: controller.name, portNum: port.port,
+      effect: !!effect,
+    });
+  };
 
   for (const { controller, port } of allPortsSorted) {
     const layoutKey = `${controller.id}:${port.port}`;
@@ -505,36 +597,62 @@ export function computeProjection(registry, configsByName, pins) {
 
     const portDead = badControllers.has(controller) || contestedPorts.has(port);
     const isEffectsPort = port.universe === EFFECTS_UNIVERSE;
-    let cursor = port.startAddress;
-    let chainBroken = false; // overflow/orphan poisons everything after it
-    let spanStart = null;
-    let spanEnd = null;
 
     for (const entry of port.chain) {
       const name = entryFixtureName(entry);
 
-      // Gaps consume channels but project nothing. They still join the
-      // port's occupied span: a gap reserves channels for real hardware
-      // not modeled in the sim, so a sibling port packing into it is a
-      // physical DMX collision and must trip the overlap check exactly
-      // like a fixture would (cold review M2, 2026-06-12).
+      // ── Gaps: absolute channel reservations ({gap, at}) for real
+      // hardware not modeled in the sim ─────────────────────────────
       if (isGapEntry(entry)) {
-        layout.push({ entry, name: null, address: cursor, footprint: entry.gap, valid: !chainBroken });
-        if (!portDead && !chainBroken && !isEffectsPort) {
-          if (spanStart === null) spanStart = cursor;
-          spanEnd = Math.min(cursor + entry.gap - 1, DMX_UNIVERSE_SIZE);
+        if (isEffectsPort) {
+          addViolation('non_effect_on_u1', `${controller.name} port ${port.port}: a ` +
+            `${entry.gap}-ch gap on universe ${EFFECTS_UNIVERSE} (effects-only, pinned ` +
+            'addresses) reserves nothing', controller, port);
+          layout.push({ entry, name: null, address: entry.at || 0, footprint: entry.gap, valid: false });
+          continue;
         }
-        cursor += entry.gap;
+        if (!Number.isInteger(entry.at)) {
+          addViolation('unallocated', `${controller.name} port ${port.port}: a ${entry.gap}-ch ` +
+            'gap has no allocated address (legacy packed entry) — boot migration assigns one; ' +
+            'if this persists, remove and re-add the gap', controller, port);
+          layout.push({ entry, name: null, address: 0, footprint: entry.gap, valid: false });
+          continue;
+        }
+        const gapEnd = entry.at + entry.gap - 1;
+        if (entry.at < 1 || gapEnd > DMX_UNIVERSE_SIZE) {
+          addViolation('pin_overflow', `${controller.name} port ${port.port}: gap @${entry.at} ` +
+            `spans ch ${entry.at}–${gapEnd} — outside 1–${DMX_UNIVERSE_SIZE}; it reserves nothing`,
+          controller, port);
+          layout.push({ entry, name: null, address: entry.at, footprint: entry.gap, valid: false });
+          continue;
+        }
+        const gapItem = { entry, name: null, address: entry.at, footprint: entry.gap, valid: !portDead };
+        layout.push(gapItem);
+        if (!portDead) claim(port.universe, entry.at, gapEnd, null, gapItem, controller, port);
         continue;
       }
 
+      // ── Legacy packed (string) entries: the old model derived their
+      // addresses from chain order; migrateLegacyChains() converts
+      // them at boot. One surviving here means migration could not
+      // prove its footprint (missing fixture/definition) or the file
+      // was hand-edited mid-session. Loud + unpatched, never guessed.
+      if (typeof entry === 'string') {
+        addViolation('unallocated', `'${entry}' on ${controller.name} port ${port.port} has no ` +
+          'allocated address (legacy packed entry) — migration runs at boot; if this persists ' +
+          'the fixture or its definition is missing: fix it or re-add via the panel',
+        controller, port);
+        layout.push({ entry, name, address: 0, footprint: 0, valid: false });
+        unpatch(name);
+        continue;
+      }
+
+      // ── Pinned entries ({fixture, at}) ────────────────────────────
       const config = configsByName.get(name);
       if (!config) {
         addViolation('orphan', `'${name}' on ${controller.name} port ${port.port} does not ` +
-          'resolve to a fixture — drop the entry or fix the name; entries after it project ' +
-          'unpatched', controller, port);
-        layout.push({ entry, name, address: cursor, footprint: 0, valid: false });
-        chainBroken = true; // addresses after an orphan are uncertain
+          'resolve to a fixture — drop the entry or fix the name', controller, port);
+        layout.push({ entry, name, address: entry.at || 0, footprint: 0, valid: false });
         continue;
       }
 
@@ -542,71 +660,12 @@ export function computeProjection(registry, configsByName, pins) {
       const fixtureType = config.fixtureType || config.type || '';
       const isEffect = isGlobalEffect(fixtureType);
 
-      // ── Pinned entries ───────────────────────────────────────────────
-      // Two flavors share the {fixture, at} shape:
-      //  • EFFECTS (fog/haze/horn/fire): valid on ANY port, address is
-      //    always the config.yaml pin on the effects universe — the
-      //    entry records the physical cabling (operator decision
-      //    2026-06-11).
-      //  • MANUAL pins (any other fixture, normal ports): the operator
-      //    typed an absolute address — the ultimate savior when packing
-      //    and the physical rig disagree (operator decision 2026-06-12,
-      //    docs/33 decision 18). Detached from the packing cursor;
-      //    conflicts WARN (red in the panel) but the address STANDS.
-      if (isPinnedEntry(entry)) {
-        if (!isEffect) {
-          if (isEffectsPort) {
-            addViolation('non_effect_on_u1', `'${name}' is not a global effect but is pinned ` +
-              `on universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`,
-            controller, port);
-            layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true, manual: true });
-            unpatch(name);
-            continue;
-          }
-          // Footprint must be REAL to know what the pin occupies — the
-          // no-guess rule applies to pins too, but only kills the pin
-          // itself (it is detached from the chain).
-          if (!getDefinition(fixtureType)) {
-            addViolation('no_definition', `'${name}' (${fixtureType || 'unknown type'}) has no ` +
-              'registered fixture definition — footprint unknown, its manual pin projects ' +
-              'unpatched', controller, port);
-            layout.push({ entry, name, address: entry.at, footprint: 0, valid: false, pinned: true, manual: true });
-            unpatch(name);
-            continue;
-          }
-          if (entry.at < 1 || entry.at + footprint - 1 > DMX_UNIVERSE_SIZE) {
-            addViolation('pin_overflow', `'${name}' manual pin @${entry.at} spans ` +
-              `ch ${entry.at}–${entry.at + footprint - 1} — outside 1–${DMX_UNIVERSE_SIZE}; ` +
-              'it projects unpatched', controller, port);
-            layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
-            unpatch(name);
-            continue;
-          }
-          // A manual pin lives ON the port's universe, so a dead port
-          // (bad IP / contested universe) takes it down too — unlike
-          // effects pins, whose universe is independent.
-          if (portDead) {
-            layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
-            unpatch(name);
-            continue;
-          }
-          const manualItem = {
-            entry, name, address: entry.at, footprint, valid: true,
-            pinned: true, manual: true, pinUniverse: port.universe,
-          };
-          layout.push(manualItem);
-          fields.set(name, {
-            controllerIp: controller.ip,
-            dmxUniverse: port.universe,
-            dmxAddress: entry.at,
-            controllerId: controller.id,
-          });
-          manualPins.push({
-            controller, port, name, item: manualItem,
-            universe: port.universe, start: entry.at, end: entry.at + footprint - 1,
-          });
-          continue;
-        }
+      // Effects: the address is ALWAYS the config.yaml pin on the
+      // effects universe — the entry records the physical cabling
+      // (operator decision 2026-06-11). Identical pin addresses
+      // gang-fire by design; the dedicated check below flags only
+      // genuine config errors.
+      if (isEffect) {
         const pin = pins ? pins[fixtureType] : undefined;
         if (!pin || !Number.isInteger(pin.address)) {
           addViolation('no_pin', `'${name}' (${fixtureType}) has no pin in config.yaml ` +
@@ -623,10 +682,8 @@ export function computeProjection(registry, configsByName, pins) {
           unpatch(name);
           continue;
         }
-        // Only a controller-level IP problem invalidates a pin — the
-        // pin ignores its port's universe entirely (it records the
-        // physical cabling), so a contested-universe or overlapping
-        // port still projects its pinned effects (cold review m3).
+        // Only a controller-level IP problem invalidates an effects
+        // pin — its universe is independent of the port's.
         if (badControllers.has(controller)) {
           layout.push({ entry, name, address: pin.address, footprint, valid: false, pinned: true });
           unpatch(name);
@@ -647,111 +704,59 @@ export function computeProjection(registry, configsByName, pins) {
           controller, port, name, item: pinItem,
           universe: pin.universe, start: pin.address, end: pin.address + footprint - 1,
         });
+        claim(pin.universe, pin.address, pin.address + footprint - 1, name, pinItem,
+          controller, port, true);
         continue;
       }
 
-      // ── Universe-1 rules for packed (string) entries ─────────────────
+      // Normal fixtures.
       if (isEffectsPort) {
-        if (!isEffect) {
-          addViolation('non_effect_on_u1', `'${name}' is not a global effect but is mapped on ` +
-            `universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`,
-          controller, port);
-        } else {
-          addViolation('pin_mismatch', `'${name}' (${fixtureType}) is a global effect and must ` +
-            'be a pinned entry ({fixture, at}), found a packed entry — it projects unpatched',
-          controller, port);
-        }
-        layout.push({ entry, name, address: 0, footprint, valid: false });
+        addViolation('non_effect_on_u1', `'${name}' is not a global effect but is mapped on ` +
+          `universe ${EFFECTS_UNIVERSE} (effects-only) — it projects unpatched`, controller, port);
+        layout.push({ entry, name, address: 0, footprint, valid: false, pinned: true, manual: true });
         unpatch(name);
         continue;
       }
-
-      // ── Normal (packed) port ────────────────────────────────────────
-      if (isEffect) {
-        addViolation('effect_off_u1', `'${name}' is a global effect and must be a pinned ` +
-          `entry (auto-applied when added via the panel) — it projects unpatched`,
-        controller, port);
-        layout.push({ entry, name, address: 0, footprint, valid: false });
-        unpatch(name);
-        continue;
-      }
-
-      // Packing REQUIRES a registered definition: getFootprint()'s
-      // legacy 10-channel fallback silently compacted 119ch bars when
-      // the registry wasn't loaded, scrambling every address downstream
-      // (operator report 2026-06-12). No definition → no guess: the
-      // fixture and everything after it project unpatched, loudly.
+      // The footprint must be REAL to know what the address occupies —
+      // the no-guess rule (the silent 10-channel fallback scrambled a
+      // real mapping once, 2026-06-12).
       if (!getDefinition(fixtureType)) {
-        if (!chainBroken) {
-          addViolation('no_definition', `'${name}' (${fixtureType || 'unknown type'}) has no ` +
-            'registered fixture definition — footprint unknown, so it and every entry after ' +
-            'it project unpatched. If this appears at boot, the definition registry was not ' +
-            'initialized before projection.', controller, port);
-          chainBroken = true;
-        }
-        layout.push({ entry, name, address: cursor, footprint: 0, valid: false });
+        addViolation('no_definition', `'${name}' (${fixtureType || 'unknown type'}) has no ` +
+          'registered fixture definition — footprint unknown, it projects unpatched. If this ' +
+          'appears at boot, the definition registry was not initialized before projection.',
+        controller, port);
+        layout.push({ entry, name, address: entry.at, footprint: 0, valid: false, pinned: true, manual: true });
         unpatch(name);
         continue;
       }
-
-      const address = cursor;
-      const overflows = address + footprint - 1 > DMX_UNIVERSE_SIZE;
-      if (overflows && !chainBroken) {
-        addViolation('overflow', `${controller.name} port ${port.port} (U${port.universe}) ` +
-          `overflows at '${name}' (ch ${address}+${footprint} > ${DMX_UNIVERSE_SIZE}) — it and ` +
-          'every entry after it project unpatched', controller, port);
-        chainBroken = true;
-      }
-
-      const valid = !portDead && !chainBroken;
-      layout.push({ entry, name, address, footprint, valid });
-      cursor = address + footprint;
-
-      if (valid) {
-        if (spanStart === null) spanStart = address;
-        spanEnd = address + footprint - 1;
-        fields.set(name, {
-          controllerIp: controller.ip,
-          dmxUniverse: port.universe,
-          dmxAddress: address,
-          controllerId: controller.id,
-        });
-      } else {
+      if (!Number.isInteger(entry.at) || entry.at < 1 ||
+          entry.at + footprint - 1 > DMX_UNIVERSE_SIZE) {
+        addViolation('pin_overflow', `'${name}' @${entry.at} spans ` +
+          `ch ${entry.at}–${entry.at + footprint - 1} — outside 1–${DMX_UNIVERSE_SIZE}; ` +
+          'it projects unpatched', controller, port);
+        layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
         unpatch(name);
+        continue;
       }
-    }
-
-    if (!isEffectsPort && spanStart !== null) {
-      if (!universeSpans.has(port.universe)) universeSpans.set(port.universe, []);
-      universeSpans.get(port.universe).push({ controller, port, start: spanStart, end: spanEnd });
-    }
-  }
-
-  // ── Same-universe sibling overlap: higher port number loses ──────────
-  for (const [universe, spans] of universeSpans) {
-    spans.sort((a, b) => a.port.port - b.port.port);
-    for (let i = 0; i < spans.length; i++) {
-      for (let j = i + 1; j < spans.length; j++) {
-        const a = spans[i];
-        const b = spans[j];
-        if (b.start <= a.end && a.start <= b.end) {
-          addViolation('overlap', `U${universe}: ${b.controller.name} port ${b.port.port} ` +
-            `(ch ${b.start}–${b.end}) overlaps port ${a.port.port} (ch ${a.start}–${a.end}) — ` +
-            `port ${b.port.port}'s chain projects unpatched`, b.controller, b.port);
-          // Unpatch the losing chain and mark its layout invalid —
-          // EXCEPT pinned effects: they live on the effects universe,
-          // untouched by this port's packed-channel conflict. The dead
-          // span no longer occupies channels, so manual pins must not
-          // warn against it.
-          b.dead = true;
-          const layout = portLayouts.get(`${b.controller.id}:${b.port.port}`);
-          for (const item of layout) {
-            if (item.pinned) continue;
-            item.valid = false;
-            if (item.name !== null) unpatch(item.name);
-          }
-        }
+      // An address on a contested universe / dead controller is
+      // unsendable — unlike a CONFLICT, this is a hard unpatch.
+      if (portDead) {
+        layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
+        unpatch(name);
+        continue;
       }
+      const item = {
+        entry, name, address: entry.at, footprint, valid: true,
+        pinned: true, manual: true, pinUniverse: port.universe,
+      };
+      layout.push(item);
+      fields.set(name, {
+        controllerIp: controller.ip,
+        dmxUniverse: port.universe,
+        dmxAddress: entry.at,
+        controllerId: controller.id,
+      });
+      claim(port.universe, entry.at, entry.at + footprint - 1, name, item, controller, port);
     }
   }
 
@@ -790,75 +795,48 @@ export function computeProjection(registry, configsByName, pins) {
     }
   }
 
-  // ── Manual-pin conflict check (WARN, never unpatch) ──────────────────
-  // Decision 18 (operator, 2026-06-12): a manually pinned address is
-  // operator-sovereign — "that's my ultimate savior". Conflicts with
-  // packed chains, gaps, or other manual pins are flagged loudly (the
-  // panel paints the address red) but the address STANDS; the operator
-  // asked for it by name. Out-of-range is still impossible (checked at
-  // projection above) — only CONFLICTS get the override.
-  for (const mp of manualPins) {
-    const collisions = [];
-    for (const span of universeSpans.get(mp.universe) || []) {
-      if (span.dead) continue;
-      if (mp.start <= span.end && span.start <= mp.end) {
-        collisions.push(`${span.controller.name} port ${span.port.port} (ch ${span.start}–${span.end})`);
-      }
-    }
-    for (const other of manualPins) {
-      if (other === mp || other.universe !== mp.universe) continue;
-      if (mp.start <= other.end && other.start <= mp.end) {
-        collisions.push(`manual pin '${other.name}' @${other.start}`);
-      }
-    }
-    if (collisions.length > 0) {
-      mp.item.conflict = true;
-      addViolation('manual_overlap', `U${mp.universe}: manual pin '${mp.name}' @${mp.start} ` +
-        `(ch ${mp.start}–${mp.end}) overlaps ${collisions.join(', ')} — KEPT (manual pins ` +
-        'always stand); resolve when convenient', mp.controller, mp.port);
-    }
-  }
-
-  // ── Running end-of-universe map ───────────────────────────────────────
-  // Built once per projection pass (the projection already visits every
-  // entry) so address suggestions are O(1) lookups instead of a fresh
-  // scan per UI change. Highest occupied channel per universe across
-  // ALL controllers, counting only entries that actually hold their
-  // channels: valid packed fixtures + gaps on the port's universe, and
-  // valid pins (effects + manual) on their pin universe.
+  // ── Full universe maps + overlap sweep (WARN, never unpatch) ─────────
+  // The complete occupancy of every universe across ALL controllers —
+  // the operator's "universe map": rendered as the bar on every port,
+  // the allocator's source of truth (universeEnds = one past the last
+  // claim), and the overlap detector. Addresses are explicit, so an
+  // overlap marks BOTH claims conflicted (red) and raises a violation,
+  // but everything keeps projecting — the operator resolves it
+  // (operator decision 2026-06-12). Effects claims are exempt here
+  // (gang-fire); they have their own check above.
+  const universeMaps = new Map();
   const universeEnds = new Map();
-  const bumpEnd = (universe, end) => {
-    if (end > (universeEnds.get(universe) || 0)) universeEnds.set(universe, end);
-  };
-  for (const { controller, port } of allPortsSorted) {
-    const layout = portLayouts.get(`${controller.id}:${port.port}`);
-    for (const item of layout) {
-      if (!item.valid || item.footprint <= 0) continue;
-      const universe = item.pinned ? (item.pinUniverse || EFFECTS_UNIVERSE) : port.universe;
-      bumpEnd(universe, Math.min(item.address + item.footprint - 1, DMX_UNIVERSE_SIZE));
+  for (const [universe, claims] of occupancy) {
+    const live = claims.filter(c => c.item.valid);
+    live.sort((a, b) => a.start - b.start || (a.name || '').localeCompare(b.name || ''));
+    universeMaps.set(universe, live);
+    let end = 0;
+    let runEnd = 0;
+    let runClaim = null;
+    for (const c of live) {
+      end = Math.max(end, Math.min(c.end, DMX_UNIVERSE_SIZE));
+      if (c.effect) continue;
+      if (runClaim && c.start <= runEnd) {
+        c.item.conflict = true;
+        runClaim.item.conflict = true;
+        const what = c.name ? `'${c.name}'` : `a ${c.end - c.start + 1}-ch gap`;
+        const other = runClaim.name ? `'${runClaim.name}'` : `a gap`;
+        addViolation('overlap', `U${universe}: ${what} (ch ${c.start}–${c.end}, ` +
+          `${c.controllerName} P${c.portNum}) overlaps ${other} (ch ${runClaim.start}–` +
+          `${runClaim.end}, ${runClaim.controllerName} P${runClaim.portNum}) — BOTH KEPT; ` +
+          'fix one address', { id: c.controllerId }, { port: c.portNum });
+      }
+      if (c.end > runEnd) {
+        runEnd = c.end;
+        runClaim = c;
+      }
     }
+    if (end > 0) universeEnds.set(universe, end);
   }
 
-  return { fields, violations: [...violations.values()], portLayouts, universeEnds };
+  return { fields, violations: [...violations.values()], portLayouts, universeEnds, universeMaps };
 }
 
-/**
- * Sum of channels a port's packed chain occupies (gaps included, pinned
- * effects excluded — they live on the effects universe, not the port's).
- * Used to test whether a suggested startAddress still fits.
- */
-export function portPackedWidth(port, configsByName) {
-  let width = 0;
-  for (const entry of port.chain) {
-    if (isGapEntry(entry)) {
-      width += entry.gap;
-    } else if (!isPinnedEntry(entry)) {
-      const config = configsByName.get(entryFixtureName(entry));
-      if (config) width += getFootprint(config);
-    }
-  }
-  return width;
-}
 
 /**
  * Project a registry onto live fixture configs (mutated in place) and
@@ -872,11 +850,13 @@ export function portPackedWidth(port, configsByName) {
  *    free monotonic id;
  *  - controllerId: derived (mapped → controller id, unmapped → 0).
  *
- * Returns { violations, drift } — `drift` lists fixtures whose stored
- * fields differed from the projection (logged loudly by callers).
+ * Returns { violations, drift, migrated } — `drift` lists fixtures
+ * whose stored fields differed from the projection; `migrated` lists
+ * legacy packed entries converted to absolute addresses this pass
+ * (both logged loudly by callers).
  */
 export function projectOntoConfigs(registry, configs, pins) {
-  if (!registryIsActive(registry)) return { violations: [], drift: [] };
+  if (!registryIsActive(registry)) return { violations: [], drift: [], migrated: [] };
 
   const configsByName = new Map();
   for (const config of configs) {
@@ -884,6 +864,12 @@ export function projectOntoConfigs(registry, configs, pins) {
       configsByName.set(config.name, config);
     }
   }
+
+  // Legacy packed chains convert (once, at their previously derived
+  // addresses) before projecting — see migrateLegacyChains. The change
+  // persists with the next normal save; until then every boot
+  // re-migrates deterministically.
+  const migrated = migrateLegacyChains(registry, configsByName, pins);
 
   const { fields, violations } = computeProjection(registry, configsByName, pins);
   const drift = [];
@@ -934,5 +920,5 @@ export function projectOntoConfigs(registry, configs, pins) {
     }
   }
 
-  return { violations, drift };
+  return { violations, drift, migrated };
 }

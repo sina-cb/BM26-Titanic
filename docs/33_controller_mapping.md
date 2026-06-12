@@ -109,15 +109,26 @@ Controller "Bow PKnight"  (10.1.1.10)          ← physical box, one IP
   reference atomically in the same session** — the registry hooks the rename path,
   so a rename can never orphan a live mapping.
 
-### Derivation rules (the contract)
+### Allocation rules (the contract — REWRITTEN 2026-06-12, decision 19)
 
-For each port, addresses pack first-fit in chain order, starting at the port's
-`startAddress`:
+> The original packing model (`addr(chain[k]) = addr(chain[k-1]) +
+> footprint(chain[k-1])` from a per-port `startAddress`) is retired.
+> Ports are **pure cable topology** — chain order never influences
+> addresses, exactly like the physical rig, where addresses live on the
+> fixtures and the daisy chain only carries signal.
 
-```
-addr(chain[0]) = port.startAddress
-addr(chain[k]) = addr(chain[k-1]) + footprint(chain[k-1])
-```
+Every chain entry stores its **absolute address**: `{fixture, at}` /
+`{gap, at}`. The address is assigned **once, at add time** — one past the
+end of the universe's full occupancy map (all ports, all controllers,
+gaps and pins included) — and is sticky thereafter. Removals leave
+holes; holes are never reused automatically (waste, never reshuffle) and
+stay visible in the per-port universe bars; compaction is a deliberate
+operator action (Notion backlog card). Typing in a chip's address box
+moves the fixture anywhere; clearing it re-allocates at the universe
+end. Drag-moving a chip between ports carries the address along;
+remove + re-add allocates fresh. Legacy packed files are converted once
+at boot by `migrateLegacyChains()` at exactly their previously derived
+addresses, so upgrading moves nothing.
 
 The channel budget is the **full universe: channels 1–512**. There is no
 per-universe reserved tail any more — the old `DMX_RESERVED_CHANNELS` ([511, 512]
@@ -569,17 +580,26 @@ land-able; phases 1+2 alone already beat today's workflow.
     in the Unmapped tray. The "patches will be reset" regen warning is
     skipped under an active mapping because it no longer applies.
 18. **Manual pins are the operator's ultimate savior** — typing ANY address on
-    a chain chip converts the entry to `{fixture, at}` on the port's own
-    universe: absolute, detached from packing (the vacated slot becomes an
-    equal-width gap so downstream entries hold), and **conflict-tolerant**:
-    overlaps with packed chains, gaps, or other pins raise a `manual_overlap`
-    warning (red address in the panel) but the pin ALWAYS projects — the one
-    deliberate exception to "patches.yaml never carries a conflicting
-    address". Out-of-range (past 512) still unpatches; U1 stays effects-only.
-    Clearing the box returns the fixture to automatic packing. Every port also
-    shows a live `⚡@next` button when its startAddress differs from the
-    universe's current next-free channel (computed across ALL ports and
-    controllers) — stale suggestions no longer stick.
+    a chain chip is absolute and **conflict-tolerant**: overlaps warn (red
+    address) but the address ALWAYS projects. Out-of-range (past 512) still
+    unpatches; U1 stays effects-only. *(Generalized by decision 19: every
+    address is now an explicit pin, so this rule covers everything.)*
+19. **The allocation model** (2026-06-12, supersedes the packing model and
+    decision 4's per-port startAddress): every entry stores its absolute
+    address, assigned once at add time from the end of the universe's FULL
+    occupancy map (all ports and controllers — the map is also rendered as
+    the universe bar on every port, own claims bright / siblings dimmed /
+    conflicts red) and sticky thereafter. Chain order is cable documentation
+    only. ALL overlaps warn-and-stand (red), nothing unpatches for conflict;
+    hard unpatches remain for past-512, U1 rules, missing definitions,
+    orphans, bad/duplicate IPs, and contested universes. Holes from removals
+    are never reused automatically — fragmentation is visible in the bars,
+    compaction is a deliberate future operator action (Notion backlog card).
+    Deleting a fixture simply frees its channels (the former gap-replacement
+    rule of decision 16 is obsolete); generator regeneration (decision 17)
+    keeps survivors' stored addresses by name. Legacy packed files migrate
+    once at boot, atomically per port, at their previously derived
+    addresses.
 
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
 moving the Chauvet to 510–511, and is mechanically flagged since decision 14.)*
