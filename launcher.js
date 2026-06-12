@@ -59,7 +59,10 @@ const DEFAULT_PATTERN = '00_golden_hour_wash';
 const IS_WIN = process.platform === 'win32';
 
 const STOP_GRACE_MS = 8000;       // SIGTERM → SIGKILL escalation per child
-const CRASH_VERDICT_DELAY_MS = 300; // absorb Ctrl+C races before declaring a crash
+// Absorb console-signal races before declaring a crash. On Windows the
+// console delivers Ctrl+C to every process at once and the launcher can be
+// the last to hear about it, so the window is much wider there.
+const CRASH_VERDICT_DELAY_MS = IS_WIN ? 2000 : 300;
 
 // Command lines we are allowed to kill when they squat on our ports.
 const STACK_PROCESS_SIGNATURES = [
@@ -651,10 +654,13 @@ async function main() {
   assertSingleInstance();
   validate(opts, profileDef);
 
+  // The launcher always runs marsin_engine, so the sim must listen to it
+  // (sacn_in) instead of booting its in-browser Pixelblaze engine.
   const simQuery = new URLSearchParams({
     scene: opts.scene,
     profile: profileDef.simQuery.profile,
     spotlights: String(profileDef.simQuery.spotlights),
+    lighting_mode: 'sacn_in',
   });
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
 

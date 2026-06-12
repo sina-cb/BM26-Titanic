@@ -3852,7 +3852,18 @@ function setupGUI() {
       configTree.options.rendererMode.value = rendererOverride;
       params.rendererMode = rendererOverride;
     }
-    
+
+    const lightingModeOverride = urlParams.get('lighting_mode');
+    if (lightingModeOverride) {
+      const validLightingModes = ['gradient', 'pixelblaze', 'sacn_in'];
+      if (validLightingModes.includes(lightingModeOverride) && configTree.colorWave && configTree.colorWave.lightingMode) {
+        configTree.colorWave.lightingMode.value = lightingModeOverride;
+        params.lightingMode = lightingModeOverride;
+      } else {
+        console.error(`[GUI] Ignoring invalid lighting_mode URL override '${lightingModeOverride}' (valid: gradient, pixelblaze, sacn_in)`);
+      }
+    }
+
     buildGUI(configTree, gui);
   }
 
