@@ -21,3 +21,9 @@
 - Per-panel side-by-side screenshots + checklist sign-off.
 - Puppeteer smoke: edit pattern → compile → status updates; preset CRUD
   persists; view assign/unassign round-trips through save.
+
+## COMPLETED 2026-06-12 (session claude/admiring-shannon-4ahh4g)
+
+Delivered and validated — see .agent/02_reports/202606/20260612_3_ui_rehaul_complete.md
+for the full evidence (schema diff 700/700, interaction smokes, 5-theme
+screenshots, legacy escape regression).

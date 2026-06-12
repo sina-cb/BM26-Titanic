@@ -30,3 +30,9 @@ throughout:
   3D edit → UI refresh.
 - Side-by-side screenshots per section; 5-theme matrix; readonly +
   static-host modes.
+
+## COMPLETED 2026-06-12 (session claude/admiring-shannon-4ahh4g)
+
+Delivered and validated — see .agent/02_reports/202606/20260612_3_ui_rehaul_complete.md
+for the full evidence (schema diff 700/700, interaction smokes, 5-theme
+screenshots, legacy escape regression).

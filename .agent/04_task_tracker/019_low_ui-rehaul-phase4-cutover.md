@@ -19,3 +19,11 @@
 
 - Operator sign-off on cutover; full auto-checks + 5-theme matrix on the
   default path; agent renders work unchanged.
+
+## Progress 2026-06-12 — cutover FLIPPED (session claude/admiring-shannon-4ahh4g)
+
+- [x] Default flipped to modern (`ui_mode.js`); `?ui=legacy` escape hatch kept.
+- [x] agent_render hides `.marsin-gui` alongside `.lil-gui`.
+- [ ] Remaining (do NOT close): one operating-cycle soak on `?ui=modern`
+      default, then remove lil-gui vendor + legacy render paths and update
+      skill docs (UI_PANEL_IDS, 00_see_the_world.md).

@@ -35,3 +35,9 @@
       `agent_tools/capture_control_schema.cjs` dump tool.
 - [ ] Outstanding: tracked baseline workflow doc for Phase-3 diffing
       (capture legacy + modern on same scene, diff JSON).
+
+## COMPLETED 2026-06-12 (session claude/admiring-shannon-4ahh4g)
+
+Delivered and validated — see .agent/02_reports/202606/20260612_3_ui_rehaul_complete.md
+for the full evidence (schema diff 700/700, interaction smokes, 5-theme
+screenshots, legacy escape regression).
