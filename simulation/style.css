@@ -1,3 +1,68 @@
+/* ────────────────────────────────────────────────────────────────────────
+   BM26 Titanic — simulation UI chrome.
+
+   All colors come from the CaptainPad palette tokens (see
+   src/gui/theme.js, ported from CaptainPad/constants/theme.ts). theme.js
+   writes every token as a CSS custom property on <html> at boot and on
+   every theme switch, so the whole UI restyles live. The :root block
+   below carries the DARK palette as static boot defaults only — theme.js
+   overrides them before the first meaningful paint, and the theme parity
+   test checks this block against the CaptainPad source too.
+
+   Layout/geometry is intentionally unchanged from the pre-theme UI —
+   functional parity first, visual language second.
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Boot defaults — CaptainPad `gruvbox` palette, the sim's default
+     theme (theme.js overrides on boot and on every switch). */
+  --text: #ebdbb2;
+  --background: #282828;
+  --tint: #fabd2f;
+  --icon: #928374;
+  --tab-icon-default: #928374;
+  --tab-icon-selected: #fabd2f;
+  --surface: #282828;
+  --surface-container-low: #32302f;
+  --surface-container-lowest: #1d2021;
+  --surface-container-high: #3c3836;
+  --surface-dim: #1d2021;
+  --primary: #fabd2f;
+  --primary-container: #665c54;
+  --primary-fixed-dim: #fadc7f;
+  --on-primary: #282828;
+  --secondary: #a89984;
+  --secondary-container: #3c3836;
+  --error: #fb4934;
+  --error-container: rgba(251, 73, 52, 0.16);
+  --error-container-border: rgba(251, 73, 52, 0.45);
+  --tertiary: #b8bb26;
+  --ghost-border: rgba(168, 153, 132, 0.25);
+  --ambient-shadow: rgba(0, 0, 0, 0.55);
+  --sidebar-background: rgba(40, 40, 40, 0.88);
+  --sidebar-active-background: rgba(250, 189, 47, 0.12);
+  --sidebar-active-border: rgba(250, 189, 47, 0.4);
+  --fader-knob: #504945;
+
+  /* Typography — CaptainPad stack (Fonts.headline / Fonts.body),
+     vendored offline in vendor/fonts/. */
+  --font-headline: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+
+  /* Semantic derivations (CaptainPad rule: variants derive from base). */
+  --panel-bg: color-mix(in srgb, var(--surface) 92%, transparent);
+  --panel-header-bg: color-mix(in srgb, var(--surface-container-lowest) 55%, transparent);
+  --control-bg: var(--surface-container-high);
+  --control-bg-hover: color-mix(in srgb, var(--surface-container-high) 88%, var(--text));
+  --input-bg: var(--surface-container-lowest);
+  --ok: var(--tertiary);
+  /* Fixed safety-signage amber for caution states (unpatched, spotlight
+     budget) — deliberately NOT themed so warnings read identically in
+     every palette. Critical states use the themed --error. */
+  --caution: #ffb400;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -7,8 +72,8 @@
 body {
   overflow: hidden;
   background: #000;
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-  color: #e0e0e0;
+  font-family: var(--font-body);
+  color: var(--text);
 }
 
 canvas {
@@ -24,7 +89,11 @@ canvas {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(ellipse at center, #0a0a1a 0%, #000 100%);
+  background: radial-gradient(
+    ellipse at center,
+    var(--surface-container-low) 0%,
+    var(--surface-container-lowest) 100%
+  );
   transition: opacity 0.8s ease-out;
 }
 
@@ -34,18 +103,19 @@ canvas {
 }
 
 #loading-overlay h1 {
+  font-family: var(--font-headline);
   font-size: 1.8rem;
-  font-weight: 300;
+  font-weight: 700;
   letter-spacing: 0.3em;
   text-transform: uppercase;
-  color: #f0c060;
+  color: var(--primary);
   margin-bottom: 2rem;
-  text-shadow: 0 0 30px rgba(240, 192, 96, 0.4);
+  text-shadow: 0 0 30px color-mix(in srgb, var(--primary) 40%, transparent);
 }
 
 #loading-overlay .subtitle {
   font-size: 0.85rem;
-  color: #888;
+  color: var(--secondary);
   letter-spacing: 0.15em;
   margin-bottom: 2.5rem;
 }
@@ -53,7 +123,7 @@ canvas {
 .progress-container {
   width: 300px;
   height: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -61,16 +131,16 @@ canvas {
 .progress-bar {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, #f0c060, #ff8040);
+  background: linear-gradient(90deg, var(--primary), var(--primary-fixed-dim));
   border-radius: 2px;
   transition: width 0.3s ease;
-  box-shadow: 0 0 12px rgba(240, 192, 96, 0.5);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 50%, transparent);
 }
 
 #loading-status {
   margin-top: 1.2rem;
   font-size: 0.75rem;
-  color: #666;
+  color: var(--icon);
   letter-spacing: 0.1em;
 }
 
@@ -80,22 +150,24 @@ canvas {
   bottom: 20px;
   left: 20px;
   z-index: 100;
-  background: rgba(10, 10, 26, 0.85);
+  background: var(--panel-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(240, 192, 96, 0.15);
+  border: 1px solid var(--ghost-border);
   border-radius: 12px;
   padding: 14px 18px;
   font-size: 0.7rem;
-  color: #999;
+  color: var(--secondary);
   line-height: 1.6;
   pointer-events: none;
+  box-shadow: 0 8px 24px var(--ambient-shadow);
 }
 
 #info-panel .title {
+  font-family: var(--font-headline);
   font-size: 0.8rem;
-  color: #f0c060;
-  font-weight: 500;
+  color: var(--primary);
+  font-weight: 700;
   letter-spacing: 0.08em;
   margin-bottom: 4px;
 }
@@ -104,15 +176,15 @@ canvas {
    visually with the hud-title to its right. Color tint follows performance
    bands via [data-quality]. */
 #fps-counter {
-  font-family: "Courier New", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   padding: 1px 7px;
   border-radius: 3px;
-  border: 1px solid rgba(240, 192, 96, 0.3);
-  background: rgba(240, 192, 96, 0.06);
-  color: rgba(240, 192, 96, 0.85);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  color: color-mix(in srgb, var(--primary) 85%, transparent);
   white-space: nowrap;
   min-width: 52px;
   text-align: center;
@@ -127,21 +199,21 @@ canvas {
 }
 
 #fps-counter[data-quality="good"] {
-  color: #4f4;
-  border-color: rgba(68, 255, 68, 0.3);
-  background: rgba(68, 255, 68, 0.06);
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+  background: color-mix(in srgb, var(--ok) 6%, transparent);
 }
 
 #fps-counter[data-quality="ok"] {
-  color: #f0c060;
-  border-color: rgba(240, 192, 96, 0.35);
-  background: rgba(240, 192, 96, 0.06);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
 }
 
 #fps-counter[data-quality="poor"] {
-  color: #ff7a7a;
-  border-color: rgba(255, 100, 100, 0.4);
-  background: rgba(255, 80, 80, 0.08);
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
   animation: hud-pulse 2s ease-in-out infinite;
 }
 
@@ -156,11 +228,11 @@ canvas {
   display: flex;
   align-items: center;
   gap: 16px;
-  background: rgba(136, 0, 0, 0.35);
-  color: #ffffff;
-  border: 2px solid rgba(255, 0, 0, 0.5);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  background: color-mix(in srgb, var(--error) 25%, var(--surface-container-lowest) 35%);
+  color: var(--text);
+  border: 2px solid var(--error-container-border);
+  box-shadow: 0 4px 16px var(--ambient-shadow);
+  font-family: var(--font-body);
   pointer-events: none;
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
@@ -181,15 +253,15 @@ canvas {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #ffcc44;
-  background: rgba(80, 55, 0, 0.5);
-  border: 1px solid rgba(255, 180, 0, 0.35);
+  color: var(--caution);
+  background: color-mix(in srgb, var(--caution) 18%, var(--surface-container-lowest) 50%);
+  border: 1px solid color-mix(in srgb, var(--caution) 35%, transparent);
   border-radius: 4px;
   pointer-events: none;
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-  text-shadow: 0 0 3px rgba(255, 180, 0, 0.3);
+  font-family: var(--font-headline);
+  text-shadow: 0 0 3px color-mix(in srgb, var(--caution) 30%, transparent);
   animation: hud-pulse 3s ease-in-out infinite;
 }
 
@@ -215,7 +287,7 @@ canvas {
   pointer-events: none;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-body);
   border-radius: 4px;
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
@@ -225,19 +297,19 @@ canvas {
 }
 
 #spotlight-warning[data-severity="caution"] {
-  background: rgba(80, 55, 0, 0.55);
-  border: 1px solid rgba(255, 180, 0, 0.45);
-  color: #ffd884;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  text-shadow: 0 0 4px rgba(255, 180, 0, 0.2);
+  background: color-mix(in srgb, var(--caution) 20%, var(--surface-container-lowest) 55%);
+  border: 1px solid color-mix(in srgb, var(--caution) 45%, transparent);
+  color: var(--caution);
+  box-shadow: 0 4px 16px var(--ambient-shadow);
+  text-shadow: 0 0 4px color-mix(in srgb, var(--caution) 20%, transparent);
 }
 
 #spotlight-warning[data-severity="critical"] {
-  background: rgba(80, 10, 10, 0.6);
-  border: 1px solid rgba(255, 70, 70, 0.55);
-  color: #ffb3b3;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-  text-shadow: 0 0 4px rgba(255, 0, 0, 0.25);
+  background: color-mix(in srgb, var(--error) 25%, var(--surface-container-lowest) 60%);
+  border: 1px solid var(--error-container-border);
+  color: var(--error);
+  box-shadow: 0 4px 16px var(--ambient-shadow);
+  text-shadow: 0 0 4px color-mix(in srgb, var(--error) 25%, transparent);
   animation: hud-pulse 2.5s ease-in-out infinite;
 }
 
@@ -256,6 +328,7 @@ canvas {
 }
 
 #spotlight-warning .sw-title {
+  font-family: var(--font-headline);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -265,19 +338,19 @@ canvas {
 }
 
 #spotlight-warning .sw-count {
-  font-family: "Courier New", monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
   padding: 0 5px;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.25);
+  background: color-mix(in srgb, var(--surface-container-lowest) 25%, transparent);
 }
 
 #spotlight-warning code {
-  font-family: "Courier New", monospace;
+  font-family: var(--font-mono);
   font-size: 0.95em;
   padding: 0 4px;
   border-radius: 2px;
-  background: rgba(0, 0, 0, 0.25);
+  background: color-mix(in srgb, var(--surface-container-lowest) 25%, transparent);
 }
 
 #spotlight-warning .sw-close {
@@ -290,7 +363,7 @@ canvas {
   padding: 0;
   border-radius: 3px;
   border: 1px solid currentColor;
-  background: rgba(0, 0, 0, 0.2);
+  background: color-mix(in srgb, var(--surface-container-lowest) 20%, transparent);
   color: inherit;
   cursor: pointer;
   font-size: 0.75rem;
@@ -301,12 +374,12 @@ canvas {
   justify-content: center;
   opacity: 0.65;
   transition: opacity 0.15s ease, background 0.15s ease, transform 0.1s ease;
-  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 #spotlight-warning .sw-close:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 #spotlight-warning .sw-close:active {
@@ -317,12 +390,13 @@ canvas {
 
 .engine-blackout-title {
   flex: 0 0 auto;
+  font-family: var(--font-headline);
   font-size: clamp(1rem, 2.6vw, 1.8rem);
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #ffaaaa;
-  text-shadow: 0 0 4px rgba(255, 0, 0, 0.5);
+  color: var(--error);
+  text-shadow: 0 0 4px color-mix(in srgb, var(--error) 50%, transparent);
 }
 
 .engine-blackout-message {
@@ -331,7 +405,7 @@ canvas {
   font-size: clamp(0.78rem, 1.6vw, 1rem);
   font-weight: 600;
   line-height: 1.25;
-  color: #ffffff;
+  color: var(--text);
 }
 
 .engine-blackout-clear {
@@ -377,7 +451,7 @@ body.edit-mode-active #engine-params-panel {
   position: absolute;
   width: 32px;
   height: 32px;
-  border-color: rgba(240, 192, 96, 0.4);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
   border-style: solid;
   border-width: 0;
 }
@@ -409,7 +483,7 @@ body.edit-mode-active #engine-params-panel {
 /* Edge scan lines */
 .hud-edge {
   position: absolute;
-  background: rgba(240, 192, 96, 0.08);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 .hud-edge.top, .hud-edge.bottom {
@@ -439,31 +513,33 @@ body.edit-mode-active #engine-params-panel {
   align-items: center;
   gap: 10px;
   padding: 0 12px;
-  background: rgba(10, 10, 26, 0.5);
+  background: var(--sidebar-background);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  border-bottom: 1px solid var(--ghost-border);
   pointer-events: auto;
 }
 
 .hud-title {
+  font-family: var(--font-headline);
   font-size: 0.6rem;
   font-weight: 500;
   letter-spacing: 0.2em;
-  color: rgba(240, 192, 96, 0.6);
+  color: color-mix(in srgb, var(--primary) 75%, var(--text));
   text-transform: uppercase;
   flex: 1;
 }
 
 .hud-status {
+  font-family: var(--font-headline);
   font-size: 0.5rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.15em;
-  color: #4f4;
+  color: var(--ok);
   padding: 1px 6px;
-  border: 1px solid rgba(68, 255, 68, 0.25);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent);
   border-radius: 3px;
-  background: rgba(68, 255, 68, 0.06);
+  background: color-mix(in srgb, var(--ok) 6%, transparent);
   animation: hud-pulse 2s ease-in-out infinite;
 }
 
@@ -473,9 +549,9 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .hud-close {
-  background: rgba(255, 85, 85, 0.1);
-  border: 1px solid rgba(255, 85, 85, 0.3);
-  color: #ff5555;
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
   width: 20px;
   height: 20px;
   border-radius: 3px;
@@ -490,9 +566,9 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .hud-close:hover {
-  color: #ff5555;
-  border-color: rgba(255, 85, 85, 0.4);
-  background: rgba(255, 85, 85, 0.1);
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 /* View presets */
@@ -512,40 +588,40 @@ body.edit-mode-active #engine-params-panel {
   gap: 0;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid rgba(240, 192, 96, 0.2);
-  background: rgba(10, 10, 26, 0.8);
+  border: 1px solid var(--ghost-border);
+  background: var(--panel-bg);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   transition: all 0.25s ease;
 }
 
 #view-presets .preset-group:hover {
-  border-color: rgba(240, 192, 96, 0.45);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
 #view-presets .preset-name {
   background: none;
   border: none;
-  color: #ccc;
+  color: var(--text);
   padding: 7px 10px;
   font-size: 0.7rem;
   cursor: pointer;
   letter-spacing: 0.06em;
   transition: all 0.25s ease;
   white-space: nowrap;
-  font-family: inherit;
+  font-family: var(--font-headline);
 }
 
 #view-presets .preset-name:hover {
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.08);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 #view-presets .preset-action {
   background: none;
   border: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  color: #666;
+  border-left: 1px solid var(--ghost-border);
+  color: var(--icon);
   padding: 7px 5px;
   font-size: 0.55rem;
   cursor: pointer;
@@ -554,40 +630,42 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #view-presets .preset-action:hover {
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.1);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
 #view-presets .preset-action.remove:hover {
-  color: #ff5555;
-  background: rgba(255, 85, 85, 0.1);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 #view-presets .preset-add {
-  background: rgba(10, 10, 26, 0.8);
+  background: var(--panel-bg);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(240, 192, 96, 0.2);
-  color: #888;
+  border: 1px solid var(--ghost-border);
+  color: var(--secondary);
   padding: 7px 10px;
   border-radius: 8px;
   font-size: 0.75rem;
   cursor: pointer;
   transition: all 0.25s ease;
-  font-family: inherit;
+  font-family: var(--font-headline);
 }
 
 #view-presets .preset-add:hover {
-  border-color: rgba(240, 192, 96, 0.6);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.08);
-  box-shadow: 0 0 16px rgba(240, 192, 96, 0.15);
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 /* ─── Floating GUI Panel ─── */
 #gui-panel {
   position: fixed;
-  top: 10px;
+  /* Below the HUD top-bar exclusion strip (panel_layout.js TOP_MIN) so the
+     scene/theme selects, LIVE chip, and exit button stay reachable. */
+  top: 44px;
   right: 10px;
   width: 330px;
   height: 80vh;
@@ -598,12 +676,12 @@ body.edit-mode-active #engine-params-panel {
   z-index: 100;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 10, 20, 0.92);
+  background: var(--panel-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(240, 192, 96, 0.2);
-  border-radius: 10px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--ghost-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px var(--ambient-shadow);
   overflow: hidden;
   font-family: inherit;
   resize: both;
@@ -624,8 +702,8 @@ body.edit-mode-active #engine-params-panel {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.4);
-  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--ghost-border);
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
@@ -636,10 +714,11 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .gui-panel-title {
+  font-family: var(--font-headline);
   font-size: 0.65rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.15em;
-  color: rgba(240, 192, 96, 0.8);
+  color: var(--primary);
   text-transform: uppercase;
   flex: 1;
 }
@@ -650,7 +729,7 @@ body.edit-mode-active #engine-params-panel {
   overflow-x: hidden;
   min-height: 0;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  scrollbar-color: var(--ghost-border) transparent;
 }
 
 /* lil-gui inside panel — strip own positioning/scrolling, panel handles it */
@@ -662,16 +741,19 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: none;
 }
 
-/* ─── Compact/Dense GUI Overrides ─── */
+/* ─── Compact/Dense GUI Overrides ───
+   lil-gui consumes these custom properties natively — mapping them to the
+   palette tokens themes the whole controller tree. */
 .lil-gui {
-  --background-color: rgba(15, 15, 20, 0.85);
-  --text-color: #d0d0d0;
-  --title-background-color: rgba(0, 0, 0, 0.6);
-  --widget-color: #333;
-  --hover-color: #444;
-  --focus-color: #555;
-  --number-color: #f0c060;
-  --string-color: #f0c060;
+  --background-color: color-mix(in srgb, var(--surface-container-low) 85%, transparent);
+  --text-color: var(--text);
+  --title-background-color: var(--panel-header-bg);
+  --widget-color: var(--control-bg);
+  --hover-color: var(--control-bg-hover);
+  --focus-color: color-mix(in srgb, var(--control-bg) 80%, var(--text));
+  --number-color: var(--primary);
+  --string-color: var(--primary);
+  --font-family: var(--font-body);
   --font-size: 10px;
   --input-font-size: 10px;
   --padding: 4px;
@@ -684,13 +766,13 @@ body.edit-mode-active #engine-params-panel {
 .lil-gui.root {
   width: 320px !important;
   border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 20px var(--ambient-shadow);
 }
 
 .lil-gui .title {
   padding-top: 3px;
   padding-bottom: 3px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--ghost-border);
 }
 
 .lil-gui .controller {
@@ -707,8 +789,8 @@ body.edit-mode-active #engine-params-panel {
 .lil-gui.gui-card {
   margin: 3px 0 !important;
   border-radius: 6px !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
-  background: rgba(20, 20, 30, 0.6) !important;
+  border: 1px solid var(--ghost-border) !important;
+  background: color-mix(in srgb, var(--surface-container-high) 60%, transparent) !important;
   transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
 }
 
@@ -723,48 +805,50 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .lil-gui.gui-card:hover {
-  border-color: rgba(255, 255, 255, 0.12) !important;
-  background: rgba(25, 25, 38, 0.7) !important;
+  border-color: color-mix(in srgb, var(--text) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--surface-container-high) 70%, transparent) !important;
 }
 
-/* Selected / focused card — warm gold accent */
+/* Selected / focused card — primary accent */
 .lil-gui.gui-card.gui-card-selected {
-  border-color: rgba(240, 192, 96, 0.7) !important;
-  background: rgba(240, 192, 96, 0.08) !important;
-  box-shadow: 0 0 16px rgba(240, 192, 96, 0.18), inset 0 0 0 1px rgba(240, 192, 96, 0.12);
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent) !important;
+  background: color-mix(in srgb, var(--primary) 8%, transparent) !important;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 18%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .lil-gui.gui-card.gui-card-selected > .title {
-  color: #f5d070 !important;
-  background: rgba(240, 192, 96, 0.15) !important;
+  color: var(--primary) !important;
+  background: color-mix(in srgb, var(--primary) 15%, transparent) !important;
 }
 
 .lil-gui.gui-card.gui-card-selected:hover {
-  border-color: rgba(240, 192, 96, 0.85) !important;
-  box-shadow: 0 0 22px rgba(240, 192, 96, 0.22), inset 0 0 0 1px rgba(240, 192, 96, 0.15);
+  border-color: color-mix(in srgb, var(--primary) 85%, transparent) !important;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--primary) 22%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 /* ─── Recursive indentation for nested folders ─── */
 .lil-gui .lil-gui > .children {
   margin-left: 6px;
   padding-left: 8px;
-  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 1px solid var(--ghost-border);
 }
 
-/* Slightly brighter guide for deeper nesting */
+/* Slightly fainter guide for deeper nesting */
 .lil-gui .lil-gui .lil-gui > .children {
-  border-left-color: rgba(255, 255, 255, 0.04);
+  border-left-color: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
 /* Even deeper levels */
 .lil-gui .lil-gui .lil-gui .lil-gui > .children {
-  border-left-color: rgba(255, 255, 255, 0.03);
+  border-left-color: color-mix(in srgb, var(--text) 3%, transparent);
 }
 
 /* ─── Pattern Editor Panel ─── */
 #pattern-editor-panel {
   position: fixed;
-  top: 65px;
+  top: 52px;
   left: 14px;
   width: 400px;
   height: 520px;
@@ -775,12 +859,12 @@ body.edit-mode-active #engine-params-panel {
   z-index: 95;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 10, 20, 0.92);
+  background: var(--panel-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(240, 192, 96, 0.2);
-  border-radius: 10px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--ghost-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px var(--ambient-shadow);
   transition: height 0.25s ease, opacity 0.2s ease;
   overflow: hidden;
   font-family: inherit;
@@ -806,8 +890,8 @@ body.edit-mode-active #engine-params-panel {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.4);
-  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--ghost-border);
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
@@ -818,22 +902,23 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .pe-header .pe-title {
+  font-family: var(--font-headline);
   font-size: 0.65rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.15em;
-  color: rgba(240, 192, 96, 0.8);
+  color: var(--primary);
   text-transform: uppercase;
   flex: 1;
 }
 
 .pe-header .pe-btn {
   padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--ghost-border);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #aaa;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--secondary);
   font-size: 0.65rem;
-  font-family: inherit;
+  font-family: var(--font-headline);
   font-weight: 600;
   cursor: pointer;
   letter-spacing: 0.05em;
@@ -841,34 +926,34 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .pe-header .pe-btn:hover {
-  border-color: rgba(240, 192, 96, 0.5);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.1);
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
 .pe-header .pe-btn.pe-run {
-  border-color: rgba(68, 255, 68, 0.3);
-  color: rgba(120, 255, 120, 0.9);
-  background: rgba(30, 60, 30, 0.3);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
 }
 
 .pe-header .pe-btn.pe-run:hover {
-  border-color: rgba(68, 255, 68, 0.6);
-  color: #7f7;
-  background: rgba(40, 80, 40, 0.4);
-  box-shadow: 0 0 12px rgba(68, 255, 68, 0.15);
+  border-color: color-mix(in srgb, var(--ok) 60%, transparent);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ok) 15%, transparent);
 }
 
 .pe-header .pe-btn.pe-save {
-  border-color: rgba(240, 192, 96, 0.3);
-  color: rgba(240, 192, 96, 0.9);
-  background: rgba(60, 48, 20, 0.3);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 .pe-header .pe-btn.pe-save:hover {
-  border-color: rgba(240, 192, 96, 0.6);
-  color: #f0c060;
-  background: rgba(80, 60, 20, 0.4);
-  box-shadow: 0 0 12px rgba(240, 192, 96, 0.15);
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 /* Preset bar */
@@ -877,7 +962,7 @@ body.edit-mode-active #engine-params-panel {
   align-items: flex-start;
   gap: 4px;
   padding: 5px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--ghost-border);
 }
 .pe-preset-buttons {
   display: flex;
@@ -893,29 +978,29 @@ body.edit-mode-active #engine-params-panel {
   width: 4px;
 }
 .pe-preset-buttons::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--ghost-border);
   border-radius: 2px;
 }
 .pe-preset-buttons button {
   padding: 2px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ghost-border);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #aaa;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--secondary);
   font-size: 0.6rem;
   font-family: inherit;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .pe-preset-buttons button:hover {
-  border-color: rgba(240, 192, 96, 0.4);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.08);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 .pe-preset-buttons button.active {
-  border-color: rgba(240, 192, 96, 0.5);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.12);
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   font-weight: 600;
 }
 .pe-preset-toolbar {
@@ -926,10 +1011,10 @@ body.edit-mode-active #engine-params-panel {
 .pe-toolbar-btn {
   width: 22px;
   height: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ghost-border);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #999;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
@@ -939,14 +1024,14 @@ body.edit-mode-active #engine-params-panel {
   transition: all 0.15s ease;
 }
 .pe-toolbar-btn:hover {
-  border-color: rgba(240, 192, 96, 0.5);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.1);
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 .pe-toolbar-btn.pe-danger:hover {
-  border-color: rgba(255, 80, 80, 0.5);
-  color: #f55;
-  background: rgba(255, 80, 80, 0.1);
+  border-color: color-mix(in srgb, var(--error) 50%, transparent);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 /* Code textarea */
@@ -963,9 +1048,9 @@ body.edit-mode-active #engine-params-panel {
   resize: none;
   border: none;
   outline: none;
-  background: rgba(0, 0, 0, 0.3);
-  color: #d4d4d4;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  background: color-mix(in srgb, var(--surface-container-lowest) 50%, transparent);
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   padding: 12px 14px;
@@ -974,20 +1059,20 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .pe-textarea::selection {
-  background: rgba(240, 192, 96, 0.25);
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .pe-textarea:focus {
-  background: rgba(0, 0, 0, 0.4);
+  background: color-mix(in srgb, var(--surface-container-lowest) 65%, transparent);
 }
 
 /* Status / error bar */
 .pe-status {
   padding: 6px 12px;
   font-size: 0.65rem;
-  font-family: "Consolas", monospace;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  border-top: 1px solid var(--ghost-border);
+  background: color-mix(in srgb, var(--surface-container-lowest) 40%, transparent);
   flex-shrink: 0;
   min-height: 28px;
   display: flex;
@@ -996,13 +1081,13 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .pe-status.ok {
-  color: rgba(120, 255, 120, 0.8);
+  color: var(--ok);
 }
 
 .pe-status.error {
-  color: #ff6666;
-  background: rgba(80, 20, 20, 0.3);
-  border-top-color: rgba(255, 60, 60, 0.15);
+  color: var(--error);
+  background: var(--error-container);
+  border-top-color: var(--error-container-border);
 }
 
 .pe-status .pe-status-icon {
@@ -1014,17 +1099,17 @@ body.edit-mode-active #engine-params-panel {
   display: flex;
   gap: 4px;
   padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--surface-container-lowest) 30%, transparent);
+  border-bottom: 1px solid var(--ghost-border);
   flex-shrink: 0;
 }
 
 .pe-presets button {
   padding: 3px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ghost-border);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.03);
-  color: #888;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  color: var(--secondary);
   font-size: 0.6rem;
   font-family: inherit;
   cursor: pointer;
@@ -1032,39 +1117,43 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .pe-presets button:hover {
-  border-color: rgba(240, 192, 96, 0.4);
-  color: #f0c060;
-  background: rgba(240, 192, 96, 0.06);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
 }
 
 /* API reference panel */
 .pe-docs {
   padding: 10px 14px;
   font-size: 0.6rem;
-  color: #888;
+  color: var(--secondary);
   line-height: 1.5;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.15);
+  border-top: 1px solid var(--ghost-border);
+  background: color-mix(in srgb, var(--surface-container-lowest) 25%, transparent);
   max-height: 140px;
   overflow-y: auto;
   flex-shrink: 0;
 }
 
 .pe-docs code {
-  color: #8cc0ff;
-  font-family: "Consolas", monospace;
+  color: var(--tint);
+  font-family: var(--font-mono);
   font-size: 0.6rem;
 }
 
 .pe-docs .pe-docs-title {
-  color: rgba(240, 192, 96, 0.7);
-  font-weight: 600;
+  font-family: var(--font-headline);
+  color: var(--primary);
+  font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   margin-bottom: 4px;
 }
 
-/* ─── sACN Monitor Panel ─── */
+/* ─── sACN Monitor Panel ───
+   Monitors keep a distinct accent — `secondary` — so they read as
+   telemetry rather than editor chrome (matches the old blue-vs-gold
+   split using palette roles). */
 #sacn-in-monitor-panel, #sacn-out-monitor-panel {
   position: fixed;
   top: 60px;
@@ -1078,12 +1167,12 @@ body.edit-mode-active #engine-params-panel {
   z-index: 200;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 10, 20, 0.92);
+  background: var(--panel-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(96, 192, 240, 0.2);
-  border-radius: 10px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--ghost-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px var(--ambient-shadow);
   transition: height 0.25s ease, opacity 0.2s ease;
   overflow: hidden;
   font-family: inherit;
@@ -1091,7 +1180,11 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #sacn-out-monitor-panel {
-  top: 600px; /* positioned perfectly under the pattern editor (65px + 520px + 15px pad) */
+  /* Bottom-anchored: viewport-height-proof, expands upward, and clears the
+     unpatched-warning pill (bottom: 140) and info panel (bottom: 20). A
+     drag or persisted geometry switches it to top-anchoring inline. */
+  top: auto;
+  bottom: 180px;
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {
@@ -1112,8 +1205,8 @@ body.edit-mode-active #engine-params-panel {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.4);
-  border-bottom: 1px solid rgba(96, 192, 240, 0.12);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--ghost-border);
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
@@ -1124,10 +1217,11 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .sacn-title {
+  font-family: var(--font-headline);
   font-size: 0.65rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.15em;
-  color: rgba(96, 192, 240, 0.8);
+  color: var(--secondary);
   text-transform: uppercase;
   flex: 1;
 }
@@ -1136,18 +1230,18 @@ body.edit-mode-active #engine-params-panel {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #555;
+  background: var(--icon);
   transition: background 0.3s ease;
 }
 
 .sacn-status-dot.connected {
-  background: #4cdf6e;
-  box-shadow: 0 0 6px rgba(76, 223, 110, 0.5);
+  background: var(--ok);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 50%, transparent);
 }
 
 .sacn-status-dot.receiving {
-  background: #60c0f0;
-  box-shadow: 0 0 6px rgba(96, 192, 240, 0.5);
+  background: var(--tint);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--tint) 50%, transparent);
   animation: sacn-pulse 1s ease infinite;
 }
 
@@ -1181,24 +1275,24 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .sacn-label {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--icon);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-size: 0.55rem;
 }
 
 .sacn-value {
-  color: rgba(255, 255, 255, 0.85);
-  font-family: 'SF Mono', 'Menlo', monospace;
+  color: var(--text);
+  font-family: var(--font-mono);
   font-size: 0.65rem;
 }
 
 .sacn-log-title {
   font-size: 0.55rem;
-  color: rgba(96, 192, 240, 0.5);
+  color: var(--secondary);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--ghost-border);
   padding-top: 6px;
 }
 
@@ -1207,9 +1301,9 @@ body.edit-mode-active #engine-params-panel {
   min-height: 60px;
   max-height: 200px;
   overflow-y: auto;
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-mono);
   font-size: 0.55rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
   line-height: 1.5;
 }
 
@@ -1220,25 +1314,25 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .sacn-log .sacn-entry.source {
-  color: rgba(96, 192, 240, 0.8);
+  color: var(--tint);
 }
 
 .sacn-log .sacn-entry.warn {
-  color: rgba(240, 192, 96, 0.8);
+  color: var(--caution);
 }
 
 .sacn-log .sacn-entry.error {
-  color: rgba(240, 96, 96, 0.8);
+  color: var(--error);
 }
 
-/* ─── Scene Switcher ─── */
-#scene-select {
-  background: rgba(240, 192, 96, 0.08);
-  border: 1px solid rgba(240, 192, 96, 0.3);
+/* ─── HUD selects (scene switcher + theme picker) ─── */
+#scene-select, #theme-select {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
   border-radius: 4px;
-  color: rgba(240, 192, 96, 0.9);
+  color: var(--primary);
   font-size: 0.6rem;
-  font-family: inherit;
+  font-family: var(--font-headline);
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1250,14 +1344,14 @@ body.edit-mode-active #engine-params-panel {
   transition: all 0.2s ease;
 }
 
-#scene-select:hover {
-  background: rgba(240, 192, 96, 0.15);
-  border-color: rgba(240, 192, 96, 0.6);
+#scene-select:hover, #theme-select:hover {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
 }
 
-#scene-select option {
-  background: #111;
-  color: rgba(240, 192, 96, 0.9);
+#scene-select option, #theme-select option {
+  background: var(--surface-container-lowest);
+  color: var(--primary);
 }
 
 /* ─── Small Screen / Mobile Responsive ─── */
@@ -1341,19 +1435,22 @@ body.edit-mode-active #engine-params-panel {
 /* ─── Views editor panel ─────────────────────────────────────────────── */
 #view-masks-panel {
   position: fixed;
-  top: 65px;
+  /* Below the isolation HUD slot (top:44, ~32px tall) so the two are
+     never stacked during the isolate-from-views workflow. The right
+     offset is recomputed from the live gui-panel width on toggle. */
+  top: 84px;
   right: 360px;
   width: 300px;
   max-height: 70vh;
   z-index: 95;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 10, 20, 0.92);
+  background: var(--panel-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(240, 192, 96, 0.2);
-  border-radius: 10px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--ghost-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px var(--ambient-shadow);
   overflow: hidden;
   font-family: inherit;
 }
@@ -1371,8 +1468,8 @@ body.edit-mode-active #engine-params-panel {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.4);
-  border-bottom: 1px solid rgba(240, 192, 96, 0.12);
+  background: var(--panel-header-bg);
+  border-bottom: 1px solid var(--ghost-border);
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
@@ -1384,10 +1481,11 @@ body.edit-mode-active #engine-params-panel {
 
 .vm-title {
   flex: 1;
+  font-family: var(--font-headline);
   font-size: 0.65rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.15em;
-  color: rgba(240, 192, 96, 0.8);
+  color: var(--primary);
   text-transform: uppercase;
 }
 
@@ -1397,10 +1495,11 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-section-title {
+  font-family: var(--font-headline);
   font-size: 0.55rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.12em;
-  color: rgba(240, 192, 96, 0.55);
+  color: color-mix(in srgb, var(--primary) 70%, var(--secondary));
   margin: 8px 0 4px;
 }
 
@@ -1410,7 +1509,7 @@ body.edit-mode-active #engine-params-panel {
   gap: 6px;
   padding: 2px 4px;
   font-size: 10px;
-  color: #d0d0d0;
+  color: var(--text);
 }
 
 .vm-row .vm-name {
@@ -1421,24 +1520,24 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-row .vm-bit {
-  color: rgba(240, 192, 96, 0.7);
-  font-family: 'JetBrains Mono', monospace;
+  color: var(--primary);
+  font-family: var(--font-mono);
   font-size: 9px;
 }
 
 .vm-card {
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ghost-border);
   border-radius: 6px;
   padding: 5px;
   margin-bottom: 5px;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 
 .vm-input {
-  background: #1c1c28;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--ghost-border);
   border-radius: 4px;
-  color: #e0e0e0;
+  color: var(--text);
   font-size: 10px;
   font-family: inherit;
   padding: 2px 5px;
@@ -1446,7 +1545,7 @@ body.edit-mode-active #engine-params-panel {
 
 .vm-input.vm-bit {
   width: 70px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .vm-groups {
@@ -1457,10 +1556,10 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-chip {
-  background: rgba(240, 192, 96, 0.12);
-  border: 1px solid rgba(240, 192, 96, 0.25);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
   border-radius: 8px;
-  color: rgba(240, 192, 96, 0.85);
+  color: var(--primary);
   font-size: 9px;
   padding: 1px 6px;
   cursor: pointer;
@@ -1468,16 +1567,16 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-chip:hover {
-  background: rgba(240, 96, 96, 0.18);
-  border-color: rgba(240, 96, 96, 0.4);
-  color: #f08080;
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  color: var(--error);
 }
 
 .vm-select {
-  background: #1c1c28;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--ghost-border);
   border-radius: 4px;
-  color: #999;
+  color: var(--secondary);
   font-size: 9px;
   padding: 1px 3px;
   cursor: pointer;
@@ -1493,14 +1592,14 @@ body.edit-mode-active #engine-params-panel {
 .vm-count {
   flex: 1;
   font-size: 9px;
-  color: #888;
+  color: var(--secondary);
 }
 
 .vm-btn {
-  background: rgba(240, 192, 96, 0.1);
-  border: 1px solid rgba(240, 192, 96, 0.25);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
   border-radius: 4px;
-  color: rgba(240, 192, 96, 0.85);
+  color: var(--primary);
   font-size: 9px;
   font-family: inherit;
   padding: 2px 6px;
@@ -1508,7 +1607,7 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-btn:hover {
-  background: rgba(240, 192, 96, 0.22);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
 .vm-btn.vm-add {
@@ -1519,18 +1618,18 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-btn.vm-danger {
-  background: rgba(240, 96, 96, 0.08);
-  border-color: rgba(240, 96, 96, 0.3);
-  color: #e08080;
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
 }
 
 .vm-btn.vm-danger:hover {
-  background: rgba(240, 96, 96, 0.2);
+  background: color-mix(in srgb, var(--error) 20%, transparent);
 }
 
 .vm-hint {
   font-size: 8.5px;
-  color: #666;
+  color: var(--icon);
   line-height: 1.4;
   margin-top: 8px;
 }
@@ -1541,34 +1640,34 @@ body.edit-mode-active #engine-params-panel {
   width: 100%;
   margin-top: 4px;
   padding: 4px;
-  background: rgba(30, 60, 30, 0.35);
-  border: 1px solid rgba(51, 204, 51, 0.25);
-  color: rgba(120, 220, 120, 0.9);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent);
+  color: var(--ok);
 }
 
 .vm-btn.vm-save:hover {
-  background: rgba(40, 80, 40, 0.45);
-  border-color: rgba(51, 204, 51, 0.5);
-  color: #7f7;
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
+  color: var(--ok);
 }
 
 .vm-btn.vm-save.vm-dirty {
-  background: rgba(80, 60, 20, 0.45);
-  border-color: rgba(240, 192, 96, 0.5);
-  color: #f0c060;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  color: var(--primary);
   animation: vm-pulse-border 1.5s infinite ease-in-out;
 }
 
 @keyframes vm-pulse-border {
-  0% { box-shadow: 0 0 0 0 rgba(240, 192, 96, 0.3); }
-  50% { box-shadow: 0 0 6px 2px rgba(240, 192, 96, 0.15); }
-  100% { box-shadow: 0 0 0 0 rgba(240, 192, 96, 0.3); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 30%, transparent); }
+  50% { box-shadow: 0 0 6px 2px color-mix(in srgb, var(--primary) 15%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 30%, transparent); }
 }
 
 .vm-btn-prev {
   background: transparent;
   border: none;
-  color: #666;
+  color: var(--icon);
   cursor: pointer;
   font-size: 13px;
   padding: 0 4px;
@@ -1579,19 +1678,20 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-btn-prev:hover {
-  color: rgba(240, 192, 96, 0.85);
+  color: var(--primary);
   transform: scale(1.15);
 }
 
 .vm-btn-prev.active {
-  color: rgba(240, 192, 96, 1);
-  text-shadow: 0 0 8px rgba(240, 192, 96, 0.6);
+  color: var(--primary);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--primary) 60%, transparent);
 }
 
 .vm-card-previewing {
-  border-color: rgba(240, 192, 96, 0.45) !important;
-  background: rgba(240, 192, 96, 0.04) !important;
-  box-shadow: inset 0 0 8px rgba(240, 192, 96, 0.04), 0 2px 10px rgba(0, 0, 0, 0.4);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--primary) 4%, transparent) !important;
+  box-shadow: inset 0 0 8px color-mix(in srgb, var(--primary) 4%, transparent),
+    0 2px 10px var(--ambient-shadow);
 }
 
 /* Modal Overlay styling */
@@ -1601,7 +1701,7 @@ body.edit-mode-active #engine-params-panel {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(4, 4, 8, 0.65);
+  background: color-mix(in srgb, var(--surface-container-lowest) 65%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 9999;
@@ -1613,11 +1713,12 @@ body.edit-mode-active #engine-params-panel {
 
 .vm-modal-card {
   width: 320px;
-  background: rgba(15, 15, 25, 0.95);
-  border: 1px solid rgba(240, 192, 96, 0.25);
-  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  border: 1px solid var(--ghost-border);
+  border-radius: 16px;
   padding: 20px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: 0 20px 50px var(--ambient-shadow),
+    inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1630,24 +1731,25 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-modal-title {
+  font-family: var(--font-headline);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(240, 192, 96, 0.85);
+  color: var(--primary);
 }
 
 .vm-modal-body {
   font-size: 11px;
-  color: #bbb;
+  color: var(--secondary);
   line-height: 1.5;
 }
 
 .vm-modal-input {
-  background: #141420;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--ghost-border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--text);
   font-size: 12px;
   padding: 8px 10px;
   outline: none;
@@ -1657,8 +1759,8 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-modal-input:focus {
-  border-color: rgba(240, 192, 96, 0.5);
-  box-shadow: 0 0 8px rgba(240, 192, 96, 0.15);
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 .vm-modal-actions {
@@ -1669,12 +1771,12 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-modal-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid var(--ghost-border);
   border-radius: 6px;
-  color: #ccc;
+  color: var(--text);
   font-size: 11px;
-  font-family: inherit;
+  font-family: var(--font-headline);
   padding: 6px 14px;
   cursor: pointer;
   font-weight: 600;
@@ -1682,45 +1784,47 @@ body.edit-mode-active #engine-params-panel {
 }
 
 .vm-modal-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
 }
 
 .vm-modal-btn-primary {
-  background: rgba(240, 192, 96, 0.15);
-  border-color: rgba(240, 192, 96, 0.35);
-  color: rgba(240, 192, 96, 0.95);
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  color: var(--primary);
 }
 
 .vm-modal-btn-primary:hover {
-  background: rgba(240, 192, 96, 0.25);
-  border-color: rgba(240, 192, 96, 0.6);
-  color: #f0c060;
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--primary);
 }
 
 .vm-modal-btn-danger {
-  background: rgba(240, 96, 96, 0.15);
-  border-color: rgba(240, 96, 96, 0.3);
-  color: #fca;
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
 }
 
 .vm-modal-btn-danger:hover {
-  background: rgba(240, 96, 96, 0.25);
-  border-color: rgba(240, 96, 96, 0.5);
-  color: #ff9999;
+  background: color-mix(in srgb, var(--error) 25%, transparent);
+  border-color: color-mix(in srgb, var(--error) 50%, transparent);
+  color: var(--error);
 }
 
 /* Floating View Isolation HUD styling */
 #vm-isolation-hud {
   position: fixed;
-  top: 12px;
-  right: 12px;
-  background: rgba(240, 192, 96, 0.12);
-  border: 1px solid rgba(240, 192, 96, 0.35);
-  color: rgba(240, 192, 96, 0.9);
+  /* Below the HUD strip and left of the Lighting Controls dock so it never
+     covers the panel header or the top-bar controls. */
+  top: 44px;
+  right: 350px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface) 60%);
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  color: var(--primary);
   padding: 8px 16px;
   border-radius: 8px;
-  font-family: inherit;
+  font-family: var(--font-headline);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -1730,7 +1834,7 @@ body.edit-mode-active #engine-params-panel {
   display: flex;
   align-items: center;
   gap: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 20px var(--ambient-shadow);
   animation: vm-slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -1740,8 +1844,8 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #vm-isolation-hud button {
-  background: rgba(240, 192, 96, 0.15);
-  border: 1px solid rgba(240, 192, 96, 0.3);
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
   border-radius: 4px;
   color: inherit;
   cursor: pointer;
@@ -1752,7 +1856,7 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #vm-isolation-hud button:hover {
-  background: rgba(240, 96, 96, 0.2);
-  border-color: rgba(240, 96, 96, 0.5);
-  color: #ff9999;
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  border-color: color-mix(in srgb, var(--error) 50%, transparent);
+  color: var(--error);
 }

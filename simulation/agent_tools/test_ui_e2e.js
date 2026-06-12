@@ -32,7 +32,7 @@ const puppeteer = require('puppeteer');
     await new Promise(r => setTimeout(r, 4000));
 
     const ctrlCount = await page.evaluate(() => {
-        const g = document.querySelector('.lil-gui');
+        const g = document.querySelector('.lil-gui, .marsin-gui');
         return g ? g.querySelectorAll('.controller').length : -1;
     });
     console.log("Step 3: Controllers found:", ctrlCount);

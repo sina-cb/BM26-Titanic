@@ -64,13 +64,13 @@ options:
     label: ⚙️ Options
     collapsed: true
   rendererMode:
-    value: webgpu
+    value: webgl
     label: 🚀 Graphics Engine
     options:
       - webgpu
       - webgl
   lightingProfile:
-    value: pixel_mapping
+    value: full
     label: 💡 Lighting Profile
     options:
       - edit
@@ -189,10 +189,3 @@ _camera:
     x: -1.558
     'y': 5.6454
     z: 3.9674
-_patternEditor:
-  x: 0
-  'y': 42
-  width: 400
-  height: 520
-  collapsed: false
-  autoRun: true

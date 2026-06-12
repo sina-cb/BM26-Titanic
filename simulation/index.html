@@ -10,6 +10,7 @@
     />
     <link rel="stylesheet" href="style.css" />
     <link href="./vendor/fonts/inter/inter.css" rel="stylesheet" />
+    <link href="./vendor/fonts/space_grotesk/space_grotesk.css" rel="stylesheet" />
 
     <script type="importmap">
       {
@@ -19,7 +20,13 @@
           "three/tsl": "./vendor/three/build/three.tsl.min.js",
           "three/addons/": "./vendor/three/examples/jsm/",
           "js-yaml": "./vendor/js-yaml/js-yaml.mjs",
-          "chroma-js": "./vendor/chroma-js/index.js"
+          "chroma-js": "./vendor/chroma-js/index.js",
+          "preact": "./vendor/preact/preact.mjs",
+          "preact/hooks": "./vendor/preact/hooks.mjs",
+          "htm": "./vendor/htm/htm.mjs",
+          "htm/preact": "./vendor/htm/htm_preact.mjs",
+          "@preact/signals": "./vendor/preact_signals/signals.mjs",
+          "@preact/signals-core": "./vendor/preact_signals/signals_core.mjs"
         }
       }
     </script>
@@ -42,11 +49,11 @@
         Orbit: Left-click + drag &nbsp;|&nbsp; Zoom: Scroll &nbsp;|&nbsp; Pan:
         Right-click + drag
       </div>
-      <div style="color: #bbb">
+      <div style="color: var(--secondary)">
         Shortcuts: [T]ranslate &nbsp;|&nbsp; [R]otate &nbsp;|&nbsp; [S]cale
         &nbsp;|&nbsp; [D]uplicate &nbsp;|&nbsp; [Del]ete &nbsp;|&nbsp; [P]lace on Surface
       </div>
-      <div style="color: #999; font-size: 0.85em">
+      <div style="color: var(--icon); font-size: 0.85em">
         Ctrl+Z Undo &nbsp;|&nbsp; Ctrl+Shift+Z Redo &nbsp;|&nbsp; Shift+Click Multi-Select
         &nbsp;|&nbsp; [Esc] Deselect/Exit
       </div>
@@ -62,9 +69,10 @@
       <div class="hud-top-bar">
         <span id="fps-counter" data-quality="ok" title="Frames per second"></span>
         <span class="hud-title">
-          BM26 TITANIC — LIGHTING SIM <span style="opacity:0.5;margin:0 4px;">//</span> 
+          BM26 TITANIC — LIGHTING SIM <span style="opacity:0.5;margin:0 4px;">//</span>
           <select id="scene-select" title="Switch scene"></select>
         </span>
+        <select id="theme-select" title="Color theme (matches CaptainPad)"></select>
         <span class="hud-status" id="hud-status">LIVE</span>
         <button class="hud-close" id="hud-close" title="Exit (F11 or Alt+F4)">✕</button>
       </div>
@@ -79,7 +87,7 @@
     <div id="pattern-editor-panel" class="hidden">
       <div class="pe-header" id="pe-drag-handle">
         <span class="pe-title">🎆 Pattern Editor</span>
-        <label style="display:flex;align-items:center;gap:3px;font-size:0.6rem;color:#888;cursor:pointer;"><input type="checkbox" id="pe-autorun" style="margin:0;accent-color:#f0c060;"> Auto</label>
+        <label style="display:flex;align-items:center;gap:3px;font-size:0.6rem;color:var(--secondary);cursor:pointer;"><input type="checkbox" id="pe-autorun" style="margin:0;accent-color:var(--primary);"> Auto</label>
       <button class="pe-btn pe-save" id="pe-save-btn" title="Save current code to pattern file">💾</button>
         <button class="pe-btn pe-run" id="pe-compile-btn" title="Compile & Run (Ctrl+Enter)">▶ Run</button>
         <button class="pe-btn" id="pe-collapse-btn" title="Collapse">─</button>
@@ -122,7 +130,7 @@
         </div>
         <div class="sacn-log-title" style="display:flex; justify-content:space-between;">
           <span>Activity Log</span>
-          <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-in-log').innerHTML=''">Clear</span>
+          <span style="cursor:pointer; color:var(--secondary);" onclick="document.getElementById('sacn-in-log').innerHTML=''">Clear</span>
         </div>
         <div class="sacn-log" id="sacn-in-log"></div>
       </div>
@@ -145,8 +153,8 @@
         <div class="sacn-log-title" style="display:flex; justify-content:space-between; align-items:center;  margin-bottom: 5px;">
           <span>Activity Log</span>
           <div>
-            <button id="sacn-out-blackout-btn" class="pe-btn" onclick="if(window.triggerSacnBlackout) window.triggerSacnBlackout()" style="background:#800; color:#fff; border:1px solid #f00; padding: 2px 6px; margin-right: 5px;" title="Send 0 to all Universes and Disable Output">BLACKOUT</button>
-            <span style="cursor:pointer; color:#8cc;" onclick="document.getElementById('sacn-out-log').innerHTML=''">Clear</span>
+            <button id="sacn-out-blackout-btn" class="pe-btn" onclick="if(window.triggerSacnBlackout) window.triggerSacnBlackout()" style="background:var(--error); color:var(--surface-container-lowest); border:1px solid var(--error-container-border); padding: 2px 6px; margin-right: 5px;" title="Send 0 to all Universes and Disable Output">BLACKOUT</button>
+            <span style="cursor:pointer; color:var(--secondary);" onclick="document.getElementById('sacn-out-log').innerHTML=''">Clear</span>
           </div>
         </div>
         <div class="sacn-log" id="sacn-out-log"></div>
@@ -165,6 +173,9 @@
     <!-- View presets (populated dynamically from scene_preset_cameras.yaml) -->
     <div id="view-presets"></div>
 
+    <!-- Theme system loads first so the palette variables are applied
+         before the heavy main.js module graph finishes fetching. -->
+    <script type="module" src="src/gui/theme.js"></script>
     <script type="module" src="main.js"></script>
   </body>
 </html>

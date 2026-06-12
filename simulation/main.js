@@ -37,6 +37,12 @@ import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
+import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
+import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
+import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
+import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
+import { registerPanel, registerPanelWhenPresent, getStoredGeometry } from "./src/gui/panel_layout.js";
+import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
 
@@ -203,7 +209,11 @@ async function init() {
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
-  setupViewPresets();
+  if (IS_MODERN_UI) {
+    initModernViewPresets();
+  } else {
+    setupViewPresets();
+  }
   setupHUD();
 
   // Start render loop
@@ -457,10 +467,20 @@ Promise.all([
   // In readonly mode (e.g. iPad Monitor), skip all write-capable subsystems
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
+    // Modern shells must mount BEFORE the legacy setup functions attach
+    // their handlers to the same element ids (see modern/SHELL_NOTES.md).
+    if (IS_MODERN_UI) {
+      initModernPatternEditorShell();
+      initModernViewMasksShell();
+    }
     setupPatternEditor();
     setupViewMasksEditor();
-    setupSacnInMonitor();
-    setupSacnOutMonitor();
+    if (IS_MODERN_UI) {
+      initModernSacnMonitors();
+    } else {
+      setupSacnInMonitor();
+      setupSacnOutMonitor();
+    }
     setupSceneIndicator();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
@@ -472,20 +492,74 @@ Promise.all([
     setupSceneIndicator();
   }
 
-  // Restore pattern editor window state
-  if (ct && ct._patternEditor) {
-    const pe = ct._patternEditor;
+  // Panel layout: register floating panels with the layout system
+  // (z band + click-to-front, viewport-clamped geometry restore from
+  // localStorage — replaces the old _patternEditor block in common.yaml).
+  if (!_isReadonly) {
+    // Collapse state must flow through each panel's own collapse button:
+    // the legacy handlers keep private state + a button glyph, so setting
+    // the class directly would desync them (dead first click).
+    const collapseViaButton = (panelEl, btnSelector) => (collapsed) => {
+      if (panelEl.classList.contains('collapsed') === collapsed) return;
+      const btn = panelEl.querySelector(btnSelector);
+      if (btn) btn.click();
+      else panelEl.classList.toggle('collapsed', collapsed);
+    };
+
     const pePanel = document.getElementById('pattern-editor-panel');
     if (pePanel) {
-      if (pe.x !== undefined) pePanel.style.left = pe.x + 'px';
-      if (pe.y !== undefined) pePanel.style.top = Math.max(42, pe.y) + 'px';
-      if (pe.width) pePanel.style.width = pe.width + 'px';
-      if (pe.height) pePanel.style.height = pe.height + 'px';
-      if (pe.collapsed) pePanel.classList.add('collapsed');
+      const applyPeCollapsed = collapseViaButton(pePanel, '#pe-collapse-btn');
+      registerPanel(pePanel, { applyCollapsed: applyPeCollapsed });
+      // 2026-06-12 layout decision: below ~1366px the editor + engine
+      // params eat half the screen, so the editor boots collapsed there
+      // (an operator-saved layout always wins over this default).
+      if (!getStoredGeometry('pattern-editor-panel') && window.innerWidth < 1366) {
+        applyPeCollapsed(true);
+      }
       const autoRunCb = document.getElementById('pe-autorun');
-      if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
+      if (autoRunCb) {
+        // One-time migration: honor an autoRun=true left in scene YAML by
+        // pre-layout-migration saves, then localStorage owns it.
+        if (localStorage.getItem('bm26.sim.peAutoRun') === null
+            && ct && ct._patternEditor && ct._patternEditor.autoRun) {
+          localStorage.setItem('bm26.sim.peAutoRun', '1');
+        }
+        autoRunCb.checked = localStorage.getItem('bm26.sim.peAutoRun') === '1';
+        autoRunCb.addEventListener('change', () => {
+          localStorage.setItem('bm26.sim.peAutoRun', autoRunCb.checked ? '1' : '0');
+        });
+      }
     }
+    const masksPanel = document.getElementById('view-masks-panel');
+    if (masksPanel) registerPanel(masksPanel);
+    if (!IS_MODERN_UI) {
+      // Modern monitors register themselves with collapse-store adapters
+      // in modern_root.js; legacy panels drive their collapse buttons.
+      const inPanel = document.getElementById('sacn-in-monitor-panel');
+      if (inPanel) {
+        registerPanel(inPanel, {
+          applyCollapsed: collapseViaButton(inPanel, '#sacn-in-collapse-btn'),
+        });
+      }
+      const outPanel = document.getElementById('sacn-out-monitor-panel');
+      if (outPanel) {
+        registerPanel(outPanel, {
+          applyCollapsed: collapseViaButton(outPanel, '#sacn-out-collapse-btn'),
+        });
+      }
+    }
+    // Engine params registers itself on every (re)creation —
+    // see ensureGlobalParamsGui() in pattern_editor.js.
   }
+  registerPanelWhenPresent('gui-panel', {
+    applyCollapsed: (collapsed) => {
+      const panel = document.getElementById('gui-panel');
+      if (!panel || panel.classList.contains('collapsed') === collapsed) return;
+      const btn = panel.querySelector('.gui-panel-header button.pe-btn');
+      if (btn) btn.click();
+      else panel.classList.toggle('collapsed', collapsed);
+    },
+  });
 }).catch(async (err) => {
   // A deliberate boot halt (fatalBootError) must NOT fall back to a
   // blank init — the banner explains what to fix; booting anyway would

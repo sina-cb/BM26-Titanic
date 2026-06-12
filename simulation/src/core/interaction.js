@@ -113,7 +113,7 @@ export function nextFixtureName(baseName) {
 // ─── Pointer Move (snap cursor tracking) ─────────────────────────────────
 export function onPointerMove(event) {
   if (!snapMode || !snapCursorGroup) return;
-  if (event.target.closest && event.target.closest('.lil-gui')) {
+  if (event.target.closest && event.target.closest('.lil-gui, .marsin-gui')) {
     snapCursorGroup.visible = false;
     return;
   }
@@ -257,7 +257,7 @@ export function onPointerDown(event) {
     event.target.tagName === "INPUT" ||
     event.target.tagName === "SELECT" ||
     event.target.tagName === "BUTTON" ||
-    event.target.closest(".lil-gui") ||
+    event.target.closest(".lil-gui, .marsin-gui") ||
     event.target.closest(".vm-modal-overlay") ||
     event.target.closest(
       "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
