@@ -157,9 +157,15 @@ export function createControllerRegistry(tree) {
               `gap width ${entry.gap} must be an integer ≥ 1`);
           }
         } else if (isPinnedEntry(entry)) {
-          if (!Number.isInteger(entry.at) || entry.at < 1 || entry.at > DMX_UNIVERSE_SIZE) {
+          // at: 0 is the legitimate "no pin known" state — the panel
+          // writes it when config.yaml has no pin for the type yet.
+          // It must LOAD (the projection flags it loudly as no_pin /
+          // pin_mismatch); treating it as corruption bricked the boot
+          // off a normal UI flow (cold review B1, 2026-06-12).
+          if (!Number.isInteger(entry.at) || entry.at < 0 || entry.at > DMX_UNIVERSE_SIZE) {
             throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
-              `pinned entry '${entry.fixture}' address ${entry.at} must be in 1–${DMX_UNIVERSE_SIZE}`);
+              `pinned entry '${entry.fixture}' address ${entry.at} must be in ` +
+              `1–${DMX_UNIVERSE_SIZE} (or 0 = unpinned)`);
           }
         } else {
           throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
@@ -318,8 +324,11 @@ export function moveChainEntry(port, fromIndex, toIndex) {
 }
 
 /**
- * Rename hook: a live fixture rename must update its chain reference
- * atomically — a rename can never orphan a mapping (docs/33).
+ * Rename support: updates a fixture's chain reference atomically so a
+ * rename can never orphan a mapping (docs/33). NO production caller
+ * yet — fixture names are not editable in today's UI. Wire this into
+ * the rename path BEFORE adding a rename control, or deletions of this
+ * guarantee will be silent.
  */
 export function renameFixtureInChains(registry, oldName, newName) {
   if (!registryIsActive(registry) || oldName === newName) return false;
@@ -430,6 +439,7 @@ export function computeProjection(registry, configsByName, pins) {
   // be overlap-checked AFTER both are packed. Lower port number wins;
   // the higher port's whole chain projects unpatched (docs/33).
   const universeSpans = new Map(); // universe → [{controller, port, start, end}]
+  const pinnedOccupancy = [];      // valid pins, for the effects-universe collision check
 
   for (const { controller, port } of allPortsSorted) {
     const layoutKey = `${controller.id}:${port.port}`;
@@ -446,9 +456,17 @@ export function computeProjection(registry, configsByName, pins) {
     for (const entry of port.chain) {
       const name = entryFixtureName(entry);
 
-      // Gaps consume channels but project nothing.
+      // Gaps consume channels but project nothing. They still join the
+      // port's occupied span: a gap reserves channels for real hardware
+      // not modeled in the sim, so a sibling port packing into it is a
+      // physical DMX collision and must trip the overlap check exactly
+      // like a fixture would (cold review M2, 2026-06-12).
       if (isGapEntry(entry)) {
         layout.push({ entry, name: null, address: cursor, footprint: entry.gap, valid: !chainBroken });
+        if (!portDead && !chainBroken && !isEffectsPort) {
+          if (spanStart === null) spanStart = cursor;
+          spanEnd = Math.min(cursor + entry.gap - 1, DMX_UNIVERSE_SIZE);
+        }
         cursor += entry.gap;
         continue;
       }
@@ -498,20 +516,29 @@ export function computeProjection(registry, configsByName, pins) {
           unpatch(name);
           continue;
         }
-        if (portDead) {
+        // Only a controller-level IP problem invalidates a pin — the
+        // pin ignores its port's universe entirely (it records the
+        // physical cabling), so a contested-universe or overlapping
+        // port still projects its pinned effects (cold review m3).
+        if (badControllers.has(controller)) {
           layout.push({ entry, name, address: pin.address, footprint, valid: false, pinned: true });
           unpatch(name);
           continue;
         }
-        layout.push({
+        const pinItem = {
           entry, name, address: pin.address, footprint, valid: true,
           pinned: true, pinUniverse: pin.universe,
-        });
+        };
+        layout.push(pinItem);
         fields.set(name, {
           controllerIp: controller.ip,
           dmxUniverse: pin.universe,
           dmxAddress: pin.address,
           controllerId: controller.id,
+        });
+        pinnedOccupancy.push({
+          controller, port, name, item: pinItem,
+          universe: pin.universe, start: pin.address, end: pin.address + footprint - 1,
         });
         continue;
       }
@@ -604,13 +631,51 @@ export function computeProjection(registry, configsByName, pins) {
           addViolation('overlap', `U${universe}: ${b.controller.name} port ${b.port.port} ` +
             `(ch ${b.start}–${b.end}) overlaps port ${a.port.port} (ch ${a.start}–${a.end}) — ` +
             `port ${b.port.port}'s chain projects unpatched`, b.controller, b.port);
-          // Unpatch the entire losing chain and mark its layout invalid.
+          // Unpatch the losing chain and mark its layout invalid —
+          // EXCEPT pinned effects: they live on the effects universe,
+          // untouched by this port's packed-channel conflict.
           const layout = portLayouts.get(`${b.controller.id}:${b.port.port}`);
           for (const item of layout) {
+            if (item.pinned) continue;
             item.valid = false;
             if (item.name !== null) unpatch(item.name);
           }
         }
+      }
+    }
+  }
+
+  // ── Effects-universe pin occupancy ────────────────────────────────────
+  // IDENTICAL start addresses are ALLOWED by design: one address
+  // gang-fires several effects at once (operator decision 2026-06-12,
+  // "same address to start multiple foggers at the same time, always").
+  // What IS flagged: a pin whose footprint runs past the universe end
+  // (pin_overflow) and pins at DIFFERENT addresses whose footprints
+  // collide (pin_overlap) — both are config.yaml global_effects errors.
+  // Deterministic loser: the higher address (sorted, ties by name).
+  pinnedOccupancy.sort((a, b) =>
+    a.universe - b.universe || a.start - b.start || a.name.localeCompare(b.name));
+  for (let i = 0; i < pinnedOccupancy.length; i++) {
+    const p = pinnedOccupancy[i];
+    if (p.end > DMX_UNIVERSE_SIZE) {
+      addViolation('pin_overflow', `'${p.name}' pin U${p.universe}:${p.start} spans ` +
+        `ch ${p.start}–${p.end}, past ${DMX_UNIVERSE_SIZE} — fix config.yaml global_effects; ` +
+        'it projects unpatched', p.controller, p.port);
+      p.item.valid = false;
+      unpatch(p.name);
+      continue;
+    }
+    for (let j = i - 1; j >= 0; j--) {
+      const q = pinnedOccupancy[j];
+      if (q.universe !== p.universe) break; // sorted: earlier universes only
+      if (!q.item.valid || q.start === p.start) continue; // shared trigger address = gang-fire
+      if (p.start <= q.end) {
+        addViolation('pin_overlap', `U${p.universe}: '${p.name}' pin @${p.start} lands inside ` +
+          `'${q.name}' (ch ${q.start}–${q.end}) — fix config.yaml global_effects; ` +
+          `'${p.name}' projects unpatched`, p.controller, p.port);
+        p.item.valid = false;
+        unpatch(p.name);
+        break;
       }
     }
   }

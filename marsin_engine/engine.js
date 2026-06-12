@@ -1192,7 +1192,13 @@ async function main() {
             const staleFrame = dmxRouter.getFullFrame(staleU);
             if (staleFrame) {
               staleFrame.fill(0);
-              sacnOut.sendFrame({ [staleU]: staleFrame });
+              // The blackout is the LAST packet this universe ever
+              // gets — a single lost UDP datagram would freeze every
+              // listener on the final bright frame forever. Repeat it
+              // 3× per the sACN stream-termination convention.
+              for (let _i = 0; _i < 3; _i++) {
+                sacnOut.sendFrame({ [staleU]: staleFrame });
+              }
             }
             universeIds.splice(i, 1);
             console.log(`  🧹 Universe ${staleU} no longer mapped — sent blackout, stopped transmitting`);

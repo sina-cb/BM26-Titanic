@@ -45,6 +45,10 @@ export class SacnInputSource {
       // connected socket with aging frames is otherwise invisible
       // (task 021: frames froze for 40 s with zero indication).
       lastFrameAt: 0,
+      // (Re)connect timestamp: framesReceived is cumulative across
+      // reconnects, so the stall clock must restart from here or the
+      // monitor cries STALLED in the reconnect→first-frame gap.
+      connectedAt: 0,
     };
   }
 
@@ -102,6 +106,7 @@ export class SacnInputSource {
       this._ws.onopen = () => {
         this._connected = true;
         this.stats.connected = true;
+        this.stats.connectedAt = Date.now();
         if (window.sacnLog) window.sacnLog('Connected to bridge', 'source');
 
         // Dynamically tell the server which scene config to route outbound IPs for

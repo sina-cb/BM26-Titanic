@@ -328,6 +328,43 @@ Promise.all([
     return;
   }
 
+  // Install the registry UNCONDITIONALLY — scenes with no scene/common
+  // yaml (and scene-config parse failures, which are forgiven below)
+  // must still get the real registry, or the Controllers panel would
+  // operate on per-call throwaway objects and silently lose mutations
+  // (cold review m1, 2026-06-12).
+  window.__controllerRegistry = _controllerRegistry;
+  window.projectControllerMappings = function (configs) {
+    const registry = window.__controllerRegistry;
+    if (!registry || !registryIsActive(registry)) return { violations: [], drift: [] };
+    const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
+    const result = projectOntoConfigs(registry, configs, pins);
+    if (window.__globalPatchTree) {
+      for (const config of configs) {
+        if (!config || !config.name) continue;
+        window.__globalPatchTree[config.name] = {
+          controllerIp: config.controllerIp || '',
+          dmxUniverse: config.dmxUniverse || 0,
+          dmxAddress: config.dmxAddress || 0,
+          controllerId: config.controllerId || 0,
+          sectionId: config.sectionId || 0,
+          fixtureId: config.fixtureId || 0,
+          viewMask: config.viewMask || 0,
+        };
+      }
+    }
+    window.__controllerViolations = result.violations;
+    for (const v of result.violations) {
+      console.error(`[Controllers] ✋ ${v.message}`);
+    }
+    for (const d of result.drift) {
+      console.warn(`[Controllers] patches.yaml drift corrected for '${d.name}': ` +
+        `U${d.before.dmxUniverse}:${d.before.dmxAddress}@${d.before.controllerIp || '—'} → ` +
+        `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
+    }
+    return result;
+  };
+
   // Load scene config
   try {
     if (sceneYaml || commonYaml) {
@@ -369,44 +406,11 @@ Promise.all([
         }
       }
 
-      // Controller mapping projection (docs/33): when a mapping exists,
-      // the mapper owns ALL patch fields — derived for mapped fixtures,
-      // unpatched ('' / 0 / 0) for everything else. Runs BEFORE first
-      // render so patches.yaml drift is corrected at load, loudly.
-      // Also syncs the in-memory patch tree so later applyPatches()
-      // calls (fixture rebuilds) re-apply the projection, not stale
-      // on-disk values.
-      window.__controllerRegistry = _controllerRegistry;
-      window.projectControllerMappings = function (configs) {
-        const registry = window.__controllerRegistry;
-        if (!registry || !registryIsActive(registry)) return { violations: [], drift: [] };
-        const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
-        const result = projectOntoConfigs(registry, configs, pins);
-        if (window.__globalPatchTree) {
-          for (const config of configs) {
-            if (!config || !config.name) continue;
-            window.__globalPatchTree[config.name] = {
-              controllerIp: config.controllerIp || '',
-              dmxUniverse: config.dmxUniverse || 0,
-              dmxAddress: config.dmxAddress || 0,
-              controllerId: config.controllerId || 0,
-              sectionId: config.sectionId || 0,
-              fixtureId: config.fixtureId || 0,
-              viewMask: config.viewMask || 0,
-            };
-          }
-        }
-        window.__controllerViolations = result.violations;
-        for (const v of result.violations) {
-          console.error(`[Controllers] ✋ ${v.message}`);
-        }
-        for (const d of result.drift) {
-          console.warn(`[Controllers] patches.yaml drift corrected for '${d.name}': ` +
-            `U${d.before.dmxUniverse}:${d.before.dmxAddress}@${d.before.controllerIp || '—'} → ` +
-            `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
-        }
-        return result;
-      };
+      // Controller mapping boot projection (docs/33): when a mapping
+      // exists, the mapper owns ALL patch fields — derived for mapped
+      // fixtures, unpatched ('' / 0 / 0) for everything else. The
+      // projection itself (window.projectControllerMappings, installed
+      // above) runs AFTER initRegistry below — see the stash comment.
       const _bootConfigs = [];
       if (window.initialParams.parLights?.fixtures) _bootConfigs.push(...window.initialParams.parLights.fixtures);
       if (Array.isArray(window.initialParams.dmxLights)) _bootConfigs.push(...window.initialParams.dmxLights);

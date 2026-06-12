@@ -24,14 +24,12 @@ import {
   addPort,
   removeController,
   removePort,
-  unmapFixture,
   portPackedWidth,
   isValidIp,
   isGapEntry,
   isPinnedEntry,
   entryFixtureName,
   computeProjection,
-  renameFixtureInChains,
 } from '../dmx/controller_registry.js';
 import { gatherAllConfigs, isGlobalEffect } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
@@ -47,7 +45,15 @@ const collapsedControllers = new Set(); // controller ids
 const collapsedPorts = new Set();       // '<controllerId>:<portNum>' keys
 
 function registry() {
-  return window.__controllerRegistry || { nextControllerId: 1, controllers: [] };
+  // No fallback (codex P0): main.js installs the registry for every
+  // scene at boot. A missing one means boot never finished — handing
+  // out a throwaway object here would let panel mutations silently
+  // vanish (a fresh object per call, never saved).
+  if (!window.__controllerRegistry) {
+    throw new Error('[Controllers] window.__controllerRegistry is not initialized — ' +
+      'scene boot never installed the registry; refusing to operate on a throwaway');
+  }
+  return window.__controllerRegistry;
 }
 
 function pins() {
@@ -831,7 +837,8 @@ function handleChipDrop(event, targetController, targetPort, targetIndex) {
   const reg = registry();
   const srcController = reg.controllers.find(c => c.id === src.controllerId);
   const srcPort = srcController && srcController.ports.find(p => p.port === src.portNum);
-  if (!srcPort || !Number.isInteger(src.index) || src.index >= srcPort.chain.length) return;
+  if (!srcPort || !Number.isInteger(src.index) ||
+      src.index < 0 || src.index >= srcPort.chain.length) return;
 
   mutate(srcPort === targetPort ? 'Reordered chain' :
     `Moved to ${targetController.name} · Port ${targetPort.port}`, () => {
@@ -959,9 +966,9 @@ function addNamesToPort(controller, port, names) {
 // ── Unmapped tray ───────────────────────────────────────────────────────
 
 function renderTray(unmapped, proj) {
-  const tray = document.createElement('div');
-  tray.className = 'cm-tray' + (pickTarget ? ' cm-tray-picking' : '');
-
+  // Resolve (and possibly invalidate) the pick target BEFORE the
+  // picking style is derived — a dangling target must not leave the
+  // tray rendered in pick mode for one frame.
   const reg = registry();
   let pickController = null;
   let pickPort = null;
@@ -971,6 +978,9 @@ function renderTray(unmapped, proj) {
       (pickController.ports.find(p => p.port === pickTarget.portNum) || null);
     if (!pickPort) pickTarget = null;
   }
+
+  const tray = document.createElement('div');
+  tray.className = 'cm-tray' + (pickTarget ? ' cm-tray-picking' : '');
 
   const head = document.createElement('div');
   head.className = 'cm-tray-head';
@@ -1168,15 +1178,6 @@ export function setupControllerMapEditor() {
   // interaction.js calls this after every selection change so the
   // "+ sel (n)" counters and chip highlights track the 3D view live.
   window.refreshControllerMapPanel = renderIfOpen;
-
-  // Live rename hook: gui_builder calls this when a fixture or its
-  // clone changes name, so a rename can never orphan a chain entry.
-  window.controllerRegistryRenameFixture = (oldName, newName) => {
-    if (renameFixtureInChains(registry(), oldName, newName)) {
-      recomputeAndMark();
-      renderIfOpen();
-    }
-  };
 
   window.toggleControllerMapPanel = () => {
     panelEl.classList.toggle('hidden');

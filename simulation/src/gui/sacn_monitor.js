@@ -105,7 +105,12 @@ function updateInStats() {
   // (once per transition, with a recovery line) so a frozen rig is
   // diagnosable at a glance instead of looking like a mapping bug.
   const age = st.lastFrameAt > 0 ? Date.now() - st.lastFrameAt : null;
-  const stalled = !!(st.connected && st.framesReceived > 0 && age !== null && age > IN_STALL_MS);
+  // Stall clock runs from the last frame OR the last (re)connect,
+  // whichever is later — framesReceived is cumulative, so a fresh
+  // reconnect would otherwise flag STALLED before its first frame.
+  const lastActivity = Math.max(st.lastFrameAt, st.connectedAt || 0);
+  const stalled = !!(st.connected && st.framesReceived > 0 && lastActivity > 0 &&
+    Date.now() - lastActivity > IN_STALL_MS);
   if (stalled !== _inStalled) {
     _inStalled = stalled;
     if (stalled) sacnInLog(`⚠ STALLED — no frames for ${(age / 1000).toFixed(1)}s (socket still connected)`, 'warn');

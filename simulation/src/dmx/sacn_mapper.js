@@ -121,6 +121,10 @@ export function demapSacnToPixels(list, dmxRouter) {
     // Without this, those consumers see 0 → black pixels.
     entry.r = r; entry.g = g; entry.b = b;
     entry.w = w; entry.a = a; entry.u = uv;
+    // A driven entry is no longer undriven — keep the flag honest so
+    // paintUndrivenEntry's steady-state fast path can't be fooled by a
+    // stale marker (lose patch → regain → coincidentally red frame).
+    if (entry._sacnUndriven) entry._sacnUndriven = false;
 
     // RGBWAU → RGB blend for 3D visual preview (same formula as Pixelblaze path)
     const rn = Math.min(1, r + w * 0.8 + a * 0.9 + uv * 0.4);

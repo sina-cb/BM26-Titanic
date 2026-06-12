@@ -2,9 +2,10 @@
  * controller_registry.test.js — packing, validation, and projection
  * contract tests for the Controller Mapping registry (docs/33).
  *
- * Pure logic: synthetic fixture configs (UkingPar falls back to a
- * 10-channel footprint with no definition registry loaded) and an
- * explicit pin table, no DOM, no three.js.
+ * Pure logic: synthetic fixture configs with definitions registered
+ * explicitly up front (packing REQUIRES a registered footprint — the
+ * silent 10-channel fallback is dead) and an explicit pin table, no
+ * DOM, no three.js.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -263,6 +264,137 @@ test('a PINNED effect on any port projects its U1 pin and consumes no port chann
   ] }] });
   const p2 = computeProjection(r2, configMap(par('Par 9')), PINS);
   assert.ok(p2.violations.some(v => v.code === 'pin_not_effect'));
+});
+
+test('at: 0 (unpinned WIP) LOADS and projects a loud no_pin / pin_mismatch', () => {
+  // B1 regression (cold review 2026-06-12): the panel writes at: 0 when
+  // config.yaml has no pin for the type. Treating that as schema
+  // corruption bricked the next boot off a normal UI flow.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 1, chain: [
+      { fixture: 'Horn 1', at: 0 },  // type has NO pin → no_pin
+      { fixture: 'Fog 1', at: 0 },   // type HAS a pin (512) → pin_mismatch
+    ] },
+  ] }] });
+  const horn = { name: 'Horn 1', fixtureType: 'AirHorn' };
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const p = computeProjection(r, configMap(horn, fog), PINS);
+  assert.ok(p.violations.some(v => v.code === 'no_pin'));
+  assert.ok(p.violations.some(v => v.code === 'pin_mismatch'));
+  for (const name of ['Horn 1', 'Fog 1']) {
+    assert.deepEqual(fieldsOf(p, name),
+      { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 }, name);
+  }
+  // Negative addresses are still structural corruption.
+  assert.throws(() => reg({ controllers: [{ id: 1, name: 'A', ip: '', ports: [
+    { port: 1, universe: 1, chain: [{ fixture: 'Fog 1', at: -1 }] }] }] }), /pinned entry/);
+});
+
+test('gaps join the overlap check — a sibling port cannot pack into reserved channels', () => {
+  // M2 regression (cold review 2026-06-12): gaps reserve channels for
+  // real hardware not modeled in the sim; a sibling landing in one is a
+  // physical DMX collision.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [{ gap: 20 }, 'Par 1'] }, // gap 1–20, par 21–30
+    { port: 2, universe: 3, startAddress: 5, chain: ['Par 2'] }, // 5–14: inside the gap
+  ] }] });
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2')), PINS);
+  assert.ok(p.violations.some(v => v.code === 'overlap'));
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 21, 'lower port keeps its addresses');
+  assert.deepEqual(fieldsOf(p, 'Par 2'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+
+  // A gap-only chain still claims its channels.
+  const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: [{ gap: 50 }] },               // 1–50, nothing projected
+    { port: 2, universe: 3, startAddress: 10, chain: ['Par 2'] }, // 10–19: collision
+  ] }] });
+  const p2 = computeProjection(r2, configMap(par('Par 2')), PINS);
+  assert.ok(p2.violations.some(v => v.code === 'overlap'));
+  assert.deepEqual(fieldsOf(p2, 'Par 2'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+});
+
+test('identical pin addresses gang-fire: always allowed, never a violation', () => {
+  // Operator decision 2026-06-12: one address may start multiple
+  // foggers at the same time, always.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 1, chain: [
+      { fixture: 'Fog 1', at: 512 },
+      { fixture: 'Fog 2', at: 512 },
+    ] },
+  ] }] });
+  const fog = (name) => ({ name, fixtureType: 'TEFogMachine' });
+  const p = computeProjection(r, configMap(fog('Fog 1'), fog('Fog 2')), PINS);
+  assert.equal(p.violations.length, 0);
+  assert.equal(fieldsOf(p, 'Fog 1').dmxAddress, 512);
+  assert.equal(fieldsOf(p, 'Fog 2').dmxAddress, 512);
+});
+
+test('pins at DIFFERENT addresses with colliding footprints flag pin_overlap', () => {
+  // M3 (cold review 2026-06-12): the haze pin spans 510–511; a fog pin
+  // at 511 lands inside it — a config.yaml global_effects error. The
+  // higher address loses deterministically.
+  const collidingPins = {
+    ChauvetHaze4D: { universe: 1, address: 510 }, // 2 ch → 510–511
+    TEFogMachine: { universe: 1, address: 511 },  // 1 ch → 511
+  };
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 1, chain: [
+      { fixture: 'Haze 1', at: 510 },
+      { fixture: 'Fog 1', at: 511 },
+    ] },
+  ] }] });
+  const haze = { name: 'Haze 1', fixtureType: 'ChauvetHaze4D' };
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const p = computeProjection(r, configMap(haze, fog), collidingPins);
+  assert.ok(p.violations.some(v => v.code === 'pin_overlap'));
+  assert.equal(fieldsOf(p, 'Haze 1').dmxAddress, 510, 'lower pin keeps its address');
+  assert.deepEqual(fieldsOf(p, 'Fog 1'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+});
+
+test('a pin whose footprint runs past 512 flags pin_overflow', () => {
+  const overflowPins = { ChauvetHaze4D: { universe: 1, address: 512 } }; // 2 ch → 512–513
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 1, chain: [{ fixture: 'Haze 1', at: 512 }] },
+  ] }] });
+  const haze = { name: 'Haze 1', fixtureType: 'ChauvetHaze4D' };
+  const p = computeProjection(r, configMap(haze), overflowPins);
+  assert.ok(p.violations.some(v => v.code === 'pin_overflow'));
+  assert.deepEqual(fieldsOf(p, 'Haze 1'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+});
+
+test('pinned effects survive their port losing an overlap or universe contest', () => {
+  // m3 (cold review 2026-06-12): the pin lives on the effects universe
+  // — a packed-channel conflict on the port's own universe is unrelated.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: ['Par 1', 'Par 2'] },          // 1–20
+    { port: 2, universe: 3, startAddress: 15,
+      chain: ['Par 3', { fixture: 'Fog 1', at: 512 }] },          // loses the overlap
+  ] }] });
+  const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
+  const p = computeProjection(r,
+    configMap(par('Par 1'), par('Par 2'), par('Par 3'), fog), PINS);
+  assert.ok(p.violations.some(v => v.code === 'overlap'));
+  assert.deepEqual(fieldsOf(p, 'Par 3'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+  assert.deepEqual(fieldsOf(p, 'Fog 1'),
+    { controllerIp: '10.0.0.1', dmxUniverse: 1, dmxAddress: 512, controllerId: 1 });
+
+  // Same for a contested universe across controllers.
+  const r2 = reg({ controllers: [
+    { id: 1, name: 'A', ip: '10.0.0.1', ports: [{ port: 1, universe: 3, chain: ['Par 1'] }] },
+    { id: 2, name: 'B', ip: '10.0.0.2', ports: [
+      { port: 1, universe: 3, chain: ['Par 2', { fixture: 'Fog 1', at: 512 }] },
+    ] },
+  ] });
+  const p2 = computeProjection(r2, configMap(par('Par 1'), par('Par 2'), fog), PINS);
+  assert.ok(p2.violations.some(v => v.code === 'dup_universe'));
+  assert.deepEqual(fieldsOf(p2, 'Par 2'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+  assert.equal(fieldsOf(p2, 'Fog 1').dmxAddress, 512, 'pin unaffected by the contest');
 });
 
 test('universeEnds tracks the running end of every universe in one pass', () => {
