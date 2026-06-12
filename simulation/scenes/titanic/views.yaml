@@ -26,8 +26,4 @@ views:
     Small_Right_3: 0x00800000
     Small_Right_2: 0x01000000
     Small_Right_1: 0x02000000
-    Berg Alpha: 0x04000000
-    Berg Beta: 0x08000000
-    Berg Gamma: 0x10000000
-    Berg Delta: 0x20000000
   custom: []

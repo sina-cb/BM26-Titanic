@@ -37,7 +37,6 @@ export let configTree = null;
 export const params = {
   parLights: [],
   dmxFixtures: [],
-  icebergs: [],
   ledStrands: [],
   traces: [],
   gradientStops: []

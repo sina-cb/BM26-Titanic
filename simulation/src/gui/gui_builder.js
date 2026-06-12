@@ -1,7 +1,7 @@
 /**
  * gui_builder.js — Full GUI construction (lil-gui).
  * Contains: setupGUI(), handler registry, generic builders,
- * and all section builders (par lights, DMX, LED strands, icebergs).
+ * and all section builders (par lights, DMX, LED strands).
  */
 import * as THREE from "three";
 import yaml from "js-yaml";
@@ -31,7 +31,6 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
-import { Iceberg } from "../fixtures/iceberg.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -39,7 +38,7 @@ const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simB
 
 // Shared compact "🔖 Metadata (V2)" panel for fixture editor cards.
 // Single source of truth — used by every fixture-rendering path (regular PARs,
-// trace-generated PARs, DMX instances, LED strands, icebergs) so the metadata
+// trace-generated PARs, DMX instances, LED strands) so the metadata
 // UI is consistent and ALWAYS rendered. Returns refs to the inputs in case a
 // caller needs to push external updates (e.g. trace-generated fixtures whose
 // fixtureId is auto-derived from the DMX patch).
@@ -799,10 +798,6 @@ function setupGUI() {
       lights.helpers.forEach((h) => {
         h.visible = v;
       });
-      // Also toggle iceberg floodlight fixture models
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.setFixtureVisibility(v));
-      }
     },
     lightingEnabled: (v) => {
       if (window.onLightingChange) window.onLightingChange();
@@ -1125,11 +1120,6 @@ function setupGUI() {
         // Special: ledStrandArray → build LED Strands UI
         if (sectionMeta.type === "ledStrandArray") {
           buildLedStrandsSection(parentFolder, entry);
-          continue;
-        }
-        // Special: icebergArray → build Icebergs UI
-        if (sectionMeta.type === "icebergArray") {
-          buildIcebergsSection(parentFolder, entry);
           continue;
         }
         // Special: dmxArray → build DMX Lights UI
@@ -3566,307 +3556,6 @@ function setupGUI() {
 
     renderStrandGUI();
     rebuildLedStrands();
-  }
-
-  // ─── Icebergs Section ────────────────────────────────────────────────────
-  function buildIcebergsSection(parentFolder, sectionConfig) {
-    const bergFolder = parentFolder.addFolder(sectionConfig._section.label);
-    if (sectionConfig._section.collapsed !== false) bergFolder.close();
-    _sectionFolderMap.set(sectionConfig._section, bergFolder);
-
-    // Master toggle
-    bergFolder.add(params, 'icebergsEnabled').name('Master Enabled').onChange(v => {
-      (window.icebergFixtures || []).forEach(f => f.setVisibility(v));
-    });
-
-    // ─── Master Flood ON/OFF (promoted to top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodEnabled').name('⚡ Floods ON/OFF').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Dimmer 0-100% ───
-    if (params.masterFloodDimmer === undefined) params.masterFloodDimmer = 100;
-    bergFolder.add(params, 'masterFloodDimmer', 0, 250, 1).name('🔆 Flood Dimmer %').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Angle (top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodAngle', 10, 90, 1).name('📐 Flood Angle °').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    
-    // Focus on Select checkbox (from config)
-    if (params.focusOnSelect === undefined) params.focusOnSelect = true;
-    // Ensure entry exists in configTree so reconstructYAML persists it
-    if (sectionConfig && !sectionConfig.focusOnSelect) {
-      sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
-    }
-    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
-
-    // ─── Load Iceberg Geometry checkbox ───
-    if (params.loadIcebergGeometry === undefined) params.loadIcebergGeometry = false;
-    bergFolder.add(params, 'loadIcebergGeometry').name('🚀 Load Iceberg Geometry').onChange(async (v) => {
-      if (!v) return; // Only trigger on check
-      if (!window.icebergFixtures || window.icebergFixtures.length === 0) return;
-      
-      // Show loading overlay
-      const loadingOverlay = document.getElementById("loading-overlay");
-      if (loadingOverlay) loadingOverlay.classList.remove("hidden");
-      
-      const total = window.icebergFixtures.length;
-      
-      // Sequential loading with per-berg progress for smooth UI feedback
-      for (let i = 0; i < total; i++) {
-        updateLoading(Math.floor((i / total) * 100), `Loading iceberg ${i + 1}/${total}: ${params.icebergs[i]?.name || 'Iceberg'}…`);
-        await window.icebergFixtures[i].buildGeometry();
-        // Minimal yield to let the progress bar paint
-        await new Promise(r => setTimeout(r, 1));
-      }
-      updateLoading(100, 'Icebergs loaded!');
-      
-      if (loadingOverlay) {
-        setTimeout(() => loadingOverlay.classList.add("hidden"), 300);
-      }
-    });
-
-    // Master Flood Controls
-    const masterFloodF = bergFolder.addFolder('Master Flood Controls');
-    masterFloodF.addColor(params, 'masterFloodColor').name('Master Color').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    masterFloodF.add(params, 'masterFloodIntensity', 0, 500, 1).name('Master Intensity').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    function updateMasterFloods() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.updateFloodlightProps());
-      }
-    }
-
-    async function rebuildIcebergs() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.destroy());
-      }
-      window.icebergFixtures = [];
-      const promises = params.icebergs.map(async (config, index) => {
-        const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
-        fixture.setVisibility(params.icebergsEnabled !== false);
-        window.icebergFixtures.push(fixture);
-        // Geometry loading is manual now
-      });
-      await Promise.all(promises);
-      window.icebergFixtures.sort((a, b) => a.index - b.index);
-    }
-    window.rebuildIcebergs = rebuildIcebergs;
-
-    // Fly camera to iceberg position
-    function flyToIceberg(berg) {
-      const targetX = berg.x || 0;
-      const targetY = (berg.y || 0) + (berg.height || 6) / 2;
-      const targetZ = berg.z || 0;
-      const radius = berg.radius || 4;
-      const viewDist = radius * 4;
-
-      const targetLook = new THREE.Vector3(targetX, targetY, targetZ);
-      const targetPos = new THREE.Vector3(
-        targetX + viewDist,
-        targetY + viewDist * 0.8,
-        targetZ + viewDist
-      );
-
-      const startPos = camera.position.clone();
-      const startTarget = controls.target.clone();
-      const duration = 800;
-      const startTime = performance.now();
-
-      function step(now) {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
-        camera.position.lerpVectors(startPos, targetPos, ease);
-        controls.target.lerpVectors(startTarget, targetLook, ease);
-        controls.update();
-
-        if (t < 1) requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
-    }
-
-    // Transform handler
-    window._onIcebergTransformChange = function(obj) {
-      if (!obj.userData.isIceberg) return false;
-      const fixture = obj.userData.fixture;
-      if (!fixture) return false;
-      fixture.writeTransformToConfig();
-      debounceAutoSave();
-      return true;
-    };
-
-    // GUI
-    window.icebergGuiFolders = [];
-    window.openIcebergFolder = function(idx) {
-      bergFolder.open();
-      if (window.icebergGuiFolders) {
-        window.icebergGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
-      }
-      if (window.icebergGuiFolders[idx]) {
-        window.icebergGuiFolders[idx].open();
-        window.icebergGuiFolders[idx].domElement.classList.add('gui-card-selected');
-      }
-      // Fly to iceberg if focus checkbox is on
-      if (params.focusOnSelect && params.icebergs[idx]) {
-        flyToIceberg(params.icebergs[idx]);
-      }
-    };
-
-    function renderIcebergGUI() {
-      const existing = [...bergFolder.folders];
-      existing.forEach(f => f.destroy());
-      window.icebergGuiFolders = [];
-
-      // New Iceberg button
-      const newBtnDiv = document.createElement('div');
-      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const newBtn = document.createElement('button');
-      newBtn.textContent = '+ New Iceberg';
-      newBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--tint);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-      newBtn.onclick = () => {
-        pushUndo();
-        params.icebergs.push({
-          name: `Iceberg ${params.icebergs.length + 1}`,
-          seed: Math.floor(Math.random() * 99999),
-          x: Math.round(Math.random() * 60 - 30),
-          y: 0,
-          z: Math.round(Math.random() * 60 - 30),
-          radius: 4, height: 6, detail: 10, peakCount: 3,
-          ledPattern: 'spiral', ledDensity: 5, ledColor: '#aaeeff',
-          floodEnabled: true, floodColor: '#ffffff', floodIntensity: 50, floodAngle: 40,
-          towerOffsetX: 0, towerOffsetY: 0, towerOffsetZ: 0,
-        });
-        rebuildIcebergs();
-        renderIcebergGUI();
-        debounceAutoSave();
-      };
-      newBtnDiv.appendChild(newBtn);
-      const children = bergFolder.domElement.querySelector('.children');
-      if (children) {
-        const old = children.querySelector('.berg-new-btn');
-        if (old) old.remove();
-        newBtnDiv.classList.add('berg-new-btn');
-        children.prepend(newBtnDiv);
-      }
-
-      // Per-iceberg folders
-      params.icebergs.forEach((berg, i) => {
-        const label = `🧊 ${berg.name || `Iceberg ${i + 1}`}`;
-        const bFolder = bergFolder.addFolder(label);
-        bFolder.domElement.classList.add('gui-card');
-        bFolder.close();
-        window.icebergGuiFolders[i] = bFolder;
-
-        // Fly to iceberg when folder is opened
-        const titleEl = bFolder.domElement.querySelector('.title');
-        if (titleEl) {
-          titleEl.addEventListener('click', () => {
-            // Highlight this card, deselect others
-            if (window.icebergGuiFolders) {
-              window.icebergGuiFolders.forEach(f => {
-                if (f) f.domElement.classList.remove('gui-card-selected');
-              });
-            }
-            bFolder.domElement.classList.add('gui-card-selected');
-            if (params.focusOnSelect && berg) {
-              flyToIceberg(berg);
-            }
-          });
-        }
-
-        bFolder.add(berg, 'name').name('Name').onFinishChange(() => { renderIcebergGUI(); debounceAutoSave(); });
-        bFolder.add(berg, 'seed', 0, 99999, 1).name('Seed').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Position
-        const posF = bFolder.addFolder('Position');
-        posF.close();
-        posF.add(berg, 'x', -100, 100, 0.5).name('X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'y', -20, 20, 0.5).name('Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'z', -100, 100, 0.5).name('Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Shape
-        const shapeF = bFolder.addFolder('Shape');
-        shapeF.close();
-        shapeF.add(berg, 'radius', 1, 15, 0.5).name('Radius').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'height', 1, 20, 0.5).name('Height').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'detail', 5, 25, 1).name('Detail').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'peakCount', 1, 10, 1).name('Peaks').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Display
-        if (berg.showFaces === undefined) berg.showFaces = true;
-        if (berg.showWireframe === undefined) berg.showWireframe = true;
-        if (!berg.wireColor) berg.wireColor = '#88ddff';
-        const dispF = bFolder.addFolder('Display');
-        dispF.close();
-        dispF.add(berg, 'showFaces').name('Show Faces').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.add(berg, 'showWireframe').name('Show Wireframe').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.addColor(berg, 'wireColor').name('Wire Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // LED
-        const ledF = bFolder.addFolder('LED Wiring');
-        ledF.close();
-        ledF.add(berg, 'ledPattern', ['edges', 'spiral', 'parabolic']).name('Pattern').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.add(berg, 'ledDensity', 2, 12, 1).name('Density').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.addColor(berg, 'ledColor').name('LED Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Flood
-        const floodF = bFolder.addFolder('Local Flood Override');
-        floodF.close();
-        floodF.add(berg, 'floodEnabled').name('Enabled').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.addColor(berg, 'floodColor').name('Local Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodIntensity', 0, 150, 0.5).name('Local Intensity').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodAngle', 10, 90, 1).name('Local Angle').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Tower Offset
-        const offsetF = bFolder.addFolder('Tower Offset');
-        offsetF.close();
-        offsetF.add(berg, 'towerOffsetX', -20, 20, 0.1).name('Offset X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetY', -20, 20, 0.1).name('Offset Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetZ', -20, 20, 0.1).name('Offset Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // 🔖 Metadata (V2) — compact DOM panel (shared helper). Iceberg LEDs
-        // are exported with sId/fId/vMask too (see pixelblaze_model_exporter.js
-        // berg branch), so the operator must be able to set them here.
-        const bChildrenForMeta = bFolder.domElement.querySelector('.children');
-        appendMetadataPanelV2(bChildrenForMeta, berg, { onChange: debounceAutoSave });
-
-        // Delete
-        const actDiv = document.createElement('div');
-        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-        delBtn.onclick = () => {
-          pushUndo();
-          params.icebergs.splice(i, 1);
-          rebuildIcebergs();
-          renderIcebergGUI();
-          debounceAutoSave();
-        };
-        actDiv.appendChild(delBtn);
-        const bChildren = bFolder.domElement.querySelector('.children');
-        if (bChildren) bChildren.appendChild(actDiv);
-      });
-    }
-    window.renderIcebergGUI = renderIcebergGUI;
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const icebergsEnabled = urlParams.get('enable_iceberg') === '1';
-
-    if (icebergsEnabled) {
-      renderIcebergGUI();
-    } else {
-      console.log("[GUI] Individual Iceberg UI disabled to improve load speed. Run 'npm start enable_iceberg' to enable.");
-      // Render simple empty placeholder or nothing
-    }
-    rebuildIcebergs();
   }
 
   // ─── Build the entire GUI from the config tree ───

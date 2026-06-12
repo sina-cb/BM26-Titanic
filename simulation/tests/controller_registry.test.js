@@ -503,12 +503,12 @@ test('metadata: sectionId per group (stable), fixtureId monotonic (stable)', () 
     { port: 1, universe: 2, chain: [
       { fixture: 'Par 1', at: 1 },
       { fixture: 'Par 2', at: 11 },
-      { fixture: 'Berg 1', at: 21 },
+      { fixture: 'Mast 1', at: 21 },
     ] },
   ] }] });
   const a = { ...par('Par 1'), sectionId: 4, fixtureId: 12 };
   const b = par('Par 2');
-  const c = { ...par('Berg 1', 'Bergs') };
+  const c = { ...par('Mast 1', 'Masts') };
   projectOntoConfigs(r, [a, b, c], PINS);
   assert.equal(b.sectionId, 4, 'same group reuses the existing sectionId');
   assert.equal(c.sectionId, 5, 'new group gets the next free sectionId');

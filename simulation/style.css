@@ -784,7 +784,7 @@ body.edit-mode-active #engine-params-panel {
 }
 
 /* ─── Instance Card Styling ───
-   Applied to individual fixture/iceberg/generator/strand folders
+   Applied to individual fixture/generator/strand folders
    to visually separate them as distinct configurable entities */
 .lil-gui.gui-card {
   margin: 3px 0 !important;
