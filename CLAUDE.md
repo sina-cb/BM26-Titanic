@@ -18,14 +18,30 @@ DNA forward, be welcoming, be kind, have fun.
 | `.agent/01_skills/` | **Skills** — reusable how-tos (screenshot/render the sim, lighting arrangement, PB patterns, adding global params) | When the task matches a skill, follow the skill instead of improvising |
 | `.agent/02_reports/` | **Reports** — dated handoffs, audits, investigations (`YYYYMM/YYYYMMDD_N_slug.md`) | Read for context on past work; write one when handing off or concluding an investigation |
 | `.agent/03_agent_types/` | **Agent roles** — coordinator, planner, designer, developer (+ per-subsystem experts), reviewer, deployment, artist, investigator, validator | Adopt the matching role's mindset and checklist when acting in that capacity |
-| `.agent/04_task_tracker/` | **Task tracker** — one markdown file per task, `NNN_<priority>_<slug>.md`, completed work moves to `done/` | Capture follow-up work; check it before starting new work; see `.agent/00_gol/14_task_tracking.md` |
 | `.agent/agent_fs.yaml` | Agent filesystem visibility config for the mobile viewer | Rarely; don't break it |
+
+(The old `.agent/04_task_tracker/` directory was deprecated and removed
+on 2026-06-12 — tasks live in Notion, see below.)
 
 Key specs by number (in `.agent/00_gol/`): `00` codex · `01` git +
 python style · `02` nodejs style · `03/04/05` auto-checks (CaptainPad / sim /
 engine) · `06` run sim · `07` run engine · `08` MarsinScript patterns ·
 `09` iPad builds · `10` auto-patcher · `11` UI design · `12` Raspberry Pi ·
-`13` multi-agent worktrees · `14` task tracking.
+`13` multi-agent worktrees · `14` task tracking (Notion).
+
+## Task tracking (Notion)
+
+Tasks live on the Notion board **Titanic Lighting - Task Tracker**
+(Titanic's End workspace → Camp Operations → Titanic Lighting):
+<https://app.notion.com/p/titanicsend/9f241c2d454747859b149d738cc21bc8>
+
+Agents access it through the **Notion MCP server — the connection must
+be enabled and the Titanic's End workspace shared with it**, or every
+read fails with a 404. If you get a 404, ask Sina to enable the MCP
+connection; do not fall back to creating task files in the repo.
+Board schema, card body format, and add/close workflow:
+`.agent/00_gol/14_task_tracking.md`. Check the board before starting
+new work; file follow-ups there as `Backlog` cards.
 
 ## Hard rules (P0 — from the codex)
 
@@ -100,5 +116,5 @@ report it, don't commit or silently revert it.
 - Decompose multi-slice work via `.agent/00_gol/13_multi_agent.md`
   (worktrees, own branches, own ports).
 - Leave a dated report in `.agent/02_reports/` when handing off; file
-  follow-ups in `.agent/04_task_tracker/`.
+  follow-ups on the Notion task tracker (see "Task tracking" above).
 - This is a game — play it kindly, and have fun.

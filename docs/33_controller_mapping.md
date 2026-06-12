@@ -26,7 +26,8 @@ address-arithmetic session.
 - The titanic scene currently ships with **all 61 fixtures unpatched**
   (`dmxUniverse: 0`, `controllerIp: ''`).
 - On-site repatching of Logsville exposed how fragile per-fixture field editing is
-  (see `.agent/04_task_tracker/012_normal_logsville-universe7-patch-mismatch.md`).
+  (see the Notion task "Logsville patches use universe 7 which is not in
+  sacn_universes" on the Titanic Lighting - Task Tracker board).
 - The Views work (PR #11) proved the pattern this doc reuses: **scene-owned YAML →
   panel UI → derived per-fixture fields → existing export pipeline untouched.**
 
