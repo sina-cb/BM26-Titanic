@@ -8,7 +8,7 @@ import {
   lightingMode, lightingEnabled,
 } from "../core/state.js";
 import { MarsinEngine } from "../core/marsin_engine.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+import { GUI } from "./gui_engine.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ import {
 import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
 import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+import { GUI } from "./gui_engine.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
