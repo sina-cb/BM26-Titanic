@@ -379,8 +379,8 @@ Promise.all([
       
       const rawParams = { ...commonObj, ...sceneObj };
       const explicitOrder = [
-        "titanicEnd", "icebergs", "atmosphere", "modelTransform", 
-        "dmxLights", "parLights", "ledStrands", 
+        "atmosphere", "modelTransform",
+        "dmxLights", "parLights", "ledStrands",
         "options", "colorWave", "config", "_camera", "_patternEditor"
       ];
       window.initialParams = {};

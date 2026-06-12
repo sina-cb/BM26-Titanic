@@ -187,12 +187,6 @@ export function onTransformChange() {
     window._onStrandTransformChange(obj);
     return;
   }
-  // Handle iceberg objects
-  if (obj.userData.isIceberg && window._onIcebergTransformChange) {
-    window._onIcebergTransformChange(obj);
-    return;
-  }
-
   if (!obj.userData.fixture) return;
 
   const fixture = obj.userData.fixture;
@@ -354,9 +348,6 @@ export function onPointerDown(event) {
     } else if (hit.userData.isLedStrand) {
       deselectAllFixtures();
       if (window.openStrandFolder && hit.userData.fixture) window.openStrandFolder(hit.userData.fixture.index);
-    } else if (hit.userData.isIceberg) {
-      deselectAllFixtures();
-      if (window.openIcebergFolder && hit.userData.fixture) window.openIcebergFolder(hit.userData.fixture.index);
     } else if (hit.userData.isParLight) {
       const fixtureIndex = hit.userData.fixture.index;
       if (event.shiftKey) {

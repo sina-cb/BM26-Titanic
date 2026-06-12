@@ -211,8 +211,7 @@ export function applyViewMaskIsolation() {
   const list = [
     ...(window.parFixtures || []),
     ...(window.dmxSceneFixtures || []),
-    ...(window.ledStrandFixtures || []),
-    ...(window.icebergFixtures || [])
+    ...(window.ledStrandFixtures || [])
   ];
 
   list.forEach(f => {
@@ -232,12 +231,9 @@ export function applyViewMaskIsolation() {
     if (!activeView) {
       // Restore default visibility based on master/profile/params settings
       const isStrand = f.config.hasOwnProperty('startX');
-      const isIceberg = f.config.hasOwnProperty('peakCount');
 
       if (isStrand) {
         f.setVisibility(params.strandsEnabled !== false);
-      } else if (isIceberg) {
-        f.setVisibility(params.icebergsEnabled !== false);
       } else {
         const masterEnabled = params.dmxEnabled !== false && params.parsEnabled !== false;
         f.setVisibility(masterEnabled, params.conesEnabled !== false);

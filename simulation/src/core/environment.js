@@ -10,7 +10,6 @@ import {
   setStructureMaterial, setEditMaterial,
   setGround, setStarField,
 } from "./state.js";
-import { Iceberg } from "../fixtures/iceberg.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { initLightPool } from "./light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "./sim_preview.js";
@@ -212,22 +211,7 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   controls.maxDistance = modelRadius * 8;
   controls.update();
 
-  updateLoading(90, "Loading icebergs…");
-
-  // Instantiating initial icebergs
-  window.icebergFixtures = [];
-  const totalBergs = params.icebergs.length;
-  
-  for (let index = 0; index < totalBergs; index++) {
-    const config = params.icebergs[index];
-    const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
-    fixture.setVisibility(params.icebergsEnabled !== false);
-    window.icebergFixtures.push(fixture);
-    updateLoading(90 + Math.floor((index / totalBergs) * 10), `Loading iceberg markers… (${index + 1}/${totalBergs})`);
-  }
-  
-  // Sort fixtures back into configuration order
-  window.icebergFixtures.sort((a, b) => a.index - b.index);
+  updateLoading(90, "Building GUI…");
 
   // Setup GUI
   setupGUI();

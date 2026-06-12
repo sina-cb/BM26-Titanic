@@ -100,8 +100,8 @@ export function nextFreeBit(registry) {
  * Distinct non-empty group names from exported pixels, in
  * first-appearance order. Pixels — not fixture configs — are the
  * ground truth: effects-only fixtures (foggers, horns) never become
- * pixels and must not consume bits, while LED strands and icebergs DO
- * become pixels (their name is their group) and must get bits. The
+ * pixels and must not consume bits, while LED strands DO become
+ * pixels (their name is their group) and must get bits. The
  * engine validates groupBits against exactly this set.
  */
 export function listPixelGroups(pixels) {

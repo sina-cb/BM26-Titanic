@@ -15,8 +15,6 @@ export function captureSnapshot() {
       snapshot.traces = JSON.parse(JSON.stringify(params.traces));
     } else if (key === 'ledStrands') {
       snapshot.ledStrands = JSON.parse(JSON.stringify(params.ledStrands));
-    } else if (key === 'icebergs') {
-      snapshot.icebergs = JSON.parse(JSON.stringify(params.icebergs));
     } else {
       snapshot[key] = params[key];
     }
@@ -48,7 +46,6 @@ export function applySnapshot(snapshot) {
     const dmxChanged = JSON.stringify(params.dmxFixtures) !== JSON.stringify(snapshot.dmxFixtures || []);
     const tracesChanged = JSON.stringify(params.traces) !== JSON.stringify(snapshot.traces || []);
     const strandsChanged = JSON.stringify(params.ledStrands) !== JSON.stringify(snapshot.ledStrands || []);
-    const icebergsChanged = JSON.stringify(params.icebergs) !== JSON.stringify(snapshot.icebergs || []);
 
     for (const key of Object.keys(snapshot)) {
       if (key === 'parLights') {
@@ -59,8 +56,6 @@ export function applySnapshot(snapshot) {
         params.traces = JSON.parse(JSON.stringify(snapshot.traces || []));
       } else if (key === 'ledStrands') {
         params.ledStrands = JSON.parse(JSON.stringify(snapshot.ledStrands || []));
-      } else if (key === 'icebergs') {
-        params.icebergs = JSON.parse(JSON.stringify(snapshot.icebergs || []));
       } else {
         params[key] = snapshot[key];
       }
@@ -89,7 +84,6 @@ export function applySnapshot(snapshot) {
     if (dmxChanged && window.rebuildDmxFixtures) window.rebuildDmxFixtures();
     if (tracesChanged && window.rebuildTraceObjects) window.rebuildTraceObjects();
     if (strandsChanged && window.rebuildLedStrands) window.rebuildLedStrands();
-    if (icebergsChanged && window.rebuildIcebergs) window.rebuildIcebergs();
 
     const t3 = performance.now();
 

@@ -233,32 +233,6 @@ export function generatePixelMap() {
     });
   }
 
-  // Iceberg LEDs
-  if (params.icebergs) {
-    params.icebergs.forEach((berg, i) => {
-      const fixture = window.icebergFixtures && window.icebergFixtures[i] ? window.icebergFixtures[i] : null;
-      pixels.push({
-        type: 'iceberg',
-        name: berg.name || 'Iceberg',
-        group: berg.name || '',
-        x: +(berg.x || 0),
-        y: +(berg.y || 0),
-        z: +(berg.z || 0),
-        nx: 0, ny: 0, nz: 0,
-        cId: berg.controllerId || 0,
-        sId: berg.sectionId || 0,
-        fId: berg.fixtureId || 0,
-        vMask: berg.viewMask || 0,
-        patch: null,
-        channels: null,
-        apply: fixture ? ((r, g, b) => {
-          if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-          fixture.setColorRGB(r, g, b);
-        }) : (() => {})
-      });
-    });
-  }
-
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
