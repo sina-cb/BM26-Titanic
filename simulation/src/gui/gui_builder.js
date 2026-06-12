@@ -233,6 +233,12 @@ function setupGUI() {
   });
   window.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
+    // Mouseup released outside the window never reaches us — a move with
+    // no button held means the drag already ended (stuck-drag guard).
+    if ((e.buttons & 1) === 0) {
+      isDragging = false;
+      return;
+    }
     panel.style.left = (e.clientX - dragOffsetX) + 'px';
     panel.style.top = (e.clientY - dragOffsetY) + 'px';
     panel.style.right = 'auto';

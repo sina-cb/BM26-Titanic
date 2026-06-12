@@ -703,6 +703,13 @@ export function setupPatternEditor() {
   });
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
+    // Stuck-drag guard: a move with no button held means the mouseup was
+    // lost (released outside the window) — end the drag.
+    if ((e.buttons & 1) === 0) {
+      isDragging = false;
+      document.body.style.cursor = '';
+      return;
+    }
     panel.style.left = Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragOX)) + 'px';
     panel.style.top = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOY)) + 'px';
     panel.style.right = 'auto';

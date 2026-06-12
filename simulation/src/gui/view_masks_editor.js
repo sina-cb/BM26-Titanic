@@ -279,11 +279,18 @@ export function setupViewMasksEditor() {
   });
   header.addEventListener('pointermove', (e) => {
     if (!dragOff) return;
+    // Stuck-drag guard: no button held → the release was lost.
+    if ((e.buttons & 1) === 0) {
+      dragOff = null;
+      return;
+    }
     panel.style.left = `${Math.max(0, e.clientX - dragOff.x)}px`;
     panel.style.top = `${Math.max(0, e.clientY - dragOff.y)}px`;
     panel.style.right = 'auto';
   });
   header.addEventListener('pointerup', () => { dragOff = null; });
+  header.addEventListener('pointercancel', () => { dragOff = null; });
+  header.addEventListener('lostpointercapture', () => { dragOff = null; });
 
   collapseBtn.onclick = () => panel.classList.toggle('collapsed');
 

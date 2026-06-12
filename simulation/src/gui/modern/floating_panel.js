@@ -51,6 +51,12 @@ export function FloatingPanel({
     const onMove = (ev) => {
       const s = dragState.current;
       if (!s || !panel) return;
+      // Stuck-drag guard: a move with no button held means the mouseup
+      // was lost (released outside the window) — end the drag.
+      if ((ev.buttons & 1) === 0) {
+        onUp();
+        return;
+      }
       panel.style.left = `${Math.max(0, Math.min(window.innerWidth - 100, ev.clientX - s.dx))}px`;
       panel.style.top = `${Math.max(TOP_MIN, Math.min(window.innerHeight - 50, ev.clientY - s.dy))}px`;
       panel.style.right = 'auto';
