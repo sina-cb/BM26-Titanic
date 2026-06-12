@@ -94,17 +94,17 @@ for (const id of THEME_IDS) {
   });
 }
 
-test('style.css :root boot defaults match the CaptainPad dark palette', () => {
+test('style.css :root boot defaults match the CaptainPad gruvbox palette (sim default theme)', () => {
   const rootStart = cssSource.indexOf(':root {');
   assert.notEqual(rootStart, -1, 'style.css must define a :root block');
   const rootEnd = cssSource.indexOf('}', rootStart);
   const rootBlock = cssSource.slice(rootStart, rootEnd);
 
-  for (const [token, value] of Object.entries(tsPalettes.dark)) {
+  for (const [token, value] of Object.entries(tsPalettes.gruvbox)) {
     const cssVar = tokenToCssVar(token);
     const re = new RegExp(`${cssVar}:\\s*([^;]+);`);
     const m = re.exec(rootBlock);
     assert.ok(m, `style.css :root is missing ${cssVar}`);
-    assert.equal(m[1].trim(), value, `style.css ${cssVar} drifted from CaptainPad dark`);
+    assert.equal(m[1].trim(), value, `style.css ${cssVar} drifted from CaptainPad gruvbox`);
   }
 });

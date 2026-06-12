@@ -14,34 +14,35 @@
    ──────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* Boot defaults — CaptainPad `dark` palette (theme.js overrides). */
-  --text: #e3e6e8;
-  --background: #0f1416;
-  --tint: #5ae0ee;
-  --icon: #7a8a8e;
-  --tab-icon-default: #7a8a8e;
-  --tab-icon-selected: #5ae0ee;
-  --surface: #0f1416;
-  --surface-container-low: #171d20;
-  --surface-container-lowest: #0a0e10;
-  --surface-container-high: #1f262a;
-  --surface-dim: #0a0e10;
-  --primary: #5ae0ee;
-  --primary-container: #003640;
-  --primary-fixed-dim: #7fe9f4;
-  --on-primary: #003640;
-  --secondary: #a8c5d4;
-  --secondary-container: #2a3e48;
-  --error: #ff8a82;
-  --error-container: rgba(255, 138, 130, 0.16);
-  --error-container-border: rgba(255, 138, 130, 0.45);
-  --tertiary: #34d39a;
-  --ghost-border: rgba(180, 195, 200, 0.18);
-  --ambient-shadow: rgba(0, 0, 0, 0.5);
-  --sidebar-background: rgba(15, 20, 22, 0.85);
-  --sidebar-active-background: rgba(90, 224, 238, 0.12);
-  --sidebar-active-border: rgba(90, 224, 238, 0.4);
-  --fader-knob: #4a575c;
+  /* Boot defaults — CaptainPad `gruvbox` palette, the sim's default
+     theme (theme.js overrides on boot and on every switch). */
+  --text: #ebdbb2;
+  --background: #282828;
+  --tint: #fabd2f;
+  --icon: #928374;
+  --tab-icon-default: #928374;
+  --tab-icon-selected: #fabd2f;
+  --surface: #282828;
+  --surface-container-low: #32302f;
+  --surface-container-lowest: #1d2021;
+  --surface-container-high: #3c3836;
+  --surface-dim: #1d2021;
+  --primary: #fabd2f;
+  --primary-container: #665c54;
+  --primary-fixed-dim: #fadc7f;
+  --on-primary: #282828;
+  --secondary: #a89984;
+  --secondary-container: #3c3836;
+  --error: #fb4934;
+  --error-container: rgba(251, 73, 52, 0.16);
+  --error-container-border: rgba(251, 73, 52, 0.45);
+  --tertiary: #b8bb26;
+  --ghost-border: rgba(168, 153, 132, 0.25);
+  --ambient-shadow: rgba(0, 0, 0, 0.55);
+  --sidebar-background: rgba(40, 40, 40, 0.88);
+  --sidebar-active-background: rgba(250, 189, 47, 0.12);
+  --sidebar-active-border: rgba(250, 189, 47, 0.4);
+  --fader-knob: #504945;
 
   /* Typography — CaptainPad stack (Fonts.headline / Fonts.body),
      vendored offline in vendor/fonts/. */

@@ -214,7 +214,7 @@ function isThemeMode(v) {
   return v === 'system' || (typeof v === 'string' && v in THEMES);
 }
 
-let _mode = 'system';
+let _mode = 'gruvbox';
 const _systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 /** Resolve the operator preference to a concrete palette key. */
@@ -306,8 +306,9 @@ function initTheme() {
   } else if (isThemeMode(stored)) {
     _mode = stored;
   }
-  // Missing/unrecognized stored value falls through to 'system' — the
-  // documented default (same contract as CaptainPad's use-theme hook).
+  // Missing/unrecognized stored value falls through to 'gruvbox' — the
+  // sim's default theme (operator decision 2026-06-12). 'system' remains
+  // selectable from the picker.
 
   applyCssVariables(resolvePaletteKey(_mode));
 
