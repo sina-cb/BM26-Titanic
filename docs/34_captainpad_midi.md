@@ -78,6 +78,12 @@ CoreMIDI module. That's the real engineering work, and it's tractable.
    build, so adding an Expo Module is a known, supported motion — it changes
    the build from "JS-only rebuild" to "prebuild required once," nothing
    more.
+5. **The flip side the report never mentions:** desktop **Chromium ships Web
+   MIDI**. The CaptainPad web build running in Chrome/Edge on a Windows dev
+   machine can read the APC plugged into *that machine* directly. With a
+   small transport abstraction (below), the entire mapping/LED/dispatch
+   stack becomes hardware-in-the-loop testable on Windows — no iPad, no
+   Mac, agent-drivable via puppeteer. This is the primary development path.
 
 ### Native module options
 
@@ -136,22 +142,31 @@ it is small, isolated, and on a paved Expo path.
 - No engine-side changes: no new endpoints, no WS command path. If REST
   coalescing ever proves too slow, a WS param channel is a separate doc.
 - No Bluetooth MIDI, no Bomebox integration, no Android.
-- No support in the CaptainPad **web** build (Safari has no Web MIDI; the
-  module is iOS-native). Web build compiles unchanged with the feature
-  absent — `isMidiAvailable()` is the explicit capability gate, and the
-  Config tab says "MIDI: not available on this platform" rather than hiding.
+- No MIDI in the web build on **iPad Safari** (WebKit has no Web MIDI). The
+  web build on **desktop Chromium** is a supported transport (dev/test
+  path); everywhere else `isMidiAvailable()` is the explicit capability
+  gate and the Config tab says "MIDI: not available on this platform"
+  rather than hiding.
 
 ---
 
 ## Architecture
 
-Three layers, strictly separated:
+Three layers, strictly separated — with the bottom layer split into two
+interchangeable **transports** behind one interface:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 1. modules/captain-midi/        (Expo Module, Swift)         │
-│    CoreMIDI client · endpoint enumeration · input events     │
-│    → JS  · sendMidi() for LED feedback · hotplug notifs      │
+│ 1. MidiTransport interface      (utils/midi/transport.ts)    │
+│  ┌─────────────────────────────┬──────────────────────────┐  │
+│  │ NativeMidiTransport         │ WebMidiTransport         │  │
+│  │ modules/captain-midi/       │ navigator.               │  │
+│  │ (Expo Module, Swift,        │  requestMIDIAccess()     │  │
+│  │  CoreMIDI — iPad)           │ (desktop Chromium —      │  │
+│  │                             │  Windows dev/test)       │  │
+│  └─────────────────────────────┴──────────────────────────┘  │
+│    endpoint enumeration · input events → JS ·                │
+│    send() for LED feedback · hotplug notifications           │
 ├──────────────────────────────────────────────────────────────┤
 │ 2. utils/midi/                  (TypeScript, pure)           │
 │    profile loader (YAML) · event → action resolution ·       │
@@ -163,7 +178,16 @@ Three layers, strictly separated:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 1. Native module — `modules/captain-midi/`
+Transport selection at startup is capability-based and explicit: native
+module present → `NativeMidiTransport`; else `navigator.requestMIDIAccess`
+present → `WebMidiTransport`; else MIDI is unavailable (visible state, not
+an error). Both transports expose the same five-call surface, so layers 2–3
+are byte-identical across iPad and desktop — which is exactly what makes the
+mapping stack testable on a Windows machine with the APC plugged into the
+PC. Web MIDI's note/CC send path covers the APC LED feedback too (plain
+3-byte messages, no sysex permission needed).
+
+### 1a. Native transport — `modules/captain-midi/`
 
 Local Expo Module (`expo.modules` autolinking from the app's `modules/`
 directory; survives `expo prebuild --clean` because it's source, not
@@ -191,6 +215,17 @@ Implementation notes:
 - Hotplug via `kMIDIMsgObjectAdded/Removed` notifications → re-enumerate →
   `endpointsChanged` → hook re-resolves the profile (reconnect-on-replug,
   loud disconnect chip meanwhile).
+
+### 1b. Web transport — `utils/midi/web_midi_transport.ts`
+
+Thin adapter over `navigator.requestMIDIAccess({ sysex: false })` mapping
+`MIDIInput`/`MIDIOutput` onto the same `MidiEndpoint` shape (Web MIDI's
+`statechange` event covers hotplug). On the APC mini mk2 the browser
+exposes the same multiple ports CoreMIDI does, so the profile's
+`sourcePort`/`destinationPort` pinning applies unchanged. Chromium-only;
+on iPad Safari the capability gate reports unavailable. ~100 lines, zero
+dependencies, and the reason agents can do hardware-in-the-loop work
+without an iPad.
 
 ### 2. Mapping layer — `utils/midi/`
 
@@ -285,19 +320,78 @@ WS buses):
 
 ---
 
-## Build & deployment impact
+## Windows-first development & build topology
 
-- Adds a native module ⇒ **`npx expo prebuild --platform ios --clean` is
-  required once** before the next `xcodebuild` (runbook
-  `.agent/00_gol/09_build_ipad_release.md` §1.4 step 2 — already part of the
-  documented flow). Subsequent JS-only edits keep the 3–5 min warm rebuild.
-- EAS preview builds pick the module up automatically (local Expo Modules
-  are part of the uploaded archive).
-- No new npm dependencies at runtime; the YAML profile rides the existing
-  transformer. Offline rules untouched.
+The development machine is **Windows**; the Mac is a last resort. The
+transport split above is what makes that work. Three rings, from innermost
+(daily agent loop) to outermost (rare):
+
+### Ring 1 — Windows only, no iPad, no Mac: the agent inner loop
+
+```
+APC mini mk2 ──USB──▶ Windows PC ──▶ Chrome (Web MIDI)
+                                       │ CaptainPad web build :6967
+                                       ▼
+                              marsin_engine :6968 ──sACN──▶ sim :6969
+```
+
+Everything in layers 1b–3 (web transport, mapping, coalescing, LED
+projector, header chip, Config tab) plus the whole engine round-trip runs
+here. Agents drive it with the existing full-stack smoke skill
+(`.agent/01_skills/05_full_stack_smoke.md`) plus puppeteer — Chromium
+grants the `midi` permission headfully or via
+`browserContext.overridePermissions(origin, ['midi'])`, so **automated
+hardware-in-the-loop tests are possible**: twist a fader, assert the
+`/param-center` value moved, screenshot the sim. With no APC attached, the
+mapping layer is still fully unit-testable (pure TS, synthetic events).
+
+### Ring 2 — Windows + iPad over Expo (LAN), still no Mac
+
+CaptainPad already ships `expo-dev-client`. Build **one development-profile
+binary in the EAS cloud from Windows** (`eas build --platform ios --profile
+development`) with the native module baked in, install it on the iPad over
+the air (QR / `expo.dev` link — devices are registered with `eas
+device:create`, credentials live on EAS per the runbook). From then on:
+
+```
+Windows: npx expo start        # Metro on the LAN
+iPad:    dev-client app  ──▶ loads JS from Windows Metro, hot reload
+APC ──USB-C hub──▶ iPad        # NativeMidiTransport, real CoreMIDI
+```
+
+- **All JS/TS iteration — which is everything after the native module
+  freezes — hot-reloads from Windows onto the iPad**, with the APC plugged
+  into the iPad exercising the real CoreMIDI path.
+- Preview/standalone installs also work from Windows: `eas build --profile
+  preview` (cloud) → OTA install. This is the existing documented EAS path
+  (runbook §1.3); it never needed a Mac.
+- The cost of EAS: each **native-side** change (Swift, `app.json` plugins)
+  means a new cloud build (~15–30 min, build minutes, internet). Hence the
+  design rule: **the native module's 5-call surface freezes after phase 2**
+  so iteration stays in JS where Windows + hot reload covers it.
+
+### Ring 3 — 🚨 Mac required — loudly, these and only these
+
+| Task | Why Mac-only |
+|---|---|
+| Local USB build/install (`expo prebuild` + `xcodebuild` + `devicectl`, runbook §1.4) | Xcode toolchain. This is the **offline fallback** — i.e. **on playa, with no internet, a native rebuild needs the Mac.** Mitigation: freeze the native module and ship the dev-client + preview builds before leaving; on-playa fixes are then JS-only via Metro from any laptop. |
+| Debugging a native crash in the Swift module (symbolicated logs, Xcode debugger, Instruments) | Xcode. EAS gives you build logs, not runtime debugging. |
+| iOS Simulator runs | macOS only. Not needed for this feature (Simulator has no USB MIDI passthrough anyway — real iPad or Ring 1 are strictly better). |
+
+Everything not in that table runs from Windows. If a future step turns out
+to secretly need a Mac, that's a bug in this doc — flag it.
+
+### Build & repo impact
+
+- Adds a local Expo Module ⇒ EAS cloud builds pick it up automatically
+  (local modules ride the uploaded archive); the Mac local path gains the
+  already-documented `expo prebuild` step (runbook §1.4 step 2).
+- No new runtime npm dependencies; the YAML profile rides the existing
+  transformer; Web MIDI is a browser built-in. Offline rules untouched.
 - Auto-checks: standard `.agent/00_gol/03_captain_pad_auto_checks.md` suite
-  (`tsc --noEmit`, lint, `web:build` — the web build doubles as the
-  capability-gate regression test).
+  (`tsc --noEmit`, lint, `web:build`) — `web:build` doubles as the
+  capability-gate regression test, and mapping-layer unit tests run on
+  Windows/CI with no hardware.
 
 ## FoH hardware checklist (procurement)
 
@@ -312,17 +406,26 @@ WS buses):
 
 ## Implementation plan
 
-| Phase | Scope | Files |
-|---|---|---|
-| 0. Bench gate | APC mini mk2 → hub → FoH iPad → **MIDI Wrench**: confirm enumeration, note the exact endpoint names/ports/velocity colors iPadOS reports (they feed the profile). No code until this passes. | — (notes into the Notion card) |
-| 1. Native module | `modules/captain-midi/` (Swift + Expo Module config), enumeration/open/send/events, hotplug | `CaptainPad/modules/captain-midi/*` (new) |
-| 2. Mapping layer | profile schema + loader + validator, event→action resolver, coalescer, LED projector — **pure TS, unit-testable without hardware** | `CaptainPad/utils/midi/*` (new), `CaptainPad/midi_profiles/apc_mini_mk2.yaml` (new) |
-| 3. Integration | `useMidiControl` hook, RootShell mount, header chip, Config tab section, capability gate for web | `CaptainPad/hooks/useMidiControl.ts` (new), `app/_layout.tsx`, Config tab |
-| 4. Verification | auto-checks suite; hardware pass: every mapped control observed end-to-end against a running engine + sim (full-stack smoke skill), LED repaint on replug, unplug/replug soak | report in `.agent/02_reports/` |
-| 5. (later) | APC40 mkII profile · MIDI-learn editor · WS param channel if REST coalescing ever measures slow | — |
+Ordered Windows-first: everything through phase 3 needs no Mac, no iPad,
+and no EAS build — a local agent on the Windows box with the APC plugged
+into the PC can build and verify it end-to-end.
 
-Phases 1–3 are independently landable; phase 2 carries the test weight since
-it's hardware-free.
+| Phase | Ring | Scope | Files |
+|---|---|---|---|
+| 0. Bench gate (PC) | 1 | APC mini mk2 → Windows PC → Chrome `Web MIDI` test page (or MIDI monitor): record exact endpoint names/ports/velocity colors the browser reports — they seed the profile. | — (notes into the Notion card) |
+| 1. Transport interface + mapping layer | 1 | `MidiTransport` interface; profile schema + loader + validator; event→action resolver; coalescer; LED projector — **pure TS, unit-tested with synthetic events, no hardware** | `CaptainPad/utils/midi/*` (new), `CaptainPad/midi_profiles/apc_mini_mk2.yaml` (new) |
+| 2. Web transport + integration | 1 | `WebMidiTransport`; `useMidiControl` hook; RootShell mount; header chip; Config tab section; capability gate. **Full hardware-in-the-loop verification on Windows**: APC → Chrome → web build → engine → sim, agent-driven via puppeteer + full-stack smoke. | `CaptainPad/utils/midi/web_midi_transport.ts`, `CaptainPad/hooks/useMidiControl.ts` (new), `app/_layout.tsx`, Config tab |
+| 3. Native module | 2 (built via EAS from Windows) | `modules/captain-midi/` (Swift + Expo Module config): enumeration/open/send/events, hotplug, matching the frozen transport interface. One EAS `development` build from Windows → dev-client on iPad. | `CaptainPad/modules/captain-midi/*` (new) |
+| 4. iPad bench gate + verification | 2 | APC → hub → iPad **MIDI Wrench** check (confirm iPadOS endpoint names match the profile; adjust if CoreMIDI names differ from Chromium's), then the same end-to-end pass on the dev client: every mapped control against engine + sim, LED repaint on replug, unplug/replug soak, Guided Access check | report in `.agent/02_reports/` |
+| 5. (later) | — | APC40 mkII profile · MIDI-learn editor · WS param channel if REST coalescing ever measures slow | — |
+
+Phases are independently landable. Phase 2 ends with the feature genuinely
+usable (a Windows laptop running Chrome at FoH is a legitimate degraded
+mode); phase 3–4 promote it onto the iPad. One known risk to verify early
+in phase 4: **endpoint display names may differ between Chromium and
+CoreMIDI** for the same APC ports — the profile's `nameContains` +
+`portIndex` pinning is designed to absorb this, but the iPad bench gate
+confirms it before anything is declared done.
 
 ## Open questions (for Sina)
 
@@ -338,3 +441,8 @@ it's hardware-free.
    hardware checklist count)?
 4. **APC40 mkII priority** — bench it for BM26, or is the mini mk2 the only
    show controller this year?
+5. **EAS standing** — the runbook says preview-profile iOS credentials
+   already live on EAS; phase 3 additionally needs a `development`-profile
+   build and the dev iPad registered (`eas device:create`). Confirm the EAS
+   account has build minutes to spare, since Windows-side native builds
+   lean on the cloud.
