@@ -880,7 +880,7 @@ Recommended per-scene files (`marsin_engine/states/<scene_name>/`):
 |------|---------|
 | `mixer_state.yaml` | channels, faders, modes, local controls, shared bindings |
 | `dimmer_state.yaml` | per-section brightness tracking |
-| `param_center_state.yaml` | CPC global shared defaults (if CPC remains separately persisted) |
+| (CPC values) | persisted inside `globals_state.yaml` → `params:` (no separate file) |
 
 On restore:
 

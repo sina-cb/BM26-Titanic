@@ -1858,3 +1858,67 @@ export async function fetchPlaylistByName(name: string): Promise<ApiResult<any>>
     return { ok: false, error: err.message };
   }
 }
+
+// ── Runtime state vs show defaults (CONFIG tab → SHOW STATE card) ────────
+// The engine keeps all live YAML state (mixer/deck/globals/audio/
+// scheduler/autopilot + playlists) in a gitignored runtime cache that
+// survives restarts. Promote copies that cache onto the git-tracked
+// state_defaults/<model>/ tree on the engine machine; reset mirrors the
+// defaults back over the cache (engine restart required to load them).
+// See marsin_engine/lib/runtime_state.js.
+
+export type RuntimeStateFile = {
+  file: string;
+  inRuntime: boolean;
+  inDefaults: boolean;
+  differs: boolean;
+};
+
+export type RuntimeStateStatus = {
+  model: string;
+  files: RuntimeStateFile[];
+  dirty: boolean;
+};
+
+export type RuntimeStateMirrorResult = {
+  status: string;
+  model: string;
+  written: string[];
+  removed: string[];
+  unchanged: string[];
+  restartRequired?: boolean;
+};
+
+export async function fetchRuntimeStateStatus(): Promise<ApiResult<RuntimeStateStatus>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/state/runtime`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('runtime-state-status', 'Fetch runtime state status failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function promoteRuntimeState(): Promise<ApiResult<RuntimeStateMirrorResult>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/state/promote`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function resetRuntimeState(): Promise<ApiResult<RuntimeStateMirrorResult>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/state/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}

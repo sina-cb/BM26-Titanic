@@ -151,12 +151,14 @@ established` are transient reconnect noise — trust the rendered UI state.
 
 Kill the three processes (sim, engine, serve) when done.
 
-> **⚠️ Running the engine dirties the working tree.** The engine writes
-> runtime state into **tracked** files (`marsin_engine/states/**/*.yaml`)
-> and hot-regenerates `marsin_engine/models/*.js`. This is expected smoke
-> residue — do **not** commit it, and do **not** silently revert it either
-> (`.agent/00_gol/01_git.md`). Report the dirty paths to the operator and
-> let them decide.
+> **Running the engine must NOT dirty the working tree.** Engine runtime
+> state lives in the gitignored `marsin_engine/states/` cache (seeded from
+> tracked `marsin_engine/state_defaults/` at boot — see
+> `marsin_engine/lib/runtime_state.js`). The only tracked engine files
+> that may legitimately change are `marsin_engine/models/*.js`
+> (hot-regenerated) and `state_defaults/` after an explicit
+> `POST /state/promote`. Any other tracked diff from a smoke run is a
+> bug — report it.
 
 ---
 

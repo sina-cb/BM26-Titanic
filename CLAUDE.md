@@ -72,7 +72,7 @@ new work; file follow-ups there as `Backlog` cards.
 | `control_podium/` | Podium hardware + Raspberry Pi server bridge (Meshtastic radio path) |
 | `marsin_pb/` | Pixelblaze-related tooling |
 | `3d_models/`, `3d_structure/`, `renders/`, `images/` | Assets |
-| `states/`, `docs/`, `archived/` | State files, docs, retired work |
+| `docs/`, `archived/` | Docs, retired work |
 | `.agent_renders/` | Sim screenshot output (gitignored) |
 
 ## Seeing your work (sim screenshots)
@@ -106,9 +106,12 @@ Startup order: sim (`cd simulation && npm start`) → engine
 01_cylon_sweep`, model must match the sim scene) → CaptainPad web
 (`cd CaptainPad && npm run web:build && npm run web:serve`). Verify: sACN IN
 monitor Connected (capture with `--show-ui`), two frames showing the pattern
-animating, CaptainPad header `● CONNECTED` with live data. The engine writes
-runtime state into tracked `marsin_engine/states/` files — expected residue;
-report it, don't commit or silently revert it.
+animating, CaptainPad header `● CONNECTED` with live data. Engine runtime
+state lives in the **gitignored** `marsin_engine/states/` cache (seeded
+from tracked `marsin_engine/state_defaults/` at boot) — running the engine
+never dirties git; promote runtime → defaults via `POST /state/promote`
+(CaptainPad CONFIG tab → SHOW STATE) when the state should become the new
+tracked defaults.
 
 ## Working etiquette
 

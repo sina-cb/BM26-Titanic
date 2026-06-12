@@ -1134,7 +1134,7 @@ re-architecture:
 - The OSC listener is already side-effect-free (re-`start()` rebuilds
   its internal map from scratch), so live updates need no special
   reconciliation.
-- Persistence rule will mirror `param_center_state.yaml`: the
+- Persistence rule will mirror the CPC store (runtime `globals_state.yaml` → `params:`): the
   authoritative source becomes `osc_bindings.yaml`, and `config.yaml`
   becomes a fallback for first-boot defaults.
 - The CaptainPad UI lives next to the Shared Parameters section in
@@ -1335,7 +1335,7 @@ output changes accordingly.
 | `param_center.test.js — onChange shape`                  | `onChange({changedKeys, state})` fires with the right keys array on `set` / `setHsvField`. |
 | `param_center.test.js — hasPersistentDirty`              | `hasPersistentDirty(['audioLevel'])` returns false; `(['speed'])` returns true.           |
 | `api_server.test.js — live broadcast throttle`           | 60 OSC writes/sec to `audioLevel` produce ≤ `broadcastHz + 1` WS `sharedParams` per sec.  |
-| `api_server.test.js — no persist for live`               | 60 OSC writes/sec to `audioLevel` produce **zero** disk writes to `param_center_state.yaml`. |
+| `api_server.test.js — no persist for live`               | 60 OSC writes/sec to `audioLevel` produce **zero** disk writes to the CPC store (runtime `globals_state.yaml`). |
 | `api_server.test.js — onChange replaces direct calls`    | HTTP `POST /param-center {speed:0.5}` produces exactly one `sharedParams` broadcast.      |
 
 ### 14.3 Integration
@@ -1354,7 +1354,7 @@ A scripted end-to-end check that the existing
      droppedMessagesPerSec == 0.
    → WS sharedParams emissions for audioLevel during the window:
      ≤ broadcastHz (15) per second, so ≤ 30 broadcasts total.
-   → No new lines appended to param_center_state.yaml (audioLevel is
+   → No new writes to the runtime globals_state.yaml (audioLevel is
      live: false-persist).
    → PortWatch compact_status PUB during the window does NOT include
      the `audioLevel` field.

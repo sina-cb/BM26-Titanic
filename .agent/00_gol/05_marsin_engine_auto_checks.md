@@ -83,11 +83,14 @@ node tests/hil/hil_transition_test.mjs
 After the test:
 
 ```powershell
-git diff -- marsin_engine/states/test_bench
+git status --short
 ```
 
-The test must not leave tracked state changes. If it does, update the test to
-snapshot and restore its state files in a `finally` block.
+Engine runtime state lives in the gitignored `marsin_engine/states/` cache
+(seeded from tracked `marsin_engine/state_defaults/` at boot), so HIL runs
+must not leave ANY tracked changes. If `git status` shows a tracked diff
+after a test, something wrote outside the runtime dir — treat that as a
+test failure and fix the writer, not the diff.
 
 ## One-Command HIL Runner Target
 
@@ -97,7 +100,9 @@ The script should live under `marsin_engine/tests/hil/`.
 
 Required behavior:
 
-1. Copy these files to a temp directory before starting:
+1. Copy these files to a temp directory before starting (runtime cache —
+   gitignored, but restoring them keeps the operator's local live state
+   intact across test runs):
    - `marsin_engine/states/test_bench/deck_state.yaml`
    - `marsin_engine/states/test_bench/mixer_state.yaml`
    - `marsin_engine/states/test_bench/globals_state.yaml`
@@ -180,4 +185,7 @@ A Marsin Engine change is done only when the final response includes:
 - `node engine.js --list`: pass
 - `node engine.js --pattern test_const --model test_bench --dry-run`: pass with no missing blend warning
 - HIL transition test: pass when mixer/blend behavior changed
-- Confirmation that tracked state files were not modified by HIL
+- Confirmation that `git status` shows no tracked changes from running the
+  engine or HIL tests (runtime state is gitignored under
+  `marsin_engine/states/`; tracked defaults in `state_defaults/` only
+  change via an explicit `/state/promote`)

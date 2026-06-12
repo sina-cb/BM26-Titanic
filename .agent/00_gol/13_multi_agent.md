@@ -240,9 +240,10 @@ Before claiming "done":
    - CaptainPad manual smoke (`npx tsc --noEmit && npm run lint`,
      plus describe what you clicked on the iPad / web build).
 5. **No tracked-state side effects** — after your tests, `git status`
-   inside the worktree should show only your intended diff. If a test
-   modified `marsin_engine/states/test_bench/*.yaml`, restore those files
-   in a `finally` block (see `05_marsin_engine_auto_checks.md`).
+   inside the worktree should show only your intended diff. Engine runtime
+   state (`marsin_engine/states/`) is gitignored, so engine/HIL runs leave
+   no tracked residue; if they do, a writer is escaping the runtime dir —
+   fix the writer (see `05_marsin_engine_auto_checks.md`).
 6. **No port leftovers** — kill all servers you started.
 
 ## 7. Reporting back

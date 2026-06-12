@@ -506,10 +506,10 @@ Broadcast triggers: param change (debounced 30Hz), WS connect, pattern swap, sou
 
 ## 12. Persistence
 
-Shared param values are persisted to `param_center_state.yaml` (separate from `pattern_state.yaml`) on every change (debounced). On engine restart, the CPC restores from this file.
+Shared param values are persisted into the `params:` block of `marsin_engine/states/<model>/globals_state.yaml` (the gitignored runtime cache) on every change (debounced, via the api_server saveHook). On engine restart, the CPC restores from this file. (Historical note: this used to be a standalone `param_center_state.yaml` at the engine root.)
 
 ```yaml
-# param_center_state.yaml
+# globals_state.yaml → params: block
 speed: 0.7
 direction: 1
 count: 0.5
@@ -569,7 +569,7 @@ export function sliderTailLength(v) { tailLength = 0.02 + v * 0.3; }
 
 | Controller | Scope | Pipeline Stage | Persisted |
 |------------|-------|----------------|-----------|
-| **ParamCenter** | Pattern behavior (speed, color, density) | Pre-render: WASM injection (event-driven) | Yes (`param_center_state.yaml`) |
+| **ParamCenter** | Pattern behavior (speed, color, density) | Pre-render: WASM injection (event-driven) | Yes (`globals_state.yaml` → `params:`) |
 | **Autopilot** | Pattern scheduling (playlist, shuffle) | Pattern swap trigger | Yes (`config.yaml`) |
 | **IntensityController** | Hardware brightness (per-section dimming, blackout) | Post-render: pixel scaling | Yes (`pattern_state.yaml` `_dimmers`) |
 | **GlobalEffectsController** | Hardware effects (fogger, UV, vintage white) | Post-render: DMX bypass | No |
@@ -766,7 +766,7 @@ The CPC will:
 - Accept `POST /param-center {chaos: 0.42}`.
 - Include `chaos` in every `GET /param-center` and every
   `sharedParams` broadcast.
-- Persist the value to `param_center_state.yaml`.
+- Persist the value into the runtime `globals_state.yaml` (`params:` block).
 
 ### 16.2 Pattern (optional): wire the WASM injection
 

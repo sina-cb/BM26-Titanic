@@ -8,7 +8,7 @@ Two distinct concepts:
 
 | Concept | Where it lives | What it is |
 |---------|---------------|------------|
-| **Playlist Library** | `simulation/scenes/<scene>/playlists/*.yaml` | Authored show content — saved, versioned, shared |
+| **Playlist Library** | `marsin_engine/states/<scene>/playlists/*.yaml` (runtime cache; tracked defaults in `marsin_engine/state_defaults/<scene>/playlists/`) | Authored show content — live edits land in the runtime cache, `/state/promote` saves them as tracked defaults |
 | **Playlist Assignment** | `marsin_engine/states/<scene>/deck_state.yaml` + `mixer_state.yaml` | Runtime state — which playlist is loaded, active entry cursor, shuffle state |
 
 The library is show content. The assignment is runtime state. They never mix.
@@ -20,7 +20,7 @@ The library is show content. The assignment is runtime state. They never mix.
 ### 2.1 Playlist File Format
 
 ```yaml
-# simulation/scenes/test_bench/playlists/experimental_flash.yaml
+# marsin_engine/states/test_bench/playlists/experimental_flash.yaml
 schemaVersion: 1
 name: experimental_flash
 entries:
@@ -98,7 +98,7 @@ for (const [name, value] of Object.entries(entry.defaults)) {
 
 ### 2.4 Default Playlist Auto-Generation
 
-On engine boot, if `simulation/scenes/<scene>/playlists/` is empty:
+On engine boot, if `marsin_engine/states/<scene>/playlists/` is empty (after seeding from `state_defaults/<scene>/playlists/`):
 
 1. List all patterns from `patterns/` directory
 2. Create `default.yaml` with one entry per pattern, auto-generated IDs, no labels, empty defaults
@@ -111,7 +111,7 @@ On engine boot, if `simulation/scenes/<scene>/playlists/` is empty:
 ```
   ┌──────────────────── On Disk (Show Content) ──────────────────┐
   │                                                              │
-  │  simulation/scenes/test_bench/playlists/                     │
+  │  marsin_engine/states/test_bench/playlists/                  │
   │    ├── default.yaml           entries: [e1, e2, e3, ...]     │
   │    ├── experimental_flash.yaml                               │
   │    └── chill_night.yaml                                      │
@@ -255,7 +255,7 @@ The `channel.pattern` field continues to track the currently active pattern rega
 
 ### 3.4 Key Rules
 
-- **Library** = authored playlists on disk (`simulation/scenes/<scene>/playlists/`). Shared across restarts. Multiple channels can reference the same playlist.
+- **Library** = authored playlists on disk (`marsin_engine/states/<scene>/playlists/`, seeded from `state_defaults/<scene>/playlists/`). Shared across restarts. Multiple channels can reference the same playlist.
 - **Assignment** = runtime cursor per channel. Persisted in `deck_state.yaml` / `mixer_state.yaml` alongside existing channel data. This explicitly includes the **autopilot** sub-state so that deck and mixer channels can have independent delays and active states.
 - Each channel (deck or mixer) has its **own independent** assignment, cursor, and shuffle state.
 

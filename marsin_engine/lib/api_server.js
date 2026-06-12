@@ -17,6 +17,12 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import {
+  runtimeStateDir,
+  runtimeStateStatus,
+  promoteRuntimeState,
+  resetRuntimeState,
+} from './runtime_state.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -244,14 +250,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     engineCore.signalPostProcessorBroadcastRef.publish = broadcastWs;
   }
 
-  const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
+  // Runtime state dir (gitignored cache, seeded from state_defaults/ at
+  // engine boot — see runtime_state.js). Anchored to the engine root,
+  // NOT the cwd-relative patternsDir: the old join sprayed a stray
+  // /states/ dir at the repo root when the engine ran from there.
+  const stateModel = opts.modelName || 'default';
+  const stateDir = runtimeStateDir(stateModel);
   const stateManager = new StateManager(stateDir);
 
-  // Playlist library lives in simulation/scenes/<scene>/playlists/
-  const playlistsDir = path.join(
-    patternsDir, '..', '..', 'simulation', 'scenes',
-    opts.modelName || 'default', 'playlists'
-  );
+  // Playlist library rides the same runtime dir (promoted/reset together
+  // with the rest of the model state). Tracked default playlists live in
+  // state_defaults/<model>/playlists/.
+  const playlistsDir = path.join(stateDir, 'playlists');
   const playlistManager = new PlaylistManager(playlistsDir, patternsDir);
 
   // ── Modulation context push ─────────────────────────────────────────
@@ -1479,7 +1489,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   // Initialize Autopilot Daemon. We are always in playlist mode, so the
   // "current key" is the active entry id and the swap target is the next
-  // entry in the deck channel's playlist.
+  // entry in the deck channel's playlist. Its {active, delay_s, shuffle}
+  // state persists to the runtime dir (autopilot_state.yaml) — it used
+  // to live inside config.yaml, which made every PLAY/PAUSE tap rewrite
+  // the tracked settings file.
+  const autopilotStore = {
+    load: () => stateManager.load('autopilot_state.yaml', null),
+    save: (st) => stateManager.save('autopilot_state.yaml', st),
+  };
   const autopilot = new Autopilot(
     listPatterns,
     patternsDir,
@@ -1538,7 +1555,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('Autopilot playlist swap failed:', e.message);
         }
       }
-    }
+    },
+    autopilotStore,
   );
 
   const server = http.createServer((req, res) => {
@@ -2104,6 +2122,49 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(live));
+    } else if (req.method === 'GET' && req.url === '/state/runtime') {
+      // Runtime-vs-defaults status for the CONFIG tab's SHOW STATE card:
+      // which files a promote would write/remove, and a `dirty` rollup.
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(runtimeStateStatus(stateModel)));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url === '/state/promote') {
+      // Save the live runtime state as the new tracked defaults
+      // (state_defaults/<model>/). Flush every debounced writer FIRST so
+      // the promoted snapshot can't be torn:
+      //   - CPC values sit in a 250 ms debounce (paramCenter.save)
+      //   - mixer/deck state is saved per-mutation but re-save here in
+      //     case a transition completion is still pending
+      // The git commit of the resulting state_defaults/ diff stays a
+      // deliberate human step — the engine never touches git.
+      try {
+        if (paramCenter) paramCenter.flushPendingSave();
+        saveAllState();
+        stateManager.saveGlobalsState(globalsState, paramCenter);
+        const result = promoteRuntimeState(stateModel);
+        console.log(`[StatePromote] runtime → defaults for '${stateModel}': ${result.written.length} written, ${result.removed.length} removed`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', model: stateModel, ...result }));
+      } catch (e) {
+        console.error(`[StatePromote] FAILED: ${e.message}`);
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url === '/state/reset') {
+      // Mirror the tracked defaults back over the runtime cache. The
+      // engine keeps running on its in-memory state; the files take
+      // effect on the next boot — hence restartRequired in the reply.
+      try {
+        const result = resetRuntimeState(stateModel);
+        console.log(`[StateReset] defaults → runtime for '${stateModel}': ${result.written.length} written, ${result.removed.length} removed (restart required)`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', model: stateModel, restartRequired: true, ...result }));
+      } catch (e) {
+        console.error(`[StateReset] FAILED: ${e.message}`);
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(autopilot.state));

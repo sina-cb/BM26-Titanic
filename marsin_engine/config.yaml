@@ -13,10 +13,9 @@ vis:
   maxPixels: 100
 server:
   port: 6968
-playlist:
-  active: true
-  delay_s: '15'
-  shuffle: true
+# NOTE: the autopilot's `playlist:` block moved to
+# state_defaults/<model>/autopilot_state.yaml — this file is read-only
+# at runtime now (the engine never writes config.yaml).
 web_client:
   enabled: false
   port: 6967
