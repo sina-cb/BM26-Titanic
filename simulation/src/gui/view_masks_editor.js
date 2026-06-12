@@ -22,6 +22,7 @@ import {
   isEffectsOnlyFixture,
 } from '../dmx/view_registry.js';
 import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
+import { pinForCornerResize } from './panel_layout.js';
 
 window.__activePreviewView = null;
 
@@ -293,6 +294,10 @@ export function setupViewMasksEditor() {
   header.addEventListener('pointerup', () => { dragOff = null; });
   header.addEventListener('pointercancel', () => { dragOff = null; });
   header.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  // Native resize grip (style.css `resize: both`): pin the default
+  // right-anchored panel to left/top before the first corner resize.
+  pinForCornerResize(panel);
 
   collapseBtn.onclick = () => panel.classList.toggle('collapsed');
 

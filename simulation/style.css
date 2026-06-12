@@ -1441,6 +1441,9 @@ body.edit-mode-active #engine-params-panel {
   top: 84px;
   right: 360px;
   width: 300px;
+  min-width: 300px;
+  /* Header + a few rows — the resize grip can't make it useless. */
+  min-height: 150px;
   max-height: 70vh;
   z-index: 95;
   display: flex;
@@ -1453,6 +1456,7 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: 0 8px 40px var(--ambient-shadow);
   overflow: hidden;
   font-family: inherit;
+  resize: both;
 }
 
 #view-masks-panel.hidden {
@@ -1460,6 +1464,49 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #view-masks-panel.collapsed .vm-body {
+  display: none;
+}
+
+/* Collapsed = header bar only (same contract as the Pattern Editor and
+   sACN monitors). !important beats the inline height that a layout
+   restore or the native resize grip leaves on the element — without it
+   the frame stays full-size as an empty themed ghost. resize:none while
+   collapsed: resizing a collapsed panel is a deliberate no-op (the grip
+   disappears with the body; expand first). */
+#view-masks-panel.collapsed,
+#controller-map-panel.collapsed {
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  border-radius: 8px;
+  resize: none;
+  overflow: hidden;
+}
+
+/* Theme-visible resize grip: the native Chromium corner triangle is
+   near-invisible on dark glass panels, so paint our own diagonal lines
+   over the grip corner. pointer-events:none keeps the native resizer
+   underneath fully interactive. */
+#view-masks-panel::after,
+#controller-map-panel::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    var(--secondary) 3px 4.5px
+  );
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  opacity: 0.85;
+}
+
+#view-masks-panel.collapsed::after,
+#controller-map-panel.collapsed::after {
   display: none;
 }
 
@@ -1491,7 +1538,22 @@ body.edit-mode-active #engine-params-panel {
 
 .vm-body {
   padding: 8px;
-  overflow-y: auto;
+  overflow: auto;
+  /* Fill whatever height the operator resizes the panel to (inline
+     height from the grip or a restored layout); shrink + scroll when
+     the panel is smaller than the content. */
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Multi-column when the operator widens the panel: a flat list of
+     section titles/rows/cards flows down the first column, then the
+     next — one column at the 300px default, more as it grows. */
+  column-width: 300px;
+  column-gap: 12px;
+  column-fill: auto;
+}
+
+.vm-body > * {
+  break-inside: avoid;
 }
 
 .vm-section-title {
@@ -1867,6 +1929,9 @@ body.edit-mode-active #engine-params-panel {
   top: 65px;
   right: 360px;
   width: 380px;
+  min-width: 380px;
+  /* Header + banner slot + a couple of chain rows + the tray head. */
+  min-height: 180px;
   max-height: 86vh;
   z-index: 96;
   display: flex;
@@ -1879,6 +1944,7 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: 0 8px 40px var(--ambient-shadow);
   overflow: hidden;
   font-family: var(--font-body);
+  resize: both;
 }
 
 #controller-map-panel.hidden {
@@ -1915,6 +1981,9 @@ body.edit-mode-active #engine-params-panel {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  /* Fill the panel when it carries an explicit height (resize grip or
+     restored layout) so the scroll regions inside get the space. */
+  flex: 1 1 auto;
   font-size: 10px;
   color: var(--text);
 }
@@ -1926,6 +1995,19 @@ body.edit-mode-active #engine-params-panel {
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 80px;
+  /* Multi-column when the operator widens the panel (15–20 controller
+     rigs): cards flow into as many ~330px columns as fit — exactly one
+     at the 380px default width. Grid (not multicol) so each card stays
+     an unfragmented interactive block. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 0 10px;
+  align-content: start;
+  align-items: start;
+}
+
+.cm-main > .cm-add {
+  grid-column: 1 / -1;
 }
 
 .cm-toggle {
@@ -2221,6 +2303,31 @@ body.edit-mode-active #engine-params-panel {
   margin-top: 4px;
   background: color-mix(in srgb, var(--text) 1.5%, transparent);
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cm-tray .cm-tray-head {
+  flex: 0 0 auto;
+}
+
+/* Operator-sized panel (the legacy module sets .cm-user-sized whenever
+   the panel carries an inline height — resize grip or restored layout):
+   the tray sheds its compact chip cap and shares the extra vertical
+   space with the controllers region, 3:1 in favor of the chains. */
+#controller-map-panel.cm-user-sized .cm-main {
+  flex: 3 1 auto;
+}
+
+#controller-map-panel.cm-user-sized .cm-tray {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#controller-map-panel.cm-user-sized .cm-tray-chips {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 40px;
 }
 
 .cm-tray.cm-tray-picking {

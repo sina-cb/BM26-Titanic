@@ -34,6 +34,7 @@ import {
 } from '../dmx/controller_registry.js';
 import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
+import { pinForCornerResize } from './panel_layout.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
 
@@ -1133,6 +1134,22 @@ export function setupControllerMapEditor() {
   });
   header.addEventListener('pointerup', () => { dragOff = null; });
   collapseBtn.onclick = () => panelEl.classList.toggle('collapsed');
+
+  // Native resize grip (style.css `resize: both`): pin the default
+  // right-anchored panel to left/top before the first corner resize.
+  pinForCornerResize(panelEl);
+
+  // Tray growth switch: the tray keeps its compact 130px chip cap until
+  // the panel carries an explicit inline height (operator resize via
+  // the corner grip, or a restored layout) — from then on the flex
+  // column distributes the space (style.css .cm-user-sized rules). The
+  // native resizer writes inline styles silently, so watch the style
+  // attribute instead of hooking any event.
+  const syncUserSized = () =>
+    panelEl.classList.toggle('cm-user-sized', panelEl.style.height !== '');
+  syncUserSized();
+  new MutationObserver(syncUserSized)
+    .observe(panelEl, { attributes: true, attributeFilter: ['style'] });
 
   // Esc always backs out of the transient pick mode (docs/33).
   document.addEventListener('keydown', (e) => {

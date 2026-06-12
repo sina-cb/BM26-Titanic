@@ -276,6 +276,25 @@ export function visiblePanelRects(skipId) {
   return rects;
 }
 
+/** CSS `resize: both` on a right-anchored panel grows it leftward — the
+ *  grip corner stays pinned and escapes the pointer. Call once per
+ *  resizable panel: a pointerdown landing in the bottom-right grip
+ *  corner of a panel that still has no inline `left` (never dragged,
+ *  never restored) pins it to left/top anchoring at its current spot,
+ *  so the native resizer moves the right/bottom edges exactly like it
+ *  does on every dragged panel. Capture phase: content handlers must
+ *  not be able to swallow the pin. */
+export function pinForCornerResize(el, gripPx = 18) {
+  el.addEventListener('pointerdown', (e) => {
+    if (el.style.left) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.right - e.clientX > gripPx || rect.bottom - e.clientY > gripPx) return;
+    el.style.left = `${rect.left}px`;
+    el.style.top = `${rect.top}px`;
+    el.style.right = 'auto';
+  }, true);
+}
+
 /** Keep an expanding bottom-anchored panel on-screen: if its bottom would
  *  pass the viewport, pull the top up (never above the HUD strip). */
 export function clampIntoViewport(el) {
