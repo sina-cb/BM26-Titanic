@@ -201,6 +201,7 @@ http.createServer((req, res) => {
           const controllersPath = path.join(path.dirname(outPath), 'controllers.yaml');
           writeFileAtomic(controllersPath, yaml.dump({
             nextControllerId: configTree.controllers.nextControllerId || 1,
+            nextUniverse: configTree.controllers.nextUniverse || 2,
             controllers: configTree.controllers.controllers || [],
           }, { lineWidth: -1 }));
           console.log(`[SAVE SERVER] ✅ Wrote ${controllersPath} ` +

@@ -544,5 +544,26 @@ land-able; phases 1+2 alone already beat today's workflow.
     built in the projection pass; suggestions/full-universe warnings are O(1)
     and consider every port across all controllers.
 
+### Added 2026-06-12 (Sina + cold review)
+
+14. **Identical U1 pin addresses gang-fire** — one address may start multiple
+    foggers at the same time, always; never a violation. What IS flagged:
+    `pin_overflow` (footprint past 512) and `pin_overlap` (different addresses
+    whose footprints collide).
+15. **Universes are never reused** — `nextUniverse` is a persisted high-water
+    mark like `nextControllerId`. Removing a controller frees nothing for
+    later allocation; manually-typed universes bump the mark too. Wasting
+    universe numbers is fine; reshuffling existing assignments for a small
+    change is not.
+16. **A deleted fixture's chain entry becomes an equal-width gap** — every
+    entry after it keeps its exact address (the physical fixtures are still
+    cabled and addressed). The gap renders in the panel as reserved channels
+    the operator removes deliberately. Pinned effects simply drop.
+17. **Generator regeneration preserves the mapping** — names are stable per
+    index (`<group> N`), so survivors re-project to the same addresses; a
+    count shrink gap-replaces the casualties (decision 16); new extras land
+    in the Unmapped tray. The "patches will be reset" regen warning is
+    skipped under an active mapping because it no longer applies.
+
 *(No open questions — the Chauvet/TE pin overlap was resolved 2026-06-11 by
-moving the Chauvet to 510–511.)*
+moving the Chauvet to 510–511, and is mechanically flagged since decision 14.)*

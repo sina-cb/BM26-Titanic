@@ -24,6 +24,8 @@ import {
   addPort,
   removeController,
   removePort,
+  replaceFixtureWithGap,
+  noteUniverseUsed,
   portPackedWidth,
   isValidIp,
   isGapEntry,
@@ -31,7 +33,7 @@ import {
   entryFixtureName,
   computeProjection,
 } from '../dmx/controller_registry.js';
-import { gatherAllConfigs, isGlobalEffect } from '../dmx/auto_patcher.js';
+import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
@@ -117,7 +119,11 @@ function recomputeAndMark() {
 
 function snapshotRegistry() {
   const reg = registry();
-  return JSON.stringify({ nextControllerId: reg.nextControllerId, controllers: reg.controllers });
+  return JSON.stringify({
+    nextControllerId: reg.nextControllerId,
+    nextUniverse: reg.nextUniverse,
+    controllers: reg.controllers,
+  });
 }
 
 function restoreSnapshot(snapshot) {
@@ -126,6 +132,7 @@ function restoreSnapshot(snapshot) {
   const reg = registry();
   const parsed = JSON.parse(snapshot);
   reg.nextControllerId = parsed.nextControllerId;
+  reg.nextUniverse = parsed.nextUniverse;
   reg.controllers.length = 0;
   for (const controller of parsed.controllers) reg.controllers.push(controller);
 }
@@ -548,6 +555,9 @@ function renderPort(controller, port, proj) {
     }
     mutate(null, () => {
       port.universe = next;
+      // Manual entries move the allocation high-water mark too —
+      // a later addPort must never hand this universe out again.
+      noteUniverseUsed(registry(), next);
       if (note && !note.error) port.startAddress = note.start;
     });
     if (note) showToast(note.msg, { error: note.error, ttl: 8000 });
@@ -1178,6 +1188,39 @@ export function setupControllerMapEditor() {
   // interaction.js calls this after every selection change so the
   // "+ sel (n)" counters and chip highlights track the 3D view live.
   window.refreshControllerMapPanel = renderIfOpen;
+
+  // gui_builder calls this when fixture configs are DELETED (single
+  // remove, trace delete, regeneration shrink). Each mapped casualty's
+  // chain entry becomes an equal-width gap so every fixture after it
+  // keeps its exact address — a delete must never re-address the rest
+  // of the chain (the physical fixtures are still cabled and
+  // addressed). Pinned effects just drop (they hold no port channels).
+  window.controllerMappingFixturesRemoved = (configs) => {
+    if (!registryIsActive(registry())) return;
+    const gapped = [];
+    const unpinned = [];
+    for (const config of configs || []) {
+      if (!config || typeof config.name !== 'string' || config.name.length === 0) continue;
+      const result = replaceFixtureWithGap(registry(), config.name, getFootprint(config));
+      if (result === 'gapped') gapped.push(config.name);
+      else if (result === 'unpinned') unpinned.push(config.name);
+    }
+    if (gapped.length === 0 && unpinned.length === 0) return;
+    if (gapped.length > 0) {
+      console.warn(`[Controllers] ${gapped.length} deleted fixture(s) replaced with ` +
+        `equal-width gap(s) — chain addresses unchanged:`, gapped);
+    }
+    if (unpinned.length > 0) {
+      console.warn('[Controllers] deleted pinned effect(s) removed from their chain:', unpinned);
+    }
+    recomputeAndMark();
+    renderIfOpen();
+    if (gapped.length > 0) {
+      showToast(`${gapped.length} deleted fixture(s) → reserved gap(s); ` +
+        'chain addresses unchanged. Remove the gaps in the 🎛 panel to repack.',
+      { ttl: 8000 });
+    }
+  };
 
   window.toggleControllerMapPanel = () => {
     panelEl.classList.toggle('hidden');

@@ -13,6 +13,7 @@
  * Shape (mirrors controllers.yaml):
  *   {
  *     nextControllerId: <int>,            // monotonic — ids never reused
+ *     nextUniverse: <int>,                // monotonic — universes never reused either
  *     controllers: [
  *       { id, name, ip, ports: [
  *           { port, universe, startAddress, chain: [
@@ -80,7 +81,7 @@ export function entryFixtureName(entry) {
  */
 export function createControllerRegistry(tree) {
   const src = (tree && typeof tree === 'object') ? tree : {};
-  const registry = { nextControllerId: 1, controllers: [] };
+  const registry = { nextControllerId: 1, nextUniverse: 2, controllers: [] };
 
   const rawControllers = src.controllers;
   if (rawControllers !== undefined && !Array.isArray(rawControllers)) {
@@ -191,6 +192,20 @@ export function createControllerRegistry(tree) {
   const rawNext = src.nextControllerId;
   registry.nextControllerId = Number.isInteger(rawNext) && rawNext > maxId ? rawNext : maxId + 1;
 
+  // Universe high-water mark: like controller ids, universes are NEVER
+  // reused — deleting a controller must not let its old universes be
+  // handed to later gear, silently re-meaning addresses the engine,
+  // models and patterns may still reference. Wasting universe numbers
+  // is fine; reshuffling the system for a small change is not
+  // (operator decision 2026-06-12).
+  let maxU = 1; // U1 (effects) never counts as allocatable
+  for (const controller of registry.controllers) {
+    for (const port of controller.ports) maxU = Math.max(maxU, port.universe);
+  }
+  const rawNextU = src.nextUniverse;
+  registry.nextUniverse = Math.max(
+    Number.isInteger(rawNextU) ? rawNextU : 2, maxU + 1, 2);
+
   return registry;
 }
 
@@ -224,12 +239,23 @@ export function derivedUniverses(registry) {
   return [...set].sort((a, b) => a - b);
 }
 
-/** Lowest universe ≥ 2 not carried by any port (U1 is effects-only). */
+/**
+ * Next universe to allocate — MONOTONIC, never a freed one. The
+ * high-water mark only moves forward (createControllerRegistry
+ * normalizes it past every in-use universe at load; addPort and
+ * noteUniverseUsed bump it live), so removing a controller can never
+ * cause a later addition to reclaim its universes and silently
+ * re-mean existing addresses. U1 is effects-only and never allocated.
+ */
 export function nextFreeUniverse(registry) {
-  const used = new Set(derivedUniverses(registry));
-  let u = 2;
-  while (used.has(u)) u++;
-  return u;
+  return Math.max(registry.nextUniverse || 2, 2);
+}
+
+/** Record a manually-entered universe so allocation never hands it out again. */
+export function noteUniverseUsed(registry, universe) {
+  if (Number.isInteger(universe) && universe + 1 > (registry.nextUniverse || 2)) {
+    registry.nextUniverse = universe + 1;
+  }
 }
 
 // ── Mutations (panel operations) ────────────────────────────────────────
@@ -249,7 +275,9 @@ export function addController(registry, { name, ip }) {
 
 export function addPort(registry, controller) {
   const portNum = controller.ports.reduce((m, p) => Math.max(m, p.port), 0) + 1;
-  const port = { port: portNum, universe: nextFreeUniverse(registry), startAddress: 1, chain: [] };
+  const universe = nextFreeUniverse(registry);
+  registry.nextUniverse = universe + 1;
+  const port = { port: portNum, universe, startAddress: 1, chain: [] };
   controller.ports.push(port);
   return port;
 }
@@ -300,6 +328,31 @@ export function appendFixtures(registry, port, names) {
     added.push(name);
   }
   return { added, rejected };
+}
+
+/**
+ * A DELETED fixture's chain entry becomes an equal-width gap, so every
+ * entry after it keeps its exact address — deleting one fixture must
+ * never re-address the rest of its chain (the physical fixtures are
+ * still cabled and addressed; operator decision 2026-06-12). The gap
+ * shows in the panel as reserved channels the operator removes
+ * deliberately. Pinned entries hold no port channels and are simply
+ * dropped. Returns 'gapped' | 'unpinned' | false (not mapped).
+ */
+export function replaceFixtureWithGap(registry, name, footprint) {
+  for (const controller of registry.controllers) {
+    for (const port of controller.ports) {
+      const i = port.chain.findIndex(e => entryFixtureName(e) === name);
+      if (i < 0) continue;
+      if (isPinnedEntry(port.chain[i])) {
+        port.chain.splice(i, 1);
+        return 'unpinned';
+      }
+      port.chain.splice(i, 1, { gap: Math.max(1, footprint | 0) });
+      return 'gapped';
+    }
+  }
+  return false;
 }
 
 /** Remove one fixture (by name) from whatever chain holds it. */

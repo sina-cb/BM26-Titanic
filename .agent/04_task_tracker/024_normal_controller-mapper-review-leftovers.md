@@ -1,4 +1,4 @@
-# Controller mapper: cold-review leftovers (m5 + chain pruning)
+# Controller mapper: cold-review leftovers (m5)
 
 - **ID:** 024
 - **Priority:** NORMAL
@@ -20,14 +20,13 @@ Two review findings deliberately deferred from the 2026-06-12 fix pass
    the panel call it. (Chip-✕ keeps its index-based splice — it must
    remove gaps too, which the name-based `unmapFixture` can't.)
 
-2. **Fixture deletion never prunes chains.** Deleting a fixture leaves
-   its chain entry as an orphan; the orphan violation is loud, but it
-   deliberately breaks the rest of the chain — harsh for a routine
-   delete. Consider auto-unmapping (with a console warning) from the
-   fixture-delete path in gui_builder.
+2. ~~**Fixture deletion never prunes chains.**~~ DONE 2026-06-12: a
+   deleted fixture's chain entry is replaced with an equal-width gap
+   (downstream addresses preserved) via
+   `window.controllerMappingFixturesRemoved`, wired into the par/DMX
+   remove buttons, trace delete, and generator regeneration (docs/33
+   decisions 16–17).
 
 ## Why it matters
 (1) is a divergence bug waiting to happen — a fix to one append path
-won't reach the other. (2) is an operator-experience trap: deleting one
-par unpatches every fixture after it on the chain until the orphan is
-manually removed.
+won't reach the other.

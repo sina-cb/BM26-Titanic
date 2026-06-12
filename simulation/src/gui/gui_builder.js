@@ -2025,7 +2025,14 @@ function setupGUI() {
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.parLights[index];
             params.parLights.splice(index, 1);
+            // Mapped fixture deleted → its chain entry becomes an
+            // equal-width gap so the rest of the chain keeps its
+            // addresses (controller_map_editor owns the details).
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
             rebuildParLights();
@@ -2593,8 +2600,15 @@ function setupGUI() {
 
       if (!skipUndo) pushUndo();
 
-      // Remove existing lights from this trace's group name
+      // Remove existing lights from this trace's group name.
+      // Regeneration contract with the controller mapping (operator
+      // request 2026-06-12): names are stable per index ("<group> N"),
+      // so survivors keep their chain entries and re-project to the
+      // SAME addresses; only fixtures lost to a count shrink are
+      // gap-replaced (addresses after them stay put). New extras land
+      // in the Unmapped tray.
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
+      const previousGenerated = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
       params.parLights = params.parLights.filter(l => l.group !== groupName || !l.traceGenerated);
 
       // Compute points
@@ -2779,6 +2793,24 @@ function setupGUI() {
       });
 
       trace.generated = true;
+
+      // Count shrink: fixtures whose names no longer exist were
+      // deleted — gap-replace their chain entries (the hook reprojects
+      // and re-renders the panel itself).
+      const survivingNames = new Set();
+      for (let n = 1; n <= pts.length; n++) survivingNames.add(`${groupName} ${n}`);
+      const regenCasualties = previousGenerated.filter(c => !survivingNames.has(c.name));
+      if (window.controllerMappingFixturesRemoved) {
+        window.controllerMappingFixturesRemoved(regenCasualties);
+      }
+      // Survivors are NEW config objects with the old names — re-run
+      // the projection so they regain their derived patch fields
+      // before the first render. (Redundant when the hook above found
+      // mapped casualties and already reprojected — harmless.)
+      if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0 &&
+          window.projectControllerMappings) {
+        window.projectControllerMappings(gatherAllConfigs(params));
+      }
 
       if (window._setGuiRebuilding) window._setGuiRebuilding(true);
       if (!window._isAppBooting) rebuildParLights(true);
@@ -3090,8 +3122,13 @@ function setupGUI() {
         genBtn.textContent = trace.generated ? '↻ Regenerate' : '✓ Generate';
         genBtn.style.cssText = aBtnStyle + 'background:color-mix(in srgb, var(--ok) 15%, var(--surface));color:var(--ok);';
         genBtn.onclick = () => {
-          // Check for custom DMX patches before regenerating
-          if (trace.generated) {
+          // Check for custom DMX patches before regenerating. Under an
+          // active controller mapping this warning is moot: patches are
+          // PROJECTED, names are stable per index, so survivors re-derive
+          // the same addresses and a count shrink leaves reserved gaps.
+          const cmActive = window.__controllerRegistry &&
+            window.__controllerRegistry.controllers.length > 0;
+          if (trace.generated && !cmActive) {
             const groupName = trace.groupName || trace.name;
             const patchedFixtures = params.parLights.filter(l =>
               l.group === groupName && l.traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
@@ -3123,7 +3160,13 @@ function setupGUI() {
           // Remove generated lights from this trace's group
           if (trace) {
             const groupName = trace.groupName || trace.name;
+            const removedConfigs = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
             params.parLights = params.parLights.filter(l => !(l.group === groupName && l.traceGenerated));
+            // Mapped fixtures deleted with the trace → gap-replace
+            // their chain entries; downstream addresses stay put.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved(removedConfigs);
+            }
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -3334,7 +3377,13 @@ function setupGUI() {
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.dmxFixtures[index];
             params.dmxFixtures.splice(index, 1);
+            // Mapped fixture deleted → gap-replace its chain entry so
+            // the rest of the chain keeps its addresses.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderDmxGUI();
             rebuildDmxFixtures();

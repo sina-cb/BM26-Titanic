@@ -23,6 +23,8 @@ import {
   removePort,
   appendFixtures,
   unmapFixture,
+  replaceFixtureWithGap,
+  noteUniverseUsed,
   moveChainEntry,
   renameFixtureInChains,
   computeProjection,
@@ -552,14 +554,61 @@ test('unmapFixture, moveChainEntry, renameFixtureInChains', () => {
   assert.equal(mappedFixtures(r).has('Bow Par'), true);
 });
 
-test('derivedUniverses and nextFreeUniverse', () => {
+test('derivedUniverses and nextFreeUniverse (monotonic — holes are wasted, not filled)', () => {
   const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
     { port: 1, universe: 5, chain: [] },
     { port: 2, universe: 2, chain: [] },
     { port: 3, universe: 1, chain: [] },
   ] }] });
   assert.deepEqual(derivedUniverses(r), [1, 2, 5]);
-  assert.equal(nextFreeUniverse(r), 3);
+  // U3/U4 are free but NOT handed out — allocation never backfills, so
+  // removals can never cause later gear to reclaim old universes
+  // (operator decision 2026-06-12: waste universes, never reshuffle).
+  assert.equal(nextFreeUniverse(r), 6);
+});
+
+test('universes are never reused after a controller is removed', () => {
+  const r = reg(null);
+  const a = addController(r, { name: 'A', ip: '10.0.0.1' }); // U2–5
+  const b = addController(r, { name: 'B', ip: '10.0.0.2' }); // U6–9
+  removeController(r, a);
+  const c = addController(r, { name: 'C', ip: '10.0.0.3' });
+  assert.deepEqual(c.ports.map(p => p.universe), [10, 11, 12, 13],
+    'C must NOT reclaim A\'s freed U2–5');
+  assert.deepEqual(b.ports.map(p => p.universe), [6, 7, 8, 9], 'B untouched');
+  // The high-water mark survives a save/load round-trip.
+  const r2 = reg(JSON.parse(JSON.stringify(r)));
+  assert.equal(nextFreeUniverse(r2), 14);
+});
+
+test('noteUniverseUsed: a manually-typed universe is never handed out again', () => {
+  const r = reg(null);
+  const a = addController(r, { name: 'A', ip: '10.0.0.1' }); // U2–5, next=6
+  noteUniverseUsed(r, 20); // operator types U20 on a port
+  const p = addPort(r, a);
+  assert.equal(p.universe, 21);
+  noteUniverseUsed(r, 7); // lower than high-water: no effect
+  assert.equal(nextFreeUniverse(r), 22);
+});
+
+test('replaceFixtureWithGap: deleting a fixture keeps every downstream address', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: ['Par 1', 'Par 2', 'Par 3'] }, // 1 / 11 / 21
+  ] }] });
+  assert.equal(replaceFixtureWithGap(r, 'Par 2', FP), 'gapped');
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 3')), PINS);
+  assert.equal(p.violations.length, 0, 'no orphan — the entry is a gap now');
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
+  assert.equal(fieldsOf(p, 'Par 3').dmxAddress, 21, 'unchanged despite the delete');
+  // Pinned effects hold no port channels — entry simply drops.
+  const r2 = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 3, chain: ['Par 1', { fixture: 'Fog 1', at: 512 }, 'Par 2'] },
+  ] }] });
+  assert.equal(replaceFixtureWithGap(r2, 'Fog 1', 1), 'unpinned');
+  const p2 = computeProjection(r2, configMap(par('Par 1'), par('Par 2')), PINS);
+  assert.equal(fieldsOf(p2, 'Par 2').dmxAddress, 11, 'packed neighbors unaffected');
+  // Unmapped names report false (nothing to do).
+  assert.equal(replaceFixtureWithGap(r2, 'Ghost', FP), false);
 });
 
 test('a fixture type with no registered definition unpatches the rest of the chain, loudly', () => {
