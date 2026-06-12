@@ -14,7 +14,7 @@
  *             (pixel_mapping, 0 spotlights) — no fancy lighting.
  *   dev       sim + engine + CaptainPad Expo dev server. Sim in full
  *             analytic mode with 60 spotlights.
- *   devlight  Like dev, but no fancy lighting (emissive, 0 spotlights).
+ *   dev-lite  Like dev, but no fancy lighting (emissive, 0 spotlights).
  *
  * Options:
  *   --scene <name>     Sim scene AND engine model (default: titanic)
@@ -58,7 +58,7 @@ const PROFILES = {
     processes: ['sim', 'engine', 'captainpad'],
     simQuery: { profile: 'full', spotlights: 60 },
   },
-  devlight: {
+  'dev-lite': {
     description: 'Dev stack without fancy lighting: sim + engine + CaptainPad Expo, emissive only',
     processes: ['sim', 'engine', 'captainpad'],
     simQuery: { profile: 'emissive', spotlights: 0 },
