@@ -3,11 +3,14 @@
 Follow-up work that comes out of code reviews, bug reports, audits, and
 operator conversations is tracked in **Notion**, not in the repo.
 
-> **DEPRECATION NOTICE (2026-06-12):** the file-based tracker at
-> `.agent/04_task_tracker/` is retired. All open tasks (001–013) were
-> migrated to the Notion board on 2026-06-12; the original markdown
-> files are preserved read-only in `.agent/04_task_tracker/migrated/`
-> for history. Do **not** add new task files there.
+> **DEPRECATION NOTICE (2026-06-12):** the file-based tracker that
+> lived at `.agent/04_task_tracker/` is deprecated and the directory
+> has been removed. All of its tasks (001–013) were migrated to the
+> Notion board on 2026-06-12. Older reports may still cite
+> `.agent/04_task_tracker/NNN_*` paths — those files are gone; the
+> task content lives on the board, and the original files remain
+> reachable through git history if ever needed. Do **not** recreate
+> task files in the repo.
 
 ## Where the tracker lives
 

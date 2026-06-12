@@ -18,8 +18,10 @@ DNA forward, be welcoming, be kind, have fun.
 | `.agent/01_skills/` | **Skills** — reusable how-tos (screenshot/render the sim, lighting arrangement, PB patterns, adding global params) | When the task matches a skill, follow the skill instead of improvising |
 | `.agent/02_reports/` | **Reports** — dated handoffs, audits, investigations (`YYYYMM/YYYYMMDD_N_slug.md`) | Read for context on past work; write one when handing off or concluding an investigation |
 | `.agent/03_agent_types/` | **Agent roles** — coordinator, planner, designer, developer (+ per-subsystem experts), reviewer, deployment, artist, investigator, validator | Adopt the matching role's mindset and checklist when acting in that capacity |
-| `.agent/04_task_tracker/` | **DEPRECATED** (2026-06-12) — old file-based tracker, history preserved in `migrated/` | Never add files here; tasks live in Notion (see below and `.agent/00_gol/14_task_tracking.md`) |
 | `.agent/agent_fs.yaml` | Agent filesystem visibility config for the mobile viewer | Rarely; don't break it |
+
+(The old `.agent/04_task_tracker/` directory was deprecated and removed
+on 2026-06-12 — tasks live in Notion, see below.)
 
 Key specs by number (in `.agent/00_gol/`): `00` codex · `01` git +
 python style · `02` nodejs style · `03/04/05` auto-checks (CaptainPad / sim /

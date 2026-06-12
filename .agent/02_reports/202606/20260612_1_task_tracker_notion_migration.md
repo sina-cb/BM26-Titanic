@@ -14,6 +14,9 @@ Camp Operations → Titanic Lighting):
   the Titanic's End workspace shared with it, or reads 404).
 - `.agent/04_task_tracker/` deprecated. Tasks 001–013 preserved
   read-only in `migrated/`; `README.md` explains the move.
+  **UPDATE (later same day):** operator directed full removal — the
+  directory (including `migrated/`) was deleted outright. The old task
+  files remain reachable only through git history.
 - `CLAUDE.md` gained a "Task tracking (Notion)" section; the `.agent/`
   table row and etiquette bullet updated.
 - `docs/33_controller_mapping.md` path reference to task 012 fixed.
@@ -47,5 +50,6 @@ repo history.
 
 - Consider merging card 011 into "[MarsinLED] Grouping/Zoning".
 - Repo reports written before 2026-06-12 still cite
-  `.agent/04_task_tracker/NNN_*` paths; those resolve under
-  `migrated/`. Historical reports were intentionally not edited.
+  `.agent/04_task_tracker/NNN_*` paths; those files no longer exist
+  (recoverable via git history). Historical reports were intentionally
+  not edited — they are verbatim records of past state.

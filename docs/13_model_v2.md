@@ -481,7 +481,7 @@ A pattern that declares its own `var MASK_X = ...` keeps its value (the injector
 
 #### 4.5.6 Model Declarations
 
-All four models pin their `groupBits` in sidecars (see the files for the full tables; `titanic.viewmasks.js` pins 30 groups and has no composite presets yet — task tracker 011). Presets:
+All four models pin their `groupBits` in sidecars (see the files for the full tables; `titanic.viewmasks.js` pins 30 groups and has no composite presets yet — tracked on the Notion board as "Author a titanic.viewmasks.js sidecar with composite presets"). Presets:
 
 ##### `test_bench.viewmasks.js`
 
