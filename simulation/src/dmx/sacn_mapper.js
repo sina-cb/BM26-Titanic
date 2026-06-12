@@ -62,21 +62,21 @@ export function demapSacnToPixels(list, dmxRouter) {
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
     // Unpatched fixtures (and fixtures on universes with no received
-    // buffer) must render BLACK in sACN-in mode — skipping them froze
-    // whatever color the local pattern painted last, producing lit
-    // "bleeding" pixels that ignore the engine's fader entirely
-    // (operator report 2026-06-11: blue/red stuck cells at full
-    // blackout). In this mode the frame is the only truth; a fixture
-    // the frame doesn't drive is dark, loudly matching its unpatched
-    // state.
+    // buffer) render BRIGHT RED in sACN-in mode — skipping them used to
+    // freeze whatever color the local pattern painted last, producing
+    // lit "bleeding" pixels that ignore the engine's fader entirely
+    // (operator report 2026-06-11). In this mode the frame is the only
+    // truth; a fixture the frame doesn't drive screams red so the
+    // operator spots the unmapped hole immediately (operator decision
+    // 2026-06-12: red, not black).
     if (!entry.patch || !entry.channels) {
-      blackoutEntry(entry);
+      paintUndrivenEntry(entry);
       continue;
     }
 
     const frame = dmxRouter.getFullFrame(entry.patch.universe);
     if (!frame) {
-      blackoutEntry(entry);
+      paintUndrivenEntry(entry);
       continue;
     }
     
@@ -132,18 +132,24 @@ export function demapSacnToPixels(list, dmxRouter) {
 }
 
 /**
- * Zero an entry's channel values and repaint it black. Skips the
- * (per-frame, per-pixel) apply call once the entry is already dark so
- * undriven fixtures cost nothing in steady state.
+ * Paint an undriven entry bright red (the "this fixture is unmapped /
+ * not receiving data" indicator). entry.r/g/b carry the red because
+ * the V2 InstancedMesh dot flush and the SpotLight pool read those
+ * fields directly (see demap above); entries without a patch are never
+ * re-emitted as DMX (mapPixelsToSacn skips them), so the indicator
+ * stays visual-only. Skips the (per-frame, per-pixel) apply call once
+ * the entry is already marked so undriven fixtures cost nothing in
+ * steady state.
  */
-function blackoutEntry(entry) {
-  if (!entry.r && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u && entry._sacnDark) {
+function paintUndrivenEntry(entry) {
+  if (entry._sacnUndriven &&
+      entry.r === 1 && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u) {
     return;
   }
-  entry.r = 0; entry.g = 0; entry.b = 0;
+  entry.r = 1; entry.g = 0; entry.b = 0;
   entry.w = 0; entry.a = 0; entry.u = 0;
-  entry._sacnDark = true;
-  if (entry.apply) entry.apply(0, 0, 0);
+  entry._sacnUndriven = true;
+  if (entry.apply) entry.apply(1, 0, 0);
 }
 
 /**
