@@ -40,7 +40,8 @@ engine's persisted deck state otherwise silently overrides the CLI flag.
 
 ## Stack bugs found and fixed along the way
 
-- **Task 010 (RESOLVED on this branch):** all sACN Senders bound UDP
+- **"sACN senders bind UDP :5568" (Notion card, RESOLVED on this
+  branch — was repo task 010):** all sACN Senders bound UDP
   `*:5568` via `reuseAddr: true`, so the last binder stole inbound
   datagrams from the sim bridge Receiver — engine→sim showed `Connected`
   but `FRAMES 0` forever with the launcher's fixed start order. Removed
@@ -63,11 +64,17 @@ engine's persisted deck state otherwise silently overrides the CLI flag.
 - Screenshots in `.agent_renders/launcher_dev_*.png`,
   `launcher_devlite.png`, `launcher_prod.png`.
 
-## Open follow-ups (task tracker)
+## Open follow-ups (Notion task tracker)
 
-- **014** (new): `simulation/start.js` serves via `npx http-server` but
-  `http-server` is not a declared dependency — offline/playa risk.
-- **015** (new): `marsin_engine/models/titanic.js` has 0/976 pixels
+Task tracking moved to the Notion board "Titanic Lighting - Task
+Tracker" mid-stream (`.agent/00_gol/14_task_tracking.md`); these were
+filed there:
+
+- **"Sim http-server runs via npx but is not a declared dependency"**:
+  `simulation/start.js` serves via `npx http-server` but `http-server`
+  is not in `simulation/package.json` — offline/playa risk.
+- **"Titanic engine model has no DMX patches — engine runs
+  render-only"**: `marsin_engine/models/titanic.js` has 0/976 pixels
   patched → engine runs render-only on the default scene; the prod stack
   drives no DMX until the titanic model is re-exported with patches.
   Also: titanic scene default `lightingMode` was `pixelblaze` (now
