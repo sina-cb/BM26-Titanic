@@ -556,7 +556,7 @@ async function waitFor(tag, probe, target, timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     if (shuttingDown) throw new Error(`Aborted while waiting for ${tag}`);
     if (await probe()) {
-      log('launcher', `✅ ${tag} ready: ${target}`);
+      log('launcher', `  ✓ ${tag} responding (${target})`);
       return;
     }
     const elapsed = Date.now() - start;
@@ -683,17 +683,21 @@ async function main() {
     children: {},
   });
 
+  const captainPadUrl = `http://localhost:${ports.captainpad_web_port}/`;
+
   // 1. Simulation servers (HTTP, save, sACN in/out).
   startChild('sim', 'node', ['start.js', '--scene', opts.scene], SIM_DIR);
-  await waitForHttp('sim', `http://127.0.0.1:${ports.http_port}/simulation/`, 90000);
+  await waitForHttp('sim http', `http://127.0.0.1:${ports.http_port}/simulation/`, 90000);
   await waitForTcp('sim save server', ports.save_port, 30000);
   await waitForTcp('sim sACN in bridge', ports.sacn_port, 30000);
   await waitForTcp('sim sACN out bridge', ports.sacn_output_port, 30000);
+  log('launcher', '✅ Simulation is ready.');
 
   // 2. Engine — model must match the sim scene (05_full_stack_smoke.md).
   startChild('engine', 'node',
     ['engine.js', '--model', opts.scene, '--pattern', opts.pattern], ENGINE_DIR);
-  await waitForHttp('engine', `http://127.0.0.1:${ports.marsin_engine_port}/status`, 120000);
+  await waitForHttp('engine api', `http://127.0.0.1:${ports.marsin_engine_port}/status`, 120000);
+  log('launcher', '✅ Engine is ready.');
 
   // 3. CaptainPad Expo dev server (dev profiles only).
   if (profileDef.processes.includes('captainpad')) {
@@ -701,16 +705,20 @@ async function main() {
       ['expo', 'start', '--web', '--port', String(ports.captainpad_web_port)],
       CAPTAINPAD_DIR,
       { EXPO_NO_TELEMETRY: '1', CI: '1', BROWSER: 'none' });
-    await waitForHttp('captainpad', `http://127.0.0.1:${ports.captainpad_web_port}/`, 300000);
+    await waitForHttp('captainpad web', captainPadUrl, 300000);
+    log('launcher', '✅ CaptainPad is ready.');
   }
 
   log('launcher', '────────────────────────────────────────────────────────');
   log('launcher', `🚀 Stack is up (profile: ${opts.command})`);
-  log('launcher', `   Simulation:  ${simUrl}`);
-  log('launcher', `   Engine API:  http://localhost:${ports.marsin_engine_port}/status`);
+  log('launcher', '');
+  log('launcher', '   Open in your browser:');
+  log('launcher', `     Simulation:  ${simUrl}`);
   if (profileDef.processes.includes('captainpad')) {
-    log('launcher', `   CaptainPad:  http://localhost:${ports.captainpad_web_port}/`);
+    log('launcher', `     CaptainPad:  ${captainPadUrl}`);
   }
+  log('launcher', '');
+  log('launcher', `   Engine API:    http://localhost:${ports.marsin_engine_port}/status`);
   log('launcher', '   Ctrl+C stops everything (`node launcher.js stop` works too).');
   log('launcher', '────────────────────────────────────────────────────────');
 }
