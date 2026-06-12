@@ -42,3 +42,13 @@ rename hook live. Remaining: delete auto_patcher.js (registry still
 imports getFootprint/isGlobalEffect/gatherAllConfigs from it), retire
 spec .agent/00_gol/10 (Sina sign-off).
 
+2026-06-12 — Sina: "Remove auto patch buttons and clear all from the
+old place, the new controller mapping is all we need." Done: 🎯
+Auto-Patch and ❌ Clear All Patches buttons removed from the Par List
+panel (gui_builder.js); 🔄 Clear Metadata kept (also resets viewMask —
+not an auto-patch path). This also closes code-review finding M1
+(build-time-only guard on the auto-patch button: no button, no hole).
+gui_builder no longer imports autoPatchAll/clearAllPatches/
+validatePatches. Remaining unchanged: delete the module itself, retire
+spec 00_gol/10.
+

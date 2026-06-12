@@ -23,7 +23,7 @@ import { GUI } from "./gui_engine.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
-import { autoPatchAll, clearAllPatches, clearMetadata, validatePatches, gatherAllConfigs } from "../dmx/auto_patcher.js";
+import { clearMetadata, gatherAllConfigs } from "../dmx/auto_patcher.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
 import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
@@ -1306,110 +1306,20 @@ function setupGUI() {
       children.forEach((f) => f.destroy());
       window.parGuiFolders = [];
 
-      // ─── Auto-Patch All button ───
-      // Remove any stale auto-patch buttons from previous renders
+      // ─── Patch tools ───
+      // Patching is owned by the Controller Mapping panel (docs/33) —
+      // the legacy Auto-Patch / Clear All Patches buttons are gone
+      // (auto_patcher.js module deletion is task 017). Only the
+      // metadata reset survives here.
+      // Remove any stale button wraps from previous renders.
       const plChildrenCleanup = parListFolder.domElement.querySelector('.children');
       if (plChildrenCleanup) {
         plChildrenCleanup.querySelectorAll('.auto-patch-wrap').forEach(el => el.remove());
       }
-      // Stack vertically — labels like "🎯 Auto-Patch All Unpatched" need
-      // the full panel width to render without truncation.
       const autoPatchWrap = document.createElement('div');
       autoPatchWrap.className = 'auto-patch-wrap';
       autoPatchWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:4px 6px;border-bottom:1px solid var(--ghost-border);';
       const apBtnBase = 'width:100%;padding:5px 8px;border:none;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
-      const autoPatchBtn = document.createElement('button');
-      autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
-      autoPatchBtn.title = 'Auto-Patch All Unpatched';
-      autoPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--tint) 15%, var(--surface));color:var(--tint);';
-
-      // With a controller mapping present the mapper owns ALL patch
-      // fields (docs/33) — two writers would fight, so the legacy
-      // auto-patch path is disabled, not just discouraged. Full removal
-      // is task 017.
-      const mapperActive = window.__controllerRegistry &&
-        window.__controllerRegistry.controllers.length > 0;
-      if (mapperActive) {
-        autoPatchBtn.disabled = true;
-        autoPatchBtn.style.opacity = '0.4';
-        autoPatchBtn.style.cursor = 'default';
-        autoPatchBtn.title = 'Disabled — patches are derived from the Controller Mapping. ' +
-          'Use the 🎛 Controllers panel.';
-      }
-
-      const clearPatchBtn = document.createElement('button');
-      clearPatchBtn.textContent = '❌ Clear All Patches';
-      clearPatchBtn.title = 'Clear All Patches';
-      clearPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);';
-      clearPatchBtn.onclick = () => {
-        if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0) {
-          alert('Patches are derived from the Controller Mapping — clear the mapping in the ' +
-            '🎛 Controllers panel instead.');
-          return;
-        }
-        if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
-        pushUndo();
-        
-        // Pass params.parLights directly — this is the authoritative fixture list
-        const fixtures = params.parLights || [];
-        const traces = params.traces || [];
-        const cleared = clearAllPatches(fixtures, { includeGlobalEffects: true, traces });
-        
-        console.log(`[AutoPatcher] Cleared ${cleared} DMX patch(es)`);
-        
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        
-        // Rebuild GUI menu items (NOT fixtures) to reflect updated patch values
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window.renderDmxGUI) window.renderDmxGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-        exportConfig();
-        
-
-      };
-      // autoPatchBtn's onclick logic — delegates to auto_patcher.js
-      autoPatchBtn.onclick = () => {
-        pushUndo();
-
-        // 1. Patch all configs (DMX addresses + sectionIds)
-        const configs = gatherAllConfigs(params);
-        const { patchedCount, maxUniverse, groupToSectionId } = autoPatchAll(configs);
-        const sectionCount = groupToSectionId ? Object.keys(groupToSectionId).length : 0;
-
-        // 2. Sync in-memory patch tree so applyPatches doesn't overwrite during rebuild
-        if (window.__globalPatchTree) {
-          for (const c of configs) {
-            if (c.name && window.__globalPatchTree[c.name]) {
-              Object.assign(window.__globalPatchTree[c.name], {
-                dmxUniverse: c.dmxUniverse || 0,
-                dmxAddress: c.dmxAddress || 0,
-                controllerIp: c.controllerIp || '',
-                sectionId: c.sectionId || 0,
-                controllerId: c.controllerId || 0,
-                fixtureId: c.fixtureId || 0,
-              });
-            }
-          }
-        }
-
-        // 3. Save to file (patches.yaml + scene_config.yaml + model export)
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        exportConfig();
-
-        // 4. Rebuild UI
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-
-        // 5. Toast
-        const parts = [];
-        if (patchedCount > 0) parts.push(`${patchedCount} patched`);
-        if (sectionCount > 0) parts.push(`${sectionCount} dimmer section(s)`);
-        _showAutoToast(parts.length > 0
-          ? `✓ Auto-patch: ${parts.join(', ')} (U1–${maxUniverse})`
-          : '✓ All fixtures already patched — no changes needed.');
-      };
       const clearMetaBtn = document.createElement('button');
       clearMetaBtn.textContent = '🔄 Clear Metadata';
       clearMetaBtn.title = 'Clear Metadata';
@@ -1435,9 +1345,7 @@ function setupGUI() {
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
         _showAutoToast(`✓ Cleared metadata on ${cleared} fixture(s)`);
       };
-      autoPatchWrap.appendChild(autoPatchBtn);
       autoPatchWrap.appendChild(clearMetaBtn);
-      autoPatchWrap.appendChild(clearPatchBtn);
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
 
