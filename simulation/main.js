@@ -37,6 +37,9 @@ import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
+import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
+import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
+import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
 
@@ -203,7 +206,11 @@ async function init() {
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
-  setupViewPresets();
+  if (IS_MODERN_UI) {
+    initModernViewPresets();
+  } else {
+    setupViewPresets();
+  }
   setupHUD();
 
   // Start render loop
@@ -459,8 +466,12 @@ Promise.all([
   if (!_isReadonly) {
     setupPatternEditor();
     setupViewMasksEditor();
-    setupSacnInMonitor();
-    setupSacnOutMonitor();
+    if (IS_MODERN_UI) {
+      initModernSacnMonitors();
+    } else {
+      setupSacnInMonitor();
+      setupSacnOutMonitor();
+    }
     setupSceneIndicator();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
