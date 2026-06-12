@@ -429,3 +429,24 @@ synthetic controllers added through the real modal → **20 controllers,
 Review Part 3 verdicts (vintage gaps confirmed) and the prioritized list;
 approve the rename table + bow/stern decision so the rename pass can be
 scheduled before the first real mapping session.
+
+---
+
+## Operator addenda (Sina, 2026-06-12 evening)
+
+1. **View-mask ceiling is a first-class gap**: a scene supports at most
+   **31 distinct group/view bits**, and titanic sits at 26/31 (16 eaten
+   by per-strand auto-bits; the 4 per-iceberg bits were reclaimed when
+   the fixture type was retired). Direction: consolidate strands into
+   larger logical groups and/or optimize bit allocation (lazy
+   assignment, eventually a wider mask). Tracked: Notion card
+   "View-mask capacity: 31-bit ceiling".
+2. **LED strands must reach full parity with DMX lights** — controller
+   mapping (output mapping, universes, addresses, discovery), views,
+   groups, dimmer support, model exports + tests. Today strands are
+   invisible to the whole toolchain (`gatherAllConfigs` excludes them).
+   Tracked: Notion card "LED strands: first-class parity".
+3. **Vintage lights additionally need a VERTICAL-STANDING placement
+   option** (not just the horizontal row mounting) — folded into the
+   "Titanic Model Finalization" Notion card together with this report's
+   missing-groups, naming, views, and patching work.
