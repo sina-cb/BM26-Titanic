@@ -61,10 +61,24 @@ export function demapSacnToPixels(list, dmxRouter) {
   if (!list || !dmxRouter) return;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
-    if (!entry.patch || !entry.channels) continue;
-    
+    // Unpatched fixtures (and fixtures on universes with no received
+    // buffer) must render BLACK in sACN-in mode — skipping them froze
+    // whatever color the local pattern painted last, producing lit
+    // "bleeding" pixels that ignore the engine's fader entirely
+    // (operator report 2026-06-11: blue/red stuck cells at full
+    // blackout). In this mode the frame is the only truth; a fixture
+    // the frame doesn't drive is dark, loudly matching its unpatched
+    // state.
+    if (!entry.patch || !entry.channels) {
+      blackoutEntry(entry);
+      continue;
+    }
+
     const frame = dmxRouter.getFullFrame(entry.patch.universe);
-    if (!frame) continue;
+    if (!frame) {
+      blackoutEntry(entry);
+      continue;
+    }
     
     const addr = entry.patch.addr - 1; // 0-indexed
     let ch = entry.channels;
@@ -115,6 +129,21 @@ export function demapSacnToPixels(list, dmxRouter) {
     
     if (entry.apply) entry.apply(rn, gn, bn);
   }
+}
+
+/**
+ * Zero an entry's channel values and repaint it black. Skips the
+ * (per-frame, per-pixel) apply call once the entry is already dark so
+ * undriven fixtures cost nothing in steady state.
+ */
+function blackoutEntry(entry) {
+  if (!entry.r && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u && entry._sacnDark) {
+    return;
+  }
+  entry.r = 0; entry.g = 0; entry.b = 0;
+  entry.w = 0; entry.a = 0; entry.u = 0;
+  entry._sacnDark = true;
+  if (entry.apply) entry.apply(0, 0, 0);
 }
 
 /**
