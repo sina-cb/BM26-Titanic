@@ -1,6 +1,6 @@
 # Plan: Runtime / defaults separation for engine YAML state
 
-**Date:** 2026-06-12 · **Author:** agent (planner role) · **Status:** proposal, awaiting Sina's sign-off
+**Date:** 2026-06-12 · **Author:** agent (planner role) · **Status:** proposal v2 (playlists + param state folded in per Sina), awaiting sign-off
 **Branch:** `claude/runtime-config-separation-p2tnmz`
 
 ## 1. Problem
@@ -17,6 +17,15 @@ it" (CLAUDE.md, full-stack smoke skill). Sina wants:
 3. An elegant, deliberate **"save runtime → defaults"** action when the
    current live state is worth keeping as the new defaults.
 
+The pain being solved (Sina, 2026-06-12): running the engine during a
+show or tuning session leaves ~20 tracked files dirty. Knowing exactly
+which files changed is occasionally useful, but mostly it's a constant
+"don't lose / don't accidentally commit" tax. The runtime cache absorbs
+all of that churn invisibly; one explicit promote action consolidates
+the cache into the tracked defaults when — and only when — the state is
+worth keeping. **Scope explicitly includes playlists and the global
+parameter state**, not just mixer/deck/globals files.
+
 ## 2. Inventory — who writes what today
 
 | File(s) | Writer | Trigger |
@@ -27,7 +36,7 @@ it" (CLAUDE.md, full-stack smoke skill). Sina wants:
 | `marsin_engine/config.yaml` | **`lib/autopilot.js`** (`saveConfig()`) | autopilot PLAY/PAUSE/delay/shuffle. Rewrites the *entire settings file* via `yaml.dump` — also destroys comments/ordering. Worst offender: runtime state living inside the defaults file. |
 | `marsin_engine/param_center_state.yaml` | **nobody anymore** | `ParamCenter` is constructed with `statePath = null` (`engine.js:873`) and persists through `saveHook → globals_state.yaml` (`api_server.js:325`). The tracked root file is stale residue. |
 | `/states/test_bench/` (repo root!) | `StateManager` | path bug: `api_server.js:247` builds `stateDir` from the **cwd-relative** `'./patterns'` arg, so running the engine from the repo root sprays state into `/states/`. |
-| `simulation/scenes/<scene>/playlists/*.yaml` | `lib/playlist_manager.js` | playlist CRUD from CaptainPad. Curated content, not churn — see open questions. |
+| `simulation/scenes/<scene>/playlists/*.yaml` | `lib/playlist_manager.js` | playlist CRUD from CaptainPad (incl. per-entry params/localControls). **In scope** — joins the runtime scheme, see §3.5. Verified: nothing in `simulation/` or `CaptainPad/` reads this dir from disk; only the engine's PlaylistManager (CaptainPad goes through the engine API). |
 | `simulation/scenes/{common,scene_config,views,patches,cameras}.yaml` | sim save-server (`:6970`) | deliberate sim-side saves. **Out of scope here**; same pattern could apply later (see §7). |
 
 ## 3. Target design
@@ -74,7 +83,48 @@ seed from it and log once. `Autopilot` loses its private
 `CONFIG_FILE` read/write entirely; `api_server` hands it a load/save
 pair like every other subsystem.
 
-### 3.4 Dead-file cleanup
+### 3.4 Parameter state (CPC) — already covered, stating it explicitly
+
+The global parameter state Sina tunes from CaptainPad persists through
+`ParamCenter.saveHook → globals_state.yaml` (`params:` block,
+`api_server.js:325`). Since `globals_state.yaml` lives in the runtime
+dir, parameter tweaks land in the cache automatically, survive engine
+restarts (seeded runtime file is only created when missing), and only
+reach the tracked defaults on promote. No extra work needed — listed
+here so it's clear the "parameters" requirement is satisfied by the
+same mechanism, not a separate one.
+
+### 3.5 Playlists join the same split
+
+Playlists (including the per-entry parameter snapshots stored inside
+them) move into the engine's defaults/runtime tree:
+
+```
+marsin_engine/state_defaults/<model>/playlists/*.yaml   # tracked defaults
+marsin_engine/states/<model>/playlists/*.yaml           # runtime, gitignored
+```
+
+- One-time migration: `git mv simulation/scenes/<scene>/playlists
+  marsin_engine/state_defaults/<scene>/playlists` for each scene.
+  Safe because the engine is the only disk reader (verified §2).
+- `api_server.js:251` `playlistsDir` → runtime dir; boot seeding (§3.2)
+  recurses into `playlists/` the same per-file way.
+- Promote (§4) covers the `playlists/` subdir like any other runtime
+  file, including deletions: a playlist removed at runtime is removed
+  from defaults on promote (promote mirrors the subdir, not just
+  copies-over). Without this, deleted playlists would resurrect at the
+  next seed.
+- The `.gitignore` rule for `simulation/scenes/*/playlists/hil_*.yaml`
+  crash residue becomes obsolete — HIL-created playlists now land in
+  the ignored runtime dir by construction. Drop the rule.
+
+Alternative considered: keep tracked playlists under
+`simulation/scenes/<scene>/playlists/` and promote across the repo.
+Rejected — two defaults roots for one promote action is exactly the
+kind of spread-out bookkeeping this plan is removing, and nothing
+sim-side reads the files.
+
+### 3.6 Dead-file cleanup
 
 - `git rm marsin_engine/param_center_state.yaml` (stale — see §2).
 - `git rm -r states/` at repo root (residue of the cwd bug).
@@ -93,10 +143,11 @@ New endpoints in `api_server.js`:
 - `GET /state/runtime` → `{ files: [{ name, differsFromDefault }] }` —
   lets CaptainPad show a "runtime differs from defaults" badge.
 - `POST /state/promote` → flush all pending debounced saves, then
-  atomically copy every `states/<model>/*.yaml` →
+  atomically mirror `states/<model>/` (including `playlists/`) →
   `state_defaults/<model>/` (write-tmp-then-rename, the
-  `scheduled_tasks.js` pattern). Returns the list of files that
-  changed. Errors fail loudly (P0 rule), nothing half-copied.
+  `scheduled_tasks.js` pattern; runtime-deleted playlists are removed
+  from defaults too). Returns the list of files changed/removed.
+  Errors fail loudly (P0 rule), nothing half-copied.
 - `POST /state/reset` (cheap symmetry, v1-optional) → copy defaults →
   runtime and respond `{ restartRequired: true }`. No live re-apply in
   v1 — honest and simple beats clever.
@@ -121,8 +172,9 @@ Surfacing:
 | `lib/api_server.js:247` | `__dirname`-anchored `stateDir`; call seeding at boot; new `/state/*` routes |
 | `engine.js:764,1043,1183` | audio `sceneStateDir`/`scenePath` → same anchored runtime dir |
 | `lib/autopilot.js` | drop `CONFIG_FILE`; state via injected load/save (`autopilot_state.yaml`) |
-| `.gitignore` | `+ marsin_engine/states/` |
-| repo | `git mv states→state_defaults`; rm `param_center_state.yaml`, root `states/` |
+| `lib/api_server.js:251` | `playlistsDir` → runtime `states/<model>/playlists/` |
+| `.gitignore` | `+ marsin_engine/states/`; drop the now-obsolete `simulation/scenes/*/playlists/hil_*.yaml` rule |
+| repo | `git mv states→state_defaults`; `git mv` each `simulation/scenes/<scene>/playlists/` → `state_defaults/<scene>/playlists/`; rm `param_center_state.yaml`, root `states/` |
 | tests | `tests/audio_config_store.test.js`, `tests/hil/*` path references |
 | docs/specs | `.agent/00_gol/05` (auto-checks), `07` (runbook), `.agent/01_skills/05_full_stack_smoke.md` + `CLAUDE.md` — replace "expected residue" guidance with "runtime is gitignored"; `docs/15/18/24/25` path mentions |
 
@@ -133,17 +185,16 @@ Surfacing:
 2. **PR 2 — promote**: endpoints + CLI wrapper (§4).
 3. **PR 3 — CaptainPad**: Settings button + differs-badge.
 4. **Later (separate Notion cards)**: sim save-server files
-   (`common.yaml` & friends) with the same defaults/runtime pattern;
-   playlists decision (below).
+   (`common.yaml` & friends) with the same defaults/runtime pattern.
 
 ## 7. Open questions for Sina
 
-1. **Playlists** (`simulation/scenes/<scene>/playlists/`): keep
-   tracked-and-live-written (they're curated content, like patterns),
-   or fold into the runtime+promote scheme? Plan assumes **keep as-is**.
-2. **Reset-to-defaults** endpoint in v1, or skip until wanted?
-3. **Promote granularity**: whole model in v1 (proposed); per-file
+~~1. Playlists in or out?~~ **Resolved 2026-06-12: in** — playlists and
+their per-entry parameters join the runtime/promote scheme (§3.5).
+
+1. **Reset-to-defaults** endpoint in v1, or skip until wanted?
+2. **Promote granularity**: whole model in v1 (proposed); per-file
    selection could come with the CaptainPad UI if useful.
-4. `simulation/scenes/common.yaml` and the other sim-side saves: same
+3. `simulation/scenes/common.yaml` and the other sim-side saves: same
    treatment as a follow-up, or intentionally leave sim saves tracked
    since they're deliberate design edits?
