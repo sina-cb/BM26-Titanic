@@ -411,7 +411,12 @@ Promise.all([
       if (window.initialParams.parLights?.fixtures) _bootConfigs.push(...window.initialParams.parLights.fixtures);
       if (Array.isArray(window.initialParams.dmxLights)) _bootConfigs.push(...window.initialParams.dmxLights);
       if (window.initialParams.dmxLights?.fixtures) _bootConfigs.push(...window.initialParams.dmxLights.fixtures);
-      window.projectControllerMappings(_bootConfigs);
+      // Stash for the boot projection below — which must NOT run here:
+      // the fixture definition registry isn't initialized yet, and
+      // packing without definitions silently used 10-channel footprints
+      // for everything, compacting 119ch bars and scrambling every
+      // address on reload (operator report 2026-06-12).
+      window.__bootProjectionConfigs = _bootConfigs;
 
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
@@ -469,6 +474,17 @@ Promise.all([
 
   // Initialize fixture definition registry
   initRegistry(window.fixtureModels);
+
+  // Controller mapping boot projection — strictly AFTER initRegistry:
+  // packing depends on real fixture footprints from the definition
+  // registry. Running earlier "corrected" patches.yaml with 10-channel
+  // fallback footprints on every reload (operator report 2026-06-12).
+  if (window.__bootProjectionConfigs) {
+    window.projectControllerMappings(window.__bootProjectionConfigs);
+    delete window.__bootProjectionConfigs;
+    // Patch state may have changed — re-derive the active flag.
+    if (window.recomputePatchesActive) window.recomputePatchesActive();
+  }
 
   // Initialize DMX universe router (universe 1 as default)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');

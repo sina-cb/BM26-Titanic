@@ -32,6 +32,7 @@
  */
 
 import { getFootprint, isGlobalEffect } from './auto_patcher.js';
+import { getDefinition } from './fixture_definition_registry.js';
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -537,6 +538,24 @@ export function computeProjection(registry, configsByName, pins) {
           `entry (auto-applied when added via the panel) — it projects unpatched`,
         controller, port);
         layout.push({ entry, name, address: 0, footprint, valid: false });
+        unpatch(name);
+        continue;
+      }
+
+      // Packing REQUIRES a registered definition: getFootprint()'s
+      // legacy 10-channel fallback silently compacted 119ch bars when
+      // the registry wasn't loaded, scrambling every address downstream
+      // (operator report 2026-06-12). No definition → no guess: the
+      // fixture and everything after it project unpatched, loudly.
+      if (!getDefinition(fixtureType)) {
+        if (!chainBroken) {
+          addViolation('no_definition', `'${name}' (${fixtureType || 'unknown type'}) has no ` +
+            'registered fixture definition — footprint unknown, so it and every entry after ' +
+            'it project unpatched. If this appears at boot, the definition registry was not ' +
+            'initialized before projection.', controller, port);
+          chainBroken = true;
+        }
+        layout.push({ entry, name, address: cursor, footprint: 0, valid: false });
         unpatch(name);
         continue;
       }

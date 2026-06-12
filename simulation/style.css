@@ -2311,3 +2311,30 @@ body.edit-mode-active #engine-params-panel {
   padding: 2px 10px;
   cursor: pointer;
 }
+
+.cm-chip-addr-input {
+  width: 34px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: rgba(96, 192, 240, 0.9);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0 2px;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.cm-chip-addr-input::-webkit-outer-spin-button,
+.cm-chip-addr-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.cm-chip-addr-input:hover,
+.cm-chip-addr-input:focus {
+  border-color: rgba(96, 192, 240, 0.5);
+  outline: none;
+}

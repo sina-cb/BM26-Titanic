@@ -700,14 +700,29 @@ function renderChain(controller, port, layout) {
         `U${item.pinUniverse || EFFECTS_UNIVERSE}:${item.entry.at} (config.yaml global_effects)`;
     } else {
       if (!item.valid) chip.classList.add('cm-chip-invalid');
-      const addr = document.createElement('span');
-      addr.className = 'cm-chip-addr';
-      addr.textContent = item.valid ? String(item.address) : '✗';
-      chip.appendChild(addr);
+      // Manual address box (operator request 2026-06-12): type the
+      // address you want; the editor materializes it as an auto-managed
+      // gap before the fixture, so "order + footprints (+ gaps) ⇒
+      // addresses" stays the single packing rule.
+      const addrInp = document.createElement('input');
+      addrInp.className = 'cm-chip-addr cm-chip-addr-input';
+      addrInp.type = 'number';
+      addrInp.min = '1';
+      addrInp.max = String(DMX_UNIVERSE_SIZE);
+      addrInp.value = item.valid ? String(item.address) : '';
+      addrInp.placeholder = '✗';
+      addrInp.title = `Start address of ${item.name} — edit to pin (a gap is inserted/resized before it)`;
+      addrInp.onclick = (e) => e.stopPropagation();
+      addrInp.ondragstart = (e) => { e.preventDefault(); e.stopPropagation(); };
+      addrInp.onchange = (e) => {
+        e.stopPropagation();
+        setManualAddress(port, index, parseInt(addrInp.value, 10), item);
+      };
+      chip.appendChild(addrInp);
       chip.appendChild(document.createTextNode(item.name));
       chip.title = item.valid
         ? `${item.name} — U${port.universe}:${item.address} (${item.footprint} ch). ` +
-          'Click to select in 3D, drag to reorder/move.'
+          'Click to select in 3D, drag to reorder/move, edit the number to pin its address.'
         : `${item.name} — projects UNPATCHED (see violations)`;
     }
 
@@ -765,6 +780,45 @@ function renderChain(controller, port, layout) {
   };
 
   return chain;
+}
+
+/**
+ * Pin a chain entry's start address by inserting/resizing the gap
+ * before it. Moving a fixture EARLIER than its packed position needs
+ * the channels before it freed first (shrink/remove gaps, reorder) —
+ * that is refused loudly, never silently re-packed.
+ */
+function setManualAddress(port, index, target, item) {
+  if (!Number.isInteger(target) || target < 1 || target > DMX_UNIVERSE_SIZE) {
+    showToast(`Address must be 1–${DMX_UNIVERSE_SIZE}`, { error: true, ttl: 5000 });
+    renderIfOpen();
+    return;
+  }
+  if (target === item.address) return;
+
+  const prev = index > 0 ? port.chain[index - 1] : null;
+  const prevIsGap = isGapEntry(prev);
+  // Address this entry would pack at if the preceding gap were absent.
+  const base = prevIsGap ? item.address - prev.gap : item.address;
+  const gapNeeded = target - base;
+
+  if (gapNeeded < 0) {
+    showToast(`Can't start '${item.name}' at ${target} — channels up to ${base - 1} are ` +
+      'occupied by the entries before it. Reorder the chain or lower their addresses first.',
+    { error: true, ttl: 8000 });
+    renderIfOpen();
+    return;
+  }
+  mutate(`'${item.name}' pinned at ch ${target}` +
+    (gapNeeded > 0 ? ` (${gapNeeded}-ch gap before it)` : ' (gap removed)'), () => {
+    if (gapNeeded === 0) {
+      if (prevIsGap) port.chain.splice(index - 1, 1);
+    } else if (prevIsGap) {
+      prev.gap = gapNeeded;
+    } else {
+      port.chain.splice(index, 0, { gap: gapNeeded });
+    }
+  });
 }
 
 function handleChipDrop(event, targetController, targetPort, targetIndex) {

@@ -35,7 +35,15 @@ const PINS = {
   TEFogMachine: { universe: 1, address: 512 },
 };
 
-// UkingPar has no registered definition in tests → getFootprint() = 10.
+// Packing now REQUIRES registered definitions (the silent 10-channel
+// fallback scrambled real mappings at boot — 2026-06-12). Register the
+// synthetic test types up front, mirroring main.js's initRegistry.
+import { initRegistry } from '../src/dmx/fixture_definition_registry.js';
+initRegistry({
+  UkingPar: { fixture_type: 'UkingPar', channel_mode: 10 },
+  ShehdsBar: { fixture_type: 'ShehdsBar', channel_mode: 119 },
+});
+
 const FP = 10;
 
 function par(name, group = 'Pars') {
@@ -420,6 +428,37 @@ test('derivedUniverses and nextFreeUniverse', () => {
   ] }] });
   assert.deepEqual(derivedUniverses(r), [1, 2, 5]);
   assert.equal(nextFreeUniverse(r), 3);
+});
+
+test('a fixture type with no registered definition unpatches the rest of the chain, loudly', () => {
+  // The exact reload-scramble bug: packing must never guess a footprint.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: ['Par 1', 'Mystery', 'Par 2'] },
+  ] }] });
+  const mystery = { name: 'Mystery', fixtureType: 'UnregisteredBar9000' };
+  const p = computeProjection(r, configMap(par('Par 1'), mystery, par('Par 2')), PINS);
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1, 'entries before the unknown keep packing');
+  assert.deepEqual(fieldsOf(p, 'Mystery'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+  assert.deepEqual(fieldsOf(p, 'Par 2'),
+    { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 });
+  assert.ok(p.violations.some(v => v.code === 'no_definition'));
+});
+
+test('mixed-footprint chain packs with REAL definition footprints (reload regression)', () => {
+  // Mirrors the operator's test_bench mapping: pars (10ch) then bars
+  // (119ch). The boot-order bug packed the bars 10 apart.
+  const r = reg({ controllers: [{ id: 1, name: 'A', ip: '10.0.0.1', ports: [
+    { port: 1, universe: 2, chain: ['Par 1', 'Par 2', 'Bar 1', 'Bar 2'] },
+  ] }] });
+  const bar = (name) => ({ name, group: 'Bars', fixtureType: 'ShehdsBar' });
+  const p = computeProjection(r,
+    configMap(par('Par 1'), par('Par 2'), bar('Bar 1'), bar('Bar 2')), PINS);
+  assert.equal(p.violations.length, 0);
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
+  assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 11);
+  assert.equal(fieldsOf(p, 'Bar 1').dmxAddress, 21);
+  assert.equal(fieldsOf(p, 'Bar 2').dmxAddress, 140, '21 + 119, NOT 31');
 });
 
 // ── Round-trip identity (save→load→save) ───────────────────────────────
