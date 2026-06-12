@@ -9,6 +9,21 @@ import { usePalette } from '../hooks/use-theme';
 // `const gs = useGlobalStyles()` rather than importing a module-level
 // `globalStyles` constant.
 
+// shadow* style props are deprecated (react-native-web warns on every
+// render; RN's new architecture prefers `boxShadow`). One string
+// replaces the four shadow* props, with the opacity baked into an
+// 8-digit hex color. `elevation` is untouched where present — it is
+// the Android-native shadow, unrelated to this deprecation.
+export function shadow(x: number, y: number, blur: number, hexColor: string, opacity: number): string {
+  let hex = hexColor;
+  if (/^#[0-9a-fA-F]{3}$/.test(hex)) {
+    hex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+  }
+  const a = Math.round(Math.max(0, Math.min(1, opacity)) * 255)
+    .toString(16).padStart(2, '0');
+  return `${x}px ${y}px ${blur}px ${hex}${a}`;
+}
+
 export function makeGlobalStyles(C: Palette) {
   return StyleSheet.create({
     container: {
@@ -46,10 +61,7 @@ export function makeGlobalStyles(C: Palette) {
       marginTop: 8,
     },
     ambientShadow: {
-      shadowColor: C.text,
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.05,
-      shadowRadius: 24,
+      boxShadow: shadow(0, 8, 24, C.text, 0.05),
       elevation: 3,
     },
     ghostBorder: {

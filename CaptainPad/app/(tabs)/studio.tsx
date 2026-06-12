@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvoidingView, Platform, SafeAreaView, useWindowDimensions } from 'react-native';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
@@ -302,7 +302,7 @@ export default function StudioScreen() {
                backgroundColor: toastMessage.type === 'error' ? 'rgba(255, 50, 50, 0.95)' : 'rgba(0, 218, 243, 0.95)',
                padding: 20, borderRadius: 12, alignItems: 'center', zIndex: 9999,
                borderWidth: 1, borderColor: toastMessage.type === 'error' ? '#FF8888' : '#FFFFFF',
-               shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.5, shadowRadius: 20, elevation: 10
+               boxShadow: shadow(0, 10, 20, '#000', 0.5), elevation: 10
             }}>
                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000', fontSize: 16 }}>{toastMessage.title}</Text>
                <Text style={{ fontFamily: 'Courier', color: '#000', fontSize: 13, marginTop: 8, textAlign: 'center' }}>{toastMessage.message}</Text>
@@ -319,7 +319,7 @@ export default function StudioScreen() {
            backgroundColor: toastMessage.type === 'error' ? 'rgba(255, 50, 50, 0.95)' : 'rgba(0, 218, 243, 0.95)',
            padding: 20, borderRadius: 12, alignItems: 'center', zIndex: 9999,
            borderWidth: 1, borderColor: toastMessage.type === 'error' ? '#FF8888' : '#FFFFFF',
-           shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.5, shadowRadius: 20, elevation: 10
+           boxShadow: shadow(0, 10, 20, '#000', 0.5), elevation: 10
         }}>
            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000', fontSize: 16 }}>{toastMessage.title}</Text>
            <Text style={{ fontFamily: 'Courier', color: '#000', fontSize: 13, marginTop: 8, textAlign: 'center' }}>{toastMessage.message}</Text>

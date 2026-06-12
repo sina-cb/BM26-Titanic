@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
+import { shadow } from '@/styles/globalStyles';
 import { RigProvider } from '@/components/RigGlobals';
 import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
@@ -22,10 +23,7 @@ function CustomSideBar({ state, descriptors, navigation }: any) {
       paddingVertical: 32,
       alignItems: 'center',
       zIndex: 50,
-      shadowColor: palette.text,
-      shadowOffset: { width: 10, height: 0 },
-      shadowOpacity: 0.03,
-      shadowRadius: 30,
+      boxShadow: shadow(10, 0, 30, palette.text, 0.03),
       elevation: 5,
     }}>
       <View style={{ marginBottom: 48, alignItems: 'center' }}>
