@@ -37,6 +37,7 @@ import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
+import { setupUiVisibility } from "./src/gui/ui_visibility.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
 
@@ -59,6 +60,7 @@ function getRequestedRendererMode() {
 // ─── Init ───────────────────────────────────────────────────────────────
 async function init() {
   setupEngineBlackoutWarning({ readonly: window.__readonlyMode });
+  setupUiVisibility();
 
   const requestedRendererMode = getRequestedRendererMode();
   const forceWebGL = requestedRendererMode === "webgl";
