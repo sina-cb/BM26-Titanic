@@ -815,12 +815,13 @@ function setupGUI() {
     lightingMode: () => {
       if (window.onLightingChange) window.onLightingChange();
     },
-    // Master floods (scene yaml `floods:` section) — all five params
-    // drive the same rig update; see src/core/flood_lights.js.
+    // Master floods (Atmosphere → Master Floods in common.yaml) — all
+    // six params drive the same rig update; see src/core/flood_lights.js.
     masterFloodEnabled: () => updateFloodLights(),
     masterFloodColor: () => updateFloodLights(),
     masterFloodIntensity: () => updateFloodLights(),
     masterFloodAngle: () => updateFloodLights(),
+    masterFloodDistance: () => updateFloodLights(),
     masterFloodDimmer: () => updateFloodLights(),
   };
 

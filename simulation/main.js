@@ -80,6 +80,13 @@ async function init() {
   await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);
 
+  // Shadow maps default OFF in three's renderer; without this the moon's and
+  // master floods' castShadow flags are silent no-ops. Only those few lights
+  // cast (the per-fixture sim SpotLights all set castShadow = false), so the
+  // cost is a handful of shadow passes, not hundreds.
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
   // Keep this in sync with onResize() in view_presets.js. Retina displays at
   // dpr=2 cost ~2.56× the fragment work of dpr=1.25 for a 0–5% visual quality
   // gain on this scene, so default-cap at 1.25 unless the scene overrides it.

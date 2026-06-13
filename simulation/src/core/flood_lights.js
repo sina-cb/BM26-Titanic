@@ -3,15 +3,16 @@
  *
  * Restored 2026-06-13 by operator request ("bring back the floods"):
  * the master-flood controls retired with the icebergs drove per-berg
- * ground uplights; the same rig now washes the SHIP. Four ground-
- * mounted floods sit at the model's corners aiming at the structure,
- * driven by the masterFlood* params (scene yaml `floods:` section,
- * rendered by the generic GUI builder). Old semantics preserved:
+ * ground uplights; the same rig now washes the SHIP. Four pole-mounted
+ * floods sit around the model aiming at the structure, driven by the
+ * masterFlood* params (Atmosphere → Master Floods in common.yaml,
+ * rendered by the generic GUI builder):
  *
  *   masterFloodEnabled   master ON/OFF for all four
  *   masterFloodColor     wash color
  *   masterFloodIntensity 0–500 base intensity
  *   masterFloodAngle     10–90° beam angle
+ *   masterFloodDistance  0.5–4× ship radius — how far out the poles sit
  *   masterFloodDimmer    0–250% multiplier on intensity
  *
  * The rig is created lazily on the first update with floods enabled
@@ -19,16 +20,24 @@
  * corner positions from the live model bounds on every update —
  * onModelLoaded() calls update again so the corners snap to the real
  * ship once it is in the scene.
+ *
+ * IMPORTANT: once the rig exists, lights are turned off by driving
+ * intensity to 0 — NEVER by toggling light.visible or removing them.
+ * Changing the set of visible lights forces a WebGPU pipeline
+ * recompile (multi-second hang); intensity changes are free. The only
+ * unavoidable compile hit is the one-time lazy build on first enable.
  */
 import * as THREE from "three";
 import { scene, params, modelCenter, modelSize, modelRadius } from "./state.js";
 
 const FLOOD_COUNT = 4;
+const POLE_HEIGHT = 6; // m — pole-mounted heads, tall enough to rake the hull
 
 let rig = null; // { lights: SpotLight[], visuals: Group, target: Object3D }
 
 function cornerPositions() {
-  const r = Math.max(modelRadius || 40, 10) * 0.85;
+  const mult = params.masterFloodDistance !== undefined ? params.masterFloodDistance : 1.4;
+  const r = Math.max(modelRadius || 40, 10) * mult;
   const cx = modelCenter ? modelCenter.x : 0;
   const cz = modelCenter ? modelCenter.z : 0;
   return [
@@ -48,11 +57,19 @@ function buildRig() {
   for (let i = 0; i < FLOOD_COUNT; i++) {
     const light = new THREE.SpotLight("#ffffff", 0, 0, Math.PI / 4, 0.4, 1.2);
     light.target = rig.target;
+    light.castShadow = true;
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.camera.near = 1;
+    light.shadow.bias = -0.0005;
     rig.visuals.add(light);
     rig.lights.push(light);
 
-    // Playa-style fixture body — the same housing + glow orb look the
-    // berg floods had, so the rig reads as real hardware in the sim.
+    // Playa-style fixture body — a pole with the housing + glow orb
+    // head the berg floods had, so the rig reads as real hardware.
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.15, POLE_HEIGHT, 8),
+      new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.6, metalness: 0.6 }),
+    );
     const housing = new THREE.Mesh(
       new THREE.BoxGeometry(2, 1, 1.5),
       new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.5 }),
@@ -63,7 +80,9 @@ function buildRig() {
     );
     glow.position.y = 0.6;
     housing.add(glow);
+    rig.visuals.add(pole);
     rig.visuals.add(housing);
+    light.userData.pole = pole;
     light.userData.housing = housing;
     light.userData.glow = glow;
   }
@@ -81,31 +100,34 @@ export function updateFloodLights() {
   const base = params.masterFloodIntensity !== undefined ? params.masterFloodIntensity : 150;
   const angleDeg = params.masterFloodAngle !== undefined ? params.masterFloodAngle : 50;
   const dimmer = (params.masterFloodDimmer !== undefined ? params.masterFloodDimmer : 100) / 100;
-  const intensity = base * dimmer;
-  const on = enabled && dimmer > 0;
+  const intensity = enabled ? base * dimmer : 0; // off = intensity 0, never visible toggles
 
   const cx = modelCenter ? modelCenter.x : 0;
   const cy = modelCenter ? modelCenter.y : 0;
   const cz = modelCenter ? modelCenter.z : 0;
   const midHeight = cy + (modelSize ? modelSize.y * 0.35 : 8);
   rig.target.position.set(cx, midHeight, cz);
-  const reach = Math.max(modelRadius || 40, 10) * 3;
+  const mult = params.masterFloodDistance !== undefined ? params.masterFloodDistance : 1.4;
+  const reach = Math.max(modelRadius || 40, 10) * (mult + 2);
 
   cornerPositions().forEach(([x, z], i) => {
     const light = rig.lights[i];
-    light.position.set(x, 1, z);
-    light.visible = on;
+    light.position.set(x, POLE_HEIGHT, z);
     light.color.set(color);
     light.intensity = intensity;
     light.angle = THREE.MathUtils.degToRad(angleDeg);
     light.distance = reach;
+    light.shadow.camera.far = reach;
 
+    const pole = light.userData.pole;
+    pole.position.set(x, POLE_HEIGHT / 2, z);
+    pole.visible = enabled;
     const housing = light.userData.housing;
-    housing.position.set(x, 0.5, z);
-    housing.lookAt(cx, 0.5, cz);
+    housing.position.set(x, POLE_HEIGHT, z);
+    housing.lookAt(cx, midHeight, cz);
     housing.visible = enabled;
     light.userData.glow.material.color.set(color);
-    light.userData.glow.visible = on;
+    light.userData.glow.material.opacity = intensity > 0 ? 0.9 : 0.15;
   });
 }
 
