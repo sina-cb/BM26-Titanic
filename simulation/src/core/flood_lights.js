@@ -15,17 +15,18 @@
  *   masterFloodDistance  0.5–4× ship radius — how far out the poles sit
  *   masterFloodDimmer    0–250% multiplier on intensity
  *
- * The rig is created lazily on the first update with floods enabled
- * (a disabled feature never adds scene objects) and re-derives its
- * corner positions from the live model bounds on every update —
- * onModelLoaded() calls update again so the corners snap to the real
- * ship once it is in the scene.
+ * The rig is built on the first update call and the fixture hardware
+ * (poles + housings) stays in the scene PERMANENTLY — disabling only
+ * turns the light off, the fixtures never come and go (operator
+ * request, 2026-06-13). Corner positions re-derive from the live
+ * model bounds on every update — onModelLoaded() calls update again
+ * so the corners snap to the real ship once it is in the scene.
  *
  * IMPORTANT: once the rig exists, lights are turned off by driving
  * intensity to 0 — NEVER by toggling light.visible or removing them.
  * Changing the set of visible lights forces a WebGPU pipeline
- * recompile (multi-second hang); intensity changes are free. The only
- * unavoidable compile hit is the one-time lazy build on first enable.
+ * recompile (multi-second hang); intensity changes are free. Building
+ * at boot folds the one compile the lights cost into startup.
  */
 import * as THREE from "three";
 import { scene, params, modelCenter, modelSize, modelRadius } from "./state.js";
@@ -91,10 +92,7 @@ function buildRig() {
 export function updateFloodLights() {
   if (!scene) return;
   const enabled = params.masterFloodEnabled === true;
-  if (!rig) {
-    if (!enabled) return; // lazy: an off feature adds nothing to the scene
-    buildRig();
-  }
+  if (!rig) buildRig();
 
   const color = params.masterFloodColor || "#ffffff";
   const base = params.masterFloodIntensity !== undefined ? params.masterFloodIntensity : 150;
@@ -121,11 +119,9 @@ export function updateFloodLights() {
 
     const pole = light.userData.pole;
     pole.position.set(x, POLE_HEIGHT / 2, z);
-    pole.visible = enabled;
     const housing = light.userData.housing;
     housing.position.set(x, POLE_HEIGHT, z);
     housing.lookAt(cx, midHeight, cz);
-    housing.visible = enabled;
     light.userData.glow.material.color.set(color);
     light.userData.glow.material.opacity = intensity > 0 ? 0.9 : 0.15;
   });

@@ -385,6 +385,21 @@ Promise.all([
       const commonObj = commonYaml ? yaml.load(commonYaml) : {};
       
       const rawParams = { ...commonObj, ...sceneObj };
+
+      // Retired config sections — the iceberg-era `titanicEnd:` block and
+      // the short-lived standalone `floods:` block. Stale autosaved yamls
+      // from old builds resurrect their menus through the generic section
+      // builder, so drop them at load (loudly); the next save writes the
+      // cleaned tree, scrubbing them from disk for good. Flood controls
+      // live under Atmosphere → Master Floods now.
+      for (const retired of ["titanicEnd", "floods"]) {
+        if (rawParams[retired] !== undefined) {
+          console.warn(`[Config] dropped retired section '${retired}' from loaded yaml — ` +
+            `flood controls live under 🌌 Atmosphere → 💡 Master Floods.`);
+          delete rawParams[retired];
+        }
+      }
+
       const explicitOrder = [
         "atmosphere", "modelTransform",
         "dmxLights", "parLights", "ledStrands",
