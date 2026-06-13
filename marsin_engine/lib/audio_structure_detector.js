@@ -83,8 +83,8 @@ export class AudioStructureDetector {
    *   Read fresh each tick so a hot PATCH takes effect immediately.
    */
   constructor({ paramCenter, broadcast, getConfig }) {
-    if (!paramCenter || typeof paramCenter.get !== 'function' || typeof paramCenter.set !== 'function') {
-      throw new TypeError('AudioStructureDetector: paramCenter with get()/set() is required');
+    if (!paramCenter || typeof paramCenter.get !== 'function' || typeof paramCenter.setMany !== 'function') {
+      throw new TypeError('AudioStructureDetector: paramCenter with get()/setMany() is required');
     }
     if (typeof broadcast !== 'function') {
       throw new TypeError('AudioStructureDetector: broadcast function is required');
@@ -196,8 +196,8 @@ export class AudioStructureDetector {
       return;
     }
     if (!this._wasEnabled) {
-      // Enable edge — start from a clean slate so a previously-decayed
-      // envelope from an earlier enabled run doesn't bleed in.
+      // Enable edge. State is already clean here — reset() runs on the
+      // constructor and on every disable edge — so we only flip the flag.
       this._wasEnabled = true;
     }
 
@@ -283,9 +283,13 @@ export class AudioStructureDetector {
     }
     const energyLowFor1s = this._energyLowSinceMs !== null
       && (now - this._energyLowSinceMs) > 1000;
-    //   short-energy jump (drop edge): short envelope ≥ jump × long.
-    const energyJump = this._shortEnv / Math.max(this._longEnv, EPS);
-    const dropEdge = energyJump > cfg.dropEnergyJump;
+    //   short/long energy LEVEL RATIO (drop edge): short envelope ≥
+    //   dropEnergyJump × long. NOTE: this is a steady level ratio, not the
+    //   rate-of-change "jump in < 500 ms" docs/30 §5 describes — a slow
+    //   build whose ratio drifts past the threshold can fire. Fidelity
+    //   tuning (true windowed delta) is deferred to docs/30 Phase 3.
+    const energyLevelRatio = this._shortEnv / Math.max(this._longEnv, EPS);
+    const dropEdge = energyLevelRatio > cfg.dropEnergyJump;
 
     // 5. State machine.
     const prevState = this._state;
@@ -303,7 +307,7 @@ export class AudioStructureDetector {
           // DROP.
           this._state = STATE.SUSTAIN;
           const stemsBoost = stemsFull ? 1.0 : 0.7;
-          const conf = clamp01(this._buildScore * energyJump * stemsBoost);
+          const conf = clamp01(this._buildScore * energyLevelRatio * stemsBoost);
           const buildDurationMs = now - this._buildStartedAtMs;
           this._dropPulse = 1.0;
           this._fireDrop(now, conf, buildDurationMs, stemsFresh, cfg);
@@ -340,12 +344,16 @@ export class AudioStructureDetector {
     this._energyRatio = energyRatio;
     this._lastEnergyRatio = energyRatio;
 
-    // 7. Publish (write to paramCenter).
-    this.paramCenter.set('audioStructure',   this._state,             'audioStructureDetector');
-    this.paramCenter.set('audioBuildScore',  this._buildScore,        'audioStructureDetector');
-    this.paramCenter.set('audioEnergyRatio', this._energyRatio,       'audioStructureDetector');
-    this.paramCenter.set('audioVocalsHot',   vocalsHot ? 1.0 : 0.0,   'audioStructureDetector');
-    this.paramCenter.set('audioDropPulse',   this._dropPulse,         'audioStructureDetector');
+    // 7. Publish — single setMany so the onChange fan-out (which
+    //    deep-copies the CPC store) fires ONCE per hop for all five keys,
+    //    matching the mic path's batching right beside us in engine.js.
+    this.paramCenter.setMany([
+      { kind: 'scalar', key: 'audioStructure',   value: this._state },
+      { kind: 'scalar', key: 'audioBuildScore',  value: this._buildScore },
+      { kind: 'scalar', key: 'audioEnergyRatio', value: this._energyRatio },
+      { kind: 'scalar', key: 'audioVocalsHot',   value: vocalsHot ? 1.0 : 0.0 },
+      { kind: 'scalar', key: 'audioDropPulse',   value: this._dropPulse },
+    ], 'audioStructureDetector');
 
     // THIN→BUILD logged inside _enterBuild only when it logs; ensure a
     // transition log line for the plain THIN→BUILD edge too.
@@ -419,11 +427,13 @@ export class AudioStructureDetector {
   _zeroLiveKeys() {
     if (this._fatal) return;
     try {
-      this.paramCenter.set('audioStructure',   0.0, 'audioStructureDetector');
-      this.paramCenter.set('audioBuildScore',  0.0, 'audioStructureDetector');
-      this.paramCenter.set('audioEnergyRatio', 0.0, 'audioStructureDetector');
-      this.paramCenter.set('audioVocalsHot',   0.0, 'audioStructureDetector');
-      this.paramCenter.set('audioDropPulse',   0.0, 'audioStructureDetector');
+      this.paramCenter.setMany([
+        { kind: 'scalar', key: 'audioStructure',   value: 0.0 },
+        { kind: 'scalar', key: 'audioBuildScore',  value: 0.0 },
+        { kind: 'scalar', key: 'audioEnergyRatio', value: 0.0 },
+        { kind: 'scalar', key: 'audioVocalsHot',   value: 0.0 },
+        { kind: 'scalar', key: 'audioDropPulse',   value: 0.0 },
+      ], 'audioStructureDetector');
     } catch (e) {
       this._fatal = true;
       console.error(`[audioStructure] FATAL on key zero — disabling detector: ${e && e.message}`);
