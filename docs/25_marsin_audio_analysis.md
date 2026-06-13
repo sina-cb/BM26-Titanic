@@ -212,7 +212,7 @@ ffmpeg -hide_banner -loglevel warning -nostdin \
   -ac <channels> -ar <sampleRate> -f s16le -
 ```
 
-- `-stream_loop -1` (placed **before** `-i`) loops the clip forever so a 3-minute show clip doesn't stop the meters. Controlled by `capture.loop` (default `true`); set `loop: false` to omit it and let the file play once.
+- `-stream_loop -1` (placed **before** `-i`) loops the clip forever so a 3-minute show clip doesn't stop the meters. Controlled by `capture.loop` (default `true`); set `loop: false` to omit it and let the file play once. When `loop: false`, ffmpeg exits cleanly (code 0) at EOF and `AudioCapture` treats that as a terminal `stopped` state — it does **not** trigger the restart-on-exit backoff (that's reserved for *unexpected* exits: a non-zero code, or a live-mic dropout). A genuine read failure on a file source (non-zero exit) still restarts.
 - `-re` reads at the file's native rate so the pipeline sees realistic frame timing.
 - No `-f <inputFormat>` is passed — ffmpeg auto-detects the container.
 - An empty path (`file:`) throws a typed `audio_file_missing_path` error (codex P0: fail loudly, no fallback to mic).

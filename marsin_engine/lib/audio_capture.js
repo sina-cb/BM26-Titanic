@@ -346,6 +346,15 @@ export class AudioCapture {
     child.on('exit', (code, signal) => {
       this._child = null;
       if (this._stopRequested) return;
+      // A file source that reached EOF cleanly (code 0) with looping
+      // disabled has finished playing — that's a normal end, not a
+      // failure, and must NOT restart. Without this guard `loop:false`
+      // would replay the clip after each backoff instead of playing once.
+      if (code === 0 && isFileDevice(this.device) && this.loop === false) {
+        this._errorCode = null;
+        this._emitStatus({ phase: 'stopped' });
+        return;
+      }
       this._errorCode = 'capture_exited';
       this._emitStatus({
         phase: 'exited',

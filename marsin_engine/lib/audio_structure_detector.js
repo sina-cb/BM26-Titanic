@@ -29,7 +29,7 @@
  * Inputs (read each tick from paramCenter live keys — the RAW, pre-gain
  * mirrors per review §2.1, so the detector models the music not the
  * operator's gain sliders):
- *   micLowRaw, micHighRaw, micKickRaw, micFlux
+ *   micLowRaw, micHighRaw, micKickRaw, micFluxRaw
  *   stemsBassRaw, stemsDrumsRaw, stemsVocalsRaw  (only when fresh)
  *   tempoBpm
  *   barPhase                                      (NOT bound on this rig)
@@ -231,9 +231,11 @@ export class AudioStructureDetector {
     const stemsFresh = (now - this._stemsLastUpdateMs) < cfg.stemsTimeoutMs;
     this._lastStemsFresh = stemsFresh;
 
-    // RAW (pre-gain) inputs (review §2.1).
-    const micLow  = this.paramCenter.get('micLowRaw');
-    const micFlux = this.paramCenter.get('micFlux');
+    // RAW (pre-gain) inputs (review §2.1) — including micFluxRaw, the
+    // pre-chain spectral-flux mirror, so an operator nudging micFluxGain
+    // can't shift the build score (consistent with the other raw reads).
+    const micLow     = this.paramCenter.get('micLowRaw');
+    const micFluxRaw = this.paramCenter.get('micFluxRaw');
 
     // 1. Short / long energy envelopes (causal one-pole IIR).
     if (dt > 0) {
@@ -243,10 +245,10 @@ export class AudioStructureDetector {
     const rawRatio = this._shortEnv / Math.max(this._longEnv, EPS);
     const energyRatio = clamp01(Math.log1p(rawRatio) / ENERGY_RATIO_DENOM);
 
-    // 2. Build score from spectral flux (review §2.2 — prefer micFlux
+    // 2. Build score from spectral flux (review §2.2 — prefer micFluxRaw
     //    over differencing micHigh). EMA, tau ~2 s.
     if (dt > 0) {
-      const target = clamp01(micFlux * BUILD_GAIN);
+      const target = clamp01(micFluxRaw * BUILD_GAIN);
       this._buildScore += (dt / BUILD_TAU) * (target - this._buildScore);
       this._buildScore = clamp01(this._buildScore);
     }
