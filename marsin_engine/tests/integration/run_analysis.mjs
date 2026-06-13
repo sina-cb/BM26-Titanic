@@ -60,6 +60,11 @@ const KICK  = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayM
 
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 
+// Re-export the product-default analyzer params so sweeps can build "tuned"
+// variants by spreading over these rather than hardcoding magic numbers.
+export const DEFAULT_BANDS = BANDS;
+export const DEFAULT_KICK = KICK;
+
 /**
  * Run one clip through the real chain.
  *
@@ -70,7 +75,7 @@ const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
  *   include `enabled: true` to exercise the detector).
  * @returns {object} per-run record (timeline, drops, stats).
  */
-export function runClip(clip, { mode, detectorConfig }) {
+export function runClip(clip, { mode, detectorConfig, chainsOverride = null, bands = BANDS, kick = KICK }) {
   if (mode !== 'mic-only' && mode !== 'stems-fed') {
     throw new Error(`runClip: mode must be 'mic-only' or 'stems-fed' (got ${mode})`);
   }
@@ -85,6 +90,9 @@ export function runClip(clip, { mode, detectorConfig }) {
   const hopMs = (HOP_SIZE / sampleRate) * 1000;
 
   const spp = new SignalPostProcessor({ paramCenter });
+  // Optional chain override (A/B tuning of DEFAULT_CHAINS without touching
+  // product source). loadChains validates + rejects bad blocks loudly.
+  if (chainsOverride) spp.loadChains(chainsOverride);
 
   const broadcasts = [];
   const detector = new AudioStructureDetector({
@@ -95,6 +103,14 @@ export function runClip(clip, { mode, detectorConfig }) {
 
   // Records.
   const timeline = [];       // [{ tMs, state }] — one row per hop
+  // Per-signal series (post-chain + raw) — used by signal_metrics.mjs for
+  // chain-feel (flicker / variance / pulse / kick-attack) measurement.
+  // Additive: the synthetic regression guard does not assert on these.
+  const signals = {
+    micLow: [], micMid: [], micHigh: [], micKick: [], micFlux: [],
+    micLowRaw: [], micMidRaw: [], micHighRaw: [], micKickRaw: [], micFluxRaw: [],
+    tMs: [],
+  };
   let lastState = null;
   let lastAnalysisAtMs = 0;
   let anyNonFinite = false;
@@ -119,8 +135,8 @@ export function runClip(clip, { mode, detectorConfig }) {
     sampleRate,
     fftSize: FFT_SIZE,
     hopSize: HOP_SIZE,
-    bands: BANDS,
-    kick: KICK,
+    bands,
+    kick,
     nowFn: () => clockMs,
     onAnalysis: ({ low, mid, high, kick, flux }) => {
       const nowMs = clockMs;
@@ -132,6 +148,14 @@ export function runClip(clip, { mode, detectorConfig }) {
       const highPost = spp.process('micHigh', high, dt);
       const kickPost = spp.process('micKick', kick, dt);
       const fluxPost = spp.process('micFlux', flux, dt);
+
+      signals.tMs.push(nowMs);
+      signals.micLow.push(lowPost);   signals.micMid.push(midPost);
+      signals.micHigh.push(highPost); signals.micKick.push(kickPost);
+      signals.micFlux.push(fluxPost);
+      signals.micLowRaw.push(low);    signals.micMidRaw.push(mid);
+      signals.micHighRaw.push(high);  signals.micKickRaw.push(kick);
+      signals.micFluxRaw.push(flux);
 
       const writes = [
         { kind: 'scalar', key: 'micLow',     value: lowPost  },
@@ -214,6 +238,7 @@ export function runClip(clip, { mode, detectorConfig }) {
     hops: timeline.length,
     hopMs,
     timeline,
+    signals,
     transitions,
     dropFired,
     reachedSustain: timeline.some((r) => r.state === 2),
