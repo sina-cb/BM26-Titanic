@@ -1,0 +1,88 @@
+// Per-control trailing throttle (~30 Hz). A fader sweep emits a CC flood
+// (often >200 msgs/s); without coalescing each one becomes a REST POST and
+// machine-guns the engine. This collapses them to one dispatch per control
+// per ~33 ms window — leading edge fires immediately so the move feels live,
+// and the LATEST value is always flushed on the trailing edge so the final
+// resting position is never dropped (docs/34 §2 "latest value wins, flushed
+// on release"). Discrete (note) events bypass this entirely.
+//
+// Generic over the payload so it can carry a ResolvedAction (or anything).
+// Timers are injectable for deterministic unit tests.
+
+export interface CoalescerTimers {
+  setTimeout: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+const DEFAULT_TIMERS: CoalescerTimers = {
+  setTimeout: (cb, ms) => setTimeout(cb, ms),
+  clearTimeout: (h) => clearTimeout(h),
+};
+
+interface Slot<T> {
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: T | null;
+  hasPending: boolean;
+}
+
+export class ControlCoalescer<T> {
+  private readonly intervalMs: number;
+  private readonly flush: (controlId: string, payload: T) => void;
+  private readonly timers: CoalescerTimers;
+  private readonly slots = new Map<string, Slot<T>>();
+
+  constructor(
+    intervalMs: number,
+    flush: (controlId: string, payload: T) => void,
+    timers: CoalescerTimers = DEFAULT_TIMERS,
+  ) {
+    this.intervalMs = intervalMs;
+    this.flush = flush;
+    this.timers = timers;
+  }
+
+  /** Feed a continuous-control value. Fires immediately if idle, otherwise
+   *  stores it as pending to be flushed at the end of the current window. */
+  push(controlId: string, payload: T): void {
+    const slot = this.slots.get(controlId);
+    if (!slot || slot.timer === null) {
+      // Leading edge — fire now and open a window.
+      this.flush(controlId, payload);
+      this.openWindow(controlId);
+      return;
+    }
+    // Inside a window — keep only the latest value.
+    slot.pending = payload;
+    slot.hasPending = true;
+  }
+
+  private openWindow(controlId: string): void {
+    const existing = this.slots.get(controlId);
+    const slot: Slot<T> = existing ?? { timer: null, pending: null, hasPending: false };
+    slot.timer = this.timers.setTimeout(() => this.onWindowEnd(controlId), this.intervalMs);
+    this.slots.set(controlId, slot);
+  }
+
+  private onWindowEnd(controlId: string): void {
+    const slot = this.slots.get(controlId);
+    if (!slot) return;
+    slot.timer = null;
+    if (slot.hasPending && slot.pending !== null) {
+      const payload = slot.pending;
+      slot.pending = null;
+      slot.hasPending = false;
+      // Trailing flush of the latest value, then re-open a window so a still
+      // moving fader keeps trickling at the throttled rate.
+      this.flush(controlId, payload);
+      this.openWindow(controlId);
+    }
+  }
+
+  /** Cancel all timers (teardown). Does not flush pending values. */
+  dispose(): void {
+    for (const slot of this.slots.values()) {
+      if (slot.timer !== null) this.timers.clearTimeout(slot.timer);
+    }
+    this.slots.clear();
+  }
+}

@@ -1,0 +1,226 @@
+# APC mini mk2 — CaptainPad MIDI profile (driver #1).
+#
+# Authored from the Akai APC mini mk2 Communications Protocol v1.0 + a live
+# Web MIDI capture on the dev PC. See apc_mini_mk2_reference.md for in/out note
+# tables + colour palette. Loaded/validated by utils/midi/profile.ts; dispatched
+# through existing utils/api.ts functions (zero engine changes).
+#
+# TAB-AWARE: the same controls map to different actions per CaptainPad tab,
+# under `contexts:` (deck / mixer). The active tab selects the context.
+#
+# STAGE 1 of Sina's operator mapping (2026-06-13). Pad columns 1-8 in the mixer
+# (per-layer playlist window browser + colour-pair pads) are STAGE 2 — left
+# unmapped here for now.
+#
+# Note numbers (Port 0, Ch 0): grid pads 0-63; Track buttons 100-107; Scene
+# Launch 112-119 (Scene 1 top … Scene 8 bottom); Shift 122 (no LED).
+# Faders: CC 48-55 = Fader 1-8, CC 56 = Fader 9 (master).
+
+device:
+  id: apc_mini_mk2
+  label: "APC mini mk2"
+  nameContains: "APC mini mk2"
+  sourcePort: 0
+  destinationPort: 0
+
+contexts:
+  # ── DECK tab: performance / pattern surface (best-practice layout) ──────
+  deck:
+    - id: fader_1_speed
+      match: { type: cc, channel: 0, cc: 48 }
+      action: { kind: paramCenter, key: speed, range: [0, 1] }
+    - id: fader_2_size
+      match: { type: cc, channel: 0, cc: 49 }
+      action: { kind: paramCenter, key: size, range: [0, 1] }
+    - id: fader_3_rotate
+      match: { type: cc, channel: 0, cc: 50 }
+      action: { kind: paramCenter, key: rotate, range: [0, 1] }
+    - id: fader_9_master
+      match: { type: cc, channel: 0, cc: 56 }
+      action: { kind: master }
+    # Bottom pad row → pattern bank 0 (active pad green).
+    - id: pad_bank0_bottom_row
+      match: { type: note, channel: 0, notes: [0, 7] }
+      action: { kind: patternBank, bank: 0 }
+      led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
+    # Scene Launch (bottom→up): blackout, then global-effect slots 1..7.
+    - id: scene_blackout
+      match: { type: note, channel: 0, notes: [119] }   # Scene 8 (bottom)
+      action: { kind: blackoutToggle }
+      led: { on: 2, off: 0 }   # blink when blackout engaged (alert)
+    - id: scene_ge_1
+      match: { type: note, channel: 0, notes: [118] }
+      action: { kind: globalEffectSlot, slot: 1 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_2
+      match: { type: note, channel: 0, notes: [117] }
+      action: { kind: globalEffectSlot, slot: 2 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_3
+      match: { type: note, channel: 0, notes: [116] }
+      action: { kind: globalEffectSlot, slot: 3 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_4
+      match: { type: note, channel: 0, notes: [115] }
+      action: { kind: globalEffectSlot, slot: 4 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_5
+      match: { type: note, channel: 0, notes: [114] }
+      action: { kind: globalEffectSlot, slot: 5 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_6
+      match: { type: note, channel: 0, notes: [113] }
+      action: { kind: globalEffectSlot, slot: 6 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_7
+      match: { type: note, channel: 0, notes: [112] }   # Scene 1 (top)
+      action: { kind: globalEffectSlot, slot: 7 }
+      led: { on: 1, off: 0 }
+
+  # ── MIXER tab: layers / levels surface ─────────────────────────────────
+  mixer:
+    # Faders 1-4 → mixer layers 1-4 (inert if that layer doesn't exist).
+    - id: fader_1_layer1
+      match: { type: cc, channel: 0, cc: 48 }
+      action: { kind: mixerLayerFader, layer: 0, range: [0, 1] }
+    - id: fader_2_layer2
+      match: { type: cc, channel: 0, cc: 49 }
+      action: { kind: mixerLayerFader, layer: 1, range: [0, 1] }
+    - id: fader_3_layer3
+      match: { type: cc, channel: 0, cc: 50 }
+      action: { kind: mixerLayerFader, layer: 2, range: [0, 1] }
+    - id: fader_4_layer4
+      match: { type: cc, channel: 0, cc: 51 }
+      action: { kind: mixerLayerFader, layer: 3, range: [0, 1] }
+    # Fader 5 → global speed (Stage 2 will add fader 6 = active-layer local speed).
+    - id: fader_5_speed
+      match: { type: cc, channel: 0, cc: 52 }
+      action: { kind: paramCenter, key: speed, range: [0, 1] }
+    - id: fader_9_master
+      match: { type: cc, channel: 0, cc: 56 }
+      action: { kind: master }
+    # Fader 6 (cc53) → active-layer local speed: TBD (needs an "active layer"
+    # definition) — left unmapped for now. Faders 7-8 (cc54-55): nothing yet.
+
+    # ── Pad columns 1-4 → per-layer playlist window browser (Stage 2) ──────
+    # Column c (0-3) browses layer (c+1)'s playlist: bottom pad scroll-down,
+    # top pad scroll-up, middle 6 pads select within a 6-entry window. The
+    # window's active entry lights bright green, the rest dim; an absent layer
+    # keeps its whole column dark; scroll pads light only when scrollable.
+    - id: pad_col1_scroll_down
+      match: { type: column, channel: 0, column: 0, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 0, dir: down }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col1_scroll_up
+      match: { type: column, channel: 0, column: 0, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 0, dir: up }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col1_window
+      match: { type: column, channel: 0, column: 0, fromRow: 1, toRow: 6 }
+      action: { kind: playlistWindowSelect, layer: 0 }
+      led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
+    - id: pad_col2_scroll_down
+      match: { type: column, channel: 0, column: 1, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 1, dir: down }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col2_scroll_up
+      match: { type: column, channel: 0, column: 1, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 1, dir: up }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col2_window
+      match: { type: column, channel: 0, column: 1, fromRow: 1, toRow: 6 }
+      action: { kind: playlistWindowSelect, layer: 1 }
+      led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
+    - id: pad_col3_scroll_down
+      match: { type: column, channel: 0, column: 2, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 2, dir: down }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col3_scroll_up
+      match: { type: column, channel: 0, column: 2, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 2, dir: up }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col3_window
+      match: { type: column, channel: 0, column: 2, fromRow: 1, toRow: 6 }
+      action: { kind: playlistWindowSelect, layer: 2 }
+      led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
+    - id: pad_col4_scroll_down
+      match: { type: column, channel: 0, column: 3, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 3, dir: down }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col4_scroll_up
+      match: { type: column, channel: 0, column: 3, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 3, dir: up }
+      led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
+    - id: pad_col4_window
+      match: { type: column, channel: 0, column: 3, fromRow: 1, toRow: 6 }
+      action: { kind: playlistWindowSelect, layer: 3 }
+      led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
+
+    # ── Pad columns 5-8 → colour-pair pads (Stage 2) ──────────────────────
+    # Cols 5-6 = palettes 1-8 (bank 0), cols 7-8 = palettes 9-16 (bank 1). Each
+    # row = one curated CaptainPad palette; pressing any pad applies the pair
+    # (c1→colorPalette1, c2→colorPalette2). Pad LEDs show the hues: the c1
+    # column shows colour 1, the c2 column colour 2.
+    - id: pad_col5_palette_c1
+      match: { type: column, channel: 0, column: 4, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 0 }
+    - id: pad_col6_palette_c2
+      match: { type: column, channel: 0, column: 5, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 0 }
+    - id: pad_col7_palette_c1
+      match: { type: column, channel: 0, column: 6, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 1 }
+    - id: pad_col8_palette_c2
+      match: { type: column, channel: 0, column: 7, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 1 }
+
+    # Track buttons 1-4 → SOLO for layers 1-4 (red LED = soloed; dark if layer absent).
+    - id: track_1_solo_layer1
+      match: { type: note, channel: 0, notes: [100] }
+      action: { kind: mixerLayerSolo, layer: 0 }
+      led: { on: 1, off: 0 }
+    - id: track_2_solo_layer2
+      match: { type: note, channel: 0, notes: [101] }
+      action: { kind: mixerLayerSolo, layer: 1 }
+      led: { on: 1, off: 0 }
+    - id: track_3_solo_layer3
+      match: { type: note, channel: 0, notes: [102] }
+      action: { kind: mixerLayerSolo, layer: 2 }
+      led: { on: 1, off: 0 }
+    - id: track_4_solo_layer4
+      match: { type: note, channel: 0, notes: [103] }
+      action: { kind: mixerLayerSolo, layer: 3 }
+      led: { on: 1, off: 0 }
+    # Scene Launch (bottom→up): blackout, then global-effect slots 1..7.
+    - id: scene_blackout
+      match: { type: note, channel: 0, notes: [119] }
+      action: { kind: blackoutToggle }
+      led: { on: 2, off: 0 }   # blink when blackout engaged (alert)
+    - id: scene_ge_1
+      match: { type: note, channel: 0, notes: [118] }
+      action: { kind: globalEffectSlot, slot: 1 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_2
+      match: { type: note, channel: 0, notes: [117] }
+      action: { kind: globalEffectSlot, slot: 2 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_3
+      match: { type: note, channel: 0, notes: [116] }
+      action: { kind: globalEffectSlot, slot: 3 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_4
+      match: { type: note, channel: 0, notes: [115] }
+      action: { kind: globalEffectSlot, slot: 4 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_5
+      match: { type: note, channel: 0, notes: [114] }
+      action: { kind: globalEffectSlot, slot: 5 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_6
+      match: { type: note, channel: 0, notes: [113] }
+      action: { kind: globalEffectSlot, slot: 6 }
+      led: { on: 1, off: 0 }
+    - id: scene_ge_7
+      match: { type: note, channel: 0, notes: [112] }
+      action: { kind: globalEffectSlot, slot: 7 }
+      led: { on: 1, off: 0 }
