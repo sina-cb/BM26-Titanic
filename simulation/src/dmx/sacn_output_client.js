@@ -35,6 +35,11 @@ export class SacnOutputClient {
       framesSent: 0,
       fps: 0,
       activeUniverses: new Set(),
+      // 'U<universe>→<ip>' → last-send timestamp. The OUT monitor
+      // renders these so the operator can SEE where frames are going —
+      // including the (intentional) sacn_in relay to real controllers
+      // that task 021 flagged as invisible double-send risk.
+      targets: new Map(),
     };
   }
 
@@ -102,6 +107,7 @@ export class SacnOutputClient {
       this._frameCount++;
       this.stats.framesSent++;
       this.stats.activeUniverses.add(universeId);
+      this.stats.targets.set(`U${universeId}→${controllerIp}`, Date.now());
     } catch (e) {
       // Connection probably dropped
     }

@@ -27,6 +27,7 @@ import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./sr
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
+import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
@@ -35,9 +36,17 @@ import { setupGUI } from "./src/gui/gui_builder.js";
 import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
+import { setupControllerMapEditor } from "./src/gui/controller_map_editor.js";
 import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
 import { setupUiVisibility } from "./src/gui/ui_visibility.js";
+import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
+import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
+import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
+import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
+import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
+import { registerPanel, registerPanelWhenPresent, getStoredGeometry } from "./src/gui/panel_layout.js";
+import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
 
@@ -72,6 +81,13 @@ async function init() {
   });
   await renderer.init();
   renderer.setSize(window.innerWidth, window.innerHeight);
+
+  // Shadow maps default OFF in three's renderer; without this the moon's and
+  // master floods' castShadow flags are silent no-ops. Only those few lights
+  // cast (the per-fixture sim SpotLights all set castShadow = false), so the
+  // cost is a handful of shadow passes, not hundreds.
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   // Keep this in sync with onResize() in view_presets.js. Retina displays at
   // dpr=2 cost ~2.56× the fragment work of dpr=1.25 for a 0–5% visual quality
@@ -205,7 +221,11 @@ async function init() {
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
-  setupViewPresets();
+  if (IS_MODERN_UI) {
+    initModernViewPresets();
+  } else {
+    setupViewPresets();
+  }
   setupHUD();
 
   // Start render loop
@@ -236,6 +256,7 @@ const _commonConfigPath = `scenes/common.yaml`;
 const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
 const _viewsPath = `scenes/${_activeScene}/views.yaml`;
+const _controllersPath = `scenes/${_activeScene}/controllers.yaml`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
 // Deliberate boot halt: paints a fullscreen explanation and flags the
@@ -262,13 +283,14 @@ Promise.all([
   fetch(_patchesPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_camerasPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_viewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(_controllersPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/uking_rgbwau_par_light/model_10.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/shehds_18_18w_led_bar/model_119.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -299,6 +321,65 @@ Promise.all([
     return;
   }
 
+  // Scene-owned controller mapping (controllers.yaml, docs/33) — same
+  // hard-stop philosophy as views.yaml: a present-but-broken file must
+  // halt the boot (the next auto-save would rewrite controllers.yaml
+  // from a half-loaded registry, destroying the operator's mapping).
+  // A MISSING controllers.yaml is the legitimate "no mapping yet" case.
+  let _controllerRegistry;
+  try {
+    const controllersTree = controllersYaml ? yaml.load(controllersYaml) : null;
+    _controllerRegistry = createControllerRegistry(controllersTree);
+  } catch (err) {
+    fatalBootError(
+      `${_controllersPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
+      `Fix the file (or delete it to start the scene with no controller mapping) and reload. ` +
+      `Nothing has been overwritten.`, err);
+    return;
+  }
+
+  // Install the registry UNCONDITIONALLY — scenes with no scene/common
+  // yaml (and scene-config parse failures, which are forgiven below)
+  // must still get the real registry, or the Controllers panel would
+  // operate on per-call throwaway objects and silently lose mutations
+  // (cold review m1, 2026-06-12).
+  window.__controllerRegistry = _controllerRegistry;
+  window.projectControllerMappings = function (configs) {
+    const registry = window.__controllerRegistry;
+    if (!registry || !registryIsActive(registry)) return { violations: [], drift: [] };
+    const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
+    const result = projectOntoConfigs(registry, configs, pins);
+    if (window.__globalPatchTree) {
+      for (const config of configs) {
+        if (!config || !config.name) continue;
+        window.__globalPatchTree[config.name] = {
+          controllerIp: config.controllerIp || '',
+          dmxUniverse: config.dmxUniverse || 0,
+          dmxAddress: config.dmxAddress || 0,
+          controllerId: config.controllerId || 0,
+          sectionId: config.sectionId || 0,
+          fixtureId: config.fixtureId || 0,
+          viewMask: config.viewMask || 0,
+        };
+      }
+    }
+    window.__controllerViolations = result.violations;
+    if (result.migrated && result.migrated.length > 0) {
+      console.warn(`[Controllers] migrated ${result.migrated.length} legacy packed entr(ies) ` +
+        'to absolute addresses (docs/33 decision 19) — addresses unchanged, saved with the ' +
+        'next normal save:', result.migrated);
+    }
+    for (const v of result.violations) {
+      console.error(`[Controllers] ✋ ${v.message}`);
+    }
+    for (const d of result.drift) {
+      console.warn(`[Controllers] patches.yaml drift corrected for '${d.name}': ` +
+        `U${d.before.dmxUniverse}:${d.before.dmxAddress}@${d.before.controllerIp || '—'} → ` +
+        `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
+    }
+    return result;
+  };
+
   // Load scene config
   try {
     if (sceneYaml || commonYaml) {
@@ -306,9 +387,24 @@ Promise.all([
       const commonObj = commonYaml ? yaml.load(commonYaml) : {};
       
       const rawParams = { ...commonObj, ...sceneObj };
+
+      // Retired config sections — the iceberg-era `titanicEnd:` block and
+      // the short-lived standalone `floods:` block. Stale autosaved yamls
+      // from old builds resurrect their menus through the generic section
+      // builder, so drop them at load (loudly); the next save writes the
+      // cleaned tree, scrubbing them from disk for good. Flood controls
+      // live under Atmosphere → Master Floods now.
+      for (const retired of ["titanicEnd", "floods"]) {
+        if (rawParams[retired] !== undefined) {
+          console.warn(`[Config] dropped retired section '${retired}' from loaded yaml — ` +
+            `flood controls live under 🌌 Atmosphere → 💡 Master Floods.`);
+          delete rawParams[retired];
+        }
+      }
+
       const explicitOrder = [
-        "titanicEnd", "icebergs", "atmosphere", "modelTransform", 
-        "dmxLights", "parLights", "ledStrands", 
+        "atmosphere", "modelTransform",
+        "dmxLights", "parLights", "ledStrands",
         "options", "colorWave", "config", "_camera", "_patternEditor"
       ];
       window.initialParams = {};
@@ -340,6 +436,22 @@ Promise.all([
         }
       }
 
+      // Controller mapping boot projection (docs/33): when a mapping
+      // exists, the mapper owns ALL patch fields — derived for mapped
+      // fixtures, unpatched ('' / 0 / 0) for everything else. The
+      // projection itself (window.projectControllerMappings, installed
+      // above) runs AFTER initRegistry below — see the stash comment.
+      const _bootConfigs = [];
+      if (window.initialParams.parLights?.fixtures) _bootConfigs.push(...window.initialParams.parLights.fixtures);
+      if (Array.isArray(window.initialParams.dmxLights)) _bootConfigs.push(...window.initialParams.dmxLights);
+      if (window.initialParams.dmxLights?.fixtures) _bootConfigs.push(...window.initialParams.dmxLights.fixtures);
+      // Stash for the boot projection below — which must NOT run here:
+      // the fixture definition registry isn't initialized yet, and
+      // packing without definitions silently used 10-channel footprints
+      // for everything, compacting 119ch bars and scrambling every
+      // address on reload (operator report 2026-06-12).
+      window.__bootProjectionConfigs = _bootConfigs;
+
       // Notify PatchManager after patches are applied so boot state is correct
       if (window.recomputePatchesActive) window.recomputePatchesActive();
 
@@ -348,6 +460,10 @@ Promise.all([
       // splits it back out into views.yaml, like patches.yaml).
       window.initialParams.views = _viewRegistry;
       window.__viewRegistry = _viewRegistry;
+
+      // Attach the controller registry the same way — save-server.js
+      // splits it back out into controllers.yaml.
+      window.initialParams.controllers = _controllerRegistry;
 
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
@@ -392,6 +508,17 @@ Promise.all([
 
   // Initialize fixture definition registry
   initRegistry(window.fixtureModels);
+
+  // Controller mapping boot projection — strictly AFTER initRegistry:
+  // packing depends on real fixture footprints from the definition
+  // registry. Running earlier "corrected" patches.yaml with 10-channel
+  // fallback footprints on every reload (operator report 2026-06-12).
+  if (window.__bootProjectionConfigs) {
+    window.projectControllerMappings(window.__bootProjectionConfigs);
+    delete window.__bootProjectionConfigs;
+    // Patch state may have changed — re-derive the active flag.
+    if (window.recomputePatchesActive) window.recomputePatchesActive();
+  }
 
   // Initialize DMX universe router (universe 1 as default)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
@@ -459,10 +586,22 @@ Promise.all([
   // In readonly mode (e.g. iPad Monitor), skip all write-capable subsystems
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
+    // Modern shells must mount BEFORE the legacy setup functions attach
+    // their handlers to the same element ids (see modern/SHELL_NOTES.md).
+    if (IS_MODERN_UI) {
+      initModernPatternEditorShell();
+      initModernViewMasksShell();
+      initModernControllerMapShell();
+    }
     setupPatternEditor();
     setupViewMasksEditor();
-    setupSacnInMonitor();
-    setupSacnOutMonitor();
+    setupControllerMapEditor();
+    if (IS_MODERN_UI) {
+      initModernSacnMonitors();
+    } else {
+      setupSacnInMonitor();
+      setupSacnOutMonitor();
+    }
     setupSceneIndicator();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
@@ -474,20 +613,76 @@ Promise.all([
     setupSceneIndicator();
   }
 
-  // Restore pattern editor window state
-  if (ct && ct._patternEditor) {
-    const pe = ct._patternEditor;
+  // Panel layout: register floating panels with the layout system
+  // (z band + click-to-front, viewport-clamped geometry restore from
+  // localStorage — replaces the old _patternEditor block in common.yaml).
+  if (!_isReadonly) {
+    // Collapse state must flow through each panel's own collapse button:
+    // the legacy handlers keep private state + a button glyph, so setting
+    // the class directly would desync them (dead first click).
+    const collapseViaButton = (panelEl, btnSelector) => (collapsed) => {
+      if (panelEl.classList.contains('collapsed') === collapsed) return;
+      const btn = panelEl.querySelector(btnSelector);
+      if (btn) btn.click();
+      else panelEl.classList.toggle('collapsed', collapsed);
+    };
+
     const pePanel = document.getElementById('pattern-editor-panel');
     if (pePanel) {
-      if (pe.x !== undefined) pePanel.style.left = pe.x + 'px';
-      if (pe.y !== undefined) pePanel.style.top = Math.max(42, pe.y) + 'px';
-      if (pe.width) pePanel.style.width = pe.width + 'px';
-      if (pe.height) pePanel.style.height = pe.height + 'px';
-      if (pe.collapsed) pePanel.classList.add('collapsed');
+      const applyPeCollapsed = collapseViaButton(pePanel, '#pe-collapse-btn');
+      registerPanel(pePanel, { applyCollapsed: applyPeCollapsed });
+      // 2026-06-12 layout decision: below ~1366px the editor + engine
+      // params eat half the screen, so the editor boots collapsed there
+      // (an operator-saved layout always wins over this default).
+      if (!getStoredGeometry('pattern-editor-panel') && window.innerWidth < 1366) {
+        applyPeCollapsed(true);
+      }
       const autoRunCb = document.getElementById('pe-autorun');
-      if (autoRunCb && pe.autoRun) autoRunCb.checked = true;
+      if (autoRunCb) {
+        // One-time migration: honor an autoRun=true left in scene YAML by
+        // pre-layout-migration saves, then localStorage owns it.
+        if (localStorage.getItem('bm26.sim.peAutoRun') === null
+            && ct && ct._patternEditor && ct._patternEditor.autoRun) {
+          localStorage.setItem('bm26.sim.peAutoRun', '1');
+        }
+        autoRunCb.checked = localStorage.getItem('bm26.sim.peAutoRun') === '1';
+        autoRunCb.addEventListener('change', () => {
+          localStorage.setItem('bm26.sim.peAutoRun', autoRunCb.checked ? '1' : '0');
+        });
+      }
     }
+    const masksPanel = document.getElementById('view-masks-panel');
+    if (masksPanel) registerPanel(masksPanel);
+    const cmPanel = document.getElementById('controller-map-panel');
+    if (cmPanel) registerPanel(cmPanel);
+    if (!IS_MODERN_UI) {
+      // Modern monitors register themselves with collapse-store adapters
+      // in modern_root.js; legacy panels drive their collapse buttons.
+      const inPanel = document.getElementById('sacn-in-monitor-panel');
+      if (inPanel) {
+        registerPanel(inPanel, {
+          applyCollapsed: collapseViaButton(inPanel, '#sacn-in-collapse-btn'),
+        });
+      }
+      const outPanel = document.getElementById('sacn-out-monitor-panel');
+      if (outPanel) {
+        registerPanel(outPanel, {
+          applyCollapsed: collapseViaButton(outPanel, '#sacn-out-collapse-btn'),
+        });
+      }
+    }
+    // Engine params registers itself on every (re)creation —
+    // see ensureGlobalParamsGui() in pattern_editor.js.
   }
+  registerPanelWhenPresent('gui-panel', {
+    applyCollapsed: (collapsed) => {
+      const panel = document.getElementById('gui-panel');
+      if (!panel || panel.classList.contains('collapsed') === collapsed) return;
+      const btn = panel.querySelector('.gui-panel-header button.pe-btn');
+      if (btn) btn.click();
+      else panel.classList.toggle('collapsed', collapsed);
+    },
+  });
 }).catch(async (err) => {
   // A deliberate boot halt (fatalBootError) must NOT fall back to a
   // blank init — the banner explains what to fix; booting anyway would

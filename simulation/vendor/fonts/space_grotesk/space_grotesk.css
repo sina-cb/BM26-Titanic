@@ -1,0 +1,24 @@
+/* Space Grotesk (latin) — vendored from @fontsource/space-grotesk@5.2.10 for offline use.
+   CaptainPad's headline face (Fonts.headline = SpaceGrotesk_700Bold); the sim
+   vendors the same family so both surfaces share one typography stack. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('./files/space-grotesk-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('./files/space-grotesk-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url('./files/space-grotesk-latin-700-normal.woff2') format('woff2');
+}

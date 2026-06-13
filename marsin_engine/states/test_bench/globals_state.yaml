@@ -4,11 +4,8 @@ effects:
   uvBlast: false
   vintageWhite: false
   blastWhite: false
-  blastWhiteBypassDimmer: true
-  vintageWhiteBypassDimmer: false
-  uvBlastBypassDimmer: true
 params:
-  revision: 25383
+  revision: 32
   sourceLock: null
   params:
     speed:
@@ -28,20 +25,20 @@ params:
       lastRevision: 3
     colorPalette1:
       value:
-        h: 0.66
+        h: 0.64
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 4
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 31
     colorPalette2:
       value:
-        h: 0.33
+        h: 0.9
         s: 1
         v: 1
-      lastSource: init
-      lastOrigin: init
-      lastRevision: 5
+      lastSource: api
+      lastOrigin: api
+      lastRevision: 32
     stemsVocalsGain:
       value: 1
       lastSource: init
@@ -94,44 +91,44 @@ params:
       lastRevision: 15
     micLow:
       value: 0.1725266234741929
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25376
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 16
     micMid:
       value: 0.5955711135395029
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25377
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 17
     micHigh:
       value: 2.837064441380643e-128
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25378
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 18
     micKick:
       value: 0.04679660109530199
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25379
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 19
     micLowRaw:
       value: 0.0808459484613318
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25380
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 20
     micMidRaw:
       value: 0.3384897810173513
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25381
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 21
     micHighRaw:
       value: 1.9110886088049108e-128
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25382
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 22
     micKickRaw:
       value: 0.3800326494469854
-      lastSource: audio
-      lastOrigin: audio:mic
-      lastRevision: 25383
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 23
     micLowGain:
       value: 1.92
       lastSource: init
@@ -159,9 +156,9 @@ params:
       lastRevision: 28
     bpmSpeedMin:
       value: 74
-      lastSource: api
-      lastOrigin: api
-      lastRevision: 25231
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 29
     bpmSpeedMax:
       value: 147
       lastSource: init

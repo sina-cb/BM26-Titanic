@@ -1,0 +1,72 @@
+/**
+ * control_schema.js — UI-agnostic serialization of the live control tree.
+ *
+ * The parity oracle for the UI rehaul (tasks 015/018): serializes whatever
+ * GUI is currently mounted into a plain JSON tree (folders, controls,
+ * types, ranges, options). Capturing this from the legacy lil-gui UI and
+ * later from the modern UI on the same scene lets us diff the two and
+ * prove "modern renders exactly the controls legacy builds".
+ *
+ * Control type is read from lil-gui's DOM classes (`controller boolean`,
+ * `controller number`, …) because constructor names are mangled in the
+ * minified vendor build.
+ *
+ * Registered on import as `window.__captureControlSchema()` — evaluated
+ * lazily so it works whenever `window.guiInstance` exists.
+ * Capture from outside via agent_tools/capture_control_schema.cjs.
+ */
+
+const LIL_GUI_TYPE_CLASSES = ['boolean', 'color', 'string', 'number', 'option', 'function'];
+
+function controllerType(controller) {
+  const classes = controller.domElement?.classList;
+  if (!classes) return 'unknown';
+  for (const t of LIL_GUI_TYPE_CLASSES) {
+    if (classes.contains(t)) return t;
+  }
+  return 'unknown';
+}
+
+function serializeController(controller) {
+  const entry = {
+    kind: 'control',
+    name: controller._name ?? null,
+    type: controllerType(controller),
+  };
+  if (controller._min !== undefined && controller._min !== -Infinity) entry.min = controller._min;
+  if (controller._max !== undefined && controller._max !== Infinity) entry.max = controller._max;
+  if (controller._step !== undefined && controller._step !== null) entry.step = controller._step;
+  if (entry.type === 'option' && controller.$select) {
+    entry.options = [...controller.$select.options].map((o) => o.textContent);
+  }
+  return entry;
+}
+
+export function serializeControlTree(gui) {
+  if (!gui) {
+    throw new Error('serializeControlTree: no GUI instance provided');
+  }
+  const node = {
+    kind: 'folder',
+    title: gui._title ?? gui.$title?.textContent ?? null,
+    children: [],
+  };
+  for (const child of gui.children) {
+    if (child.children !== undefined && child.folders !== undefined) {
+      node.children.push(serializeControlTree(child));
+    } else {
+      node.children.push(serializeController(child));
+    }
+  }
+  return node;
+}
+
+export function countControls(tree) {
+  if (tree.kind === 'control') return 1;
+  return tree.children.reduce((sum, c) => sum + countControls(c), 0);
+}
+
+window.__captureControlSchema = () => {
+  const tree = serializeControlTree(window.guiInstance);
+  return { capturedAt: new Date().toISOString(), controlCount: countControls(tree), tree };
+};

@@ -257,8 +257,8 @@ export function TimerWheel({
             bottom edges, low opacity. Operator brief round 3: "show a
             tiny indication that it can be scrolled". pointerEvents
             none so they never steal the flick. */}
-        <View pointerEvents="none" style={[styles.tick, styles.tickTop]} />
-        <View pointerEvents="none" style={[styles.tick, styles.tickBottom]} />
+        <View style={[styles.tick, styles.tickTop]} />
+        <View style={[styles.tick, styles.tickBottom]} />
       </View>
     </View>
   );
@@ -313,6 +313,7 @@ function makeStyles(C: Palette) {
     color: C.primary,
   },
   tick: {
+    pointerEvents: 'none',
     position: 'absolute',
     width: TICK_WIDTH,
     height: TICK_HEIGHT,

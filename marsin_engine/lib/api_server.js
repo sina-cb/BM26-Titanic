@@ -1153,6 +1153,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return {
       type: 'mixer',
       blackout: globalsState.blackout,
+      // Model-sync flag — true when the engine refused a model hot
+      // reload (e.g. pixel count changed) and is still rendering a
+      // STALE model. Set/cleared by the hot-reload path in engine.js.
+      modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
+      modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
       master: mixer.master,
       maxChannels: mixer.maxChannels,
       baseChannelId: mixer.baseChannelId,
@@ -1594,8 +1599,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         port: opts.port || 6968,
         activeScene: opts.modelName || 'unknown', 
         activeModel: opts.modelName || 'unknown', 
-        activePattern: opts.pattern || 'unknown', 
-        unrealState: 'streaming' 
+        activePattern: opts.pattern || 'unknown',
+        unrealState: 'streaming',
+        // True when a model hot reload was refused (pixel count changed)
+        // and the engine is still rendering the old model — restart needed.
+        modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
+        modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel

@@ -14,7 +14,7 @@ captainpad_web_port: 6967 # CaptainPad Web UI (http_port - 2)
 global_effects:
   ChauvetHaze4D:
     universe: 1
-    address: 511
+    address: 510
   TEFogMachine:
     universe: 1
     address: 512

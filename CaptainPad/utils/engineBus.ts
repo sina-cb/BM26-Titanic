@@ -32,7 +32,10 @@
 //     detector finds a different engine IP.
 
 import { AppState, Platform } from 'react-native';
-import { getApiBaseAsync } from './api';
+// From the dependency-free apiBase.ts, NOT api.ts — api.ts imports
+// engineEvents (cache-prime listener), so importing it from here was
+// the require cycle api → engineEvents → engineBus → api.
+import { getApiBaseAsync } from './apiBase';
 
 export type EngineMessage = {
   type: string;

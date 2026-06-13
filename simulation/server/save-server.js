@@ -194,6 +194,22 @@ http.createServer((req, res) => {
           body = yaml.dump(configTree, { lineWidth: -1 });
         }
 
+        // Decouple the controller mapping into its own controllers.yaml
+        // (docs/33) — same pattern as views.yaml. The client attaches
+        // the live registry to the config tree as `controllers`.
+        if (configTree && configTree.controllers && typeof configTree.controllers === 'object') {
+          const controllersPath = path.join(path.dirname(outPath), 'controllers.yaml');
+          writeFileAtomic(controllersPath, yaml.dump({
+            nextControllerId: configTree.controllers.nextControllerId || 1,
+            nextUniverse: configTree.controllers.nextUniverse || 2,
+            controllers: configTree.controllers.controllers || [],
+          }, { lineWidth: -1 }));
+          console.log(`[SAVE SERVER] ✅ Wrote ${controllersPath} ` +
+            `(${(configTree.controllers.controllers || []).length} controller(s))`);
+          delete configTree.controllers;
+          body = yaml.dump(configTree, { lineWidth: -1 });
+        }
+
         // Split configTree into common and scene configurations
         const commonKeys = ['atmosphere', 'options', 'colorWave', 'config', '_camera', '_patternEditor'];
         const commonConfig = {};

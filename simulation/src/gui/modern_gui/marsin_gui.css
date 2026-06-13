@@ -1,0 +1,562 @@
+/* ────────────────────────────────────────────────────────────────────────
+   marsin_gui.css — MarsinGui widget styles (modern UI, ?ui=modern).
+
+   CaptainPad design language for the lil-gui-compatible control engine in
+   marsin_gui.js / controllers.js. EVERY color comes from the theme custom
+   properties written by src/gui/theme.js (CaptainPad palette) or the
+   semantic vars in style.css :root — no hardcoded colors; variants are
+   derived with color-mix(). Density matches the legacy lil-gui overrides
+   (10px font, 4px paddings, 40% name column) so the 330px #gui-panel
+   never overflows.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.marsin-gui {
+  --mg-widget-height: 18px;
+  --mg-padding: 4px;
+  --mg-spacing: 2px;
+  --mg-radius: 6px;
+
+  background: color-mix(in srgb, var(--surface-container-low) 85%, transparent);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1;
+  text-align: left;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.marsin-gui,
+.marsin-gui * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.marsin-gui.root {
+  display: flex;
+  flex-direction: column;
+  width: var(--width, 245px);
+  border-radius: var(--mg-radius);
+  box-shadow: 0 4px 20px var(--ambient-shadow);
+}
+
+.marsin-gui.root > .children {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ghost-border) transparent;
+}
+
+.marsin-gui.autoPlace {
+  max-height: 100%;
+  position: fixed;
+  right: 15px;
+  top: 0;
+  z-index: 1001;
+}
+
+/* Inside the floating panel the panel owns layout/scroll. */
+#gui-panel .marsin-gui.root {
+  width: 100% !important;
+  max-height: none;
+  overflow-y: visible;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ─── Folder title strip ─── */
+
+.marsin-gui .title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--mg-widget-height) + 4px);
+  padding: 3px var(--mg-padding);
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  font-family: var(--font-headline);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--text);
+  border-bottom: 1px solid var(--ghost-border);
+}
+
+/* Chevron — rotates when the folder is closed. */
+.marsin-gui .title::before {
+  content: "▾";
+  display: inline-block;
+  flex-shrink: 0;
+  color: var(--secondary);
+  transition: transform 0.2s ease;
+}
+
+.marsin-gui.closed > .title::before {
+  transform: rotate(-90deg);
+}
+
+body:not(.marsin-gui-dragging) .marsin-gui .title:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.marsin-gui .title:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+/* Root title strip — mirrors lil-gui's darker header band so the Engine
+   Parameters panel (which keeps its root title) reads as a panel header.
+   gui_builder hides this strip inside #gui-panel. */
+.marsin-gui.root > .title {
+  background: var(--panel-header-bg);
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+  padding: 6px var(--mg-padding);
+}
+
+/* ─── Children / nesting ─── */
+
+.marsin-gui .children {
+  padding: var(--mg-spacing) 0;
+}
+
+/* Indent guide idiom from the legacy CSS. */
+.marsin-gui .marsin-gui > .children {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--ghost-border);
+}
+
+.marsin-gui .marsin-gui .marsin-gui > .children {
+  border-left-color: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.marsin-gui .marsin-gui .marsin-gui .marsin-gui > .children {
+  border-left-color: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.marsin-gui .marsin-gui > .title {
+  border-bottom-color: color-mix(in srgb, var(--ghost-border) 60%, transparent);
+}
+
+/* Open/close states (lil-gui contract). */
+.marsin-gui.closed > .children {
+  opacity: 0;
+  transform: translateY(-7px);
+}
+
+.marsin-gui.closed:not(.transition) > .children {
+  display: none;
+}
+
+.marsin-gui.transition > .children {
+  overflow: hidden;
+  pointer-events: none;
+  transition-duration: 0.25s;
+  transition-property: height, opacity, transform;
+  transition-timing-function: cubic-bezier(0.2, 0.6, 0.35, 1);
+}
+
+.marsin-gui .children:empty::before {
+  content: "Empty";
+  display: block;
+  font-style: italic;
+  color: var(--secondary);
+  opacity: 0.5;
+  height: var(--mg-widget-height);
+  line-height: var(--mg-widget-height);
+  margin: var(--mg-spacing) 0;
+  padding: 0 var(--mg-padding);
+}
+
+/* ─── Controller rows ─── */
+
+.marsin-gui .controller {
+  display: flex;
+  align-items: center;
+  margin: var(--mg-spacing) 0;
+  padding: 1px var(--mg-padding);
+}
+
+.marsin-gui .controller.disabled {
+  opacity: 0.5;
+}
+
+.marsin-gui .controller.disabled,
+.marsin-gui .controller.disabled * {
+  pointer-events: none !important;
+}
+
+.marsin-gui .controller > .name {
+  flex-shrink: 0;
+  width: 40%;
+  min-width: 40%;
+  padding-right: 4px;
+  line-height: var(--mg-widget-height);
+  color: var(--secondary);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.marsin-gui .controller .widget {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: var(--mg-widget-height);
+  position: relative;
+}
+
+/* ─── Shared input styling ─── */
+
+.marsin-gui input {
+  -webkit-tap-highlight-color: transparent;
+  background: var(--input-bg);
+  border: 1px solid var(--ghost-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 10px;
+  height: var(--mg-widget-height);
+  outline: none;
+  width: 100%;
+  padding: 0 4px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.marsin-gui input:hover {
+  background: color-mix(in srgb, var(--input-bg) 88%, var(--text));
+}
+
+.marsin-gui input:focus {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: var(--input-bg);
+}
+
+.marsin-gui input::-webkit-inner-spin-button,
+.marsin-gui input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.marsin-gui input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+  font-family: var(--font-mono);
+  color: var(--primary);
+}
+
+/* ─── Number — horizontal fader ─── */
+
+.marsin-gui .controller.number .slider {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-container-high);
+  border: 1px solid color-mix(in srgb, var(--ghost-border) 70%, transparent);
+  cursor: ew-resize;
+  outline: none;
+  touch-action: pan-y;
+}
+
+.marsin-gui .controller.number .slider:hover {
+  background: color-mix(in srgb, var(--surface-container-high) 88%, var(--text));
+}
+
+.marsin-gui .controller.number .slider:focus-visible {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.marsin-gui .controller.number .fill {
+  position: relative;
+  height: 100%;
+  border-radius: 5px 0 0 5px;
+  background: color-mix(in srgb, var(--primary) 65%, transparent);
+}
+
+.marsin-gui .controller.number .slider.active .fill {
+  background: var(--primary);
+}
+
+/* Fader knob riding the fill edge. */
+.marsin-gui .controller.number .fill::after {
+  content: "";
+  position: absolute;
+  right: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fader-knob);
+  border: 1px solid var(--ghost-border);
+  box-shadow: 0 1px 3px var(--ambient-shadow);
+}
+
+.marsin-gui .controller.number .slider.active .fill::after {
+  background: color-mix(in srgb, var(--fader-knob) 60%, var(--primary));
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.marsin-gui .controller.number.hasSlider input {
+  flex-shrink: 0;
+  width: 44px;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* Body-level drag cursors (lil-gui idiom, marsin-scoped class names). */
+body.marsin-gui-dragging * {
+  cursor: ew-resize !important;
+}
+
+body.marsin-gui-dragging.marsin-gui-vertical * {
+  cursor: ns-resize !important;
+}
+
+/* ─── Boolean — pill toggle ─── */
+
+.marsin-gui .controller.boolean .widget {
+  cursor: pointer;
+}
+
+.marsin-gui .controller.boolean input[type="checkbox"] {
+  position: absolute;
+  width: 26px;
+  height: 14px;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
+}
+
+.marsin-gui .controller.boolean .pill {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 26px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--surface-container-high);
+  border: 1px solid var(--ghost-border);
+  transition: background 0.2s ease, border-color 0.2s ease;
+  pointer-events: none;
+}
+
+.marsin-gui .controller.boolean .pill::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--secondary);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.marsin-gui .controller.boolean input[type="checkbox"]:checked + .pill {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.marsin-gui .controller.boolean input[type="checkbox"]:checked + .pill::after {
+  background: var(--on-primary);
+  transform: translateX(12px);
+}
+
+.marsin-gui .controller.boolean input[type="checkbox"]:focus-visible + .pill {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+/* ─── Option — themed select (HUD select idiom) ─── */
+
+.marsin-gui .controller.option .widget::after {
+  content: "▾";
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--secondary);
+  pointer-events: none;
+  font-size: 9px;
+}
+
+.marsin-gui .controller.option select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  max-width: 100%;
+  height: var(--mg-widget-height);
+  padding: 0 16px 0 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--ghost-border);
+  border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  cursor: pointer;
+  outline: none;
+  text-overflow: ellipsis;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.marsin-gui .controller.option select:hover {
+  background: color-mix(in srgb, var(--input-bg) 88%, var(--text));
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.marsin-gui .controller.option select:focus {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.marsin-gui .controller.option select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* ─── Color — swatch + native picker + hex ─── */
+
+.marsin-gui .controller.color .display {
+  position: relative;
+  flex-grow: 1;
+  height: var(--mg-widget-height);
+  border-radius: 4px;
+  border: 1px solid var(--ghost-border);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.marsin-gui .controller.color .display:hover {
+  border-color: color-mix(in srgb, var(--text) 35%, transparent);
+}
+
+.marsin-gui .controller.color input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.marsin-gui .controller.color input[type="text"] {
+  flex-shrink: 0;
+  width: 52px;
+  min-width: 52px;
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+/* ─── Function — CaptainPad macro button ─── */
+
+.marsin-gui .controller.function .widget {
+  width: 100%;
+}
+
+.marsin-gui .controller.function > .name {
+  /* lil-gui moves the name inside the button — collapse the column */
+  display: none;
+}
+
+.marsin-gui button {
+  -webkit-tap-highlight-color: transparent;
+  width: 100%;
+  min-height: calc(var(--mg-widget-height) + 4px);
+  padding: 3px 8px;
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--ghost-border);
+  border-radius: var(--mg-radius);
+  color: var(--text);
+  font-family: var(--font-headline);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ambient-shadow) 40%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.marsin-gui button:hover {
+  background: color-mix(in srgb, var(--surface-container-lowest) 85%, var(--primary));
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.marsin-gui button:active {
+  background: color-mix(in srgb, var(--surface-container-lowest) 70%, var(--primary));
+}
+
+.marsin-gui button:focus-visible {
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent);
+}
+
+.marsin-gui .controller.function button .name {
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  line-height: inherit;
+  white-space: normal;
+}
+
+/* ─── String ─── */
+
+.marsin-gui .controller.string input {
+  color: var(--primary);
+}
+
+/* ─── Instance cards (gui_builder adds these classes directly) ─── */
+
+.marsin-gui.gui-card {
+  margin: 3px 0 !important;
+  border-radius: var(--mg-radius) !important;
+  border: 1px solid var(--ghost-border) !important;
+  background: color-mix(in srgb, var(--surface-container-high) 60%, transparent) !important;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+}
+
+.marsin-gui.gui-card > .title {
+  border-radius: 5px 5px 0 0;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  border-bottom-color: transparent;
+}
+
+.marsin-gui.gui-card.closed > .title {
+  border-radius: 5px;
+}
+
+.marsin-gui.gui-card:hover {
+  border-color: color-mix(in srgb, var(--text) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--surface-container-high) 70%, transparent) !important;
+}
+
+.marsin-gui.gui-card.gui-card-selected {
+  border-color: color-mix(in srgb, var(--primary) 70%, transparent) !important;
+  background: color-mix(in srgb, var(--primary) 8%, transparent) !important;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 18%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.marsin-gui.gui-card.gui-card-selected > .title {
+  color: var(--primary) !important;
+  background: color-mix(in srgb, var(--primary) 15%, transparent) !important;
+}
+
+.marsin-gui.gui-card.gui-card-selected:hover {
+  border-color: color-mix(in srgb, var(--primary) 85%, transparent) !important;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--primary) 22%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 15%, transparent);
+}

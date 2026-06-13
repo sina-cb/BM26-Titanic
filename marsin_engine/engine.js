@@ -1061,6 +1061,13 @@ async function main() {
     // under `colorPalettes:` so the operator can edit the rig's house
     // palette without code changes. See docs/27_color_palettes.md.
     colorPalettes: Array.isArray(engineConfig.colorPalettes) ? engineConfig.colorPalettes : [],
+    // Model-sync status. `stale: true` means the engine REFUSED a model
+    // hot reload (e.g. pixel count changed) and is still rendering the
+    // old model while the sim/disk already has a newer one. Surfaced on
+    // GET /status and in the mixer-state WS broadcast so operator
+    // surfaces (sim warning banner, CaptainPad) can show it loudly.
+    // Cleared on the next successful hot reload.
+    modelSync: { stale: false, message: null },
   };
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
@@ -1094,11 +1101,34 @@ async function main() {
           // three fields cover it.)
           const oldStr = JSON.stringify({ p: model.pixels, e: model.specialEffects, v: model.viewMasks, g: model.groupBits });
           const newStr = JSON.stringify({ p: newModel.pixels, e: newModel.specialEffects, v: newModel.viewMasks, g: newModel.groupBits });
-          if (oldStr === newStr) return; // No meaningful change
+          if (oldStr === newStr) {
+            // No meaningful change — but if a previous reload was refused
+            // and the disk model now matches the running one again (e.g.
+            // the operator reverted the edit), the engine is no longer
+            // stale: clear the flag and tell the operator surfaces.
+            if (engineCore.modelSync.stale && newModel.pixelCount === model.pixelCount) {
+              engineCore.modelSync.stale = false;
+              engineCore.modelSync.message = null;
+              console.log(`  ✅ Model on disk matches the running model again — stale flag cleared.`);
+              if (apiServer && typeof apiServer.broadcastMixerState === 'function') {
+                apiServer.broadcastMixerState();
+              }
+            }
+            return;
+          }
           
           console.log(`\n  🔄 Model changed on disk. Hot-reloading...`);
           if (newModel.pixelCount !== model.pixelCount) {
-             console.log(`  ⚠️ Pixel count changed (${model.pixelCount} -> ${newModel.pixelCount}). Hot reload ignored. Please restart the engine.`);
+             const staleMsg = `Engine model is STALE: pixel count changed (${model.pixelCount} -> ${newModel.pixelCount}), hot reload refused. Restart the engine to apply the new model.`;
+             console.log(`  ⚠️ ${staleMsg}`);
+             // Make the refusal loud on the operator surface, not just
+             // this console line: flag it in engineCore and push it out
+             // over the mixer-state WS broadcast (sim banner reads it).
+             engineCore.modelSync.stale = true;
+             engineCore.modelSync.message = staleMsg;
+             if (apiServer && typeof apiServer.broadcastMixerState === 'function') {
+               apiServer.broadcastMixerState();
+             }
              return;
           }
 
@@ -1141,7 +1171,44 @@ async function main() {
           };
           for (const px of model.pixels) if (px.patch) registerUniverse(px.patch);
           for (const fx of (model.specialEffects || [])) if (fx.patch) registerUniverse(fx.patch);
-          
+
+          // Universes the new mapping no longer references must go DARK,
+          // not frozen: their router buffers still hold the last rendered
+          // frame and sendFrame would re-transmit it forever. Zero the
+          // buffer, push ONE final all-zero frame so listeners black out,
+          // then drop the id so subsequent frames stop including it.
+          // Sender objects stay alive — registerUniverse may revive the
+          // universe on a later reload; not sending is sufficient.
+          const referencedUniverses = new Set();
+          for (const px of model.pixels) {
+            if (px.patch && px.patch.universe) referencedUniverses.add(px.patch.universe);
+          }
+          for (const fx of (model.specialEffects || [])) {
+            if (fx.patch && fx.patch.universe) referencedUniverses.add(fx.patch.universe);
+          }
+          for (let i = universeIds.length - 1; i >= 0; i--) {
+            const staleU = universeIds[i];
+            if (referencedUniverses.has(staleU)) continue;
+            const staleFrame = dmxRouter.getFullFrame(staleU);
+            if (staleFrame) {
+              staleFrame.fill(0);
+              // The blackout is the LAST packet this universe ever
+              // gets — a single lost UDP datagram would freeze every
+              // listener on the final bright frame forever. Repeat it
+              // 3× per the sACN stream-termination convention.
+              for (let _i = 0; _i < 3; _i++) {
+                sacnOut.sendFrame({ [staleU]: staleFrame });
+              }
+            }
+            universeIds.splice(i, 1);
+            console.log(`  🧹 Universe ${staleU} no longer mapped — sent blackout, stopped transmitting`);
+          }
+
+          // Successful reload — the running model matches disk again, so
+          // clear any stale flag left by an earlier refused reload.
+          engineCore.modelSync.stale = false;
+          engineCore.modelSync.message = null;
+
           // Push the refreshed mixer/deck state to connected CaptainPads
           // so open sessions re-sync without a manual reload.
           if (apiServer && typeof apiServer.broadcastMixerState === 'function') {

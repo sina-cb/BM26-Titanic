@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Linking, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useGlobalStyles } from '@/styles/globalStyles';
+import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette, useTheme, ThemeMode } from '@/hooks/use-theme';
 import { THEMES, THEME_ORDER } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -154,10 +154,7 @@ export default function ConfigScreen() {
               <View style={{ 
                 width: 14, height: 14, borderRadius: 7, 
                 backgroundColor: statusColor,
-                shadowColor: statusColor,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: connResult?.ok ? 0.8 : 0,
-                shadowRadius: 6,
+                boxShadow: shadow(0, 0, 6, statusColor, connResult?.ok ? 0.8 : 0),
               }} />
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: statusColor }}>
                 {statusLabel}
@@ -385,10 +382,7 @@ export default function ConfigScreen() {
                         <View style={{ 
                           width: 10, height: 10, borderRadius: 5, 
                           backgroundColor: '#34C759',
-                          shadowColor: '#34C759',
-                          shadowOffset: { width: 0, height: 0 },
-                          shadowOpacity: 0.8,
-                          shadowRadius: 4,
+                          boxShadow: shadow(0, 0, 4, '#34C759', 0.8),
                         }} />
                         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>
                           {server.name}

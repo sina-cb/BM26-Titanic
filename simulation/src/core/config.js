@@ -35,10 +35,6 @@ export function extractParams(node, parentKey = null) {
       params.ledStrands = node[key];
       continue;
     }
-    if (key === "icebergs" && Array.isArray(node[key])) {
-      params.icebergs = node[key];
-      continue;
-    }
     if (key === "gradientStops" && Array.isArray(node[key])) {
       params.gradientStops = node[key];
       continue;
@@ -101,10 +97,6 @@ export function reconstructYAML(node, parentKey = null) {
     }
     if (key === "strands" && Array.isArray(node[key])) {
       node[key] = params.ledStrands;
-      continue;
-    }
-    if (key === "icebergs" && Array.isArray(node[key])) {
-      node[key] = params.icebergs;
       continue;
     }
     if (key === "gradientStops" && Array.isArray(node[key])) {

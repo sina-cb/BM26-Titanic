@@ -171,3 +171,8 @@ Kill the three processes (sim, engine, serve) when done.
 | 5 | CaptainPad built + served | `Exported: dist`, :6967 listening |
 | 6 | CaptainPad screenshot | PNG visually inspected |
 | 7 | CaptainPad ↔ engine | `● CONNECTED` + live data in the PNG |
+
+> **Note (2026-06-12 layout pass):** the sACN monitors now boot **collapsed**.
+> For the sACN IN "Connected" screenshot, expand the panel first (click its
+> collapse button or double-click the header) — collapsed, only the header
+> status dot is visible.
