@@ -45,62 +45,65 @@
  * table so any future tweak can be traced to a citation.
  */
 
+import {
+  processedSignalKeys,
+  defaultGainChainFor,
+  gainOpIdFor,
+} from './audio_signals.js';
+
 // ── Signal keys + defaults ──────────────────────────────────────────────────
 
 /**
  * Every live audio signal that the SignalPostProcessor knows about.
- * Adding a new signal means:
- *   1) add it here,
- *   2) add a CPC registry entry (live, broadcast policy),
- *   3) add a default chain in DEFAULT_CHAINS,
- *   4) wire the call site (engine.js or osc_listener.js) to call
- *      `process(signalKey, raw, dt)`.
+ * This is DERIVED from `lib/audio_signals.js` (the single source of
+ * truth for the audio signal family) — NOT hand-listed. Adding a new
+ * audio signal is now a one-line descriptor edit there; this set, the
+ * CPC registry, DEFAULT_CHAINS, the osc_listener maps, and CaptainPad's
+ * live-key set all follow automatically.
  * `process()` throws on an unknown signal key — there is no fallback
  * to identity (Codex P0).
  */
-export const KNOWN_SIGNALS = Object.freeze([
-  'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
-  'stemsBass', 'stemsDrums', 'stemsVocals',
-]);
+export const KNOWN_SIGNALS = Object.freeze(processedSignalKeys());
 
 /**
- * Default chain per signal. Mic bands default to a single Gain op
- * tied to the existing `*Gain` CPC key, matching pre-chain behaviour
+ * Default chain per signal. Mic bands + stems default to a single Gain
+ * op tied to the existing `*Gain` CPC key, matching pre-chain behaviour
  * (Wireframe A — operator can layer LPF / Compressor / etc. on top
- * later). `micKick` gets the documented `Envelope → Schmitt → Hold`
- * trigger-shaper default per design doc §Operator catalog "When to use".
- * Stems get just a Gain op (loopback OSC, no Hold needed — design doc
- * §Stems locality, operator brief 2026-05-26).
+ * later). Those gain-only defaults are DERIVED from `audio_signals.js`
+ * via `defaultGainChainFor(key)` so the gain paramKey + op id stay in
+ * lockstep with the registry.
+ *
+ * `micKick` is the ONE exception: it gets the documented
+ * `Envelope → Schmitt → Hold` trigger-shaper default (design doc
+ * §Operator catalog "When to use"). That chain carries DSP-tuning params
+ * (attack/release/hysteresis/decay) that are post-processing BEHAVIOUR,
+ * not family metadata, so it stays hand-written HERE — `audio_signals.js`
+ * only flags micKick as `defaultChainKind: 'kickTrigger'` and leaves the
+ * params to this module. Its leading Gain op id (`kick_gain`) and paramKey
+ * still come from `gainOpIdFor`/the descriptor so even that stays in sync.
  */
-export const DEFAULT_CHAINS = Object.freeze({
-  micLow:  [
-    { id: 'low_gain',  type: 'gain',  enabled: true, params: { paramKey: 'micLowGain' } },
-  ],
-  micMid:  [
-    { id: 'mid_gain',  type: 'gain',  enabled: true, params: { paramKey: 'micMidGain' } },
-  ],
-  micHigh: [
-    { id: 'high_gain', type: 'gain',  enabled: true, params: { paramKey: 'micHighGain' } },
-  ],
-  micKick: [
-    { id: 'kick_gain',     type: 'gain',     enabled: true, params: { paramKey: 'micKickGain' } },
-    { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 8, releaseMs: 180 } },
-    { id: 'kick_schmitt',  type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 200 } },
-    { id: 'kick_hold',     type: 'hold',     enabled: true, params: { timeoutMs: 120, decayMs: 120 } },
-  ],
-  micFlux: [
-    { id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } },
-  ],
-  stemsBass:   [
-    { id: 'stems_bass_gain',   type: 'gain', enabled: true, params: { paramKey: 'stemsBassGain' } },
-  ],
-  stemsDrums:  [
-    { id: 'stems_drums_gain',  type: 'gain', enabled: true, params: { paramKey: 'stemsDrumsGain' } },
-  ],
-  stemsVocals: [
-    { id: 'stems_vocals_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsVocalsGain' } },
-  ],
-});
+export const DEFAULT_CHAINS = Object.freeze(buildDefaultChains());
+
+function buildDefaultChains() {
+  const out = {};
+  for (const key of KNOWN_SIGNALS) {
+    if (key === 'micKick') {
+      out[key] = [
+        { id: gainOpIdFor('micKick'), type: 'gain',     enabled: true, params: { paramKey: 'micKickGain' } },
+        { id: 'kick_envelope',        type: 'envelope', enabled: true, params: { attackMs: 8, releaseMs: 180 } },
+        { id: 'kick_schmitt',         type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 200 } },
+        { id: 'kick_hold',            type: 'hold',     enabled: true, params: { timeoutMs: 120, decayMs: 120 } },
+      ];
+      continue;
+    }
+    const chain = defaultGainChainFor(key);
+    if (!chain) {
+      throw new Error(`SignalPostProcessor: no default chain for processed signal "${key}"`);
+    }
+    out[key] = chain;
+  }
+  return out;
+}
 
 // ── Op type catalog ─────────────────────────────────────────────────────────
 
