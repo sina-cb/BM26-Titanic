@@ -18,9 +18,11 @@
  */
 
 const NONCRITICAL_SELECTORS = [
-  '#gui-panel',
-  '.lil-gui',
+  '#gui-panel',         // lighting controls wrapper (both UI modes)
+  '.lil-gui',           // legacy control root
+  '.marsin-gui',        // modern control root (?ui=modern, the default)
   '#pattern-editor-panel',
+  '#controller-map-panel', // modern controller-mapping panel
   '#info-panel',
   '#hud-frame',
   '#view-presets',
