@@ -93,6 +93,53 @@ dropped (HIL playlist residue lands in the ignored runtime dir).
   "Saved to defaults: 3 file(s) written" → MATCHES (screenshots in
   `.agent_renders/captainpad_showstate_*.png`).
 
+## ⚠️ Deploy / upgrade note (read before pulling this onto a show machine)
+
+`marsin_engine/states/` flips from **tracked** to **gitignored** in this
+change (the tracked content moved to `state_defaults/`). On a machine
+that already ran the old engine, the on-disk `marsin_engine/states/`
+directory physically persists after the pull — and because seeding is
+per-file and **never overwrites existing runtime files**, the engine
+will boot on whatever stale content is sitting there rather than the new
+tracked defaults. This is harmless on a dev box but can show the *wrong
+state* on the rig with no warning.
+
+**One-time upgrade step on each deployed machine** (Titanic, Pis):
+after pulling, delete the stale runtime dir so it re-seeds from the new
+defaults:
+
+```bash
+rm -rf marsin_engine/states/
+```
+
+(Or run `node tools/promote_state.mjs --reset` against the running
+engine, which mirrors defaults → runtime explicitly.)
+
+## Cold-review fixes (2026-06-13, second commit)
+
+A cold reviewer pass caught three issues; all addressed:
+
+- **Promote dropped in-flight playlist captures (real tearing bug).**
+  The per-channel auto-capture (`scheduleEntryCapture`, 500 ms debounce)
+  writes playlist-entry defaults and was NOT flushed by `/state/promote`
+  — a slider nudged within 500 ms of hitting save would miss the
+  promoted defaults. Added `flushPendingCaptures()`, called in the
+  promote handler alongside the CPC flush. Verified live: a 0.27 nudge
+  immediately followed by promote now lands in the promoted playlist
+  YAML.
+- **Legacy `config.yaml` autopilot values silently dropped on upgrade.**
+  Added a one-time boot migration: if a `playlist:` block still exists
+  in `config.yaml` AND `autopilot_state.yaml` was freshly seeded this
+  boot, its values are carried into the runtime file with a loud log.
+  Verified live (`delay_s: 99` custom block → migrated).
+- **No tests for the core module.** Added `tests/runtime_state.test.js`
+  (7 tests: seed/never-overwrite, status/dirty rollup, promote incl.
+  deletion mirroring, fail-loud on no-runtime, reset, no tmp residue).
+
+Plus: autopilot now fails loudly on a present-but-corrupt state file
+(was silently defaulting); engine.js audio paths use `runtimeStateDir()`
+instead of re-hardcoding the `states/<model>` join.
+
 ## Notes / follow-ups (Notion when MCP is enabled)
 
 - `state_defaults/titanic/` has no playlists yet — first promote on the
@@ -100,6 +147,8 @@ dropped (HIL playlist residue lands in the ignored runtime dir).
 - Deferred from the plan's open questions: per-file promote granularity
   (whole-model only for now) and the sim save-server files
   (`common.yaml` & friends) getting the same treatment.
-- Operators with hand-edited `playlist:` blocks in an untracked
-  `config.yaml` copy (e.g. a playa Pi) should re-set autopilot once
-  from CaptainPad; the engine no longer reads that block.
+- `StateManager.save()` still warns-and-continues on a write error
+  (pre-existing). In the extreme case (disk full mid-show) a promote
+  could copy slightly stale mixer/deck data while reporting success.
+  Left as-is to avoid changing global save semantics under this PR;
+  worth revisiting if it ever bites.

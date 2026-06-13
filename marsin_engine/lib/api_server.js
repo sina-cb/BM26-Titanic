@@ -592,6 +592,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return entry.defaults;
   }
 
+  /**
+   * Fire every pending debounced entry-capture NOW and clear the timers.
+   * Called before /state/promote so a slider nudged within the 500 ms
+   * capture window can't have its playlist-defaults write land AFTER the
+   * promote copy (which would silently drop the edit from the promoted
+   * defaults — the capture writes the playlist YAML, same as the timer).
+   */
+  function flushPendingCaptures() {
+    if (captureTimers.size === 0) return;
+    // Snapshot the channel ids first: the timer callback deletes its own
+    // entry from captureTimers, so we must not iterate the live Map.
+    const channelIds = [...captureTimers.keys()];
+    for (const channelId of channelIds) {
+      const timer = captureTimers.get(channelId);
+      if (timer) clearTimeout(timer);
+      captureTimers.delete(channelId);
+      const ch = mixer.getChannel(channelId);
+      if (!ch || !ch.playlist || !ch.playlist.activeEntryId || ch.locked) continue;
+      try {
+        captureActiveEntryDefaults(ch);
+      } catch (e) {
+        console.warn('[Playlist] flush capture skipped:', e.message);
+      }
+    }
+  }
+
   function scheduleEntryCapture(channelId) {
     if (!channelId) return;
     // Locked channels intentionally do NOT auto-capture. Param edits are
@@ -2145,12 +2171,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // (state_defaults/<model>/). Flush every debounced writer FIRST so
       // the promoted snapshot can't be torn:
       //   - CPC values sit in a 250 ms debounce (paramCenter.save)
+      //   - per-channel playlist-defaults sit in a 500 ms capture debounce
       //   - mixer/deck state is saved per-mutation but re-save here in
       //     case a transition completion is still pending
       // The git commit of the resulting state_defaults/ diff stays a
       // deliberate human step — the engine never touches git.
       try {
         if (paramCenter) paramCenter.flushPendingSave();
+        flushPendingCaptures();
         saveAllState();
         stateManager.saveGlobalsState(globalsState, paramCenter);
         const result = promoteRuntimeState(stateModel);
