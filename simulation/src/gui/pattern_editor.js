@@ -265,6 +265,9 @@ async function ensureGlobalParamsGui() {
   // lighting-mode switches, and panel_layout re-adopts the new element
   // (z band + click-to-front; position is derived, so no persistence).
   registerPanel(dom, { persist: false });
+  // Re-dock into the left child column if the left-drawer stack is active
+  // (this panel is recreated on every pixelblaze re-entry).
+  if (window.__refreshLeftDrawers) window.__refreshLeftDrawers();
 
   const editorPanel = document.getElementById('pattern-editor-panel');
   // Follows the pattern editor, event-driven (ResizeObserver + style/class
@@ -280,6 +283,9 @@ async function ensureGlobalParamsGui() {
       return;
     }
     dom.style.display = 'block';
+    // When docked as a left-drawer child, left_drawer.js owns its geometry —
+    // skip the floating follow-placement so the two don't fight.
+    if (dom.dataset.leftDocked === '1') return;
     const rect = editorPanel.getBoundingClientRect();
     const width = dom.offsetWidth || 245;
     const vw = window.innerWidth;

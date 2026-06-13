@@ -786,6 +786,30 @@ body.edit-mode-active #engine-params-panel {
   cursor: default;
 }
 
+/* Collapse button — a crisp icon button (replaces the raw » glyph). */
+.gui-panel-header .drawer-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--icon);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.gui-panel-header .drawer-collapse-btn:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+.gui-panel-header .drawer-collapse-btn svg {
+  display: block;
+}
+
 /* Reopen tab — a thin handle at the right edge, shown only when collapsed. */
 #control-drawer-tab {
   position: fixed;
@@ -814,7 +838,9 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: -4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 #control-drawer-tab .drawer-tab-chevron {
-  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 #control-drawer-tab .drawer-tab-icon {
@@ -984,6 +1010,71 @@ body.edit-mode-active #engine-params-panel {
   border-left: 1px solid var(--ghost-border);
   padding-left: 7px;
 }
+
+/* ─── Left Source Drawers ───
+   Pattern Editor / sACN IN docked left, with Engine Params + sACN OUT in a
+   child column (left_drawer.js). Geometry (left/top/width/height/transform)
+   is set inline by the manager; this class supplies the shared treatment and
+   neutralises each panel's floating defaults (resize, max-height, radius). */
+.left-drawer {
+  z-index: 100 !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  resize: none !important;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+#engine-params-panel.left-drawer,
+#sacn-in-monitor-panel.left-drawer,
+#sacn-out-monitor-panel.left-drawer {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* The docked drawers don't drag — drop the grab cursor on their headers. */
+.left-drawer .pe-header,
+.left-drawer .gui-panel-header,
+.left-drawer .sacn-header,
+.left-drawer .title {
+  cursor: default;
+}
+
+/* Reopen tabs for the left columns — mirror of #control-drawer-tab, hinged on
+   the left/seam edge. `left` is set inline by the manager (0 or the seam). */
+.left-drawer-tab {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 6px;
+  background: var(--panel-header-bg);
+  border: 1px solid var(--ghost-border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  box-shadow: 4px 0 24px var(--ambient-shadow);
+  cursor: pointer;
+  color: var(--primary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.left-drawer-tab:hover {
+  background: var(--control-bg-hover);
+  box-shadow: 4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.left-drawer-tab .drawer-tab-chevron {
+  font-size: 1rem;
+  line-height: 1;
+}
+/* Stagger the two handles so they never overlap when both sit at the edge. */
+#left-primary-tab { top: 44%; }
+#left-child-tab { top: 60%; }
 
 /* ─── Compact/Dense GUI Overrides ───
    lil-gui consumes these custom properties natively — mapping them to the

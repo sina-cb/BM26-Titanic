@@ -15,6 +15,11 @@
 
 const COLLAPSE_KEY = 'bm26.sim.controlDrawerCollapsed';
 
+// Inline chevron icons (stroke = currentColor) for a crisper, more deliberate
+// look than the raw » / ‹ glyphs.
+const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>';
+const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 6 9 12 15 18"/></svg>';
+
 let _panel = null;
 let _tab = null;
 let _toggleBtn = null;
@@ -59,7 +64,7 @@ function buildTab() {
   tab.title = 'Open Lighting Controls (B)';
   const chevron = document.createElement('span');
   chevron.className = 'drawer-tab-chevron';
-  chevron.textContent = '‹';
+  chevron.innerHTML = CHEVRON_LEFT;
   const icon = document.createElement('span');
   icon.className = 'drawer-tab-icon';
   icon.textContent = '🔦';
@@ -106,8 +111,9 @@ export function setupControlDrawer(panelEl) {
 
   _toggleBtn = _panel.querySelector('.gui-panel-header .pe-btn');
   if (_toggleBtn) {
-    _toggleBtn.textContent = '»';
-    const fresh = _toggleBtn.cloneNode(true); // drop the legacy collapse handler
+    const fresh = _toggleBtn.cloneNode(false); // drop the legacy collapse handler + old glyph
+    fresh.classList.add('drawer-collapse-btn');
+    fresh.innerHTML = CHEVRON_RIGHT;
     _toggleBtn.replaceWith(fresh);
     _toggleBtn = fresh;
     _toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleControlDrawer(); });

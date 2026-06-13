@@ -50,6 +50,7 @@ import {
 } from "./src/gui/panel_layout.js";
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import { setupHelpPanel } from "./src/gui/help_panel.js";
+import { setupLeftDrawers } from "./src/gui/left_drawer.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -697,7 +698,12 @@ Promise.all([
   // reaches it through panel_visibility's setDrawerVisible. So it is NOT
   // registered with the floating-geometry system here.
 
-  // Wire the show/hide hotkey + visibility module. The drawer + any
+  // Dock the left-side source panels (Pattern Editor / sACN IN + their
+  // nested Engine Params / sACN OUT) as mode-driven drawers. Must come
+  // before initPanelVisibility so a persisted H-hidden state reaches it.
+  if (!_isReadonly) setupLeftDrawers();
+
+  // Wire the show/hide hotkey + visibility module. The drawers + any
   // late-arriving floating panels are caught via a bounded re-apply.
   initPanelVisibility();
 }).catch(async (err) => {
