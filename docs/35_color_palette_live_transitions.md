@@ -1,7 +1,7 @@
 # 35. Color Palette — live switching + timed transitions
 
-**Status:** DESIGN / for review · **Author:** agent session 2026-06-13 ·
-**Operator:** Sina Solaimanpour ·
+**Status:** IMPLEMENTED — pending CaptainPad on-device review ·
+**Author:** agent session 2026-06-13 · **Operator:** Sina Solaimanpour ·
 **Branch:** `claude/captains-pad-color-transitions-xkhnhk`
 
 This doc consolidates color-palette behavior, which until now lived split
@@ -245,18 +245,21 @@ With slice 1 the revert also fades (back to where you started) — coherent.
 > persisted color wherever the finger was; trivially re-picked. Documented,
 > not guarded.
 
-### 5.4 The FADE control (where `colorTransitionMs` is set)
+### 5.4 The TRANSITION control (where `colorTransitionMs` is set)
 
-Add a compact **FADE** slider row at the bottom of the modal (visible on
-both tabs), reading/writing `colorTransitionMs` via the live shared-param
-state, labelled in seconds (e.g. `FADE 0.8 s`, `0` shown as `INSTANT`).
-Putting it in the picker keeps the Deck's GLOBAL PARAMS strip uncluttered
-and means the operator sets "how I switch colors" in the same place they
-switch them — reachable identically from Deck and Mixer.
+A **TRANSITION text field** sits at the bottom of the modal, visible on
+both tabs (operator request 2026-06-13: a typed number, not a slider).
+The operator types a value in **seconds** (e.g. `0.8`); on submit/blur it
+parses, clamps to `[0, 10]` s, and commits `colorTransitionMs =
+round(sec * 1000)` to the engine. `0` means instant. The field seeds from
+the live engine value when the modal opens and does **not** fight the
+operator's typing on subsequent live broadcasts.
 
-> **Open question for review:** FADE slider **inside the picker modal**
-> (proposed) vs a tile on the Deck globals row. Recommendation: in the
-> modal.
+It commits independently of APPLY/CANCEL — it is a *setting*, not a play
+value, so CANCEL/tap-outside does **not** revert it. Putting it in the
+picker keeps the Deck's GLOBAL PARAMS strip uncluttered and means the
+operator sets "how I switch colors" in the same place they switch them —
+reachable identically from Deck and Mixer.
 
 ## 6. Slice 3 — tap-outside to cancel
 
@@ -327,15 +330,16 @@ No new HTTP/WS endpoints; `colorTransitionMs` is just another shared param.
   back to baseline; set FADE to 0 → snap; set FADE to 3 s → visible long
   crossfade; verify a GLOBAL BLACKOUT mid-fade cuts instantly.
 
-## 10. Open decisions for your review
+## 10. Decisions as built (revisit during review)
 
-1. **Default fade duration** — proposed **800 ms** (range 0–10 s). OK, or
-   different default / max?
-2. **Interpolation space** — **HSV shortest-hue** (proposed) vs RGB.
-3. **FADE control placement** — **inside the picker modal** (proposed) vs a
-   Deck globals tile.
-4. **Live-apply scope** — Manual-tab drags live (proposed). Presets already
-   apply-on-tap; should they *also* honor the fade? (Yes by default, via
-   slice 1 — calling it out.)
-5. **Does the FADE also apply to `docs/32` group fixed colors?** Proposed
-   **no** (kept a hard lock); say the word if you want fades there too.
+1. **Default fade duration** — **800 ms**, range 0–10 s (`0` = instant).
+2. **Interpolation space** — **HSV shortest-hue**.
+3. **TRANSITION control** — a **text field inside the picker modal**
+   (operator chose a typed value over a slider), in seconds.
+4. **Live-apply scope** — Manual-tab drags apply live + throttled; presets
+   apply on tap; both honor the engine fade (slice 1).
+5. **`docs/32` group fixed colors** — unchanged (still a hard snap lock; no
+   fade). Easy to extend later if wanted.
+
+Any of these are cheap to tweak after the on-device review — duration
+default, throttle rate, and seconds-vs-ms are one-line changes.
