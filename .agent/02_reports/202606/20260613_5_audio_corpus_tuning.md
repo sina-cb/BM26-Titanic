@@ -24,13 +24,15 @@
   soft-clip → SNR-balanced pink/white/hum noise, at `clean`/`moderate`/`heavy`
   tiers (≈47/18/9 dB SNR). All tuning was measured through it, on BOTH
   synthetic and real audio.
-- **Detector (Task E):** replaced the steady level-ratio drop edge with a
-  true **windowed rate-of-change** edge and flipped the default. On the
-  synthetic ground-truth set degraded through the mic, vs the originally
-  shipped default: **precision 0.57 → 1.00, latency 139 → 56 ms, false
-  positives halved**, recall 0.89 → 0.78 (a deliberate precision-over-recall
-  trade). Meets/beats the research-memo priors (P 0.65-0.75, R 0.55-0.70,
-  latency 150-500 ms).
+- **Detector (Task E):** fixed a **state-machine flap** (after a drop the
+  body re-entered BUILD every few hops because the rising-tracker stuck at
+  the energy ceiling — `audioStructure`/`audioDropPulse` churned, mislabeling
+  the drop body as BUILD) and added a true **windowed rate-of-change** drop
+  edge (now the default). The flap fix is the precision win — it removes the
+  in-body re-fires for BOTH edges (P → 1.00). Windowed is then a refinement:
+  vs the level edge it cuts **latency 139 → 56 ms** and **false fires 6 → 4**
+  (recall 0.89 → 0.78, a deliberate trade). All meet/beat the research-memo
+  priors (P 0.65-0.75, R 0.55-0.70, latency 150-500 ms).
 - **Chain feel (Task C):** the pattern-facing low/mid/high/flux signals
   shipped GAIN-ONLY (flickery). Added per-signal smoothing LPFs and made the
   kick SUDDEN. Measured on miced real audio: micLow flicker **6.5 → 4.2 Hz**,
@@ -109,47 +111,64 @@ synthetic labeled drop @8.0s still detects down to 9 dB SNR. *(Realism nit:
 the SNR balance attenuates the signal, so heavy = noisier AND quieter —
 realistic for distance, but tier severity mixes SNR and absolute level.)*
 
-## 3. Detector accuracy (Task E) — the windowed drop edge
+## 3. Detector accuracy (Task E)
 
-The shipped detector's drop edge was a **steady level ratio**
-(`shortEnv/longEnv > dropEnergyJump`). With the long envelope's 10 s τ, a loud
-body keeps that ratio satisfied for seconds, so it **re-fires every refractory
-window** (the documented Phase-3 fidelity gap). Replaced with a **windowed
-rate-of-change** edge (`dropEdgeMode:'windowed'`): the short envelope NOW vs
-the short envelope `dropDeltaWindowMs` (400 ms) ago. A real drop is a fast
-step; a plateau stops qualifying once the lagged value catches up, so it fires
-**once per genuine edge** by construction.
+Two issues, fixed in order:
+
+### 3a. The state-machine flap (the bigger fix)
+
+After a drop the detector entered SUSTAIN but **immediately bounced back to
+BUILD every few hops** — on `clean_drop`, ONE `dropFired` but **34 state
+transitions** (16 SUSTAIN↔BUILD pairs). Root cause: `energyRatio` is pinned at
+the ceiling (1.0) through a loud body, and the "rising for > 1 s" tracker only
+reset on a *falling* ratio — so it stayed "rising" forever, re-satisfying the
+SUSTAIN→BUILD gate. The `dropFired` refractory hid the repeats, but
+`audioStructure` and `audioDropPulse` churned, and the drop body was
+**mislabeled BUILD instead of SUSTAIN**. (Caught by an external PR review.)
+
+Fix: **reset the rising-tracker when entering SUSTAIN**, and pulse
+`audioDropPulse` **only on an actual fire** (not when the refractory
+suppresses one). Result: `clean_drop` → 3 transitions (`THIN→BUILD→SUSTAIN`),
+`double_drop` → 6 (`TBSTBS`). This removes the in-body re-fires for BOTH drop
+edges. *(An earlier attempt to reset the tracker on ceiling saturation
+everywhere was wrong — it blocked BUILD entry on risers; resetting only on
+SUSTAIN entry is the correct, targeted fix.)*
+
+### 3b. The windowed rate-of-change drop edge (the refinement)
+
+The level edge (`shortEnv/longEnv > dropEnergyJump`) fires on a steady ratio.
+The new `dropEdgeMode:'windowed'` edge compares the short envelope NOW vs
+`dropDeltaWindowMs` (400 ms) ago — a real drop is a fast step; a plateau stops
+qualifying once the lagged value catches up, so it de-bounces by construction.
 
 ### Measured on the SYNTHETIC ground-truth set, degraded through the mic (3 SNR tiers)
 
 `node tests/integration/synthetic_accuracy.mjs` — positives stems-fed,
-negatives mic-only:
+negatives mic-only, both edges at the shipped 2 s refractory, **with the flap
+fix in place**:
 
-| arm | P | R | mean latency | neg-control false fires | (tp/fp/fn) |
+| edge | P | R | mean latency | neg-control false fires | (tp/fp/fn) |
 |---|---|---|---|---|---|
-| `level2000` — **originally shipped** | 0.57 | 0.89 | 139 ms | 10 | (8/6/1) |
-| `level3500` — level edge, new refractory | 1.00 | 0.89 | 139 ms | 7 | (8/0/1) |
-| **`windowed` — NEW default** | **1.00** | **0.78** | **56 ms** | **5** | (7/0/2) |
+| `level` (original edge) | 1.00 | **0.89** | 139 ms | 6 | (8/0/1) |
+| **`windowed` (NEW default)** | 1.00 | 0.78 | **56 ms** | **4** | (7/0/2) |
 
-Reading: the longer refractory alone (level2000→level3500) masks the in-body
-re-fires that tanked precision (0.57→1.00). The **windowed edge then cuts
-latency 139→56 ms (2.5×) and false fires 7→5**, de-bouncing by construction
-rather than relying on the refractory window — at a deliberate recall cost
-(0.89→0.78: a genuinely close second drop can land inside the 3.5 s
-refractory). All three windowed metrics meet/beat the research-memo priors
-(P 0.65-0.75, R 0.55-0.70, latency 150-500 ms).
+Honest reading: **the flap fix gives both edges P=1.00** (it, not the edge
+choice, is what removed the precision-killing re-fires). The windowed edge's
+remaining advantage is **latency (56 vs 139 ms — 2.5× snappier on the lights)
+and fewer false fires (4 vs 6)**, plus de-bounce-by-construction; the cost is
+recall (0.78 vs 0.89 — it ignores gradual lifts). All meet/beat the priors.
+`level` stays one config flag away for anyone who prefers the higher recall.
 
 **Product-default changes** (`lib/audio_structure_detector.js`
 `DETECTOR_DEFAULTS`):
+- the flap fix (rising-tracker reset on SUSTAIN entry; pulse only on fire)
 - `dropEdgeMode: 'level' → 'windowed'` (+ new `dropDeltaWindowMs: 400`)
-- `eventRefractoryMs: 2000 → 3500`
+- `eventRefractoryMs`: **left at 2000** (the flap fix removed the need for a
+  longer refractory; 2000 keeps recall on close double-drops)
 
-Both are deliberate, measured, and **low-risk**: the structure detector is
-`enabled:false` by default (opt-in), and `level` remains available as a live
-config value. The new fields are registered live-tunable in `audio_config.js`
-(`dropEdgeMode` string-enum, `dropDeltaWindowMs` numeric) with validators +
-tests. An idea to also reset the rising-tracker on ceiling saturation was
-**tried and removed** — it blocked BUILD entry and killed recall.
+Low-risk: the detector is `enabled:false` by default (opt-in); `level` remains
+a live value; new fields registered live-tunable in `audio_config.js` with
+validators + tests.
 
 ## 4. Chain feel (Task C) — smooth bands, sudden kick
 
@@ -202,6 +221,41 @@ band + EMA-relative onset test reject broadband noise); raising it only costs
 real-kick sensitivity. An honest "the defaults are already right here"
 outcome.
 
+## 5b. IMPORTANT — what actually reaches the show scenes (scene overrides)
+
+The engine boots `config.yaml` < `states/<model>/audio_state.yaml`, and loads
+each scene's `chains:` block over `DEFAULT_CHAINS` (engine.js ~L1193/L1212).
+The committed `titanic` and `test_bench` scenes **pin their own** analyzer
+params + chains, which **shadow the tuned defaults**:
+
+| Knob | tuned default (this PR) | titanic/test_bench scene pins |
+|---|---|---|
+| `bands` | low<200 / mid<4000 | **low<250 / mid<2760** |
+| `noiseGate` | 0.04 | **0.05** |
+| `kick.threshold` | 1.8 | **2.25** |
+| chains | gain + tuned LPFs, sudden kick | their own LPFs (8/10/2 Hz) + **long micKick (release 441 ms)** |
+| `structureDetector` | windowed + flap fix | *(not overridden → the detector changes DO apply)* |
+
+So of this PR, **only the detector fixes (windowed edge + flap fix) reach the
+titanic/test_bench scenes**; the chain-feel + analyzer tuning land on the
+`DEFAULT_CHAINS` / `config.yaml` "reset-to-defaults" baseline but are
+**overridden in the actual show scenes**. Two consequences worth the
+operator's attention:
+
+- **Re-measured the windowed detector on the titanic scene's OWN config**
+  (bands 250/2760, gate 0.05): P=1.00, **R=0.67**, latency 143 ms — degraded
+  vs the default config (R 0.78 / 56 ms) but still meets the prior. The wider
+  250 Hz low band rescues the 0.05 gate from the recall collapse it causes on
+  the 200 Hz default band. So the show scene is *suboptimal, not broken*.
+- The titanic scene's **micKick has a 441 ms release** — the opposite of the
+  "sudden kick" intent. The lights' kick is currently smeary on that scene.
+
+**I did NOT edit the show scene state files** — they look hand-tuned (likely
+via the iPad calibration tool), and silently overwriting show config would be
+wrong. To pick up this PR's feel/analyzer tuning on a scene, either hit
+**"Reset to defaults"** in the iPad Audio tab for that scene, or migrate the
+scene `audio_state.yaml` deliberately. Flagged for an operator decision (§9).
+
 ## 6. Real-corpus sweep — false-positive robustness + feel across SNR tiers
 
 `node tests/integration/corpus_sweep.mjs --corpus … --modes mic-only` over the
@@ -209,10 +263,14 @@ outcome.
 truncated to 60 s. The `baseline` arm pins the OLD detector edge
 (`level`/2000); the `detector`/`tuned` arms use the new `windowed`/3500.
 
+> NOTE: the numbers below were taken BEFORE the §3a flap fix; the flap fix
+> raises structure-agreement (the body now stays SUSTAIN) and reduces FP for
+> both arms. Refreshed values land with the post-fix sweep.
+
 | arm (detector) | drop P | drop R | latency | **FP/min** | struct agree | (tp/fp/fn) |
 |---|---|---|---|---|---|---|
 | `baseline` (level/2000) | 0.22 | 0.22 | 896 ms | **1.39** | 0.249 | (24/86/84) |
-| `detector`/`tuned` (windowed/3500) | 0.05 | 0.04 | 460 ms | **0.87** | 0.175 | (4/75/104) |
+| `detector`/`tuned` (windowed) | 0.05 | 0.04 | 460 ms | **0.87** | 0.175 | (4/75/104) |
 
 **The clean, reliable signal here is FP/min on the genuinely-quiet clips:
 windowed cuts spurious fires 1.39 → 0.87 /min (−37 %)** — the robustness win
@@ -238,10 +296,11 @@ is the direct measurement in §4, taken before the default was changed.
 
 | File | Change | Justified by |
 |---|---|---|
-| `lib/audio_structure_detector.js` | `dropEdgeMode:'windowed'` (new windowed-delta edge + `dropDeltaWindowMs:400`); `eventRefractoryMs 2000→3500` | §3 — P 0.57→1.00, latency 139→56 ms, fewer false fires |
+| `lib/audio_structure_detector.js` | **flap fix** (rising-tracker reset on SUSTAIN entry; pulse only on actual fire); `dropEdgeMode:'windowed'` (+ `dropDeltaWindowMs:400`); `eventRefractoryMs` left at 2000 | §3 — flap fix → P=1.00 both edges; windowed → latency 139→56 ms, fewer false fires |
 | `lib/signal_post_processor.js` | `DEFAULT_CHAINS`: per-signal smoothing LPFs + SUDDEN micKick | §4 — flicker down, pulse preserved, kick 5× snappier |
 | `lib/audio_config.js` | register `dropEdgeMode` (enum) + `dropDeltaWindowMs` (numeric) live-tunable | the two new detector fields need to be patchable |
 | `config.yaml` | (none — `noiseGate`/`kick` deliberately unchanged) | §5 — raising them is net negative |
+| scene `audio_state.yaml` | (none — NOT edited) | §5b — show config is hand-tuned; migration is an operator decision |
 
 Tests updated deliberately for the new defaults:
 `audio_signals.test.js`, `signal_post_processor.test.js`,
@@ -271,6 +330,8 @@ dependency). Workflow documented in the replication skill (06).
   engineering estimates; one real capture from the installed mic + speakers
   would let us pin the tiers (and re-confirm the noiseGate decision) to the
   actual rig.
-- **Close-spaced double drops.** The 3.5 s refractory can suppress a genuine
-  second drop <3.5 s after the first; operators running drop-reactive looks on
-  rapid-fire sequences can lower `eventRefractoryMs` live.
+- **Scene migration decision (operator).** The feel + analyzer tuning only
+  reaches a scene if that scene's `audio_state.yaml` is reset/migrated (§5b).
+  The titanic scene currently runs `noiseGate:0.05` (suboptimal) and a 441 ms
+  micKick release (smeary). Decide per scene: "Reset to defaults" in the iPad
+  Audio tab, or migrate the scene state deliberately. Not done here on purpose.
