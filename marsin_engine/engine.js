@@ -33,6 +33,7 @@ import {
 } from './lib/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './lib/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
+import { AudioStructureDetector } from './lib/audio_structure_detector.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
@@ -1306,6 +1307,20 @@ async function main() {
     }
   }
 
+  // docs/30: audio structure detector (build / drop / sustain cues).
+  // ALWAYS constructed so its surface exists even when disabled — tick()
+  // no-ops until audio.structureDetector.enabled flips true via PATCH
+  // /audio/config. Reads the live config fresh each tick via getConfig so
+  // a hot enable/disable + threshold tweak takes effect immediately.
+  // Broadcast hook is the same audioStatus publisher used below; the
+  // detector emits the sparse `dropFired` event through it.
+  const audioStructureDetector = new AudioStructureDetector({
+    paramCenter,
+    broadcast: (msg) => broadcastStatsRef.publish(msg),
+    getConfig: () => (audioState.config && audioState.config.structureDetector) || {},
+  });
+  audioState.structureDetector = audioStructureDetector;
+
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
   // hand. Defined here so it closes over paramCenter + broadcasts.
@@ -1406,7 +1421,7 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick }) => {
+        onAnalysis: ({ low, mid, high, kick, flux }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1414,21 +1429,30 @@ async function main() {
           const midPost  = signalPostProcessor.process('micMid',  mid,  dt);
           const highPost = signalPostProcessor.process('micHigh', high, dt);
           const kickPost = signalPostProcessor.process('micKick', kick, dt);
+          const fluxPost = signalPostProcessor.process('micFlux', flux, dt);
           if (kickPost > 0.95) audioState.lastKickAt = nowMs;
           // Single setMany so the downstream onChange fan-out fires
-          // ONCE per hop for the full 8-key bundle (post + raw), not
-          // twice. CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys
-          // to render the raw row of the diagnostics strip.
+          // ONCE per hop for the full bundle (post + raw), not twice.
+          // CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys to render
+          // the raw row of the diagnostics strip. micFlux (docs/30) is
+          // the spectral-flux primitive the structure detector reads.
           paramCenter.setMany([
             { kind: 'scalar', key: 'micLow',     value: lowPost  },
             { kind: 'scalar', key: 'micMid',     value: midPost  },
             { kind: 'scalar', key: 'micHigh',    value: highPost },
             { kind: 'scalar', key: 'micKick',    value: kickPost },
+            { kind: 'scalar', key: 'micFlux',    value: fluxPost },
             { kind: 'scalar', key: 'micLowRaw',  value: low      },
             { kind: 'scalar', key: 'micMidRaw',  value: mid      },
             { kind: 'scalar', key: 'micHighRaw', value: high     },
             { kind: 'scalar', key: 'micKickRaw', value: kick     },
+            { kind: 'scalar', key: 'micFluxRaw', value: flux     },
           ], 'audio', 'audio:mic');
+          // docs/30: run the structure detector at the analyzer hop rate
+          // (lowest latency, auto-pauses when the analyzer is off). It
+          // reads the live keys just written above and publishes its own
+          // five keys + the sparse dropFired event. No-ops when disabled.
+          audioStructureDetector.tick(nowMs, dt);
         },
       });
       audioState.capture = new AudioCapture({

@@ -160,11 +160,54 @@ test('validateLivePatch rejects non-object payloads', () => {
 test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // Lock in the live-tunable contract; changing this is a doc + UI change.
   // Bands lost `smoothingAlpha` in favour of asymmetric attack/release
-  // + a noise gate (2026-05-25 retune).
+  // + a noise gate (2026-05-25 retune). `kickEma` exposes the kick
+  // detector's EMA tuning (2026-05-26). `structureDetector` is the
+  // build/drop/sustain detector group (docs/30).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
-    kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
+    kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
+    structureDetector: [
+      'enabled', 'buildThreshold', 'dropEnergyJump', 'stemsTimeoutMs',
+      'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
+    ],
   });
+});
+
+test('validateLivePatch accepts a structureDetector patch (docs/30)', () => {
+  const res = validateLivePatch({
+    structureDetector: {
+      enabled: true,
+      buildThreshold: 0.4,
+      dropEnergyJump: 1.8,
+      stemsTimeoutMs: 250,
+      eventRefractoryMs: 2000,
+      falseFireCount: 3,
+      falseFireWindowMs: 30000,
+      falseFireQuietMs: 60000,
+    },
+  });
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.live.structureDetector.enabled, true);
+  assert.equal(res.live.structureDetector.buildThreshold, 0.4);
+});
+
+test('validateLivePatch rejects a non-boolean structureDetector.enabled', () => {
+  const res = validateLivePatch({ structureDetector: { enabled: 1 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /enabled.*boolean/);
+});
+
+test('validateLivePatch rejects an out-of-range structureDetector threshold', () => {
+  const res = validateLivePatch({ structureDetector: { dropEnergyJump: 0.5 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /dropEnergyJump/);
+});
+
+test('validateLivePatch rejects an unknown structureDetector field', () => {
+  const res = validateLivePatch({ structureDetector: { bogusKnob: 1 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /not live-tunable/);
 });
 
 test('loadAudioConfig recovers gracefully from a malformed YAML file', () => {

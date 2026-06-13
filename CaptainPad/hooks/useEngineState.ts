@@ -624,9 +624,13 @@ function _ensureInitialized() {
       // there requires updating this set too; if the set drifts the
       // worst case is a one-frame stale meter on cold boot.
       const liveKeys = new Set([
-        'micLow', 'micMid', 'micHigh', 'micKick',
+        'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
         'stemsVocals', 'stemsBass', 'stemsDrums',
         'tempoBpm',
+        // audio structure detector (docs/30) — appear once detector is
+        // enabled; harmless filter entries while disabled.
+        'audioStructure', 'audioBuildScore', 'audioEnergyRatio',
+        'audioVocalsHot', 'audioDropPulse',
       ]);
       const liveSlice: Record<string, SharedParamValue> = {};
       for (const k of liveKeys) {

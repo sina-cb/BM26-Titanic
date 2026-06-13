@@ -50,6 +50,17 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // See audio_analyzer.js constructor comment for the per-field
   // engineering rationale.
   kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
+  // structureDetector — audio build/drop/sustain detector (docs/30).
+  // Disabled by default; the detector module is instantiated at boot
+  // regardless (so its surface exists) but `tick()` no-ops until the
+  // operator flips `enabled:true` via PATCH /audio/config. `enabled`
+  // is a boolean; the remaining fields are the core numeric thresholds
+  // (docs/30 §Phase 4 names a superset — we land the ones the Phase 1
+  // state machine actually reads).
+  structureDetector: [
+    'enabled', 'buildThreshold', 'dropEnergyJump', 'stemsTimeoutMs',
+    'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
+  ],
 });
 
 /**
@@ -77,6 +88,22 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // initial value before the detector goes live. Integer ≥ 1.
     warmupHops:   (v) => (Number.isInteger(v) && v >= 1 && v <= 1000)
                          ? null : `must be an integer in [1, 1000]; got ${v}`,
+  }),
+  // structureDetector (docs/30). `enabled` is boolean — validated by
+  // the boolean branch in validateLivePatch, NOT here (these validators
+  // only fire on numeric fields). The numeric thresholds gate the
+  // build/drop/sustain state machine; ranges chosen per the doc's
+  // pseudocode defaults (buildScore∈[0,1] threshold, energyJump > 1×,
+  // freshness/refractory in ms).
+  structureDetector: Object.freeze({
+    buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    dropEnergyJump:    (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
+    stemsTimeoutMs:    (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
+    eventRefractoryMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
+    falseFireCount:    (v) => (Number.isInteger(v) && v >= 1 && v <= 100)
+                              ? null : `must be an integer in [1, 100]; got ${v}`,
+    falseFireWindowMs: (v) => (v >= 0 && v <= 600000) ? null : `must be in [0, 600000]; got ${v}`,
+    falseFireQuietMs:  (v) => (v >= 0 && v <= 600000) ? null : `must be in [0, 600000]; got ${v}`,
   }),
 });
 
@@ -254,6 +281,17 @@ export function validateLivePatch(partial) {
     for (const [k, v] of Object.entries(value)) {
       if (!allowedFields.includes(k)) {
         return { ok: false, error: `field "${key}.${k}" is not live-tunable` };
+      }
+      // Boolean group fields (e.g. structureDetector.enabled) — the
+      // numeric guard below doesn't apply. Only the field literally
+      // named `enabled` is allowed to be boolean; everything else in a
+      // group is a finite number. (Codex P0: no silent coercion.)
+      if (k === 'enabled') {
+        if (typeof v !== 'boolean') {
+          return { ok: false, error: `"${key}.${k}" must be a boolean` };
+        }
+        live[key][k] = v;
+        continue;
       }
       if (typeof v !== 'number' || !Number.isFinite(v)) {
         return { ok: false, error: `"${key}.${k}" must be a finite number` };
