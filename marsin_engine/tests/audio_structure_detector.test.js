@@ -39,6 +39,15 @@ function makeFakeParamCenter(initial = {}) {
       store[key] = value;
       return { status: 'ok' };
     },
+    setMany(writes) {
+      const changedKeys = [];
+      for (const w of writes) {
+        if (!w || typeof w !== 'object') continue;
+        store[w.key] = w.value;
+        changedKeys.push(w.key);
+      }
+      return { status: 'ok', changedKeys };
+    },
     subscribe(fn) {
       subscribers.push(fn);
       return () => {
