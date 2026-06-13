@@ -12,6 +12,10 @@
  *   --show-ui             Keep the menus/panels visible in captures (hidden by default)
  *   --viewport WxH        Screenshot resolution (default 1920x1080; use 1280x720 on
  *                         software-rendered/headless machines — see note at VIEWPORT)
+ *   --url <url>           Override the simulation URL (default http://127.0.0.1:6969/
+ *                         simulation/?scene=titanic&profile=full&renderer=webgl). Use for
+ *                         non-default ports (multi-agent slots) or extra query params
+ *                         (e.g. &theme=gruvbox for themed captures).
  *
  * Browser reuse: When --open is running, render commands (--current, --view, default)
  * automatically connect to the existing browser instead of launching a new one.
@@ -40,7 +44,20 @@ const ALL_VIEWS = loadPresetKeys();
 // backend initializes and then loses its device (black canvas). The WebGL2
 // backend is stable under SwiftShader; on real GPUs the visual difference is
 // acceptable for layout/regression checks.
-const SIM_URL = 'http://127.0.0.1:6969/simulation/?scene=titanic&profile=full&renderer=webgl';
+const DEFAULT_SIM_URL = 'http://127.0.0.1:6969/simulation/?scene=titanic&profile=full&renderer=webgl';
+// --url <url>: full override for non-default ports (multi-agent worktree
+// slots) or extra query params like &theme=<id>.
+function parseSimUrl() {
+  const i = process.argv.indexOf('--url');
+  if (i === -1) return DEFAULT_SIM_URL;
+  const value = process.argv[i + 1];
+  if (!value || !/^https?:\/\//.test(value)) {
+    console.error('❌ Invalid --url value, expected a full http(s) URL.');
+    process.exit(1);
+  }
+  return value;
+}
+const SIM_URL = parseSimUrl();
 const OUTPUT_DIR = path.join(__dirname, '..', '..', '.agent_renders');
 
 // --viewport WxH: SwiftShader (software GL on headless/CI machines) loses the
@@ -181,7 +198,7 @@ async function hideUI(page) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     }
-    document.querySelectorAll('.lil-gui').forEach((el) => { el.style.display = 'none'; });
+    document.querySelectorAll('.lil-gui, .marsin-gui').forEach((el) => { el.style.display = 'none'; });
   }, UI_PANEL_IDS);
 }
 
@@ -191,7 +208,7 @@ async function showUI(page) {
       const el = document.getElementById(id);
       if (el) el.style.display = '';
     }
-    document.querySelectorAll('.lil-gui').forEach((el) => { el.style.display = ''; });
+    document.querySelectorAll('.lil-gui, .marsin-gui').forEach((el) => { el.style.display = ''; });
   }, UI_PANEL_IDS);
   await new Promise(r => setTimeout(r, 1000));
 }

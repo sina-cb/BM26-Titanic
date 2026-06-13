@@ -1,8 +1,26 @@
 /**
  * undo.js — Undo/redo snapshot system.
- * Captures and restores the full parameter state.
+ * Captures and restores the full parameter state — INCLUDING the
+ * controller-mapping registry: a fixture delete prunes its mapping
+ * entry, so undoing the delete without the registry would bring the
+ * fixture back unmapped and a re-add would allocate a NEW address,
+ * silently re-addressing real hardware (cold review 2026-06-12).
  */
 import { params, undoStack, redoStack, MAX_UNDO } from "./state.js";
+
+// Stored under a key that can never collide with a params key; the
+// restore loop skips it explicitly.
+const REGISTRY_KEY = '__controllerRegistrySnapshot';
+
+function snapshotControllerRegistry() {
+  const reg = window.__controllerRegistry;
+  if (!reg) return null;
+  return JSON.stringify({
+    nextControllerId: reg.nextControllerId,
+    nextUniverse: reg.nextUniverse,
+    controllers: reg.controllers,
+  });
+}
 
 export function captureSnapshot() {
   const snapshot = {};
@@ -15,12 +33,11 @@ export function captureSnapshot() {
       snapshot.traces = JSON.parse(JSON.stringify(params.traces));
     } else if (key === 'ledStrands') {
       snapshot.ledStrands = JSON.parse(JSON.stringify(params.ledStrands));
-    } else if (key === 'icebergs') {
-      snapshot.icebergs = JSON.parse(JSON.stringify(params.icebergs));
     } else {
       snapshot[key] = params[key];
     }
   }
+  snapshot[REGISTRY_KEY] = snapshotControllerRegistry();
   return snapshot;
 }
 
@@ -48,7 +65,6 @@ export function applySnapshot(snapshot) {
     const dmxChanged = JSON.stringify(params.dmxFixtures) !== JSON.stringify(snapshot.dmxFixtures || []);
     const tracesChanged = JSON.stringify(params.traces) !== JSON.stringify(snapshot.traces || []);
     const strandsChanged = JSON.stringify(params.ledStrands) !== JSON.stringify(snapshot.ledStrands || []);
-    const icebergsChanged = JSON.stringify(params.icebergs) !== JSON.stringify(snapshot.icebergs || []);
 
     for (const key of Object.keys(snapshot)) {
       if (key === 'parLights') {
@@ -59,11 +75,35 @@ export function applySnapshot(snapshot) {
         params.traces = JSON.parse(JSON.stringify(snapshot.traces || []));
       } else if (key === 'ledStrands') {
         params.ledStrands = JSON.parse(JSON.stringify(snapshot.ledStrands || []));
-      } else if (key === 'icebergs') {
-        params.icebergs = JSON.parse(JSON.stringify(snapshot.icebergs || []));
+      } else if (key === REGISTRY_KEY) {
+        continue; // handled below, after params are in place
       } else {
         params[key] = snapshot[key];
       }
+    }
+
+    // Controller-mapping registry: restore IN PLACE (the object is
+    // referenced by the config tree and window.__controllerRegistry —
+    // identity must hold), then reproject so patch fields, the patch
+    // tree, and the panel reflect the restored mapping. Only when it
+    // actually differs — projection is cheap but not free.
+    const registrySnapshot = snapshot[REGISTRY_KEY];
+    const reg = window.__controllerRegistry;
+    if (registrySnapshot && reg && registrySnapshot !== snapshotControllerRegistry()) {
+      const parsed = JSON.parse(registrySnapshot);
+      reg.nextControllerId = parsed.nextControllerId;
+      reg.nextUniverse = parsed.nextUniverse;
+      reg.controllers.length = 0;
+      for (const controller of parsed.controllers) reg.controllers.push(controller);
+      if (window.projectControllerMappings) {
+        window.projectControllerMappings([
+          ...(params.parLights || []),
+          ...(params.dmxFixtures || []),
+        ]);
+      }
+      if (window.recomputePatchesActive) window.recomputePatchesActive();
+      if (window.refreshMetadataPanels) window.refreshMetadataPanels();
+      if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
     }
 
     const t1 = performance.now();
@@ -89,7 +129,6 @@ export function applySnapshot(snapshot) {
     if (dmxChanged && window.rebuildDmxFixtures) window.rebuildDmxFixtures();
     if (tracesChanged && window.rebuildTraceObjects) window.rebuildTraceObjects();
     if (strandsChanged && window.rebuildLedStrands) window.rebuildLedStrands();
-    if (icebergsChanged && window.rebuildIcebergs) window.rebuildIcebergs();
 
     const t3 = performance.now();
 

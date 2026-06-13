@@ -1,7 +1,17 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
+const os = require('os');
 
 const config = getDefaultConfig(__dirname);
+
+// Cap Metro's transform workers. Metro defaults to ~one worker per
+// core; each is a full Node process, and on the op machine (also
+// running the sim, the engine, and a browser) the combined commit
+// pushed Node into hard `Fatal process out of memory: Zone` crashes
+// on Windows (observed 2026-06-12, two workers dying in parallel).
+// Four workers keep cold bundles fast enough while cutting peak
+// memory roughly in half on an 8+ core box.
+config.maxWorkers = Math.max(2, Math.min(4, Math.floor(os.cpus().length / 2)));
 
 config.transformer.babelTransformerPath = require.resolve('./yaml-transformer.js');
 // IMPORTANT: yaml/yml are in Metro's default `assetExts`, which means

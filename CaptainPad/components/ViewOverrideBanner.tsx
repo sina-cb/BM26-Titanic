@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, Animated, Easing } from 'react-native';
 import { router, usePathname } from 'expo-router';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { shadow } from '@/styles/globalStyles';
 
 // ── ViewOverrideBanner ─────────────────────────────────────────────
 // Sticky warning banner that lights up whenever PortWatch (or any
@@ -83,8 +84,8 @@ export const ViewOverrideBanner: React.FC = () => {
 
   return (
     <Animated.View
-      pointerEvents="box-none"
       style={{
+        pointerEvents: 'box-none',
         position: 'absolute',
         top: 0,
         left: 112,
@@ -110,10 +111,7 @@ export const ViewOverrideBanner: React.FC = () => {
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.35,
-          shadowRadius: 12,
+          boxShadow: shadow(0, 4, 12, '#000', 0.35),
           elevation: 8,
         }}
       >

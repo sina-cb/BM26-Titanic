@@ -150,7 +150,8 @@ function MixerLocalParams({ channel, onControlChange }: {
                   // tall, borderRadius 8. Position + size match so the
                   // green ghost fill aligns to the underlying track.
                   top: 14, height: 16,
-                }} pointerEvents="none">
+                  pointerEvents: 'none',
+                }}>
                   <GhostMarker ghost={ghost} borderRadius={8} />
                 </View>
               ) : null}

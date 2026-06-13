@@ -1,7 +1,7 @@
 /**
  * gui_builder.js — Full GUI construction (lil-gui).
  * Contains: setupGUI(), handler registry, generic builders,
- * and all section builders (par lights, DMX, LED strands, icebergs).
+ * and all section builders (par lights, DMX, LED strands).
  */
 import * as THREE from "three";
 import yaml from "js-yaml";
@@ -19,11 +19,11 @@ import {
 import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
 import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+import { GUI } from "./gui_engine.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
-import { autoPatchAll, clearAllPatches, clearMetadata, validatePatches, gatherAllConfigs } from "../dmx/auto_patcher.js";
+import { clearMetadata, gatherAllConfigs } from "../dmx/auto_patcher.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
 import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
@@ -31,7 +31,7 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
-import { Iceberg } from "../fixtures/iceberg.js";
+import { updateFloodLights } from "../core/flood_lights.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -39,7 +39,7 @@ const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simB
 
 // Shared compact "🔖 Metadata (V2)" panel for fixture editor cards.
 // Single source of truth — used by every fixture-rendering path (regular PARs,
-// trace-generated PARs, DMX instances, LED strands, icebergs) so the metadata
+// trace-generated PARs, DMX instances, LED strands) so the metadata
 // UI is consistent and ALWAYS rendered. Returns refs to the inputs in case a
 // caller needs to push external updates (e.g. trace-generated fixtures whose
 // fixtureId is auto-derived from the DMX patch).
@@ -62,19 +62,19 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
 
   const header = document.createElement('div');
   header.style.cssText = 'margin-bottom:3px;';
-  header.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">🔖 Metadata (V2)</span>`;
+  header.innerHTML = `<span style="color:var(--secondary);font-size:10px;font-weight:600;">🔖 Metadata (V2)</span>`;
   wrap.appendChild(header);
 
   const mkLabel = (text) => {
     const s = document.createElement('span');
-    s.style.cssText = 'color:#777;font-size:9px;';
+    s.style.cssText = 'color:var(--icon);font-size:9px;';
     s.textContent = text;
     return s;
   };
   const mkInput = (value, max, onInput) => {
     const inp = document.createElement('input');
     inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
-    inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+    inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:10px;font-family:inherit;text-align:center;';
     inp.onchange = () => { onInput(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
     return inp;
   };
@@ -125,7 +125,7 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
     const views = reg.custom || [];
     if (views.length === 0) {
       const none = document.createElement('span');
-      none.style.cssText = 'color:#555;font-size:9px;font-style:italic;';
+      none.style.cssText = 'color:var(--icon);font-size:9px;font-style:italic;';
       none.textContent = 'no views defined';
       chipsContainer.appendChild(none);
       return;
@@ -142,8 +142,8 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
       chip.style.cssText =
         'padding:1px 5px;border-radius:3px;font-size:9px;font-family:inherit;cursor:default;user-select:none;border:1px solid;' +
         (active
-          ? 'background:rgba(240,192,96,0.25);color:#f0c060;border-color:rgba(240,192,96,0.5);'
-          : 'background:rgba(60,60,60,0.5);color:#666;border-color:#444;');
+          ? 'background:color-mix(in srgb, var(--primary) 25%, transparent);color:var(--primary);border-color:color-mix(in srgb, var(--primary) 50%, transparent);'
+          : 'background:color-mix(in srgb, var(--surface-container-high) 50%, transparent);color:var(--icon);border-color:var(--ghost-border);');
       chipsContainer.appendChild(chip);
     });
   }
@@ -167,6 +167,46 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
   window.__metadataPanelRegistry.push(panel);
 
+  return panel;
+}
+
+/**
+ * Register a fixture card's DMX Patch row (U / Addr / IP + status dot)
+ * for global refresh via window.refreshMetadataPanels(). The Controller
+ * Mapping panel projects new patch values into the live configs on
+ * every mutation and save — without this registration the patch inputs
+ * would show stale values until a full GUI rebuild. Also keeps the
+ * locked ("derived") state in sync with whether a mapping exists, so
+ * creating the first controller locks every card live and deleting the
+ * last one unlocks them.
+ */
+function registerPatchRowRefresh(config, { root, uniInput, addrInput, ipInput, updateStatus }) {
+  const applyLockState = () => {
+    const mapperActive = !!(window.__controllerRegistry &&
+      window.__controllerRegistry.controllers.length > 0);
+    for (const inp of [uniInput, addrInput, ipInput]) {
+      inp.disabled = mapperActive;
+      inp.style.opacity = mapperActive ? '0.6' : '';
+      inp.title = mapperActive
+        ? 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.'
+        : '';
+    }
+  };
+  applyLockState();
+
+  const panel = {
+    root,
+    refresh() {
+      uniInput.value = config.dmxUniverse || 0;
+      addrInput.value = config.dmxAddress || 0;
+      ipInput.value = config.controllerIp || '';
+      updateStatus();
+      applyLockState();
+    },
+  };
+  if (!window.__metadataPanelRegistry) window.__metadataPanelRegistry = [];
+  window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+  window.__metadataPanelRegistry.push(panel);
   return panel;
 }
 
@@ -233,6 +273,12 @@ function setupGUI() {
   });
   window.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
+    // Mouseup released outside the window never reaches us — a move with
+    // no button held means the drag already ended (stuck-drag guard).
+    if ((e.buttons & 1) === 0) {
+      isDragging = false;
+      return;
+    }
     panel.style.left = (e.clientX - dragOffsetX) + 'px';
     panel.style.top = (e.clientY - dragOffsetY) + 'px';
     panel.style.right = 'auto';
@@ -294,19 +340,10 @@ function setupGUI() {
       target: { x: +controls.target.x.toFixed(4), y: +controls.target.y.toFixed(4), z: +controls.target.z.toFixed(4) }
     };
 
-    // Persist pattern editor window state
-    const pePanel = document.getElementById('pattern-editor-panel');
-    if (pePanel) {
-      const rect = pePanel.getBoundingClientRect();
-      configTree._patternEditor = {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        collapsed: pePanel.classList.contains('collapsed'),
-        autoRun: !!(document.getElementById('pe-autorun') && document.getElementById('pe-autorun').checked)
-      };
-    }
+    // Panel geometry is per-machine state, not scene state — it lives in
+    // localStorage now (src/gui/panel_layout.js). Scrub any block left in
+    // configs saved before the 2026-06-12 layout migration.
+    delete configTree._patternEditor;
 
     let yamlStr = yaml.dump(configTree, {
       lineWidth: -1,
@@ -370,13 +407,15 @@ function setupGUI() {
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'save-toast';
-      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:6px 20px;border-radius:6px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:6px 20px;border-radius:6px;font-family:var(--font-body);font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
       document.body.appendChild(toast);
     }
     const ok = !isError;
-    toast.style.background = ok ? '#1a3a1a' : '#3a1a1a';
-    toast.style.border = ok ? '1px solid #3c3' : '1px solid #c33';
-    toast.style.color = ok ? '#3c3' : '#f66';
+    toast.style.background = ok
+      ? 'color-mix(in srgb, var(--ok) 15%, var(--surface))'
+      : 'color-mix(in srgb, var(--error) 15%, var(--surface))';
+    toast.style.border = ok ? '1px solid var(--ok)' : '1px solid var(--error-container-border)';
+    toast.style.color = ok ? 'var(--ok)' : 'var(--error)';
     toast.textContent = message || '✓ Config saved';
     toast.style.opacity = '1';
     clearTimeout(toast._timer);
@@ -395,7 +434,7 @@ function setupGUI() {
     if (!chip) {
       chip = document.createElement('div');
       chip.id = 'dirty-indicator';
-      chip.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#3a2a1a;border:1px solid #f0c060;color:#f0c060;padding:4px 14px;border-radius:6px;font-family:Inter,sans-serif;font-size:11px;font-weight:600;letter-spacing:0.08em;pointer-events:none;z-index:999;transition:opacity 0.3s;';
+      chip.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--primary) 15%, var(--surface));border:1px solid var(--primary);color:var(--primary);padding:4px 14px;border-radius:6px;font-family:var(--font-headline);font-size:11px;font-weight:600;letter-spacing:0.08em;pointer-events:none;z-index:999;transition:opacity 0.3s;';
       document.body.appendChild(chip);
     }
     chip.textContent = '● UNSAVED CHANGES';
@@ -436,7 +475,7 @@ function setupGUI() {
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'auto-patch-toast';
-      toast.style.cssText = 'position:fixed;top:48px;left:50%;transform:translateX(-50%);background:#1a2a3a;border:1px solid #6af;color:#6af;padding:8px 24px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      toast.style.cssText = 'position:fixed;top:48px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--tint) 15%, var(--surface));border:1px solid var(--tint);color:var(--tint);padding:8px 24px;border-radius:8px;font-family:var(--font-body);font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
       document.body.appendChild(toast);
     }
     toast.textContent = msg;
@@ -760,10 +799,6 @@ function setupGUI() {
       lights.helpers.forEach((h) => {
         h.visible = v;
       });
-      // Also toggle iceberg floodlight fixture models
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.setFixtureVisibility(v));
-      }
     },
     lightingEnabled: (v) => {
       if (window.onLightingChange) window.onLightingChange();
@@ -780,6 +815,14 @@ function setupGUI() {
     lightingMode: () => {
       if (window.onLightingChange) window.onLightingChange();
     },
+    // Master floods (Atmosphere → Master Floods in common.yaml) — all
+    // six params drive the same rig update; see src/core/flood_lights.js.
+    masterFloodEnabled: () => updateFloodLights(),
+    masterFloodColor: () => updateFloodLights(),
+    masterFloodIntensity: () => updateFloodLights(),
+    masterFloodAngle: () => updateFloodLights(),
+    masterFloodDistance: () => updateFloodLights(),
+    masterFloodDimmer: () => updateFloodLights(),
   };
 
   // Expose applyAllHandlers for undo/redo to sync Three.js scene from params
@@ -876,7 +919,7 @@ function setupGUI() {
     const previewDiv = document.createElement('div');
     previewDiv.style.cssText = 'padding:4px 8px 8px;';
     const previewBar = document.createElement('div');
-    previewBar.style.cssText = 'height:16px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);';
+    previewBar.style.cssText = 'height:16px;border-radius:6px;border:1px solid var(--ghost-border);';
     previewDiv.appendChild(previewBar);
 
     function updatePreview() {
@@ -912,7 +955,7 @@ function setupGUI() {
 
       const addBtn = document.createElement('button');
       addBtn.textContent = '+ Add Stop';
-      addBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:rgba(255,255,255,0.04);color:#aaa;cursor:pointer;font-size:11px;font-family:inherit;';
+      addBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid var(--ghost-border);border-radius:4px;background:color-mix(in srgb, var(--text) 4%, transparent);color:var(--secondary);cursor:pointer;font-size:11px;font-family:inherit;';
       addBtn.onclick = () => {
         const last = params.gradientStops[params.gradientStops.length - 1] || '#ffffff';
         params.gradientStops.push(last);
@@ -925,7 +968,7 @@ function setupGUI() {
       if (params.gradientStops.length > 2) {
         const rmBtn = document.createElement('button');
         rmBtn.textContent = '− Remove Last';
-        rmBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid rgba(200,80,80,0.2);border-radius:4px;background:rgba(60,20,20,0.3);color:#c66;cursor:pointer;font-size:11px;font-family:inherit;';
+        rmBtn.style.cssText = 'flex:1;padding:5px 0;border:1px solid var(--error-container-border);border-radius:4px;background:var(--error-container);color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;';
         rmBtn.onclick = () => {
           params.gradientStops.pop();
           renderStopControls();
@@ -1088,11 +1131,6 @@ function setupGUI() {
           buildLedStrandsSection(parentFolder, entry);
           continue;
         }
-        // Special: icebergArray → build Icebergs UI
-        if (sectionMeta.type === "icebergArray") {
-          buildIcebergsSection(parentFolder, entry);
-          continue;
-        }
         // Special: dmxArray → build DMX Lights UI
         if (sectionMeta.type === "dmxArray") {
           buildDmxLightsSection(parentFolder, entry);
@@ -1211,21 +1249,21 @@ function setupGUI() {
     // ─── Compact toolbar row: Collapse All | Select All | Clear All ───
     const toolbarDiv = document.createElement('div');
     toolbarDiv.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
-    const btnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:1px solid rgba(255,255,255,0.12);border-radius:3px;background:#2a2a2a;color:#ddd;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
-    const btnHover = 'background:#3a3a3a';
+    const btnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--control-bg);color:var(--text);cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
+    const btnHover = 'background:var(--control-bg-hover)';
 
     const collapseBtn = document.createElement('button');
     collapseBtn.textContent = '▼ Collapse';
     collapseBtn.style.cssText = btnStyle;
-    collapseBtn.onmouseenter = () => collapseBtn.style.background = '#3a3a3a';
-    collapseBtn.onmouseleave = () => collapseBtn.style.background = '#2a2a2a';
+    collapseBtn.onmouseenter = () => collapseBtn.style.background = 'var(--control-bg-hover)';
+    collapseBtn.onmouseleave = () => collapseBtn.style.background = 'var(--control-bg)';
     collapseBtn.onclick = () => parListFolder.folders.forEach((f) => f.close());
 
     const selectBtn = document.createElement('button');
     selectBtn.textContent = '☑ Select All';
     selectBtn.style.cssText = btnStyle;
-    selectBtn.onmouseenter = () => selectBtn.style.background = '#3a3a3a';
-    selectBtn.onmouseleave = () => selectBtn.style.background = '#2a2a2a';
+    selectBtn.onmouseenter = () => selectBtn.style.background = 'var(--control-bg-hover)';
+    selectBtn.onmouseleave = () => selectBtn.style.background = 'var(--control-bg)';
     selectBtn.onclick = () => {
       deselectAllFixtures();
       window.parFixtures.forEach((f) => {
@@ -1237,8 +1275,8 @@ function setupGUI() {
     const clearBtn = document.createElement('button');
     clearBtn.textContent = '🗑 Clear All';
     clearBtn.style.cssText = btnStyle;
-    clearBtn.onmouseenter = () => clearBtn.style.background = '#3a3a3a';
-    clearBtn.onmouseleave = () => clearBtn.style.background = '#2a2a2a';
+    clearBtn.onmouseenter = () => clearBtn.style.background = 'var(--control-bg-hover)';
+    clearBtn.onmouseleave = () => clearBtn.style.background = 'var(--control-bg)';
     clearBtn.onclick = () => {
       if (params.parLights.length === 0) return;
       pushUndo();
@@ -1267,95 +1305,24 @@ function setupGUI() {
       children.forEach((f) => f.destroy());
       window.parGuiFolders = [];
 
-      // ─── Auto-Patch All button ───
-      // Remove any stale auto-patch buttons from previous renders
+      // ─── Patch tools ───
+      // Patching is owned by the Controller Mapping panel (docs/33) —
+      // the legacy Auto-Patch / Clear All Patches buttons are gone
+      // (auto_patcher.js module deletion is task 017). Only the
+      // metadata reset survives here.
+      // Remove any stale button wraps from previous renders.
       const plChildrenCleanup = parListFolder.domElement.querySelector('.children');
       if (plChildrenCleanup) {
         plChildrenCleanup.querySelectorAll('.auto-patch-wrap').forEach(el => el.remove());
       }
-      // Stack vertically — labels like "🎯 Auto-Patch All Unpatched" need
-      // the full panel width to render without truncation.
       const autoPatchWrap = document.createElement('div');
       autoPatchWrap.className = 'auto-patch-wrap';
-      autoPatchWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:4px 6px;border-bottom:1px solid #333;';
+      autoPatchWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:4px 6px;border-bottom:1px solid var(--ghost-border);';
       const apBtnBase = 'width:100%;padding:5px 8px;border:none;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
-      const autoPatchBtn = document.createElement('button');
-      autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
-      autoPatchBtn.title = 'Auto-Patch All Unpatched';
-      autoPatchBtn.style.cssText = apBtnBase + 'background:#1a2a3a;color:#6af;';
-
-      const clearPatchBtn = document.createElement('button');
-      clearPatchBtn.textContent = '❌ Clear All Patches';
-      clearPatchBtn.title = 'Clear All Patches';
-      clearPatchBtn.style.cssText = apBtnBase + 'background:#3a1a1a;color:#f66;';
-      clearPatchBtn.onclick = () => {
-        if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
-        pushUndo();
-        
-        // Pass params.parLights directly — this is the authoritative fixture list
-        const fixtures = params.parLights || [];
-        const traces = params.traces || [];
-        const cleared = clearAllPatches(fixtures, { includeGlobalEffects: true, traces });
-        
-        console.log(`[AutoPatcher] Cleared ${cleared} DMX patch(es)`);
-        
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        
-        // Rebuild GUI menu items (NOT fixtures) to reflect updated patch values
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window.renderDmxGUI) window.renderDmxGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-        exportConfig();
-        
-
-      };
-      // autoPatchBtn's onclick logic — delegates to auto_patcher.js
-      autoPatchBtn.onclick = () => {
-        pushUndo();
-
-        // 1. Patch all configs (DMX addresses + sectionIds)
-        const configs = gatherAllConfigs(params);
-        const { patchedCount, maxUniverse, groupToSectionId } = autoPatchAll(configs);
-        const sectionCount = groupToSectionId ? Object.keys(groupToSectionId).length : 0;
-
-        // 2. Sync in-memory patch tree so applyPatches doesn't overwrite during rebuild
-        if (window.__globalPatchTree) {
-          for (const c of configs) {
-            if (c.name && window.__globalPatchTree[c.name]) {
-              Object.assign(window.__globalPatchTree[c.name], {
-                dmxUniverse: c.dmxUniverse || 0,
-                dmxAddress: c.dmxAddress || 0,
-                controllerIp: c.controllerIp || '',
-                sectionId: c.sectionId || 0,
-                controllerId: c.controllerId || 0,
-                fixtureId: c.fixtureId || 0,
-              });
-            }
-          }
-        }
-
-        // 3. Save to file (patches.yaml + scene_config.yaml + model export)
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        exportConfig();
-
-        // 4. Rebuild UI
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-
-        // 5. Toast
-        const parts = [];
-        if (patchedCount > 0) parts.push(`${patchedCount} patched`);
-        if (sectionCount > 0) parts.push(`${sectionCount} dimmer section(s)`);
-        _showAutoToast(parts.length > 0
-          ? `✓ Auto-patch: ${parts.join(', ')} (U1–${maxUniverse})`
-          : '✓ All fixtures already patched — no changes needed.');
-      };
       const clearMetaBtn = document.createElement('button');
       clearMetaBtn.textContent = '🔄 Clear Metadata';
       clearMetaBtn.title = 'Clear Metadata';
-      clearMetaBtn.style.cssText = apBtnBase + 'background:#3a2a1a;color:#fa0;';
+      clearMetaBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--caution) 15%, var(--surface));color:var(--caution);';
       clearMetaBtn.onclick = () => {
         pushUndo();
         const configs = gatherAllConfigs(params);
@@ -1377,9 +1344,7 @@ function setupGUI() {
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
         _showAutoToast(`✓ Cleared metadata on ${cleared} fixture(s)`);
       };
-      autoPatchWrap.appendChild(autoPatchBtn);
       autoPatchWrap.appendChild(clearMetaBtn);
-      autoPatchWrap.appendChild(clearPatchBtn);
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
 
@@ -1435,7 +1400,7 @@ function setupGUI() {
 
         // Trace-generated groups: show fixtures with limited editing (DMX patch only)
         if (isTraceGroup) {
-          const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;cursor:pointer;font-size:10px;font-family:inherit;';
+          const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:var(--control-bg);cursor:pointer;font-size:10px;font-family:inherit;';
           const traceRow = document.createElement('div');
           traceRow.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;align-items:center;';
 
@@ -1444,7 +1409,7 @@ function setupGUI() {
           );
           const visBtn = document.createElement('button');
           visBtn.textContent = groupHidden ? '○ Off' : '● On';
-          visBtn.style.cssText = gBtnStyle2 + (groupHidden ? 'color:#666;' : 'color:#6f6;');
+          visBtn.style.cssText = gBtnStyle2 + (groupHidden ? 'color:var(--icon);' : 'color:var(--ok);');
           visBtn.onclick = () => {
             const turnOn = visBtn.textContent.includes('Off');
             items.forEach(({ index }) => {
@@ -1452,12 +1417,12 @@ function setupGUI() {
               if (f) f.setVisibility(turnOn, params.conesEnabled !== false);
             });
             visBtn.textContent = turnOn ? '● On' : '○ Off';
-            visBtn.style.cssText = gBtnStyle2 + (turnOn ? 'color:#6f6;' : 'color:#666;');
+            visBtn.style.cssText = gBtnStyle2 + (turnOn ? 'color:var(--ok);' : 'color:var(--icon);');
             document.activeElement?.blur?.();
           };
 
           const genLabel = document.createElement('span');
-          genLabel.style.cssText = 'color:#888;font-size:10px;font-style:italic;margin-left:4px;';
+          genLabel.style.cssText = 'color:var(--secondary);font-size:10px;font-style:italic;margin-left:4px;';
           genLabel.textContent = '🔧 Generated';
 
           traceRow.appendChild(visBtn);
@@ -1534,7 +1499,7 @@ function setupGUI() {
 
               // Generator info — styled DOM label instead of lil-gui controller
               const infoDiv = document.createElement('div');
-              infoDiv.style.cssText = 'padding:2px 8px 4px;color:#888;font-size:9px;font-style:italic;';
+              infoDiv.style.cssText = 'padding:2px 8px 4px;color:var(--secondary);font-size:9px;font-style:italic;';
               infoDiv.textContent = '📍 Position controlled by generator';
               const genChildren = genFixFolder.domElement.querySelector('.children');
               if (genChildren) genChildren.appendChild(infoDiv);
@@ -1569,18 +1534,18 @@ function setupGUI() {
               // Header row
               const patchHeader = document.createElement('div');
               patchHeader.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:3px;';
-              patchHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:#666;font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
+              patchHeader.innerHTML = `<span style="color:var(--secondary);font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:var(--icon);font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
               patchDiv.appendChild(patchHeader);
 
               // Universe + Address row
               const patchRow = document.createElement('div');
               patchRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
 
-              const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:#777;font-size:9px;'; s.textContent = text; return s; };
+              const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:var(--icon);font-size:9px;'; s.textContent = text; return s; };
               const mkInput = (value, max, onchange) => {
                 const inp = document.createElement('input');
                 inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
-                inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+                inp.style.cssText = 'width:48px;padding:2px 4px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:10px;font-family:inherit;text-align:center;';
                 inp.onchange = () => { onchange(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
                 return inp;
               };
@@ -1615,10 +1580,18 @@ function setupGUI() {
               ipInput.type = 'text';
               ipInput.value = config.controllerIp || '';
               ipInput.placeholder = '10.1.1.10';
-              ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
+              ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:10px;font-family:inherit;';
               ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
               ipRow.appendChild(ipInput);
               patchDiv.appendChild(ipRow);
+
+              // With a controller mapping present, patch fields are
+              // PROJECTED (docs/33) — display-only here, edited in the
+              // 🎛 Controllers panel. Registration keeps the values and
+              // the locked state live across mapping changes.
+              registerPatchRowRefresh(config, {
+                root: patchDiv, uniInput, addrInput, ipInput, updateStatus,
+              });
 
               if (genChildren) genChildren.appendChild(patchDiv);
 
@@ -1646,7 +1619,7 @@ function setupGUI() {
         // (white-space + overflow + text-overflow) makes any future label
         // overflow render as `Re…` inside the button frame instead of
         // visually leaking past the right border.
-        const gBtnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
+        const gBtnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);cursor:pointer;font-size:10px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
 
         // Row 1: Select All | Visible toggle
         const row1 = document.createElement('div');
@@ -1678,7 +1651,7 @@ function setupGUI() {
           window.parFixtures[index] && !window.parFixtures[index].group.visible
         );
         visBtn.textContent = groupHidden ? '○ Off' : '● On';
-        visBtn.style.cssText = gBtnStyle + (groupHidden ? 'color:#666;' : 'color:#6f6;');
+        visBtn.style.cssText = gBtnStyle + (groupHidden ? 'color:var(--icon);' : 'color:var(--ok);');
         visBtn.onclick = () => {
           const turnOn = visBtn.textContent.includes('Off');
           items.forEach(({ index }) => {
@@ -1686,7 +1659,7 @@ function setupGUI() {
             if (f) f.setVisibility(turnOn, params.conesEnabled !== false);
           });
           visBtn.textContent = turnOn ? '● On' : '○ Off';
-          visBtn.style.cssText = gBtnStyle + (turnOn ? 'color:#6f6;' : 'color:#666;');
+          visBtn.style.cssText = gBtnStyle + (turnOn ? 'color:var(--ok);' : 'color:var(--icon);');
           renderer.domElement.focus({ preventScroll: true });
           document.activeElement?.blur?.();
         };
@@ -1721,7 +1694,7 @@ function setupGUI() {
         const addWrap = document.createElement('div');
         addWrap.style.cssText = 'display:flex;gap:2px;flex:1;';
         const typeSelect = document.createElement('select');
-        typeSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;font-size:10px;font-family:inherit;cursor:pointer;';
+        typeSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);font-size:10px;font-family:inherit;cursor:pointer;';
         const availableTypes = listTypes();
         if (availableTypes.length === 0) availableTypes.push('UkingPar');
         availableTypes.forEach(t => {
@@ -1735,7 +1708,7 @@ function setupGUI() {
         const addBtn = document.createElement('button');
         addBtn.textContent = '+';
         addBtn.title = 'Add fixture of selected type';
-        addBtn.style.cssText = 'padding:2px 8px;border:none;border-radius:3px;background:#1a3a1a;color:#6f6;cursor:pointer;font-size:10px;font-family:inherit;font-weight:bold;';
+        addBtn.style.cssText = 'padding:2px 8px;border:none;border-radius:3px;background:color-mix(in srgb, var(--ok) 15%, var(--surface));color:var(--ok);cursor:pointer;font-size:10px;font-family:inherit;font-weight:bold;';
         addBtn.onclick = () => {
           pushUndo();
           const selectedType = typeSelect.value;
@@ -1816,7 +1789,7 @@ function setupGUI() {
           if (config.fixtureType === 'TEFogMachine' || config.fixtureType === 'ChauvetHaze4D') {
             const holdBtn = document.createElement('button');
             holdBtn.textContent = '💨 Hold to Fog';
-            holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:#3a1a1a;color:#f66;cursor:pointer;font-size:10px;font-weight:bold;';
+            holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:10px;font-weight:bold;';
             const toggleFog = (state) => {
               console.log(`[GUI] toggleFog(${state}) called`);
               [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
@@ -1963,18 +1936,18 @@ function setupGUI() {
           // Header
           const patchHeader = document.createElement('div');
           patchHeader.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:3px;';
-          patchHeader.innerHTML = `<span style="color:#aaa;font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:#666;font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
+          patchHeader.innerHTML = `<span style="color:var(--secondary);font-size:10px;font-weight:600;">📡 DMX Patch</span><span style="color:var(--icon);font-size:9px;">${fixtureType} · ${footprint}ch</span>`;
           patchDiv.appendChild(patchHeader);
 
           // Universe + Address row
           const patchRow = document.createElement('div');
           patchRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
 
-          const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:#777;font-size:9px;'; s.textContent = text; return s; };
+          const mkLabel = (text) => { const s = document.createElement('span'); s.style.cssText = 'color:var(--icon);font-size:9px;'; s.textContent = text; return s; };
           const mkInput = (value, max, onchange) => {
             const inp = document.createElement('input');
             inp.type = 'number'; inp.min = 0; inp.max = max; inp.step = 1; inp.value = value;
-            inp.style.cssText = 'width:52px;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;text-align:center;';
+            inp.style.cssText = 'width:52px;padding:2px 4px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:10px;font-family:inherit;text-align:center;';
             inp.onchange = () => { onchange(Math.max(0, Math.min(max, Math.round(Number(inp.value))))); };
             return inp;
           };
@@ -2009,18 +1982,26 @@ function setupGUI() {
           ipInput.type = 'text';
           ipInput.value = config.controllerIp || '';
           ipInput.placeholder = '10.1.1.10';
-          ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid #444;border-radius:3px;background:#1a1a1a;color:#ccc;font-size:10px;font-family:inherit;';
+          ipInput.style.cssText = 'flex:1;padding:2px 4px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:10px;font-family:inherit;';
           ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
           ipRow.appendChild(ipInput);
           patchDiv.appendChild(ipRow);
+
+          // With a controller mapping present, patch fields are
+          // PROJECTED (docs/33) — display-only here, edited in the
+          // 🎛 Controllers panel. Registration keeps the values and
+          // the locked state live across mapping changes.
+          registerPatchRowRefresh(config, {
+            root: patchDiv, uniInput, addrInput, ipInput, updateStatus: updatePatchStatus,
+          });
 
           const idxChildren = idxFolder.domElement.querySelector('.children');
           if (idxChildren) idxChildren.appendChild(patchDiv);
 
           // Compact action row
           const actDiv = document.createElement('div');
-          actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;border-top:1px solid #333;margin-top:4px;';
-          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+          actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;border-top:1px solid var(--ghost-border);margin-top:4px;';
+          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);cursor:pointer;font-size:10px;font-family:inherit;';
 
           const dupBtn = document.createElement('button');
           dupBtn.textContent = '⧉ Duplicate';
@@ -2043,7 +2024,14 @@ function setupGUI() {
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.parLights[index];
             params.parLights.splice(index, 1);
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts
+            // (controller_map_editor owns the details).
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
             rebuildParLights();
@@ -2053,7 +2041,7 @@ function setupGUI() {
 
           // Move to group dropdown
           const moveSelect = document.createElement('select');
-          moveSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;font-size:10px;font-family:inherit;cursor:pointer;';
+          moveSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);font-size:10px;font-family:inherit;cursor:pointer;';
           const defaultOpt = document.createElement('option');
           defaultOpt.textContent = '→ Move…';
           defaultOpt.disabled = true;
@@ -2611,8 +2599,15 @@ function setupGUI() {
 
       if (!skipUndo) pushUndo();
 
-      // Remove existing lights from this trace's group name
+      // Remove existing lights from this trace's group name.
+      // Regeneration contract with the controller mapping (operator
+      // request 2026-06-12): names are stable per index ("<group> N"),
+      // so survivors keep their chain entries and re-project to the
+      // SAME addresses; fixtures lost to a count shrink just drop
+      // (addresses are absolute — nothing shifts). New extras land
+      // in the Unmapped tray.
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
+      const previousGenerated = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
       params.parLights = params.parLights.filter(l => l.group !== groupName || !l.traceGenerated);
 
       // Compute points
@@ -2798,6 +2793,24 @@ function setupGUI() {
 
       trace.generated = true;
 
+      // Count shrink: fixtures whose names no longer exist were
+      // deleted — drop their mapping entries (the hook reprojects
+      // and re-renders the panel itself).
+      const survivingNames = new Set();
+      for (let n = 1; n <= pts.length; n++) survivingNames.add(`${groupName} ${n}`);
+      const regenCasualties = previousGenerated.filter(c => !survivingNames.has(c.name));
+      if (window.controllerMappingFixturesRemoved) {
+        window.controllerMappingFixturesRemoved(regenCasualties);
+      }
+      // Survivors are NEW config objects with the old names — re-run
+      // the projection so they regain their derived patch fields
+      // before the first render. (Redundant when the hook above found
+      // mapped casualties and already reprojected — harmless.)
+      if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0 &&
+          window.projectControllerMappings) {
+        window.projectControllerMappings(gatherAllConfigs(params));
+      }
+
       if (window._setGuiRebuilding) window._setGuiRebuilding(true);
       if (!window._isAppBooting) rebuildParLights(true);
       renderParGUI();
@@ -2826,7 +2839,7 @@ function setupGUI() {
       // New Trace buttons
       const newBtnDiv = document.createElement('div');
       newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#2a2a2a;color:#ff8800;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--caution);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
 
       const newCircleBtn = document.createElement('button');
       newCircleBtn.textContent = '○ New Circle';
@@ -3041,7 +3054,7 @@ function setupGUI() {
         aimBtnDiv.style.cssText = 'padding:2px 6px;';
         const aimBtn = document.createElement('button');
         aimBtn.textContent = '🎯 Select Aim Target';
-        aimBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:#3a3a1a;color:#ffcc00;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+        aimBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--caution) 15%, var(--surface));color:var(--caution);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
         aimBtn.onclick = (e) => {
           if (e) e.stopPropagation();
           const tObj = window.traceObjects[i];
@@ -3089,7 +3102,7 @@ function setupGUI() {
         const lockBtn = document.createElement('button');
         lockBtn.textContent = trace.locked ? '🔒' : '🔓';
         lockBtn.title = trace.locked ? 'Unlock generator' : 'Lock generator';
-        lockBtn.style.cssText = aBtnStyle + (trace.locked ? 'background:#3a3a1a;color:#cc0;' : 'background:#2a2a2a;color:#888;');
+        lockBtn.style.cssText = aBtnStyle + (trace.locked ? 'background:color-mix(in srgb, var(--caution) 15%, var(--surface));color:var(--caution);' : 'background:var(--control-bg);color:var(--secondary);');
         lockBtn.onclick = () => {
           trace.locked = !trace.locked;
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -3106,10 +3119,15 @@ function setupGUI() {
 
         const genBtn = document.createElement('button');
         genBtn.textContent = trace.generated ? '↻ Regenerate' : '✓ Generate';
-        genBtn.style.cssText = aBtnStyle + 'background:#1a3a1a;color:#3c3;';
+        genBtn.style.cssText = aBtnStyle + 'background:color-mix(in srgb, var(--ok) 15%, var(--surface));color:var(--ok);';
         genBtn.onclick = () => {
-          // Check for custom DMX patches before regenerating
-          if (trace.generated) {
+          // Check for custom DMX patches before regenerating. Under an
+          // active controller mapping this warning is moot: patches are
+          // PROJECTED, names are stable per index, so survivors re-derive
+          // the same addresses and a count shrink leaves reserved gaps.
+          const cmActive = window.__controllerRegistry &&
+            window.__controllerRegistry.controllers.length > 0;
+          if (trace.generated && !cmActive) {
             const groupName = trace.groupName || trace.name;
             const patchedFixtures = params.parLights.filter(l =>
               l.group === groupName && l.traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
@@ -3129,19 +3147,25 @@ function setupGUI() {
         // Lock disables generate
         if (trace.locked) {
           genBtn.disabled = true;
-          genBtn.style.cssText = aBtnStyle + 'background:#222;color:#555;cursor:not-allowed;';
+          genBtn.style.cssText = aBtnStyle + 'background:var(--surface-container-low);color:var(--icon);cursor:not-allowed;';
         }
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = aBtnStyle + 'background:#3a1a1a;color:#c33;';
+        delBtn.style.cssText = aBtnStyle + 'background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);';
         delBtn.onclick = () => {
           pushUndo();
           const trace = params.traces[i];
           // Remove generated lights from this trace's group
           if (trace) {
             const groupName = trace.groupName || trace.name;
+            const removedConfigs = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
             params.parLights = params.parLights.filter(l => !(l.group === groupName && l.traceGenerated));
+            // Mapped fixtures deleted with the trace → their mapping
+            // entries drop; addresses are absolute, nothing shifts.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved(removedConfigs);
+            }
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -3195,10 +3219,10 @@ function setupGUI() {
       });
       
       const dmxToolbarDiv = document.createElement('div');
-      dmxToolbarDiv.style.cssText = 'display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:4px;';
+      dmxToolbarDiv.style.cssText = 'display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid var(--ghost-border);margin-bottom:4px;';
       
       const typeSelect = document.createElement('select');
-      typeSelect.style.cssText = 'flex:1;padding:4px;border:1px solid rgba(255,255,255,0.2);border-radius:4px;background:rgba(0,0,0,0.5);color:#fff;font-size:11px;';
+      typeSelect.style.cssText = 'flex:1;padding:4px;border:1px solid var(--ghost-border);border-radius:4px;background:var(--input-bg);color:var(--text);font-size:11px;';
       const availableTypes = window.fixtureModels ? Object.keys(window.fixtureModels) : [];
       if (availableTypes.length > 0) {
         for (const k of availableTypes) {
@@ -3217,7 +3241,7 @@ function setupGUI() {
 
       const aBtn = document.createElement('button');
       aBtn.textContent = '➕ Add';
-      aBtn.style.cssText = 'flex:1;padding:4px 0;border:1px solid rgba(255,255,255,0.2);border-radius:4px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;font-size:11px;';
+      aBtn.style.cssText = 'flex:1;padding:4px 0;border:1px solid var(--ghost-border);border-radius:4px;background:color-mix(in srgb, var(--text) 10%, transparent);color:var(--text);cursor:pointer;font-size:11px;';
       aBtn.onclick = () => {
         pushUndo();
         // Pick the selected model
@@ -3345,14 +3369,20 @@ function setupGUI() {
 
           const actDiv = document.createElement('div');
           actDiv.style.cssText = 'display:flex;gap:2px;padding:2px 6px 4px;';
-          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:#2a2a2a;color:#aaa;cursor:pointer;font-size:10px;font-family:inherit;';
+          const aBtnStyle = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);cursor:pointer;font-size:10px;font-family:inherit;';
 
           const rmBtn = document.createElement('button');
           rmBtn.textContent = '✕ Remove';
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.dmxFixtures[index];
             params.dmxFixtures.splice(index, 1);
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderDmxGUI();
             rebuildDmxFixtures();
@@ -3430,7 +3460,7 @@ function setupGUI() {
       // New Strand button
       const newBtnDiv = document.createElement('div');
       newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#2a2a2a;color:#88ff44;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--ok);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
       const newBtn = document.createElement('button');
       newBtn.textContent = '+ New Strand';
       newBtn.style.cssText = btnStyle;
@@ -3518,7 +3548,7 @@ function setupGUI() {
         actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#c33;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
         delBtn.onclick = () => {
           pushUndo();
           params.ledStrands.splice(i, 1);
@@ -3535,307 +3565,6 @@ function setupGUI() {
 
     renderStrandGUI();
     rebuildLedStrands();
-  }
-
-  // ─── Icebergs Section ────────────────────────────────────────────────────
-  function buildIcebergsSection(parentFolder, sectionConfig) {
-    const bergFolder = parentFolder.addFolder(sectionConfig._section.label);
-    if (sectionConfig._section.collapsed !== false) bergFolder.close();
-    _sectionFolderMap.set(sectionConfig._section, bergFolder);
-
-    // Master toggle
-    bergFolder.add(params, 'icebergsEnabled').name('Master Enabled').onChange(v => {
-      (window.icebergFixtures || []).forEach(f => f.setVisibility(v));
-    });
-
-    // ─── Master Flood ON/OFF (promoted to top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodEnabled').name('⚡ Floods ON/OFF').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Dimmer 0-100% ───
-    if (params.masterFloodDimmer === undefined) params.masterFloodDimmer = 100;
-    bergFolder.add(params, 'masterFloodDimmer', 0, 250, 1).name('🔆 Flood Dimmer %').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Angle (top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodAngle', 10, 90, 1).name('📐 Flood Angle °').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    
-    // Focus on Select checkbox (from config)
-    if (params.focusOnSelect === undefined) params.focusOnSelect = true;
-    // Ensure entry exists in configTree so reconstructYAML persists it
-    if (sectionConfig && !sectionConfig.focusOnSelect) {
-      sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
-    }
-    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
-
-    // ─── Load Iceberg Geometry checkbox ───
-    if (params.loadIcebergGeometry === undefined) params.loadIcebergGeometry = false;
-    bergFolder.add(params, 'loadIcebergGeometry').name('🚀 Load Iceberg Geometry').onChange(async (v) => {
-      if (!v) return; // Only trigger on check
-      if (!window.icebergFixtures || window.icebergFixtures.length === 0) return;
-      
-      // Show loading overlay
-      const loadingOverlay = document.getElementById("loading-overlay");
-      if (loadingOverlay) loadingOverlay.classList.remove("hidden");
-      
-      const total = window.icebergFixtures.length;
-      
-      // Sequential loading with per-berg progress for smooth UI feedback
-      for (let i = 0; i < total; i++) {
-        updateLoading(Math.floor((i / total) * 100), `Loading iceberg ${i + 1}/${total}: ${params.icebergs[i]?.name || 'Iceberg'}…`);
-        await window.icebergFixtures[i].buildGeometry();
-        // Minimal yield to let the progress bar paint
-        await new Promise(r => setTimeout(r, 1));
-      }
-      updateLoading(100, 'Icebergs loaded!');
-      
-      if (loadingOverlay) {
-        setTimeout(() => loadingOverlay.classList.add("hidden"), 300);
-      }
-    });
-
-    // Master Flood Controls
-    const masterFloodF = bergFolder.addFolder('Master Flood Controls');
-    masterFloodF.addColor(params, 'masterFloodColor').name('Master Color').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    masterFloodF.add(params, 'masterFloodIntensity', 0, 500, 1).name('Master Intensity').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    function updateMasterFloods() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.updateFloodlightProps());
-      }
-    }
-
-    async function rebuildIcebergs() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.destroy());
-      }
-      window.icebergFixtures = [];
-      const promises = params.icebergs.map(async (config, index) => {
-        const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
-        fixture.setVisibility(params.icebergsEnabled !== false);
-        window.icebergFixtures.push(fixture);
-        // Geometry loading is manual now
-      });
-      await Promise.all(promises);
-      window.icebergFixtures.sort((a, b) => a.index - b.index);
-    }
-    window.rebuildIcebergs = rebuildIcebergs;
-
-    // Fly camera to iceberg position
-    function flyToIceberg(berg) {
-      const targetX = berg.x || 0;
-      const targetY = (berg.y || 0) + (berg.height || 6) / 2;
-      const targetZ = berg.z || 0;
-      const radius = berg.radius || 4;
-      const viewDist = radius * 4;
-
-      const targetLook = new THREE.Vector3(targetX, targetY, targetZ);
-      const targetPos = new THREE.Vector3(
-        targetX + viewDist,
-        targetY + viewDist * 0.8,
-        targetZ + viewDist
-      );
-
-      const startPos = camera.position.clone();
-      const startTarget = controls.target.clone();
-      const duration = 800;
-      const startTime = performance.now();
-
-      function step(now) {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
-        camera.position.lerpVectors(startPos, targetPos, ease);
-        controls.target.lerpVectors(startTarget, targetLook, ease);
-        controls.update();
-
-        if (t < 1) requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
-    }
-
-    // Transform handler
-    window._onIcebergTransformChange = function(obj) {
-      if (!obj.userData.isIceberg) return false;
-      const fixture = obj.userData.fixture;
-      if (!fixture) return false;
-      fixture.writeTransformToConfig();
-      debounceAutoSave();
-      return true;
-    };
-
-    // GUI
-    window.icebergGuiFolders = [];
-    window.openIcebergFolder = function(idx) {
-      bergFolder.open();
-      if (window.icebergGuiFolders) {
-        window.icebergGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
-      }
-      if (window.icebergGuiFolders[idx]) {
-        window.icebergGuiFolders[idx].open();
-        window.icebergGuiFolders[idx].domElement.classList.add('gui-card-selected');
-      }
-      // Fly to iceberg if focus checkbox is on
-      if (params.focusOnSelect && params.icebergs[idx]) {
-        flyToIceberg(params.icebergs[idx]);
-      }
-    };
-
-    function renderIcebergGUI() {
-      const existing = [...bergFolder.folders];
-      existing.forEach(f => f.destroy());
-      window.icebergGuiFolders = [];
-
-      // New Iceberg button
-      const newBtnDiv = document.createElement('div');
-      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const newBtn = document.createElement('button');
-      newBtn.textContent = '+ New Iceberg';
-      newBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#2a2a2a;color:#88ccff;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-      newBtn.onclick = () => {
-        pushUndo();
-        params.icebergs.push({
-          name: `Iceberg ${params.icebergs.length + 1}`,
-          seed: Math.floor(Math.random() * 99999),
-          x: Math.round(Math.random() * 60 - 30),
-          y: 0,
-          z: Math.round(Math.random() * 60 - 30),
-          radius: 4, height: 6, detail: 10, peakCount: 3,
-          ledPattern: 'spiral', ledDensity: 5, ledColor: '#aaeeff',
-          floodEnabled: true, floodColor: '#ffffff', floodIntensity: 50, floodAngle: 40,
-          towerOffsetX: 0, towerOffsetY: 0, towerOffsetZ: 0,
-        });
-        rebuildIcebergs();
-        renderIcebergGUI();
-        debounceAutoSave();
-      };
-      newBtnDiv.appendChild(newBtn);
-      const children = bergFolder.domElement.querySelector('.children');
-      if (children) {
-        const old = children.querySelector('.berg-new-btn');
-        if (old) old.remove();
-        newBtnDiv.classList.add('berg-new-btn');
-        children.prepend(newBtnDiv);
-      }
-
-      // Per-iceberg folders
-      params.icebergs.forEach((berg, i) => {
-        const label = `🧊 ${berg.name || `Iceberg ${i + 1}`}`;
-        const bFolder = bergFolder.addFolder(label);
-        bFolder.domElement.classList.add('gui-card');
-        bFolder.close();
-        window.icebergGuiFolders[i] = bFolder;
-
-        // Fly to iceberg when folder is opened
-        const titleEl = bFolder.domElement.querySelector('.title');
-        if (titleEl) {
-          titleEl.addEventListener('click', () => {
-            // Highlight this card, deselect others
-            if (window.icebergGuiFolders) {
-              window.icebergGuiFolders.forEach(f => {
-                if (f) f.domElement.classList.remove('gui-card-selected');
-              });
-            }
-            bFolder.domElement.classList.add('gui-card-selected');
-            if (params.focusOnSelect && berg) {
-              flyToIceberg(berg);
-            }
-          });
-        }
-
-        bFolder.add(berg, 'name').name('Name').onFinishChange(() => { renderIcebergGUI(); debounceAutoSave(); });
-        bFolder.add(berg, 'seed', 0, 99999, 1).name('Seed').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Position
-        const posF = bFolder.addFolder('Position');
-        posF.close();
-        posF.add(berg, 'x', -100, 100, 0.5).name('X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'y', -20, 20, 0.5).name('Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'z', -100, 100, 0.5).name('Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Shape
-        const shapeF = bFolder.addFolder('Shape');
-        shapeF.close();
-        shapeF.add(berg, 'radius', 1, 15, 0.5).name('Radius').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'height', 1, 20, 0.5).name('Height').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'detail', 5, 25, 1).name('Detail').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'peakCount', 1, 10, 1).name('Peaks').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Display
-        if (berg.showFaces === undefined) berg.showFaces = true;
-        if (berg.showWireframe === undefined) berg.showWireframe = true;
-        if (!berg.wireColor) berg.wireColor = '#88ddff';
-        const dispF = bFolder.addFolder('Display');
-        dispF.close();
-        dispF.add(berg, 'showFaces').name('Show Faces').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.add(berg, 'showWireframe').name('Show Wireframe').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.addColor(berg, 'wireColor').name('Wire Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // LED
-        const ledF = bFolder.addFolder('LED Wiring');
-        ledF.close();
-        ledF.add(berg, 'ledPattern', ['edges', 'spiral', 'parabolic']).name('Pattern').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.add(berg, 'ledDensity', 2, 12, 1).name('Density').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.addColor(berg, 'ledColor').name('LED Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Flood
-        const floodF = bFolder.addFolder('Local Flood Override');
-        floodF.close();
-        floodF.add(berg, 'floodEnabled').name('Enabled').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.addColor(berg, 'floodColor').name('Local Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodIntensity', 0, 150, 0.5).name('Local Intensity').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodAngle', 10, 90, 1).name('Local Angle').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Tower Offset
-        const offsetF = bFolder.addFolder('Tower Offset');
-        offsetF.close();
-        offsetF.add(berg, 'towerOffsetX', -20, 20, 0.1).name('Offset X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetY', -20, 20, 0.1).name('Offset Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetZ', -20, 20, 0.1).name('Offset Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // 🔖 Metadata (V2) — compact DOM panel (shared helper). Iceberg LEDs
-        // are exported with sId/fId/vMask too (see pixelblaze_model_exporter.js
-        // berg branch), so the operator must be able to set them here.
-        const bChildrenForMeta = bFolder.domElement.querySelector('.children');
-        appendMetadataPanelV2(bChildrenForMeta, berg, { onChange: debounceAutoSave });
-
-        // Delete
-        const actDiv = document.createElement('div');
-        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:#3a1a1a;color:#c33;cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-        delBtn.onclick = () => {
-          pushUndo();
-          params.icebergs.splice(i, 1);
-          rebuildIcebergs();
-          renderIcebergGUI();
-          debounceAutoSave();
-        };
-        actDiv.appendChild(delBtn);
-        const bChildren = bFolder.domElement.querySelector('.children');
-        if (bChildren) bChildren.appendChild(actDiv);
-      });
-    }
-    window.renderIcebergGUI = renderIcebergGUI;
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const icebergsEnabled = urlParams.get('enable_iceberg') === '1';
-
-    if (icebergsEnabled) {
-      renderIcebergGUI();
-    } else {
-      console.log("[GUI] Individual Iceberg UI disabled to improve load speed. Run 'npm start enable_iceberg' to enable.");
-      // Render simple empty placeholder or nothing
-    }
-    rebuildIcebergs();
   }
 
   // ─── Build the entire GUI from the config tree ───
@@ -3866,18 +3595,26 @@ function setupGUI() {
   saveDiv.style.cssText = 'padding:10px 6px 6px;';
   const saveBtn = document.createElement('button');
   saveBtn.textContent = '💾  Save Configuration';
-  saveBtn.style.cssText = 'width:100%;min-height:38px;padding:12px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(51,204,51,0.25);border-radius:8px;background:rgba(30,60,30,0.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(120,220,120,0.9);cursor:pointer;font-size:12px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,0.06),0 2px 8px rgba(0,0,0,0.3);';
-  saveBtn.onmouseenter = () => { saveBtn.style.borderColor = 'rgba(51,204,51,0.5)'; saveBtn.style.background = 'rgba(40,80,40,0.45)'; saveBtn.style.color = '#7f7'; saveBtn.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.1),0 4px 16px rgba(51,204,51,0.12)'; };
-  saveBtn.onmouseleave = () => { saveBtn.style.borderColor = 'rgba(51,204,51,0.25)'; saveBtn.style.background = 'rgba(30,60,30,0.35)'; saveBtn.style.color = 'rgba(120,220,120,0.9)'; saveBtn.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.06),0 2px 8px rgba(0,0,0,0.3)'; };
+  saveBtn.style.cssText = 'width:100%;min-height:38px;padding:12px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--ok) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--ok) 12%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--ok);cursor:pointer;font-size:12px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;box-shadow:inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent),0 2px 8px var(--ambient-shadow);';
+  saveBtn.onmouseenter = () => { saveBtn.style.borderColor = 'color-mix(in srgb, var(--ok) 50%, transparent)'; saveBtn.style.background = 'color-mix(in srgb, var(--ok) 20%, transparent)'; saveBtn.style.color = 'var(--ok)'; saveBtn.style.boxShadow = 'inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent),0 4px 16px color-mix(in srgb, var(--ok) 12%, transparent)'; };
+  saveBtn.onmouseleave = () => { saveBtn.style.borderColor = 'color-mix(in srgb, var(--ok) 25%, transparent)'; saveBtn.style.background = 'color-mix(in srgb, var(--ok) 12%, transparent)'; saveBtn.style.color = 'var(--ok)'; saveBtn.style.boxShadow = 'inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent),0 2px 8px var(--ambient-shadow)'; };
   saveBtn.onclick = () => { exportConfig(); };
   saveDiv.appendChild(saveBtn);
 
   // Views panel toggle — named views / group bits editor (views.yaml)
   const viewsBtn = document.createElement('button');
   viewsBtn.textContent = '👁  Views';
-  viewsBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid rgba(240,192,96,0.25);border-radius:8px;background:rgba(60,48,24,0.3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(240,192,96,0.85);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  viewsBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--primary) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--primary) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--primary);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
   viewsBtn.onclick = () => { if (window.toggleViewMasksPanel) window.toggleViewMasksPanel(); };
   saveDiv.appendChild(viewsBtn);
+
+  // Controller mapping panel toggle — hardware topology editor
+  // (controllers.yaml, docs/33). The only place patch fields are edited.
+  const controllersBtn = document.createElement('button');
+  controllersBtn.textContent = '🎛  Controllers';
+  controllersBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--tint) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--tint) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--tint);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  controllersBtn.onclick = () => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); };
+  saveDiv.appendChild(controllersBtn);
 
   const guiChildren = gui.domElement.querySelector('.children');
   if (guiChildren) guiChildren.appendChild(saveDiv);

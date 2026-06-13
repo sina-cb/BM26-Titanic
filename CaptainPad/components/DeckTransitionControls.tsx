@@ -344,7 +344,7 @@ export function DeckTransitionControls({
       </View>
 
       {/* Row 2: duration pill-bar */}
-      <View style={{ opacity: enabled ? 1 : 0.5 }} pointerEvents={enabled ? 'auto' : 'none'}>
+      <View style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
         <TimerPillBar
           label="DURATION"
           presets={TRANSITION_DURATION_PRESETS_MS}

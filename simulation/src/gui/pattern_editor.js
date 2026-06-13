@@ -8,7 +8,8 @@ import {
   lightingMode, lightingEnabled,
 } from "../core/state.js";
 import { MarsinEngine } from "../core/marsin_engine.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+import { GUI } from "./gui_engine.js";
+import { TOP_MIN, registerPanel } from "./panel_layout.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
@@ -95,7 +96,9 @@ const ExportKind = {
 };
 
 let paramGuiInstance = null;
-let paramGuiTrackingInterval = null;
+let paramGuiResizeObserver = null;
+let paramGuiMutationObserver = null;
+let paramGuiDetachResize = null;
 let localFolder = null;
 
 // CPC default values — used when engine is offline
@@ -258,23 +261,72 @@ async function ensureGlobalParamsGui() {
   const dom = paramGuiInstance.domElement;
   dom.id = 'engine-params-panel';
   dom.style.position = 'fixed';
-  dom.style.zIndex = '9999';
+  // Register on EVERY creation: this panel is destroyed/recreated on
+  // lighting-mode switches, and panel_layout re-adopts the new element
+  // (z band + click-to-front; position is derived, so no persistence).
+  registerPanel(dom, { persist: false });
 
   const editorPanel = document.getElementById('pattern-editor-panel');
+  // Follows the pattern editor, event-driven (ResizeObserver + style/class
+  // mutations + window resize) instead of the old 50ms polling loop.
+  // Placement rule: right of the editor when that fits before the
+  // right-dock zone (Lighting Controls) and any visible Views panel;
+  // otherwise below the editor — always clamped on-screen.
   function updatePosition() {
     if (!editorPanel) return;
     const isHidden = editorPanel.classList.contains('hidden') || editorPanel.style.display === 'none';
     if (isHidden) {
       dom.style.display = 'none';
-    } else {
-      dom.style.display = 'block';
-      const rect = editorPanel.getBoundingClientRect();
-      dom.style.top = rect.top + 'px';
-      dom.style.left = (rect.right + 10) + 'px';
+      return;
     }
+    dom.style.display = 'block';
+    const rect = editorPanel.getBoundingClientRect();
+    const width = dom.offsetWidth || 245;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const guiPanel = document.getElementById('gui-panel');
+    const rightDockLeft = guiPanel ? guiPanel.getBoundingClientRect().left : vw - 360;
+    const masks = document.getElementById('view-masks-panel');
+    const masksVisible = masks && !masks.classList.contains('hidden');
+    const masksLeft = masksVisible ? masks.getBoundingClientRect().left : Infinity;
+    const rightLimit = Math.min(rightDockLeft, masksLeft) - 10;
+
+    let left = rect.right + 10;
+    let top = rect.top;
+    if (left + width > rightLimit) {
+      left = rect.left;
+      top = rect.bottom + 10;
+    }
+    dom.style.left = `${Math.max(0, Math.min(left, vw - width - 10))}px`;
+    dom.style.top = `${Math.max(TOP_MIN, Math.min(top, vh - 60))}px`;
   }
   updatePosition();
-  paramGuiTrackingInterval = setInterval(updatePosition, 50);
+
+  let positionUpdateQueued = false;
+  const queuePositionUpdate = () => {
+    if (positionUpdateQueued) return;
+    positionUpdateQueued = true;
+    requestAnimationFrame(() => {
+      positionUpdateQueued = false;
+      updatePosition();
+    });
+  };
+  paramGuiResizeObserver = new ResizeObserver(queuePositionUpdate);
+  paramGuiResizeObserver.observe(editorPanel);
+  paramGuiResizeObserver.observe(dom);
+  paramGuiMutationObserver = new MutationObserver(queuePositionUpdate);
+  paramGuiMutationObserver.observe(editorPanel, { attributes: true, attributeFilter: ['style', 'class'] });
+  // The Views panel shares the same airspace: its visibility/position
+  // changes must also reflow the params panel (validated overlap
+  // otherwise: 49x195px at 1280x720).
+  const masksPanel = document.getElementById('view-masks-panel');
+  if (masksPanel) {
+    paramGuiResizeObserver.observe(masksPanel);
+    paramGuiMutationObserver.observe(masksPanel, { attributes: true, attributeFilter: ['style', 'class'] });
+  }
+  window.addEventListener('resize', queuePositionUpdate);
+  paramGuiDetachResize = () => window.removeEventListener('resize', queuePositionUpdate);
 
   const globalFolder = paramGuiInstance.addFolder('🌐 Global Parameters');
   const paramState = {};
@@ -310,9 +362,17 @@ function destroyParamGui() {
     paramGuiInstance.destroy();
     paramGuiInstance = null;
     localFolder = null;
-    if (paramGuiTrackingInterval) {
-      clearInterval(paramGuiTrackingInterval);
-      paramGuiTrackingInterval = null;
+    if (paramGuiResizeObserver) {
+      paramGuiResizeObserver.disconnect();
+      paramGuiResizeObserver = null;
+    }
+    if (paramGuiMutationObserver) {
+      paramGuiMutationObserver.disconnect();
+      paramGuiMutationObserver = null;
+    }
+    if (paramGuiDetachResize) {
+      paramGuiDetachResize();
+      paramGuiDetachResize = null;
     }
   }
   globalExportMap = {};
@@ -608,32 +668,27 @@ export function setupPatternEditor() {
     if (toolbar) toolbar.style.display = 'none';
   }
 
-  // Collapse / expand
-  let isCollapsed = false;
+  // Collapse / expand — state derives from the 'collapsed' class, not a
+  // private flag: external code (panel_layout restore, the sub-1366 boot
+  // default in main.js) toggles the class through this same handler via
+  // collapseBtn.click(), and the class is the single source of truth.
   let _savedHeight = '';
+  const toggleCollapse = () => {
+    const isCollapsed = !panel.classList.contains('collapsed');
+    if (isCollapsed) {
+      _savedHeight = panel.style.height;
+      panel.style.height = '';
+    } else if (_savedHeight) {
+      panel.style.height = _savedHeight;
+    }
+    panel.classList.toggle('collapsed', isCollapsed);
+    collapseBtn.textContent = isCollapsed ? '□' : '─';
+  };
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    isCollapsed = !isCollapsed;
-    if (isCollapsed) {
-      _savedHeight = panel.style.height;
-      panel.style.height = '';
-    } else if (_savedHeight) {
-      panel.style.height = _savedHeight;
-    }
-    panel.classList.toggle('collapsed', isCollapsed);
-    collapseBtn.textContent = isCollapsed ? '□' : '─';
+    toggleCollapse();
   });
-  header.addEventListener('dblclick', () => {
-    isCollapsed = !isCollapsed;
-    if (isCollapsed) {
-      _savedHeight = panel.style.height;
-      panel.style.height = '';
-    } else if (_savedHeight) {
-      panel.style.height = _savedHeight;
-    }
-    panel.classList.toggle('collapsed', isCollapsed);
-    collapseBtn.textContent = isCollapsed ? '□' : '─';
-  });
+  header.addEventListener('dblclick', toggleCollapse);
 
   // Dragging
   let isDragging = false, dragOX = 0, dragOY = 0;
@@ -648,6 +703,13 @@ export function setupPatternEditor() {
   });
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
+    // Stuck-drag guard: a move with no button held means the mouseup was
+    // lost (released outside the window) — end the drag.
+    if ((e.buttons & 1) === 0) {
+      isDragging = false;
+      document.body.style.cursor = '';
+      return;
+    }
     panel.style.left = Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragOX)) + 'px';
     panel.style.top = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOY)) + 'px';
     panel.style.right = 'auto';

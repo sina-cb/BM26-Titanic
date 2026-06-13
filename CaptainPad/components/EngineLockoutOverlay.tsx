@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, View, Text } from 'react-native';
+import { shadow } from '@/styles/globalStyles';
 import { useEngineLock } from '@/hooks/useEngineLock';
 
 // ── EngineLockoutOverlay ──────────────────────────────────────────
@@ -52,11 +53,11 @@ export const EngineLockoutOverlay: React.FC = () => {
 
   return (
     <Animated.View
-      // pointerEvents: 'auto' = catch every touch and do nothing
-      // with it. This is what prevents CaptainPad from issuing any
-      // writes while the lock is engaged.
-      pointerEvents={locked ? 'auto' : 'none'}
       style={{
+        // pointerEvents 'auto' = catch every touch and do nothing
+        // with it. This is what prevents CaptainPad from issuing any
+        // writes while the lock is engaged.
+        pointerEvents: locked ? 'auto' : 'none',
         position: 'absolute',
         top: 0,
         left: 0,
@@ -87,10 +88,7 @@ export const EngineLockoutOverlay: React.FC = () => {
           borderColor: '#7f1d1d',
           alignItems: 'center',
           gap: 6,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 6 },
-          shadowOpacity: 0.4,
-          shadowRadius: 16,
+          boxShadow: shadow(0, 6, 16, '#000', 0.4),
           elevation: 12,
           maxWidth: 520,
         }}
