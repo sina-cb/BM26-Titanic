@@ -21,7 +21,7 @@ import { AudioStructureDetector } from '../lib/audio_structure_detector.js';
 // real CPC does).
 function makeFakeParamCenter(initial = {}) {
   const store = {
-    micLowRaw: 0, micHighRaw: 0, micKickRaw: 0, micFlux: 0,
+    micLowRaw: 0, micHighRaw: 0, micKickRaw: 0, micFluxRaw: 0,
     stemsBassRaw: 0, stemsDrumsRaw: 0, stemsVocalsRaw: 0,
     tempoBpm: 0,
     audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
@@ -96,7 +96,7 @@ test('disabled tick is a no-op and the keys stay zero', () => {
   const broadcasts = [];
   const { pc, det } = makeDetector({ enabled: false }, broadcasts);
   // Even with hot inputs, a disabled detector publishes nothing.
-  pc.feed({ micLowRaw: 0.9, micFlux: 0.9 });
+  pc.feed({ micLowRaw: 0.9, micFluxRaw: 0.9 });
   for (let i = 0; i < 50; i++) det.tick(1000 + i * 12, 0.012);
   assert.equal(pc.store.audioStructure, 0);
   assert.equal(pc.store.audioBuildScore, 0);
@@ -118,7 +118,7 @@ test('enabled→disabled edge resets to THIN and zeroes keys', () => {
   let now = 1000;
   pc.feed({ stemsBassRaw: 0.5, stemsDrumsRaw: 0.5 });
   for (let i = 0; i < 100; i++) {
-    pc.store.micLowRaw = 0.8; pc.store.micFlux = 0.6;
+    pc.store.micLowRaw = 0.8; pc.store.micFluxRaw = 0.6;
     det.tick(now, 0.012); now += 12;
   }
   // Now disable — the next tick must reset everything to zero.
@@ -147,7 +147,7 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
 
   // Phase 1 — long quiet baseline so longEnv settles low.
   for (let i = 0; i < 200; i++) {
-    pc.store.micLowRaw = 0.05; pc.store.micFlux = 0.0;
+    pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0;
     det.tick(now, tickMs / 1000); now += tickMs;
   }
   assert.equal(det.getStatus().state, 'THIN', 'should still be THIN on quiet baseline');
@@ -156,7 +156,7 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   // shortEnv climbs, buildScore climbs; energyRatio rises for >1 s.
   for (let i = 0; i < 150; i++) {
     pc.store.micLowRaw = Math.min(0.6, 0.1 + i * 0.004);
-    pc.store.micFlux = 0.5;
+    pc.store.micFluxRaw = 0.5;
     // re-feed stems so they stay fresh
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
     det.tick(now, tickMs / 1000); now += tickMs;
@@ -167,7 +167,7 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   // Phase 3 — the drop: shortEnv jumps well above longEnv. Feed a few
   // loud hops so short/long ratio clears dropEnergyJump.
   for (let i = 0; i < 30; i++) {
-    pc.store.micLowRaw = 0.95; pc.store.micFlux = 0.4;
+    pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     pc.feed({ stemsBassRaw: 0.7, stemsDrumsRaw: 0.7 });
     det.tick(now, tickMs / 1000); now += tickMs;
     if (det.getStatus().state === 'SUSTAIN') break;
@@ -195,13 +195,13 @@ function rampToDropAndCount(pc, det, startNow, broadcasts) {
   // build
   for (let i = 0; i < 150; i++) {
     pc.store.micLowRaw = Math.min(0.6, 0.1 + i * 0.004);
-    pc.store.micFlux = 0.5;
+    pc.store.micFluxRaw = 0.5;
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
     det.tick(now, tickMs / 1000); now += tickMs;
   }
   // drop
   for (let i = 0; i < 30; i++) {
-    pc.store.micLowRaw = 0.95; pc.store.micFlux = 0.4;
+    pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     pc.feed({ stemsBassRaw: 0.7, stemsDrumsRaw: 0.7 });
     det.tick(now, tickMs / 1000); now += tickMs;
   }
@@ -222,7 +222,7 @@ test('dropFired respects the 2 s refractory window', () => {
   // the second drop must be suppressed by the refractory window.
   // Collapse energy briefly to leave SUSTAIN, then re-build + drop.
   for (let i = 0; i < 100; i++) {
-    pc.store.micLowRaw = 0.02; pc.store.micFlux = 0.0;
+    pc.store.micLowRaw = 0.02; pc.store.micFluxRaw = 0.0;
     pc.feed({ stemsBassRaw: 0.05, stemsDrumsRaw: 0.05 });
     det.tick(now, 0.012); now += 12;
   }
@@ -251,7 +251,7 @@ test('self-quiet suppresses dropFired after N drops in the window', () => {
     now = rampToDropAndCount(pc, det, now, broadcasts);
     // collapse back to THIN before the next cycle
     for (let i = 0; i < 120; i++) {
-      pc.store.micLowRaw = 0.02; pc.store.micFlux = 0.0;
+      pc.store.micLowRaw = 0.02; pc.store.micFluxRaw = 0.0;
       pc.feed({ stemsBassRaw: 0.05, stemsDrumsRaw: 0.05 });
       det.tick(now, 0.012); now += 12;
     }
@@ -278,7 +278,7 @@ test('stale stems → vocalsHot false, status offline, drop confidence lower', (
   pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6, stemsVocalsRaw: 0.9 });
   // baseline
   for (let i = 0; i < 200; i++) {
-    pc.store.micLowRaw = 0.05; pc.store.micFlux = 0.0;
+    pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0;
     det.tick(now, tickMs / 1000); now += tickMs;
   }
   // After 200 hops (~2.4 s) stems are long stale.
@@ -286,12 +286,12 @@ test('stale stems → vocalsHot false, status offline, drop confidence lower', (
   // build (no stem re-feed)
   for (let i = 0; i < 150; i++) {
     pc.store.micLowRaw = Math.min(0.6, 0.1 + i * 0.004);
-    pc.store.micFlux = 0.5;
+    pc.store.micFluxRaw = 0.5;
     det.tick(now, tickMs / 1000); now += tickMs;
   }
   // drop
   for (let i = 0; i < 30; i++) {
-    pc.store.micLowRaw = 0.95; pc.store.micFlux = 0.4;
+    pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     det.tick(now, tickMs / 1000); now += tickMs;
     if (det.getStatus().state === 'SUSTAIN') break;
   }
@@ -311,7 +311,7 @@ test('reset() returns the detector to THIN and zeroes keys', () => {
   const { pc, det } = makeDetector({ buildThreshold: 0.2, stemsTimeoutMs: 100000 }, broadcasts);
   let now = 1000;
   for (let i = 0; i < 100; i++) {
-    pc.store.micLowRaw = 0.7; pc.store.micFlux = 0.6;
+    pc.store.micLowRaw = 0.7; pc.store.micFluxRaw = 0.6;
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
     det.tick(now, 0.012); now += 12;
   }
