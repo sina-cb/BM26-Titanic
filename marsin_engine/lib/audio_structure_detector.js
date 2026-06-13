@@ -53,7 +53,7 @@ const DETECTOR_DEFAULTS = Object.freeze({
   dropEdgeMode:      'windowed', // 'level' | 'windowed' (see corpus-tuning report §Task E)
   dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
-  eventRefractoryMs: 3500,   // suppress repeat dropFired within this window
+  eventRefractoryMs: 2000,   // suppress repeat dropFired within this window
   falseFireCount:    3,      // N drops …
   falseFireWindowMs: 30000,  // … within M ms …
   falseFireQuietMs:  60000,  // … → suppress dropFired for this long
@@ -343,14 +343,25 @@ export class AudioStructureDetector {
         if (dropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
           // DROP.
           this._state = STATE.SUSTAIN;
+          // Reset the rising-trend tracker on entry to SUSTAIN. energyRatio
+          // is pinned at the ceiling through a loud body, so the tracker
+          // would otherwise stay "rising" forever and immediately bounce
+          // SUSTAIN→BUILD (state/pulse flapping, and the body mislabeled
+          // BUILD). A genuine NEW build must re-accumulate a fresh > 1 s
+          // rise (after a real energy dip) to re-enter BUILD.
+          this._energyRisingSinceMs = null;
           const stemsBoost = stemsFull ? 1.0 : 0.7;
           const conf = clamp01(this._buildScore * dropEdgeRatio * stemsBoost);
           const buildDurationMs = now - this._buildStartedAtMs;
-          this._dropPulse = 1.0;
-          this._fireDrop(now, conf, buildDurationMs, stemsFresh, cfg);
+          // Pulse only on an ACTUAL fire — _fireDrop may suppress under the
+          // refractory / self-quiet, and a suppressed drop must not re-pulse.
+          if (this._fireDrop(now, conf, buildDurationMs, stemsFresh, cfg)) {
+            this._dropPulse = 1.0;
+          }
           this._logTransition(now, 'BUILD→SUSTAIN drop', conf);
         } else if ((now - this._buildStartedAtMs) > 6000 && buildDecaying) {
           this._state = STATE.SUSTAIN; // false build, never dropped
+          this._energyRisingSinceMs = null;
           this._logTransition(now, 'BUILD→SUSTAIN (false build)', 0);
         } else if (energyLowFor1s) {
           this._state = STATE.THIN;    // collapsed before drop
@@ -407,14 +418,16 @@ export class AudioStructureDetector {
   }
 
   /**
-   * @private fire (or suppress) a drop event. Honours the 2 s refractory
-   * and the N-in-M self-quiet (review §2.4 / doc Open Q2).
+   * @private fire (or suppress) a drop event. Honours the refractory and
+   * the N-in-M self-quiet (review §2.4 / doc Open Q2).
+   * @returns {boolean} true if a dropFired was actually broadcast (false if
+   *   suppressed) — the caller pulses audioDropPulse only on a real fire.
    */
   _fireDrop(now, confidence, buildDurationMs, stemsFresh, cfg) {
     // Refractory: suppress a repeat within eventRefractoryMs.
-    if ((now - this._lastDropAtMs) < cfg.eventRefractoryMs) return;
+    if ((now - this._lastDropAtMs) < cfg.eventRefractoryMs) return false;
     // Self-quiet window active?
-    if (now < this._quietUntilMs) return;
+    if (now < this._quietUntilMs) return false;
 
     // Record this drop in the rolling history and evaluate the self-quiet
     // trigger (N drops within falseFireWindowMs → quiet for falseFireQuietMs).
@@ -444,6 +457,7 @@ export class AudioStructureDetector {
       console.warn(`[audioStructure] dropFired broadcast threw: ${e && e.message}`);
     }
     console.log(`[audioStructure] ${new Date(now).toISOString()} dropFired confidence=${confidence.toFixed(2)} buildMs=${Math.round(buildDurationMs)} stemsFresh=${stemsFresh}`);
+    return true;
   }
 
   /** @private one stdout line per state transition (operator wants all). */

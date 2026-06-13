@@ -152,10 +152,15 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   }
   assert.equal(det.getStatus().state, 'THIN', 'should still be THIN on quiet baseline');
 
-  // Phase 2 — a build: rising low energy + sustained flux for ~1.5 s.
-  // shortEnv climbs, buildScore climbs; energyRatio rises for >1 s.
-  for (let i = 0; i < 150; i++) {
-    pc.store.micLowRaw = Math.min(0.6, 0.1 + i * 0.004);
+  // Phase 2 — a build: gently COMPOUNDING low energy + sustained flux for
+  // ~3 s. shortEnv climbs, buildScore climbs, energyRatio rises for >1 s. A
+  // compounding (constant-ratio) rise keeps the windowed rate-of-change
+  // BELOW the drop edge (a build's per-window growth is < the drop slam's),
+  // so the build itself never fires a drop — only the sharp Phase-3 jump
+  // does. (A linear ramp from near-silence would DOUBLE every few hops at
+  // the low end and trip the windowed edge — a real build is gentler.)
+  for (let i = 0; i < 250; i++) {
+    pc.store.micLowRaw = Math.min(0.45, 0.06 * Math.pow(1.010, i));
     pc.store.micFluxRaw = 0.5;
     // re-feed stems so they stay fresh
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
@@ -164,9 +169,9 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   assert.equal(det.getStatus().state, 'BUILD',
     `expected BUILD after the rising ramp; got ${det.getStatus().state}`);
 
-  // Phase 3 — the drop: shortEnv jumps well above longEnv. Feed a few
-  // loud hops so short/long ratio clears dropEnergyJump.
-  for (let i = 0; i < 30; i++) {
+  // Phase 3 — the drop: a SHARP jump to 0.95 (a real slam), so the windowed
+  // short-envelope rate-of-change clears dropEnergyJump within the window.
+  for (let i = 0; i < 60; i++) {
     pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     pc.feed({ stemsBassRaw: 0.7, stemsDrumsRaw: 0.7 });
     det.tick(now, tickMs / 1000); now += tickMs;

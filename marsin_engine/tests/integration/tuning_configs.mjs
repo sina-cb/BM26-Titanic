@@ -73,11 +73,14 @@ export const TUNED_BANDS = { ...DEFAULT_BANDS };
 export const TUNED_KICK  = { ...DEFAULT_KICK };
 
 // ── TUNED detector (Task E) ───────────────────────────────────────────────
-// windowed-delta drop edge + longer refractory.
+// windowed-delta drop edge. Refractory stays at the shipped 2000 ms: the
+// rising-tracker reset on SUSTAIN entry structurally prevents in-body
+// re-fires, so a longer refractory is no longer needed (and 2000 keeps
+// recall on genuinely close double-drops).
 export const TUNED_DETECTOR = {
   dropEdgeMode: 'windowed',
   dropDeltaWindowMs: 400,
-  eventRefractoryMs: 3500,
+  eventRefractoryMs: 2000,
 };
 
 export const SCENARIOS = {

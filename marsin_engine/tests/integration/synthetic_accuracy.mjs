@@ -29,16 +29,13 @@ const MIC_SEED = 0x5EED;
 
 // The detector edge variants under test (the only differing field is the
 // edge mode + its companions; everything else is product default).
-// Three explicit arms so the comparison is unambiguous about WHICH config
-// each number came from (the report cites these directly):
-//   level2000 — the ORIGINALLY-shipped default (level edge, 2 s refractory).
-//   level3500 — level edge with the new 3.5 s refractory (isolates the
-//               refractory's effect on the old edge).
-//   windowed  — the NEW default (windowed edge + 3.5 s refractory).
+// Two arms, both at the shipped 2 s refractory (the flap fix made the
+// refractory bump unnecessary), isolating the drop-EDGE choice:
+//   level    — the original steady short/long level-ratio edge.
+//   windowed — the NEW default rate-of-change edge.
 const EDGES = {
-  level2000: { dropEdgeMode: 'level', eventRefractoryMs: 2000 },
-  level3500: { dropEdgeMode: 'level', eventRefractoryMs: 3500 },
-  windowed:  { dropEdgeMode: 'windowed', dropDeltaWindowMs: TUNED_DETECTOR.dropDeltaWindowMs, eventRefractoryMs: TUNED_DETECTOR.eventRefractoryMs },
+  level:    { dropEdgeMode: 'level', eventRefractoryMs: 2000 },
+  windowed: { dropEdgeMode: 'windowed', dropDeltaWindowMs: TUNED_DETECTOR.dropDeltaWindowMs, eventRefractoryMs: TUNED_DETECTOR.eventRefractoryMs },
 };
 
 function fmt(x, d = 2) { return x === null || x === undefined ? ' — ' : Number(x).toFixed(d); }
