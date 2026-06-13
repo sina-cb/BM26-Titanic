@@ -168,10 +168,21 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
     structureDetector: [
-      'enabled', 'buildThreshold', 'dropEnergyJump', 'stemsTimeoutMs',
-      'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
+      'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
+      'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
+});
+
+test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects bad values', () => {
+  const ok = validateLivePatch({ structureDetector: { dropEdgeMode: 'windowed', dropDeltaWindowMs: 350 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.structureDetector.dropEdgeMode, 'windowed');
+  assert.equal(ok.live.structureDetector.dropDeltaWindowMs, 350);
+  const badEnum = validateLivePatch({ structureDetector: { dropEdgeMode: 'sideways' } });
+  assert.equal(badEnum.ok, false);
+  const badWin = validateLivePatch({ structureDetector: { dropDeltaWindowMs: 10 } });
+  assert.equal(badWin.ok, false);
 });
 
 test('validateLivePatch accepts a structureDetector patch (docs/30)', () => {

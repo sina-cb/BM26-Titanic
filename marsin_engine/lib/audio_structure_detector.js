@@ -42,8 +42,18 @@ const DETECTOR_DEFAULTS = Object.freeze({
   enabled:           false,
   buildThreshold:    0.35,   // buildScore must clear this to enter BUILD
   dropEnergyJump:    1.5,    // short-energy ×-jump that signals a drop
+  // Drop-edge discriminator:
+  //   'level'    — short/long LEVEL ratio > dropEnergyJump (the original
+  //                behavior; re-fires in a loud body because the slow long
+  //                envelope lags for seconds — docs/30 Phase-3 fidelity gap).
+  //   'windowed' — true rate-of-change: short envelope NOW vs short envelope
+  //                dropDeltaWindowMs ago > dropEnergyJump. Plateaus stop
+  //                qualifying once the lagged value catches up, killing
+  //                in-body re-fires AND the slow-build false edge.
+  dropEdgeMode:      'windowed', // 'level' | 'windowed' (see corpus-tuning report §Task E)
+  dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
-  eventRefractoryMs: 2000,   // suppress repeat dropFired within this window
+  eventRefractoryMs: 3500,   // suppress repeat dropFired within this window
   falseFireCount:    3,      // N drops …
   falseFireWindowMs: 30000,  // … within M ms …
   falseFireQuietMs:  60000,  // … → suppress dropFired for this long
@@ -137,6 +147,8 @@ export class AudioStructureDetector {
     this._state = STATE.THIN;
     this._shortEnv = 0;
     this._longEnv = 0;
+    // Ring of recent {t, v:_shortEnv} for the windowed-delta drop edge.
+    this._shortEnvHist = [];
     this._buildScore = 0;
     this._energyRatio = 0;
     this._dropPulse = 0;
@@ -268,6 +280,8 @@ export class AudioStructureDetector {
     //    absent → nearDownbeat defaults true; gate effectively disabled.
     const nearDownbeat = true;
 
+    const windowedEdge = cfg.dropEdgeMode === 'windowed';
+
     // Trend trackers (review §2.3).
     //   energyRatio rising → record when the rise began.
     if (energyRatio > this._lastEnergyRatio + 1e-4) {
@@ -285,13 +299,34 @@ export class AudioStructureDetector {
     }
     const energyLowFor1s = this._energyLowSinceMs !== null
       && (now - this._energyLowSinceMs) > 1000;
-    //   short/long energy LEVEL RATIO (drop edge): short envelope ≥
-    //   dropEnergyJump × long. NOTE: this is a steady level ratio, not the
-    //   rate-of-change "jump in < 500 ms" docs/30 §5 describes — a slow
-    //   build whose ratio drifts past the threshold can fire. Fidelity
-    //   tuning (true windowed delta) is deferred to docs/30 Phase 3.
+    //   DROP EDGE. Two discriminators (cfg.dropEdgeMode):
+    //   'level'    — steady short/long LEVEL ratio > dropEnergyJump. Re-fires
+    //                in a loud body (the slow long envelope lags for seconds)
+    //                and can fire on a slow build that drifts past threshold.
+    //   'windowed' — TRUE rate-of-change: short envelope NOW vs the short
+    //                envelope dropDeltaWindowMs ago. A real drop is a fast
+    //                step up; a plateau stops qualifying once the lagged
+    //                value catches up (≈ window later), so it fires ONCE per
+    //                genuine edge instead of every refractory window
+    //                (docs/30 Phase-3 fidelity fix, report §4.1).
     const energyLevelRatio = this._shortEnv / Math.max(this._longEnv, EPS);
-    const dropEdge = energyLevelRatio > cfg.dropEnergyJump;
+    let dropEdge;
+    let dropEdgeRatio = energyLevelRatio; // value used for confidence
+    if (windowedEdge) {
+      this._shortEnvHist.push({ t: now, v: this._shortEnv });
+      const cutoff = now - cfg.dropDeltaWindowMs;
+      // Drop history older than the window (keep one straddling sample so we
+      // always have a value ~window ago).
+      while (this._shortEnvHist.length > 2 && this._shortEnvHist[1].t <= cutoff) {
+        this._shortEnvHist.shift();
+      }
+      const past = this._shortEnvHist[0].v;
+      const windowedRatio = this._shortEnv / Math.max(past, EPS);
+      dropEdge = windowedRatio > cfg.dropEnergyJump;
+      dropEdgeRatio = windowedRatio;
+    } else {
+      dropEdge = energyLevelRatio > cfg.dropEnergyJump;
+    }
 
     // 5. State machine.
     const prevState = this._state;
@@ -309,7 +344,7 @@ export class AudioStructureDetector {
           // DROP.
           this._state = STATE.SUSTAIN;
           const stemsBoost = stemsFull ? 1.0 : 0.7;
-          const conf = clamp01(this._buildScore * energyLevelRatio * stemsBoost);
+          const conf = clamp01(this._buildScore * dropEdgeRatio * stemsBoost);
           const buildDurationMs = now - this._buildStartedAtMs;
           this._dropPulse = 1.0;
           this._fireDrop(now, conf, buildDurationMs, stemsFresh, cfg);

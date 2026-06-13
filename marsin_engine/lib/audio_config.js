@@ -58,9 +58,20 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // (docs/30 §Phase 4 names a superset — we land the ones the Phase 1
   // state machine actually reads).
   structureDetector: [
-    'enabled', 'buildThreshold', 'dropEnergyJump', 'stemsTimeoutMs',
-    'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
+    'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
+    'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
   ],
+});
+
+/**
+ * String-enum live fields (the only non-numeric, non-boolean group fields).
+ * dropEdgeMode selects the drop discriminator (see audio_structure_detector
+ * DETECTOR_DEFAULTS). Validated as an exact-match enum; anything else 400s.
+ */
+const LIVE_STRING_ENUMS = Object.freeze({
+  structureDetector: Object.freeze({
+    dropEdgeMode: ['level', 'windowed'],
+  }),
 });
 
 /**
@@ -98,6 +109,7 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
   structureDetector: Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     dropEnergyJump:    (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
+    dropDeltaWindowMs: (v) => (v >= 50 && v <= 5000) ? null : `must be in [50, 5000]; got ${v}`,
     stemsTimeoutMs:    (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     eventRefractoryMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     falseFireCount:    (v) => (Number.isInteger(v) && v >= 1 && v <= 100)
@@ -289,6 +301,15 @@ export function validateLivePatch(partial) {
       if (k === 'enabled') {
         if (typeof v !== 'boolean') {
           return { ok: false, error: `"${key}.${k}" must be a boolean` };
+        }
+        live[key][k] = v;
+        continue;
+      }
+      // String-enum group fields (e.g. structureDetector.dropEdgeMode).
+      const enumValues = LIVE_STRING_ENUMS[key] && LIVE_STRING_ENUMS[key][k];
+      if (enumValues) {
+        if (typeof v !== 'string' || !enumValues.includes(v)) {
+          return { ok: false, error: `"${key}.${k}" must be one of: ${enumValues.join(', ')}` };
         }
         live[key][k] = v;
         continue;

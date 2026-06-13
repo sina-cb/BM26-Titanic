@@ -15,19 +15,15 @@
  *     (docs/30 §Performance budget).
  *
  * CONFIG NOTE — defaults vs. tuned (honest disclosure):
- *   The product-DEFAULT detector config (DETECTOR_DEFAULTS, enabled:true)
- *   already passes the steady_loud + silence negative controls in BOTH
- *   mic-only and stems-fed modes, and the affirmative controls in
- *   stems-fed mode EXCEPT that the post-drop body re-triggers extra
- *   dropFired events within the loud SUSTAIN — a direct consequence of
- *   the detector's documented "level-ratio, not windowed-jump" fidelity
- *   gap (audio_structure_detector.js lines ~288-294; deferred to docs/30
- *   Phase 3). To make the affirmative controls (exactly-one / exactly-two
- *   fires) deterministic we pass a TUNED `eventRefractoryMs: 4000` in the
- *   test ONLY. We do NOT change the product defaults in
- *   audio_structure_detector.js / audio_config.js / config.yaml. The
- *   report (.agent/02_reports/202606/20260613_4_audio_analysis_validation.md)
- *   states the default-vs-tuned gap in full.
+ *   As of the corpus-tuning pass (report 202606/..._audio_corpus_tuning.md)
+ *   the product DEFAULT drop edge is the WINDOWED rate-of-change
+ *   discriminator (DETECTOR_DEFAULTS.dropEdgeMode='windowed',
+ *   eventRefractoryMs=3500). That fix RESOLVED the old level-ratio in-body
+ *   re-fire: the post-drop loud body no longer re-triggers, so the
+ *   affirmative single-/double-fire controls now hold on the product
+ *   default. The test still passes a TUNED `eventRefractoryMs: 4000` for
+ *   the affirmative assertions purely to keep them robust to clip timing;
+ *   the negative controls run on the bare product default (DEFAULT_CFG).
  *
  *   The affirmative single-/double-fire assertions run on the STEMS-FED
  *   path. In MIC-ONLY mode the detector fires prematurely during risers
