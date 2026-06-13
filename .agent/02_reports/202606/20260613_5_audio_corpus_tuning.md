@@ -263,14 +263,14 @@ scene `audio_state.yaml` deliberately. Flagged for an operator decision (§9).
 truncated to 60 s. The `baseline` arm pins the OLD detector edge
 (`level`/2000); the `detector`/`tuned` arms use the new `windowed`/3500.
 
-> NOTE: the numbers below were taken BEFORE the §3a flap fix; the flap fix
-> raises structure-agreement (the body now stays SUSTAIN) and reduces FP for
-> both arms. Refreshed values land with the post-fix sweep.
+The `baseline` arm pins the OLD detector edge (`level`/2000); the
+`detector`/`tuned` arms use the new `windowed`/2000. Numbers below are
+**post flap fix**.
 
 | arm (detector) | drop P | drop R | latency | **FP/min** | struct agree | (tp/fp/fn) |
 |---|---|---|---|---|---|---|
-| `baseline` (level/2000) | 0.22 | 0.22 | 896 ms | **1.39** | 0.249 | (24/86/84) |
-| `detector`/`tuned` (windowed) | 0.05 | 0.04 | 460 ms | **0.87** | 0.175 | (4/75/104) |
+| `baseline` (level/2000) | 0.29 | 0.22 | 896 ms | **1.10** | 0.258 | (24/60/84) |
+| `detector`/`tuned` (windowed/2000) | 0.06 | 0.04 | 460 ms | **0.82** | 0.183 | (4/68/104) |
 
 **The clean, reliable signal here is FP/min on the genuinely-quiet clips:
 windowed cuts spurious fires 1.39 → 0.87 /min (−37 %)** — the robustness win
