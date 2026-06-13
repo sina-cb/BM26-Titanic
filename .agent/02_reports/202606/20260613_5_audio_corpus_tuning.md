@@ -60,9 +60,25 @@ one was assembled from two open sources, each with honestly-stated limits:
 genre + drop count. **No audio is committed** — only the tooling. License mix:
 50 CC BY-NC-SA (MUSDB) + a spread of CC Attribution/NC/SA variants (FMA).
 
+**What the dataset actually bought us (honest accounting).** Because no human
+listened, the corpus's value was NOT a trustworthy accuracy number (that came
+from the synthetic ground truth, §3). Its real value, strongest first:
+(1) **chain-feel tuning on real miced audio** (§4 — the LPF cutoffs were
+validated against real music's spectral jitter, not synthetic tones); (2)
+**false-positive robustness** (§6 — spurious fires/min on real quiet clips,
+which needs only "this clip has no drop", not exact drop times); (3) the
+weak, caveated heuristic drop P/R. **The MUSDB stems** were decoded
+(mixture + bass/drums/vocals/other) and used for independent stem-gated label
+derivation + the harness `stemsPlan`, but because MUSDB is rock/pop with
+near-constant energy the stems yielded **~0 structural drops** — so the 4.7 GB
+of stems delivered less than hoped; their real worth was 50 full-length
+*real-audio* tracks for feel/FP tuning. The FMA Electronic clips supplied the
+EDM character.
+
 ### Label provenance — honest disclosure
 
-An autonomous agent cannot listen, so the labels are **heuristic, not
+**0 of the 110 tracks were listened to by a human in this study.** An
+autonomous agent cannot hear audio, so the labels are **heuristic, not
 human-verified**. `auto_label.mjs` is deliberately INDEPENDENT of the causal
 detector it evaluates (to avoid circularity): **non-causal** (look-ahead — a
 drop must STAY loud), **global-percentile / loud-reference** region
