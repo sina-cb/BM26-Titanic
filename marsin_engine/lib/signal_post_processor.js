@@ -28,11 +28,17 @@
  * Envelope (asymmetric attack/release), Schmitt (hysteresis +
  * refractory), Hold (sample-and-hold + exponential decay).
  *
- * Ops shipped in Phase 7 (this commit, closes docs/29 Phase 7 — full
- * 12-op catalog for operator chain authoring): Curve, Slew Limiter,
- * Compressor, Biquad LPF, Slope. Each cites its source formula in a
- * comment above its `_applyOp` case (Katz / RBJ EQ Cookbook / TD CHOP
- * / matches `modulation_engine.js applyCurve()`).
+ * Ops shipped in Phase 7 (closes docs/29 Phase 7 — full 12-op catalog
+ * for operator chain authoring): Curve, Slew Limiter, Compressor,
+ * Biquad LPF, Slope. Each cites its source formula in a comment above
+ * its `_applyOp` case (Katz / RBJ EQ Cookbook / TD CHOP / matches
+ * `modulation_engine.js applyCurve()`).
+ *
+ * Op shipped in Phase 8 (this commit): Normalizer — a per-sample causal
+ * AGC built from a dual floor/peak envelope follower (Pirkle / Zölzer
+ * DAFX adaptive level) so a new venue/mic auto-levels without hand
+ * re-tuning PRE_CLAMP_GAIN / bands.noiseGate. See docs/34 for the
+ * calibration-tool companion.
  *
  * Per-op math is cited inline above each `case` in `_applyOp` — every
  * formula points to the source in the design doc's Operator catalog
@@ -196,6 +202,25 @@ const OP_SCHEMA = Object.freeze({
     params: {
       scale:   { type: 'number',  min: 0.001, max: 1000, default: 4.0 },
       bipolar: { type: 'boolean', default: false },
+    },
+  },
+  normalizer: {
+    // Phase 8 (this commit) — automatic-gain-control / adaptive level.
+    // Per-sample causal envelope-follower AGC: a slow-rising floor and a
+    // slow-falling peak estimate, both with time constant `windowSec`,
+    // map the input to a venue/mic-independent [0, 1] range. This lets a
+    // new room work without re-tuning PRE_CLAMP_GAIN / bands.noiseGate by
+    // hand. Source: adaptive-level / dual-envelope follower per Pirkle,
+    // *Designing Audio Effect Plug-Ins in C++* (2nd ed., 2019, ch. 6) and
+    // Zölzer, *DAFX* (2nd ed., 2011, §4.3 adaptive level / normalization).
+    // O(1) per sample — two scalar envelope words, NO sample-history
+    // buffer (keeping the framework's O(1)-per-op convention; a true
+    // percentile over a windowSec history would be O(window) and against
+    // the hot-path budget — design doc §Performance note).
+    description: 'Auto-level (AGC) to [0,1] via a sliding floor/peak envelope follower.',
+    params: {
+      windowSec: { type: 'number', min: 1, max: 120, default: 30 },
+      strength:  { type: 'number', min: 0, max: 1,   default: 1.0 },
     },
   },
 });
@@ -994,6 +1019,49 @@ export class SignalPostProcessor {
         rt.yPrev = y;
         return y;
       }
+      case 'normalizer': {
+        // Source: design doc §Operator catalog row "Normalizer" — adaptive
+        // level / dual-envelope follower (Pirkle, *Designing Audio Effect
+        // Plug-Ins in C++* 2nd ed. 2019 ch. 6; Zölzer *DAFX* 2nd ed. 2011
+        // §4.3 adaptive level). Two one-pole envelopes both with time
+        // constant τ = windowSec track the signal's running floor and peak:
+        //
+        //   floor : tracks DOWN fast (αFast on a falling sample so a new,
+        //           lower quiet level is adopted quickly) and UP slow
+        //           (αSlow so a transient can't drag the floor up).
+        //   peak  : tracks UP fast (αFast on a rising sample so transients
+        //           set the ceiling) and DOWN slow (αSlow so the peak
+        //           sags back gently when the room quiets).
+        //
+        //   norm  = clamp01((x − floor) / max(peak − floor, ε))
+        //   out   = strength·norm + (1 − strength)·x   (dial AGC in gradually)
+        //
+        // αSlow is the windowSec time constant; αFast is a fixed-fraction
+        // faster follower (τ/8) so the floor/peak "grab" transients within
+        // the window but only relax over the full window. ε guards the
+        // divide so a flat input (peak == floor) can't emit NaN/Infinity —
+        // it converges to 0 (x sits on the floor) rather than blowing up.
+        const eps = 1e-6;
+        const tauSlow = op.params.windowSec;
+        const tauFast = tauSlow / 8;
+        const aSlow = 1 - Math.exp(-dt / tauSlow);
+        const aFast = 1 - Math.exp(-dt / tauFast);
+        // Floor: fast on the way down, slow on the way up.
+        const aFloor = x < rt.floor ? aFast : aSlow;
+        rt.floor = rt.floor + aFloor * (x - rt.floor);
+        // Peak: fast on the way up, slow on the way down.
+        const aPeak = x > rt.peak ? aFast : aSlow;
+        rt.peak = rt.peak + aPeak * (x - rt.peak);
+        const span = rt.peak - rt.floor;
+        const denom = span > eps ? span : eps;
+        let norm = (x - rt.floor) / denom;
+        if (!(norm > 0)) norm = 0;
+        else if (norm > 1) norm = 1;
+        const strength = op.params.strength;
+        const out = strength * norm + (1 - strength) * x;
+        rt.yPrev = out;
+        return out;
+      }
       default:
         // Unreachable — validateChain rejects unknown types at config
         // time. If we ever land here it's a P0 escape; surface it.
@@ -1038,6 +1106,13 @@ function _initRuntime(op) {
     case 'slope':
       // Discrete derivative needs the previous input sample.
       rt.xPrev = 0;
+      break;
+    case 'normalizer':
+      // Dual envelope follower state. floor/peak both start at 0 so the
+      // first samples set the span; with a [0,1] input the floor stays at
+      // 0 until a quiet stretch and the peak rises to the first transient.
+      rt.floor = 0;
+      rt.peak = 0;
       break;
     default:
       break;
