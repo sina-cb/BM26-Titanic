@@ -127,6 +127,7 @@ function usage(stream = process.stdout) {
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
     `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
+    '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
     '    --help             Show this help',
     ''
   );
@@ -135,7 +136,7 @@ function usage(stream = process.stdout) {
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true };
+  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true, open: true };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
       logError(`${flag} requires a value (got ${value === undefined ? 'nothing' : `'${value}'`}).`);
@@ -149,6 +150,7 @@ function parseArgs(argv) {
       case '--scene':   opts.scene = takeValue(arg, argv[++i]); break;
       case '--pattern': opts.pattern = takeValue(arg, argv[++i]); break;
       case '--no-kill': opts.kill = false; break;
+      case '--no-open': opts.open = false; break;
       case '--help': case '-h': usage(); process.exit(0); break;
       default:
         if (arg.startsWith('-')) {
@@ -440,6 +442,37 @@ function startChild(tag, command, args, cwd, extraEnv = {}) {
   return child;
 }
 
+// ── Browser auto-open (best-effort, never fatal, not a stack child) ─────
+function browserOpenCommand(url) {
+  if (process.platform === 'darwin') return { cmd: 'open', args: [url] };
+  if (IS_WIN) return { cmd: 'cmd', args: ['/c', 'start', '', url] };
+  return { cmd: 'xdg-open', args: [url] };
+}
+
+function openInBrowser(label, url) {
+  // Headless Linux (no X/Wayland session) has no browser to open into —
+  // print the URL instead of spawning a doomed xdg-open.
+  if (!IS_WIN && process.platform !== 'darwin' &&
+      !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    log('launcher', `  ↗ ${label} ready — no display detected, open it manually: ${url}`);
+    return;
+  }
+  const { cmd, args } = browserOpenCommand(url);
+  try {
+    // Detached + unref'd and deliberately NOT tracked in `children`: this is
+    // the operator's browser, not part of the stack, so teardown must never
+    // close it.
+    const opener = spawn(cmd, args, { stdio: 'ignore', detached: true, shell: false });
+    opener.on('error', (err) => {
+      log('launcher', `  ↗ ${label}: could not auto-open (${err.message}) — open ${url} manually`);
+    });
+    opener.unref();
+    log('launcher', `  ↗ Opening ${label} in your browser: ${url}`);
+  } catch (err) {
+    log('launcher', `  ↗ ${label}: could not auto-open (${err.message}) — open ${url} manually`);
+  }
+}
+
 function stopChild(tag, child) {
   return new Promise((resolve) => {
     let settled = false;
@@ -722,6 +755,11 @@ async function main() {
   log('launcher', `  ✓ engine pattern set to ${opts.pattern}`);
   log('launcher', '✅ Engine is ready.');
 
+  // Open the sim only now that the engine is up: the sim's boot probes
+  // :6968/status and falls back from sacn_in to the in-browser Pixelblaze
+  // engine if it loads while the engine is still down.
+  if (opts.open) openInBrowser('Simulation', simUrl);
+
   // 3. CaptainPad Expo dev server (dev profiles only).
   if (profileDef.processes.includes('captainpad')) {
     startChild('captainpad', 'npx',
@@ -730,12 +768,14 @@ async function main() {
       { EXPO_NO_TELEMETRY: '1', CI: '1', BROWSER: 'none' });
     await waitForHttp('captainpad web', captainPadUrl, 300000);
     log('launcher', '✅ CaptainPad is ready.');
+    if (opts.open) openInBrowser('CaptainPad', captainPadUrl);
   }
 
   log('launcher', '────────────────────────────────────────────────────────');
   log('launcher', `🚀 Stack is up (profile: ${opts.command})`);
   log('launcher', '');
-  log('launcher', '   Open in your browser:');
+  log('launcher', opts.open ? '   Opened in your browser (URLs below if you need them):'
+    : '   Open in your browser:');
   log('launcher', `     Simulation:  ${simUrl}`);
   if (profileDef.processes.includes('captainpad')) {
     log('launcher', `     CaptainPad:  ${captainPadUrl}`);
