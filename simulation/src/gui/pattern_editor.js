@@ -10,6 +10,7 @@ import {
 import { MarsinEngine } from "../core/marsin_engine.js";
 import { GUI } from "./gui_engine.js";
 import { TOP_MIN, registerPanel } from "./panel_layout.js";
+import { setupSyntaxHighlight } from "./syntax_highlight.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ export async function loadPatternPresets() {
   const textarea = document.getElementById('pe-code');
   if (textarea && !textarea.value && PATTERN_PRESETS.rainbow) {
     textarea.value = PATTERN_PRESETS.rainbow;
+    if (textarea.__rehighlight) textarea.__rehighlight();
     selectedPattern = 'rainbow';
   }
   renderPresetButtons();
@@ -505,6 +507,9 @@ export function setupPatternEditor() {
   const presetsEl = document.getElementById('pe-presets');
   if (!panel || !textarea) return;
 
+  // VS Code-style syntax highlighting backdrop (CaptainPad Studio parity).
+  setupSyntaxHighlight(textarea);
+
   // Static host: pattern persistence requires the dev save-server (port 6970),
   // which is unreachable from a deployed Pages site. Mark the buttons disabled
   // so users get instant feedback instead of clicking into a console error.
@@ -544,6 +549,7 @@ export function setupPatternEditor() {
       const en = textarea.selectionEnd;
       textarea.value = textarea.value.substring(0, s) + '  ' + textarea.value.substring(en);
       textarea.selectionStart = textarea.selectionEnd = s + 2;
+      if (textarea.__rehighlight) textarea.__rehighlight();
     }
   });
 
@@ -554,6 +560,7 @@ export function setupPatternEditor() {
     const key = btn.dataset.pattern;
     if (PATTERN_PRESETS[key]) {
       textarea.value = PATTERN_PRESETS[key];
+      if (textarea.__rehighlight) textarea.__rehighlight();
       selectedPattern = key;
       renderPresetButtons();
       compileEditorCode();
@@ -612,6 +619,7 @@ export function setupPatternEditor() {
         PATTERN_PRESETS[key] = template;
         selectedPattern = key;
         textarea.value = template;
+        if (textarea.__rehighlight) textarea.__rehighlight();
         renderPresetButtons();
         compileEditorCode();
       }
@@ -638,6 +646,7 @@ export function setupPatternEditor() {
         delete PATTERN_PRESETS[selectedPattern];
         selectedPattern = null;
         textarea.value = '';
+        if (textarea.__rehighlight) textarea.__rehighlight();
         renderPresetButtons();
         const statusEl = document.getElementById('pe-status');
         if (statusEl) {

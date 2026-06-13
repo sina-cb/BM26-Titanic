@@ -1027,6 +1027,23 @@ body.edit-mode-active #engine-params-panel {
   border-bottom-left-radius: 0;
   transition: transform 0.25s ease, opacity 0.2s ease;
 }
+
+/* Right-edge grip to widen the left drawer (left_drawer.js). */
+.left-drawer-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: ew-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.left-drawer-resizer:hover,
+.left-drawer-resizer:active {
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--primary) 40%, transparent));
+}
 #engine-params-panel.left-drawer,
 #sacn-in-monitor-panel.left-drawer,
 #sacn-out-monitor-panel.left-drawer {
@@ -1410,12 +1427,67 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--surface-container-lowest) 50%, transparent);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
   padding: 12px 14px;
   tab-size: 2;
   overflow: auto;
 }
+
+/* ─── Studio-style syntax highlighting (CaptainPad parity) ───
+   A highlighted <pre> backdrop sits behind a transparent textarea; both share
+   identical metrics so glyphs align. Colours are the VS Code Dark+ palette. */
+.pe-code-wrap.pe-highlighted {
+  position: relative;
+  background: #1e1e1e;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight,
+.pe-code-wrap.pe-highlighted .pe-textarea {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight {
+  overflow: auto;
+  pointer-events: none;
+  z-index: 0;
+  color: #d4d4d4;
+  background: #1e1e1e;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight code {
+  font: inherit;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
+}
+.pe-code-wrap.pe-highlighted .pe-textarea {
+  z-index: 1;
+  background: transparent;
+  color: transparent;
+  caret-color: #00daf3;
+  overflow: auto;
+}
+.pe-code-wrap.pe-highlighted .pe-textarea::selection {
+  background: rgba(0, 218, 243, 0.28);
+}
+.pe-tok-comment { color: #6a9955; }
+.pe-tok-keyword { color: #569cd6; font-weight: 700; }
+.pe-tok-number  { color: #b5cea8; }
+.pe-tok-string  { color: #ce9178; }
+.pe-tok-op      { color: #d4d4d4; }
+.pe-tok-builtin { color: #dcdcaa; }
+.pe-tok-special { color: #4ec9b0; font-weight: 700; }
+.pe-tok-ident   { color: #9cdcfe; }
 
 .pe-textarea::selection {
   background: color-mix(in srgb, var(--primary) 25%, transparent);

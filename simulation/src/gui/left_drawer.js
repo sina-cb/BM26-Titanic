@@ -21,11 +21,13 @@
 import { lightingMode } from '../core/state.js';
 
 const COLLAPSE_KEY = 'bm26.sim.leftPrimaryCollapsed';
+const WIDTH_KEY = 'bm26.sim.leftDrawerWidth';
 
 const TOP = 44;          // below the HUD strip (panel_layout TOP_MIN)
-const BOTTOM = 64;       // leave the lower-left corner for the sACN monitors
+const BOTTOM = 64;       // min lower-corner reserve for the sACN monitors
 const LEFT = 0;
-const WIDTH = 384;
+const MIN_WIDTH = 384;   // the drawer only ever gets wider than this
+const MAX_WIDTH = 760;
 
 const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 6 9 12 15 18"/></svg>';
 const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>';
@@ -33,7 +35,9 @@ const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="non
 let _mode = 'gradient';
 let _collapsed = false;
 let _hidden = false;
+let _width = MIN_WIDTH;
 let _tab = null;
+let _sacnObserved = false;
 const _dragGuarded = new WeakSet();
 
 function readBool(key) {
@@ -46,7 +50,59 @@ function writeBool(key, val) {
     console.error('[LeftDrawer] persist', key, err);
   }
 }
+function readWidth() {
+  try {
+    const v = parseInt(localStorage.getItem(WIDTH_KEY), 10);
+    return Number.isFinite(v) ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v)) : MIN_WIDTH;
+  } catch (err) { console.error('[LeftDrawer] read width', err); return MIN_WIDTH; }
+}
 const byId = (id) => document.getElementById(id);
+
+/** Bottom reserve so the docked drawer always stops above the (bottom-left)
+ *  sACN OUT monitor, whatever its current height. */
+function sacnOutReserve() {
+  const out = byId('sacn-out-monitor-panel');
+  if (!out || out.classList.contains('hidden') || getComputedStyle(out).display === 'none') return BOTTOM;
+  const h = out.getBoundingClientRect().height || 34;
+  return Math.round(h + 20 + 14); // sACN OUT's bottom:20 + a gap
+}
+
+/** Re-flow the drawer when the sACN OUT monitor expands/collapses. */
+function observeSacnOut() {
+  if (_sacnObserved) return;
+  const out = byId('sacn-out-monitor-panel');
+  if (!out) return;
+  _sacnObserved = true;
+  new ResizeObserver(() => applyLayout()).observe(out);
+}
+
+/** Right-edge grip that widens the drawer (never narrower than MIN_WIDTH). */
+function ensureResizeHandle(pe) {
+  if (pe.querySelector('.left-drawer-resizer')) return;
+  const grip = document.createElement('div');
+  grip.className = 'left-drawer-resizer';
+  grip.title = 'Drag to widen';
+  let startX = 0; let startW = 0; let dragging = false;
+  grip.addEventListener('pointerdown', (e) => {
+    dragging = true; startX = e.clientX; startW = _width;
+    grip.setPointerCapture(e.pointerId);
+    e.preventDefault(); e.stopPropagation();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(startW + (e.clientX - startX))));
+    if (w !== _width) { _width = w; applyLayout(); }
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { grip.releasePointerCapture(e.pointerId); } catch (err) { /* released */ }
+    try { localStorage.setItem(WIDTH_KEY, String(_width)); } catch (err) { console.error('[LeftDrawer] persist width', err); }
+  };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  pe.appendChild(grip);
+}
 
 /** Stop the panel's own header drag from moving the docked drawer. Capture
  *  phase so it pre-empts the legacy mousedown handlers. */
@@ -133,14 +189,17 @@ function applyLayout() {
   const vh = window.innerHeight;
 
   if (isPB && pe) {
-    dock(pe, { left: LEFT, top: TOP, width: WIDTH, height: Math.max(200, vh - TOP - BOTTOM), collapsed: _collapsed });
+    const reserve = Math.max(BOTTOM, sacnOutReserve());
+    dock(pe, { left: LEFT, top: TOP, width: _width, height: Math.max(200, vh - TOP - reserve), collapsed: _collapsed });
     embedEngineParams(pe);
+    ensureResizeHandle(pe);
+    observeSacnOut();
     pe.style.display = _hidden ? 'none' : '';
   } else if (pe) {
     undock(pe);
   }
 
-  setTab(isPB && !_hidden, _collapsed ? 0 : WIDTH, _collapsed);
+  setTab(isPB && !_hidden, _collapsed ? 0 : _width, _collapsed);
 }
 
 function buildTab() {
@@ -179,6 +238,7 @@ export function refreshLeftDrawers(mode) {
 export function setupLeftDrawers() {
   if (_tab) return;
   _collapsed = readBool(COLLAPSE_KEY);
+  _width = readWidth();
   _tab = buildTab();
   _mode = lightingMode || _mode;
 
