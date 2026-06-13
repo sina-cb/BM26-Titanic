@@ -57,6 +57,68 @@ function resolveInputFormat({ platform, inputFormat }) {
   return DEFAULT_FORMAT_BY_PLATFORM[platform] || null;
 }
 
+// ── File-replay capture source (see docs/25 §3 "File replay") ─────────────
+//
+// A `device` of the form `file:<path>` streams a local audio FILE through
+// the EXACT same capture→analyzer→CPC path as a live mic. This unblocks
+// deterministic end-to-end audio tests, desk tuning with no speakers, and
+// the docs/30 structure-detector dataset validation. A file source is
+// platform-neutral, so resolveDevice / resolveInputFormat / platform logic
+// is bypassed entirely in this mode.
+
+const FILE_DEVICE_PREFIX = 'file:';
+
+/** True when `device` selects the file-replay source. */
+export function isFileDevice(device) {
+  return typeof device === 'string' && device.startsWith(FILE_DEVICE_PREFIX);
+}
+
+/**
+ * Strip the `file:` prefix and return the real filesystem path. Rejects an
+ * empty path with a typed error — Codex P0: fail loudly, no fallback to mic.
+ */
+function resolveFilePath(device) {
+  const filePath = device.slice(FILE_DEVICE_PREFIX.length);
+  if (!filePath) {
+    const err = new Error(
+      'File capture source requires a path, e.g. device: "file:/clips/track.wav"',
+    );
+    err.code = 'audio_file_missing_path';
+    throw err;
+  }
+  return filePath;
+}
+
+/**
+ * Build ffmpeg argv for the file-replay source. `-re` makes ffmpeg read at
+ * the file's native rate so the pipeline sees realistic timing; ffmpeg
+ * auto-detects the container, so no `-f <inputFormat>` is passed here. When
+ * `loop` is true (the default) `-stream_loop -1` makes the clip loop forever
+ * so a 3-minute show clip doesn't stop the meters.
+ */
+function buildFileFfmpegArgs(cfg) {
+  const filePath = resolveFilePath(cfg.device);
+  const loop = cfg.loop ?? true;
+  const args = [
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-nostdin',
+  ];
+  if (loop) {
+    // -stream_loop MUST come before -i to apply to the input.
+    args.push('-stream_loop', '-1');
+  }
+  args.push(
+    '-re',
+    '-i',  filePath,
+    '-ac', String(cfg.channels   ?? 1),
+    '-ar', String(cfg.sampleRate ?? 44100),
+    '-f',  's16le',
+    '-',
+  );
+  return args;
+}
+
 /**
  * Pick a device string. macOS / Linux have safe defaults; Windows
  * REQUIRES the operator to have run `--choose_mic` (or pinned
@@ -89,6 +151,12 @@ function resolveDevice({ platform, device }) {
  * is safe. Do NOT build shell command strings here.
  */
 export function buildFfmpegArgs(cfg) {
+  // File-replay source bypasses ALL platform / device / input-format logic
+  // (a file is platform-neutral). Live capture below is byte-for-byte
+  // unchanged when `device` is not a `file:` URI.
+  if (isFileDevice(cfg.device)) {
+    return buildFileFfmpegArgs(cfg);
+  }
   const platform    = resolvePlatform(cfg.platform);
   const inputFormat = resolveInputFormat({ platform, inputFormat: cfg.inputFormat });
   const device      = resolveDevice({ platform, device: cfg.device });
@@ -119,6 +187,7 @@ export class AudioCapture {
    * @param {number}  [opts.sampleRate]
    * @param {number}  [opts.channels]
    * @param {number}  opts.frameSamples — samples per emitted frame (matches analyzer hop size)
+   * @param {boolean} [opts.loop] — file sources only: loop forever (default true)
    * @param {string}  [opts.inputFormat] — null = auto
    * @param {(int16: Int16Array) => void} opts.onFrame
    * @param {(status: object) => void} [opts.onStatus]
@@ -145,6 +214,9 @@ export class AudioCapture {
     this.channels      = opts.channels || 1;
     this.frameSamples  = opts.frameSamples;
     this.inputFormat   = resolveInputFormat({ platform: this.platform, inputFormat: opts.inputFormat || null });
+    // File sources loop forever by default so a short show clip doesn't
+    // stop the meters; `loop` only applies to `file:` devices.
+    this.loop          = opts.loop ?? true;
     this.deviceLabel   = opts.deviceLabel || null;
     this.deviceId      = opts.deviceId || null;
     this._onFrame      = opts.onFrame;
@@ -153,10 +225,14 @@ export class AudioCapture {
     this._stopTimeoutMs           = opts.stopTimeoutMs           ?? 2000;
     this._stderrWarnIntervalMs    = opts.stderrWarnIntervalMs    ?? STDERR_WARN_INTERVAL_MS;
 
-    // resolveDevice throws a typed error on Windows-without-config — let
-    // it propagate so the engine can surface it via audioStatus instead
-    // of silently picking the wrong mic.
-    this.device = resolveDevice({ platform: this.platform, device: opts.device });
+    // A `file:` source is platform-neutral — keep it verbatim and skip the
+    // mic-resolution logic entirely. For live capture, resolveDevice throws
+    // a typed error on Windows-without-config — let it propagate so the
+    // engine can surface it via audioStatus instead of silently picking the
+    // wrong mic.
+    this.device = isFileDevice(opts.device)
+      ? opts.device
+      : resolveDevice({ platform: this.platform, device: opts.device });
 
     this._restartCount = 0;
     this._lastFrameAtMs = null;
@@ -189,6 +265,7 @@ export class AudioCapture {
       device:      this.device,
       channels:    this.channels,
       sampleRate:  this.sampleRate,
+      loop:        this.loop,
     });
   }
 
