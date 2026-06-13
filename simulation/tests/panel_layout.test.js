@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TOP_MIN, clampPosition, findFreeSlot } from '../src/gui/panel_layout.js';
+import {
+  TOP_MIN, clampPosition, findFreeSlot, sanitizeGeometry,
+} from '../src/gui/panel_layout.js';
 
 // Pins the pure layout-policy helpers in src/gui/panel_layout.js.
 // Only the pure exports are exercised — registerPanel & co. need a DOM.
@@ -92,4 +94,48 @@ test('findFreeSlot ignores overlap below the 40% threshold', () => {
   // Overlap is 40x50 = 2000px² of the candidate's 20000px² — 10%.
   const occupied = [{ left: 260, top: 150, width: 200, height: 100 }];
   assert.deepEqual(findFreeSlot(desired, occupied, VW, VH), desired);
+});
+
+// ── sanitizeGeometry ────────────────────────────────────────────────────
+
+test('sanitizeGeometry leaves an in-bounds entry unchanged', () => {
+  const entry = { x: 200, y: 100, w: 300, h: 200, collapsed: false };
+  assert.deepEqual(sanitizeGeometry(entry, VW, VH), entry);
+});
+
+test('sanitizeGeometry pulls an entry off the right edge back into bounds', () => {
+  const entry = { x: 5000, y: 100, w: 300, h: 200, collapsed: false };
+  const out = sanitizeGeometry(entry, VW, VH);
+  assert.equal(out.x, VW - 100);
+  assert.equal(out.y, 100);
+});
+
+test('sanitizeGeometry pulls an entry off the bottom edge back into bounds', () => {
+  const entry = { x: 200, y: 5000, w: 300, h: 200, collapsed: false };
+  const out = sanitizeGeometry(entry, VW, VH);
+  assert.equal(out.y, VH - 50);
+  assert.equal(out.x, 200);
+});
+
+test('sanitizeGeometry raises an entry above TOP_MIN down to TOP_MIN', () => {
+  const entry = { x: 200, y: 0, w: 300, h: 200, collapsed: false };
+  const out = sanitizeGeometry(entry, VW, VH);
+  assert.equal(out.y, TOP_MIN);
+});
+
+test('sanitizeGeometry shrinks oversized w/h to viewport bounds', () => {
+  const entry = { x: 0, y: 100, w: 9999, h: 9999, collapsed: false };
+  const out = sanitizeGeometry(entry, VW, VH);
+  assert.equal(out.w, VW - 20);
+  assert.equal(out.h, VH - TOP_MIN - 10);
+});
+
+test('sanitizeGeometry preserves the collapsed flag and omits absent w/h', () => {
+  const entry = { x: 200, y: 100, collapsed: true };
+  const out = sanitizeGeometry(entry, VW, VH);
+  assert.equal(out.collapsed, true);
+  assert.equal('w' in out, false);
+  assert.equal('h' in out, false);
+  assert.equal(out.x, 200);
+  assert.equal(out.y, 100);
 });

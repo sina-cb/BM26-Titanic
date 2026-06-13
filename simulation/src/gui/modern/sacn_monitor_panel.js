@@ -18,9 +18,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 
 import { FloatingPanel } from './floating_panel.js';
-import {
-  TOP_MIN, findFreeSlot, getStoredGeometry, visiblePanelRects,
-} from '../panel_layout.js';
+import { getStoredGeometry } from '../panel_layout.js';
 
 const MAX_LOG_ENTRIES = 20;
 const STATS_POLL_MS = 500;
@@ -90,32 +88,21 @@ function readDirectionStats(source, framesField) {
 export const sacnInStore = createMonitorStore({ collapsedDefault: true });
 export const sacnOutStore = createMonitorStore({ collapsedDefault: true });
 
-/** Default slot for the IN monitor when it has no operator-saved
- *  geometry: left dock under the pattern editor, cascaded off any panel
- *  already occupying that spot. */
+/** Default slot for the IN monitor when it has no operator-saved geometry:
+ *  bottom-left, stacked directly above and left-aligned with sACN OUT. */
 function placeSacnInMonitor() {
   const el = document.getElementById('sacn-in-monitor-panel');
   if (!el || getStoredGeometry('sacn-in-monitor-panel')) return;
-  const pe = document.getElementById('pattern-editor-panel');
-  const peVisible = pe && !pe.classList.contains('hidden') && pe.style.display !== 'none';
-  const desiredTop = peVisible
-    ? Math.min(pe.getBoundingClientRect().bottom + 10, window.innerHeight - 90)
-    : TOP_MIN + 8;
-  const rect = el.getBoundingClientRect();
-  const slot = findFreeSlot(
-    {
-      left: 14,
-      top: Math.max(TOP_MIN, desiredTop),
-      width: rect.width || 280,
-      height: rect.height || 34,
-    },
-    visiblePanelRects('sacn-in-monitor-panel'),
-    window.innerWidth, window.innerHeight,
-  );
-  el.style.left = `${slot.left}px`;
-  el.style.top = `${slot.top}px`;
+  const out = document.getElementById('sacn-out-monitor-panel');
+  let bottom = 44;
+  if (out) {
+    const r = out.getBoundingClientRect();
+    if (r.height > 0) bottom = Math.round(window.innerHeight - r.top + 6);
+  }
+  el.style.left = '0';
+  el.style.bottom = `${bottom}px`;
+  el.style.top = 'auto';
   el.style.right = 'auto';
-  el.style.bottom = 'auto';
 }
 
 export function registerSacnGlobals() {

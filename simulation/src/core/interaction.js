@@ -10,6 +10,9 @@ import {
 } from "./state.js";
 import { pushUndo, undo, redo } from "./undo.js";
 import { rebuildParLights } from "./fixtures.js";
+import { toggleAllPanels } from "../gui/panel_visibility.js";
+import { toggleControlDrawer } from "../gui/control_drawer.js";
+import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
 
 // ─── Snap-to-Surface Mode State ──────────────────────────────────────────
 let snapMode = false;
@@ -397,7 +400,20 @@ export function onKeyDown(event) {
     return;
   }
 
+  // Ctrl+? (Shift+/ → '?') toggles the keyboard-shortcuts help overlay.
+  if ((event.ctrlKey || event.metaKey) && event.key === '?') {
+    event.preventDefault();
+    toggleHelpPanel();
+    return;
+  }
+
   if (event.key === "Escape") {
+    // The help overlay swallows Escape first so closing it never also
+    // deselects fixtures or exits a mode underneath.
+    if (isHelpPanelOpen()) {
+      hideHelpPanel();
+      return;
+    }
     if (snapMode) {
       toggleSnapMode(true);
       return;
@@ -438,6 +454,18 @@ export function onKeyDown(event) {
   // P key: toggle snap mode
   if (k === 'p' && !event.ctrlKey && !event.metaKey) {
     toggleSnapMode();
+    return;
+  }
+
+  // H key: hide/show all floating panels
+  if (event.key.toLowerCase() === 'h' && !event.ctrlKey && !event.metaKey) {
+    toggleAllPanels();
+    return;
+  }
+
+  // B key: collapse/expand the Lighting Controls drawer
+  if (event.key.toLowerCase() === 'b' && !event.ctrlKey && !event.metaKey) {
+    toggleControlDrawer();
     return;
   }
 

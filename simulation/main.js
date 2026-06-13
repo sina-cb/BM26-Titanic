@@ -44,7 +44,13 @@ import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
-import { registerPanel, registerPanelWhenPresent, getStoredGeometry } from "./src/gui/panel_layout.js";
+import {
+  registerPanel, getStoredGeometry,
+  sanitizeStore, clampAllPanels,
+} from "./src/gui/panel_layout.js";
+import { initPanelVisibility } from "./src/gui/panel_visibility.js";
+import { setupHelpPanel } from "./src/gui/help_panel.js";
+import { setupLeftDrawers } from "./src/gui/left_drawer.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -216,6 +222,14 @@ async function init() {
 
   // Events
   window.addEventListener("resize", onResize);
+  // Separate, debounced resize listener: re-clamp floating panels into the
+  // (possibly shrunk) viewport so they can never drift unreachable. Kept
+  // independent of view_presets.onResize on purpose.
+  let _panelClampTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(_panelClampTimer);
+    _panelClampTimer = setTimeout(clampAllPanels, 150);
+  });
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
@@ -225,6 +239,8 @@ async function init() {
     setupViewPresets();
   }
   setupHUD();
+  // Keyboard-shortcuts help overlay + bottom-right hint.
+  setupHelpPanel();
 
   // Start render loop
   animate();
@@ -614,6 +630,11 @@ Promise.all([
   // Panel layout: register floating panels with the layout system
   // (z band + click-to-front, viewport-clamped geometry restore from
   // localStorage — replaces the old _patternEditor block in common.yaml).
+  //
+  // Repair any persisted geometry that now falls outside this viewport
+  // BEFORE panels restore, so a layout saved on a large monitor (or after
+  // a viewport shrink) can't bring a panel back off-screen.
+  sanitizeStore();
   if (!_isReadonly) {
     // Collapse state must flow through each panel's own collapse button:
     // the legacy handlers keep private state + a button glyph, so setting
@@ -672,15 +693,19 @@ Promise.all([
     // Engine params registers itself on every (re)creation —
     // see ensureGlobalParamsGui() in pattern_editor.js.
   }
-  registerPanelWhenPresent('gui-panel', {
-    applyCollapsed: (collapsed) => {
-      const panel = document.getElementById('gui-panel');
-      if (!panel || panel.classList.contains('collapsed') === collapsed) return;
-      const btn = panel.querySelector('.gui-panel-header button.pe-btn');
-      if (btn) btn.click();
-      else panel.classList.toggle('collapsed', collapsed);
-    },
-  });
+  // Lighting Controls (#gui-panel) is a right-docked drawer, not a floating
+  // panel — gui_builder wires it via setupControlDrawer, and the H toggle
+  // reaches it through panel_visibility's setDrawerVisible. So it is NOT
+  // registered with the floating-geometry system here.
+
+  // Dock the left-side source panels (Pattern Editor / sACN IN + their
+  // nested Engine Params / sACN OUT) as mode-driven drawers. Must come
+  // before initPanelVisibility so a persisted H-hidden state reaches it.
+  if (!_isReadonly) setupLeftDrawers();
+
+  // Wire the show/hide hotkey + visibility module. The drawers + any
+  // late-arriving floating panels are caught via a bounded re-apply.
+  initPanelVisibility();
 }).catch(async (err) => {
   // A deliberate boot halt (fatalBootError) must NOT fall back to a
   // blank init — the banner explains what to fix; booting anyway would
