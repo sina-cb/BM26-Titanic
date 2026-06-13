@@ -37,7 +37,7 @@ import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
-import { seedRuntimeState } from './lib/runtime_state.js';
+import { seedRuntimeState, runtimeStateDir } from './lib/runtime_state.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createSacnOutput } from './lib/sacn_output.js';
@@ -761,6 +761,26 @@ async function main() {
     if (seeded.length > 0) {
       console.log(`  🌱 Runtime state: seeded ${seeded.length} file(s) from state_defaults/${opts.modelName}/`);
     }
+    // One-time autopilot migration. The autopilot's PLAY/PAUSE/delay/
+    // shuffle state used to live in config.yaml's `playlist:` block; it
+    // now lives in states/<model>/autopilot_state.yaml. If a machine
+    // still carries a legacy `playlist:` block (e.g. a deployed config
+    // with committed local edits) AND we just freshly seeded the
+    // autopilot file this boot, carry those values over once so the
+    // operator's tuned cadence isn't silently replaced by the committed
+    // default. Fires loudly, exactly once (subsequent boots find the
+    // runtime file already present, so it's never in `seeded`).
+    if (engineConfig.playlist && seeded.includes('autopilot_state.yaml')) {
+      const lp = engineConfig.playlist;
+      const migrated = {
+        active: !!lp.active,
+        delay_s: String(lp.delay_s ?? '30'),
+        shuffle: !!lp.shuffle,
+      };
+      const apPath = path.join(runtimeStateDir(opts.modelName), 'autopilot_state.yaml');
+      fs.writeFileSync(apPath, yaml.dump(migrated));
+      console.log(`  ⏩ Migrated legacy config.yaml autopilot state → ${apPath} (${JSON.stringify(migrated)}). Remove the \`playlist:\` block from config.yaml to silence this.`);
+    }
   }
 
   // ── Audio CLI flags (mic discovery / selection) ─────────────────────────
@@ -775,7 +795,7 @@ async function main() {
   const audioFlags = parseEngineFlags(process.argv.slice(2));
   const _bootCfgForAudio = loadConfig();
   const _earlySceneDir = opts.modelName
-    ? path.join(__dirname, 'states', opts.modelName)
+    ? runtimeStateDir(opts.modelName)
     : null;
   const rawFfmpegPath = _bootCfgForAudio?.audio?.capture?.ffmpegPath || 'ffmpeg';
   const resolvedFfmpegPath = await resolveFfmpegPath(rawFfmpegPath);
@@ -1054,7 +1074,7 @@ async function main() {
   // file is loaded. Broadcast is a deferred ref filled by api_server.
   const signalPostProcessorBroadcastRef = { publish: () => {} };
   const signalPostProcessor = new SignalPostProcessor({
-    scenePath: path.join(__dirname, 'states', opts.modelName),
+    scenePath: runtimeStateDir(opts.modelName),
     paramCenter,
     broadcast: (msg) => signalPostProcessorBroadcastRef.publish(msg),
   });
@@ -1261,7 +1281,7 @@ async function main() {
   // enabled flag. Trade-off: running the same scene on a different rig
   // means re-running `--choose_mic --model <scene>` once on that rig.
   // The win: a single source of truth, no hidden machine-local file.
-  const sceneStateDir  = path.join(__dirname, 'states', opts.modelName);
+  const sceneStateDir  = runtimeStateDir(opts.modelName);
   const sceneAudioOv   = loadSceneAudio(sceneStateDir);
   audioState.sceneDir  = sceneStateDir;
   // `defaults` is what the operator gets back when they hit "Reset to

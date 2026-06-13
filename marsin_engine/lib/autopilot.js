@@ -53,17 +53,25 @@ export class Autopilot {
     this.generation = 0;
 
     const loaded = this.store.load();
-    this._state = (loaded && typeof loaded === 'object')
-      ? {
-          active: !!loaded.active,
-          delay_s: String(loaded.delay_s ?? DEFAULT_STATE.delay_s),
-          shuffle: !!loaded.shuffle,
-        }
-      : { ...DEFAULT_STATE };
-    // Write the file on first boot so the state is visible in the
-    // runtime dir (and gets captured by /state/promote) even before
-    // the operator touches the controls.
-    if (!loaded) this.store.save(this._state);
+    if (loaded == null) {
+      // No persisted state yet (first boot before seeding wrote a file,
+      // or a brand-new model). Use defaults and write them so the state
+      // is visible in the runtime dir / captured by /state/promote.
+      this._state = { ...DEFAULT_STATE };
+      this.store.save(this._state);
+    } else if (typeof loaded === 'object' && !Array.isArray(loaded)) {
+      this._state = {
+        active: !!loaded.active,
+        delay_s: String(loaded.delay_s ?? DEFAULT_STATE.delay_s),
+        shuffle: !!loaded.shuffle,
+      };
+    } else {
+      // File exists but parsed to a non-object (corrupt / hand-edited to
+      // garbage). Fail loudly rather than silently masking it with
+      // defaults — matches the codex P0 rule and scheduled_tasks' boot
+      // behaviour.
+      throw new Error(`Autopilot state is corrupt (expected a mapping, got ${typeof loaded}). Fix or delete autopilot_state.yaml.`);
+    }
   }
 
   get state() {
