@@ -10,6 +10,7 @@ import {
 } from "./state.js";
 import { pushUndo, undo, redo } from "./undo.js";
 import { rebuildParLights } from "./fixtures.js";
+import { toggleAllPanels } from "../gui/panel_visibility.js";
 
 // ─── Snap-to-Surface Mode State ──────────────────────────────────────────
 let snapMode = false;
@@ -438,6 +439,12 @@ export function onKeyDown(event) {
   // P key: toggle snap mode
   if (k === 'p' && !event.ctrlKey && !event.metaKey) {
     toggleSnapMode();
+    return;
+  }
+
+  // H key: hide/show all floating panels
+  if (event.key.toLowerCase() === 'h' && !event.ctrlKey && !event.metaKey) {
+    toggleAllPanels();
     return;
   }
 

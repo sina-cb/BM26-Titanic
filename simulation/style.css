@@ -438,6 +438,16 @@ body.edit-mode-active #engine-params-panel {
   display: none !important;
 }
 
+/* ─── Generic panel hide (visibility module safety net) ───
+   #gui-panel and several panels lack a per-id `.hidden` rule, so a
+   class-based hide is otherwise unreliable. The panel-visibility module
+   hides via inline `display:none` (CSS-independent), but applies this
+   class too as a robust, generic fallback so ANY panel can be hidden by
+   class regardless of its own id-specific rules. */
+.panel-hidden {
+  display: none !important;
+}
+
 /* ─── HUD Frame Overlay ─── */
 #hud-frame {
   position: fixed;

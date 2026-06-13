@@ -44,7 +44,11 @@ import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
-import { registerPanel, registerPanelWhenPresent, getStoredGeometry } from "./src/gui/panel_layout.js";
+import {
+  registerPanel, registerPanelWhenPresent, getStoredGeometry,
+  sanitizeStore, clampAllPanels,
+} from "./src/gui/panel_layout.js";
+import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -216,6 +220,14 @@ async function init() {
 
   // Events
   window.addEventListener("resize", onResize);
+  // Separate, debounced resize listener: re-clamp floating panels into the
+  // (possibly shrunk) viewport so they can never drift unreachable. Kept
+  // independent of view_presets.onResize on purpose.
+  let _panelClampTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(_panelClampTimer);
+    _panelClampTimer = setTimeout(clampAllPanels, 150);
+  });
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
@@ -614,6 +626,11 @@ Promise.all([
   // Panel layout: register floating panels with the layout system
   // (z band + click-to-front, viewport-clamped geometry restore from
   // localStorage — replaces the old _patternEditor block in common.yaml).
+  //
+  // Repair any persisted geometry that now falls outside this viewport
+  // BEFORE panels restore, so a layout saved on a large monitor (or after
+  // a viewport shrink) can't bring a panel back off-screen.
+  sanitizeStore();
   if (!_isReadonly) {
     // Collapse state must flow through each panel's own collapse button:
     // the legacy handlers keep private state + a button glyph, so setting
@@ -681,6 +698,11 @@ Promise.all([
       else panel.classList.toggle('collapsed', collapsed);
     },
   });
+
+  // Wire the show/hide hotkey + visibility module. #gui-panel arrives
+  // asynchronously, but the visibility module discovers late panels via
+  // getRegisteredPanels(), so a single call here is enough.
+  initPanelVisibility();
 }).catch(async (err) => {
   // A deliberate boot halt (fatalBootError) must NOT fall back to a
   // blank init — the banner explains what to fix; booting anyway would
