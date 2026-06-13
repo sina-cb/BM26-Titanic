@@ -774,6 +774,24 @@ async function main() {
     process.exit(audioCliResult.exitCode || 0);
   }
 
+  // --audio_file <path>: stream a local audio FILE through the EXACT same
+  // capture→analyzer→CPC path as a mic (deterministic e2e tests, desk
+  // tuning with no speakers, docs/30 dataset validation). Force audio on
+  // and pin the capture device to the `file:` URI here, in the boot-config
+  // region, BEFORE AudioCapture is constructed — audio_capture.js detects
+  // the `file:` prefix and builds file-input ffmpeg argv. Codex P0: this is
+  // an explicit operator request, so it overrides config.yaml's audio
+  // defaults loudly rather than silently falling back to a mic.
+  if (audioFlags.audioFile) {
+    engineConfig.audio = engineConfig.audio || {};
+    engineConfig.audio.enabled = true;
+    engineConfig.audio.capture = {
+      ...(engineConfig.audio.capture || {}),
+      device: `file:${audioFlags.audioFile}`,
+    };
+    console.log(`  🎵 audio file replay: ${audioFlags.audioFile} (forces audio.enabled)`);
+  }
+
   console.log(`
   ╔══════════════════════════════════════════╗
   ║       🔥 MarsinEngine v2.0 (WASM VM)    ║
@@ -1338,6 +1356,9 @@ async function main() {
         sampleRate:   cfg.capture.sampleRate,
         channels:     cfg.capture.channels,
         inputFormat:  cfg.capture.inputFormat || undefined,
+        // `loop` only applies to file: capture sources (default true so a
+        // short show clip doesn't stop the meters); ignored for live mics.
+        loop:         cfg.capture.loop,
         frameSamples: cfg.hopSize,
         stopTimeoutMs:        cfg.capture.stopTimeoutMs,
         stderrWarnIntervalMs: cfg.capture.stderrWarnIntervalMs,
