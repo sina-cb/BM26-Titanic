@@ -17,6 +17,7 @@
  */
 
 import { getRegisteredPanels, showPanelClamped } from './panel_layout.js';
+import { setDrawerVisible } from './control_drawer.js';
 
 export const PANEL_VISIBILITY_KEY = 'bm26.sim.panelVisibility';
 
@@ -93,6 +94,9 @@ export function setAllPanelsHidden(hidden) {
     if (hidden) hideOnePanel(id, el);
     else showOnePanel(id, el);
   }
+  // The Lighting Controls drawer is not a registered floating panel; clear it
+  // off-screen too so H fully clears the HUD for watching the show.
+  setDrawerVisible(!hidden);
 }
 
 // ── Public toggle ────────────────────────────────────────────────────────

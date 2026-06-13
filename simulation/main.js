@@ -45,10 +45,11 @@ import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_pa
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
 import {
-  registerPanel, registerPanelWhenPresent, getStoredGeometry,
+  registerPanel, getStoredGeometry,
   sanitizeStore, clampAllPanels,
 } from "./src/gui/panel_layout.js";
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
+import { setupHelpPanel } from "./src/gui/help_panel.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -237,6 +238,8 @@ async function init() {
     setupViewPresets();
   }
   setupHUD();
+  // Keyboard-shortcuts help overlay + bottom-right hint.
+  setupHelpPanel();
 
   // Start render loop
   animate();
@@ -689,19 +692,13 @@ Promise.all([
     // Engine params registers itself on every (re)creation —
     // see ensureGlobalParamsGui() in pattern_editor.js.
   }
-  registerPanelWhenPresent('gui-panel', {
-    applyCollapsed: (collapsed) => {
-      const panel = document.getElementById('gui-panel');
-      if (!panel || panel.classList.contains('collapsed') === collapsed) return;
-      const btn = panel.querySelector('.gui-panel-header button.pe-btn');
-      if (btn) btn.click();
-      else panel.classList.toggle('collapsed', collapsed);
-    },
-  });
+  // Lighting Controls (#gui-panel) is a right-docked drawer, not a floating
+  // panel — gui_builder wires it via setupControlDrawer, and the H toggle
+  // reaches it through panel_visibility's setDrawerVisible. So it is NOT
+  // registered with the floating-geometry system here.
 
-  // Wire the show/hide hotkey + visibility module. #gui-panel arrives
-  // asynchronously, but the visibility module discovers late panels via
-  // getRegisteredPanels(), so a single call here is enough.
+  // Wire the show/hide hotkey + visibility module. The drawer + any
+  // late-arriving floating panels are caught via a bounded re-apply.
   initPanelVisibility();
 }).catch(async (err) => {
   // A deliberate boot halt (fatalBootError) must NOT fall back to a

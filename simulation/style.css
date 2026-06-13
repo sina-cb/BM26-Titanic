@@ -751,6 +751,240 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: none;
 }
 
+/* ─── Lighting Controls Drawer ───
+   #gui-panel docked to the right edge as a slide-away drawer (control_drawer.js).
+   Overrides the floating defaults above: pinned right, no drag, no resize, and
+   stops short of the bottom so the view-preset bar (#view-presets) stays clear. */
+.control-drawer#gui-panel {
+  top: 44px;
+  /* Stop above the bottom-right stack (help hint + view-preset bar) so an
+     open drawer never sits under them. */
+  bottom: 108px;
+  right: 0;
+  left: auto;
+  height: auto;
+  max-height: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+  resize: none;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.control-drawer#gui-panel.drawer-collapsed {
+  /* Slide fully off the right edge (+ a touch extra to clear the shadow). */
+  transform: translateX(calc(100% + 16px));
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* No drag affordance on the docked drawer's header. */
+.control-drawer .gui-panel-header {
+  cursor: default;
+}
+.control-drawer .gui-panel-header:active {
+  cursor: default;
+}
+
+/* Reopen tab — a thin handle at the right edge, shown only when collapsed. */
+#control-drawer-tab {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 6px;
+  background: var(--panel-header-bg);
+  border: 1px solid var(--ghost-border);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  box-shadow: -4px 0 24px var(--ambient-shadow);
+  cursor: pointer;
+  color: var(--primary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+#control-drawer-tab:hover {
+  background: var(--control-bg-hover);
+  box-shadow: -4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+#control-drawer-tab .drawer-tab-chevron {
+  font-size: 1rem;
+  line-height: 1;
+}
+#control-drawer-tab .drawer-tab-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* ─── Keyboard Shortcuts Help Overlay ─── */
+#help-panel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--scrim, #000) 55%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#help-panel-overlay.hidden {
+  display: none !important;
+}
+
+#help-panel-card {
+  width: min(760px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--ghost-border);
+  border-radius: 14px;
+  box-shadow: 0 16px 60px var(--ambient-shadow);
+}
+
+.help-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--ghost-border);
+  background: var(--panel-header-bg);
+  border-radius: 14px 14px 0 0;
+  position: sticky;
+  top: 0;
+}
+.help-panel-title {
+  flex: 1;
+  font-family: var(--font-headline);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.help-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 28px;
+  padding: 18px;
+}
+.help-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-group-title {
+  font-family: var(--font-headline);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin-bottom: 4px;
+}
+.help-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+}
+.help-keys {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 96px;
+}
+.help-key {
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--control-bg);
+  border: 1px solid var(--ghost-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.help-key-plus {
+  color: var(--icon);
+  font-size: 0.6rem;
+}
+.help-desc {
+  font-size: 0.72rem;
+  color: var(--text);
+}
+.help-panel-footer {
+  padding: 10px 18px 14px;
+  font-size: 0.66rem;
+  color: var(--icon);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .help-panel-grid { grid-template-columns: 1fr; }
+}
+
+/* ─── Bottom-right Help Hint ─── */
+#help-hint {
+  position: fixed;
+  right: 20px;
+  bottom: 64px;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--ghost-border);
+  border-radius: 999px;
+  box-shadow: 0 4px 20px var(--ambient-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#help-hint:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+#help-hint .help-hint-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+#help-hint .help-hint-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+#help-hint .help-hint-combo {
+  font-size: 0.6rem;
+  color: var(--icon);
+  border-left: 1px solid var(--ghost-border);
+  padding-left: 7px;
+}
+
 /* ─── Compact/Dense GUI Overrides ───
    lil-gui consumes these custom properties natively — mapping them to the
    palette tokens themes the whole controller tree. */
