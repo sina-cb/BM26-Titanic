@@ -220,6 +220,10 @@ export async function onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxF
   window._isAppBooting = false;
   if (typeof rebuildParLights === 'function') rebuildParLights(true);
 
+  // Snap the master-flood rig to the real model bounds (its GUI
+  // handlers may have run before the model landed).
+  if (window.updateFloodLights) window.updateFloodLights();
+
   // Seed the profile category tracker for smart profile switching
   const profileDef = getProfileDef(params.lightingProfile || 'edit');
   window._lastProfileCategory = profileDef.category;

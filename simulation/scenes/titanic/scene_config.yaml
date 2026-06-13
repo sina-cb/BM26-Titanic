@@ -1413,3 +1413,32 @@ ledStrands:
       fixtureId: 0
       viewMask: 0
 traces: *ref_0
+floods:
+  _section:
+    label: 💡 Master Floods
+    collapsed: true
+  masterFloodEnabled:
+    value: false
+    label: Master Flood Enabled
+  masterFloodColor:
+    value: '#ffffff'
+    label: Master Flood Color
+    type: color
+  masterFloodIntensity:
+    value: 150
+    label: Master Flood Intensity
+    min: 0
+    max: 500
+    step: 1
+  masterFloodAngle:
+    value: 50
+    label: Master Flood Angle °
+    min: 10
+    max: 90
+    step: 1
+  masterFloodDimmer:
+    value: 100
+    label: Master Flood Dimmer %
+    min: 0
+    max: 250
+    step: 1

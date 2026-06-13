@@ -31,6 +31,7 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
+import { updateFloodLights } from "../core/flood_lights.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -814,6 +815,13 @@ function setupGUI() {
     lightingMode: () => {
       if (window.onLightingChange) window.onLightingChange();
     },
+    // Master floods (scene yaml `floods:` section) — all five params
+    // drive the same rig update; see src/core/flood_lights.js.
+    masterFloodEnabled: () => updateFloodLights(),
+    masterFloodColor: () => updateFloodLights(),
+    masterFloodIntensity: () => updateFloodLights(),
+    masterFloodAngle: () => updateFloodLights(),
+    masterFloodDimmer: () => updateFloodLights(),
   };
 
   // Expose applyAllHandlers for undo/redo to sync Three.js scene from params
