@@ -23,7 +23,7 @@ test('maskConstantName: camelCase boundaries split', () => {
 
 test('maskConstantName: spaces and underscores collapse', () => {
   assert.equal(maskConstantName('DJ Lights'), 'MASK_DJ_LIGHTS');
-  assert.equal(maskConstantName('Berg Alpha'), 'MASK_BERG_ALPHA');
+  assert.equal(maskConstantName('Crow Nest'), 'MASK_CROW_NEST');
   assert.equal(maskConstantName('Left_Front_Left'), 'MASK_LEFT_FRONT_LEFT');
   assert.equal(maskConstantName('Right Front Wall Generator'), 'MASK_RIGHT_FRONT_WALL_GENERATOR');
 });
@@ -150,9 +150,9 @@ test('WasmHost.compile: injected MASK_* constant compiles and renders', async ()
   const host = new WasmHost();
   await host.init(4);
   try {
-    host.setMaskConstants({ MASK_BERG_ALPHA: 0x04000000 });
+    host.setMaskConstants({ MASK_CROW_NEST: 0x04000000 });
     const result = host.compile(
-      'export function render(index) { var on = (viewMask & MASK_BERG_ALPHA) != 0; rgb(on, 0, 0); }');
+      'export function render(index) { var on = (viewMask & MASK_CROW_NEST) != 0; rgb(on, 0, 0); }');
     assert.equal(result.ok, true, result.error);
     host.destroy(result.handle);
   } finally {
@@ -184,12 +184,12 @@ test('WasmHost.compile: unknown MASK_* reference is a loud compile failure', asy
   const host = new WasmHost();
   await host.init(4);
   try {
-    host.setMaskConstants({ MASK_BERG_ALPHA: 0x04000000 });
+    host.setMaskConstants({ MASK_CROW_NEST: 0x04000000 });
     const result = host.compile(
       'export function render(index) { rgb(viewMask & MASK_NO_SUCH_GROUP, 0, 0); }');
     assert.equal(result.ok, false);
     assert.match(result.error, /MASK_NO_SUCH_GROUP/);
-    assert.match(result.error, /MASK_BERG_ALPHA/);
+    assert.match(result.error, /MASK_CROW_NEST/);
   } finally {
     host.shutdown();
   }

@@ -1,23 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { engineEvents } from './engineEvents';
+// Engine address resolution lives in the dependency-free apiBase.ts —
+// engineBus.ts needs it too, and importing it from here created the
+// require cycle api → engineEvents → engineBus → api. Re-exported so
+// every existing `from './api'` call site keeps working.
+import { api_base, getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase } from './apiBase';
 
-const defaultConfigsRaw: any = require('@/config.yaml');
-const defaultConfigs = defaultConfigsRaw?.default || defaultConfigsRaw || {};
-
-// Fail fast: config.yaml is the single source of truth for the default engine
-// address. If the YAML loader returned an asset URI string (because metro's
-// assetExts was misconfigured) or the key is missing, surface the misconfig
-// instead of silently falling back to a stale hard-coded IP.
-if (!defaultConfigs || typeof defaultConfigs !== 'object' || typeof defaultConfigs.api_base !== 'string' || !defaultConfigs.api_base) {
-  throw new Error(
-    'CaptainPad config error: CaptainPad/config.yaml must define `api_base` as a non-empty string. ' +
-      'Got: ' + JSON.stringify(defaultConfigs),
-  );
-}
-
-let api_base: string = defaultConfigs.api_base;
-const DEFAULT_API_BASE: string = defaultConfigs.api_base;
+export { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase };
 
 // ── Fetch with timeout ────────────────────────────────────────────────────
 // RN's `fetch` has NO default timeout. A flaky packet or a server that
@@ -73,48 +62,6 @@ function warnThrottled(tag: string, msg: string, err: unknown) {
     console.warn(`${msg} (engine offline; suppressing further warnings for ${WARN_THROTTLE_MS / 1000}s)`);
   } else {
     console.warn(msg, err);
-  }
-}
-
-// ── Async-safe API base resolution ────────────────────────────────────────
-// Screens must await getApiBaseAsync() before their first network call
-// to avoid racing AsyncStorage on cold start.
-let _resolved = false;
-let _resolvePromise: Promise<string> | null = null;
-
-
-
-export function getApiBase(): string {
-  return api_base;
-}
-
-/**
- * Await this before the first network call on any screen.
- * Returns the resolved api_base (from AsyncStorage or YAML default).
- */
-export async function getApiBaseAsync(): Promise<string> {
-  if (_resolved) return api_base;
-  if (!_resolvePromise) {
-    _resolvePromise = AsyncStorage.getItem('API_BASE').then(val => {
-      if (val) api_base = val;
-      _resolved = true;
-      return api_base;
-    });
-  }
-  return _resolvePromise;
-}
-
-export function getDefaultApiBase(): string {
-  return DEFAULT_API_BASE;
-}
-
-export async function setApiBase(val: string) {
-  api_base = val;
-  _resolved = true;
-  if (val === DEFAULT_API_BASE) {
-    await AsyncStorage.removeItem('API_BASE');
-  } else {
-    await AsyncStorage.setItem('API_BASE', val);
   }
 }
 
@@ -1211,8 +1158,8 @@ export function primePlaylistCache(name: string, data: PlaylistData) {
 // installed; for the user's 3rd-channel-add scenario the
 // channelPlaylistData WS event could fire DURING that window and
 // the cache would never be primed, leaving the new PlaylistPanel
-// to fall back to a slow GET. engineEvents.ts has no api imports,
-// so there's no circular-dep concern with a static import.
+// to fall back to a slow GET. engineEvents/engineBus import only the
+// dependency-free apiBase.ts, so this static import is cycle-free.
 engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
   if (msg && msg.type === 'channelPlaylistData') {
     const pd = msg.playlistData as PlaylistData | undefined;

@@ -61,10 +61,24 @@ export function demapSacnToPixels(list, dmxRouter) {
   if (!list || !dmxRouter) return;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
-    if (!entry.patch || !entry.channels) continue;
-    
+    // Unpatched fixtures (and fixtures on universes with no received
+    // buffer) render BRIGHT RED in sACN-in mode — skipping them used to
+    // freeze whatever color the local pattern painted last, producing
+    // lit "bleeding" pixels that ignore the engine's fader entirely
+    // (operator report 2026-06-11). In this mode the frame is the only
+    // truth; a fixture the frame doesn't drive screams red so the
+    // operator spots the unmapped hole immediately (operator decision
+    // 2026-06-12: red, not black).
+    if (!entry.patch || !entry.channels) {
+      paintUndrivenEntry(entry);
+      continue;
+    }
+
     const frame = dmxRouter.getFullFrame(entry.patch.universe);
-    if (!frame) continue;
+    if (!frame) {
+      paintUndrivenEntry(entry);
+      continue;
+    }
     
     const addr = entry.patch.addr - 1; // 0-indexed
     let ch = entry.channels;
@@ -107,6 +121,10 @@ export function demapSacnToPixels(list, dmxRouter) {
     // Without this, those consumers see 0 → black pixels.
     entry.r = r; entry.g = g; entry.b = b;
     entry.w = w; entry.a = a; entry.u = uv;
+    // A driven entry is no longer undriven — keep the flag honest so
+    // paintUndrivenEntry's steady-state fast path can't be fooled by a
+    // stale marker (lose patch → regain → coincidentally red frame).
+    if (entry._sacnUndriven) entry._sacnUndriven = false;
 
     // RGBWAU → RGB blend for 3D visual preview (same formula as Pixelblaze path)
     const rn = Math.min(1, r + w * 0.8 + a * 0.9 + uv * 0.4);
@@ -115,6 +133,27 @@ export function demapSacnToPixels(list, dmxRouter) {
     
     if (entry.apply) entry.apply(rn, gn, bn);
   }
+}
+
+/**
+ * Paint an undriven entry bright red (the "this fixture is unmapped /
+ * not receiving data" indicator). entry.r/g/b carry the red because
+ * the V2 InstancedMesh dot flush and the SpotLight pool read those
+ * fields directly (see demap above); entries without a patch are never
+ * re-emitted as DMX (mapPixelsToSacn skips them), so the indicator
+ * stays visual-only. Skips the (per-frame, per-pixel) apply call once
+ * the entry is already marked so undriven fixtures cost nothing in
+ * steady state.
+ */
+function paintUndrivenEntry(entry) {
+  if (entry._sacnUndriven &&
+      entry.r === 1 && !entry.g && !entry.b && !entry.w && !entry.a && !entry.u) {
+    return;
+  }
+  entry.r = 1; entry.g = 0; entry.b = 0;
+  entry.w = 0; entry.a = 0; entry.u = 0;
+  entry._sacnUndriven = true;
+  if (entry.apply) entry.apply(1, 0, 0);
 }
 
 /**

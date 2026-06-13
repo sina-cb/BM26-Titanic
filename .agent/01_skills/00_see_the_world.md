@@ -202,7 +202,7 @@ Repeat for all 5 views: `*_front.png`, `*_side.png`, `*_aerial.png`, `*_dramatic
 
 | ✅ Pass | ❌ Fail |
 |---|---|
-| 3D geometry visible (structure, icebergs) | Completely black or white screen |
+| 3D geometry visible (structure) | Completely black or white screen |
 | Lighting and shadows present | No visible 3D content |
 | Stars/moon visible in sky | Only UI elements visible, no canvas |
 | Ground plane with light pools | Error text or browser chrome visible |
@@ -229,9 +229,9 @@ Each view should show a **clearly different perspective**:
 
 | View | Expected Perspective |
 |---|---|
-| **Front** | Eye-level, facing the structure head-on. Full scene width visible. Icebergs flanking the structure on both sides. |
+| **Front** | Eye-level, facing the structure head-on. Full scene width visible. |
 | **Side** | 90° rotated from front. Structure profile visible. Chimney and hull tilt clearly shown. |
-| **Aerial** | High overhead looking down. Structure appears foreshortened. Ground light pools visible from above. Icebergs appear as flat shapes. |
+| **Aerial** | High overhead looking down. Structure appears foreshortened. Ground light pools visible from above. |
 | **Dramatic** | Low angle, slightly off-center. Moon often visible. More sky than ground. Cinematic composition. |
 | **Night Walk** | Very close to ground level between hull sections. Structure fills both sides of frame. Detailed geometry visible (individual blocks, porthole lights). Most immersive view. |
 
@@ -247,7 +247,6 @@ Each view should show a **clearly different perspective**:
 | **Bloom** | Soft glow halos around bright light sources |
 | **Shadows** | Ground shadows beneath the structure (PCF soft shadows) |
 | **Stars** | Tiny white dots in the dark sky |
-| **Icebergs** | Blue wireframe geometry with dashed LED wiring patterns |
 
 #### Step 6: Report to User (if via ZeroG)
 
@@ -314,6 +313,6 @@ For future use — if you need to capture a screenshot of the user's **already-o
 | `simulation/vendor/` | Vendored browser deps (three.js, js-yaml, chroma-js, Inter font) |
 | `simulation/src/gui/view_presets.js` | Camera preset animation (`window.animateCamera`) |
 | `simulation/scenes/titanic/cameras.yaml` | Camera presets (keys used by `--view`) |
-| `simulation/scenes/titanic/scene_config.yaml` | Scene state (fixtures, lights, icebergs) |
+| `simulation/scenes/titanic/scene_config.yaml` | Scene state (fixtures, lights) |
 | `.agent_renders/` | Output directory (gitignored) |
 | `.gitignore` | Excludes `.agent_renders/` from git |

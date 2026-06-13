@@ -1,6 +1,7 @@
 const ENGINE_WS = `ws://${window.location.hostname}:6968`;
 
 let warningEl = null;
+let titleEl = null;
 let messageEl = null;
 let clearBtn = null;
 let readonlyMode = false;
@@ -16,15 +17,15 @@ function ensureWarningElement() {
   warningEl.setAttribute('role', 'alert');
   warningEl.setAttribute('aria-live', 'assertive');
 
-  const title = document.createElement('div');
-  title.className = 'engine-blackout-title';
-  title.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
+  titleEl = document.createElement('div');
+  titleEl.className = 'engine-blackout-title';
+  titleEl.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
 
   messageEl = document.createElement('div');
   messageEl.className = 'engine-blackout-message';
   messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
 
-  warningEl.append(title, messageEl);
+  warningEl.append(titleEl, messageEl);
   document.body.appendChild(warningEl);
   return warningEl;
 }
@@ -35,18 +36,24 @@ function setWarningVisible(visible) {
   document.body.classList.toggle('engine-blackout-active', visible);
   
   window._sacnBlackoutActivated = visible;
+  // CONTRACT: in modern mode this button is rendered by Preact
+  // (modern/sacn_monitor_panel.js) as a fully STATIC subtree — Preact
+  // never diffs its label/styles, so these imperative writes are safe.
+  // If that button ever becomes dynamic (signal-driven label/style),
+  // move the blackout state into the panel's store instead of poking
+  // the DOM from here.
   const btn = document.getElementById('sacn-out-blackout-btn');
   if (btn) {
     if (visible) {
       btn.textContent = "RESUME";
-      btn.style.background = "#080";
-      btn.style.color = "#fff";
-      btn.style.borderColor = "#0f0";
+      btn.style.background = "var(--tertiary)";
+      btn.style.color = "var(--surface-container-lowest)";
+      btn.style.borderColor = "var(--tertiary)";
     } else {
       btn.textContent = "BLACKOUT";
-      btn.style.background = "rgb(136, 0, 0)";
-      btn.style.color = "rgb(255, 255, 255)";
-      btn.style.borderColor = "rgb(255, 0, 0)";
+      btn.style.background = "var(--error)";
+      btn.style.color = "var(--surface-container-lowest)";
+      btn.style.borderColor = "var(--error-container-border)";
     }
   }
 }
@@ -77,9 +84,20 @@ function connectEngineWebSocket() {
       const data = JSON.parse(event.data);
       if (data.type === 'mixer') {
         const blackoutActive = data.blackout === true;
+        const modelStale = data.modelStale === true;
         setWarningVisible(blackoutActive);
-        if (blackoutActive && messageEl) {
+        if (blackoutActive) {
+          titleEl.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
           messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
+        } else if (modelStale) {
+          // Stale-model warning reuses the banner element. Blackout takes
+          // precedence; this branch only runs when blackout is off, and it
+          // deliberately skips setWarningVisible so the sACN blackout
+          // button is not repainted into its RESUME state.
+          warningEl.classList.remove('hidden');
+          titleEl.textContent = 'ENGINE MODEL STALE — RESTART ENGINE';
+          messageEl.textContent = data.modelStaleMessage ||
+            'Engine refused a model hot reload and is still rendering the old model.';
         }
       }
     } catch (err) {

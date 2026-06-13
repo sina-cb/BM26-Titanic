@@ -26,7 +26,6 @@ Recommended simulation URL:
 ## 🏗️ What `npm start` Launches
 
 `npm start` runs `start.js`, which spawns all required background services.
-*Note: To improve initial load times, individual Iceberg UI folders are disabled by default. If you need to edit iceberg positions or geometry, launch the simulation with `npm start enable_iceberg`.*
 
 | Service | Port | Purpose |
 |---------|------|---------|
@@ -77,7 +76,7 @@ Ports are configured in `config.yaml`.
 ### Fixture Management (lil-gui Panel)
 - **Fixture Types:** UkingPar, ShehdsBar, VintageLed — loaded from `dmx/fixtures/`
 - **DMX Patch Controls:** Universe, address, controller IP per fixture
-- **Auto-Patch:** One-click "🎯 Auto-Patch All Unpatched" packing algorithm
+- **Controller Mapping:** 🎛 Controllers panel owns all DMX patching (see `docs/33_controller_mapping.md`)
 - **Multi-select:** Shift-click to select multiple fixtures, batch transforms
 - **Undo/Redo:** 50-deep snapshot stack (Ctrl+Z / Ctrl+Shift+Z)
 

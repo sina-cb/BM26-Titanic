@@ -191,7 +191,7 @@ function _showOverlapToast(msg) {
   if (!toast) {
     toast = document.createElement('div');
     toast.id = 'overlap-toast';
-    toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#3a2a1a;border:1px solid #f80;color:#fa0;padding:10px 24px;border-radius:8px;font-family:Inter,sans-serif;font-size:13px;white-space:pre-line;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;max-width:500px;';
+    toast.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--caution) 18%, var(--surface));border:1px solid var(--caution);color:var(--caution);padding:10px 24px;border-radius:8px;font-family:var(--font-body);font-size:13px;white-space:pre-line;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;max-width:500px;';
     document.body.appendChild(toast);
   }
   toast.textContent = msg;

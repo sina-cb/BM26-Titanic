@@ -4,7 +4,7 @@
 // WASM VM as one Int32 per pixel), so pattern authors historically
 // hardcoded magic numbers like `viewMask & 64`. This module turns the
 // model's resolved group/preset bit table into named constants
-// (`MASK_REDWOOD_PARS`, `MASK_BERG_ALPHA`, ...) that WasmHost injects
+// (`MASK_REDWOOD_PARS`, `MASK_DJ_LIGHTS`, ...) that WasmHost injects
 // into pattern source at compile time. The VM and the MarsinScript
 // language stay untouched — names are resolved to integer literals
 // before the compiler ever sees the code.
@@ -18,7 +18,7 @@
 
 // MASK_ + name with camelCase boundaries split, non-alphanumerics
 // collapsed to underscores: 'RedwoodPARs' → MASK_REDWOOD_PARS,
-// 'DJ Lights' → MASK_DJ_LIGHTS, 'Berg Alpha' → MASK_BERG_ALPHA.
+// 'DJ Lights' → MASK_DJ_LIGHTS.
 export function maskConstantName(name) {
   const body = String(name)
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
