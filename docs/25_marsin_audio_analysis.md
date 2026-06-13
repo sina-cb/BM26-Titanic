@@ -196,6 +196,40 @@ ffmpeg -hide_banner -f alsa -list_devices true -i dummy
 
 ffmpeg writes device lists to **stderr**, not stdout. `listAudioDevices` concatenates both streams before parsing.
 
+### 3.6 File-replay capture source
+
+A `capture.device` of the form `file:<path>` streams a local audio FILE through the **exact same** capture → analyzer → CPC path as a live mic. No mic required. This unblocks:
+
+- **Deterministic end-to-end audio tests** — replay a fixed clip, assert the resulting bands / kicks.
+- **Desk tuning with no speakers** — tune chains and the kick detector from a known track.
+- **docs/30 structure-detector dataset validation** — feed labelled clips through the live pipeline.
+
+A file source is **platform-neutral**: `buildFfmpegArgs` detects the `file:` prefix and bypasses `resolveDevice` / `resolveInputFormat` / platform logic entirely. It builds:
+
+```bash
+ffmpeg -hide_banner -loglevel warning -nostdin \
+  -stream_loop -1 -re -i <path> \
+  -ac <channels> -ar <sampleRate> -f s16le -
+```
+
+- `-stream_loop -1` (placed **before** `-i`) loops the clip forever so a 3-minute show clip doesn't stop the meters. Controlled by `capture.loop` (default `true`); set `loop: false` to omit it and let the file play once.
+- `-re` reads at the file's native rate so the pipeline sees realistic frame timing.
+- No `-f <inputFormat>` is passed — ffmpeg auto-detects the container.
+- An empty path (`file:`) throws a typed `audio_file_missing_path` error (codex P0: fail loudly, no fallback to mic).
+
+Enable it from config (`audio.capture.device: "file:/clips/track.wav"`) or, most commonly, from the CLI:
+
+```bash
+node marsin_engine/engine.js --model test_bench --pattern 01_cylon_sweep \
+  --audio_file /clips/track.wav
+```
+
+| Flag                   | Effect                                                                                                  |
+|------------------------|---------------------------------------------------------------------------------------------------------|
+| `--audio_file <path>`  | Forces `audio.enabled = true` and pins `capture.device = file:<path>` before the listener boots. Not an exit flag — normal boot continues. Requires a value (throws `cli_missing_value` if absent). |
+
+`loop` lives under `audio.capture` in `config.yaml` (default `true`) and is threaded through `AudioCapture` into `buildArgs`. It only applies to `file:` sources; it's ignored for live mics.
+
 ---
 
 ## 4. Analyzer

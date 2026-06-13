@@ -13,6 +13,9 @@
  *   --choose_mic --start         Choose/save, then continue normal boot.
  *   --mic "<device>"             Non-interactive override. Saves and continues.
  *   --clear_mic                  Wipe saved mic and exit.
+ *   --audio_file "<path>"        Stream a local audio FILE through the same
+ *                                capture→analyzer→CPC path as a mic. Forces
+ *                                audio.enabled and continues normal boot.
  *
  * Exit-style precedence when multiple are passed (most operators only
  * use one at a time, but the rule keeps surprises off the playa):
@@ -26,6 +29,7 @@ export function parseEngineFlags(argv) {
     start: false,
     mic: null,
     clearMic: false,
+    audioFile: null,
   };
   if (!Array.isArray(argv)) return flags;
 
@@ -44,6 +48,17 @@ export function parseEngineFlags(argv) {
           throw err;
         }
         flags.mic = next;
+        i++;
+        break;
+      }
+      case '--audio_file': {
+        const next = argv[i + 1];
+        if (!next || next.startsWith('--')) {
+          const err = new Error('--audio_file requires a path, e.g. --audio_file /clips/track.wav');
+          err.code = 'cli_missing_value';
+          throw err;
+        }
+        flags.audioFile = next;
         i++;
         break;
       }
