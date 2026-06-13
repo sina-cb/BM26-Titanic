@@ -160,6 +160,8 @@ let globalExportMap = {};
 //
 // ──────────────────────────────────────────────────────────────────────────
 
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
 // Standard HSV to RGB conversion (h, s, v all 0-1)
 function hsvToRgb(h, s, v) {
   h = h - Math.floor(h); // wrap
@@ -434,14 +436,18 @@ async function updateParameterUI(ok) {
 
   localFolder = paramGuiInstance.addFolder('Pattern Parameters');
   const paramState = {};
+  // Seed each control from the engine's live value (falling back to `def`) so
+  // the panel reflects what the global CPC controls have driven it to — e.g.
+  // cp1H shows the hue colorPalette1 set, not a stale 0.
+  const seed = (exp, def) => (typeof exp.value === 'number' ? exp.value : def);
 
   localExports.forEach(exp => {
     if (exp.kind === ExportKind.SLIDER) {
-      paramState[exp.name] = 0.5;
+      paramState[exp.name] = clamp01(seed(exp, 0.5));
       localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.TOGGLE) {
-      paramState[exp.name] = false;
+      paramState[exp.name] = seed(exp, 0) >= 0.5;
       localFolder.add(paramState, exp.name)
         .onChange(v => patternEngine.setControl(exp.id, v ? 1 : 0));
     } else if (exp.kind === ExportKind.TRIGGER) {
@@ -451,14 +457,16 @@ async function updateParameterUI(ok) {
       };
       localFolder.add(paramState, exp.name);
     } else if (exp.kind === ExportKind.VAR) {
-      paramState[exp.name] = 0;
-      localFolder.add(paramState, exp.name)
+      // CaptainPad parity: every parameter is a 0–1 fader, not a bare number
+      // field. Seeded from the engine so it tracks the global CPC drive.
+      paramState[exp.name] = clamp01(seed(exp, 0));
+      localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.GAUGE) {
-      paramState[exp.name] = 0;
-      localFolder.add(paramState, exp.name).disable();
+      paramState[exp.name] = clamp01(seed(exp, 0));
+      localFolder.add(paramState, exp.name, 0, 1).disable();
     } else if (exp.kind === ExportKind.HSV || exp.kind === ExportKind.RGB) {
-      paramState[exp.name] = 0;
+      paramState[exp.name] = clamp01(seed(exp, 0));
       const ctrl = localFolder.add(paramState, exp.name, 0, 1).name(exp.name + ' (Hue)');
       ctrl.onChange(h => {
         if (exp.kind === ExportKind.HSV) {
