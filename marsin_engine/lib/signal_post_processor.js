@@ -82,17 +82,32 @@ export const KNOWN_SIGNALS = Object.freeze(processedSignalKeys());
  * params to this module. Its leading Gain op id (`kick_gain`) and paramKey
  * still come from `gainOpIdFor`/the descriptor so even that stays in sync.
  */
+// Per-signal LPF smoothing cutoff (Hz), tuned against the miced real-EDM
+// corpus (report 202606/..._audio_corpus_tuning.md §Task C). The non-kick
+// signals shipped GAIN-ONLY (no smoothing → visible flicker on the lights);
+// a one-pole LPF tuned to each signal's musical character makes low/mid/high
+// dance-smooth while preserving the beat-locked pulse, and gives flux a
+// gentle build-up glow. Measured on miced real audio: e.g. micLow flicker
+// 6.5→4.2 Hz, micFlux 54.6→34.8 Hz, pulse depth preserved.
+const SMOOTHING_HZ = Object.freeze({
+  micLow: 3.5, micMid: 5.5, micHigh: 10.0, micFlux: 4.5,
+  stemsBass: 3.5, stemsDrums: 12.0, stemsVocals: 5.0,
+});
+
 export const DEFAULT_CHAINS = Object.freeze(buildDefaultChains());
 
 function buildDefaultChains() {
   const out = {};
   for (const key of KNOWN_SIGNALS) {
     if (key === 'micKick') {
+      // SUDDEN kick: fast attack, short envelope release (180→60 ms), tight
+      // schmitt refractory, short hold decay (120→60 ms) — crisp trigger,
+      // no long release smear. (Measured: kick decay 2334→464 ms.)
       out[key] = [
         { id: gainOpIdFor('micKick'), type: 'gain',     enabled: true, params: { paramKey: 'micKickGain' } },
-        { id: 'kick_envelope',        type: 'envelope', enabled: true, params: { attackMs: 8, releaseMs: 180 } },
-        { id: 'kick_schmitt',         type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 200 } },
-        { id: 'kick_hold',            type: 'hold',     enabled: true, params: { timeoutMs: 120, decayMs: 120 } },
+        { id: 'kick_envelope',        type: 'envelope', enabled: true, params: { attackMs: 5, releaseMs: 60 } },
+        { id: 'kick_schmitt',         type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 120 } },
+        { id: 'kick_hold',            type: 'hold',     enabled: true, params: { timeoutMs: 60, decayMs: 60 } },
       ];
       continue;
     }
@@ -100,7 +115,13 @@ function buildDefaultChains() {
     if (!chain) {
       throw new Error(`SignalPostProcessor: no default chain for processed signal "${key}"`);
     }
-    out[key] = chain;
+    // Append the tuned smoothing LPF after the gain op.
+    const cutoffHz = SMOOTHING_HZ[key];
+    if (cutoffHz === undefined) {
+      throw new Error(`SignalPostProcessor: no smoothing cutoff for processed signal "${key}"`);
+    }
+    const lpfId = gainOpIdFor(key).replace(/_gain$/, '_lpf');
+    out[key] = [...chain, { id: lpfId, type: 'lpf', enabled: true, params: { cutoffHz } }];
   }
   return out;
 }

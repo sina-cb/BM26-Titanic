@@ -21,7 +21,16 @@ import { SignalPostProcessor } from '../lib/signal_post_processor.js';
  * default Gain op (paramKey: '<key>Gain'). Mirrors the engine's wiring.
  */
 function makePostProcessor(pc) {
-  return new SignalPostProcessor({ paramCenter: pc });
+  const proc = new SignalPostProcessor({ paramCenter: pc });
+  // These raw+post tests verify the GAIN × raw-mirror dispatch contract in
+  // isolation. Since the corpus-tuning pass (2026-06) the stems default
+  // chain is gain → smoothing LPF, whose one-pole state makes a single
+  // packet's post value lag the pure gain product. Pin a gain-only chain so
+  // the assertions test gain math, not smoothing transients.
+  proc.putChain('stemsVocals', [
+    { id: 'stems_vocals_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsVocalsGain' } },
+  ]);
+  return proc;
 }
 
 // ── Test doubles ───────────────────────────────────────────────────────────

@@ -79,12 +79,18 @@ test('DEFAULT_CHAINS has an entry per known signal', () => {
   }
 });
 
-test('default mic chains are single-op Gain tied to *Gain CPC paramKey (Wireframe A backward-compat)', () => {
+test('default mic chains are Gain(→*Gain CPC paramKey) + tuned smoothing LPF', () => {
+  // The non-kick signals shipped GAIN-ONLY (flickery). The corpus-tuning
+  // pass (report 202606/..._audio_corpus_tuning.md §Task C) appended a
+  // per-signal smoothing LPF: low 3.5 Hz, mid 5.5 Hz, high 10 Hz.
+  const cutoff = { micLow: 3.5, micMid: 5.5, micHigh: 10.0 };
   for (const sig of ['micLow', 'micMid', 'micHigh']) {
     const chain = DEFAULT_CHAINS[sig];
-    assert.equal(chain.length, 1, `${sig} default chain should be single-op`);
+    assert.equal(chain.length, 2, `${sig} default chain should be gain + lpf`);
     assert.equal(chain[0].type, 'gain');
     assert.equal(chain[0].params.paramKey, `${sig}Gain`);
+    assert.equal(chain[1].type, 'lpf');
+    assert.equal(chain[1].params.cutoffHz, cutoff[sig]);
   }
 });
 
@@ -98,13 +104,18 @@ test('micKick default chain has Envelope → Schmitt → Hold per design doc Wir
   assert.ok(types.includes('hold'));
 });
 
-test('stems default chains are single-op Gain (loopback OSC — Hold NOT in default)', () => {
+test('stems default chains are Gain(→*Gain paramKey) + tuned smoothing LPF (Hold NOT in default)', () => {
+  // Per-character smoothing (§Task C): bass smooth (3.5 Hz), drums snappy
+  // (12 Hz), vocals smooth (5 Hz). Still NO Hold in the default.
+  const cutoff = { stemsBass: 3.5, stemsDrums: 12.0, stemsVocals: 5.0 };
   for (const sig of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
     const chain = DEFAULT_CHAINS[sig];
-    assert.equal(chain.length, 1, `stems default for ${sig} should be single Gain op`);
+    assert.equal(chain.length, 2, `stems default for ${sig} should be gain + lpf`);
     assert.equal(chain[0].type, 'gain', `stems ${sig} default op should be gain`);
-    assert.ok(!chain.some(op => op.type === 'hold'), `${sig} default must NOT include Hold (loopback OSC)`);
     assert.equal(chain[0].params.paramKey, `${sig}Gain`);
+    assert.equal(chain[1].type, 'lpf');
+    assert.equal(chain[1].params.cutoffHz, cutoff[sig]);
+    assert.ok(!chain.some(op => op.type === 'hold'), `${sig} default must NOT include Hold (loopback OSC)`);
   }
 });
 

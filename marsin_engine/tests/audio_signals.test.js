@@ -135,21 +135,31 @@ test('KNOWN_SIGNALS is unchanged as a set (and as the pre-refactor ordered list)
   assert.deepEqual([...KNOWN_SIGNALS], processedSignalKeys());
 });
 
-test('DEFAULT_CHAINS matches the pre-refactor gain defaults + micKick trigger chain', () => {
+test('DEFAULT_CHAINS = Gain + tuned smoothing LPF per signal, sudden micKick trigger chain', () => {
+  // Corpus-tuning pass (report 202606/..._audio_corpus_tuning.md §Task C):
+  // each non-kick signal gained a per-character smoothing LPF; the kick
+  // chain was retuned SUDDEN (release 180→60 ms, hold decay 120→60 ms).
   const expected = {
-    micLow: [{ id: 'low_gain', type: 'gain', enabled: true, params: { paramKey: 'micLowGain' } }],
-    micMid: [{ id: 'mid_gain', type: 'gain', enabled: true, params: { paramKey: 'micMidGain' } }],
-    micHigh: [{ id: 'high_gain', type: 'gain', enabled: true, params: { paramKey: 'micHighGain' } }],
+    micLow: [{ id: 'low_gain', type: 'gain', enabled: true, params: { paramKey: 'micLowGain' } },
+             { id: 'low_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 3.5 } }],
+    micMid: [{ id: 'mid_gain', type: 'gain', enabled: true, params: { paramKey: 'micMidGain' } },
+             { id: 'mid_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 5.5 } }],
+    micHigh: [{ id: 'high_gain', type: 'gain', enabled: true, params: { paramKey: 'micHighGain' } },
+              { id: 'high_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 10.0 } }],
     micKick: [
       { id: 'kick_gain', type: 'gain', enabled: true, params: { paramKey: 'micKickGain' } },
-      { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 8, releaseMs: 180 } },
-      { id: 'kick_schmitt', type: 'schmitt', enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 200 } },
-      { id: 'kick_hold', type: 'hold', enabled: true, params: { timeoutMs: 120, decayMs: 120 } },
+      { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 5, releaseMs: 60 } },
+      { id: 'kick_schmitt', type: 'schmitt', enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 120 } },
+      { id: 'kick_hold', type: 'hold', enabled: true, params: { timeoutMs: 60, decayMs: 60 } },
     ],
-    micFlux: [{ id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } }],
-    stemsBass: [{ id: 'stems_bass_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsBassGain' } }],
-    stemsDrums: [{ id: 'stems_drums_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsDrumsGain' } }],
-    stemsVocals: [{ id: 'stems_vocals_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsVocalsGain' } }],
+    micFlux: [{ id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } },
+              { id: 'flux_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 4.5 } }],
+    stemsBass: [{ id: 'stems_bass_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsBassGain' } },
+                { id: 'stems_bass_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 3.5 } }],
+    stemsDrums: [{ id: 'stems_drums_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsDrumsGain' } },
+                 { id: 'stems_drums_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 12.0 } }],
+    stemsVocals: [{ id: 'stems_vocals_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsVocalsGain' } },
+                  { id: 'stems_vocals_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 5.0 } }],
   };
   assert.deepEqual(DEFAULT_CHAINS, expected);
 });
