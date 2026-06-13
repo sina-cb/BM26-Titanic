@@ -2,8 +2,9 @@
  * AudioAnalyzer — FFT, band energy + kick detection. PURE DATA SOURCE.
  *
  * Reads Int16 PCM frames via `pushSamples(int16)` and emits per-hop
- * analysis results to `onAnalysis({ low, mid, high, kick })` — RAW
- * post-envelope band values in [0, 1]. No per-band gain, no chain
+ * analysis results to `onAnalysis({ low, mid, high, kick, flux })` —
+ * RAW post-envelope band values in [0, 1] plus half-wave-rectified
+ * spectral flux (`flux`). No per-band gain, no chain
  * processing here. The engine wraps each value through the per-signal
  * post-processing chain (`lib/signal_post_processor.js`, docs/29) in
  * its `onAnalysis` callback before writing to CPC.
@@ -151,11 +152,12 @@ export class AudioAnalyzer {
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
-   * @param {(r: {low, mid, high, kick}) => void} opts.onAnalysis
+   * @param {(r: {low, mid, high, kick, flux}) => void} opts.onAnalysis
    *        Each callback receives the RAW post-envelope band values
-   *        in [0, 1]. The engine wraps these through the per-signal
-   *        post-processing chain (lib/signal_post_processor.js) before
-   *        writing them to CPC.
+   *        in [0, 1], plus `flux` (half-wave-rectified spectral flux,
+   *        same scale). The engine wraps the bands/kick through the
+   *        per-signal post-processing chain (lib/signal_post_processor.js)
+   *        before writing them to CPC.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -193,6 +195,19 @@ export class AudioAnalyzer {
 
     // Per-band smoothing state.
     this._smoothed = { low: 0, mid: 0, high: 0 };
+
+    // Half-wave-rectified spectral flux state (SuperFlux-lite, Böck &
+    // Widmer 2013, "Maximum Filter Vibrato Suppression for Onset
+    // Detection"; see research memo §A2). We keep the previous hop's
+    // full magnitude spectrum so each hop can compute
+    //   flux = Σ_k max(0, |X[k]|now − |X[k]|prev)
+    // i.e. rising-energy-only spectral change — the core onset-strength
+    // primitive a build-up / riser / snare-roll lights up. Normalized
+    // through the SAME `/ fftSize` scale + softCompress(PRE_CLAMP_GAIN·E)
+    // mapping as the bands so `flux` lands in [0, 1] like them and the
+    // detector can use it without re-scaling. `null` until the first
+    // hop fills it (first flux is 0 — no prior spectrum to diff against).
+    this._prevMag = null;
 
     // Kick state. EMA is "what does the kick band typically look
     // like right now"; we compare the instant read against it. To
@@ -344,6 +359,7 @@ export class AudioAnalyzer {
     this._kickEmaWarmupHops = 0;
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
+    this._prevMag = null;
   }
 
   // ── Internal ────────────────────────────────────────────────────────────
@@ -369,6 +385,27 @@ export class AudioAnalyzer {
     const midE  = this._bandEnergy(out, this._binMid);
     const highE = this._bandEnergy(out, this._binHigh);
     const kickE = this._bandEnergy(out, this._binKick);
+
+    // Half-wave-rectified spectral flux (SuperFlux-lite — Böck & Widmer
+    // 2013; research memo §A2). One pass over the positive-frequency
+    // bins: accumulate this hop's magnitudes into `_prevMag` (reused
+    // Float64Array, no per-hop allocation) while summing the rising-only
+    // delta vs. the previous hop. Same `/ fftSize` normalization the
+    // bands use, so `flux` shares their absolute scale. First hop has no
+    // prior spectrum → flux is 0.
+    const halfBins = this.fftSize >> 1;
+    if (this._prevMag === null) this._prevMag = new Float64Array(halfBins);
+    const prevMag = this._prevMag;
+    let fluxE = 0;
+    for (let k = 0; k < halfBins; k++) {
+      const re = out[k * 2];
+      const im = out[k * 2 + 1];
+      const mag = Math.hypot(re, im);
+      const diff = mag - prevMag[k];
+      if (diff > 0) fluxE += diff;
+      prevMag[k] = mag;
+    }
+    fluxE /= this.fftSize;
 
     // Per-band soft-compression + noise gate + asymmetric envelope.
     //
@@ -477,6 +514,12 @@ export class AudioAnalyzer {
     const midOut  = clamp01(mid);
     const highOut = clamp01(high);
     const kickOut = clamp01(this._kickValue);
+    // `flux` shares the bands' absolute scale (same `/ fftSize` +
+    // softCompress(PRE_CLAMP_GAIN·E) mapping) so it lands in [0, 1]
+    // like the other outputs. Purely additive — the four existing
+    // fields are byte-for-byte unchanged. SuperFlux-lite (Böck &
+    // Widmer 2013; research memo §A2).
+    const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * fluxE));
 
     try {
       this._onAnalysis({
@@ -484,6 +527,7 @@ export class AudioAnalyzer {
         mid:  midOut,
         high: highOut,
         kick: kickOut,
+        flux: fluxOut,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

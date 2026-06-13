@@ -183,6 +183,19 @@ const PARAM_REGISTRY = [
     persist: false, live: true, broadcastHz: 30, portWatch: false,
     oscAddress: '/marsin/mic/kick', sharedFnName: 'micKick',
   },
+  // micFlux — half-wave-rectified spectral flux (SuperFlux-lite, Böck &
+  // Widmer 2013). Onset-strength primitive emitted by the analyzer
+  // alongside the bands (same [0,1] scale). Same live-param policy as
+  // the bands; consumed by the audio structure detector (docs/30) as
+  // its build-score flux input and available to patterns as a
+  // "music-is-changing" signal. Default chain: a single Gain op tied
+  // to `micFluxGain`, mirroring micLow.
+  {
+    key: 'micFlux', label: 'Mic · Flux', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    oscAddress: '/marsin/mic/flux', sharedFnName: 'micFlux',
+  },
 
   // ── RAW (pre-gain) mic-derived live keys ───────────────────────────────
   // Mirror of the `mic*` live keys above, but published BEFORE the per-band
@@ -215,6 +228,12 @@ const PARAM_REGISTRY = [
     persist: false, live: true, broadcastHz: 30, portWatch: false,
     sharedFnName: 'micKickRaw',
   },
+  {
+    key: 'micFluxRaw', label: 'Mic · Flux (raw)', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'micFluxRaw',
+  },
 
   // ── Per-band mic gains (operator-tunable, persistent) ──────────────────
   // Range reshaped at boot by `osc.gainMax` via registryOverrides,
@@ -238,6 +257,50 @@ const PARAM_REGISTRY = [
     key: 'micKickGain', label: 'Mic Kick Gain', type: 'float',
     default: 1.0, range: [0, 2], clamp: true, persist: true,
     oscAddress: '/marsin/param/micKickGain', sharedFnName: 'micKickGain',
+  },
+  {
+    key: 'micFluxGain', label: 'Mic Flux Gain', type: 'float',
+    default: 1.0, range: [0, 2], clamp: true, persist: true,
+    oscAddress: '/marsin/param/micFluxGain', sharedFnName: 'micFluxGain',
+  },
+
+  // ── Audio structure detector live keys (docs/30 §Data shape) ───────────
+  // Engine-emitted by lib/audio_structure_detector.js — observe-and-publish
+  // outputs of the build/drop/sustain state machine. Same live-param policy
+  // as the mic/stems keys (persist:false, live:true, portWatch:false, no OSC
+  // inbound binding). `audioStructure` is a FLOAT-encoded enum (0.0=THIN,
+  // 1.0=BUILD, 2.0=SUSTAIN) for uniformity with every other live key — the
+  // codebase has no int-typed live keys (feasibility review §2.2 overrides
+  // the doc's `type:int`). Per-key broadcastHz follows docs/30 §Data shape.
+  {
+    key: 'audioStructure', label: 'Audio · Structure', type: 'float',
+    default: 0.0, range: [0, 2], clamp: true,
+    persist: false, live: true, broadcastHz: 10, portWatch: false,
+    sharedFnName: 'audioStructure',
+  },
+  {
+    key: 'audioBuildScore', label: 'Audio · Build Score', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 10, portWatch: false,
+    sharedFnName: 'audioBuildScore',
+  },
+  {
+    key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 10, portWatch: false,
+    sharedFnName: 'audioEnergyRatio',
+  },
+  {
+    key: 'audioVocalsHot', label: 'Audio · Vocals Hot', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 5, portWatch: false,
+    sharedFnName: 'audioVocalsHot',
+  },
+  {
+    key: 'audioDropPulse', label: 'Audio · Drop Pulse', type: 'float',
+    default: 0.0, range: [0, 1], clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
+    sharedFnName: 'audioDropPulse',
   },
 
   // ── BPM → speed sync (docs/25 §6) ──────────────────────────────────────

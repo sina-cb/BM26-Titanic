@@ -42,6 +42,7 @@ function makeParamCenter(initial = {}) {
 function fullGainPC() {
   return makeParamCenter({
     micLowGain: 1.0, micMidGain: 1.0, micHighGain: 1.0, micKickGain: 1.0,
+    micFluxGain: 1.0,
     stemsBassGain: 1.0, stemsDrumsGain: 1.0, stemsVocalsGain: 1.0,
   });
 }
@@ -61,10 +62,13 @@ function runSingleOp(opCfg, sequence, { signalKey = 'micLow', pc = null } = {}) 
 
 // ── KNOWN_SIGNALS / DEFAULT_CHAINS sanity ────────────────────────────────────
 
-test('KNOWN_SIGNALS covers the 7 docs/29 signals', () => {
+test('KNOWN_SIGNALS covers the docs/29 signals + micFlux (docs/30)', () => {
+  // micFlux added 2026-06-13 (docs/30): the spectral-flux primitive the
+  // audio structure detector consumes. Default chain is a single Gain
+  // tied to micFluxGain, mirroring the mic bands.
   assert.deepEqual(
     [...KNOWN_SIGNALS].sort(),
-    ['micHigh', 'micKick', 'micLow', 'micMid', 'stemsBass', 'stemsDrums', 'stemsVocals'],
+    ['micFlux', 'micHigh', 'micKick', 'micLow', 'micMid', 'stemsBass', 'stemsDrums', 'stemsVocals'],
   );
 });
 

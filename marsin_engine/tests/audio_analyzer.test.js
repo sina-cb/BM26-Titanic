@@ -372,3 +372,77 @@ test('reconfigure rejects invalid bands', () => {
 // wraps each value through `signalPostProcessor.process()` before
 // writing to CPC. Gain math + paramKey live-read + clamp behaviour
 // is now covered by tests/signal_post_processor.test.js.
+
+// ── Spectral flux (micFlux primitive, docs/30 / research memo §A2) ──────
+//
+// The analyzer emits a fifth field `flux` on each onAnalysis callback:
+// half-wave-rectified spectral flux, normalized to the bands' [0,1]
+// scale. SuperFlux-lite (Böck & Widmer 2013). These tests pin: (1) the
+// field is present and finite, (2) it's ~0 on a steady tone across hops
+// (no spectral change → no rising energy), (3) it spikes on a sudden
+// broadband change (a quiet tone followed by loud white noise).
+
+test('onAnalysis emits a finite `flux` field in [0,1]', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(440, 0.1, 0.5));
+  assert.ok(results.length > 0, 'expected at least one analysis');
+  for (const r of results) {
+    assert.ok(typeof r.flux === 'number' && Number.isFinite(r.flux),
+      `flux must be a finite number; got ${r.flux}`);
+    assert.ok(r.flux >= 0 && r.flux <= 1, `flux must be in [0,1]; got ${r.flux}`);
+  }
+});
+
+test('flux is ~0 on a steady tone across hops', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // A long steady tone — after the spectrum settles, consecutive hops
+  // have near-identical magnitude spectra so rising-only flux → ~0.
+  an.pushSamples(sineInt16(440, 0.5, 0.5));
+  // Skip the first few hops (ring buffer still filling / spectrum
+  // ramping in) and check the tail is quiet.
+  const tail = results.slice(Math.floor(results.length / 2));
+  assert.ok(tail.length > 0);
+  for (const r of tail) {
+    assert.ok(r.flux < 0.05, `steady-tone flux should be ~0; got ${r.flux}`);
+  }
+});
+
+test('flux spikes on a sudden broadband change', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // Settle on a quiet tone, capture the steady flux, then hit it with
+  // loud broadband noise — the magnitude spectrum jumps across many
+  // bins so half-wave-rectified flux spikes.
+  an.pushSamples(sineInt16(440, 0.4, 0.2));
+  const steadyTail = results.slice(-3);
+  const steadyMax = Math.max(...steadyTail.map(r => r.flux));
+  const beforeCount = results.length;
+  an.pushSamples(whiteNoiseInt16(0.1, 0.7));
+  const afterNoise = results.slice(beforeCount);
+  const spikeMax = Math.max(...afterNoise.map(r => r.flux));
+  assert.ok(spikeMax > steadyMax + 0.05,
+    `flux should spike on broadband change; steadyMax=${steadyMax} spikeMax=${spikeMax}`);
+});
+
+test('reset() clears the prev-spectrum so flux settles back to ~0', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // Run loud noise (high flux), reset, then a steady tone. After reset
+  // the stored prev-spectrum is cleared (null) and re-allocated zeroed,
+  // so the first post-reset hop diffs against an empty spectrum — but
+  // once the spectrum settles, consecutive steady hops produce ~0 flux.
+  // We assert the tail of the steady run is quiet, proving reset didn't
+  // leave stale prev-spectrum state bleeding in.
+  an.pushSamples(whiteNoiseInt16(0.2, 0.6));
+  an.reset();
+  const before = results.length;
+  an.pushSamples(sineInt16(440, 0.4, 0.5));
+  const fresh = results.slice(before);
+  assert.ok(fresh.length >= 3, 'expected several analyses after reset');
+  const tail = fresh.slice(Math.floor(fresh.length / 2));
+  for (const r of tail) {
+    assert.ok(r.flux < 0.05, `post-reset steady flux should settle to ~0; got ${r.flux}`);
+  }
+});
