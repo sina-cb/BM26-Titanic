@@ -94,6 +94,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
   stats:                       TOPICS.CONTROL,
+  // docs/30: sparse drop-detected event from the audio structure
+  // detector. ~once per 60 s of music, UI-relevant (scene-swap / macro
+  // / log candidate), so /ws/control next to audioStatus — NOT the
+  // high-rate /ws/signals meter stream.
+  dropFired:                   TOPICS.CONTROL,
 
   // ── /ws/params ─────────────────────────────────────────────────
   sharedParams:                TOPICS.PARAMS,

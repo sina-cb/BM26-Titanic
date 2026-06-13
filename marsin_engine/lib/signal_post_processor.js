@@ -59,7 +59,7 @@
  * to identity (Codex P0).
  */
 export const KNOWN_SIGNALS = Object.freeze([
-  'micLow', 'micMid', 'micHigh', 'micKick',
+  'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
   'stemsBass', 'stemsDrums', 'stemsVocals',
 ]);
 
@@ -87,6 +87,9 @@ export const DEFAULT_CHAINS = Object.freeze({
     { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 8, releaseMs: 180 } },
     { id: 'kick_schmitt',  type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 200 } },
     { id: 'kick_hold',     type: 'hold',     enabled: true, params: { timeoutMs: 120, decayMs: 120 } },
+  ],
+  micFlux: [
+    { id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } },
   ],
   stemsBass:   [
     { id: 'stems_bass_gain',   type: 'gain', enabled: true, params: { paramKey: 'stemsBassGain' } },
