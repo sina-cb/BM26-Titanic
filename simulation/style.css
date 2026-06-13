@@ -1073,8 +1073,32 @@ body.edit-mode-active #engine-params-panel {
   line-height: 1;
 }
 /* Stagger the two handles so they never overlap when both sit at the edge. */
-#left-primary-tab { top: 44%; }
-#left-child-tab { top: 60%; }
+#left-primary-tab { top: 50%; }
+
+/* Engine Parameters embedded inside the Pattern Editor drawer (left_drawer.js)
+   — flows as a capped, scrollable section above the Quick Reference instead of
+   a separate floating panel. */
+#engine-params-panel.embedded-in-editor {
+  position: static !important;
+  left: auto;
+  top: auto;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: 38vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: auto !important;
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--ghost-border);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 /* ─── Compact/Dense GUI Overrides ───
    lil-gui consumes these custom properties natively — mapping them to the
@@ -1515,11 +1539,12 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #sacn-out-monitor-panel {
-  /* Bottom-anchored: viewport-height-proof, expands upward, and clears the
-     unpatched-warning pill (bottom: 140) and info panel (bottom: 20). A
-     drag or persisted geometry switches it to top-anchoring inline. */
+  /* Bottom-left, viewport-height-proof: bottom-anchored so it expands upward
+     and the sACN IN monitor stacks just above it (placeSacnInMonitor). A drag
+     or persisted geometry switches it to top-anchoring inline. */
   top: auto;
-  bottom: 180px;
+  left: 14px;
+  bottom: 20px;
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {
