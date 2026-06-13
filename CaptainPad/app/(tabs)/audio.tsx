@@ -80,6 +80,16 @@ interface AudioConfig {
     attackMs: number; releaseMs: number; noiseGate: number;
   };
   kick:  { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
+  // Audio structure detector (build/drop/sustain cues, docs/30). Optional:
+  // absent until the engine has it in its merged audio config. Only the
+  // fields the UI reads/patches are typed here.
+  structureDetector?: {
+    enabled?: boolean;
+    dropEdgeMode?: 'level' | 'windowed';
+    dropDeltaWindowMs?: number;
+    buildThreshold?: number; dropEnergyJump?: number;
+    eventRefractoryMs?: number; stemsTimeoutMs?: number;
+  };
 }
 
 // BPM-sync absolute bounds. Operator picks min/max inside this band;
@@ -812,6 +822,196 @@ function PinnedAudioMeters({
   );
 }
 
+// ── Structure-detector live meters (docs/30) ─────────────────────────────
+//
+// The audio structure detector publishes a small family of derived live
+// keys (audioStructure / audioBuildScore / audioEnergyRatio / audioVocalsHot
+// / audioDropPulse) + a sparse `dropFired` event. This card surfaces them in
+// the SAME trail-plot style as <PinnedAudioMeters /> so they read
+// consistently with the MIC/STEMS meters. Self-contained: it owns its live
+// subscription + ring buffers + sample timer, so the AUDIO body around it
+// never re-renders on these high-rate ticks (same discipline as the pinned
+// strip). The detector is disabled by default — flat traces until enabled.
+
+// State enum mirror (lib/audio_structure_detector.js STATE).
+const STRUCTURE_STATE_NAMES = ['THIN', 'BUILD', 'SUSTAIN'] as const;
+function structureStateMeta(stateValue: number, C: Palette): { name: string; color: string } {
+  const idx = Math.max(0, Math.min(2, Math.round(stateValue)));
+  const name = STRUCTURE_STATE_NAMES[idx];
+  // THIN = muted, BUILD = amber (rising), SUSTAIN = the live accent.
+  const color = idx === 0 ? C.secondary : idx === 1 ? '#f0a23b' : ACCENT_AUTO;
+  return { name, color };
+}
+
+// Continuous [0,1] structure signals, each a single-trace plot. `audioDropPulse`
+// is the visible manifestation of the sparse `dropFired` event (it spikes to
+// 1.0 on a fire then decays), so a dedicated dropFired plot is redundant.
+type StructureSlot = { key: string; label: string; accent: SignalAccent; hint: string };
+const STRUCTURE_SIGNALS: readonly StructureSlot[] = [
+  { key: 'audioBuildScore',  label: 'BUILD',  accent: '#f0a23b', hint: 'build-up strength' },
+  { key: 'audioEnergyRatio', label: 'ENERGY', accent: 'auto',    hint: 'short/long energy' },
+  { key: 'audioDropPulse',   label: 'DROP',   accent: 'error',   hint: 'pulse fired on a drop' },
+];
+
+const STRUCTURE_LIVE_DEFAULTS: Record<string, number> = {
+  audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
+  audioVocalsHot: 0, audioDropPulse: 0,
+};
+// Trail order: the 3 continuous signals + the (normalised) state line.
+const STRUCTURE_TRAIL_KEYS = [...STRUCTURE_SIGNALS.map(s => s.key), 'audioStructure'];
+
+// Single-trace column — mirrors the POST sub-row of <SignalColumn /> (label,
+// value, bar, trail) so it sits flush with the MIC/STEMS meter style.
+function StructureSignalColumn({ label, value, samples, bufferLen, accent, valueText, barFill }: {
+  label: string; value: number; samples: readonly number[]; bufferLen: number;
+  accent: string; valueText?: string; barFill?: number;
+}) {
+  const C = usePalette();
+  const v = Math.max(0, Math.min(1, value));
+  const bar = Math.max(0, Math.min(1, barFill ?? v));
+  const points = useMemo(() => buildPoints(samples, bufferLen), [samples, bufferLen]);
+  return (
+    <View style={{ flex: 1, marginHorizontal: 4 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, letterSpacing: 0.6 }}>{label}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{valueText ?? v.toFixed(2)}</Text>
+      </View>
+      <View style={{
+        height: 18, borderRadius: 9, backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden', marginTop: 2,
+      }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${bar * 100}%`, backgroundColor: accent }} />
+      </View>
+      <View style={{
+        marginTop: 2, height: TRAIL_HEIGHT, backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 3, overflow: 'hidden',
+      }}>
+        <Svg width="100%" height="100%" viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`} preserveAspectRatio="none">
+          {points ? <Polyline points={points} fill="none" stroke={accent} strokeWidth={1.5} /> : null}
+        </Svg>
+      </View>
+    </View>
+  );
+}
+
+function StructureDetectorCard({ cardStyle, detectorOn, busy, onToggle }: {
+  cardStyle: any; detectorOn: boolean; busy: boolean; onToggle: () => void;
+}) {
+  const C = usePalette();
+  const live = useLiveParamValues(STRUCTURE_LIVE_DEFAULTS) as Record<string, number>;
+
+  // Trail window — read the SAME persisted key the pinned strip uses, so the
+  // two stay visually consistent (re-read on focus to pick up changes there).
+  const [windowS, setWindowS] = useState<number>(DEFAULT_WINDOW_S);
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    AsyncStorage.getItem(SIGNAL_WINDOW_KEY).then(raw => {
+      if (!alive || !raw) return;
+      const parsed = parseInt(raw, 10);
+      if (WINDOW_OPTIONS_S.includes(parsed as typeof WINDOW_OPTIONS_S[number])) setWindowS(parsed);
+    }).catch(() => { /* benign */ });
+    return () => { alive = false; };
+  }, []));
+  const setWindow = useCallback((s: number) => {
+    setWindowS(s);
+    AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s)).catch(() => { /* benign */ });
+  }, []);
+
+  // Ring buffers (same pattern as PinnedAudioMeters): one per trail key.
+  const [trails, setTrails] = useState<number[][]>(() => STRUCTURE_TRAIL_KEYS.map(() => []));
+  const liveRef = useRef(live); liveRef.current = live;
+  useFocusEffect(useCallback(() => {
+    const interval = setInterval(() => {
+      const snap = liveRef.current;
+      setTrails(prev => prev.map((buf, i) => {
+        const key = STRUCTURE_TRAIL_KEYS[i];
+        // audioStructure is 0..2 → normalise to [0,1] for the trail.
+        const raw = snap[key] ?? 0;
+        const v = key === 'audioStructure' ? raw / 2 : raw;
+        const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
+        out.push(v);
+        return out;
+      }));
+    }, TRAIL_SAMPLE_MS);
+    return () => clearInterval(interval);
+  }, []));
+
+  const bufferLen = windowS * TRAIL_SAMPLE_HZ;
+  const stateMeta = structureStateMeta(live.audioStructure ?? 0, C);
+  const vocalsHot = (live.audioVocalsHot ?? 0) >= 0.5;
+
+  return (
+    <View style={cardStyle}>
+      <SectionHeader
+        icon="waveform"
+        title="STRUCTURE DETECTOR"
+        hint="Build / drop / sustain cues (docs/30). Reads the raw pre-chain signals; observe-only."
+        right={
+          <WindowPicker value={windowS} onChange={setWindow} />
+        }
+      />
+      <MasterToggle
+        on={detectorOn}
+        busy={busy}
+        onPress={onToggle}
+        label={detectorOn ? '● DETECTING' : 'DISABLED'}
+        subtitle={detectorOn
+          ? 'Publishing audioStructure / buildScore / energyRatio / dropPulse to the CPC.'
+          : 'Tap to enable. Traces below stay flat until the detector is running.'}
+        accent={detectorOn ? ACCENT_AUTO : ACCENT_AUTO}
+      />
+
+      {/* Current state badge + vocals indicator. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, marginBottom: 6 }}>
+        <View style={{
+          paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8,
+          backgroundColor: detectorOn ? stateMeta.color : C.surfaceContainerLowest,
+          borderWidth: 1, borderColor: detectorOn ? stateMeta.color : C.ghostBorder,
+        }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14,
+            color: detectorOn ? '#001014' : C.icon, letterSpacing: 1.2,
+          }}>{detectorOn ? stateMeta.name : '—'}</Text>
+        </View>
+        <View style={{
+          paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+          backgroundColor: vocalsHot ? C.primaryContainer : C.surfaceContainerLowest,
+          borderWidth: 1, borderColor: vocalsHot ? C.primary : C.ghostBorder,
+        }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: vocalsHot ? C.primary : C.icon, letterSpacing: 0.8,
+          }}>{vocalsHot ? '♪ VOCALS HOT' : 'VOCALS'}</Text>
+        </View>
+      </View>
+
+      {/* Trace row — STATE (stepped) + the 3 continuous signals, all in the
+          shared SignalColumn trail style. */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 6 }}>
+        <StructureSignalColumn
+          label="STATE"
+          value={(live.audioStructure ?? 0) / 2}
+          valueText={detectorOn ? stateMeta.name : '—'}
+          barFill={(live.audioStructure ?? 0) / 2}
+          samples={trails[STRUCTURE_TRAIL_KEYS.indexOf('audioStructure')]}
+          bufferLen={bufferLen}
+          accent={detectorOn ? stateMeta.color : C.secondary}
+        />
+        {STRUCTURE_SIGNALS.map((slot, i) => (
+          <StructureSignalColumn
+            key={slot.key}
+            label={slot.label}
+            value={live[slot.key] ?? 0}
+            samples={trails[i]}
+            bufferLen={bufferLen}
+            accent={resolveAccent(slot.accent, C)}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // ── BPM live read-outs ───────────────────────────────────────────────────
 //
 // Tiny live-only siblings of the BPM-sync MasterToggle. Pulled out so
@@ -1351,6 +1551,19 @@ function AudioConfigBody({
     else { setPatchError(null); reload(); }
   }, [cfg, reload]);
 
+  // Structure detector enable/disable (docs/30). Nested live field —
+  // structureDetector.enabled is in the audio_config live allow-list.
+  const toggleDetector = useCallback(async () => {
+    if (!cfg) return;
+    const target = !(cfg.structureDetector?.enabled ?? false);
+    setBusy('detector');
+    setCfg(prev => prev && ({ ...prev, structureDetector: { ...(prev.structureDetector || {}), enabled: target } }));
+    const r = await patchAudioConfig({ structureDetector: { enabled: target } });
+    setBusy(null);
+    if (!r.ok) { setPatchError(r.error || 'failed to toggle detector'); reload(); }
+    else { setPatchError(null); reload(); }
+  }, [cfg, reload]);
+
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice
   // both have the picker fields the engine wants — accept the union so
@@ -1400,6 +1613,7 @@ function AudioConfigBody({
 
   // ── Derived ────────────────────────────────────────────────────────
   const enabled  = cfg?.enabled ?? false;
+  const detectorOn = cfg?.structureDetector?.enabled ?? false;
   const phase    = status?.phase ?? (enabled ? 'unknown' : 'off');
   const phaseColor =
     phase === 'running'    ? ACCENT_AUTO :
@@ -1489,6 +1703,19 @@ function AudioConfigBody({
           bpmSyncOn={bpmSyncOn}
           oscMissing={oscMissing}
           oscState={oscState}
+        />
+
+        {/* ── 2b. STRUCTURE DETECTOR (live build/drop/sustain meters) ────
+            docs/30 — surfaces the detector's derived live keys as
+            trail plots in the same style as the pinned MIC/STEMS meters,
+            plus the enable toggle (the detector is observe-only and
+            disabled by default). Self-contained live subscription so the
+            body around it doesn't re-render on detector ticks. */}
+        <StructureDetectorCard
+          cardStyle={CARD}
+          detectorOn={detectorOn}
+          busy={busy === 'detector'}
+          onToggle={toggleDetector}
         />
 
         {/* ── Cross-machine mic-not-found banner ──────────────────────
