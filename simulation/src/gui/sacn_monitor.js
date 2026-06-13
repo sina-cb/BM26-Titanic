@@ -4,10 +4,19 @@
  * Shows connection status, stats, and activity log for the sACN input source.
  * Appears when sacn_in lighting mode is selected; hides otherwise.
  */
+import { lightingMode } from '../core/state.js';
 
 const MAX_LOG_ENTRIES = 20;
 let _updateIntervalIn = null;
 let _updateIntervalOut = null;
+
+// A connected socket whose frames stop arriving is a silent failure
+// (task 021: 40 s of frozen frames with zero indication). Age past
+// this threshold flips the IN monitor to a loud STALLED state.
+const IN_STALL_MS = 2000;
+let _inStalled = false;
+// Out targets older than this drop off the display (sender went idle).
+const OUT_TARGET_TTL_MS = 5000;
 
 // ─── sACN IN Monitor ──────────────────────────────────────────────────────────
 
@@ -89,8 +98,34 @@ function updateInStats() {
   const framesEl = document.getElementById('sacn-in-st-frames');
   const univEl = document.getElementById('sacn-in-st-universe');
   const priEl = document.getElementById('sacn-in-st-priority');
+  const ageEl = document.getElementById('sacn-in-st-age');
 
-  if (statusEl) statusEl.textContent = st.connected ? 'Connected' : 'Disconnected';
+  // Freshness + stall detection: connected but frames aging = the
+  // bridge link silently died upstream. Loud in the panel AND the log
+  // (once per transition, with a recovery line) so a frozen rig is
+  // diagnosable at a glance instead of looking like a mapping bug.
+  const age = st.lastFrameAt > 0 ? Date.now() - st.lastFrameAt : null;
+  // Stall clock runs from the last frame OR the last (re)connect,
+  // whichever is later — framesReceived is cumulative, so a fresh
+  // reconnect would otherwise flag STALLED before its first frame.
+  const lastActivity = Math.max(st.lastFrameAt, st.connectedAt || 0);
+  const stalled = !!(st.connected && st.framesReceived > 0 && lastActivity > 0 &&
+    Date.now() - lastActivity > IN_STALL_MS);
+  if (stalled !== _inStalled) {
+    _inStalled = stalled;
+    if (stalled) sacnInLog(`⚠ STALLED — no frames for ${(age / 1000).toFixed(1)}s (socket still connected)`, 'warn');
+    else sacnInLog('✅ Frames resumed', 'info');
+  }
+  if (ageEl) {
+    if (age === null) ageEl.textContent = '—';
+    else if (age < 1500) ageEl.textContent = `${age} ms`;
+    else ageEl.textContent = `${(age / 1000).toFixed(1)} s`;
+    ageEl.style.color = stalled ? '#f66' : '';
+  }
+  if (statusEl) {
+    statusEl.textContent = stalled ? '⚠ STALLED' : (st.connected ? 'Connected' : 'Disconnected');
+    statusEl.style.color = stalled ? '#f66' : '';
+  }
   if (fpsEl) fpsEl.textContent = st.fps;
   if (framesEl) framesEl.textContent = st.framesReceived.toLocaleString();
   if (univEl) {
@@ -195,6 +230,28 @@ function updateOutStats() {
   const fpsEl = document.getElementById('sacn-out-st-fps');
   const framesEl = document.getElementById('sacn-out-st-frames');
   const univEl = document.getElementById('sacn-out-st-universe');
+  const modeEl = document.getElementById('sacn-out-st-mode');
+  const targetsEl = document.getElementById('sacn-out-st-targets');
+
+  // What the output path is doing right now, in operator terms. In
+  // sacn_in mode the sim deliberately RELAYS the engine's frames to the
+  // real controllers (it is the engine→hardware bridge on playa) —
+  // task 021 flagged that this was happening invisibly.
+  if (modeEl) {
+    modeEl.textContent = lightingMode === 'sacn_in'
+      ? 'RELAY (engine → controllers)'
+      : 'SIM RENDER (local patterns)';
+  }
+  // Live send targets (universe → controller IP); idle ones age out.
+  if (targetsEl && st.targets) {
+    const now = Date.now();
+    const live = [];
+    for (const [key, at] of st.targets) {
+      if (now - at > OUT_TARGET_TTL_MS) st.targets.delete(key);
+      else live.push(key);
+    }
+    targetsEl.textContent = live.length > 0 ? live.sort().join('  ') : '—';
+  }
 
   if (statusEl) statusEl.textContent = st.connected ? 'Connected' : 'Disconnected';
   if (fpsEl) fpsEl.textContent = st.fps;

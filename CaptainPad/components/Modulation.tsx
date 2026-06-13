@@ -243,8 +243,8 @@ function GhostMarker({
   const pct = Math.min(100, Math.max(0, ghost * 100));
   return (
     <View
-      pointerEvents="none"
       style={{
+        pointerEvents: 'none',
         position: 'absolute',
         left: 0,
         top: 0,
@@ -307,8 +307,8 @@ function ModulationRangeBand({
   if (width < 0.005) return null;
   return (
     <View
-      pointerEvents="none"
       style={{
+        pointerEvents: 'none',
         position: 'absolute',
         left: `${lo * 100}%`,
         width: `${width * 100}%`,

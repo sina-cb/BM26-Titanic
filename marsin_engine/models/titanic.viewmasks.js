@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the titanic model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/titanic/views.yaml).
-// Updated: 2026-06-10T19:53:20.833Z
+// Updated: 2026-06-12T22:41:02.828Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails
@@ -33,10 +33,6 @@ export const groupBits = {
   'Small_Right_3': 0x00800000,
   'Small_Right_2': 0x01000000,
   'Small_Right_1': 0x02000000,
-  'Berg Alpha': 0x04000000,
-  'Berg Beta': 0x08000000,
-  'Berg Gamma': 0x10000000,
-  'Berg Delta': 0x20000000,
 };
 
 export const viewMasks = [

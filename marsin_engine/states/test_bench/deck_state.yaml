@@ -1,7 +1,7 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 80_tree_canopy_fracture
+  pattern: 13_sparkle
   mode: blend_screen
   fader: 1
   enabled: true
@@ -9,25 +9,21 @@ channel:
   faderLocked: false
   localControls:
     '1037917937':
-      v0: 0.81
+      v0: 0.31
       v1: 0
       v2: 0
-    '1176417386':
-      v0: 0.48
+    '2393603498':
+      v0: 0.5
       v1: 0
       v2: 0
-    '3904555625':
-      v0: 0.43
-      v1: 0
-      v2: 0
-    '4257441711':
-      v0: 0.81
+    '2524999969':
+      v0: 0.5
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_52_80_tree_canopy_fracture
-    cursor: 52
+    activeEntryId: e_default_13_13_sparkle
+    cursor: 13
     autopilot:
       active: false
       delay_s: 1

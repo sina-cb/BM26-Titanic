@@ -784,7 +784,7 @@ body.edit-mode-active #engine-params-panel {
 }
 
 /* ─── Instance Card Styling ───
-   Applied to individual fixture/iceberg/generator/strand folders
+   Applied to individual fixture/generator/strand folders
    to visually separate them as distinct configurable entities */
 .lil-gui.gui-card {
   margin: 3px 0 !important;
@@ -1441,6 +1441,9 @@ body.edit-mode-active #engine-params-panel {
   top: 84px;
   right: 360px;
   width: 300px;
+  min-width: 300px;
+  /* Header + a few rows — the resize grip can't make it useless. */
+  min-height: 150px;
   max-height: 70vh;
   z-index: 95;
   display: flex;
@@ -1453,6 +1456,7 @@ body.edit-mode-active #engine-params-panel {
   box-shadow: 0 8px 40px var(--ambient-shadow);
   overflow: hidden;
   font-family: inherit;
+  resize: both;
 }
 
 #view-masks-panel.hidden {
@@ -1460,6 +1464,49 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #view-masks-panel.collapsed .vm-body {
+  display: none;
+}
+
+/* Collapsed = header bar only (same contract as the Pattern Editor and
+   sACN monitors). !important beats the inline height that a layout
+   restore or the native resize grip leaves on the element — without it
+   the frame stays full-size as an empty themed ghost. resize:none while
+   collapsed: resizing a collapsed panel is a deliberate no-op (the grip
+   disappears with the body; expand first). */
+#view-masks-panel.collapsed,
+#controller-map-panel.collapsed {
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  border-radius: 8px;
+  resize: none;
+  overflow: hidden;
+}
+
+/* Theme-visible resize grip: the native Chromium corner triangle is
+   near-invisible on dark glass panels, so paint our own diagonal lines
+   over the grip corner. pointer-events:none keeps the native resizer
+   underneath fully interactive. */
+#view-masks-panel::after,
+#controller-map-panel::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    var(--secondary) 3px 4.5px
+  );
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  opacity: 0.85;
+}
+
+#view-masks-panel.collapsed::after,
+#controller-map-panel.collapsed::after {
   display: none;
 }
 
@@ -1491,7 +1538,22 @@ body.edit-mode-active #engine-params-panel {
 
 .vm-body {
   padding: 8px;
-  overflow-y: auto;
+  overflow: auto;
+  /* Fill whatever height the operator resizes the panel to (inline
+     height from the grip or a restored layout); shrink + scroll when
+     the panel is smaller than the content. */
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Multi-column when the operator widens the panel: a flat list of
+     section titles/rows/cards flows down the first column, then the
+     next — one column at the 300px default, more as it grows. */
+  column-width: 300px;
+  column-gap: 12px;
+  column-fill: auto;
+}
+
+.vm-body > * {
+  break-inside: avoid;
 }
 
 .vm-section-title {
@@ -1859,4 +1921,544 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--error) 20%, transparent);
   border-color: color-mix(in srgb, var(--error) 50%, transparent);
   color: var(--error);
+}
+
+/* ─── Controller Mapping panel (docs/33) ─────────────────────────────── */
+#controller-map-panel {
+  position: fixed;
+  top: 65px;
+  right: 360px;
+  width: 380px;
+  min-width: 380px;
+  /* Header + banner slot + a couple of chain rows + the tray head. */
+  min-height: 180px;
+  max-height: 86vh;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--ghost-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px var(--ambient-shadow);
+  overflow: hidden;
+  font-family: var(--font-body);
+  resize: both;
+}
+
+#controller-map-panel.hidden {
+  display: none;
+}
+
+#controller-map-panel.collapsed .cm-body {
+  display: none;
+}
+
+.cm-header-status {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.cm-header-status.cm-warn {
+  background: color-mix(in srgb, var(--caution) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--caution) 40%, transparent);
+  color: var(--caution);
+}
+
+.cm-header-status.cm-ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+  color: var(--ok);
+}
+
+.cm-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  /* Fill the panel when it carries an explicit height (resize grip or
+     restored layout) so the scroll regions inside get the space. */
+  flex: 1 1 auto;
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* Controllers get their own scroll region; the violations banner above
+   and the tray/save/hint below stay fixed and reachable at any rig
+   size (15+ controllers, hundreds of fixtures). */
+.cm-main {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 80px;
+  /* Multi-column when the operator widens the panel (15–20 controller
+     rigs): cards flow into as many ~330px columns as fit — exactly one
+     at the 380px default width. Grid (not multicol) so each card stays
+     an unfragmented interactive block. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 0 10px;
+  align-content: start;
+  align-items: start;
+}
+
+.cm-main > .cm-add {
+  grid-column: 1 / -1;
+}
+
+.cm-toggle {
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--primary) 65%, transparent);
+  cursor: pointer;
+  font-size: 9px;
+  font-family: inherit;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.cm-toggle:hover {
+  color: var(--primary);
+}
+
+.cm-summary {
+  font-size: 8.5px;
+  color: var(--secondary);
+  padding: 1px 4px 2px 18px;
+}
+
+.cm-banner {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-radius: 6px;
+  color: var(--error);
+  font-size: 9px;
+  line-height: 1.45;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  max-height: 96px;
+  overflow-y: auto;
+  flex: 0 0 auto;
+}
+
+.cm-controller {
+  border: 1px solid var(--ghost-border);
+  border-radius: 8px;
+  padding: 6px;
+  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+}
+
+.cm-controller-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.cm-input {
+  background: var(--input-bg);
+  border: 1px solid var(--ghost-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 5px;
+  min-width: 0;
+}
+
+.cm-input.cm-invalid {
+  border-color: color-mix(in srgb, var(--error) 70%, transparent);
+  background: color-mix(in srgb, var(--error) 14%, var(--input-bg));
+}
+
+.cm-input.cm-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.cm-input.cm-ip {
+  width: 92px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.cm-input.cm-num {
+  width: 44px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.cm-port {
+  border-top: 1px solid color-mix(in srgb, var(--text) 5%, transparent);
+  padding: 4px 2px 5px;
+}
+
+.cm-port.cm-port-picking {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.cm-port-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cm-port-label {
+  font-weight: 600;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.cm-port-label.cm-effects {
+  color: var(--tint);
+}
+
+/* ── Universe map bar ───────────────────────────────────────────────
+   Every claim on this port's universe across ALL ports/controllers,
+   placed where it lives in 1–512: own claims bright, siblings dimmed,
+   conflicts red. Fragmentation (holes) is the compaction signal. */
+.cm-occupancy {
+  flex: 1;
+  height: 9px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  position: relative;
+  overflow: hidden;
+  min-width: 50px;
+}
+
+.cm-occupancy .cm-occ-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.cm-occupancy .cm-occ-seg.cm-occ-gap {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.cm-occupancy .cm-occ-seg.cm-occ-invalid {
+  background: color-mix(in srgb, var(--error) 75%, transparent);
+}
+
+/* Claims from OTHER ports render dimmed so this port's own fixtures
+   pop while fragmentation stays readable. */
+.cm-occ-seg.cm-occ-other {
+  opacity: 0.32;
+}
+
+/* Overlapping claims (kept by design — addresses are explicit). */
+.cm-occ-seg.cm-occ-conflict {
+  background: var(--error) !important;
+  opacity: 1;
+}
+
+.cm-occ-count {
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  color: var(--secondary);
+  white-space: nowrap;
+}
+
+.cm-occ-count.cm-occ-over {
+  color: var(--error);
+  font-weight: 700;
+}
+
+.cm-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 4px 0 3px;
+}
+
+.cm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: grab;
+  user-select: none;
+}
+
+.cm-chip .cm-chip-addr {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.cm-chip .cm-chip-x {
+  cursor: pointer;
+  color: transparent;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.cm-chip:hover .cm-chip-x {
+  color: var(--error);
+}
+
+.cm-chip.cm-chip-invalid {
+  border-color: color-mix(in srgb, var(--error) 60%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error);
+  text-decoration: line-through;
+}
+
+.cm-chip.cm-chip-gap {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  color: var(--secondary);
+  font-style: italic;
+}
+
+.cm-chip.cm-chip-pinned {
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
+  background: color-mix(in srgb, var(--tint) 8%, transparent);
+  color: var(--tint);
+  cursor: default;
+}
+
+.cm-chip.cm-chip-selected {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--caution) 80%, transparent);
+}
+
+.cm-chip.cm-drag-over {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.cm-port-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.cm-btn {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 4px;
+  color: var(--primary);
+  font-size: 9px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.cm-btn:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.cm-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.cm-btn.cm-danger {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+  color: var(--error);
+}
+
+.cm-btn.cm-danger:hover {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+}
+
+.cm-btn.cm-add {
+  display: block;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 4px;
+}
+
+.cm-error-chip {
+  display: inline-block;
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 40%, transparent);
+  border-radius: 6px;
+  color: var(--error);
+  font-size: 8.5px;
+  padding: 1px 6px;
+  margin: 2px 0;
+}
+
+.cm-tray {
+  border: 1px solid var(--ghost-border);
+  border-radius: 8px;
+  padding: 6px;
+  margin-top: 4px;
+  background: color-mix(in srgb, var(--text) 1.5%, transparent);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cm-tray .cm-tray-head {
+  flex: 0 0 auto;
+}
+
+/* Operator-sized panel (the legacy module sets .cm-user-sized whenever
+   the panel carries an inline height — resize grip or restored layout):
+   the tray sheds its compact chip cap and shares the extra vertical
+   space with the controllers region, 3:1 in favor of the chains. */
+#controller-map-panel.cm-user-sized .cm-main {
+  flex: 3 1 auto;
+}
+
+#controller-map-panel.cm-user-sized .cm-tray {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#controller-map-panel.cm-user-sized .cm-tray-chips {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 40px;
+}
+
+.cm-tray.cm-tray-picking {
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.cm-tray-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.cm-tray-title {
+  flex: 1;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  font-family: var(--font-headline);
+  color: color-mix(in srgb, var(--primary) 60%, transparent);
+  text-transform: uppercase;
+}
+
+.cm-tray-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.cm-tray-chip {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 9px;
+  padding: 1px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-tray-chip:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  color: var(--text);
+}
+
+.cm-fully-patched {
+  text-align: center;
+  color: var(--ok);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 6px;
+}
+
+.cm-hint {
+  font-size: 8.5px;
+  color: var(--secondary);
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+#cm-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-bg);
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-body);
+  padding: 8px 14px;
+  box-shadow: 0 6px 30px var(--ambient-shadow);
+}
+
+#cm-toast.cm-toast-error {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  color: var(--error);
+}
+
+#cm-toast button {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: 4px;
+  color: var(--primary);
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 700;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.cm-chip-addr-input {
+  width: 34px;
+  background: color-mix(in srgb, var(--surface-container-lowest) 60%, transparent);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0 2px;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.cm-chip-addr-input::-webkit-outer-spin-button,
+.cm-chip-addr-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.cm-chip-addr-input:hover,
+.cm-chip-addr-input:focus {
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  outline: none;
+}
+
+/* An address whose channels collide with something else — KEPT by
+   design (addresses are explicit); red screams "look at me". */
+.cm-chip-addr-input.cm-chip-addr-conflict {
+  color: var(--error);
+  font-weight: 700;
+  border-color: color-mix(in srgb, var(--error) 70%, transparent);
 }

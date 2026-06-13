@@ -124,6 +124,7 @@
         <div class="sacn-stats" id="sacn-in-stats">
           <div class="sacn-stat-row" title="WebSocket connection to the sACN IN bridge server"><span class="sacn-label">Status</span><span class="sacn-value" id="sacn-in-st-status">Disconnected</span></div>
           <div class="sacn-stat-row" title="Incoming sACN frames per second (measured over 5s window)"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-in-st-fps">0</span></div>
+          <div class="sacn-stat-row" title="Time since the last DMX frame arrived — turns red/STALLED if the link silently freezes"><span class="sacn-label">Last frame</span><span class="sacn-value" id="sacn-in-st-age">—</span></div>
           <div class="sacn-stat-row" title="Total DMX frames received since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-in-st-frames">0</span></div>
           <div class="sacn-stat-row" title="Number of active sACN universes being received"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-in-st-universe">—</span></div>
           <div class="sacn-stat-row" title="sACN source priority (higher priority wins in multi-source merge)"><span class="sacn-label">Priority</span><span class="sacn-value" id="sacn-in-st-priority">—</span></div>
@@ -149,6 +150,8 @@
           <div class="sacn-stat-row" title="Outgoing sACN frames per second"><span class="sacn-label">FPS</span><span class="sacn-value" id="sacn-out-st-fps">0</span></div>
           <div class="sacn-stat-row" title="Total DMX frames sent since connection"><span class="sacn-label">Frames</span><span class="sacn-value" id="sacn-out-st-frames">0</span></div>
           <div class="sacn-stat-row" title="Number of active sACN universes being pushed"><span class="sacn-label">Universes</span><span class="sacn-value" id="sacn-out-st-universe">—</span></div>
+          <div class="sacn-stat-row" title="RELAY: forwarding the engine's received frames to real controllers (sacn_in mode). SIM RENDER: sending locally rendered patterns"><span class="sacn-label">Mode</span><span class="sacn-value" id="sacn-out-st-mode">—</span></div>
+          <div class="sacn-stat-row" title="Where frames are going right now (universe → controller IP); idle targets age out after 5s"><span class="sacn-label">Targets</span><span class="sacn-value" id="sacn-out-st-targets">—</span></div>
         </div>
         <div class="sacn-log-title" style="display:flex; justify-content:space-between; align-items:center;  margin-bottom: 5px;">
           <span>Activity Log</span>
@@ -168,6 +171,16 @@
         <button class="pe-btn" id="vm-collapse-btn" title="Collapse">─</button>
       </div>
       <div class="vm-body" id="vm-body"></div>
+    </div>
+
+    <!-- Controller mapping editor (floating, draggable, collapsible) -->
+    <div id="controller-map-panel" class="hidden">
+      <div class="vm-header" id="cm-drag-handle">
+        <span class="vm-title">🎛 Controller Mapping</span>
+        <span class="cm-header-status" id="cm-header-status"></span>
+        <button class="pe-btn" id="cm-collapse-btn" title="Collapse">─</button>
+      </div>
+      <div class="cm-body" id="cm-body"></div>
     </div>
 
     <!-- View presets (populated dynamically from scene_preset_cameras.yaml) -->

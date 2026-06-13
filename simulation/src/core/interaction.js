@@ -187,12 +187,6 @@ export function onTransformChange() {
     window._onStrandTransformChange(obj);
     return;
   }
-  // Handle iceberg objects
-  if (obj.userData.isIceberg && window._onIcebergTransformChange) {
-    window._onIcebergTransformChange(obj);
-    return;
-  }
-
   if (!obj.userData.fixture) return;
 
   const fixture = obj.userData.fixture;
@@ -261,6 +255,7 @@ export function onPointerDown(event) {
     event.target.closest(".vm-modal-overlay") ||
     event.target.closest(
       "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
+      "#controller-map-panel, #cm-toast, " +
       "#sacn-in-monitor-panel, #sacn-out-monitor-panel, #view-presets, #info-panel"
     )
   )
@@ -353,9 +348,6 @@ export function onPointerDown(event) {
     } else if (hit.userData.isLedStrand) {
       deselectAllFixtures();
       if (window.openStrandFolder && hit.userData.fixture) window.openStrandFolder(hit.userData.fixture.index);
-    } else if (hit.userData.isIceberg) {
-      deselectAllFixtures();
-      if (window.openIcebergFolder && hit.userData.fixture) window.openIcebergFolder(hit.userData.fixture.index);
     } else if (hit.userData.isParLight) {
       const fixtureIndex = hit.userData.fixture.index;
       if (event.shiftKey) {
@@ -376,11 +368,13 @@ export function onPointerDown(event) {
     }
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
   }
 }
 

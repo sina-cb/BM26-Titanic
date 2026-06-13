@@ -1,7 +1,7 @@
 /**
  * gui_builder.js — Full GUI construction (lil-gui).
  * Contains: setupGUI(), handler registry, generic builders,
- * and all section builders (par lights, DMX, LED strands, icebergs).
+ * and all section builders (par lights, DMX, LED strands).
  */
 import * as THREE from "three";
 import yaml from "js-yaml";
@@ -23,7 +23,7 @@ import { GUI } from "./gui_engine.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
-import { autoPatchAll, clearAllPatches, clearMetadata, validatePatches, gatherAllConfigs } from "../dmx/auto_patcher.js";
+import { clearMetadata, gatherAllConfigs } from "../dmx/auto_patcher.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
 import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
@@ -31,7 +31,7 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
-import { Iceberg } from "../fixtures/iceberg.js";
+import { updateFloodLights } from "../core/flood_lights.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -39,7 +39,7 @@ const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simB
 
 // Shared compact "🔖 Metadata (V2)" panel for fixture editor cards.
 // Single source of truth — used by every fixture-rendering path (regular PARs,
-// trace-generated PARs, DMX instances, LED strands, icebergs) so the metadata
+// trace-generated PARs, DMX instances, LED strands) so the metadata
 // UI is consistent and ALWAYS rendered. Returns refs to the inputs in case a
 // caller needs to push external updates (e.g. trace-generated fixtures whose
 // fixtureId is auto-derived from the DMX patch).
@@ -167,6 +167,46 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
   window.__metadataPanelRegistry.push(panel);
 
+  return panel;
+}
+
+/**
+ * Register a fixture card's DMX Patch row (U / Addr / IP + status dot)
+ * for global refresh via window.refreshMetadataPanels(). The Controller
+ * Mapping panel projects new patch values into the live configs on
+ * every mutation and save — without this registration the patch inputs
+ * would show stale values until a full GUI rebuild. Also keeps the
+ * locked ("derived") state in sync with whether a mapping exists, so
+ * creating the first controller locks every card live and deleting the
+ * last one unlocks them.
+ */
+function registerPatchRowRefresh(config, { root, uniInput, addrInput, ipInput, updateStatus }) {
+  const applyLockState = () => {
+    const mapperActive = !!(window.__controllerRegistry &&
+      window.__controllerRegistry.controllers.length > 0);
+    for (const inp of [uniInput, addrInput, ipInput]) {
+      inp.disabled = mapperActive;
+      inp.style.opacity = mapperActive ? '0.6' : '';
+      inp.title = mapperActive
+        ? 'Derived from Controller Mapping — edit in the 🎛 Controllers panel.'
+        : '';
+    }
+  };
+  applyLockState();
+
+  const panel = {
+    root,
+    refresh() {
+      uniInput.value = config.dmxUniverse || 0;
+      addrInput.value = config.dmxAddress || 0;
+      ipInput.value = config.controllerIp || '';
+      updateStatus();
+      applyLockState();
+    },
+  };
+  if (!window.__metadataPanelRegistry) window.__metadataPanelRegistry = [];
+  window.__metadataPanelRegistry = window.__metadataPanelRegistry.filter(p => p.root && p.root.isConnected);
+  window.__metadataPanelRegistry.push(panel);
   return panel;
 }
 
@@ -759,10 +799,6 @@ function setupGUI() {
       lights.helpers.forEach((h) => {
         h.visible = v;
       });
-      // Also toggle iceberg floodlight fixture models
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.setFixtureVisibility(v));
-      }
     },
     lightingEnabled: (v) => {
       if (window.onLightingChange) window.onLightingChange();
@@ -779,6 +815,14 @@ function setupGUI() {
     lightingMode: () => {
       if (window.onLightingChange) window.onLightingChange();
     },
+    // Master floods (Atmosphere → Master Floods in common.yaml) — all
+    // six params drive the same rig update; see src/core/flood_lights.js.
+    masterFloodEnabled: () => updateFloodLights(),
+    masterFloodColor: () => updateFloodLights(),
+    masterFloodIntensity: () => updateFloodLights(),
+    masterFloodAngle: () => updateFloodLights(),
+    masterFloodDistance: () => updateFloodLights(),
+    masterFloodDimmer: () => updateFloodLights(),
   };
 
   // Expose applyAllHandlers for undo/redo to sync Three.js scene from params
@@ -1087,11 +1131,6 @@ function setupGUI() {
           buildLedStrandsSection(parentFolder, entry);
           continue;
         }
-        // Special: icebergArray → build Icebergs UI
-        if (sectionMeta.type === "icebergArray") {
-          buildIcebergsSection(parentFolder, entry);
-          continue;
-        }
         // Special: dmxArray → build DMX Lights UI
         if (sectionMeta.type === "dmxArray") {
           buildDmxLightsSection(parentFolder, entry);
@@ -1266,91 +1305,20 @@ function setupGUI() {
       children.forEach((f) => f.destroy());
       window.parGuiFolders = [];
 
-      // ─── Auto-Patch All button ───
-      // Remove any stale auto-patch buttons from previous renders
+      // ─── Patch tools ───
+      // Patching is owned by the Controller Mapping panel (docs/33) —
+      // the legacy Auto-Patch / Clear All Patches buttons are gone
+      // (auto_patcher.js module deletion is task 017). Only the
+      // metadata reset survives here.
+      // Remove any stale button wraps from previous renders.
       const plChildrenCleanup = parListFolder.domElement.querySelector('.children');
       if (plChildrenCleanup) {
         plChildrenCleanup.querySelectorAll('.auto-patch-wrap').forEach(el => el.remove());
       }
-      // Stack vertically — labels like "🎯 Auto-Patch All Unpatched" need
-      // the full panel width to render without truncation.
       const autoPatchWrap = document.createElement('div');
       autoPatchWrap.className = 'auto-patch-wrap';
       autoPatchWrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:4px 6px;border-bottom:1px solid var(--ghost-border);';
       const apBtnBase = 'width:100%;padding:5px 8px;border:none;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
-      const autoPatchBtn = document.createElement('button');
-      autoPatchBtn.textContent = '🎯 Auto-Patch All Unpatched';
-      autoPatchBtn.title = 'Auto-Patch All Unpatched';
-      autoPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--tint) 15%, var(--surface));color:var(--tint);';
-
-      const clearPatchBtn = document.createElement('button');
-      clearPatchBtn.textContent = '❌ Clear All Patches';
-      clearPatchBtn.title = 'Clear All Patches';
-      clearPatchBtn.style.cssText = apBtnBase + 'background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);';
-      clearPatchBtn.onclick = () => {
-        if (!confirm('Clear all DMX patch mappings (including foggers)?')) return;
-        pushUndo();
-        
-        // Pass params.parLights directly — this is the authoritative fixture list
-        const fixtures = params.parLights || [];
-        const traces = params.traces || [];
-        const cleared = clearAllPatches(fixtures, { includeGlobalEffects: true, traces });
-        
-        console.log(`[AutoPatcher] Cleared ${cleared} DMX patch(es)`);
-        
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        
-        // Rebuild GUI menu items (NOT fixtures) to reflect updated patch values
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window.renderDmxGUI) window.renderDmxGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-        exportConfig();
-        
-
-      };
-      // autoPatchBtn's onclick logic — delegates to auto_patcher.js
-      autoPatchBtn.onclick = () => {
-        pushUndo();
-
-        // 1. Patch all configs (DMX addresses + sectionIds)
-        const configs = gatherAllConfigs(params);
-        const { patchedCount, maxUniverse, groupToSectionId } = autoPatchAll(configs);
-        const sectionCount = groupToSectionId ? Object.keys(groupToSectionId).length : 0;
-
-        // 2. Sync in-memory patch tree so applyPatches doesn't overwrite during rebuild
-        if (window.__globalPatchTree) {
-          for (const c of configs) {
-            if (c.name && window.__globalPatchTree[c.name]) {
-              Object.assign(window.__globalPatchTree[c.name], {
-                dmxUniverse: c.dmxUniverse || 0,
-                dmxAddress: c.dmxAddress || 0,
-                controllerIp: c.controllerIp || '',
-                sectionId: c.sectionId || 0,
-                controllerId: c.controllerId || 0,
-                fixtureId: c.fixtureId || 0,
-              });
-            }
-          }
-        }
-
-        // 3. Save to file (patches.yaml + scene_config.yaml + model export)
-        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('patches');
-        exportConfig();
-
-        // 4. Rebuild UI
-        if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-        renderParGUI();
-        if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-
-        // 5. Toast
-        const parts = [];
-        if (patchedCount > 0) parts.push(`${patchedCount} patched`);
-        if (sectionCount > 0) parts.push(`${sectionCount} dimmer section(s)`);
-        _showAutoToast(parts.length > 0
-          ? `✓ Auto-patch: ${parts.join(', ')} (U1–${maxUniverse})`
-          : '✓ All fixtures already patched — no changes needed.');
-      };
       const clearMetaBtn = document.createElement('button');
       clearMetaBtn.textContent = '🔄 Clear Metadata';
       clearMetaBtn.title = 'Clear Metadata';
@@ -1376,9 +1344,7 @@ function setupGUI() {
         if (window._setGuiRebuilding) window._setGuiRebuilding(false);
         _showAutoToast(`✓ Cleared metadata on ${cleared} fixture(s)`);
       };
-      autoPatchWrap.appendChild(autoPatchBtn);
       autoPatchWrap.appendChild(clearMetaBtn);
-      autoPatchWrap.appendChild(clearPatchBtn);
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
 
@@ -1618,6 +1584,14 @@ function setupGUI() {
               ipInput.onchange = () => { config.controllerIp = ipInput.value.trim(); debounceAutoSave(); };
               ipRow.appendChild(ipInput);
               patchDiv.appendChild(ipRow);
+
+              // With a controller mapping present, patch fields are
+              // PROJECTED (docs/33) — display-only here, edited in the
+              // 🎛 Controllers panel. Registration keeps the values and
+              // the locked state live across mapping changes.
+              registerPatchRowRefresh(config, {
+                root: patchDiv, uniInput, addrInput, ipInput, updateStatus,
+              });
 
               if (genChildren) genChildren.appendChild(patchDiv);
 
@@ -2013,6 +1987,14 @@ function setupGUI() {
           ipRow.appendChild(ipInput);
           patchDiv.appendChild(ipRow);
 
+          // With a controller mapping present, patch fields are
+          // PROJECTED (docs/33) — display-only here, edited in the
+          // 🎛 Controllers panel. Registration keeps the values and
+          // the locked state live across mapping changes.
+          registerPatchRowRefresh(config, {
+            root: patchDiv, uniInput, addrInput, ipInput, updateStatus: updatePatchStatus,
+          });
+
           const idxChildren = idxFolder.domElement.querySelector('.children');
           if (idxChildren) idxChildren.appendChild(patchDiv);
 
@@ -2042,7 +2024,14 @@ function setupGUI() {
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.parLights[index];
             params.parLights.splice(index, 1);
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts
+            // (controller_map_editor owns the details).
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
             rebuildParLights();
@@ -2610,8 +2599,15 @@ function setupGUI() {
 
       if (!skipUndo) pushUndo();
 
-      // Remove existing lights from this trace's group name
+      // Remove existing lights from this trace's group name.
+      // Regeneration contract with the controller mapping (operator
+      // request 2026-06-12): names are stable per index ("<group> N"),
+      // so survivors keep their chain entries and re-project to the
+      // SAME addresses; fixtures lost to a count shrink just drop
+      // (addresses are absolute — nothing shifts). New extras land
+      // in the Unmapped tray.
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
+      const previousGenerated = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
       params.parLights = params.parLights.filter(l => l.group !== groupName || !l.traceGenerated);
 
       // Compute points
@@ -2796,6 +2792,24 @@ function setupGUI() {
       });
 
       trace.generated = true;
+
+      // Count shrink: fixtures whose names no longer exist were
+      // deleted — drop their mapping entries (the hook reprojects
+      // and re-renders the panel itself).
+      const survivingNames = new Set();
+      for (let n = 1; n <= pts.length; n++) survivingNames.add(`${groupName} ${n}`);
+      const regenCasualties = previousGenerated.filter(c => !survivingNames.has(c.name));
+      if (window.controllerMappingFixturesRemoved) {
+        window.controllerMappingFixturesRemoved(regenCasualties);
+      }
+      // Survivors are NEW config objects with the old names — re-run
+      // the projection so they regain their derived patch fields
+      // before the first render. (Redundant when the hook above found
+      // mapped casualties and already reprojected — harmless.)
+      if (window.__controllerRegistry && window.__controllerRegistry.controllers.length > 0 &&
+          window.projectControllerMappings) {
+        window.projectControllerMappings(gatherAllConfigs(params));
+      }
 
       if (window._setGuiRebuilding) window._setGuiRebuilding(true);
       if (!window._isAppBooting) rebuildParLights(true);
@@ -3107,8 +3121,13 @@ function setupGUI() {
         genBtn.textContent = trace.generated ? '↻ Regenerate' : '✓ Generate';
         genBtn.style.cssText = aBtnStyle + 'background:color-mix(in srgb, var(--ok) 15%, var(--surface));color:var(--ok);';
         genBtn.onclick = () => {
-          // Check for custom DMX patches before regenerating
-          if (trace.generated) {
+          // Check for custom DMX patches before regenerating. Under an
+          // active controller mapping this warning is moot: patches are
+          // PROJECTED, names are stable per index, so survivors re-derive
+          // the same addresses and a count shrink leaves reserved gaps.
+          const cmActive = window.__controllerRegistry &&
+            window.__controllerRegistry.controllers.length > 0;
+          if (trace.generated && !cmActive) {
             const groupName = trace.groupName || trace.name;
             const patchedFixtures = params.parLights.filter(l =>
               l.group === groupName && l.traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
@@ -3140,7 +3159,13 @@ function setupGUI() {
           // Remove generated lights from this trace's group
           if (trace) {
             const groupName = trace.groupName || trace.name;
+            const removedConfigs = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
             params.parLights = params.parLights.filter(l => !(l.group === groupName && l.traceGenerated));
+            // Mapped fixtures deleted with the trace → their mapping
+            // entries drop; addresses are absolute, nothing shifts.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved(removedConfigs);
+            }
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -3351,7 +3376,13 @@ function setupGUI() {
           rmBtn.style.cssText = aBtnStyle;
           rmBtn.onclick = () => {
             pushUndo();
+            const removed = params.dmxFixtures[index];
             params.dmxFixtures.splice(index, 1);
+            // Mapped fixture deleted → its mapping entry drops;
+            // addresses are absolute, so nothing else shifts.
+            if (window.controllerMappingFixturesRemoved) {
+              window.controllerMappingFixturesRemoved([removed]);
+            }
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderDmxGUI();
             rebuildDmxFixtures();
@@ -3536,307 +3567,6 @@ function setupGUI() {
     rebuildLedStrands();
   }
 
-  // ─── Icebergs Section ────────────────────────────────────────────────────
-  function buildIcebergsSection(parentFolder, sectionConfig) {
-    const bergFolder = parentFolder.addFolder(sectionConfig._section.label);
-    if (sectionConfig._section.collapsed !== false) bergFolder.close();
-    _sectionFolderMap.set(sectionConfig._section, bergFolder);
-
-    // Master toggle
-    bergFolder.add(params, 'icebergsEnabled').name('Master Enabled').onChange(v => {
-      (window.icebergFixtures || []).forEach(f => f.setVisibility(v));
-    });
-
-    // ─── Master Flood ON/OFF (promoted to top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodEnabled').name('⚡ Floods ON/OFF').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Dimmer 0-100% ───
-    if (params.masterFloodDimmer === undefined) params.masterFloodDimmer = 100;
-    bergFolder.add(params, 'masterFloodDimmer', 0, 250, 1).name('🔆 Flood Dimmer %').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    // ─── Master Flood Angle (top-level for quick access) ───
-    bergFolder.add(params, 'masterFloodAngle', 10, 90, 1).name('📐 Flood Angle °').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    
-    // Focus on Select checkbox (from config)
-    if (params.focusOnSelect === undefined) params.focusOnSelect = true;
-    // Ensure entry exists in configTree so reconstructYAML persists it
-    if (sectionConfig && !sectionConfig.focusOnSelect) {
-      sectionConfig.focusOnSelect = { value: params.focusOnSelect, label: 'Focus on Select' };
-    }
-    bergFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
-
-    // ─── Load Iceberg Geometry checkbox ───
-    if (params.loadIcebergGeometry === undefined) params.loadIcebergGeometry = false;
-    bergFolder.add(params, 'loadIcebergGeometry').name('🚀 Load Iceberg Geometry').onChange(async (v) => {
-      if (!v) return; // Only trigger on check
-      if (!window.icebergFixtures || window.icebergFixtures.length === 0) return;
-      
-      // Show loading overlay
-      const loadingOverlay = document.getElementById("loading-overlay");
-      if (loadingOverlay) loadingOverlay.classList.remove("hidden");
-      
-      const total = window.icebergFixtures.length;
-      
-      // Sequential loading with per-berg progress for smooth UI feedback
-      for (let i = 0; i < total; i++) {
-        updateLoading(Math.floor((i / total) * 100), `Loading iceberg ${i + 1}/${total}: ${params.icebergs[i]?.name || 'Iceberg'}…`);
-        await window.icebergFixtures[i].buildGeometry();
-        // Minimal yield to let the progress bar paint
-        await new Promise(r => setTimeout(r, 1));
-      }
-      updateLoading(100, 'Icebergs loaded!');
-      
-      if (loadingOverlay) {
-        setTimeout(() => loadingOverlay.classList.add("hidden"), 300);
-      }
-    });
-
-    // Master Flood Controls
-    const masterFloodF = bergFolder.addFolder('Master Flood Controls');
-    masterFloodF.addColor(params, 'masterFloodColor').name('Master Color').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-    masterFloodF.add(params, 'masterFloodIntensity', 0, 500, 1).name('Master Intensity').onChange(() => { updateMasterFloods(); debounceAutoSave(); });
-
-    function updateMasterFloods() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.updateFloodlightProps());
-      }
-    }
-
-    async function rebuildIcebergs() {
-      if (window.icebergFixtures) {
-        window.icebergFixtures.forEach(f => f.destroy());
-      }
-      window.icebergFixtures = [];
-      const promises = params.icebergs.map(async (config, index) => {
-        const fixture = new Iceberg(config, index, scene, interactiveObjects, params);
-        fixture.setVisibility(params.icebergsEnabled !== false);
-        window.icebergFixtures.push(fixture);
-        // Geometry loading is manual now
-      });
-      await Promise.all(promises);
-      window.icebergFixtures.sort((a, b) => a.index - b.index);
-    }
-    window.rebuildIcebergs = rebuildIcebergs;
-
-    // Fly camera to iceberg position
-    function flyToIceberg(berg) {
-      const targetX = berg.x || 0;
-      const targetY = (berg.y || 0) + (berg.height || 6) / 2;
-      const targetZ = berg.z || 0;
-      const radius = berg.radius || 4;
-      const viewDist = radius * 4;
-
-      const targetLook = new THREE.Vector3(targetX, targetY, targetZ);
-      const targetPos = new THREE.Vector3(
-        targetX + viewDist,
-        targetY + viewDist * 0.8,
-        targetZ + viewDist
-      );
-
-      const startPos = camera.position.clone();
-      const startTarget = controls.target.clone();
-      const duration = 800;
-      const startTime = performance.now();
-
-      function step(now) {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
-        camera.position.lerpVectors(startPos, targetPos, ease);
-        controls.target.lerpVectors(startTarget, targetLook, ease);
-        controls.update();
-
-        if (t < 1) requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
-    }
-
-    // Transform handler
-    window._onIcebergTransformChange = function(obj) {
-      if (!obj.userData.isIceberg) return false;
-      const fixture = obj.userData.fixture;
-      if (!fixture) return false;
-      fixture.writeTransformToConfig();
-      debounceAutoSave();
-      return true;
-    };
-
-    // GUI
-    window.icebergGuiFolders = [];
-    window.openIcebergFolder = function(idx) {
-      bergFolder.open();
-      if (window.icebergGuiFolders) {
-        window.icebergGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
-      }
-      if (window.icebergGuiFolders[idx]) {
-        window.icebergGuiFolders[idx].open();
-        window.icebergGuiFolders[idx].domElement.classList.add('gui-card-selected');
-      }
-      // Fly to iceberg if focus checkbox is on
-      if (params.focusOnSelect && params.icebergs[idx]) {
-        flyToIceberg(params.icebergs[idx]);
-      }
-    };
-
-    function renderIcebergGUI() {
-      const existing = [...bergFolder.folders];
-      existing.forEach(f => f.destroy());
-      window.icebergGuiFolders = [];
-
-      // New Iceberg button
-      const newBtnDiv = document.createElement('div');
-      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const newBtn = document.createElement('button');
-      newBtn.textContent = '+ New Iceberg';
-      newBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--tint);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-      newBtn.onclick = () => {
-        pushUndo();
-        params.icebergs.push({
-          name: `Iceberg ${params.icebergs.length + 1}`,
-          seed: Math.floor(Math.random() * 99999),
-          x: Math.round(Math.random() * 60 - 30),
-          y: 0,
-          z: Math.round(Math.random() * 60 - 30),
-          radius: 4, height: 6, detail: 10, peakCount: 3,
-          ledPattern: 'spiral', ledDensity: 5, ledColor: '#aaeeff',
-          floodEnabled: true, floodColor: '#ffffff', floodIntensity: 50, floodAngle: 40,
-          towerOffsetX: 0, towerOffsetY: 0, towerOffsetZ: 0,
-        });
-        rebuildIcebergs();
-        renderIcebergGUI();
-        debounceAutoSave();
-      };
-      newBtnDiv.appendChild(newBtn);
-      const children = bergFolder.domElement.querySelector('.children');
-      if (children) {
-        const old = children.querySelector('.berg-new-btn');
-        if (old) old.remove();
-        newBtnDiv.classList.add('berg-new-btn');
-        children.prepend(newBtnDiv);
-      }
-
-      // Per-iceberg folders
-      params.icebergs.forEach((berg, i) => {
-        const label = `🧊 ${berg.name || `Iceberg ${i + 1}`}`;
-        const bFolder = bergFolder.addFolder(label);
-        bFolder.domElement.classList.add('gui-card');
-        bFolder.close();
-        window.icebergGuiFolders[i] = bFolder;
-
-        // Fly to iceberg when folder is opened
-        const titleEl = bFolder.domElement.querySelector('.title');
-        if (titleEl) {
-          titleEl.addEventListener('click', () => {
-            // Highlight this card, deselect others
-            if (window.icebergGuiFolders) {
-              window.icebergGuiFolders.forEach(f => {
-                if (f) f.domElement.classList.remove('gui-card-selected');
-              });
-            }
-            bFolder.domElement.classList.add('gui-card-selected');
-            if (params.focusOnSelect && berg) {
-              flyToIceberg(berg);
-            }
-          });
-        }
-
-        bFolder.add(berg, 'name').name('Name').onFinishChange(() => { renderIcebergGUI(); debounceAutoSave(); });
-        bFolder.add(berg, 'seed', 0, 99999, 1).name('Seed').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Position
-        const posF = bFolder.addFolder('Position');
-        posF.close();
-        posF.add(berg, 'x', -100, 100, 0.5).name('X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'y', -20, 20, 0.5).name('Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        posF.add(berg, 'z', -100, 100, 0.5).name('Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Shape
-        const shapeF = bFolder.addFolder('Shape');
-        shapeF.close();
-        shapeF.add(berg, 'radius', 1, 15, 0.5).name('Radius').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'height', 1, 20, 0.5).name('Height').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'detail', 5, 25, 1).name('Detail').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        shapeF.add(berg, 'peakCount', 1, 10, 1).name('Peaks').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Display
-        if (berg.showFaces === undefined) berg.showFaces = true;
-        if (berg.showWireframe === undefined) berg.showWireframe = true;
-        if (!berg.wireColor) berg.wireColor = '#88ddff';
-        const dispF = bFolder.addFolder('Display');
-        dispF.close();
-        dispF.add(berg, 'showFaces').name('Show Faces').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.add(berg, 'showWireframe').name('Show Wireframe').onChange(() => {
-          const f = window.icebergFixtures[i];
-          if (f) f.updateVisibility();
-          debounceAutoSave();
-        });
-        dispF.addColor(berg, 'wireColor').name('Wire Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // LED
-        const ledF = bFolder.addFolder('LED Wiring');
-        ledF.close();
-        ledF.add(berg, 'ledPattern', ['edges', 'spiral', 'parabolic']).name('Pattern').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.add(berg, 'ledDensity', 2, 12, 1).name('Density').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        ledF.addColor(berg, 'ledColor').name('LED Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Flood
-        const floodF = bFolder.addFolder('Local Flood Override');
-        floodF.close();
-        floodF.add(berg, 'floodEnabled').name('Enabled').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.addColor(berg, 'floodColor').name('Local Color').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodIntensity', 0, 150, 0.5).name('Local Intensity').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        floodF.add(berg, 'floodAngle', 10, 90, 1).name('Local Angle').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // Tower Offset
-        const offsetF = bFolder.addFolder('Tower Offset');
-        offsetF.close();
-        offsetF.add(berg, 'towerOffsetX', -20, 20, 0.1).name('Offset X').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetY', -20, 20, 0.1).name('Offset Y').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-        offsetF.add(berg, 'towerOffsetZ', -20, 20, 0.1).name('Offset Z').onChange(() => { rebuildIcebergs(); debounceAutoSave(); });
-
-        // 🔖 Metadata (V2) — compact DOM panel (shared helper). Iceberg LEDs
-        // are exported with sId/fId/vMask too (see pixelblaze_model_exporter.js
-        // berg branch), so the operator must be able to set them here.
-        const bChildrenForMeta = bFolder.domElement.querySelector('.children');
-        appendMetadataPanelV2(bChildrenForMeta, berg, { onChange: debounceAutoSave });
-
-        // Delete
-        const actDiv = document.createElement('div');
-        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-        delBtn.onclick = () => {
-          pushUndo();
-          params.icebergs.splice(i, 1);
-          rebuildIcebergs();
-          renderIcebergGUI();
-          debounceAutoSave();
-        };
-        actDiv.appendChild(delBtn);
-        const bChildren = bFolder.domElement.querySelector('.children');
-        if (bChildren) bChildren.appendChild(actDiv);
-      });
-    }
-    window.renderIcebergGUI = renderIcebergGUI;
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const icebergsEnabled = urlParams.get('enable_iceberg') === '1';
-
-    if (icebergsEnabled) {
-      renderIcebergGUI();
-    } else {
-      console.log("[GUI] Individual Iceberg UI disabled to improve load speed. Run 'npm start enable_iceberg' to enable.");
-      // Render simple empty placeholder or nothing
-    }
-    rebuildIcebergs();
-  }
-
   // ─── Build the entire GUI from the config tree ───
   if (configTree) {
     const urlParams = new URLSearchParams(window.location.search);
@@ -3877,6 +3607,14 @@ function setupGUI() {
   viewsBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--primary) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--primary) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--primary);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
   viewsBtn.onclick = () => { if (window.toggleViewMasksPanel) window.toggleViewMasksPanel(); };
   saveDiv.appendChild(viewsBtn);
+
+  // Controller mapping panel toggle — hardware topology editor
+  // (controllers.yaml, docs/33). The only place patch fields are edited.
+  const controllersBtn = document.createElement('button');
+  controllersBtn.textContent = '🎛  Controllers';
+  controllersBtn.style.cssText = 'width:100%;min-height:30px;margin-top:6px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid color-mix(in srgb, var(--tint) 25%, transparent);border-radius:8px;background:color-mix(in srgb, var(--tint) 10%, transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--tint);cursor:pointer;font-size:11px;font-family:var(--font-headline);font-weight:600;letter-spacing:0.05em;transition:all 0.3s ease;';
+  controllersBtn.onclick = () => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); };
+  saveDiv.appendChild(controllersBtn);
 
   const guiChildren = gui.domElement.querySelector('.children');
   if (guiChildren) guiChildren.appendChild(saveDiv);

@@ -36,8 +36,26 @@ export function generatePixelMap() {
     if (fixturesReady) dmxList.forEach((light, i) => {
       const fType = light.type || light.fixtureType || 'Generic';
 
-
-      const fixture = (window.dmxSceneFixtures && window.dmxSceneFixtures[i]) || (window.parFixtures && window.parFixtures[i]) || null;
+      // Bind the runtime fixture by CONFIG IDENTITY, never by index
+      // coincidence. The old `dmxSceneFixtures[i] || parFixtures[i]`
+      // lookup silently fell through to a DIFFERENT array at the same
+      // index whenever a slot was empty (failed build, mid-rebuild
+      // residue) — the entry's apply() then painted the wrong fixture,
+      // scrambling colors identically in pixelblaze AND sacn_in modes
+      // (operator report 2026-06-12). Identity can't cross wires; a
+      // miss is loud, and the index lookup remains only as a verified
+      // fast path.
+      let fixture = (window.dmxSceneFixtures && window.dmxSceneFixtures[i]) ||
+        (window.parFixtures && window.parFixtures[i]) || null;
+      if (!fixture || fixture.config !== light) {
+        fixture = (window.dmxSceneFixtures || []).find(f => f && f.config === light) ||
+          (window.parFixtures || []).find(f => f && f.config === light) || null;
+        if (!fixture) {
+          console.error(`[pixelblaze] No runtime fixture for config '${light.name || i}' ` +
+            `(index ${i}) — its pixels are skipped this pass. A failed fixture build or ` +
+            'stale rebuild state is desynced from the config list.');
+        }
+      }
       if (fixture && fixture.pixels && fixture.pixels.length > 0) {
         if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
         if (fixture.group) fixture.group.updateMatrixWorld(true);
@@ -212,32 +230,6 @@ export function generatePixelMap() {
           }) : (() => {})
         });
       }
-    });
-  }
-
-  // Iceberg LEDs
-  if (params.icebergs) {
-    params.icebergs.forEach((berg, i) => {
-      const fixture = window.icebergFixtures && window.icebergFixtures[i] ? window.icebergFixtures[i] : null;
-      pixels.push({
-        type: 'iceberg',
-        name: berg.name || 'Iceberg',
-        group: berg.name || '',
-        x: +(berg.x || 0),
-        y: +(berg.y || 0),
-        z: +(berg.z || 0),
-        nx: 0, ny: 0, nz: 0,
-        cId: berg.controllerId || 0,
-        sId: berg.sectionId || 0,
-        fId: berg.fixtureId || 0,
-        vMask: berg.viewMask || 0,
-        patch: null,
-        channels: null,
-        apply: fixture ? ((r, g, b) => {
-          if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-          fixture.setColorRGB(r, g, b);
-        }) : (() => {})
-      });
     });
   }
 

@@ -22,6 +22,7 @@ import {
   isEffectsOnlyFixture,
 } from '../dmx/view_registry.js';
 import { generatePixelMap } from '../dmx/pixelblaze_model_exporter.js';
+import { pinForCornerResize } from './panel_layout.js';
 
 window.__activePreviewView = null;
 
@@ -60,7 +61,9 @@ function markChanged() {
 }
 
 // ── Custom DOM Modals ────────────────────────────────────────────────
-function showCustomModal({ title, placeholder, value = '', onConfirm }) {
+// Exported for reuse by sibling panels (controller_map_editor.js
+// imports showCustomConfirm).
+export function showCustomModal({ title, placeholder, value = '', onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'vm-modal-overlay';
 
@@ -116,7 +119,7 @@ function showCustomModal({ title, placeholder, value = '', onConfirm }) {
   };
 }
 
-function showCustomConfirm({ title, text, onConfirm }) {
+export function showCustomConfirm({ title, text, onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'vm-modal-overlay';
 
@@ -208,8 +211,7 @@ export function applyViewMaskIsolation() {
   const list = [
     ...(window.parFixtures || []),
     ...(window.dmxSceneFixtures || []),
-    ...(window.ledStrandFixtures || []),
-    ...(window.icebergFixtures || [])
+    ...(window.ledStrandFixtures || [])
   ];
 
   list.forEach(f => {
@@ -229,12 +231,9 @@ export function applyViewMaskIsolation() {
     if (!activeView) {
       // Restore default visibility based on master/profile/params settings
       const isStrand = f.config.hasOwnProperty('startX');
-      const isIceberg = f.config.hasOwnProperty('peakCount');
 
       if (isStrand) {
         f.setVisibility(params.strandsEnabled !== false);
-      } else if (isIceberg) {
-        f.setVisibility(params.icebergsEnabled !== false);
       } else {
         const masterEnabled = params.dmxEnabled !== false && params.parsEnabled !== false;
         f.setVisibility(masterEnabled, params.conesEnabled !== false);
@@ -291,6 +290,10 @@ export function setupViewMasksEditor() {
   header.addEventListener('pointerup', () => { dragOff = null; });
   header.addEventListener('pointercancel', () => { dragOff = null; });
   header.addEventListener('lostpointercapture', () => { dragOff = null; });
+
+  // Native resize grip (style.css `resize: both`): pin the default
+  // right-anchored panel to left/top before the first corner resize.
+  pinForCornerResize(panel);
 
   collapseBtn.onclick = () => panel.classList.toggle('collapsed');
 

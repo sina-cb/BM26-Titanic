@@ -1,6 +1,7 @@
 const ENGINE_WS = `ws://${window.location.hostname}:6968`;
 
 let warningEl = null;
+let titleEl = null;
 let messageEl = null;
 let clearBtn = null;
 let readonlyMode = false;
@@ -16,15 +17,15 @@ function ensureWarningElement() {
   warningEl.setAttribute('role', 'alert');
   warningEl.setAttribute('aria-live', 'assertive');
 
-  const title = document.createElement('div');
-  title.className = 'engine-blackout-title';
-  title.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
+  titleEl = document.createElement('div');
+  titleEl.className = 'engine-blackout-title';
+  titleEl.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
 
   messageEl = document.createElement('div');
   messageEl.className = 'engine-blackout-message';
   messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
 
-  warningEl.append(title, messageEl);
+  warningEl.append(titleEl, messageEl);
   document.body.appendChild(warningEl);
   return warningEl;
 }
@@ -83,9 +84,20 @@ function connectEngineWebSocket() {
       const data = JSON.parse(event.data);
       if (data.type === 'mixer') {
         const blackoutActive = data.blackout === true;
+        const modelStale = data.modelStale === true;
         setWarningVisible(blackoutActive);
-        if (blackoutActive && messageEl) {
+        if (blackoutActive) {
+          titleEl.textContent = 'ENGINE GLOBAL BLACKOUT ENABLED';
           messageEl.textContent = 'MarsinEngine output is intentionally black. sACN packets may still look healthy.';
+        } else if (modelStale) {
+          // Stale-model warning reuses the banner element. Blackout takes
+          // precedence; this branch only runs when blackout is off, and it
+          // deliberately skips setWarningVisible so the sACN blackout
+          // button is not repainted into its RESUME state.
+          warningEl.classList.remove('hidden');
+          titleEl.textContent = 'ENGINE MODEL STALE — RESTART ENGINE';
+          messageEl.textContent = data.modelStaleMessage ||
+            'Engine refused a model hot reload and is still rendering the old model.';
         }
       }
     } catch (err) {

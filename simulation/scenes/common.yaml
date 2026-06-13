@@ -59,6 +59,41 @@ atmosphere:
       min: 0
       max: 1
       step: 0.01
+  floods:
+    _section:
+      label: 💡 Master Floods
+      collapsed: true
+    masterFloodEnabled:
+      value: false
+      label: Enabled
+    masterFloodColor:
+      value: '#ffffff'
+      label: Color
+      type: color
+    masterFloodIntensity:
+      value: 150
+      label: Intensity
+      min: 0
+      max: 500
+      step: 1
+    masterFloodAngle:
+      value: 50
+      label: Beam Angle °
+      min: 10
+      max: 90
+      step: 1
+    masterFloodDistance:
+      value: 1.4
+      label: Distance (× ship)
+      min: 0.5
+      max: 4
+      step: 0.05
+    masterFloodDimmer:
+      value: 100
+      label: Dimmer %
+      min: 0
+      max: 250
+      step: 1
 options:
   _section:
     label: ⚙️ Options
@@ -129,7 +164,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: pixelblaze
+    value: sacn_in
     label: Mode
     options:
       - gradient
@@ -182,10 +217,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -15.2521
-    'y': 10.3228
-    z: 18.1252
+    x: -0.8278
+    'y': 2.5757
+    z: 8.7226
   target:
-    x: -1.558
-    'y': 5.6454
-    z: 3.9674
+    x: 0.0946
+    'y': 1.758
+    z: 5.405

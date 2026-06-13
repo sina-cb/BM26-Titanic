@@ -1,0 +1,39 @@
+nextControllerId: 2
+nextUniverse: 6
+controllers:
+  - id: 1
+    name: Test Bench 1
+    ip: 10.1.1.10
+    ports:
+      - port: 1
+        universe: 2
+        chain:
+          - fixture: Par 1
+            at: 1
+          - fixture: Par 2
+            at: 11
+          - fixture: Par 3
+            at: 21
+          - fixture: Par 4
+            at: 31
+      - port: 2
+        universe: 2
+        chain:
+          - fixture: Bar Left
+            at: 107
+          - fixture: Bar Right
+            at: 226
+      - port: 3
+        universe: 2
+        chain:
+          - fixture: Vintage Left
+            at: 41
+          - fixture: Vintage Right
+            at: 74
+      - port: 4
+        universe: 1
+        chain:
+          - fixture: ChauvetHaze4D 10
+            at: 510
+          - fixture: TEFogMachine 10
+            at: 512
