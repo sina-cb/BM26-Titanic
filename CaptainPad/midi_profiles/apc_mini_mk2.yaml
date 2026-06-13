@@ -26,14 +26,17 @@ device:
 contexts:
   # ── DECK tab: performance / pattern surface (best-practice layout) ──────
   deck:
-    - id: fader_1_speed
-      match: { type: cc, channel: 0, cc: 48 }
+    # Global params on faders 5-7 — speed sits on fader 5 to match the Mixer
+    # tab, so GLOBAL SPEED lives on exactly one fader everywhere. Faders 1-4
+    # are reserved for mixer layer faders and intentionally do nothing here.
+    - id: fader_5_speed
+      match: { type: cc, channel: 0, cc: 52 }
       action: { kind: paramCenter, key: speed, range: [0, 1] }
-    - id: fader_2_size
-      match: { type: cc, channel: 0, cc: 49 }
+    - id: fader_6_size
+      match: { type: cc, channel: 0, cc: 53 }
       action: { kind: paramCenter, key: size, range: [0, 1] }
-    - id: fader_3_rotate
-      match: { type: cc, channel: 0, cc: 50 }
+    - id: fader_7_rotate
+      match: { type: cc, channel: 0, cc: 54 }
       action: { kind: paramCenter, key: rotate, range: [0, 1] }
     - id: fader_9_master
       match: { type: cc, channel: 0, cc: 56 }
@@ -116,7 +119,7 @@ contexts:
       action: { kind: playlistScroll, layer: 0, dir: up }
       led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
     - id: pad_col1_window
-      match: { type: column, channel: 0, column: 0, fromRow: 1, toRow: 6 }
+      match: { type: column, channel: 0, column: 0, fromRow: 1, toRow: 6, reverse: true }
       action: { kind: playlistWindowSelect, layer: 0 }
       led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
     - id: pad_col2_scroll_down
@@ -128,7 +131,7 @@ contexts:
       action: { kind: playlistScroll, layer: 1, dir: up }
       led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
     - id: pad_col2_window
-      match: { type: column, channel: 0, column: 1, fromRow: 1, toRow: 6 }
+      match: { type: column, channel: 0, column: 1, fromRow: 1, toRow: 6, reverse: true }
       action: { kind: playlistWindowSelect, layer: 1 }
       led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
     - id: pad_col3_scroll_down
@@ -140,7 +143,7 @@ contexts:
       action: { kind: playlistScroll, layer: 2, dir: up }
       led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
     - id: pad_col3_window
-      match: { type: column, channel: 0, column: 2, fromRow: 1, toRow: 6 }
+      match: { type: column, channel: 0, column: 2, fromRow: 1, toRow: 6, reverse: true }
       action: { kind: playlistWindowSelect, layer: 2 }
       led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
     - id: pad_col4_scroll_down
@@ -152,7 +155,7 @@ contexts:
       action: { kind: playlistScroll, layer: 3, dir: up }
       led: { on: 3, off: 0, channel: 6 }   # white = scroll arrow lit when scrollable
     - id: pad_col4_window
-      match: { type: column, channel: 0, column: 3, fromRow: 1, toRow: 6 }
+      match: { type: column, channel: 0, column: 3, fromRow: 1, toRow: 6, reverse: true }
       action: { kind: playlistWindowSelect, layer: 3 }
       led: { active: 21, idle: 45, channel: 6 }   # green = active, blue = selectable
 

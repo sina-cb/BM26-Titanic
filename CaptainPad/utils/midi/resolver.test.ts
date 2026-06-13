@@ -77,4 +77,20 @@ describe('column matches (Stage 2)', () => {
     // column 2, row 0 (note 2) is below fromRow 1
     expect(resolveEvent(p, decodeMidi([0x90, 2, 127]), 'mixer')).toBeNull();
   });
+
+  it('reverse: true flips the index so the TOP pad is slot 0', () => {
+    const rp = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [
+          { id: 'win', match: { type: 'column', channel: 0, column: 0, fromRow: 1, toRow: 6, reverse: true }, action: { kind: 'playlistWindowSelect', layer: 0 } },
+        ],
+      },
+    });
+    // Top window pad = row 6 (note 48) → slot 0; bottom = row 1 (note 8) → slot 5.
+    expect(resolveEvent(rp, decodeMidi([0x90, 48, 127]), 'mixer')?.resolved)
+      .toEqual({ kind: 'playlistWindowSelect', layer: 0, slot: 0 });
+    expect(resolveEvent(rp, decodeMidi([0x90, 8, 127]), 'mixer')?.resolved)
+      .toEqual({ kind: 'playlistWindowSelect', layer: 0, slot: 5 });
+  });
 });

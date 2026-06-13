@@ -67,10 +67,22 @@ function isRgbPad(note: number): boolean {
 /** Map a hue (0..1) to the nearest APC mk2 palette colour velocity (coarse —
  *  for indication, not fidelity). See the colour chart in the reference doc. */
 export function hueToApcVelocity(h: number): number {
+  // Finer wheel than v1 so green/lime hues don't collapse onto yellow.
   const wheel: [number, number][] = [
-    [0.00, 5], [0.08, 9], [0.14, 13], [0.33, 21], [0.45, 33],
-    [0.52, 78], [0.60, 41], [0.66, 45], [0.75, 49], [0.83, 53],
-    [0.92, 57], [1.00, 5],
+    [0.00, 5],   // red
+    [0.055, 9],  // orange
+    [0.13, 13],  // yellow
+    [0.22, 74],  // lime
+    [0.30, 17],  // bright green
+    [0.36, 21],  // green
+    [0.45, 33],  // spring
+    [0.52, 78],  // cyan
+    [0.60, 41],  // azure
+    [0.66, 45],  // blue
+    [0.74, 49],  // violet
+    [0.83, 53],  // magenta
+    [0.92, 57],  // pink
+    [1.00, 5],   // red (wrap)
   ];
   const hue = ((h % 1) + 1) % 1;
   let best = wheel[0];
@@ -87,7 +99,9 @@ function matchPads(m: ControlMatch): { note: number; index: number }[] {
   if (m.type === 'cc') return [];
   if (m.type === 'column') {
     const out: { note: number; index: number }[] = [];
-    for (let row = m.fromRow; row <= m.toRow; row++) out.push({ note: row * 8 + m.column, index: row - m.fromRow });
+    for (let row = m.fromRow; row <= m.toRow; row++) {
+      out.push({ note: row * 8 + m.column, index: m.reverse ? m.toRow - row : row - m.fromRow });
+    }
     return out;
   }
   const lo = m.notes[0];
@@ -158,8 +172,10 @@ function* padVelocities(
       for (const p of pads) {
         const entryIdx = cursor + p.index;
         let velocity = 0;
-        if (exists && entryIdx < len) {
-          velocity = entryIdx === activeIdx ? (control.led?.active ?? 21) : (control.led?.idle ?? 1);
+        if (exists) {
+          velocity = entryIdx < len
+            ? (entryIdx === activeIdx ? (control.led?.active ?? 21) : (control.led?.idle ?? 45))
+            : 1; // dim frame — keep the 6-slot window rectangle visible even past the end
         }
         yield { note: p.note, velocity };
       }

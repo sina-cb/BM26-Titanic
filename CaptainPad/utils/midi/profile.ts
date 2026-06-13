@@ -19,9 +19,11 @@ export type ControlMatch =
   | { type: 'note'; channel: number; notes: number[] }
   // A strided grid COLUMN: APC pad note = row*8 + column (row 0 = bottom).
   // Matches pads in `column` whose row is in [fromRow, toRow]; the matched
-  // pad's (row - fromRow) becomes the action index. Used by the per-layer
-  // playlist window browser and the colour-pair pads.
-  | { type: 'column'; channel: number; column: number; fromRow: number; toRow: number };
+  // pad's index becomes the action index. Used by the per-layer playlist
+  // window browser and the colour-pair pads. `reverse: true` flips the index
+  // so the TOP pad is index 0 — the APC grid runs bottom→up, but the playlist
+  // UI runs top→down, so the window browser reverses to stay visually aligned.
+  | { type: 'column'; channel: number; column: number; fromRow: number; toRow: number; reverse?: boolean };
 
 /** What a matched control does. Maps 1:1 onto utils/api.ts dispatch fns. */
 export type ProfileAction =
@@ -145,7 +147,8 @@ function validateMatch(where: string, m: any): ControlMatch {
     if (typeof m.fromRow !== 'number' || m.fromRow < 0 || m.fromRow > 7) fail(`${where}: match.fromRow must be 0-7`);
     if (typeof m.toRow !== 'number' || m.toRow < 0 || m.toRow > 7) fail(`${where}: match.toRow must be 0-7`);
     if (m.fromRow > m.toRow) fail(`${where}: match.fromRow must be <= toRow`);
-    return { type: 'column', channel: m.channel, column: m.column, fromRow: m.fromRow, toRow: m.toRow };
+    if (m.reverse !== undefined && typeof m.reverse !== 'boolean') fail(`${where}: match.reverse must be a boolean`);
+    return { type: 'column', channel: m.channel, column: m.column, fromRow: m.fromRow, toRow: m.toRow, reverse: m.reverse === true };
   }
   return fail(`${where}: match.type must be 'cc', 'note', or 'column'`);
 }

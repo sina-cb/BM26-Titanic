@@ -56,7 +56,7 @@ function matches(control: ControlDef, ev: DecodedMidi): { hit: boolean; index: n
     const col = ev.note % 8;
     const row = Math.floor(ev.note / 8);
     if (col !== m.column || row < m.fromRow || row > m.toRow) return { hit: false, index: 0 };
-    return { hit: true, index: row - m.fromRow };
+    return { hit: true, index: m.reverse ? m.toRow - row : row - m.fromRow };
   }
   return { hit: false, index: 0 };
 }
