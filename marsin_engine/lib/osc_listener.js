@@ -20,6 +20,8 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
+import { gainByKeyForOsc } from './audio_signals.js';
+
 // Per-signal post-processing (docs/29) runs in the engine via
 // `lib/signal_post_processor.js`. The OSC listener accepts an OPTIONAL
 // `signalPostProcessor` constructor arg and routes each gainable
@@ -35,15 +37,13 @@ import * as osc from 'osc-min';
 // nothing, which is the failure mode this map exists to prevent).
 // The MATH of gain is now in the chain framework — this map stays
 // only as a boot-time existence check.
-export const GAIN_BY_KEY = Object.freeze({
-  stemsBass:   'stemsBassGain',
-  stemsDrums:  'stemsDrumsGain',
-  stemsVocals: 'stemsVocalsGain',
-  micLow:      'micLowGain',
-  micMid:      'micMidGain',
-  micHigh:     'micHighGain',
-  micKick:     'micKickGain',
-});
+//
+// DERIVED from `lib/audio_signals.js` (the single source of truth for
+// the audio signal family) via `gainByKeyForOsc()` — NOT hand-listed —
+// so adding/removing a gain-aware OSC signal is a one-line descriptor
+// edit there. The `<liveKey>Raw` mirror map below is likewise derived at
+// construction time from whichever `<key>Raw` keys exist in the registry.
+export const GAIN_BY_KEY = Object.freeze(gainByKeyForOsc());
 
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 

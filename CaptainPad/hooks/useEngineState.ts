@@ -378,6 +378,46 @@ function _emitLive(next: LiveParams | null) {
   _scheduleFlush(_flushLive);
 }
 
+/**
+ * The set of CPC keys flagged `live: true` in the engine schema. This is
+ * the iPad-side mirror of the engine's live-key list, but DERIVED from
+ * `GET /param-center/schema` instead of hardcoded — so it tracks the
+ * engine's single source of truth (marsin_engine/lib/audio_signals.js)
+ * automatically and can never drift. Returns an empty set if the schema
+ * hasn't been fetched yet (Codex P0: no hardcoded fallback list).
+ */
+function _liveKeysFromSchema(
+  schema: Record<string, ParamSchemaEntry>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const key of Object.keys(schema)) {
+    if (schema[key]?.live === true) out.add(key);
+  }
+  return out;
+}
+
+/**
+ * Extract the live-key subset from a {revision, params} snapshot using the
+ * schema's live flags, and emit it onto the live micro-bus. No-op when the
+ * schema has no live keys yet (cold-boot race — see callers); the WS
+ * liveParams broadcast catches the UI up regardless.
+ */
+function _seedLiveFromSchema(
+  snapshot: { revision?: number; params?: Record<string, SharedParamValue> },
+  schema: Record<string, ParamSchemaEntry>,
+): void {
+  const liveKeys = _liveKeysFromSchema(schema);
+  if (liveKeys.size === 0) return;
+  const liveSlice: Record<string, SharedParamValue> = {};
+  for (const k of liveKeys) {
+    const slot = snapshot.params?.[k];
+    if (slot) liveSlice[k] = slot;
+  }
+  if (Object.keys(liveSlice).length > 0) {
+    _emitLive({ revision: snapshot.revision ?? 0, params: liveSlice });
+  }
+}
+
 function _onMessage(msg: EngineMessage) {
   if (msg.type === 'sharedParams') {
     const raw = msg as unknown as SharedParams & { type: string };
@@ -578,29 +618,21 @@ function _ensureInitialized() {
           params: data.params || {},
         },
       });
-      // Best-effort live-key extraction. We don't have the schema
-      // yet (the fetchParamCenterSchema chain races us), so we use a
-      // hardcoded list of the live keys defined in
-      // marsin_engine/lib/param_center.js. Adding a new live key
-      // there requires updating this set too; if the set drifts the
-      // worst case is a one-frame stale meter on cold boot.
-      const liveKeys = new Set([
-        'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
-        'stemsVocals', 'stemsBass', 'stemsDrums',
-        'tempoBpm',
-        // audio structure detector (docs/30) — appear once detector is
-        // enabled; harmless filter entries while disabled.
-        'audioStructure', 'audioBuildScore', 'audioEnergyRatio',
-        'audioVocalsHot', 'audioDropPulse',
-      ]);
-      const liveSlice: Record<string, SharedParamValue> = {};
-      for (const k of liveKeys) {
-        const slot = data.params?.[k];
-        if (slot) liveSlice[k] = slot;
-      }
-      if (Object.keys(liveSlice).length > 0) {
-        _emitLive({ revision: data.revision ?? 0, params: liveSlice });
-      }
+      // Live-key extraction is now SEEDED FROM THE ENGINE SCHEMA, not a
+      // hardcoded list. The engine's `GET /param-center/schema` marks
+      // every live key with `live: true` (generated, in turn, from
+      // marsin_engine/lib/audio_signals.js — the single source of truth
+      // for the audio signal family), so this set can never drift out of
+      // sync the way the old hardcoded copy did.
+      //
+      // Codex P0 — NO hardcoded fallback: if the schema fetch hasn't
+      // resolved yet (it races this one), `_liveKeysFromSchema` returns an
+      // empty set and we simply emit nothing here. The schema-fetch `.then`
+      // below re-runs the extraction once it lands, and the WS `liveParams`
+      // broadcast catches us up within a couple of frames regardless. The
+      // pre-existing comment already named that empty-for-one-frame window
+      // the acceptable worst case.
+      _seedLiveFromSchema(data, _cached.paramSchema);
     })
     .catch(() => undefined);
 
@@ -612,6 +644,19 @@ function _ensureInitialized() {
         if (e && typeof e.key === 'string') flat[e.key] = e;
       }
       _emit({ ..._cached, paramSchema: flat });
+      // Re-seed the live slice now that we know which keys are live. The
+      // /param-center REST seed above runs in PARALLEL with this schema
+      // fetch, so on a cold boot it may have landed FIRST (empty live set,
+      // nothing emitted). Now that the schema is here, extract the live
+      // slice from the cached sharedParams so the audio meters have a
+      // correct first paint without waiting for the WS liveParams tick.
+      const shared = _cached.sharedParams;
+      if (shared) {
+        _seedLiveFromSchema(
+          { revision: shared.revision, params: shared.params },
+          flat,
+        );
+      }
     })
     .catch(() => undefined);
 
