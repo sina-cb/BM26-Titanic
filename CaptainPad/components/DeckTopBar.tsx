@@ -18,6 +18,7 @@ import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { MidiStatusChip } from '@/components/MidiStatusChip';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 
@@ -75,6 +76,9 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
+        {/* Direct-MIDI controller status, same visual language as the engine
+            badge. Grey = no device, green = connected, red = error. */}
+        <MidiStatusChip />
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}

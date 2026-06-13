@@ -31,6 +31,37 @@ controller to the thing the operator is already holding.
 
 ---
 
+## A unified, multi-controller framework (not one device)
+
+The mapping stack is **controller-agnostic and runs multiple controllers at
+once**. A controller is just a **YAML profile** (`CaptainPad/midi_profiles/
+<device>.yaml`) bound to a transport; the `MidiManager` owns N of them
+concurrently. Adding a controller is a data change, not a rewrite.
+
+- **Driver #1 — Akai APC mini mk2** (this work). 8×8 RGB pad grid, 9 faders,
+  17 UI buttons. Protocol + colour palette captured from Akai's official docs
+  (archived in `CaptainPad/midi_profiles/manuals/`) and a live Web MIDI capture
+  on the dev PC; summarised in `CaptainPad/midi_profiles/apc_mini_mk2_reference.md`.
+- **Driver #2 — DJTT MIDI Fighter Twister** (planned, next). The authoritative
+  protocol reference is Sina's **`pymft`** library
+  (<https://github.com/sina-cb/pymft>, local
+  `C:\Users\sina_\workspace\TD-MidiFighterTwister\pymft`): it encodes the MFT's
+  encoder/bank/colour/detent model and 2-way feedback. The MFT lands as a second
+  profile plus a small resolver extension for its **relative (endless) encoders**
+  (the APC's faders are absolute CC; the MFT's encoders send relative deltas and
+  expect value/colour writes back). `pymft` is Python today and **can be ported
+  to native code for the marsin engine eventually** — but for the FoH/iPad path
+  it is a *reference spec*, not a runtime dependency (MIDI stays CaptainPad-side
+  so it reaches the iPad over USB-C; see "iPad is a must" below).
+
+**iPad is a must.** Engine-side (Node) MIDI was considered and rejected for the
+show path: it puts the controller on the car, not in the operator's hands at
+FoH, and can't drive the iPad. The controller plugs into the **iPad** (CoreMIDI,
+native transport — deferred follow-up) or, for dev/degraded-FoH, a **desktop
+Chrome** (Web MIDI). Both sit behind the same frozen `MidiTransport`.
+
+---
+
 ## Feasibility check
 
 This section reviews the "Direct Akai APC Controller Connection to iPad for
@@ -426,6 +457,81 @@ in phase 4: **endpoint display names may differ between Chromium and
 CoreMIDI** for the same APC ports — the profile's `nameContains` +
 `portIndex` pinning is designed to absorb this, but the iPad bench gate
 confirms it before anything is declared done.
+
+## As-built — phases 0-2 (2026-06-12)
+
+Implemented CaptainPad-side, zero engine changes. Module layout under
+`CaptainPad/`:
+
+| File | Role |
+|---|---|
+| `utils/midi/transport.ts` | **Frozen** `MidiTransport` interface + endpoint/event types |
+| `utils/midi/web_midi_transport.ts` | Web MIDI adapter + `isMidiAvailable()` capability gate |
+| `utils/midi/midi_message.ts` | raw-byte ↔ typed decode (Note On/Off, CC); LED Note-On builder |
+| `utils/midi/profile.ts` | profile types + `validateProfile` (throws) + `validateProfileParams` |
+| `utils/midi/endpoints.ts` | `resolveEndpoints` — `{nameContains, portIndex}` pinning, throws on absent/ambiguous |
+| `utils/midi/resolver.ts` | pure event → `ResolvedAction` with scaled value |
+| `utils/midi/coalescer.ts` | per-control ~30 Hz trailing throttle (injectable timers) |
+| `utils/midi/led_projector.ts` | engine state → diffed LED messages |
+| `utils/midi/dispatch.ts` | `ResolvedAction` → existing `utils/api.ts` fns (injectable) |
+| `utils/midi/manager.ts` | `MidiManager` — runs N controllers concurrently |
+| `hooks/useMidiControl.ts` | RootShell lifecycle + module store + `useMidiStatus()` |
+| `components/MidiStatusChip.tsx` | 🎹 APC header chip (grey/green/red) |
+| `components/MidiConfigSection.tsx` | Config tab read-only status + last-event monitor |
+| `midi_profiles/apc_mini_mk2.yaml` | driver #1 profile (default mapping) |
+| `midi_profiles/apc_mini_mk2_reference.md` + `manuals/` | in/out note tables + Akai PDFs |
+| `utils/midi/*.test.ts` | Vitest unit suite (synthetic events, fake transport) |
+
+**Phase 0 capture (Chromium Web MIDI, Windows).** The device name appears on
+two ports; `nameContains: "APC mini mk2"` matches both, so `sourcePort:0` /
+`destinationPort:0` disambiguate (port 0 = faders/pads/buttons/LEDs). Bome
+virtual ports (`APCMini -> …`, mfr "Microsoft") are excluded by name.
+
+| Kind | Port | Name | Mfr |
+|---|---|---|---|
+| in/out | 0 | `APC mini mk2` | AKAI Professional |
+| in/out | 1 | `MIDIIN2/MIDIOUT2 (APC mini mk2)` | AKAI Professional |
+
+**Deliberate deviations from the sketch in this doc:**
+- Blackout is mapped to **Track Button 8 (note 107)**, not Shift (122) as the
+  example showed — Shift has **no LED** on the mk2, so it can't satisfy the
+  LED-feedback requirement. Track buttons are single red LEDs.
+- Endpoint disambiguation is `nameContains` + a **deterministic port index**
+  (not "throw if >1 name match"): the index pin is explicit, not a silent
+  auto-pick, so it satisfies the no-fallback rule while handling the real
+  two-port enumeration.
+- Param-key validation is **aggregate + non-fatal by default** (other controls
+  keep working; the Config tab names the offending key) with a `strict` throw
+  variant for tests — reconciling the failure-mode table with the unit-test
+  contract.
+
+**Verification:** `npx tsc --noEmit` clean for all new code (2 pre-existing
+`Modulation.tsx` errors remain, tracked separately); `npm run lint` exit 0 (new
+files: zero warnings); `npm run web:build` passes; Vitest suite green.
+Hardware-in-the-loop on the bench rig confirms the round-trip.
+
+### Tab-aware operator mapping (extension)
+
+Profiles declare **`contexts:`** (e.g. `deck` / `mixer`); the same hardware maps
+to different actions per active CaptainPad tab (`MidiManager.setContext()`,
+driven by tab focus). A dedicated **MIDI tab** (`app/(tabs)/midi.tsx`) shows
+status + a live event monitor; the 🎹 chip taps through to it. The APC layout:
+
+- **Common:** fader 9 → master brightness.
+- **Mixer:** faders 1-4 → layer faders; track buttons 1-4 → layer **solo**;
+  fader 5 → speed; pad cols 1-4 → per-layer **playlist window browser** (scroll
+  + 6-entry window + LED border, mirrored as an amber border in the mixer UI);
+  pad cols 5-8 → **colour-pair pads** (palettes 1-16); scene buttons → blackout
+  (GEM e-stop) + global-effect slots.
+- **Deck:** faders → speed/size/rotate; pad row → pattern select; scene buttons
+  → global-effect slots + blackout.
+- **Activity auto-disable:** any MIDI input disables autopilot + deck
+  transitions (faders authoritative); restored after 60 s idle.
+
+New action kinds: `mixerLayerFader`, `mixerLayerSolo`, `globalEffectSlot`,
+`playlistScroll`, `playlistWindowSelect`, `colorPalettePair`; new match type
+`column` (strided pad columns). All still dispatch through existing
+`utils/api.ts` — zero engine changes.
 
 ## Open questions (for Sina)
 

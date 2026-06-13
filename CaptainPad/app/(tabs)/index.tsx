@@ -24,6 +24,7 @@ import {
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineVizEvents } from '@/utils/engineVizEvents';
+import { setMidiActiveContext } from '@/hooks/useMidiControl';
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -173,6 +174,8 @@ export default function ControlDeckScreen() {
   useFocusEffect(
     useCallback(() => {
       setMixerView('deck');
+      // Switch the MIDI controller to its Deck mapping context.
+      setMidiActiveContext('deck');
       // Tab unmount cleanup: any in-flight swap is finalized by the
       // engine when we navigate away (the /mixer/view POST does that
       // server-side), so clear the local flag so the next mount starts

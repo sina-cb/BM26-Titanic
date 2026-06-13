@@ -20,6 +20,7 @@ import {
 import { engineEvents } from '@/utils/engineEvents';
 import { engineVizEvents } from '@/utils/engineVizEvents';
 import { useActiveModel } from '@/hooks/useEngineState';
+import { setMidiActiveContext } from '@/hooks/useMidiControl';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
@@ -612,6 +613,8 @@ export default function MixerScreen() {
   useFocusEffect(
     useCallback(() => {
       setMixerView('mixer');
+      // Switch the MIDI controller to its Mixer mapping context.
+      setMidiActiveContext('mixer');
     }, [])
   );
 
