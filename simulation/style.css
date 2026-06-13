@@ -810,42 +810,20 @@ body.edit-mode-active #engine-params-panel {
   display: block;
 }
 
-/* Reopen tab — a thin handle at the right edge, shown only when collapsed. */
+/* Lighting Controls edge tab — mirror of the Pattern Editor's .left-drawer-tab
+   onto the right edge (it shares that class; these override the side). The
+   `right` offset is set inline by control_drawer.js (0 collapsed, drawer width
+   when open). */
 #control-drawer-tab {
-  position: fixed;
-  right: 0;
+  left: auto;
   top: 50%;
-  transform: translateY(-50%);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 6px;
-  background: var(--panel-header-bg);
-  border: 1px solid var(--ghost-border);
-  border-right: none;
   border-radius: 10px 0 0 10px;
+  border-left: 1px solid var(--ghost-border);
+  border-right: none;
   box-shadow: -4px 0 24px var(--ambient-shadow);
-  cursor: pointer;
-  color: var(--primary);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 #control-drawer-tab:hover {
-  background: var(--control-bg-hover);
   box-shadow: -4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
-}
-#control-drawer-tab .drawer-tab-chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
-#control-drawer-tab .drawer-tab-icon {
-  font-size: 0.95rem;
-  line-height: 1;
 }
 
 /* ─── Keyboard Shortcuts Help Overlay ─── */
@@ -1611,12 +1589,13 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #sacn-out-monitor-panel {
-  /* Bottom-left, viewport-height-proof: bottom-anchored so it expands upward
-     and the sACN IN monitor stacks just above it (placeSacnInMonitor). A drag
-     or persisted geometry switches it to top-anchoring inline. */
+  /* Flush in the bottom-left corner, left-aligned with the Pattern Editor
+     drawer. Bottom-anchored so it expands upward and the sACN IN monitor
+     stacks directly above it (placeSacnInMonitor). A drag or persisted
+     geometry switches it to top-anchoring inline. */
   top: auto;
-  left: 14px;
-  bottom: 20px;
+  left: 0;
+  bottom: 14px;
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {

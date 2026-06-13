@@ -22,7 +22,6 @@ const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none
 
 let _panel = null;
 let _tab = null;
-let _toggleBtn = null;
 let _collapsed = false;
 let _hidden = false;
 
@@ -52,25 +51,29 @@ function applyState() {
   if (!_panel) return;
   _panel.classList.toggle('drawer-collapsed', _collapsed);
   _panel.style.display = _hidden ? 'none' : '';
-  // The reopen tab is only meaningful when the drawer is tucked away and the
-  // operator hasn't stashed the whole HUD with H.
-  if (_tab) _tab.style.display = (!_hidden && _collapsed) ? '' : 'none';
-  if (_toggleBtn) _toggleBtn.title = _collapsed ? 'Open Lighting Controls' : 'Collapse to edge';
+  // Always-visible edge-tab toggle (mirrors the Pattern Editor's left tab):
+  // open → a collapse handle (›) at the drawer's inner edge; collapsed → a
+  // reopen handle (‹) at the right screen edge.
+  if (_tab) {
+    _tab.style.display = _hidden ? 'none' : '';
+    const w = _panel.getBoundingClientRect().width || 330;
+    _tab.style.right = _collapsed ? '0px' : `${Math.round(w)}px`;
+    const chev = _tab.querySelector('.drawer-tab-chevron');
+    if (chev) chev.innerHTML = _collapsed ? CHEVRON_LEFT : CHEVRON_RIGHT;
+    _tab.title = _collapsed ? 'Open Lighting Controls (B)' : 'Collapse Lighting Controls (B)';
+  }
 }
 
 function buildTab() {
   const tab = document.createElement('button');
   tab.id = 'control-drawer-tab';
-  tab.title = 'Open Lighting Controls (B)';
+  tab.className = 'left-drawer-tab';  // share the Pattern Editor tab styling
+  tab.title = 'Collapse Lighting Controls (B)';
   const chevron = document.createElement('span');
   chevron.className = 'drawer-tab-chevron';
-  chevron.innerHTML = CHEVRON_LEFT;
-  const icon = document.createElement('span');
-  icon.className = 'drawer-tab-icon';
-  icon.textContent = '🔦';
+  chevron.innerHTML = CHEVRON_RIGHT;
   tab.appendChild(chevron);
-  tab.appendChild(icon);
-  tab.addEventListener('click', () => setDrawerCollapsed(false));
+  tab.addEventListener('click', toggleControlDrawer);
   document.body.appendChild(tab);
   return tab;
 }
@@ -109,15 +112,10 @@ export function setupControlDrawer(panelEl) {
   _panel = panelEl;
   _panel.classList.add('control-drawer');
 
-  _toggleBtn = _panel.querySelector('.gui-panel-header .pe-btn');
-  if (_toggleBtn) {
-    const fresh = _toggleBtn.cloneNode(false); // drop the legacy collapse handler + old glyph
-    fresh.classList.add('drawer-collapse-btn');
-    fresh.innerHTML = CHEVRON_RIGHT;
-    _toggleBtn.replaceWith(fresh);
-    _toggleBtn = fresh;
-    _toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleControlDrawer(); });
-  }
+  // The drawer collapses via the always-visible edge tab (consistent with the
+  // Pattern Editor), so the legacy header collapse button is removed.
+  const headerBtn = _panel.querySelector('.gui-panel-header .pe-btn');
+  if (headerBtn) headerBtn.remove();
 
   _tab = buildTab();
   _collapsed = readCollapsed();

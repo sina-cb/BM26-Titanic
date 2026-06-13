@@ -63,8 +63,10 @@ const byId = (id) => document.getElementById(id);
 function sacnOutReserve() {
   const out = byId('sacn-out-monitor-panel');
   if (!out || out.classList.contains('hidden') || getComputedStyle(out).display === 'none') return BOTTOM;
-  const h = out.getBoundingClientRect().height || 34;
-  return Math.round(h + 20 + 14); // sACN OUT's bottom:20 + a gap
+  const r = out.getBoundingClientRect();
+  if (r.height <= 0) return BOTTOM;
+  // Reserve down to the monitor's top edge (wherever it sits) plus a gap.
+  return Math.round(window.innerHeight - r.top + 12);
 }
 
 /** Re-flow the drawer when the sACN OUT monitor expands/collapses. */

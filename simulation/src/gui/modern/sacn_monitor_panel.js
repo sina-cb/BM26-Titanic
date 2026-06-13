@@ -89,17 +89,17 @@ export const sacnInStore = createMonitorStore({ collapsedDefault: true });
 export const sacnOutStore = createMonitorStore({ collapsedDefault: true });
 
 /** Default slot for the IN monitor when it has no operator-saved geometry:
- *  bottom-left, stacked just above the bottom-anchored sACN OUT monitor. */
+ *  bottom-left, stacked directly above and left-aligned with sACN OUT. */
 function placeSacnInMonitor() {
   const el = document.getElementById('sacn-in-monitor-panel');
   if (!el || getStoredGeometry('sacn-in-monitor-panel')) return;
   const out = document.getElementById('sacn-out-monitor-panel');
-  let bottom = 64;
+  let bottom = 44;
   if (out) {
     const r = out.getBoundingClientRect();
-    if (r.height > 0) bottom = Math.round(window.innerHeight - r.top + 8);
+    if (r.height > 0) bottom = Math.round(window.innerHeight - r.top + 6);
   }
-  el.style.left = '14px';
+  el.style.left = '0';
   el.style.bottom = `${bottom}px`;
   el.style.top = 'auto';
   el.style.right = 'auto';
