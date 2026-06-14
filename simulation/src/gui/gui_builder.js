@@ -20,6 +20,7 @@ import { captureSnapshot, pushUndo } from "../core/undo.js";
 import { reconstructYAML } from "../core/config.js";
 import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
 import { GUI } from "./gui_engine.js";
+import { setupControlDrawer } from "./control_drawer.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
@@ -222,7 +223,7 @@ function setupGUI() {
   const panel = document.createElement('div');
   panel.id = 'gui-panel';
 
-  // Header — drag handle + collapse
+  // Header — title + drawer collapse toggle (wired by setupControlDrawer)
   const header = document.createElement('div');
   header.className = 'gui-panel-header';
   const titleSpan = document.createElement('span');
@@ -231,16 +232,8 @@ function setupGUI() {
   header.appendChild(titleSpan);
   const collapseBtn = document.createElement('button');
   collapseBtn.className = 'pe-btn';
-  collapseBtn.title = 'Collapse';
-  collapseBtn.textContent = '─';
-  collapseBtn.addEventListener('click', () => {
-    panel.classList.toggle('collapsed');
-    collapseBtn.textContent = panel.classList.contains('collapsed') ? '□' : '─';
-  });
-  if (window.innerWidth < 800) {
-    panel.classList.add('collapsed');
-    collapseBtn.textContent = '□';
-  }
+  collapseBtn.title = 'Collapse to edge';
+  collapseBtn.textContent = '»';
   header.appendChild(collapseBtn);
   panel.appendChild(header);
 
@@ -261,29 +254,9 @@ function setupGUI() {
   panel.appendChild(body);
   document.body.appendChild(panel);
 
-  // ── Drag handling ────────────────────────────────────────────────────
-  let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-    isDragging = true;
-    const rect = panel.getBoundingClientRect();
-    dragOffsetX = e.clientX - rect.left;
-    dragOffsetY = e.clientY - rect.top;
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    // Mouseup released outside the window never reaches us — a move with
-    // no button held means the drag already ended (stuck-drag guard).
-    if ((e.buttons & 1) === 0) {
-      isDragging = false;
-      return;
-    }
-    panel.style.left = (e.clientX - dragOffsetX) + 'px';
-    panel.style.top = (e.clientY - dragOffsetY) + 'px';
-    panel.style.right = 'auto';
-  });
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  // Dock the panel as a right-edge slide-away drawer (replaces the old
+  // free-floating drag behaviour). Owns the collapse toggle + reopen tab.
+  setupControlDrawer(panel);
 
   // ─── Section → Folder Map (for collapse persistence) ───
   const _sectionFolderMap = new Map();

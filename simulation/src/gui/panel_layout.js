@@ -309,3 +309,119 @@ export function clampIntoViewport(el) {
     el.style.bottom = 'auto';
   }
 }
+
+// ── Off-screen repair (viewport clamp + layout sanitization) ─────────────
+
+/**
+ * Repair one stored geometry entry so it sits fully reachable in a
+ * vw×vh viewport. Pure — no DOM, no localStorage — so it unit-tests
+ * directly. Delegates the actual bounds math to clampPosition; only the
+ * stored `{x,y,w,h,collapsed}` shape mapping lives here.
+ *
+ * @param {{x:number,y:number,w?:number,h?:number,collapsed?:boolean}} entry
+ * @param {number} vw  viewport width
+ * @param {number} vh  viewport height
+ * @returns {{x:number,y:number,w?:number,h?:number,collapsed?:boolean}}
+ *          a repaired entry (same fields; w/h/collapsed preserved when absent)
+ */
+export function sanitizeGeometry(entry, vw, vh) {
+  const pos = clampPosition(
+    { left: entry.x, top: entry.y, width: entry.w, height: entry.h }, vw, vh,
+  );
+  const repaired = { x: pos.left, y: pos.top };
+  if (entry.w !== undefined) repaired.w = pos.width;
+  if (entry.h !== undefined) repaired.h = pos.height;
+  if (entry.collapsed !== undefined) repaired.collapsed = entry.collapsed;
+  return repaired;
+}
+
+/**
+ * Walk the persisted store and repair every entry whose clamped position
+ * differs from what was stored (i.e. it currently falls outside the
+ * viewport), writing the store back only if something actually moved.
+ * Call this on boot BEFORE panels restore so registerPanel reads
+ * already-repaired geometry — this defends against stale large-monitor
+ * layouts restoring off-screen.
+ */
+export function sanitizeStore(vw = window.innerWidth, vh = window.innerHeight) {
+  const store = readStore();
+  let dirty = false;
+  for (const id of Object.keys(store)) {
+    const entry = store[id];
+    if (!entry || typeof entry !== 'object') continue;
+    const repaired = sanitizeGeometry(entry, vw, vh);
+    if (repaired.x !== entry.x || repaired.y !== entry.y
+        || repaired.w !== entry.w || repaired.h !== entry.h) {
+      store[id] = repaired;
+      dirty = true;
+    }
+  }
+  if (dirty) writeStore(store);
+}
+
+/**
+ * Clamp one live panel element fully into the current viewport: read its
+ * on-screen rect, run clampPosition, and write back inline left/top
+ * (plus width/height when they changed). Switches the panel to
+ * top/left anchoring so the clamp sticks.
+ */
+function clampPanelEl(el) {
+  const r = el.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const pos = clampPosition(
+    { left: r.left, top: r.top, width: r.width, height: r.height }, vw, vh,
+  );
+  el.style.left = `${pos.left}px`;
+  el.style.top = `${pos.top}px`;
+  el.style.right = 'auto';
+  el.style.bottom = 'auto';
+  if (pos.width !== undefined && Math.round(pos.width) !== Math.round(r.width)) {
+    el.style.width = `${pos.width}px`;
+  }
+  if (pos.height !== undefined && Math.round(pos.height) !== Math.round(r.height)) {
+    el.style.height = `${pos.height}px`;
+  }
+}
+
+/**
+ * Resize handler: clamp every registered panel back into the (possibly
+ * shrunk) viewport. Visible panels are repositioned live; hidden panels
+ * (display:none or `.hidden`) keep their inline geometry but have their
+ * PERSISTED geometry repaired, so they reappear on-screen when shown.
+ */
+export function clampAllPanels() {
+  for (const [id, { el }] of _registered) {
+    const hidden = el.classList.contains('hidden') || el.style.display === 'none';
+    if (hidden) {
+      const stored = getStoredGeometry(id);
+      if (stored) {
+        const repaired = sanitizeGeometry(stored, window.innerWidth, window.innerHeight);
+        const store = readStore();
+        store[id] = repaired;
+        writeStore(store);
+      }
+      continue;
+    }
+    clampPanelEl(el);
+  }
+}
+
+/**
+ * Snapshot of every currently registered panel as
+ * `Array<{ id: string, el: HTMLElement }>`. The panel-visibility module
+ * consumes this — keep the name and shape stable.
+ */
+export function getRegisteredPanels() {
+  return [..._registered].map(([id, { el }]) => ({ id, el }));
+}
+
+/**
+ * Re-show a panel safely: clamp it fully into the viewport (so a panel
+ * that drifted off-screen while hidden never reappears unreachable) and
+ * raise it to the front. Called by the visibility module on show.
+ */
+export function showPanelClamped(el) {
+  clampPanelEl(el);
+  raisePanel(el);
+}

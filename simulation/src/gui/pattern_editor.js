@@ -10,6 +10,7 @@ import {
 import { MarsinEngine } from "../core/marsin_engine.js";
 import { GUI } from "./gui_engine.js";
 import { TOP_MIN, registerPanel } from "./panel_layout.js";
+import { setupSyntaxHighlight } from "./syntax_highlight.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ export async function loadPatternPresets() {
   const textarea = document.getElementById('pe-code');
   if (textarea && !textarea.value && PATTERN_PRESETS.rainbow) {
     textarea.value = PATTERN_PRESETS.rainbow;
+    if (textarea.__rehighlight) textarea.__rehighlight();
     selectedPattern = 'rainbow';
   }
   renderPresetButtons();
@@ -157,6 +159,8 @@ let globalExportMap = {};
 //     c) A single slider can't represent two different color wheels
 //
 // ──────────────────────────────────────────────────────────────────────────
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 // Standard HSV to RGB conversion (h, s, v all 0-1)
 function hsvToRgb(h, s, v) {
@@ -265,6 +269,9 @@ async function ensureGlobalParamsGui() {
   // lighting-mode switches, and panel_layout re-adopts the new element
   // (z band + click-to-front; position is derived, so no persistence).
   registerPanel(dom, { persist: false });
+  // Re-dock into the left child column if the left-drawer stack is active
+  // (this panel is recreated on every pixelblaze re-entry).
+  if (window.__refreshLeftDrawers) window.__refreshLeftDrawers();
 
   const editorPanel = document.getElementById('pattern-editor-panel');
   // Follows the pattern editor, event-driven (ResizeObserver + style/class
@@ -280,6 +287,9 @@ async function ensureGlobalParamsGui() {
       return;
     }
     dom.style.display = 'block';
+    // When docked as a left-drawer child, left_drawer.js owns its geometry —
+    // skip the floating follow-placement so the two don't fight.
+    if (dom.dataset.leftDocked === '1') return;
     const rect = editorPanel.getBoundingClientRect();
     const width = dom.offsetWidth || 245;
     const vw = window.innerWidth;
@@ -426,14 +436,18 @@ async function updateParameterUI(ok) {
 
   localFolder = paramGuiInstance.addFolder('Pattern Parameters');
   const paramState = {};
+  // Seed each control from the engine's live value (falling back to `def`) so
+  // the panel reflects what the global CPC controls have driven it to — e.g.
+  // cp1H shows the hue colorPalette1 set, not a stale 0.
+  const seed = (exp, def) => (typeof exp.value === 'number' ? exp.value : def);
 
   localExports.forEach(exp => {
     if (exp.kind === ExportKind.SLIDER) {
-      paramState[exp.name] = 0.5;
+      paramState[exp.name] = clamp01(seed(exp, 0.5));
       localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.TOGGLE) {
-      paramState[exp.name] = false;
+      paramState[exp.name] = seed(exp, 0) >= 0.5;
       localFolder.add(paramState, exp.name)
         .onChange(v => patternEngine.setControl(exp.id, v ? 1 : 0));
     } else if (exp.kind === ExportKind.TRIGGER) {
@@ -443,14 +457,16 @@ async function updateParameterUI(ok) {
       };
       localFolder.add(paramState, exp.name);
     } else if (exp.kind === ExportKind.VAR) {
-      paramState[exp.name] = 0;
-      localFolder.add(paramState, exp.name)
+      // CaptainPad parity: every parameter is a 0–1 fader, not a bare number
+      // field. Seeded from the engine so it tracks the global CPC drive.
+      paramState[exp.name] = clamp01(seed(exp, 0));
+      localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
     } else if (exp.kind === ExportKind.GAUGE) {
-      paramState[exp.name] = 0;
-      localFolder.add(paramState, exp.name).disable();
+      paramState[exp.name] = clamp01(seed(exp, 0));
+      localFolder.add(paramState, exp.name, 0, 1).disable();
     } else if (exp.kind === ExportKind.HSV || exp.kind === ExportKind.RGB) {
-      paramState[exp.name] = 0;
+      paramState[exp.name] = clamp01(seed(exp, 0));
       const ctrl = localFolder.add(paramState, exp.name, 0, 1).name(exp.name + ' (Hue)');
       ctrl.onChange(h => {
         if (exp.kind === ExportKind.HSV) {
@@ -499,6 +515,9 @@ export function setupPatternEditor() {
   const presetsEl = document.getElementById('pe-presets');
   if (!panel || !textarea) return;
 
+  // VS Code-style syntax highlighting backdrop (CaptainPad Studio parity).
+  setupSyntaxHighlight(textarea);
+
   // Static host: pattern persistence requires the dev save-server (port 6970),
   // which is unreachable from a deployed Pages site. Mark the buttons disabled
   // so users get instant feedback instead of clicking into a console error.
@@ -538,6 +557,7 @@ export function setupPatternEditor() {
       const en = textarea.selectionEnd;
       textarea.value = textarea.value.substring(0, s) + '  ' + textarea.value.substring(en);
       textarea.selectionStart = textarea.selectionEnd = s + 2;
+      if (textarea.__rehighlight) textarea.__rehighlight();
     }
   });
 
@@ -548,6 +568,7 @@ export function setupPatternEditor() {
     const key = btn.dataset.pattern;
     if (PATTERN_PRESETS[key]) {
       textarea.value = PATTERN_PRESETS[key];
+      if (textarea.__rehighlight) textarea.__rehighlight();
       selectedPattern = key;
       renderPresetButtons();
       compileEditorCode();
@@ -606,6 +627,7 @@ export function setupPatternEditor() {
         PATTERN_PRESETS[key] = template;
         selectedPattern = key;
         textarea.value = template;
+        if (textarea.__rehighlight) textarea.__rehighlight();
         renderPresetButtons();
         compileEditorCode();
       }
@@ -632,6 +654,7 @@ export function setupPatternEditor() {
         delete PATTERN_PRESETS[selectedPattern];
         selectedPattern = null;
         textarea.value = '';
+        if (textarea.__rehighlight) textarea.__rehighlight();
         renderPresetButtons();
         const statusEl = document.getElementById('pe-status');
         if (statusEl) {

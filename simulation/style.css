@@ -438,6 +438,16 @@ body.edit-mode-active #engine-params-panel {
   display: none !important;
 }
 
+/* ─── Generic panel hide (visibility module safety net) ───
+   #gui-panel and several panels lack a per-id `.hidden` rule, so a
+   class-based hide is otherwise unreliable. The panel-visibility module
+   hides via inline `display:none` (CSS-independent), but applies this
+   class too as a robust, generic fallback so ANY panel can be hidden by
+   class regardless of its own id-specific rules. */
+.panel-hidden {
+  display: none !important;
+}
+
 /* ─── HUD Frame Overlay ─── */
 #hud-frame {
   position: fixed;
@@ -739,6 +749,350 @@ body.edit-mode-active #engine-params-panel {
   overflow-y: visible;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* ─── Lighting Controls Drawer ───
+   #gui-panel docked to the right edge as a slide-away drawer (control_drawer.js).
+   Overrides the floating defaults above: pinned right, no drag, no resize, and
+   stops short of the bottom so the view-preset bar (#view-presets) stays clear. */
+.control-drawer#gui-panel {
+  top: 44px;
+  /* Stop above the bottom-right stack (help hint + view-preset bar) so an
+     open drawer never sits under them. */
+  bottom: 108px;
+  right: 0;
+  left: auto;
+  height: auto;
+  max-height: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+  resize: none;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+.control-drawer#gui-panel.drawer-collapsed {
+  /* Slide fully off the right edge (+ a touch extra to clear the shadow). */
+  transform: translateX(calc(100% + 16px));
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* No drag affordance on the docked drawer's header. */
+.control-drawer .gui-panel-header {
+  cursor: default;
+}
+.control-drawer .gui-panel-header:active {
+  cursor: default;
+}
+
+/* Collapse button — a crisp icon button (replaces the raw » glyph). */
+.gui-panel-header .drawer-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--icon);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.gui-panel-header .drawer-collapse-btn:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+.gui-panel-header .drawer-collapse-btn svg {
+  display: block;
+}
+
+/* Lighting Controls edge tab — mirror of the Pattern Editor's .left-drawer-tab
+   onto the right edge (it shares that class; these override the side). The
+   `right` offset is set inline by control_drawer.js (0 collapsed, drawer width
+   when open). */
+#control-drawer-tab {
+  left: auto;
+  top: 50%;
+  border-radius: 10px 0 0 10px;
+  border-left: 1px solid var(--ghost-border);
+  border-right: none;
+  box-shadow: -4px 0 24px var(--ambient-shadow);
+}
+#control-drawer-tab:hover {
+  box-shadow: -4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+/* ─── Keyboard Shortcuts Help Overlay ─── */
+#help-panel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--scrim, #000) 55%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#help-panel-overlay.hidden {
+  display: none !important;
+}
+
+#help-panel-card {
+  width: min(760px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--ghost-border);
+  border-radius: 14px;
+  box-shadow: 0 16px 60px var(--ambient-shadow);
+}
+
+.help-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--ghost-border);
+  background: var(--panel-header-bg);
+  border-radius: 14px 14px 0 0;
+  position: sticky;
+  top: 0;
+}
+.help-panel-title {
+  flex: 1;
+  font-family: var(--font-headline);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.help-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 28px;
+  padding: 18px;
+}
+.help-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-group-title {
+  font-family: var(--font-headline);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin-bottom: 4px;
+}
+.help-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+}
+.help-keys {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 96px;
+}
+.help-key {
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--control-bg);
+  border: 1px solid var(--ghost-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.help-key-plus {
+  color: var(--icon);
+  font-size: 0.6rem;
+}
+.help-desc {
+  font-size: 0.72rem;
+  color: var(--text);
+}
+.help-panel-footer {
+  padding: 10px 18px 14px;
+  font-size: 0.66rem;
+  color: var(--icon);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .help-panel-grid { grid-template-columns: 1fr; }
+}
+
+/* ─── Bottom-right Help Hint ─── */
+#help-hint {
+  position: fixed;
+  right: 20px;
+  bottom: 64px;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--ghost-border);
+  border-radius: 999px;
+  box-shadow: 0 4px 20px var(--ambient-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#help-hint:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+#help-hint .help-hint-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+#help-hint .help-hint-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+#help-hint .help-hint-combo {
+  font-size: 0.6rem;
+  color: var(--icon);
+  border-left: 1px solid var(--ghost-border);
+  padding-left: 7px;
+}
+
+/* ─── Left Source Drawers ───
+   Pattern Editor / sACN IN docked left, with Engine Params + sACN OUT in a
+   child column (left_drawer.js). Geometry (left/top/width/height/transform)
+   is set inline by the manager; this class supplies the shared treatment and
+   neutralises each panel's floating defaults (resize, max-height, radius). */
+.left-drawer {
+  z-index: 100 !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  resize: none !important;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+}
+
+/* Right-edge grip to widen the left drawer (left_drawer.js). */
+.left-drawer-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: ew-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.left-drawer-resizer:hover,
+.left-drawer-resizer:active {
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--primary) 40%, transparent));
+}
+#engine-params-panel.left-drawer,
+#sacn-in-monitor-panel.left-drawer,
+#sacn-out-monitor-panel.left-drawer {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* The docked drawers don't drag — drop the grab cursor on their headers. */
+.left-drawer .pe-header,
+.left-drawer .gui-panel-header,
+.left-drawer .sacn-header,
+.left-drawer .title {
+  cursor: default;
+}
+
+/* Reopen tabs for the left columns — mirror of #control-drawer-tab, hinged on
+   the left/seam edge. `left` is set inline by the manager (0 or the seam). */
+.left-drawer-tab {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 6px;
+  background: var(--panel-header-bg);
+  border: 1px solid var(--ghost-border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  box-shadow: 4px 0 24px var(--ambient-shadow);
+  cursor: pointer;
+  color: var(--primary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.left-drawer-tab:hover {
+  background: var(--control-bg-hover);
+  box-shadow: 4px 0 28px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.left-drawer-tab .drawer-tab-chevron {
+  font-size: 1rem;
+  line-height: 1;
+}
+/* Stagger the two handles so they never overlap when both sit at the edge. */
+#left-primary-tab { top: 50%; }
+
+/* Engine Parameters embedded inside the Pattern Editor drawer (left_drawer.js)
+   — flows as a capped, scrollable section above the Quick Reference instead of
+   a separate floating panel. */
+#engine-params-panel.embedded-in-editor {
+  position: static !important;
+  left: auto;
+  top: auto;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: 38vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: auto !important;
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--ghost-border);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* ─── Compact/Dense GUI Overrides ───
@@ -1051,12 +1405,67 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--surface-container-lowest) 50%, transparent);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
   padding: 12px 14px;
   tab-size: 2;
   overflow: auto;
 }
+
+/* ─── Studio-style syntax highlighting (CaptainPad parity) ───
+   A highlighted <pre> backdrop sits behind a transparent textarea; both share
+   identical metrics so glyphs align. Colours are the VS Code Dark+ palette. */
+.pe-code-wrap.pe-highlighted {
+  position: relative;
+  background: #1e1e1e;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight,
+.pe-code-wrap.pe-highlighted .pe-textarea {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight {
+  overflow: auto;
+  pointer-events: none;
+  z-index: 0;
+  color: #d4d4d4;
+  background: #1e1e1e;
+}
+.pe-code-wrap.pe-highlighted .pe-highlight code {
+  font: inherit;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
+}
+.pe-code-wrap.pe-highlighted .pe-textarea {
+  z-index: 1;
+  background: transparent;
+  color: transparent;
+  caret-color: #00daf3;
+  overflow: auto;
+}
+.pe-code-wrap.pe-highlighted .pe-textarea::selection {
+  background: rgba(0, 218, 243, 0.28);
+}
+.pe-tok-comment { color: #6a9955; }
+.pe-tok-keyword { color: #569cd6; font-weight: 700; }
+.pe-tok-number  { color: #b5cea8; }
+.pe-tok-string  { color: #ce9178; }
+.pe-tok-op      { color: #d4d4d4; }
+.pe-tok-builtin { color: #dcdcaa; }
+.pe-tok-special { color: #4ec9b0; font-weight: 700; }
+.pe-tok-ident   { color: #9cdcfe; }
 
 .pe-textarea::selection {
   background: color-mix(in srgb, var(--primary) 25%, transparent);
@@ -1180,11 +1589,13 @@ body.edit-mode-active #engine-params-panel {
 }
 
 #sacn-out-monitor-panel {
-  /* Bottom-anchored: viewport-height-proof, expands upward, and clears the
-     unpatched-warning pill (bottom: 140) and info panel (bottom: 20). A
-     drag or persisted geometry switches it to top-anchoring inline. */
+  /* Flush in the bottom-left corner, left-aligned with the Pattern Editor
+     drawer. Bottom-anchored so it expands upward and the sACN IN monitor
+     stacks directly above it (placeSacnInMonitor). A drag or persisted
+     geometry switches it to top-anchoring inline. */
   top: auto;
-  bottom: 180px;
+  left: 0;
+  bottom: 14px;
 }
 
 #sacn-in-monitor-panel.hidden, #sacn-out-monitor-panel.hidden {
