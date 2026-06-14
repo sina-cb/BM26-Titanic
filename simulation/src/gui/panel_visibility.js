@@ -37,15 +37,22 @@ const CRITICAL_PANEL_IDS = new Set([
   'sacn-out-monitor-panel',
 ]);
 
-// Critical alert banners — not registered floating panels, so hidden via a
-// body class (covers ones created after a mode change too). Visible until
-// `hide_all`.
-const CRITICAL_BANNER_SELECTORS = [
+// Overlays that are not registered floating panels, hidden only in
+// `hide_all` (via a body class, so lazily-created ones are covered too) for
+// a genuinely clean canvas. Two groups, same timing:
+//   - critical alert banners (kept visible through hide_noncritical)
+//   - persistent navigation/status chrome (HUD frame, view-preset row, the
+//     Shortcuts hint) — kept through hide_noncritical so you can still
+//     navigate and read status, gone only at hide_all.
+const HIDE_ALL_ONLY_SELECTORS = [
   '#engine-blackout-warning',
   '#unpatched-warning',
   '#spotlight-warning',
   '#spotlight-cap-toast',
   '#dirty-indicator',
+  '#hud-frame',
+  '#view-presets',
+  '#help-hint',
 ];
 
 const HIDE_ALL_BODY_CLASS = 'sim-panels-hide-all';
@@ -155,8 +162,8 @@ export function setVisibilityMode(mode) {
   setDrawerVisible(drawersVisible);
   setLeftDrawersVisible(drawersVisible);
 
-  // Critical alert banners: hidden only in hide_all (via body class so
-  // lazily-created banners are covered too).
+  // Non-panel overlays (alert banners + nav/status chrome): hidden only in
+  // hide_all, via a body class so lazily-created ones are covered too.
   if (document.body) document.body.classList.toggle(HIDE_ALL_BODY_CLASS, _mode === 'hide_all');
 }
 
@@ -196,7 +203,7 @@ function injectBannerStyles() {
   if (document.getElementById('panel-visibility-styles')) return;
   const style = document.createElement('style');
   style.id = 'panel-visibility-styles';
-  const sel = CRITICAL_BANNER_SELECTORS.map((s) => `body.${HIDE_ALL_BODY_CLASS} ${s}`).join(',\n');
+  const sel = HIDE_ALL_ONLY_SELECTORS.map((s) => `body.${HIDE_ALL_BODY_CLASS} ${s}`).join(',\n');
   style.textContent = `${sel} { display: none !important; }`;
   document.head.appendChild(style);
 }
