@@ -10,6 +10,11 @@ This skill documents the reusable harness under
 pass (report `.agent/02_reports/202606/20260613_5_audio_corpus_tuning.md`).
 **All audio lives in `~/tmp/` (gitignored) — never commit audio binaries.**
 
+- **Datasets** (what/where/how to download): `marsin_engine/datasets/README.md`.
+- **§9 is the step-by-step PER-SIGNAL recipe** — the part to follow when you
+  want to (re)tune ANY signal (input gain / low / mid / high / kick / flux /
+  stems) against the datasets. §0–§8 are the harness it builds on.
+
 ---
 
 ## 0. The two tuning tracks (keep them separate)
@@ -163,3 +168,107 @@ Use the **synthetic** set (`synthetic_accuracy.mjs`) for rigorous drop
 | `synthetic_accuracy.mjs` | CLI: rigorous drop P/R/latency on synthetic + mic |
 | `run_analysis.mjs` | the real analyzer+chain+detector wired like engine.js |
 | `synth_dataset.mjs` / `wav_io.mjs` | synthetic labeled clips / pure-JS WAV codec |
+
+---
+
+## 9. Per-signal tuning recipes (step-by-step) — THE REPLICATION GUIDE
+
+Every signal is tuned with the **same loop**, only the knobs + acceptance
+metric change. Always measure through the **virtual mic** (`mic_model.mjs`,
+`moderate` tier = typical), on BOTH a synthetic clip (known) and a few real
+clips from the corpus (`marsin_engine/datasets/README.md`).
+
+```
+THE LOOP (per signal):
+ 1. pick clips: 1 synthetic (known shape) + 3–5 real corpus mixtures.
+ 2. degrade through applyMicModel(samples, sr, {tier:'moderate'}).
+ 3. push through runClip(...) → read rec.signals.<signal> (post) + *Raw (pre).
+ 4. measure with signal_metrics.signalFeel(series, hopMs, {...}).
+ 5. change ONE knob; A/B via runClip overrides (bands / kick / chainsOverride).
+ 6. accept when the metric hits the target AND the synthetic regression stays
+    green AND it behaves across mic tiers (clean→heavy).
+```
+
+Two knob locations (keep straight): **analyzer front-end** (`config.yaml
+audio.bands` / `audio.kick`, applied in `lib/audio_analyzer.js`) vs
+**post-processing chain** (`DEFAULT_CHAINS` in `lib/signal_post_processor.js`).
+Patterns + meters see the chain output; the detector sees the raw analyzer
+output. **`audio.bands.inputGain` is the software mic-preamp applied first.**
+
+### 9.0 INPUT GAIN (software mic-preamp) — set this FIRST
+- **Goal:** a quiet mic / line feed should drive the bands into a usable
+  range (not pinned near 0, not clipping). Lifts low/mid/high/flux above the
+  noise gate. Applied in `audio_analyzer._analyzeOnce` to the band energies
+  before softCompress.
+- **Knob:** `config.yaml audio.bands.inputGain` (default 1.0, range [0,64]);
+  live-tunable from the iPad AUDIO strip (INPUT GAIN slider) or
+  `PATCH /audio/config {bands:{inputGain}}`.
+- **Procedure:** with the real mic/feed running, raise inputGain until
+  `micLow/micMid/micHigh` sit roughly 0.2–0.8 on typical-loud passages
+  (measure: `signalFeel(rec.signals.micLow).mean`). Verify silence stays near
+  0 (the gate holds).
+- **Note:** the KICK is a RATIO detector and is intentionally **decoupled**
+  from inputGain (gain cancels in a ratio and would only lift the noise floor
+  → phantom kicks). So input gain ≠ kick sensitivity.
+
+### 9.1 LOW / MID / HIGH (FFT bands)
+- **Goal:** smooth, dance-like, **low flicker** but a preserved beat **pulse**.
+- **Knobs:** band edges `audio.bands.lowMaxHz` (200) / `midMaxHz` (4000);
+  smoothing **LPF cutoff** in `DEFAULT_CHAINS` (`SMOOTHING_HZ`: low 3.5, mid
+  5.5, high 10 Hz); envelope `attackMs/releaseMs`; `noiseGate`.
+- **Measure:** `signalFeel(rec.signals.micLow, hopMs)` →
+  `flickerHz` (LOWER = smoother), `pulseDepth` (KEEP it — smooth ≠ flat).
+- **Targets (from the 2026-06 pass, on miced real audio):** micLow flicker
+  ~4 Hz, mid ~5–6, high ~8–10, pulse depth preserved vs the gain-only baseline.
+- **noiseGate:** set from the MEASURED floor — feed a SILENT clip through the
+  mic tier into the analyzer with `noiseGate:0`, read the band p95; set the
+  gate just above the moderate-tier floor (raising it too far starves the
+  detector — see report §Task D, why 0.04 was kept).
+
+### 9.2 KICK (transient trigger)
+- **Goal:** fires on real kicks, **never on silence/noise**, and is a crisp
+  **PULSE** (no staying high).
+- **Design (don't break):** the kick prominence is the LINEAR energy ratio
+  `kickLin > _kickEma·threshold`, with `kickGated>0` (softCompress+gate) as a
+  **silence floor only**, computed on RAW energy (decoupled from inputGain).
+  This makes it gain-invariant + saturation-free.
+- **Knobs:** `audio.kick.threshold` (1.8 — raise to reject noise variance,
+  lower for more sensitivity), `minHz/maxHz` (50–110), `refractoryMs` (140),
+  `decayMs` (70 — shorter = crisper pulse). Chain shape: `micKick`
+  envelope/schmitt/hold in `DEFAULT_CHAINS` (short release + short hold = sudden).
+- **Measure (functional, no labels needed):** run a clip, count fresh fires
+  (`rec.signals.micKick >= 0.999`); on a **noise-floor** clip (low-amp white
+  noise) at several inputGains the count MUST be 0 (regression:
+  `audio_analyzer.test.js` "kick does NOT fire on a noisy room floor"). On a
+  real kick-drum clip, ~2–4 events/sec is sane.
+- **Acceptance:** 0 false kicks on room noise at any inputGain; fires on real
+  kicks; the POST kick drops back to ~0 between hits (a pulse).
+
+### 9.3 FLUX (spectral-flux / build glow)
+- **Goal:** a gentle rising "glow" on build-ups, no flicker.
+- **Knobs:** smoothing LPF in `DEFAULT_CHAINS.micFlux` (~4.5 Hz). Flux IS
+  coupled to inputGain (it's a display/build signal, unlike the kick).
+- **Measure:** `signalFeel(rec.signals.micFlux).flickerHz` (de-jitter it; the
+  raw flux is very jittery — 2026-06 got it 54→35 Hz) while keeping pulseDepth.
+
+### 9.4 STEMS (bass / drums / vocals — OSC sidecar, when present)
+- Per-character chain smoothing in `DEFAULT_CHAINS`: bass smooth (~3.5 Hz),
+  drums snappy (~12 Hz), vocals smooth (~5 Hz). Same `signalFeel` measure.
+  Only live when the OSC stem sidecar feeds the engine.
+
+### 9.5 STRUCTURE DETECTOR (drop/build/sustain) — DEFERRED, under development
+- Currently **disabled by default + locked in the UI** ("under development").
+- Tuning recipe + open work live in the Notion task ("Audio structure detector
+  — tune to reliable, then re-enable") and report §3/§9. Measure with
+  `synthetic_accuracy.mjs` (rigorous P/R/latency on known ground truth) +
+  `corpus_sweep.mjs` (false-positive/min on real). Needs a real labeled EDM
+  corpus + a human listening pass before re-enabling.
+
+### Applying the result — defaults vs SHOW SCENES (read before you celebrate)
+The engine boots `config.yaml` < `states/<model>/audio_state.yaml`, and loads
+each scene's `chains:` over `DEFAULT_CHAINS`. The committed `titanic` /
+`test_bench` scenes pin their OWN `bands` / `kick` / `chains`, which **shadow
+the tuned defaults**. So tuning the defaults does NOT change the show scenes
+unless you ALSO migrate the scene `audio_state.yaml` (or "Reset to defaults"
+in the iPad Audio tab for that scene). Always confirm which config the running
+model actually uses.
