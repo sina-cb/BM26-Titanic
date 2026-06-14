@@ -8,9 +8,65 @@ Lighting design, pattern engineering, and simulation toolkit for the **Titanic**
 
 ---
 
-## ⚡ Quick Start
+## 🚀 One-Command Launch (recommended)
 
-You need **three terminals** open side-by-side: one for the
+`launcher.js` (repo root, zero dependencies) brings up the whole stack
+with a single command and opens the sim — and CaptainPad on the dev
+profiles — in your browser when each is ready. Run it from the repo
+root:
+
+```bash
+node launcher.js dev
+```
+
+Pick the profile for what you're doing:
+
+| Command | Brings up | Sim rendering |
+|---|---|---|
+| `node launcher.js prod` | sim + engine | lightest — `pixel_mapping`, 0 spotlights |
+| `node launcher.js dev` | sim + engine + CaptainPad | full analytic, 60 spotlights |
+| `node launcher.js dev-lite` | sim + engine + CaptainPad | `emissive`, 0 spotlights |
+
+It validates everything up front, starts the pieces in order (printing
+`✅ Simulation is ready.` / `✅ Engine is ready.` / `✅ CaptainPad is
+ready.`), forces the sim to listen to the engine over sACN, and prints
+the URLs. Press **Ctrl+C** to stop the whole stack.
+
+```bash
+# Drive a specific scene + engine model (test_bench is DMX-patched, so it
+# streams real sACN frames into the sim):
+node launcher.js prod --scene test_bench
+
+# Same, but don't auto-open the browser (e.g. headless box, or you already
+# have the tab open):
+node launcher.js prod --scene test_bench --no-open
+
+# Pick the engine boot pattern too:
+node launcher.js dev --scene test_bench --pattern 01_cylon_sweep
+
+# From another terminal: is a stack running? then stop it:
+node launcher.js status
+node launcher.js stop
+
+# Don't kill stale listeners on the stack's ports, and full usage:
+node launcher.js prod --no-kill
+node launcher.js --help
+```
+
+Defaults are `--scene titanic` and `--pattern 00_golden_hour_wash`.
+**One-time setup** (the launcher fails loudly and tells you if a
+component's `node_modules` is missing):
+
+```bash
+cd simulation && npm install && cd ../marsin_engine && npm install && cd ../CaptainPad && npm install && cd ..
+```
+
+---
+
+## ⚡ Manual Start (per-component)
+
+Prefer to run the pieces yourself, or only need one of them? You need
+**three terminals** open side-by-side: one for the
 simulation (browser preview), one for the rendering engine, and one
 for the CaptainPad control surface. Each component has its own README
 with the full story — this is just enough to get pixels moving.
