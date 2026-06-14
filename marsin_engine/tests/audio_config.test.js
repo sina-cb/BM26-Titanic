@@ -160,13 +160,14 @@ test('validateLivePatch rejects non-object payloads', () => {
 test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // Lock in the live-tunable contract; changing this is a doc + UI change.
   // Bands lost `smoothingAlpha` in favour of asymmetric attack/release
-  // + a noise gate (2026-05-25 retune). `kickEma` exposes the kick
-  // detector's EMA tuning (2026-05-26). `structureDetector` is the
-  // build/drop/sustain detector group (docs/30).
+  // + a noise gate (2026-05-25 retune); gained `inputGain` (2026-06-14
+  // software preamp). `kickEma` was REMOVED 2026-06-14 — it was advertised
+  // live-tunable but never wired into the analyzer (silent no-op); the kick
+  // EMA coefficients are hardcoded in audio_analyzer.js. `structureDetector`
+  // is the build/drop/sustain detector group (docs/30).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
     bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
-    kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',

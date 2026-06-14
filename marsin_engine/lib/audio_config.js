@@ -42,14 +42,6 @@ import yaml from 'js-yaml';
 export const AUDIO_LIVE_FIELDS = Object.freeze({
   bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
-  // kickEma — internal kick-detector EMA tuning. Exposed (2026-05-26)
-  // so operators can field-tune the asymmetric attack/release and
-  // ceiling clamp from CaptainPad without an engine rebuild. The
-  // analyzer's constructor seeds these from the merged config; PATCH
-  // /audio/config {kickEma:{…}} hot-reconfigures via reconfigure().
-  // See audio_analyzer.js constructor comment for the per-field
-  // engineering rationale.
-  kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
   // structureDetector — audio build/drop/sustain detector (docs/30).
   // Disabled by default; the detector module is instantiated at boot
   // regardless (so its surface exists) but `tick()` no-ops until the
@@ -85,21 +77,6 @@ const LIVE_STRING_ENUMS = Object.freeze({
  * explicitly with the documented range, integer-ness, etc.
  */
 const LIVE_FIELD_VALIDATORS = Object.freeze({
-  kickEma: Object.freeze({
-    // Three alpha coefficients share the (0, 1] contract — they're
-    // one-pole IIR mixing weights so values <= 0 or > 1 are nonsense.
-    alphaUp:      (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
-    alphaDown:    (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
-    trailAlpha:   (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
-    // ceilingRatio: must be > 1.0 — anything <= 1 makes the clamp a
-    // FLOOR instead of a ceiling and the EMA would be pinned BELOW
-    // the trailing reference, never above. Operator-explicit guard.
-    ceilingRatio: (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
-    // warmupHops: number of analysis frames used to seed the EMA's
-    // initial value before the detector goes live. Integer ≥ 1.
-    warmupHops:   (v) => (Number.isInteger(v) && v >= 1 && v <= 1000)
-                         ? null : `must be an integer in [1, 1000]; got ${v}`,
-  }),
   // structureDetector (docs/30). `enabled` is boolean — validated by
   // the boolean branch in validateLivePatch, NOT here (these validators
   // only fire on numeric fields). The numeric thresholds gate the
