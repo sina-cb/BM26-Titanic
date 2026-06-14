@@ -380,6 +380,9 @@ const MIC_SIGNALS: readonly SignalSlot[] = [
   { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: 'auto' },
   { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: 'auto' },
   { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: 'error' },
+  // micFlux (spectral flux — the build-up "glow"; docs/30). Distinct violet
+  // accent so it reads apart from the LOW/MID/HIGH bands + the red KICK.
+  { label: 'FLUX', rawKey: 'micFluxRaw', postKey: 'micFlux', accent: '#c084fc' },
 ];
 
 const STEMS_SIGNALS: readonly SignalSlot[] = [
@@ -411,6 +414,12 @@ const PINNED_LIVE_DEFAULTS: Record<string, number> = (() => {
 // Trail buffer + window-picker constants. Same AsyncStorage key as
 // before (operator preference roams across rebuilds).
 const SIGNAL_WINDOW_KEY = '@CaptainPad:audioTrailWindowS';
+// Global meter-sensitivity gain (display-only, 0–5×). Persisted so the
+// operator's preference roams across rebuilds, same as the trail window.
+const METER_GAIN_KEY = '@CaptainPad:audioMeterGain';
+const METER_GAIN_MIN = 0;
+const METER_GAIN_MAX = 5;
+const METER_GAIN_DEFAULT = 1;
 const WINDOW_OPTIONS_S = [5, 10, 15, 30] as const;
 const DEFAULT_WINDOW_S = 10;
 const TRAIL_SAMPLE_HZ = 15;            // 15 Hz visual cadence — enough resolution for a smooth polyline
@@ -425,14 +434,14 @@ const SVG_VIEW_H   = 100;              // viewBox height — y inverted because 
 // Build a polyline "x,y x,y …" point string from a sample buffer. Older
 // samples LEFT, newest RIGHT. Empty leading slots are skipped (line
 // just starts later) — keeps the "now" anchored to the right edge.
-function buildPoints(samples: readonly number[], bufferLen: number): string {
+function buildPoints(samples: readonly number[], bufferLen: number, gain = 1): string {
   if (!samples.length || bufferLen <= 1) return '';
   const take = Math.min(samples.length, bufferLen);
   const startIdx = bufferLen - take;       // x slot where the line starts
   const stepX = SVG_VIEW_W / (bufferLen - 1);
   const parts: string[] = [];
   for (let i = 0; i < take; i++) {
-    const v = Math.max(0, Math.min(1, samples[samples.length - take + i] ?? 0));
+    const v = Math.max(0, Math.min(1, (samples[samples.length - take + i] ?? 0) * gain));
     const x = (startIdx + i) * stepX;
     const y = SVG_VIEW_H * (1 - v);        // invert: 0 at bottom, 1 at top
     parts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
@@ -444,20 +453,25 @@ function buildPoints(samples: readonly number[], bufferLen: number): string {
 // (ghost-toned bar + trace) and POST (solid bar + trace). Stacking
 // them (vs overlaying) means the operator can read each separately
 // and verify gain divergence at a glance.
-function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
+function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen, gain = 1 }: {
   slot: SignalSlot;
   raw: number;
   post: number;
   rawSamples: readonly number[];
   postSamples: readonly number[];
   bufferLen: number;
+  gain?: number;
 }) {
   const C = usePalette();
   const accentColor = resolveAccent(slot.accent, C);
-  const rv = Math.max(0, Math.min(1, raw));
-  const pv = Math.max(0, Math.min(1, post));
-  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
-  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
+  // `gain` is the global METER-SENSITIVITY gain (0–5×) — like a VU meter's
+  // input trim. It scales the displayed reading (bar + trail + number) so
+  // weak signals are visible; it is DISPLAY-ONLY and does NOT change the
+  // engine values, the detector, or what the patterns react to.
+  const rv = Math.max(0, Math.min(1, raw * gain));
+  const pv = Math.max(0, Math.min(1, post * gain));
+  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen, gain), [rawSamples,  bufferLen, gain]);
+  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen, gain), [postSamples, bufferLen, gain]);
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
       {/* header — slot label */}
@@ -652,6 +666,29 @@ function PinnedAudioMeters({
       .catch(() => { /* benign — persistence is best-effort */ });
   }, []);
 
+  // ── Global meter-sensitivity gain (display-only, 0–5×) — persisted.
+  const [meterGain, setMeterGainState] = useState<number>(METER_GAIN_DEFAULT);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(METER_GAIN_KEY).then(raw => {
+      if (!alive || raw == null) return;
+      const parsed = parseFloat(raw);
+      if (Number.isFinite(parsed) && parsed >= METER_GAIN_MIN && parsed <= METER_GAIN_MAX) {
+        setMeterGainState(parsed);
+      }
+    }).catch(() => { /* benign — first launch */ });
+    return () => { alive = false; };
+  }, []);
+  const setMeterGain = useCallback((g: number) => {
+    const clamped = Math.max(METER_GAIN_MIN, Math.min(METER_GAIN_MAX, g));
+    setMeterGainState(clamped);
+  }, []);
+  const commitMeterGain = useCallback((g: number) => {
+    const clamped = Math.max(METER_GAIN_MIN, Math.min(METER_GAIN_MAX, g));
+    AsyncStorage.setItem(METER_GAIN_KEY, String(clamped))
+      .catch(() => { /* benign — persistence is best-effort */ });
+  }, []);
+
   // ── Ring buffer — one number[] per (signal, raw|post) pair. Identity
   // changes on each tick so SignalColumn's useMemo recomputes the
   // polyline points string. Bounded at MAX_BUFFER_LEN; window picker
@@ -754,8 +791,8 @@ function PinnedAudioMeters({
           [label+value]→[bar]→[trail]. The BPM pill rides at the right
           end of the STEMS half (no trail — BPM has its own pace). */}
       <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
-        {/* LEFT half: MIC bands */}
-        <View style={{ flex: 4, paddingRight: 16 }}>
+        {/* LEFT half: MIC bands (now incl. FLUX) + the global meter gain. */}
+        <View style={{ flex: 5, paddingRight: 16 }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
             color: C.secondary, textTransform: 'uppercase',
@@ -771,8 +808,25 @@ function PinnedAudioMeters({
                 rawSamples={trails.raw[i]}
                 postSamples={trails.post[i]}
                 bufferLen={bufferLen}
+                gain={meterGain}
               />
             ))}
+          </View>
+          {/* Global meter-sensitivity gain — sits UNDER the MIC meters
+              (operator request). Display-only: scales every meter (mic +
+              stems) so weak signals are readable; does not touch the engine. */}
+          <View style={{ marginTop: 10, marginHorizontal: 4 }}>
+            <FaderRow
+              label="METER GAIN"
+              suffix="×"
+              min={METER_GAIN_MIN}
+              max={METER_GAIN_MAX}
+              step={0.1}
+              value={meterGain}
+              hint="Display-only meter sensitivity (0–5×). Boosts the bars/trails so weak signals show; does not change engine levels or what patterns react to."
+              onDrag={setMeterGain}
+              onCommit={commitMeterGain}
+            />
           </View>
         </View>
         {/* Vertical divider */}
@@ -797,6 +851,7 @@ function PinnedAudioMeters({
                 rawSamples={trails.raw[MIC_SIGNALS.length + i]}
                 postSamples={trails.post[MIC_SIGNALS.length + i]}
                 bufferLen={bufferLen}
+                gain={meterGain}
               />
             ))}
             {/* BPM pill — biggest single number on the strip. No trail
