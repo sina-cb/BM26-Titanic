@@ -176,6 +176,14 @@ export class FogMachine {
     }
   }
 
+  // Diagnostic body tint for the "show unpatched as red" overlay. Sim-only;
+  // the caller skips selected fixtures so selection tint is never clobbered.
+  setUnpatchedRed(on) {
+    if (this.boxMat) {
+      this.boxMat.color.setHex(on ? 0xff2222 : 0x333333);
+    }
+  }
+
   destroy() {
     this.scene.remove(this.group);
     this.scene.remove(this.hitbox);
