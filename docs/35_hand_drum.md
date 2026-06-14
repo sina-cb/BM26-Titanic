@@ -1,5 +1,15 @@
 # 🥁 Hand Drum — Play the Titanic Like a Drum Surface — Design Doc
 
+> **Rev. 2026-06-14 (expert pre-implementation pass).** Tightened to match the
+> current repo before any code lands: per-hit transport is **`/ws/control`**
+> (via `engineEvents.send`); runtime `drumHit` errors return a **`drumError`**
+> frame and never crash the render loop, while *enabled-but-unwired* fails
+> **at boot**; vertical filtering is **`nyBand`** (`zBand` reserved for depth);
+> a new **§0 model-export prerequisite** + Titanic scene cleanup; v1 voices are
+> **weighted `dropHit` only** (`effect:` flavor is v2); a separate
+> **`drumMaster`** additive level; and each hit carries a **`kitId`** validated
+> server-side (multi-client). See §0, §3.D–E, §5, §6, §7, §8.
+
 ## Overview
 
 The Titanic's light is mostly *programmed* — patterns run, the deck plays a
@@ -26,11 +36,11 @@ impulse** (a drop-hit that knows *where* on the model it landed).
  │  └─────────────────┘  │                  └────────┬─────────┘
  │  kit picker · faders  │                           │ NativeMidiTransport
  └───────────┬───────────┘                           │ (docs/34)
-             │  ws "drumHit" { u, v, voice, vel }     │
+             │  ws "drumHit" {u,v,kit,voice,vel}      │
              ▼                                        ▼
    ┌────────────────────────────────────────────────────────┐
-   │  MarsinEngine :6968  —  /ws/params  (existing socket)    │
-   │   drumHit → resolve voice → SpatialImpulse{originN,      │
+   │  MarsinEngine :6968  —  /ws/control (existing socket)    │
+   │   drumHit → resolve kit+voice → SpatialImpulse{originN,  │
    │             radiusN, color6, env, blend}                 │
    │   → GlobalEffectsController.triggerSpatialImpulse(...)    │
    │   → per-pixel weight = falloff(dist(pixel.nN, originN))   │
@@ -48,6 +58,56 @@ impulse** (a drop-hit that knows *where* on the model it landed).
 
 ---
 
+## 0. Prerequisite — Hand Drum consumes the **exported model**, not scene YAML
+
+The whole feature stands on one assumption: **every controllable pixel has a
+finite normalized position.** The spatial weight is `falloff(dist(px.nN,
+originN))` — a pixel with a missing or `NaN` `nx/ny` either never lights or
+poisons the math. So before any Hand Drum code lands, this prerequisite must
+hold and be enforced.
+
+**What Hand Drum reads.** Hand Drum operates on the **exported engine model**
+(`marsin_engine/models/<scene>.js` — the `pixels[]` array with
+`i/type/group/x/y/z/nx/ny/nz/…`), **not** the raw scene YAML and **not** the
+sim's scene graph. The export is the contract; the spatial primitive never
+parses scene authoring files.
+
+**The hard requirement.** The exported model MUST provide **finite `nx`, `ny`,
+`nz` in `[0..1]`** for:
+
+- every **controllable DMX fixture** pixel (par, bar, vintage, etc.), and
+- every **LED pixel** (strand/strip pixels).
+
+Non-light simulation fixtures (Horn, Fire, Foggers — the companion
+`*.effects.js` model) are out of scope and not drummable.
+
+**Fail-loud validation (codex P0).** A new `HandDrum` boot step validates the
+loaded model and **throws at startup** listing every controllable pixel whose
+`nx/ny/nz` is missing, non-finite, or outside `[0..1]`. There is no
+"skip the bad pixel" fallback — a model that can't be drummed safely is a
+loud boot error, not a silent partial surface. The same validator is reused
+by the `nyBand`/`zBand` filters so an out-of-range band fails the same way.
+
+**Titanic scene cleanup — do this before implementation.** The `titanic`
+scene needs a tidy-up pass so its export satisfies the contract and the skin
+is stable shot-to-shot. Tracked as prerequisite work (own task on the
+tracker), not part of the Hand Drum phases:
+
+1. **Stable logical IDs / view masks for LED strands** — assign each LED
+   strand a stable logical id + view mask so the same physical run maps to the
+   same skin region across re-exports (so `regions`/calibration don't drift).
+2. **One canonical traces source** — pick a single canonical traces/geometry
+   source for the export, or prove the loaders consume exactly one (no
+   ambiguity about which geometry produced the `nx/ny/nz`).
+3. **Standardize generator / group names** — normalize generator and `group`
+   names so kit `regions` and any group-scoped logic key off stable strings.
+
+If this cleanup isn't done, Hand Drum on `titanic` is blocked at the boot
+validator — which is the intended, loud behavior. `test_bench` (which already
+exports clean `nx/ny/nz`, see §B) is the bench rig in the meantime.
+
+---
+
 ## 1. The one idea that makes this work: the **Spatial Impulse**
 
 Everything the engine fires today — `dropHit`, `blastWhite`, `uvBlast`,
@@ -62,8 +122,10 @@ SpatialImpulse {
   falloff:  'gaussian' | 'linear' | 'flat'
   color6:   [r,g,b,w,a,u]  // RGBWAU in 0..1 ("hue")
   attackMs, holdMs, releaseMs   // the envelope ("speed"/"feel")
-  intensity: 0..1          // peak amount (velocity)
+  intensity: 0..1          // peak amount (velocity · gain · drumIntensity · drumMaster)
   blend:    'add' | 'max' | 'replace'
+  nyBand?:  [min, max]     // optional vertical (high/low) filter on px.ny
+  zBand?:   [min, max]     // optional front/back depth filter on px.nz
 }
 ```
 
@@ -120,10 +182,11 @@ are **fire-and-forget and polyphonic**: ten taps = ten entries summing
    macros (**size / speed / hue / intensity / master** + spares), and pads
    **light up (LED)** as their hit decays — a tactile echo.
 3. **Kits**: pick a "drum kit" (a named set of voices) the way you pick a
-   pattern. A voice = color + envelope + radius + blend + effect flavor. Kits
-   are **data** (YAML in the repo), authored offline, validated at load.
+   pattern. A voice (v1) = color + envelope + radius + blend, applied as a
+   **weighted `dropHit`**. Kits are **data** (YAML in the repo), authored
+   offline, validated at load.
 4. Exactly **one** new engine concept (the Spatial Impulse) and **one** new
-   transport message (`drumHit` on the existing `/ws/params` socket). No new
+   transport message (`drumHit` on the existing `/ws/control` socket). No new
    port, no new daemon, no change to the pixel/DMX/sACN tail.
 5. **Polyphonic, fire-and-forget, never stuck**: any number of simultaneous
    taps; every voice ages out by its own envelope. Panic/clear is one tap.
@@ -135,8 +198,11 @@ are **fire-and-forget and polyphonic**: ten taps = ten entries summing
 - **No sequencer / no recording / no looping.** Hand Drum is *live* only.
   Record-and-loop is the obvious v2 and gets its own doc.
 - **No new pixel math beyond the spatial weight** — we do not add new blend
-  modes, new effect families, or per-pixel shaders. A voice is a weighted
-  `dropHit` (plus the handful of macro effects already in the library).
+  modes, new effect families, or per-pixel shaders. **A v1 voice is a weighted
+  `dropHit`, period.** Flavoring a voice onto other library effects
+  (`uvBlast`/`colorWash`/…) is explicitly **v2** (§6). Note a weighted
+  `dropHit` already drives the **U (UV)** and **W/A** channels via `color6`,
+  so a "UV stab" voice needs no new effect — just `color6 = [0,0,0,0,0,1]`.
 - **No true 3D picking.** v1 maps taps onto a **2D front-elevation skin**
   using `nx, ny` (which every model exports). Side/top skins and camera-true
   3D raypick are v2 (§9).
@@ -167,8 +233,9 @@ Three pieces, each minimal, each reusing what exists:
                                     │ ws { type:'drumHit', ... }
 ┌──────────────────────────────────▼─────────────────────────────────┐
 │ MarsinEngine                                                        │
-│ D. api_server.js  /ws/params handler: + case d.type==='drumHit'     │
-│ E. lib/hand_drum.js   resolve voice + scale by live macros →        │
+│ D. api_server.js  /ws/control handler: + case d.type==='drumHit'    │
+│                   (try/catch → drumError frame, never crashes loop) │
+│ E. lib/hand_drum.js   resolve kit+voice + scale by live macros →    │
 │                       SpatialImpulse                                │
 │ F. global_effects_controller.js  + spatialImpulses[] list +         │
 │                       triggerSpatialImpulse() + per-frame apply     │
@@ -194,7 +261,8 @@ pattern of the existing tabs. Layout:
   voices) *or* a single-voice kit plays one voice everywhere. Default kits
   ship in the repo (§6).
 - **Macro faders** (on-screen, mirror the APC faders): **Size**, **Speed**,
-  **Hue**, **Intensity**, **Master**. These are *live performance scalars*
+  **Hue**, **Intensity**, **Master** (the separate **`drumMaster`** additive
+  level — see §Master semantics in §5). These are *live performance scalars*
   applied on top of the kit's voice values (a voice defines a *base* radius;
   the Size fader scales it 0.25×–2×, etc.). On-screen faders reuse
   `components/NauticalFader.tsx`.
@@ -217,13 +285,18 @@ once (kit list) on mount.
   profiles), and a **validator that throws at load** on unknown effect id,
   out-of-range envelope, a color that isn't a 6-tuple, or a region that
   doesn't cover `[0..1]²`. No partial kits (codex P0).
-- **`drum_transport.ts`** — sends `{ type:'drumHit', u, v, voice, intensity,
-  ts }` over the **existing** `/ws/params` socket. Hits are **discrete and
-  dispatched immediately** (a drum that throttles taps is not a drum). Only
-  the **continuous macro faders** coalesce (~30 Hz trailing, exactly like
-  docs/34) and they go through the normal CPC path (`setSharedParam` /
-  `updateParamCenter`), because size/speed/hue are engine-side state read at
-  trigger time, not per-hit payload.
+- **`drum_transport.ts`** — sends `{ type:'drumHit', u, v, kit, voice,
+  intensity, hitId, ts }` over the **existing control-plane socket** via
+  `engineEvents.send(...)` (which owns the iPad's one connection to
+  **`/ws/control`** — the socket that already accepts inbound `setControl` /
+  `setSharedParam`). Hits are **discrete and dispatched immediately** (a drum
+  that throttles taps is not a drum). The **continuous macro faders** coalesce
+  (~30 Hz trailing, exactly like docs/34) and ride the **same** socket as
+  `engineEvents.send({ type:'setSharedParam', key, value })` — i.e. the CPC
+  write path, because size/speed/hue/master are engine-side state read at
+  trigger time, not per-hit payload. (We do **not** write through
+  `engineParamsEvents` / `/ws/params`: that bus has no inbound writer — it is
+  the read-side params firehose. All Hand Drum writes go over `/ws/control`.)
 
 ### C. `hooks/useHandDrum.ts`
 
@@ -237,37 +310,79 @@ chip styling).
 
 ### D. Engine transport — `api_server.js`
 
-One new branch in the `/ws/params` message handler (alongside `setControl`,
-`setSharedParam`, …):
+One new branch in the `/ws/control` message handler (alongside `setControl`,
+`setSharedParam`, …). Two rules from the expert pass:
+
+1. **Wiring is a boot-time invariant, not a per-message check.** If Hand Drum
+   is *enabled* in config but `handDrum` failed to construct, the **engine
+   fails loudly at boot** — never a silent `return` on every hit. By the time
+   a `drumHit` arrives, `handDrum` is guaranteed present.
+2. **A malformed runtime `drumHit` must never crash the render loop.** The
+   branch wraps the hit in try/catch and replies to *the sender* with a
+   `drumError` frame; the frame loop is untouched.
 
 ```js
 } else if (d.type === 'drumHit') {
-  // d = { type, u, v, voice, intensity, ts }
-  if (!handDrum) return;                       // tab/feature not wired → fail loud at boot, not here
-  handDrum.hit({ u: d.u, v: d.v, voice: d.voice, intensity: d.intensity }, nowMs());
+  // d = { type, u, v, kit, voice, intensity, hitId, ts }
+  // handDrum is guaranteed non-null here (boot invariant, see engine.js).
+  try {
+    handDrum.hit(
+      { u: d.u, v: d.v, kitId: d.kit, voice: d.voice, intensity: d.intensity },
+      performance.now(),
+    );
+  } catch (err) {
+    // Logged + sent back to the sender; render loop never sees it.
+    console.error('[HandDrum] drumHit failed:', err);
+    ws.send(JSON.stringify({
+      type: 'drumError',
+      code: err.code || 'DRUM_HIT_FAILED',   // e.g. UNKNOWN_KIT | UNKNOWN_VOICE | BAD_HIT
+      message: String(err.message || err),
+      hitId: d.hitId,                          // echoed so the client can correlate
+    }));
+  }
+}
+```
+
+And in `engine.js` boot, the loud invariant:
+
+```js
+if (config.handDrum?.enabled && !handDrum) {
+  throw new Error('Hand Drum enabled but HandDrum failed to initialize'); // codex P0: fail loud
 }
 ```
 
 WS, not REST: a single tap is ~80 bytes and must feel instant; REST per-tap
-would add a connection/round-trip tax the drummer can feel. The socket is
-already open and already carries `setSharedParam` at performance rates.
+would add a connection/round-trip tax the drummer can feel. The `/ws/control`
+socket is already open and already carries `setControl`/`setSharedParam` at
+performance rates.
 
-### E. `lib/hand_drum.js` — voice resolution
+### E. `lib/hand_drum.js` — kit registry + voice resolution
 
-`HandDrum` holds the active **kit** (pushed from CaptainPad via a tiny
-`POST /hand-drum/kit` so the engine, not just the client, knows the active
-voice set — keeps validation server-side too) and the live **macro scalars**
-(read from CPC keys `drumSize`, `drumSpeed`, `drumHue`, `drumIntensity`,
-registered in the param schema like any global param — see
-`.agent/01_skills/04_add_new_global_param.md`). On `hit()` it:
+**Multi-client decision (expert pass):** rather than a single global "active
+kit" that two surfaces fight over, `HandDrum` holds a **kit registry** (all
+validated kits, loaded at boot + via `POST /hand-drum/kit`) and **every
+`drumHit` names its `kitId`**. Two iPads (or an iPad + the APC) can play
+different kits simultaneously with no shared mutable selection — the FoH iPad
+on `full_hull`, a roaming iPad on `bow_kit`, both summing additively. An
+unknown `kitId` is a server-side `drumError` (`UNKNOWN_KIT`), not a guess.
+(The client still tracks *its own* selected kit for UI/LED feedback; that is
+purely local.)
 
-1. `originN = skinProjection(u, v)` (engine mirrors the same projection so the
-   client and engine agree; projection table ships in the model sidecar).
-2. `voice = kit.resolve(originN, d.voice)` → base color/env/radius/blend.
-3. Apply macros: `radiusN = voice.radiusN * sizeScale`, envelope ×
-   `speedScale`, hue-rotate `color6` by `hueShift`, `intensity *=
-   intensityScale`.
-4. `controller.triggerSpatialImpulse(impulse, nowMs)`.
+`HandDrum` reads the live **macro scalars** from CPC keys `drumSize`,
+`drumSpeed`, `drumHue`, `drumIntensity`, **`drumMaster`** (registered in the
+param schema like any global param — see
+`.agent/01_skills/04_add_new_global_param.md`). On `hit({ kitId, voice, u, v,
+intensity })` it:
+
+1. `kit = registry.get(kitId)` → throws `UNKNOWN_KIT` if absent.
+2. `originN = projection.project(u, v)` (engine mirrors the same projection so
+   client and engine agree; projection table ships in the scene sidecar).
+3. `voice = kit.resolve(originN, voice)` → base color/env/radius/blend/bands;
+   throws `UNKNOWN_VOICE` if the named/region voice isn't in the kit.
+4. Apply macros: `radiusN = voice.radiusN * drumSize`, envelope ÷ `drumSpeed`,
+   hue-rotate `color6` by `drumHue`, and the **final intensity**
+   `= clamp01(velocity · voice.gain · drumIntensity · drumMaster)`.
+5. `controller.triggerSpatialImpulse(impulse, nowMs)`.
 
 ### F. `global_effects_controller.js` — the only pixel-loop change
 
@@ -307,16 +422,19 @@ is literally the `nx`(x) × `ny`(y) unit square; the tab draws each fixture at
   radius = a hull-wide swell.
 - **Falloff** softens the rim so neighboring fixtures glow, not a hard circle
   — reads as a drum *hit* with body, not a spotlight.
-- **Depth (`nz`)** is ignored in v1's distance term (2D skin). A voice may
-  *opt in* to a `nz` band (`zBand: [min,max]`) so e.g. a "stack" voice only
-  lights high fixtures regardless of where horizontally you tap — cheap 2.5D
-  expressiveness without a real 3D pick.
+- **Vertical filtering (`nyBand`)**: a voice may *opt in* to an `ny` band
+  (`nyBand: [min,max]`) so e.g. a "stack" voice only lights **high** fixtures
+  regardless of where horizontally you tap — cheap expressiveness, no 3D pick.
+- **Depth (`nz`) is ignored in v1's distance term** (2D skin). It is available
+  only as an optional **`zBand: [min,max]`** front/back **depth** filter (e.g.
+  a voice that lights just the front face). Vertical = `nyBand`, depth =
+  `zBand` — don't conflate them.
 - **Per-model calibration** lives in a model sidecar (next to
   `*.viewmasks.js`): the front-skin bounds + optional named regions for
   region→voice kits. Authored once per scene; validated at load.
 
 **Why front-only is enough for BM26:** the operator faces the ship; the front
-is what the crowd sees; `nz`-bands cover the "tap high vs low" gesture. Camera-
+is what the crowd sees; `nyBand` covers the "tap high vs low" gesture. Camera-
 true 3D picking (tap the sim's current view, raycast to fixtures) is a clean
 v2 that reuses the sim's existing picking — noted, not built (§9).
 
@@ -334,7 +452,7 @@ needs nothing from it beyond a new **mapping profile** and one new
 | **Pad velocity** | Hit **intensity** (the mk2 pads are velocity-sensitive). Soft tap = gentle glow, hard hit = punch. |
 | **Pad LED** | **Echo**: the pad lights in the voice color on hit and fades on the envelope's release — the grid pulses with your playing. |
 | **Faders 1–8** | The live macros: F1 **Size**, F2 **Speed**, F3 **Hue**, F4 **Intensity**, F5–F7 spare (e.g. per-bank), F8 reserved. |
-| **Fader 9** | **Master** (same master path the mixer uses). |
+| **Fader 9** | **`drumMaster`** — the Hand Drum additive level (see below). **Not** the global/mixer master, unless explicitly reassigned in a later profile. |
 | **Scene/track buttons** | **Kit select** (bank of kits) + **Panic/Clear**. |
 
 The profile is just another docs/34 YAML, with one new `action.kind: drumPad`
@@ -349,6 +467,23 @@ profile so they are data, not code.
 > tab is still fully deliverable touch-only (Ring 1/2 below); the APC simply
 > reports `absent`. The two docs are independently landable; Hand Drum is the
 > reason to prioritize docs/34.
+
+### Master semantics — `drumMaster` is a separate additive level
+
+Hand Drum is its **own additive layer**, not folded into the global/mixer
+master. It has a dedicated CPC param **`drumMaster`** (0..1) so the operator
+can drum *over* a blacked-out or dim deck — a great look — and ride the whole
+drum layer up/down independently of the show.
+
+- **Final hit intensity** is
+  `clamp01(velocity · voice.gain · drumIntensity · drumMaster)` — `drumMaster`
+  is the last per-layer scalar, `drumIntensity` is the per-voice-bank trim,
+  `voice.gain` is the kit's per-voice balance, `velocity` is the tap/pad force.
+- **`drumMaster` still obeys global blackout and panic-stop.** The spatial
+  impulses are applied inside `GlobalEffectsController` *above* the existing
+  dimmer/blackout pipeline, so global blackout zeroes them and **Panic/Clear**
+  drops `spatialImpulses[]` outright (§7). `drumMaster` is a *layer* level, not
+  an escape hatch around safety.
 
 ---
 
@@ -384,32 +519,51 @@ voices:
     radiusN: 0.12
     holdMs: 10
     releaseMs: 160
-    zBand: [0.7, 1.0]                  # only the high fixtures
+    nyBand: [0.7, 1.0]                 # vertical filter: only the high fixtures
 ```
+
+> **Coordinate note:** `nyBand` is the **vertical (high/low)** filter on a
+> pixel's `ny` — that's what "only the high fixtures / stacks" means. `zBand`
+> is **reserved** for optional **front/back depth** filtering on `nz` (e.g. a
+> voice that only lights the front face), and is unused by the starter kits.
+> Don't conflate the two: vertical = `nyBand`, depth = `zBand`.
 
 - **"Choosing a special pattern (signals)"** = choosing a kit. Within a kit,
   the *place you tap* selects the voice (regions) — exactly the user's "based
   on the location of the tapped fingers it instantiates those signals."
-- Voices can flavor onto the existing macro effects too: a voice may set
-  `effect: uvBlast` or `effect: colorWash` (mapped to the library in docs/28)
-  instead of the default weighted `dropHit`, so a kit can mix a UV stab with
-  RGB toms. v1 ships `dropHit`-flavored voices; the field is there from day one.
-- Ship **2–3 starter kits** (`bow_kit`, `full_hull`, `uv_ghost`) so the tab is
-  fun out of the box. Authoring more is a YAML PR, not code.
+- **v1 voices are weighted `dropHit` only.** A UV stab needs no special effect
+  — set `color6 = [0,0,0,0,0,1]` and the dropHit drives the U channel.
+- **(v2)** Flavoring a voice onto another library effect (`effect: uvBlast`,
+  `effect: colorWash`, mapped to docs/28) is a deliberate **v2** extension
+  (§9). The schema leaves room for an `effect:` field but v1 rejects any value
+  other than the implicit `dropHit` at kit-load (fail loud, no half-support).
+- Ship **2–3 starter kits** (`bow_kit`, `full_hull`, `uv_ghost` — the latter a
+  UV-channel dropHit, not a `uvBlast` flavor) so the tab is fun out of the box.
+  Authoring more is a YAML PR, not code.
 
 ---
 
 ## 7. Failure modes — fail loudly, everywhere (codex P0)
 
-| Condition | Surfaced as |
-|---|---|
-| Kit YAML invalid (unknown effect, bad color tuple, region gap, env < 0) | **Throws at load** with the offending kit path. No partial kit. |
-| `drumHit` for a voice not in the active kit | Engine throws in `hand_drum.js` (logged + WS error frame); the client only sends voices it resolved, so this means client/engine kit drift — loud, not swallowed. |
-| Active kit not pushed to engine before a hit | `handDrum.hit` throws "no active kit" — the tab pushes the kit on mount/selection; a hit before that is a wiring bug, surfaced. |
-| Macro CPC key missing from schema | Engine boot-time schema validation fails (same as every global param). |
-| Runaway / stuck finger | Impulses are fire-and-forget and self-expire; **Panic/Clear** drops `spatialImpulses[]` and calls the existing panic-stop. No voice can outlive its envelope. |
-| APC profile endpoint mismatch | Inherited docs/34 behavior: red chip naming the endpoints found, no auto-pick. |
-| Frame budget exceeded under heavy drumming | Bench-gated (§8); if ever real, cap concurrent impulses (oldest-drops) — a *loud* cap surfaced in the tab, not a silent throttle. |
+All runtime `drumHit` failures share one shape: **log + a `drumError` frame
+to the sender**, and the **render loop is never touched**. The frame is
+`{ type: 'drumError', code, message, hitId? }` where `code` ∈
+`UNKNOWN_KIT | UNKNOWN_VOICE | BAD_HIT | …` and `hitId` echoes the client's
+hit id for correlation.
+
+| Condition | When | Surfaced as |
+|---|---|---|
+| **Hand Drum enabled but `HandDrum` not wired** | boot | **Engine throws at startup** (codex P0). Not a per-message `return`. |
+| **Exported model missing finite `nx/ny/nz`** on any controllable pixel | boot | `HandDrum` validator **throws at startup** listing the offending pixels (§0). No skip-the-pixel fallback. |
+| Kit YAML invalid (bad color tuple, region gap, env < 0, `effect:` ≠ dropHit in v1) | load | **Throws at kit load** with the offending kit path. No partial kit. |
+| Macro CPC key missing from schema (`drumSize/Speed/Hue/Intensity/Master`) | boot | Engine boot-time schema validation fails (same as every global param). |
+| `drumHit` names an unknown `kitId` | runtime | `drumError` `UNKNOWN_KIT` to sender; logged. Render loop untouched. |
+| `drumHit` resolves no voice (unknown name / no region) | runtime | `drumError` `UNKNOWN_VOICE` to sender; logged. |
+| Malformed `drumHit` (missing/`NaN` `u/v`, out-of-range, bad payload) | runtime | `drumError` `BAD_HIT` to sender; logged. **Never** queued into `spatialImpulses[]`. |
+| Runaway / stuck finger | runtime | Impulses are fire-and-forget and self-expire; **Panic/Clear** drops `spatialImpulses[]` and calls the existing panic-stop. No voice can outlive its envelope. |
+| Global blackout active while drumming | runtime | `drumMaster` layer is zeroed by the existing blackout pipeline — drumming is silent but does not error. |
+| APC profile endpoint mismatch | runtime | Inherited docs/34 behavior: red chip naming the endpoints found, no auto-pick. |
+| Frame budget exceeded under heavy drumming | runtime | Bench-gated (§8); if ever real, cap concurrent impulses (oldest-drops) — a *loud* cap surfaced in the tab, not a silent throttle. |
 
 ---
 
@@ -418,12 +572,23 @@ voices:
 Mirrors docs/34's Windows-first, Mac-last topology — Hand Drum is even easier
 because the core is **engine-side and pure-function testable**.
 
-- **Engine unit tests** (no hardware, no iPad): `effects/spatial_impulse.js`
-  weight math (a tap at a fixture's `nN` peaks there, decays to 0 past
-  `radiusN`); `hand_drum.js` voice resolution + macro scaling; envelope
-  lifecycle/expiry. Runs in CI like the rest of `marsin_engine/tests/`.
+**Required tests/checks (expert pass) — each maps to a contract above:**
+
+| Check | Asserts | Where |
+|---|---|---|
+| Spatial impulse **weight + envelope expiry** | weight peaks at `originN`, →0 past `radiusN`; impulse is removed once `elapsed ≥ durationMs` (no leak) | `effects/spatial_impulse.js` + `global_effects_controller` unit test |
+| **`nyBand` filtering** | a voice with `nyBand:[0.7,1]` lights only pixels with `ny∈[0.7,1]`; `zBand` filters `nz` independently | `spatial_impulse` unit test |
+| **Missing `nx/ny/nz` fails validation** | the `HandDrum` boot validator **throws** on a model with a non-finite/out-of-range coord on a controllable pixel (§0) | `hand_drum` validator unit test (synthetic bad model) |
+| **Runtime `drumHit` error → `drumError`, no crash** | unknown kit/voice and malformed payload each produce a `drumError{code,…}` frame and the engine keeps rendering (frame counter advances) | `api_server` / `hand_drum` test (mock ws) |
+| **Panic-stop clears `spatialImpulses`** | after `panicStop()` / `POST /global-effect-macros/panic-stop`, `spatialImpulses.length === 0` | `global_effects_controller` unit test |
+| **Frame budget under realistic drumming** | N hits/s (e.g. 8/s, ~0.5 s envelopes) on the **`titanic`** model keeps `applyMacros` frame time < 25 ms @ 40 fps | bench script (Ring 1) |
+
+- **Engine unit tests** (no hardware, no iPad): the table's `spatial_impulse`,
+  `hand_drum`, and `global_effects_controller` rows; voice resolution + macro
+  scaling (incl. the `velocity·gain·drumIntensity·drumMaster` formula). Runs
+  in CI like the rest of `marsin_engine/tests/`.
 - **Pure-TS tests**: `skin_projection` round-trips, kit loader/validator
-  throw cases.
+  throw cases (incl. `effect:` ≠ dropHit rejected in v1).
 - **Ring 1 — full-stack smoke on one box** (`.agent/01_skills/05_full_stack_smoke.md`):
   CaptainPad web build → engine → sim. Drive the skin with puppeteer taps (or
   APC over **Web MIDI** in desktop Chrome), assert via the sim screenshot
@@ -449,18 +614,20 @@ end of phase 3.
 
 | Phase | Scope | Files |
 |---|---|---|
-| 1. **Engine primitive** | `effects/spatial_impulse.js` (weight × `applyDropHit`); `spatialImpulses[]` + `triggerSpatialImpulse` + per-frame apply in `global_effects_controller.js`; unit tests. Pure engine, no UI. | `marsin_engine/effects/spatial_impulse.js`, `lib/global_effects_controller.js`, tests |
-| 2. **Voice/kit + transport** | `lib/hand_drum.js` (kit hold, voice resolve, macro scaling); `drumSize/Speed/Hue/Intensity` CPC params; `drumHit` WS branch + `POST /hand-drum/kit`; starter kits. | `marsin_engine/lib/hand_drum.js`, `lib/api_server.js`, param schema, `CaptainPad/utils/drum/kits/*.yaml` |
-| 3. **CaptainPad tab (touch)** | `app/(tabs)/hand_drum.tsx` + `_layout.tsx` entry; `utils/drum/{skin_projection,kit,drum_transport}.ts`; `hooks/useHandDrum.ts`; macro faders; panic. **Full Ring-1 HIL pass** (puppeteer taps → sim). | CaptainPad tab + utils + hook |
-| 4. **APC drum profile** | docs/34 profile `apc_mini_mk2_drum.yaml` + `action.kind: drumPad`; LED echo in `useHandDrum`. Ring-1 (Web MIDI) then Ring-2 (iPad CoreMIDI). | `CaptainPad/midi_profiles/*`, hook |
-| 5. **(later)** | 3D camera-true pick (reuse sim picking); side/top skins; voice→signal-bus publish so patterns react to drumming; record/loop sequencer (own doc); tap-to-edit kit builder. | — |
+| 0. **Prerequisite — Titanic scene cleanup** | Stable logical IDs/view masks for LED strands; one canonical traces source (or prove single-loader); standardize generator/group names; re-export so `titanic.js` has finite `nx/ny/nz` on every controllable pixel (§0). Bench rig is `test_bench` until done. | `simulation/scenes/titanic/*`, model export, tracker task |
+| 1. **Engine primitive** | `effects/spatial_impulse.js` (weight × `applyToPixel`, `nyBand`/`zBand` filters); `spatialImpulses[]` + `triggerSpatialImpulse` + per-frame apply + `panicStop` clear in `global_effects_controller.js`; unit tests. Pure engine, no UI. | `marsin_engine/effects/spatial_impulse.js`, `lib/global_effects_controller.js`, tests |
+| 2. **Voice/kit + transport** | `lib/hand_drum.js` (model-coord boot validator, kit **registry**, voice resolve, macro scaling incl. `drumMaster`); `drumSize/Speed/Hue/Intensity/Master` CPC params; `drumHit` branch on `/ws/control` with try/catch → `drumError`; boot wiring invariant; `POST /hand-drum/kit`; starter kits. | `marsin_engine/lib/hand_drum.js`, `lib/api_server.js`, `engine.js`, param schema, `CaptainPad/utils/drum/kits/*.yaml` |
+| 3. **CaptainPad tab (touch)** | `app/(tabs)/hand_drum.tsx` + `_layout.tsx` entry; `utils/drum/{skin_projection,kit,drum_transport}.ts` (hits via `engineEvents.send` on `/ws/control`, `kitId` per hit); `hooks/useHandDrum.ts`; macro faders; panic; `drumError` handling. **Full Ring-1 HIL pass** (puppeteer taps → sim). | CaptainPad tab + utils + hook |
+| 4. **APC drum profile** | docs/34 profile `apc_mini_mk2_drum.yaml` + `action.kind: drumPad`; Fader 9 → `drumMaster`; LED echo in `useHandDrum`. Ring-1 (Web MIDI) then Ring-2 (iPad CoreMIDI). | `CaptainPad/midi_profiles/*`, hook |
+| 5. **(v2)** | `effect:` voice flavor (`uvBlast`/`colorWash`/…); 3D camera-true pick (reuse sim picking); side/top skins; voice→signal-bus publish so patterns react to drumming; record/loop sequencer (own doc); tap-to-edit kit builder. | — |
 
 ---
 
 ## 10. Open questions (for Sina)
 
-1. **Skin v1 — front elevation OK?** Front-only with `nz`-band voices covers
-   "tap high vs low." Or do you want the tab to mirror the **sim's current
+1. **Skin v1 — front elevation OK?** Front-only with `nyBand` voices covers
+   "tap high vs low" (vertical filtering on `ny`; `zBand`/`nz` reserved for
+   front/back depth). Or do you want the tab to mirror the **sim's current
    camera** (tap what you see) from day one? (That's the v2 3D pick; bigger.)
 2. **Tap-where vs pick-voice.** Two kit styles: *regions* (where you tap picks
    the voice — most "instrument"-like) and *single voice everywhere* (the kit
@@ -472,10 +639,11 @@ end of phase 3.
    or pinned to *named fixture clusters* (bow/mid/stern × waterline/deck/stack)
    so each pad is "a thing on the ship," not a coordinate? Clusters read more
    musical but need per-scene authoring.
-5. **Master interaction** — does the drum's Master fader fold into the global
-   master, or is Hand Drum a separate additive layer with its own level (so
-   you can drum over a blacked-out deck)? Proposed: separate additive level,
-   because drumming over a dark hull is a great look.
+5. **Master interaction** — ✅ **resolved (expert pass): separate additive
+   level.** Hand Drum has its own `drumMaster` (final intensity =
+   `velocity·voice.gain·drumIntensity·drumMaster`, clamped), still subject to
+   global blackout + panic-stop; APC Fader 9 drives it. Left here only to
+   confirm you're happy with that call.
 6. **Welcoming mode** — do we want a "guest" lockdown (kit + master fixed,
    only the skin live) so an alien can safely play without touching the show?
    Cheap to add given Guided Access is already at FoH.
@@ -509,7 +677,7 @@ mini mk2. Six concrete ways it earns its place across a night:
    exterior into a beacon that *breathes* — far more eye-catching than a
    static wash, and it costs the operator four taps a bar.
 
-3. **Smokestack barks.** A `stack` voice with `zBand: [0.7, 1.0]` lights only
+3. **Smokestack barks.** A `stack` voice with `nyBand: [0.7, 1.0]` lights only
    the high fixtures regardless of horizontal tap position — so a hard hit
    makes the stacks *bark* over the hull. The "tap high vs low" gesture maps
    to the ship's silhouette without any 3D picking.
@@ -578,13 +746,16 @@ export function spatialWeight(dist, radiusN, falloff) {
   }
 }
 
-/** Apply one live impulse to the frame's pixels at envelope value `env`. */
+/** Apply one live impulse to the frame's pixels at envelope value `env`.
+ *  `intensity` already folds velocity·gain·drumIntensity·drumMaster (clamped).
+ *  nyBand = vertical (high/low) filter on px.ny; zBand = front/back depth on px.nz. */
 export function applySpatialImpulse({ pixels, impulse, env }) {
   const { originN: [ox, oy], radiusN, falloff, color6,
-          intensity, blend, zBand } = impulse;
+          intensity, blend, nyBand, zBand } = impulse;
   for (let i = 0; i < pixels.length; i++) {
     const px = pixels[i];
-    if (zBand && (px.nz < zBand[0] || px.nz > zBand[1])) continue;
+    if (nyBand && (px.ny < nyBand[0] || px.ny > nyBand[1])) continue; // vertical
+    if (zBand  && (px.nz < zBand[0]  || px.nz > zBand[1]))  continue; // depth
     const d = Math.hypot(px.nx - ox, px.ny - oy);
     const w = spatialWeight(d, radiusN, falloff);
     if (w <= 0) continue;
@@ -629,50 +800,71 @@ if (this.spatialImpulses.length > 0) {
 `panicStop()` (line 618) clears `this.spatialImpulses = []` too — the panic
 path must drop live drum voices (failure table, §7).
 
-### B.3 Engine — `lib/hand_drum.js` (new) — voice resolution
+### B.3 Engine — `lib/hand_drum.js` (new) — kit registry + voice resolution
 
-Holds the active kit + the live macro scalars (read from CPC) and turns a tap
-into an impulse. Throws (no fallback) on a missing kit/voice — codex P0.
+Holds a **kit registry** (not a single active kit — multi-client, §3.E) + the
+live macro scalars (read from CPC) and turns a tap into an impulse. Errors
+carry a `code` so the WS branch can emit a typed `drumError` (B.4). A custom
+`DrumError` keeps the codes in one place; nothing here is swallowed.
 
 ```js
+class DrumError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
 export class HandDrum {
-  constructor({ controller, projection, paramCenter }) {
+  constructor({ controller, projection, paramCenter, model }) {
     this.controller = controller;     // GlobalEffectsController
     this.projection = projection;     // skin (u,v) -> [nx, ny], scene sidecar
-    this.paramCenter = paramCenter;   // for drumSize/Speed/Hue/Intensity
-    this.kit = null;
+    this.paramCenter = paramCenter;   // drumSize/Speed/Hue/Intensity/Master
+    this.kits = new Map();            // kitId -> validated Kit
+    this._validateModelCoords(model); // §0: throws at boot on bad nx/ny/nz
   }
 
-  setKit(kit) { this.kit = kit.validate(); } // throws on bad kit at swap time
+  /** §0 prerequisite — fail loud at boot if any controllable pixel lacks coords. */
+  _validateModelCoords(model) {
+    const bad = model.pixels.filter(px =>
+      ![px.nx, px.ny, px.nz].every(n => Number.isFinite(n) && n >= 0 && n <= 1));
+    if (bad.length) {
+      throw new Error(`HandDrum: ${bad.length} controllable pixels lack finite nx/ny/nz in [0..1]: ` +
+        bad.slice(0, 10).map(p => p.i).join(','));
+    }
+  }
 
-  hit({ u, v, voice: voiceId, intensity = 1 }, nowMs) {
-    if (!this.kit) throw new Error('HandDrum.hit: no active kit (POST /hand-drum/kit first)');
-    const originN = this.projection.project(u, v);  // [nx, ny] in 0..1
-    const voice = this.kit.resolve(originN, voiceId); // throws if unknown
-    const m = this._macros();                          // live CPC scalars
+  loadKit(kit) { this.kits.set(kit.id, kit.validate()); } // throws on bad kit
+
+  hit({ u, v, kitId, voice: voiceId, intensity = 1 }, nowMs) {
+    const kit = this.kits.get(kitId);
+    if (!kit) throw new DrumError('UNKNOWN_KIT', `no kit '${kitId}'`);
+    const originN = this.projection.project(u, v);          // [nx, ny] in 0..1
+    const voice = kit.resolve(originN, voiceId);             // throws UNKNOWN_VOICE
+    const m = this._macros();                                // live CPC scalars
     this.controller.triggerSpatialImpulse({
       originN,
       radiusN:   clamp01(voice.radiusN * m.size),
       falloff:   voice.falloff,
-      color6:    rotateHue(voice.color6, m.hue),       // RGB hue-rotate, W/A/U pass-through
+      color6:    rotateHue(voice.color6, m.hue),             // RGB hue-rotate, W/A/U pass-through
       attackMs:  voice.attackMs,
-      holdMs:    voice.holdMs   / m.speed,             // faster speed = shorter hold
+      holdMs:    voice.holdMs   / m.speed,                   // faster speed = shorter hold
       releaseMs: voice.releaseMs / m.speed,
-      intensity: clamp01(intensity * voice.gain * m.intensity),
-      blend:     voice.blend,                          // 'add' | 'max' | 'replace'
-      zBand:     voice.zBand || null,
+      // final intensity: velocity · voice.gain · drumIntensity · drumMaster
+      intensity: clamp01(intensity * voice.gain * m.intensity * m.master),
+      blend:     voice.blend,                                // 'add' | 'max' | 'replace'
+      nyBand:    voice.nyBand || null,                       // vertical filter
+      zBand:     voice.zBand  || null,                       // depth filter
     }, nowMs);
   }
 
   _macros() {
     const p = this.paramCenter.getAll();
-    return { size: p.drumSize, speed: p.drumSpeed, hue: p.drumHue, intensity: p.drumIntensity };
+    return { size: p.drumSize, speed: p.drumSpeed, hue: p.drumHue,
+             intensity: p.drumIntensity, master: p.drumMaster };
   }
 }
 ```
 
-`drumSize/drumSpeed/drumHue/drumIntensity` are registered in the param schema
-exactly like every other global param (follow
+`drumSize/drumSpeed/drumHue/drumIntensity/drumMaster` are registered in the
+param schema exactly like every other global param (follow
 `.agent/01_skills/04_add_new_global_param.md`); they get clamped/validated by
 the CPC, persisted per policy, and broadcast — Hand Drum stores no param state
 of its own. Macros are **engine-side state read at trigger time**, which is
@@ -680,43 +872,82 @@ why per-tap `drumHit` payloads stay tiny (§3.D).
 
 ### B.4 Engine — `lib/api_server.js` WS branch (one `else if`)
 
-Added to the `/ws/params` inbound handler, alongside `setSharedParam`
-(line 3714) and `setControl` (line 3588). WS, not REST — a tap must feel
-instant and the socket is already open at performance rates.
+Added to the **`/ws/control`** inbound handler — the same `ws.on('message')`
+block that already handles `setControl` (api_server.js:3588) and
+`setSharedParam` (api_server.js:3714). (`engineEvents` on the client connects
+to `/ws/control`; that's the socket with the inbound writer.) WS, not REST — a
+tap must feel instant and the socket is already open at performance rates.
+
+`handDrum` is a **boot invariant**, not a per-message guard; the runtime
+branch only guards against *malformed hits* and turns them into `drumError`
+frames so the render loop is never interrupted.
 
 ```js
 } else if (d.type === 'drumHit') {
-  // d = { type, u, v, voice, intensity, ts }
-  if (!handDrum) throw new Error('drumHit received but HandDrum not wired'); // boot bug, fail loud
-  handDrum.hit({ u: d.u, v: d.v, voice: d.voice, intensity: d.intensity }, nowMs());
+  // d = { type, u, v, kit, voice, intensity, hitId, ts }
+  try {
+    handDrum.hit(
+      { u: d.u, v: d.v, kitId: d.kit, voice: d.voice, intensity: d.intensity },
+      performance.now(),
+    );
+  } catch (err) {
+    console.error('[HandDrum] drumHit failed:', err);
+    ws.send(JSON.stringify({
+      type: 'drumError',
+      code: err.code || 'BAD_HIT',   // UNKNOWN_KIT | UNKNOWN_VOICE | BAD_HIT
+      message: String(err.message || err),
+      hitId: d.hitId,
+    }));
+  }
+}
+```
+
+The boot invariant lives in `engine.js` (not the message handler):
+
+```js
+if (config.handDrum?.enabled && !handDrum) {
+  throw new Error('Hand Drum enabled but HandDrum failed to initialize');
 }
 ```
 
 Plus a tiny REST `POST /hand-drum/kit` so the **engine** (not just the client)
-validates and holds the active kit — keeps validation server-side and lets the
-kit change without reconnecting the socket.
+validates and registers kits — keeps validation server-side; kits live in the
+registry and each `drumHit` names its `kitId` (§3.E).
 
 ### B.5 CaptainPad — `utils/drum/drum_transport.ts` (new)
 
-Hits ride the **existing** engine WS via `engineEvents.send(...)`
-(`CaptainPad/utils/engineBus.ts` → exported as `engineEvents.send`, line 40 of
-`engineEvents.ts`). Discrete hits dispatch immediately; only the continuous
-macro faders coalesce and go through the CPC (`setSharedParam`), exactly like
-docs/34.
+Hits ride the **control-plane** WS via `engineEvents.send(...)` — the singleton
+bus that owns the iPad's one connection to **`/ws/control`**
+(`CaptainPad/utils/engineEvents.ts:34` `createBus('/ws/control')`; `send`
+exported at `engineEvents.ts:40`). We do **not** use `engineParamsEvents`
+(`/ws/params`) — that bus has no inbound writer. Discrete hits dispatch
+immediately; only the continuous macro faders coalesce and go through the CPC
+(`setSharedParam`) on the **same** socket, exactly like docs/34.
 
 ```ts
 import { engineEvents } from '@/utils/engineEvents';
 
+let hitSeq = 0;
+
 /** Fire one drum voice. Discrete → send now, never throttled (it's a drum). */
-export function drumHit(u: number, v: number, voice: string, intensity = 1) {
-  engineEvents.send({ type: 'drumHit', u, v, voice, intensity, ts: Date.now() });
+export function drumHit(u: number, v: number, kit: string, voice: string, intensity = 1) {
+  engineEvents.send({
+    type: 'drumHit', u, v, kit, voice, intensity,
+    hitId: `${Date.now()}-${hitSeq++}`,  // echoed in any drumError
+    ts: Date.now(),
+  });
 }
 
-/** Continuous macro (Size/Speed/Hue/Intensity) → CPC, ~30 Hz trailing. */
-export function setDrumMacro(key: 'drumSize'|'drumSpeed'|'drumHue'|'drumIntensity', value: number) {
+/** Continuous macro → CPC, ~30 Hz trailing, same /ws/control socket. */
+export function setDrumMacro(
+  key: 'drumSize'|'drumSpeed'|'drumHue'|'drumIntensity'|'drumMaster', value: number) {
   engineEvents.send({ type: 'setSharedParam', key, value, origin: 'handdrum' });
 }
 ```
+
+A `drumError` frame (`{ type:'drumError', code, message, hitId }`) arrives on
+the same bus; `useHandDrum` subscribes and surfaces it (e.g. a brief inline
+toast keyed by `hitId`) rather than swallowing it.
 
 ### B.6 Skin projection — `utils/drum/skin_projection.ts` (new, pure)
 
@@ -741,22 +972,34 @@ sidecar) so client and engine agree on where a tap lands.
 A reviewer can sign off by checking these — each is a place the design could be
 wrong, not a rubber stamp:
 
-- [ ] **Spatial primitive is genuinely additive-only and reuses `dropHit`** —
-  no new blend modes, no change below `applyMacros` in the pixel→DMX→sACN tail.
-- [ ] **Polyphony bounds**: `spatialImpulses[]` length under realistic
-  drumming (e.g. 8 hits/s × ~0.5 s envelopes ≈ ≤ ~8–12 live) keeps
-  `applyMacros` under the 25 ms frame budget on the `titanic` model (the §8
-  bench gate must prove this, not assume it).
-- [ ] **Fail-loud holds**: bad kit/voice/effect throws at *load* and *swap*;
-  `drumHit` for an unknown voice throws server-side; panic clears live voices.
-- [ ] **Macro semantics**: Size scales radius, Speed scales envelope (hold +
-  release), Hue rotates RGB only (W/A/U pass through), Intensity × velocity ×
-  voice gain — all clamped by the CPC. Confirm `1/speed` is the intended sense
-  (bigger Speed = snappier).
-- [ ] **Front-skin sufficiency** for BM26 vs needing the 3D pick now (Q1) —
-  the single biggest scope decision.
-- [ ] **Latency path**: tap → `engineEvents.send` (WS, open) → `drumHit` →
-  trigger, with no REST in the per-tap path. Continuous faders are the only
-  coalesced channel.
+- [ ] **§0 prerequisite enforced**: `HandDrum` boot validator throws on any
+  controllable pixel lacking finite `nx/ny/nz` in `[0..1]`; Titanic scene
+  cleanup (LED strand IDs, single traces source, generator/group names) is
+  tracked and gates `titanic`.
+- [ ] **Spatial primitive is additive-only and reuses `dropHit`** — v1 voices
+  are weighted `dropHit` only (no `effect:` flavor), no new blend modes, no
+  change below `applyMacros` in the pixel→DMX→sACN tail.
+- [ ] **Coordinate semantics**: `nyBand` filters vertical (`ny`, high/low);
+  `zBand` is reserved for front/back depth (`nz`). Kits/examples/code agree.
+- [ ] **Error model**: enabled-but-unwired → **boot** throw; runtime
+  unknown-kit / unknown-voice / malformed hit → `drumError{code,message,hitId}`
+  to the sender + log, **render loop never crashes**; panic clears
+  `spatialImpulses[]`.
+- [ ] **Multi-client**: each `drumHit` carries `kitId`, validated against the
+  server kit registry; no shared mutable "active kit" two surfaces fight over.
+- [ ] **Master semantics**: final intensity =
+  `clamp01(velocity · voice.gain · drumIntensity · drumMaster)`; `drumMaster`
+  is a separate additive level that still obeys blackout + panic; APC Fader 9
+  drives it.
+- [ ] **Macro semantics**: Size scales radius, Speed scales envelope (`÷
+  drumSpeed` on hold+release — bigger Speed = snappier), Hue rotates RGB only
+  (W/A/U pass through) — all clamped by the CPC.
+- [ ] **Polyphony bounds**: `spatialImpulses[]` under realistic drumming
+  (e.g. 8 hits/s × ~0.5 s ≈ ≤ ~8–12 live) keeps `applyMacros` < 25 ms @ 40 fps
+  on `titanic` (§8 bench gate proves it, not assumes it).
+- [ ] **Transport**: hits go `engineEvents.send` → `/ws/control` → `drumHit`,
+  no REST in the per-tap path; continuous faders (incl. `drumMaster`) are the
+  only coalesced channel and ride the same socket; `engineParamsEvents` is not
+  used as an outbound writer.
 - [ ] **Offline/playa**: WS + bundled YAML kits + CoreMIDI/Web MIDI built-ins;
   no CDN, no runtime install (codex hard rule).
