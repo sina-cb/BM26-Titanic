@@ -725,8 +725,11 @@ function setupSceneIndicator() {
     })
     .catch(err => console.error(`[Scene] Failed to load scenes manifest at ${manifestUrl}:`, err));
 
-  select.addEventListener('change', async (e) => {
+  select.addEventListener('change', (e) => {
     const val = e.target.value;
+    // Build the next URL from the CURRENT one so every active query param
+    // (profile, spotlights, lighting_mode, renderer, …) survives the reload —
+    // only `scene` changes.
     const url = new URL(window.location.href);
     if (val) {
       url.searchParams.set('scene', val);
@@ -734,34 +737,49 @@ function setupSceneIndicator() {
       url.searchParams.delete('scene');
     }
 
-    // Tell the engine to follow the scene change: it loads (and renders)
-    // the most-recently exported marsin_engine/models/<scene>.js for the new
-    // scene. The engine restarts itself onto the new model and re-binds the
-    // same port, so the reloaded sim reconnects to the matching model.
+    // Tell the engine to follow the scene change: it loads (and renders) the
+    // most-recently exported marsin_engine/models/<scene>.js for the new scene,
+    // then restarts itself onto the new model and re-binds the same port.
     //
-    // Skipped on a static host (no engine reachable by construction — the
-    // sim runs its in-browser Pixelblaze engine there). Failures are surfaced
-    // loudly to the console but never block the operator's scene change: the
-    // sim still follows the selection.
+    // This POST is FIRE-AND-FORGET on purpose. The engine acknowledges and then
+    // tears its own HTTP/WS server down ~50ms later to restart on the new model
+    // (see marsin_engine/lib/api_server.js POST /scene). Awaiting the response
+    // here used to race that teardown: when the engine dropped the socket while
+    // the reply was in flight, the await never settled, the handler stalled, and
+    // `window.location.href` below never ran — the sim froze on the old scene
+    // with stale controls (operator report 2026-06-14). We use `keepalive` so
+    // the request still completes across the navigation we trigger immediately
+    // after, and surface any synchronous dispatch failure loudly to the console
+    // without ever blocking the operator's scene change.
+    //
+    // Skipped on a static host (no engine reachable by construction — the sim
+    // runs its in-browser Pixelblaze engine there).
     if (val && !isStaticHost()) {
       const engineSceneUrl = `http://${window.location.hostname}:6968/scene`;
-      try {
-        const resp = await fetch(engineSceneUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scene: val }),
-        });
+      fetch(engineSceneUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene: val }),
+        keepalive: true,
+      }).then((resp) => {
         if (!resp.ok) {
-          const body = await resp.text().catch(() => '');
-          console.error(`[Scene] Engine refused scene switch to '${val}' (HTTP ${resp.status}): ${body}`);
+          console.error(`[Scene] Engine refused scene switch to '${val}' (HTTP ${resp.status}).`);
         } else {
           console.log(`[Scene] Engine following scene change → '${val}'`);
         }
-      } catch (err) {
+      }).catch((err) => {
         console.error(`[Scene] Could not reach engine at ${engineSceneUrl} to switch scene to '${val}':`, err);
-      }
+      });
     }
 
+    // A scene switch is a deliberate operator navigation, not an accidental
+    // tab close. Flush any pending config save and disarm the unsaved-changes
+    // guard so the browser does NOT raise its blocking "Leave site?" dialog —
+    // that dialog silently stalled the reload and left the sim frozen on the
+    // old scene with stale/empty controls (operator report 2026-06-14).
+    if (window.flushAndDisarmUnloadGuard) window.flushAndDisarmUnloadGuard();
+
+    // Reload immediately — never gated behind the engine round-trip above.
     window.location.href = url.toString();
   });
 }
