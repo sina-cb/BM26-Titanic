@@ -1,6 +1,10 @@
-# 🥁 Hand Drum — Play the Titanic Like a Drum Surface — Design Doc
+# 🥁 [TODO] Hand Drum — Play the Titanic Like a Drum Surface — Design Doc
 
-> **Rev. 2026-06-14 (expert pre-implementation pass, ×2).** Tightened to match
+> **Status: TODO — design only, not yet implemented.** Reviewed and approved
+> for build; tracked on the Notion task board (Titanic Lighting - Task
+> Tracker). This file is the spec an implementation agent works from.
+
+> **Rev. 2026-06-14 (expert pre-implementation pass, ×3).** Tightened to match
 > the current repo before any code lands: per-hit transport is **`/ws/control`**
 > (via `engineEvents.send`); runtime `drumHit` errors return a **`drumError`**
 > frame and never crash the render loop, while *enabled-but-unwired* fails
@@ -161,7 +165,8 @@ pixel, a **spatial weight**:
 ```
 d      = hypot(px.nx - originN[0], px.ny - originN[1])   // distance on the skin
 w      = falloff(d / radiusN)        // 1 at the tap, →0 at the rim, 0 beyond
-amount = intensity · envelope(elapsedMs) · w
+amount = clamp01(baseIntensity · drumMaster) · envelope(elapsedMs) · w
+//       └ baseIntensity fixed at trigger; drumMaster read LIVE each frame (§5)
 ```
 
 then applies the **existing `dropHit` per-pixel math** (`effects/dropHit.js`
@@ -308,8 +313,10 @@ once (kit list) on mount.
 - **`kit.ts` + `kits/*.yaml`** — kit/voice schema, loader (via the existing
   `yaml-transformer.js` bundling path, same as `config.yaml` and the MIDI
   profiles), and a **validator that throws at load** on unknown effect id,
-  out-of-range envelope, a color that isn't a 6-tuple, or a region that
-  doesn't cover `[0..1]²`. No partial kits (codex P0).
+  out-of-range envelope, a color that isn't a 6-tuple, a **non-finite `gain`
+  after defaults** (every voice must end up with a finite `gain`; the bundled
+  default is `1.0`), a `groups:` entry naming a group absent from the model, or
+  a region that doesn't cover `[0..1]²`. No partial kits (codex P0).
 - **`drum_transport.ts`** — sends `{ type:'drumHit', u, v, kitId, voice,
   intensity, hitId, ts }` over the **existing control-plane socket** via
   `engineEvents.send(...)` (which owns the iPad's one connection to
@@ -545,8 +552,10 @@ profile so they are data, not code.
 
 Hand Drum is its **own additive layer**, not folded into the global/mixer
 master. It has a dedicated CPC param **`drumMaster`** (0..1) so the operator
-can drum *over* a blacked-out or dim deck — a great look — and ride the whole
-drum layer up/down independently of the show.
+can drum *over* a dark/dim **deck pattern** — a great look — and ride the whole
+drum layer up/down independently of the show. (This is layering over a quiet
+*pattern*, not an escape from **global blackout**, which still silences the
+drum layer — see below.)
 
 - **Per-frame amount** for a pixel is
   `clamp01(baseIntensity · drumMaster) · envelope · weight`, where
@@ -576,6 +585,7 @@ name: "Bow & Stacks"
 defaults:        # applied to every voice unless overridden
   falloff: gaussian
   blend: add
+  gain: 1.0        # per-voice intensity balance; REQUIRED post-default & finite
   attackMs: 8
   holdMs: 40
   releaseMs: 320
@@ -669,7 +679,7 @@ because the core is **engine-side and pure-function testable**.
 | **`drumMaster` is live** | moving `drumMaster` between frames changes the per-frame `amount` of an **already-ringing** impulse (not just new hits) | `global_effects_controller` unit test (two frames, different master) |
 | **`drumSpeed` never divides by zero** | CPC clamps `drumSpeed` into `[0.25,4.0]`; envelope timing stays finite at the fader extremes | `hand_drum` + param-schema test |
 | **Missing `nx/ny/nz` fails validation** | the `HandDrum` boot validator **throws** on a model with a non-finite/out-of-range coord on a controllable pixel (§0) | `hand_drum` validator unit test (synthetic bad model) |
-| **Runtime `drumHit` error → `drumError`, no crash** | unknown kit/voice/group and malformed payload each produce a `drumError{code,…}` frame and the engine keeps rendering (frame counter advances) | `api_server` / `hand_drum` test (mock ws) |
+| **Runtime `drumHit` error → `drumError`, no crash** | unknown kit/voice and malformed payload each produce a `drumError{code,…}` frame and the engine keeps rendering (frame counter advances). (Unknown **group** is a kit-load failure, not runtime — see the kit-validator row.) | `api_server` / `hand_drum` test (mock ws) |
 | **Panic-stop clears `spatialImpulses`** | after `panicStop()` / `POST /global-effect-macros/panic-stop`, `spatialImpulses.length === 0` | `global_effects_controller` unit test |
 | **Frame budget under realistic drumming** | N hits/s (e.g. 8/s, ~0.5 s envelopes) on the **`titanic`** model keeps `applyMacros` frame time < 25 ms @ 40 fps | bench script (Ring 1) |
 
@@ -921,6 +931,9 @@ export class HandDrum {
     this.paramCenter = paramCenter;   // drumSize/Speed/Hue/Intensity/Master
     this.kits = new Map();            // kitId -> validated Kit
     this._validateModelCoords(model); // §0: throws at boot on bad nx/ny/nz
+    // Set of every group name in the export — kit validation checks `groups:`
+    // entries against this so an absent group fails loud at kit-load (§6).
+    this.knownGroups = new Set(model.pixels.map(px => px.group));
   }
 
   /** §0 prerequisite — fail loud at boot if any controllable pixel lacks coords. */
@@ -933,7 +946,10 @@ export class HandDrum {
     }
   }
 
-  loadKit(kit) { this.kits.set(kit.id, kit.validate()); } // throws on bad kit
+  // Validate against the loaded model's group set; `validate` throws
+  // UNKNOWN_GROUP for any `groups:` naming an absent group, and applies the
+  // gain:1.0 default so every voice ends up with a finite gain (§6).
+  loadKit(kit) { this.kits.set(kit.id, kit.validate({ knownGroups: this.knownGroups })); }
 
   hit({ u, v, kitId, voice: voiceId, intensity = 1 }, nowMs) {
     const kit = this.kits.get(kitId);
@@ -949,8 +965,10 @@ export class HandDrum {
       attackMs:  voice.attackMs,
       holdMs:    voice.holdMs   / m.speed,                   // m.speed ∈ [0.25,4.0], never 0
       releaseMs: voice.releaseMs / m.speed,
-      // FIXED at trigger; drumMaster is applied LIVE per frame (applySpatialImpulse)
-      baseIntensity: clamp01(intensity * voice.gain * m.intensity),
+      // FIXED at trigger; drumMaster is applied LIVE per frame (applySpatialImpulse).
+      // voice.gain is defaulted to 1.0 at kit-load, but `?? 1` keeps a hand-built
+      // voice from ever producing NaN here.
+      baseIntensity: clamp01(intensity * (voice.gain ?? 1) * m.intensity),
       blend:     voice.blend,                                // 'add' | 'max' | 'replace'
       groups:    voice.groups || null,                       // named-group filter (preferred)
       nyBand:    voice.nyBand || null,                       // vertical filter (measured)
