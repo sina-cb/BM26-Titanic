@@ -21,6 +21,7 @@ import {
 } from "./src/core/state.js";
 import { pushUndo } from "./src/core/undo.js";
 import { extractParams } from "./src/core/config.js";
+import { applyBootUrlOverrides } from "./src/core/url_overrides.js";
 import { createGround, createStarField, loadModel, onModelLoaded } from "./src/core/environment.js";
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
@@ -481,6 +482,11 @@ Promise.all([
 
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
+      // Boot-time URL overrides (?profile=, ?lighting_mode=, ?renderer=) must
+      // win over the YAML/persisted values extractParams just loaded, and must
+      // do so BEFORE init()/setupLighting() reads params.lightingProfile and
+      // builds the analytic SpotLight rig. See src/core/url_overrides.js.
+      applyBootUrlOverrides(_urlParams);
       // No reconcile here: bits are reconciled against the EXPORTED
       // PIXELS (the engine's validation universe) inside saveModelJS,
       // which boot calls right after init.
@@ -746,7 +752,7 @@ function setupSceneIndicator() {
     })
     .catch(err => console.error(`[Scene] Failed to load scenes manifest at ${manifestUrl}:`, err));
 
-  select.addEventListener('change', (e) => {
+  select.addEventListener('change', async (e) => {
     const val = e.target.value;
     const url = new URL(window.location.href);
     if (val) {
@@ -754,6 +760,35 @@ function setupSceneIndicator() {
     } else {
       url.searchParams.delete('scene');
     }
+
+    // Tell the engine to follow the scene change: it loads (and renders)
+    // the most-recently exported marsin_engine/models/<scene>.js for the new
+    // scene. The engine restarts itself onto the new model and re-binds the
+    // same port, so the reloaded sim reconnects to the matching model.
+    //
+    // Skipped on a static host (no engine reachable by construction — the
+    // sim runs its in-browser Pixelblaze engine there). Failures are surfaced
+    // loudly to the console but never block the operator's scene change: the
+    // sim still follows the selection.
+    if (val && !isStaticHost()) {
+      const engineSceneUrl = `http://${window.location.hostname}:6968/scene`;
+      try {
+        const resp = await fetch(engineSceneUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scene: val }),
+        });
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          console.error(`[Scene] Engine refused scene switch to '${val}' (HTTP ${resp.status}): ${body}`);
+        } else {
+          console.log(`[Scene] Engine following scene change → '${val}'`);
+        }
+      } catch (err) {
+        console.error(`[Scene] Could not reach engine at ${engineSceneUrl} to switch scene to '${val}':`, err);
+      }
+    }
+
     window.location.href = url.toString();
   });
 }

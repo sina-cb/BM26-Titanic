@@ -45,7 +45,7 @@ import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1781,7 +1781,15 @@ async function main() {
   const getOscListener = () => oscState.listener;
 
   // 8. Graceful shutdown
-  function shutdown() {
+  //
+  // `afterClose` lets a caller (the scene-switch path) run AFTER every
+  // listener/socket is released but BEFORE the process exits — so a
+  // replacement engine can re-bind :6968 / the sACN sockets without an
+  // EADDRINUSE race. Without it, shutdown exits the process as before.
+  let shuttingDown = false;
+  function shutdown(afterClose = null) {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('\n\n  ⏹ Stopping...');
     // Stop external input sources FIRST so an in-flight packet or
     // audio frame can't sneak a CPC write in after we've decided to
@@ -1796,6 +1804,10 @@ async function main() {
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
     loop.stop();
+    // Release the HTTP/WS API socket so a replacement engine can re-bind
+    // :6968 immediately (scene-switch restart). On a plain SIGINT/SIGTERM
+    // the process exits anyway, but closing first is harmless.
+    try { apiServer.closeNow && apiServer.closeNow(); } catch (_) { /* ignore */ }
 
     // Send blackout frame
     for (let i = 0; i < model.pixels.length; i++) {
@@ -1813,20 +1825,81 @@ async function main() {
       blackBuffers[u] = dmxRouter.getFullFrame(u);
     }
 
-      sacnOut.sendFrame(blackBuffers).then(() => {
-      sacnOut.stop();
-      mixer.destroy();
-      wasmHost.shutdown();
+    const finish = () => {
+      try { sacnOut.stop(); } catch (_) { /* ignore */ }
+      try { mixer.destroy(); } catch (_) { /* ignore */ }
+      try { wasmHost.shutdown(); } catch (_) { /* ignore */ }
       console.log(`  ✅ Shutdown complete (${loop.frameCount} frames rendered)\n`);
-      process.exit(0);
-    });
+      if (typeof afterClose === 'function') {
+        afterClose();
+      } else {
+        process.exit(0);
+      }
+    };
 
-    // Force exit after 2s
-    setTimeout(() => process.exit(0), 2000);
+    sacnOut.sendFrame(blackBuffers).then(finish).catch(finish);
+
+    // Force exit after 2s — but ONLY when we're not handing off to a
+    // restart callback (that path owns the exit after spawning the child).
+    if (typeof afterClose !== 'function') {
+      setTimeout(() => process.exit(0), 2000);
+    }
   }
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown());
+  process.on('SIGTERM', () => shutdown());
+
+  // Scene/model coordination hook (sim → engine, see POST /scene in
+  // api_server.js). Cross-scene model swaps change the pixel count and the
+  // render loop / WASM buffers are sized once at boot, so an in-process swap
+  // is impossible (the existing on-disk hot reloader refuses pixel-count
+  // changes and goes STALE). The robust path is a clean restart with the new
+  // --model: gracefully shut this engine down, then spawn a detached
+  // replacement that re-binds the same ports with the new scene's model.
+  //
+  // The replacement is self-supervised (detached + unref'd) so this works
+  // standalone (`node engine.js …`, the sim+engine verification path). The
+  // process also exits with code 75 (EX_TEMPFAIL) to mark the restart as
+  // INTENTIONAL — a parent supervisor (e.g. launcher.js, owned by the
+  // launcher PR this branch merges into) can treat code 75 as "scene switch,
+  // not a crash" and adopt/re-track the respawned engine instead of tearing
+  // the stack down. See the merge notes in the handoff report.
+  engineCore.requestSceneSwitch = (scene) => {
+    const modelFile = path.join(__dirname, 'models', `${scene}.js`);
+    if (!fs.existsSync(modelFile)) {
+      // Mirror the API guard — never restart toward a missing model.
+      console.error(`  ❌ Scene switch aborted: model not found: ${modelFile}`);
+      return;
+    }
+    // Rebuild this engine's argv with the new model, preserving every other
+    // flag the operator booted with (pattern, fps, priority, port, etc.).
+    // The engine keys everything (model, state dir, /status activeScene) off
+    // --model, so swapping just that flag is sufficient.
+    const childArgs = [__filename];
+    const src = process.argv.slice(2);
+    for (let i = 0; i < src.length; i++) {
+      const a = src[i];
+      if (a === '--model' || a === '-m') { i++; continue; }
+      childArgs.push(a);
+    }
+    childArgs.push('--model', scene);
+
+    shutdown(() => {
+      console.log(`  🔁 Respawning engine for scene '${scene}': node ${childArgs.join(' ')}`);
+      const child = spawn(process.execPath, childArgs, {
+        cwd: process.cwd(),
+        env: process.env,
+        detached: true,
+        stdio: 'inherit',
+      });
+      child.unref();
+      // Exit code 75 (EX_TEMPFAIL) signals an INTENTIONAL scene-switch
+      // restart to any supervisor watching this process. A supervisor that
+      // respawns the engine itself should pass the new scene; the detached
+      // child above is the self-supervised (standalone) safety net.
+      process.exit(75);
+    });
+  };
 }
 
 main().catch(err => {

@@ -3541,31 +3541,12 @@ function setupGUI() {
   }
 
   // ─── Build the entire GUI from the config tree ───
+  // URL overrides (?profile=, ?lighting_mode=, ?renderer=) are applied
+  // authoritatively at boot, right after extractParams() — see
+  // src/core/url_overrides.js. By the time we get here both params and the
+  // config tree already hold the final values, so the controllers built
+  // below render them correctly with no late, order-dependent patching.
   if (configTree) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const profileOverride = urlParams.get('profile');
-    if (profileOverride && configTree.options && configTree.options.lightingProfile) {
-      configTree.options.lightingProfile.value = profileOverride;
-      params.lightingProfile = profileOverride;
-    }
-
-    const rendererOverride = urlParams.get('renderer');
-    if ((rendererOverride === 'webgpu' || rendererOverride === 'webgl') && configTree.options && configTree.options.rendererMode) {
-      configTree.options.rendererMode.value = rendererOverride;
-      params.rendererMode = rendererOverride;
-    }
-
-    const lightingModeOverride = urlParams.get('lighting_mode');
-    if (lightingModeOverride) {
-      const validLightingModes = ['gradient', 'pixelblaze', 'sacn_in'];
-      if (validLightingModes.includes(lightingModeOverride) && configTree.colorWave && configTree.colorWave.lightingMode) {
-        configTree.colorWave.lightingMode.value = lightingModeOverride;
-        params.lightingMode = lightingModeOverride;
-      } else {
-        console.error(`[GUI] Ignoring invalid lighting_mode URL override '${lightingModeOverride}' (valid: gradient, pixelblaze, sacn_in)`);
-      }
-    }
-
     buildGUI(configTree, gui);
   }
 
