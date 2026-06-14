@@ -410,16 +410,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let lastSharedParams = null;
   let lastLiveParams = null;
   const lastBroadcastMs = {};
-  // Bucket-level emit cap (May 2026 perf). Per-key throttles are too
-  // coarse — with 4 mic bands all flagged 15 Hz but staggered, ANY
-  // band passing its 66ms deadline triggers a broadcast carrying ALL
-  // live keys, so the wire rate climbs to ~4×15 = 60 msg/s. The eye
-  // can't see meter ticks above ~20 Hz, and at 60 msg/s the iPad
-  // JS thread pays JSON.parse + listener fan-out for nothing. Cap the
-  // BUCKET so livePayloads emit at most every 50 ms regardless of how
-  // many per-key deadlines are firing. Per-key Hz values still act as
-  // a CEILING (a key flagged 5 Hz still throttles its own contribution).
-  const LIVE_BUCKET_MIN_INTERVAL_MS = 50; // 20 Hz cap
+  // Bucket-level emit cap (May 2026 perf; cadence revisited Jun 2026 for
+  // the audio-meter latency pass). One coalesced `liveParams` frame is
+  // emitted per bucket interval carrying ALL live keys (mic bands + kick
+  // + flux, stems, detector outputs). The bucket interval is the SOLE
+  // pacer for the live channel:
+  //
+  //   - At 50 ms (the old 20 Hz cap) the audio meters looked laggy and
+  //     stepped — a fresh sample could sit up to 50 ms before hitting
+  //     the wire, and 20 Hz is visibly below the ~40-60 Hz the eye reads
+  //     as "smooth" for fast-moving bars.
+  //   - The old design ALSO required `pastThrottle(...)` (per-key Hz) to
+  //     pass on top of the bucket. That was redundant: the live bundle is
+  //     coalesced (every frame carries every live key regardless of which
+  //     one tripped), so a per-key OR-gate only let the effective rate
+  //     float up to the fastest live key (micKick @ 30 Hz) while adding
+  //     no smoothing and a confusing second knob.
+  //
+  // 22 ms ~= 45 Hz: smooth and low-latency for the meters, still far
+  // below the analyser's ~86 Hz hop rate, and the ~150 B payload keeps
+  // the iPad JSON.parse + fan-out cost trivial. Per-key Hz now only
+  // governs the STEADY (sharedParams) bucket; the live bucket is paced
+  // purely by this interval.
+  const LIVE_BUCKET_MIN_INTERVAL_MS = 22; // ~45 Hz coalesced live frame
   let lastLiveBroadcastMs = 0;
   let hzByKeyCache = null;
   let liveKeysSetCache = null;
@@ -497,15 +510,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // ── liveParams: tight payload, only live keys ───────────────────
-    // Two gates must both pass: (1) per-key Hz (cheap insurance against
-    // a single key spamming faster than its declared rate) AND (2) the
-    // BUCKET rate cap which keeps total liveParams traffic below 20 Hz
-    // even when multiple keys are evolving in parallel.
+    // Single gate: the BUCKET interval. Whenever any live key changed and
+    // at least LIVE_BUCKET_MIN_INTERVAL_MS has elapsed since the last live
+    // frame, emit ONE coalesced frame carrying every live key's freshest
+    // value. The per-key Hz `pastThrottle` requirement was removed here
+    // (Jun 2026 latency pass) — see the LIVE_BUCKET_MIN_INTERVAL_MS comment
+    // for why it was redundant for a coalesced bundle.
     if (liveChanged.length > 0
-        && (now - lastLiveBroadcastMs) >= LIVE_BUCKET_MIN_INTERVAL_MS
-        && pastThrottle(now, 'live', liveChanged, hzByKey)) {
+        && (now - lastLiveBroadcastMs) >= LIVE_BUCKET_MIN_INTERVAL_MS) {
       lastLiveBroadcastMs = now;
-      stampThrottle(now, 'live', liveChanged);
       const params = {};
       const srcParams = (state && state.params) || {};
       // Only ship live keys; if you need full CPC state, hit

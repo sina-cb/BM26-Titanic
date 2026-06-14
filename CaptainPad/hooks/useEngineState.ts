@@ -352,20 +352,27 @@ function useEngineSlice<T>(selector: (s: EngineLiveState) => T): T {
   return slice;
 }
 
-// rAF-coalesced live emit (May 2026 perf). Even with the engine's
-// 20 Hz bucket cap, a busy network can queue multiple liveParams
-// messages between two React render passes. Without coalescing, each
-// triggers its own setState wave through every live subscriber. Here
-// we accumulate into `_pendingLive` and flush once per frame via
-// rAF / setImmediate — so multiple incoming messages collapse into a
-// single setState per consumer per frame, with no perceptual loss
-// (meters can't paint faster than the device's frame rate anyway).
+// Tick-coalesced live emit (May 2026 perf; scheduler revisited Jun 2026
+// for the audio-meter latency pass). A busy network can queue multiple
+// liveParams messages in the same JS tick; without coalescing each one
+// triggers its own setState wave through every live subscriber. We
+// accumulate into `_pendingLive` and flush once per scheduled callback,
+// so a burst collapses into a single setState per consumer.
+//
+// WHY NOT requestAnimationFrame: on React Native / Expo, rAF is driven
+// by the UI frame loop and only fires while the app is actively
+// rendering — under load (the AUDIO tab is busy) those callbacks get
+// deferred well past one 16 ms frame, and the engine's ~45 Hz live
+// frames then pile up behind a late paint. That deferral was a visible
+// chunk of the meter lag. A `setTimeout(0)` macrotask flushes on the
+// next tick regardless of paint state, so the freshest engine frame
+// reaches React state with near-zero added latency while STILL
+// coalescing everything that arrived in the same tick. The meters can't
+// paint faster than the device frame rate anyway, so there is no
+// downside to handing React the value a frame early.
 let _pendingLive: LiveParams | null = null;
 let _flushScheduled = false;
-const _scheduleFlush: (cb: () => void) => void =
-  typeof requestAnimationFrame === 'function'
-    ? (cb) => requestAnimationFrame(() => cb())
-    : (cb) => setTimeout(cb, 16);
+const _scheduleFlush: (cb: () => void) => void = (cb) => { setTimeout(cb, 0); };
 
 function _flushLive() {
   _flushScheduled = false;
