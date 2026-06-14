@@ -138,6 +138,28 @@ test('kick prominence is input-gain-invariant (no softCompress saturation)', () 
   assert.equal(k2, k8, `kick count must be gain-invariant: inputGain2=${k2} vs inputGain8=${k8}`);
 });
 
+test('kick does NOT fire on a noisy room floor, even at high inputGain', () => {
+  // Regression: the kick is DECOUPLED from inputGain, so turning the display
+  // gain up cannot lift mic self-noise / room hiss above the kick silence
+  // floor and fire phantom kicks. Low-amplitude white noise (a quiet room),
+  // NOT pure digital silence.
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+  function noiseKicks(inputGain) {
+    const results = []; let clock = 0;
+    const an = makeAnalyzer({ bands: { noiseGate: 0.04, inputGain } }, results, () => clock);
+    const buf = new Int16Array(512);
+    for (let i = 0; i < SR * 3; i += 512) {
+      for (let j = 0; j < 512; j++) buf[j] = Math.round(rnd() * 0.01 * 32767);
+      clock += (512 / SR) * 1000; an.pushSamples(buf);
+    }
+    return results.filter(r => r.kick >= 0.999).length;
+  }
+  for (const g of [1, 8, 16]) {
+    assert.equal(noiseKicks(g), 0, `room-noise must not fire kicks at inputGain=${g}`);
+  }
+});
+
 test('1000 Hz sine lights up MID', () => {
   const results = [];
   const an = makeAnalyzer({}, results);

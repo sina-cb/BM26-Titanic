@@ -61,7 +61,9 @@ audio:
     maxHz: 110
     threshold: 1.8
     refractoryMs: 140
-    decayMs: 120
+    # 70 ms (was 120): a crisp kick PULSE that doesn't linger high. The
+    # micKick chain (schmitt + short hold) shapes the final pulse on top.
+    decayMs: 70
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★

@@ -467,16 +467,17 @@ export class AudioAnalyzer {
     // EMA + ceiling clamp is a second line of defense: even if the
     // asymmetric coefficients get retuned, the threshold can never
     // sit more than CEILING_RATIO × a several-second baseline.
-    // Kick prominence is computed on the LINEAR (un-compressed) gained
-    // energy, NOT the softCompressed value. softCompress saturates toward 1
-    // at high input levels, which collapses the kick-vs-baseline RATIO (a
-    // loud kick and a loud sustained sub both read ~1.0 → no transient) and
-    // makes the kick non-monotonic in input gain. The ratio on linear energy
-    // is gain-invariant and saturation-free, so the kick fires the same way
-    // at any input gain. softCompress + the noise gate are still used, but
-    // ONLY as a SILENCE FLOOR (`kickGated > 0`) so the noise floor (HVAC,
-    // mic self-noise) can't fire a phantom kick when there's no signal.
-    const kickLin   = PRE_CLAMP_GAIN * inputGain * kickE;
+    // Kick prominence is computed on the LINEAR (un-compressed) energy, NOT
+    // the softCompressed value (softCompress saturates toward 1 at high level,
+    // collapsing the kick-vs-baseline ratio). It is ALSO DECOUPLED from the
+    // display inputGain: the kick is a RATIO detector, so a linear input gain
+    // cancels in the ratio and changes nothing — EXCEPT it would lift the mic
+    // noise floor above the silence gate and fire phantom kicks on amplified
+    // room hiss when the operator turns inputGain up. So the kick runs on the
+    // RAW band energy: inputGain only affects the display bands. softCompress
+    // + the noise gate remain as a SILENCE FLOOR (`kickGated > 0`) so the
+    // noise floor (HVAC, mic self-noise) can't fire a kick in true quiet.
+    const kickLin   = PRE_CLAMP_GAIN * kickE;          // raw — decoupled from inputGain
     const kickGated = applyGate(softCompress(kickLin)); // silence floor only
     if (this._kickEmaWarmedUp) {
       const alpha = kickLin > this._kickEma
