@@ -2,7 +2,17 @@
 
 All audio code lives here (moved out of `lib/` 2026-06-14). The engine wires
 these together in `engine.js`'s audio boot path; the live signals flow to
-CaptainPad + the experimental companion over the `/ws/signals` socket.
+CaptainPad + the Audio Companion over the `/ws/signals` socket.
+
+## ░ HARD, UNBREAKABLE RULE — single source of truth ░
+
+> The **Audio Companion** (`audio/companion/`) and any future audio tooling
+> MUST run the engine's REAL audio code by importing it from `audio/…`. They
+> MUST NEVER reimplement, fork, or shadow any audio-processing logic (FFT
+> bands, kick, flux, the post-processing chain ops, the detector) in their own
+> code path. **One source of truth.** A chain/signal that previews in the
+> Companion is byte-for-byte what the engine runs. New audio behaviour lands
+> in `audio/…` first; tools only render/drive it. (Also stated in `engine.js`.)
 
 | Dir | Holds | Key exports |
 |---|---|---|

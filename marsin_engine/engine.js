@@ -10,6 +10,14 @@
  *   node engine.js --list
  *   node engine.js --pattern fire --dry-run
  *   node engine.js --pattern fire --force-osc-port
+ *
+ * ░░ HARD, UNBREAKABLE RULE — audio is single-source-of-truth ░░
+ *   All audio DSP lives in `audio/` (analyzer, postproc chains, detector,
+ *   capture, config). The Audio Companion app (audio/companion/) MUST run the
+ *   engine's REAL audio code by importing it from `audio/…` — it must NEVER
+ *   reimplement, fork, or shadow any audio-processing logic in its own code
+ *   path. Whatever the engine does, the Companion does, because it is the same
+ *   code. New audio behaviour goes in `audio/…` first. (See audio/README.md.)
  */
 
 import fs from 'fs';

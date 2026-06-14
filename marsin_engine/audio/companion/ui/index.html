@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Audio Companion</title>
+  <link rel="stylesheet" href="companion_app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◇</span>
+      <span class="title">AUDIO COMPANION</span>
+      <span class="sub">design · chain · visualise · export — running the engine's real DSP</span>
+    </div>
+    <div class="top-right">
+      <span id="flash" class="flash"></span>
+      <span id="status" class="status">connecting…</span>
+      <button id="export-btn" class="primary">Export config ▾</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="panel-label">SIGNALS</div>
+      <div id="signals" class="signals"></div>
+    </aside>
+
+    <section class="stage">
+      <div class="trace-panel">
+        <canvas id="trace" width="1100" height="260"></canvas>
+        <div class="readouts">
+          <div class="ro"><span class="ro-l">RAW</span><span class="ro-v" id="big-raw">0.00</span></div>
+          <div class="ro"><span class="ro-l">POST</span><span class="ro-v big" id="big-post">0.00</span></div>
+          <div class="ro-legend"><span class="dot ghost"></span>raw &nbsp; <span class="dot solid"></span>post</div>
+        </div>
+      </div>
+
+      <div class="lower">
+        <div class="source-panel">
+          <div class="panel-label">TEST SOURCE</div>
+          <div id="source" class="source"></div>
+        </div>
+        <div class="chain-panel">
+          <div class="panel-label" id="chain-title">chain</div>
+          <div id="chain" class="chain"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="export-modal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head"><span>chains config — paste under <code>chains:</code> in a scene's audio_state.yaml</span>
+        <button id="export-close" class="op-btn">✕</button></div>
+      <textarea id="export-text" spellcheck="false"></textarea>
+      <div class="modal-foot"><button id="export-copy" class="primary">Copy</button></div>
+    </div>
+  </div>
+
+  <script src="companion_app.js"></script>
+</body>
+</html>
