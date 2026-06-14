@@ -28,11 +28,11 @@ const puppeteer = require('puppeteer');
     console.log("Step 1: Navigate");
     await page.goto('http://localhost', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    console.log("Step 2: Wait 4s for lil-gui");
+    console.log("Step 2: Wait 4s for the control GUI");
     await new Promise(r => setTimeout(r, 4000));
 
     const ctrlCount = await page.evaluate(() => {
-        const g = document.querySelector('.lil-gui, .marsin-gui');
+        const g = document.querySelector('.marsin-gui');
         return g ? g.querySelectorAll('.controller').length : -1;
     });
     console.log("Step 3: Controllers found:", ctrlCount);

@@ -1,7 +1,8 @@
 /**
- * gui_builder.js — Full GUI construction (lil-gui).
- * Contains: setupGUI(), handler registry, generic builders,
- * and all section builders (par lights, DMX, LED strands).
+ * gui_builder.js — Full GUI construction against the control engine
+ * (the lil-gui-API-compatible MarsinGui, imported as `GUI` from
+ * gui_engine.js). Contains: setupGUI(), handler registry, generic
+ * builders, and all section builders (par lights, DMX, LED strands).
  */
 import * as THREE from "three";
 import yaml from "js-yaml";

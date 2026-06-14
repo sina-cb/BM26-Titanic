@@ -1,26 +1,25 @@
 /**
- * marsin_gui.js — MarsinGui: lil-gui API-compatible control engine with
- * CaptainPad-styled widgets (UI rehaul Phase 3, task 018).
+ * marsin_gui.js — MarsinGui: the sim's control engine, a lil-gui
+ * 0.17.0-API-compatible tree with CaptainPad-styled widgets (UI rehaul
+ * Phase 3, task 018; sole control engine since the 2026-06-12 cutover).
  *
- * Imported by gui_engine.js; only instantiated in modern mode
- * (`?ui=modern`). gui_builder.js and pattern_editor.js run UNCHANGED
- * against this class, so control-level parity with legacy lil-gui is
- * structural. The implemented surface is exactly the builders' usage
- * inventory (API_INVENTORY.md); semantics are ported from the vendored
- * lil-gui 0.17.0.
+ * Imported by gui_engine.js. gui_builder.js and pattern_editor.js were
+ * written against the lil-gui API and run UNCHANGED against this class.
+ * The implemented surface is exactly the builders' usage inventory
+ * (API_INVENTORY.md); semantics are ported from lil-gui 0.17.0.
  *
- * Deliberate deltas from lil-gui:
- *  - Root element class is `marsin-gui` (NOT `lil-gui`) so the legacy CSS
- *    overrides in style.css can never bleed into modern widgets.
+ * Deliberate deltas from the lil-gui API it mirrors:
+ *  - Root element class is `marsin-gui` and all widget styling is scoped
+ *    to it (marsin_gui.css).
  *  - Styles live in marsin_gui.css (theme custom properties only) and are
  *    attached via a <link> instead of an inline <style> blob — offline,
  *    no CDN.
  *  - The root element stops `pointerdown` propagation: the raycaster
- *    guard in src/core/interaction.js whitelists `.lil-gui` by class, so
- *    without this, fader drags would deselect fixtures through the panel.
+ *    guard in src/core/interaction.js whitelists `.marsin-gui` by class,
+ *    so without this, fader drags would deselect fixtures through the panel.
  *  - No `onOpenClose`: lil-gui 0.17 doesn't have it, and gui_builder
  *    probes for it with `typeof` — implementing it would silently switch
- *    the builders onto a code path legacy never exercises.
+ *    the builders onto a code path they never otherwise exercise.
  */
 
 import {

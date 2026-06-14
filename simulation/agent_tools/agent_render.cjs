@@ -198,7 +198,7 @@ async function hideUI(page) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     }
-    document.querySelectorAll('.lil-gui, .marsin-gui').forEach((el) => { el.style.display = 'none'; });
+    document.querySelectorAll('.marsin-gui').forEach((el) => { el.style.display = 'none'; });
   }, UI_PANEL_IDS);
 }
 
@@ -208,7 +208,7 @@ async function showUI(page) {
       const el = document.getElementById(id);
       if (el) el.style.display = '';
     }
-    document.querySelectorAll('.lil-gui, .marsin-gui').forEach((el) => { el.style.display = ''; });
+    document.querySelectorAll('.marsin-gui').forEach((el) => { el.style.display = ''; });
   }, UI_PANEL_IDS);
   await new Promise(r => setTimeout(r, 1000));
 }

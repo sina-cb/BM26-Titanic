@@ -45,7 +45,7 @@ Ports are configured in `config.yaml`.
 | Technology | Version | Role |
 |---|---|---|
 | **Three.js** | `0.177.0` in the browser import map; `0.184.x` in local dev dependencies | 3D rendering — scene graph, lights, meshes, shadows |
-| **lil-gui** | (bundled) | Lightweight GUI control panel |
+| **MarsinGui** | (in-tree, `src/gui/modern_gui/`) | CaptainPad-styled control panel (lil-gui-0.17-API-compatible) |
 | **js-yaml** | `4.1.x` | YAML parsing for config persistence |
 | **chroma-js** | `3.1.2` | LAB-space color interpolation for gradients |
 | **sacn** | `4.6.x` | sACN (E1.31) protocol — used by bridge servers |
@@ -73,7 +73,7 @@ Ports are configured in `config.yaml`.
 
 ## 🎨 Features
 
-### Fixture Management (lil-gui Panel)
+### Fixture Management (Lighting Controls Panel)
 - **Fixture Types:** UkingPar, ShehdsBar, VintageLed — loaded from `dmx/fixtures/`
 - **DMX Patch Controls:** Universe, address, controller IP per fixture
 - **Controller Mapping:** 🎛 Controllers panel owns all DMX patching (see `docs/33_controller_mapping.md`)

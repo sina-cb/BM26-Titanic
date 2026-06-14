@@ -1,13 +1,12 @@
 /* ────────────────────────────────────────────────────────────────────────
-   marsin_gui.css — MarsinGui widget styles (modern UI, ?ui=modern).
+   marsin_gui.css — MarsinGui widget styles.
 
-   CaptainPad design language for the lil-gui-compatible control engine in
-   marsin_gui.js / controllers.js. EVERY color comes from the theme custom
-   properties written by src/gui/theme.js (CaptainPad palette) or the
+   CaptainPad design language for the lil-gui-API-compatible control engine
+   in marsin_gui.js / controllers.js. EVERY color comes from the theme
+   custom properties written by src/gui/theme.js (CaptainPad palette) or the
    semantic vars in style.css :root — no hardcoded colors; variants are
-   derived with color-mix(). Density matches the legacy lil-gui overrides
-   (10px font, 4px paddings, 40% name column) so the 330px #gui-panel
-   never overflows.
+   derived with color-mix(). Compact density (10px font, 4px paddings, 40%
+   name column) so the 330px #gui-panel never overflows.
    ──────────────────────────────────────────────────────────────────────── */
 
 .marsin-gui {

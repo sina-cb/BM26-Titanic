@@ -14,8 +14,8 @@
  *   otherwise  : nothing on the left
  *
  * Docking is positional (inline styles + a data-left-docked marker), never
- * re-parenting the Pattern Editor itself — only the lil-gui Engine Params
- * panel (legacy DOM, safe to move) is embedded into it.
+ * re-parenting the Pattern Editor itself — only the Engine Params panel
+ * (MarsinGui DOM, safe to move) is embedded into it.
  */
 
 import { lightingMode } from '../core/state.js';
@@ -159,7 +159,7 @@ function undock(el) {
   for (const prop of DOCK_PROPS) el.style[prop] = '';
 }
 
-/** Move the Engine Params lil-gui inside the Pattern Editor (above its Quick
+/** Move the Engine Params panel inside the Pattern Editor (above its Quick
  *  Reference) and let it flow there. Safe to call repeatedly — it is a no-op
  *  once embedded, and re-embeds the freshly recreated panel on mode re-entry. */
 function embedEngineParams(pe) {

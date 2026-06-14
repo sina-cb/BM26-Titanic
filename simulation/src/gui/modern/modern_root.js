@@ -1,17 +1,15 @@
 /**
- * modern_root.js — Mount points for the modern (Preact) UI surfaces.
+ * modern_root.js — Mount points for the Preact UI surfaces.
  *
- * Only the migrated surfaces are mounted here; everything else stays
- * legacy in BOTH modes until its phase lands (see
- * .agent/02_reports/202606/20260612_2_ui_rehaul_plan.md, tasks 015–019).
- *
- * Migrated so far: sACN IN/OUT monitors, camera view-preset row.
+ * Mounts the sACN IN/OUT monitors and the camera view-preset row (the
+ * surfaces that became standalone Preact components in the UI rehaul,
+ * see .agent/02_reports/202606/20260612_2_ui_rehaul_plan.md). The rest of
+ * the UI is the MarsinGui control engine + the modern panel shells.
  */
 
 import { render } from 'preact';
 import { html } from 'htm/preact';
 
-import { IS_MODERN_UI } from '../ui_mode.js';
 import { registerPanel } from '../panel_layout.js';
 import {
   SacnInMonitor, SacnOutMonitor, registerSacnGlobals,
@@ -19,12 +17,10 @@ import {
 } from './sacn_monitor_panel.js';
 import { ViewPresetsRow } from './view_presets_row.js';
 
-// Register the modern log/visibility globals at module-eval time (this
-// module evaluates after sacn_monitor.js in main.js's import graph, so
-// the override wins immediately). Doing it here instead of at mount time
-// closes the window where an early caller's sacnInLog/sacnOutLog lines
-// would land in the static panels that the mount then deletes.
-if (IS_MODERN_UI) registerSacnGlobals();
+// Register the log/visibility globals at module-eval time so an early
+// caller's sacnInLog/sacnOutLog lines route into the signal stores before
+// the panels mount.
+registerSacnGlobals();
 
 /** Replace the legacy static sACN panels with the modern components.
  *  Removing the static nodes first keeps element ids unique. */

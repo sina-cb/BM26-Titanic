@@ -742,15 +742,6 @@ body.edit-mode-active #engine-params-panel {
   scrollbar-color: var(--ghost-border) transparent;
 }
 
-/* lil-gui inside panel — strip own positioning/scrolling, panel handles it */
-#gui-panel .lil-gui.root {
-  width: 100% !important;
-  max-height: none;
-  overflow-y: visible;
-  border-radius: 0;
-  box-shadow: none;
-}
-
 /* ─── Lighting Controls Drawer ───
    #gui-panel docked to the right edge as a slide-away drawer (control_drawer.js).
    Overrides the floating defaults above: pinned right, no drag, no resize, and
@@ -1095,109 +1086,8 @@ body.edit-mode-active #engine-params-panel {
   -webkit-backdrop-filter: none;
 }
 
-/* ─── Compact/Dense GUI Overrides ───
-   lil-gui consumes these custom properties natively — mapping them to the
-   palette tokens themes the whole controller tree. */
-.lil-gui {
-  --background-color: color-mix(in srgb, var(--surface-container-low) 85%, transparent);
-  --text-color: var(--text);
-  --title-background-color: var(--panel-header-bg);
-  --widget-color: var(--control-bg);
-  --hover-color: var(--control-bg-hover);
-  --focus-color: color-mix(in srgb, var(--control-bg) 80%, var(--text));
-  --number-color: var(--primary);
-  --string-color: var(--primary);
-  --font-family: var(--font-body);
-  --font-size: 10px;
-  --input-font-size: 10px;
-  --padding: 4px;
-  --spacing: 4px;
-  --slider-knob-width: 2px;
-  --slider-input-width: 40px;
-  --folder-indent: 6px;
-}
-
-.lil-gui.root {
-  width: 320px !important;
-  border-radius: 6px;
-  box-shadow: 0 4px 20px var(--ambient-shadow);
-}
-
-.lil-gui .title {
-  padding-top: 3px;
-  padding-bottom: 3px;
-  border-bottom: 1px solid var(--ghost-border);
-}
-
-.lil-gui .controller {
-  margin-bottom: 1px;
-}
-
-.lil-gui .controller .name {
-  width: 40%;
-}
-
-/* ─── Instance Card Styling ───
-   Applied to individual fixture/generator/strand folders
-   to visually separate them as distinct configurable entities */
-.lil-gui.gui-card {
-  margin: 3px 0 !important;
-  border-radius: 6px !important;
-  border: 1px solid var(--ghost-border) !important;
-  background: color-mix(in srgb, var(--surface-container-high) 60%, transparent) !important;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
-}
-
-.lil-gui.gui-card > .title {
-  border-radius: 5px 5px 0 0;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.lil-gui.gui-card.closed > .title {
-  border-radius: 5px;
-}
-
-.lil-gui.gui-card:hover {
-  border-color: color-mix(in srgb, var(--text) 12%, transparent) !important;
-  background: color-mix(in srgb, var(--surface-container-high) 70%, transparent) !important;
-}
-
-/* Selected / focused card — primary accent */
-.lil-gui.gui-card.gui-card-selected {
-  border-color: color-mix(in srgb, var(--primary) 70%, transparent) !important;
-  background: color-mix(in srgb, var(--primary) 8%, transparent) !important;
-  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 18%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
-}
-
-.lil-gui.gui-card.gui-card-selected > .title {
-  color: var(--primary) !important;
-  background: color-mix(in srgb, var(--primary) 15%, transparent) !important;
-}
-
-.lil-gui.gui-card.gui-card-selected:hover {
-  border-color: color-mix(in srgb, var(--primary) 85%, transparent) !important;
-  box-shadow: 0 0 22px color-mix(in srgb, var(--primary) 22%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--primary) 15%, transparent);
-}
-
-/* ─── Recursive indentation for nested folders ─── */
-.lil-gui .lil-gui > .children {
-  margin-left: 6px;
-  padding-left: 8px;
-  border-left: 1px solid var(--ghost-border);
-}
-
-/* Slightly fainter guide for deeper nesting */
-.lil-gui .lil-gui .lil-gui > .children {
-  border-left-color: color-mix(in srgb, var(--text) 4%, transparent);
-}
-
-/* Even deeper levels */
-.lil-gui .lil-gui .lil-gui .lil-gui > .children {
-  border-left-color: color-mix(in srgb, var(--text) 3%, transparent);
-}
+/* MarsinGui controller-tree styling (cards, indentation, theming) lives in
+   src/gui/modern_gui/marsin_gui.css, scoped to `.marsin-gui`. */
 
 /* ─── Pattern Editor Panel ─── */
 #pattern-editor-panel {
@@ -1770,13 +1660,6 @@ body.edit-mode-active #engine-params-panel {
   /* Hide the info/shortcuts panel — too much text for small screens */
   #info-panel {
     display: none;
-  }
-
-  /* Shrink the lil-gui panel so it doesn't cover the whole viewport */
-  .lil-gui.root {
-    width: 260px !important;
-    max-height: 50vh;
-    overflow-y: auto;
   }
 
   /* Pattern editor: compact selector-only on small screens */
