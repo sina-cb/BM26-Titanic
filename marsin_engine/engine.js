@@ -1895,7 +1895,15 @@ async function main() {
           console.error('  ❌ BM26_SUPERVISED set without BM26_SCENE_SWITCH_FILE — cannot hand off scene switch');
           process.exit(1);
         }
-        fs.writeFileSync(handoff, JSON.stringify({ scene }));
+        try {
+          fs.writeFileSync(handoff, JSON.stringify({ scene }));
+        } catch (err) {
+          // Fail loud and deterministically: exit as a real crash (not 75) so
+          // the supervisor tears down rather than silently restarting on a
+          // handoff it can't read.
+          console.error(`  ❌ Failed to write scene handoff ${handoff}: ${err.message}`);
+          process.exit(1);
+        }
         console.log(`  🔁 Scene switch to '${scene}' — handing restart to supervisor (exit 75).`);
         process.exit(75);
       }

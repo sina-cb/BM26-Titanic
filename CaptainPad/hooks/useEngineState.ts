@@ -564,8 +564,11 @@ function _seedActiveModel() {
       if (!r.ok || !r.data) return;
       const model = r.data.activeModel;
       if (typeof model !== 'string' || model.length === 0) return;
-      if (model === _cached.activeModel) return;
-      _emit({ ..._cached, activeModel: model });
+      // The engine reports 'unknown' when it has no resolved model — treat that
+      // as "no model" so the header chip hides rather than showing "unknown".
+      const normalized = model === 'unknown' ? null : model;
+      if (normalized === _cached.activeModel) return;
+      _emit({ ..._cached, activeModel: normalized });
     })
     .catch(() => undefined);
 }

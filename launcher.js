@@ -267,10 +267,18 @@ function removeLock() {
   lockOwned = false;
 }
 
+// A dead launcher's PID can be recycled onto an unrelated process. Treat the
+// lock as a live launcher only if the PID is alive AND its command line is
+// actually a launcher.js process — otherwise it's a stale lock (or PID reuse).
+function lockLauncherAlive(lock) {
+  if (!lock || !pidAlive(lock.pid)) return false;
+  return commandlineOf(lock.pid).includes('launcher.js');
+}
+
 function assertSingleInstance() {
   const lock = readLock();
   if (!lock) return;
-  if (pidAlive(lock.pid)) {
+  if (lockLauncherAlive(lock)) {
     logError(`A stack is already running: profile '${lock.profile}', launcher pid ${lock.pid}, started ${lock.startedAt}.`);
     logError('Stop it first (`node launcher.js stop`, or Ctrl+C in its terminal).');
     process.exit(1);
@@ -402,6 +410,13 @@ function validate(opts, profileDef) {
   }
   if (!fs.existsSync(path.join(SIM_DIR, 'node_modules'))) {
     problems.push('simulation/node_modules missing — run `npm install` in simulation/');
+  } else if (!fs.existsSync(path.join(SIM_DIR, 'node_modules', '.bin', 'http-server')) &&
+             !fs.existsSync(path.join(SIM_DIR, 'node_modules', '.bin', 'http-server.cmd'))) {
+    // start.js serves the sim via `npx http-server`. Assert it's installed
+    // locally so npx resolves it offline — otherwise npx would try to fetch it
+    // from the network (no internet on the playa) and the sim HTTP probe would
+    // hang for 90s before the launcher gave up. Fail fast and clearly instead.
+    problems.push('simulation http-server missing — run `npm install` in simulation/ (needed offline)');
   }
   if (!fs.existsSync(path.join(ENGINE_DIR, 'node_modules'))) {
     problems.push('marsin_engine/node_modules missing — run `npm install` in marsin_engine/');
@@ -702,10 +717,12 @@ async function cmdStop() {
     console.log(`No stack is running (no lock file at ${LOCK_PATH}).`);
     process.exit(1);
   }
-  if (!pidAlive(lock.pid)) {
-    console.log(`Launcher pid ${lock.pid} is already dead — cleaning up stale lock.`);
+  if (!lockLauncherAlive(lock)) {
+    console.log(`Launcher pid ${lock.pid} is not a live launcher — cleaning up stale lock.`);
     for (const [tag, pid] of Object.entries(lock.children || {})) {
-      if (pidAlive(pid)) {
+      // Only kill a recorded child if it's still alive AND its command line
+      // looks like ours — guards against PID reuse killing an innocent process.
+      if (pidAlive(pid) && STACK_PROCESS_SIGNATURES.some((sig) => commandlineOf(pid).includes(sig))) {
         console.log(`Force-killing orphaned ${tag} (pid ${pid}).`);
         forceKillTree(pid);
       }
