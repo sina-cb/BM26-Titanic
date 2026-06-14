@@ -99,6 +99,45 @@ test('100 Hz sine lights up LOW, leaves MID and HIGH quiet', () => {
   assert.ok(r.high < 0.1, `high should be quiet, got ${r.high}`);
 });
 
+test('bands.inputGain lifts a quiet signal above the noise gate', () => {
+  // A quiet 100 Hz sine that the noise gate would otherwise zero. At unity
+  // gain LOW stays gated near 0; raising inputGain lifts it above the gate.
+  const quiet = sineInt16(100, 0.2, 0.02); // 100 Hz, 200 ms, amplitude 0.02
+  const r1 = []; makeAnalyzer({ bands: { noiseGate: 0.04, inputGain: 1 } }, r1).pushSamples(quiet);
+  const r8 = []; makeAnalyzer({ bands: { noiseGate: 0.04, inputGain: 8 } }, r8).pushSamples(quiet);
+  assert.ok(lastResult(r1).low < 0.05, `unity gain should leave the quiet band gated, got ${lastResult(r1).low}`);
+  assert.ok(lastResult(r8).low > lastResult(r1).low + 0.1, `inputGain=8 should lift LOW well above unity, got ${lastResult(r8).low}`);
+});
+
+test('bands.inputGain out of range throws (codex P0)', () => {
+  assert.throws(() => makeAnalyzer({ bands: { inputGain: -1 } }, []), /inputGain/);
+  assert.throws(() => makeAnalyzer({ bands: { inputGain: 100 } }, []), /inputGain/);
+});
+
+test('kick prominence is input-gain-invariant (no softCompress saturation)', () => {
+  // The kick fires on the LINEAR energy ratio, so the SAME signal fires the
+  // kick the same way regardless of inputGain (was broken when the ratio ran
+  // on the saturating softCompressed value). Build a sub + periodic kick.
+  function countKicks(inputGain) {
+    const results = []; let clock = 0;
+    const an = makeAnalyzer({ bands: { noiseGate: 0.04, inputGain } }, results, () => clock);
+    const buf = new Int16Array(512);
+    for (let i = 0; i < SR * 3; i += 512) {
+      for (let j = 0; j < 512; j++) {
+        const t = (i + j) / SR;
+        let s = Math.sin(2 * Math.PI * 60 * t) * 0.04;
+        if ((i + j) % 22050 < 1500) s += Math.sin(2 * Math.PI * 90 * t) * 0.08;
+        buf[j] = Math.round(Math.max(-1, Math.min(1, s)) * 32767);
+      }
+      clock += (512 / SR) * 1000; an.pushSamples(buf);
+    }
+    return results.filter(r => r.kick >= 0.999).length; // fresh fires (==1.0)
+  }
+  const k2 = countKicks(2), k8 = countKicks(8);
+  assert.ok(k2 > 0, `expected kicks at inputGain=2, got ${k2}`);
+  assert.equal(k2, k8, `kick count must be gain-invariant: inputGain2=${k2} vs inputGain8=${k8}`);
+});
+
 test('1000 Hz sine lights up MID', () => {
   const results = [];
   const an = makeAnalyzer({}, results);

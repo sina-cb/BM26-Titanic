@@ -298,6 +298,14 @@ export class AudioAnalyzer {
     if (!(noiseGate >= 0 && noiseGate < 1)) {
       throw new RangeError(`bands.noiseGate must be in [0, 1); got ${noiseGate}`);
     }
+    // inputGain is optional (defaults to 1 in the hot path) but when present
+    // must be a finite, non-negative, sane multiplier.
+    if (next.bands.inputGain !== undefined) {
+      const ig = +next.bands.inputGain;
+      if (!(ig >= 0 && ig <= 64)) {
+        throw new RangeError(`bands.inputGain must be in [0, 64]; got ${ig}`);
+      }
+    }
 
     const kMin = +next.kick.minHz, kMax = +next.kick.maxHz;
     if (!(kMin > 0 && kMin < kMax && kMax <= nyquist)) {
@@ -426,9 +434,18 @@ export class AudioAnalyzer {
     const gate = this.bands.noiseGate;
     const gateScale = 1 - gate;
     const applyGate = (v) => (v <= gate ? 0 : (v - gate) / gateScale);
-    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE));
-    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE));
-    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE));
+    // Global INPUT GAIN — scales the raw band energies BEFORE softCompress +
+    // gate, i.e. a software mic-preamp. A quiet mic / line feed leaves the
+    // band energies below the noise gate, which zeroes low/mid/high AND
+    // starves the kick detector (its `instant` is gated to 0, so the
+    // `_kickEma > 0` fire-guard never passes). Lifting the energies above the
+    // gate restores all four. Default 1.0 (no change for hot feeds);
+    // operator-tunable 0–N via audio.bands.inputGain. See the mic/gain note
+    // in report 202606/..._audio_corpus_tuning.md.
+    const inputGain = this.bands.inputGain ?? 1;
+    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * lowE));
+    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * midE));
+    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * highE));
     const attackAlpha  = 1 - Math.exp(-frameMs / this.bands.attackMs);
     const releaseAlpha = 1 - Math.exp(-frameMs / this.bands.releaseMs);
     const env = (prev, target) => {
@@ -450,19 +467,25 @@ export class AudioAnalyzer {
     // EMA + ceiling clamp is a second line of defense: even if the
     // asymmetric coefficients get retuned, the threshold can never
     // sit more than CEILING_RATIO × a several-second baseline.
-    // Gate the kick input through the SAME softCompress + noiseGate
-    // pipeline as the display bands. Without this, raw FFT energy in
-    // silence is tiny but so is the EMA, so the threshold ratio still
-    // fires on noise floor (HVAC, mic self-noise).
-    const instant = applyGate(softCompress(PRE_CLAMP_GAIN * kickE));
+    // Kick prominence is computed on the LINEAR (un-compressed) gained
+    // energy, NOT the softCompressed value. softCompress saturates toward 1
+    // at high input levels, which collapses the kick-vs-baseline RATIO (a
+    // loud kick and a loud sustained sub both read ~1.0 → no transient) and
+    // makes the kick non-monotonic in input gain. The ratio on linear energy
+    // is gain-invariant and saturation-free, so the kick fires the same way
+    // at any input gain. softCompress + the noise gate are still used, but
+    // ONLY as a SILENCE FLOOR (`kickGated > 0`) so the noise floor (HVAC,
+    // mic self-noise) can't fire a phantom kick when there's no signal.
+    const kickLin   = PRE_CLAMP_GAIN * inputGain * kickE;
+    const kickGated = applyGate(softCompress(kickLin)); // silence floor only
     if (this._kickEmaWarmedUp) {
-      const alpha = instant > this._kickEma
+      const alpha = kickLin > this._kickEma
         ? this._kickEmaAlphaUp     // slow attack — lag loud baselines
         : this._kickEmaAlphaDown;  // faster release — recover in quiet
-      this._kickEma = alpha * instant + (1 - alpha) * this._kickEma;
+      this._kickEma = alpha * kickLin + (1 - alpha) * this._kickEma;
       // Slow-trailing reference — always uses the slow alpha so a
       // brief loud section can't lift the ceiling significantly.
-      this._kickEmaTrail = this._kickEmaTrailAlpha * instant
+      this._kickEmaTrail = this._kickEmaTrailAlpha * kickLin
                          + (1 - this._kickEmaTrailAlpha) * this._kickEmaTrail;
       // Ceiling clamp: the operating EMA may not exceed the
       // slow-trailing reference times the ceiling ratio. Belt-and-
@@ -471,7 +494,7 @@ export class AudioAnalyzer {
       if (this._kickEma > ceiling) this._kickEma = ceiling;
     } else {
       // Seed EMA with the running mean of the first warmup hops.
-      this._kickEmaWarmupSum += instant;
+      this._kickEmaWarmupSum += kickLin;
       this._kickEmaWarmupHops++;
       if (this._kickEmaWarmupHops >= 50) {
         const seed = this._kickEmaWarmupSum / this._kickEmaWarmupHops;
@@ -483,8 +506,9 @@ export class AudioAnalyzer {
     const now = this._nowFn();
     const refractoryOk = (now - this._lastKickAt) >= this.kick.refractoryMs;
     const hot = this._kickEmaWarmedUp
+             && kickGated > 0                 // above the silence floor
              && this._kickEma > 0
-             && instant > this._kickEma * this.kick.threshold;
+             && kickLin > this._kickEma * this.kick.threshold;
     if (hot && refractoryOk) {
       this._kickValue = 1.0;
       this._lastKickAt = now;
@@ -519,7 +543,7 @@ export class AudioAnalyzer {
     // like the other outputs. Purely additive — the four existing
     // fields are byte-for-byte unchanged. SuperFlux-lite (Böck &
     // Widmer 2013; research memo §A2).
-    const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * fluxE));
+    const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * inputGain * fluxE));
 
     try {
       this._onAnalysis({

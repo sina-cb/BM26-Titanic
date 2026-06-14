@@ -40,7 +40,7 @@ import yaml from 'js-yaml';
 // behaviors", the analyzer rejects a `bands` payload that's missing
 // any of these — config.yaml supplies them at boot.
 export const AUDIO_LIVE_FIELDS = Object.freeze({
-  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
+  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
   // kickEma — internal kick-detector EMA tuning. Exposed (2026-05-26)
   // so operators can field-tune the asymmetric attack/release and
@@ -106,6 +106,10 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
   // build/drop/sustain state machine; ranges chosen per the doc's
   // pseudocode defaults (buildScore∈[0,1] threshold, energyJump > 1×,
   // freshness/refractory in ms).
+  bands: Object.freeze({
+    // Software input gain (mic-preamp). 0 = mute, 1 = unity, up to 64×.
+    inputGain: (v) => (v >= 0 && v <= 64) ? null : `must be in [0, 64]; got ${v}`,
+  }),
   structureDetector: Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     dropEnergyJump:    (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,

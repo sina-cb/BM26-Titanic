@@ -164,7 +164,7 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // detector's EMA tuning (2026-05-26). `structureDetector` is the
   // build/drop/sustain detector group (docs/30).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     kickEma: ['alphaUp', 'alphaDown', 'trailAlpha', 'ceilingRatio', 'warmupHops'],
     structureDetector: [

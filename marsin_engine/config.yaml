@@ -51,6 +51,11 @@ audio:
     attackMs: 8
     releaseMs: 180
     noiseGate: 0.04
+    # Software input gain (mic-preamp), applied to all band energies + the
+    # kick BEFORE the noise gate. 1.0 = unity. Raise it for a quiet mic so
+    # low/mid/high/kick lift above the gate; tunable live from the iPad AUDIO
+    # strip (INPUT GAIN). Range [0, 64].
+    inputGain: 1.0
   kick:
     minHz: 50
     maxHz: 110
