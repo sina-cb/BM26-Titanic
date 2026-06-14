@@ -435,14 +435,14 @@ const SVG_VIEW_H   = 100;              // viewBox height — y inverted because 
 // Build a polyline "x,y x,y …" point string from a sample buffer. Older
 // samples LEFT, newest RIGHT. Empty leading slots are skipped (line
 // just starts later) — keeps the "now" anchored to the right edge.
-function buildPoints(samples: readonly number[], bufferLen: number, gain = 1): string {
+function buildPoints(samples: readonly number[], bufferLen: number): string {
   if (!samples.length || bufferLen <= 1) return '';
   const take = Math.min(samples.length, bufferLen);
   const startIdx = bufferLen - take;       // x slot where the line starts
   const stepX = SVG_VIEW_W / (bufferLen - 1);
   const parts: string[] = [];
   for (let i = 0; i < take; i++) {
-    const v = Math.max(0, Math.min(1, (samples[samples.length - take + i] ?? 0) * gain));
+    const v = Math.max(0, Math.min(1, samples[samples.length - take + i] ?? 0));
     const x = (startIdx + i) * stepX;
     const y = SVG_VIEW_H * (1 - v);        // invert: 0 at bottom, 1 at top
     parts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
@@ -454,25 +454,22 @@ function buildPoints(samples: readonly number[], bufferLen: number, gain = 1): s
 // (ghost-toned bar + trace) and POST (solid bar + trace). Stacking
 // them (vs overlaying) means the operator can read each separately
 // and verify gain divergence at a glance.
-function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen, gain = 1 }: {
+function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
   slot: SignalSlot;
   raw: number;
   post: number;
   rawSamples: readonly number[];
   postSamples: readonly number[];
   bufferLen: number;
-  gain?: number;
 }) {
   const C = usePalette();
   const accentColor = resolveAccent(slot.accent, C);
-  // `gain` is the global METER-SENSITIVITY gain (0–5×) — like a VU meter's
-  // input trim. It scales the displayed reading (bar + trail + number) so
-  // weak signals are visible; it is DISPLAY-ONLY and does NOT change the
-  // engine values, the detector, or what the patterns react to.
-  const rv = Math.max(0, Math.min(1, raw * gain));
-  const pv = Math.max(0, Math.min(1, post * gain));
-  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen, gain), [rawSamples,  bufferLen, gain]);
-  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen, gain), [postSamples, bufferLen, gain]);
+  // Meters show the TRUE engine values (boost the actual signal with the
+  // INPUT GAIN slider, which patches audio.bands.inputGain on the engine).
+  const rv = Math.max(0, Math.min(1, raw));
+  const pv = Math.max(0, Math.min(1, post));
+  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
+  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
       {/* header — slot label */}
@@ -771,7 +768,7 @@ function PinnedAudioMeters({
           [label+value]→[bar]→[trail]. The BPM pill rides at the right
           end of the STEMS half (no trail — BPM has its own pace). */}
       <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
-        {/* LEFT half: MIC bands (now incl. FLUX) + the global meter gain. */}
+        {/* LEFT half: MIC bands (now incl. FLUX) + the INPUT GAIN slider. */}
         <View style={{ flex: 5, paddingRight: 16 }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,

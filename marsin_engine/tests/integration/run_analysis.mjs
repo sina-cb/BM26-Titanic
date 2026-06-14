@@ -56,7 +56,7 @@ const FFT_SIZE = 1024;   // config.yaml audio.fftSize
 const HOP_SIZE = 512;    // config.yaml audio.hopSize
 // config.yaml audio.bands / audio.kick (the PRODUCT defaults).
 const BANDS = { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 };
-const KICK  = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 120 };
+const KICK  = { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 };
 
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 
