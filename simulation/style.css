@@ -2579,6 +2579,27 @@ body.edit-mode-active #engine-params-panel {
   padding: 4px;
 }
 
+.cm-btn.cm-unpatched-toggle {
+  display: block;
+  width: 100%;
+  margin: 2px 0 4px;
+  padding: 4px;
+}
+
+.cm-main > .cm-unpatched-toggle {
+  grid-column: 1 / -1;
+}
+
+.cm-btn.cm-unpatched-toggle.cm-on {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+  color: var(--error);
+}
+
+.cm-btn.cm-unpatched-toggle.cm-on:hover {
+  background: color-mix(in srgb, var(--error) 24%, transparent);
+}
+
 .cm-error-chip {
   display: inline-block;
   background: color-mix(in srgb, var(--error) 12%, transparent);

@@ -1218,6 +1218,19 @@ function setupGUI() {
     if (handlers.conesEnabled) handlers.conesEnabled(params.conesEnabled);
     if (handlers.conesTransparent) handlers.conesTransparent(params.conesTransparent);
 
+    // Diagnostic overlay: tint fixtures with no DMX patch red in the 3D view
+    // so the operator can spot what still needs mapping. Sim-only — no DMX is
+    // sent. Synced with the matching toggle in the Controller Mapping panel
+    // (.listen() reflects changes made over there).
+    if (params.showUnpatchedRed === undefined) params.showUnpatchedRed = false;
+    parFolder
+      .add(params, "showUnpatchedRed")
+      .name("Show Unpatched (Red)")
+      .listen()
+      .onChange(() => {
+        if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+      });
+
     const parListFolder = parFolder.addFolder("Light Instances");
 
     // ─── Compact toolbar row: Collapse All | Select All | Clear All ───
