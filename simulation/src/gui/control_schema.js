@@ -1,27 +1,28 @@
 /**
  * control_schema.js — UI-agnostic serialization of the live control tree.
  *
- * The parity oracle for the UI rehaul (tasks 015/018): serializes whatever
- * GUI is currently mounted into a plain JSON tree (folders, controls,
- * types, ranges, options). Capturing this from the legacy lil-gui UI and
- * later from the modern UI on the same scene lets us diff the two and
- * prove "modern renders exactly the controls legacy builds".
+ * Serializes whatever GUI is currently mounted into a plain JSON tree
+ * (folders, controls, types, ranges, options). Originally the parity
+ * oracle for the UI rehaul (diffing the old lil-gui tree against MarsinGui,
+ * tasks 015/018); kept as a general control-tree snapshot tool for
+ * regression checks.
  *
- * Control type is read from lil-gui's DOM classes (`controller boolean`,
- * `controller number`, …) because constructor names are mangled in the
- * minified vendor build.
+ * Control type is read from the controller's DOM classes (`controller
+ * boolean`, `controller number`, …) — the class contract MarsinGui shares
+ * with the lil-gui API — because constructor names are mangled in minified
+ * builds.
  *
  * Registered on import as `window.__captureControlSchema()` — evaluated
  * lazily so it works whenever `window.guiInstance` exists.
  * Capture from outside via agent_tools/capture_control_schema.cjs.
  */
 
-const LIL_GUI_TYPE_CLASSES = ['boolean', 'color', 'string', 'number', 'option', 'function'];
+const CONTROL_TYPE_CLASSES = ['boolean', 'color', 'string', 'number', 'option', 'function'];
 
 function controllerType(controller) {
   const classes = controller.domElement?.classList;
   if (!classes) return 'unknown';
-  for (const t of LIL_GUI_TYPE_CLASSES) {
+  for (const t of CONTROL_TYPE_CLASSES) {
     if (classes.contains(t)) return t;
   }
   return 'unknown';

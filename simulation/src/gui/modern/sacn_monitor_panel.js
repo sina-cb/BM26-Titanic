@@ -1,8 +1,8 @@
 /**
  * sacn_monitor_panel.js — Modern (Preact) sACN IN/OUT monitors.
  *
- * Strangler replacement for src/gui/sacn_monitor.js. Preserves every
- * external contract of the legacy panels:
+ * The sim's sACN IN/OUT monitors. Preserves every external contract the
+ * former vanilla-DOM panels exposed:
  *   - `window.showSacnInMonitor(show)` / `window.showSacnOutMonitor(show)`
  *   - `window.sacnInLog(msg, type)` / `window.sacnOutLog` / `window.sacnLog`
  *   - stats read from `window.sacnInput.stats` / `window.sacnOutput.stats`
@@ -123,7 +123,7 @@ export function registerSacnGlobals() {
   // Legacy alias kept for sacn_client.js call sites.
   window.sacnLog = window.sacnInLog;
 
-  // Same boot behavior as legacy setupSacnOutMonitor().
+  // The OUT monitor boots visible (it has always shown on load).
   window.showSacnOutMonitor(true);
 }
 

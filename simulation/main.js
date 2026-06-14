@@ -33,13 +33,11 @@ import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
-import { setupHUD, setupViewPresets, onResize } from "./src/gui/view_presets.js";
+import { setupHUD, onResize } from "./src/gui/view_presets.js";
 import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src/gui/pattern_editor.js";
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupControllerMapEditor } from "./src/gui/controller_map_editor.js";
-import { setupSacnInMonitor, setupSacnOutMonitor } from "./src/gui/sacn_monitor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
-import { IS_MODERN_UI } from "./src/gui/ui_mode.js";
 import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
@@ -233,11 +231,7 @@ async function init() {
   window.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("keydown", onKeyDown, true);
-  if (IS_MODERN_UI) {
-    initModernViewPresets();
-  } else {
-    setupViewPresets();
-  }
+  initModernViewPresets();
   setupHUD();
   // Keyboard-shortcuts help overlay + bottom-right hint.
   setupHelpPanel();
@@ -600,22 +594,15 @@ Promise.all([
   // In readonly mode (e.g. iPad Monitor), skip all write-capable subsystems
   const _isReadonly = _urlParams.get('readonly') === '1';
   if (!_isReadonly) {
-    // Modern shells must mount BEFORE the legacy setup functions attach
-    // their handlers to the same element ids (see modern/SHELL_NOTES.md).
-    if (IS_MODERN_UI) {
-      initModernPatternEditorShell();
-      initModernViewMasksShell();
-      initModernControllerMapShell();
-    }
+    // Modern shells must mount BEFORE the setup functions attach their
+    // handlers to the same element ids (see modern/SHELL_NOTES.md).
+    initModernPatternEditorShell();
+    initModernViewMasksShell();
+    initModernControllerMapShell();
     setupPatternEditor();
     setupViewMasksEditor();
     setupControllerMapEditor();
-    if (IS_MODERN_UI) {
-      initModernSacnMonitors();
-    } else {
-      setupSacnInMonitor();
-      setupSacnOutMonitor();
-    }
+    initModernSacnMonitors();
     setupSceneIndicator();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
@@ -674,22 +661,8 @@ Promise.all([
     if (masksPanel) registerPanel(masksPanel);
     const cmPanel = document.getElementById('controller-map-panel');
     if (cmPanel) registerPanel(cmPanel);
-    if (!IS_MODERN_UI) {
-      // Modern monitors register themselves with collapse-store adapters
-      // in modern_root.js; legacy panels drive their collapse buttons.
-      const inPanel = document.getElementById('sacn-in-monitor-panel');
-      if (inPanel) {
-        registerPanel(inPanel, {
-          applyCollapsed: collapseViaButton(inPanel, '#sacn-in-collapse-btn'),
-        });
-      }
-      const outPanel = document.getElementById('sacn-out-monitor-panel');
-      if (outPanel) {
-        registerPanel(outPanel, {
-          applyCollapsed: collapseViaButton(outPanel, '#sacn-out-collapse-btn'),
-        });
-      }
-    }
+    // The sACN monitors register themselves with collapse-store adapters
+    // in modern_root.js (initModernSacnMonitors).
     // Engine params registers itself on every (re)creation —
     // see ensureGlobalParamsGui() in pattern_editor.js.
   }
