@@ -74,27 +74,48 @@ const STACK_PROCESS_SIGNATURES = [
   'sacn_output_bridge.js', 'http-server', 'expo', 'metro', 'launcher.js',
 ];
 
-// ── Profiles ────────────────────────────────────────────────────────────
-// `simQuery` maps onto the sim's URL params: `profile` selects the
-// lighting profile (simulation/src/core/profile_registry.js) and
-// `spotlights` sizes the analytic SpotLight pool (src/core/light_pool.js).
+// ── Profiles (the launcher config — edit here) ───────────────────────────
+// Each profile defines, at a glance, what `node launcher.js <name>` does:
+//   description : one-line summary (shown in `--help` and at startup)
+//   processes   : which services come up — 'sim', 'engine', 'captainpad'
+//   simParams   : the exact sim URL query params this profile applies. These
+//                 are the settings the sim boots with AND the settings of the
+//                 URL the launcher auto-opens in your browser — one source of
+//                 truth, so the opened tab always matches the profile.
+//                   profile=<pixel_mapping|emissive|full|edit>  lighting profile
+//                                       (simulation/src/core/profile_registry.js)
+//                   spotlights=<N>      analytic SpotLight pool size
+//                                       (simulation/src/core/light_pool.js)
+//                 Add any other sim query param here (e.g. renderer) and it
+//                 flows straight through to the opened browser URL.
+//
+// Quick reference:
+//   prod      sim + engine               · lightest render, no fancy lighting
+//   dev       sim + engine + CaptainPad   · full analytic lighting, 60 spotlights
+//   dev-lite  sim + engine + CaptainPad   · emissive lighting, no spotlights
 const PROFILES = {
   prod: {
     description: 'Show stack: sim + engine, lightest sim rendering (no fancy lighting)',
     processes: ['sim', 'engine'],
-    simQuery: { profile: 'pixel_mapping', spotlights: 0 },
+    simParams: { profile: 'pixel_mapping', spotlights: 0 },
   },
   dev: {
     description: 'Full dev stack: sim + engine + CaptainPad Expo, full analytic lighting, 60 spotlights',
     processes: ['sim', 'engine', 'captainpad'],
-    simQuery: { profile: 'full', spotlights: 60 },
+    simParams: { profile: 'full', spotlights: 60 },
   },
   'dev-lite': {
     description: 'Dev stack without fancy lighting: sim + engine + CaptainPad Expo, emissive only',
     processes: ['sim', 'engine', 'captainpad'],
-    simQuery: { profile: 'emissive', spotlights: 0 },
+    simParams: { profile: 'emissive', spotlights: 0 },
   },
 };
+
+// Sim URL params applied to EVERY profile. The launcher always runs
+// marsin_engine, so the sim must listen to it over sACN (sacn_in) instead of
+// booting its own in-browser Pixelblaze engine.
+const SIM_QUERY_COMMON = { lighting_mode: 'sacn_in' };
+
 
 // ── Logging ─────────────────────────────────────────────────────────────
 const USE_COLOR = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -719,14 +740,12 @@ async function main() {
   assertSingleInstance();
   validate(opts, profileDef);
 
-  // The launcher always runs marsin_engine, so the sim must listen to it
-  // (sacn_in) instead of booting its in-browser Pixelblaze engine.
-  const simQuery = new URLSearchParams({
-    scene: opts.scene,
-    profile: profileDef.simQuery.profile,
-    spotlights: String(profileDef.simQuery.spotlights),
-    lighting_mode: 'sacn_in',
-  });
+  // Build the sim URL straight from the profile config + the common params,
+  // so the auto-opened browser tab always carries this profile's settings.
+  const simQuery = new URLSearchParams({ scene: opts.scene, ...SIM_QUERY_COMMON });
+  for (const [key, value] of Object.entries(profileDef.simParams)) {
+    simQuery.set(key, String(value));
+  }
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
