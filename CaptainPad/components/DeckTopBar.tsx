@@ -18,7 +18,7 @@ import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
-import { useMaster } from '@/hooks/useEngineState';
+import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 
 interface Props {
@@ -34,6 +34,10 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
   const master = useMaster();
+  // Active model name (GET /status → activeModel). Null until the first
+  // probe lands / while offline — we hide the chip in that case, same
+  // graceful-degrade posture as the OFFLINE status pill.
+  const activeModel = useActiveModel();
   // Throttle PATCH writes to ~30 Hz — same cadence as the mixer
   // header, keeps the engine from being PATCH-spammed while still
   // letting the slider feel live.
@@ -61,6 +65,16 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             </Text>
           )}
         </View>
+        {/* Active model chip — secondary status, after the connection
+            pill. Hidden until the /status probe resolves and on
+            portrait (matches the CONNECTED label's portrait behaviour)
+            so the narrow header isn't crowded. */}
+        {!isPortrait && activeModel ? (
+          <View style={styles.modelChip}>
+            <Text style={styles.labelCaps}>MODEL</Text>
+            <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
+          </View>
+        ) : null}
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
@@ -116,6 +130,28 @@ function makeStyles(C: Palette) {
       width: 8, height: 8, borderRadius: 4,
       // '#00a86b' MOD_GREEN — works on both themes (matches the connected label).
       backgroundColor: '#00a86b',
+    },
+    // Secondary "active model" chip. Same surface/border geometry as the
+    // status badge so the two read as one toolbar; slightly tighter
+    // padding to keep it visually subordinate to the connection pill.
+    modelChip: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 6,
+      maxWidth: 200,
+      backgroundColor: C.surfaceContainerHigh,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+    },
+    modelName: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.4,
+      color: C.primary,
+      flexShrink: 1,
     },
     labelCaps: {
       fontFamily: 'SpaceGrotesk_700Bold',

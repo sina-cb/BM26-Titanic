@@ -19,6 +19,7 @@ import {
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineVizEvents } from '@/utils/engineVizEvents';
+import { useActiveModel } from '@/hooks/useEngineState';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
@@ -506,6 +507,11 @@ export default function MixerScreen() {
 
   const [master, setMaster] = useState(1.0);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
+  // Active model name (GET /status → activeModel), from the shared
+  // engine-state cache. Null until the first /status probe lands /
+  // while offline — we hide the chip then, matching the OFFLINE pill's
+  // graceful-degrade behaviour.
+  const activeModel = useActiveModel();
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
   // ─── Playlist library: parent-owned (May 2026 refactor) ───────────
@@ -1228,6 +1234,16 @@ export default function MixerScreen() {
               </Text>
             )}
           </View>
+          {/* Active model chip — secondary status, after the connection
+              pill. Hidden until the /status probe resolves and on
+              portrait (matches the CONNECTED label's portrait behaviour)
+              so the narrow header isn't crowded. */}
+          {!isPortrait && activeModel ? (
+            <View style={styles.modelChip}>
+              <Text style={styles.labelCaps}>MODEL</Text>
+              <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
+            </View>
+          ) : null}
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
           {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
@@ -1468,6 +1484,28 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   statusDot: {
     width: 8, height: 8, borderRadius: 4,
     backgroundColor: '#00a86b',
+  },
+  // Secondary "active model" chip — same surface/border geometry as the
+  // status badge so the two read as one toolbar; slightly tighter
+  // padding to keep it visually subordinate to the connection pill.
+  modelChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 200,
+    backgroundColor: C.surfaceContainerHigh,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+  },
+  modelName: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 11,
+    letterSpacing: 0.4,
+    color: C.primary,
+    flexShrink: 1,
   },
   labelCaps: {
     fontFamily: 'SpaceGrotesk_700Bold',
