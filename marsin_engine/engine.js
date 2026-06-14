@@ -1885,6 +1885,21 @@ async function main() {
     childArgs.push('--model', scene);
 
     shutdown(() => {
+      // Supervised mode: a parent launcher (BM26_SUPERVISED=1) owns the
+      // respawn so the engine stays a tracked child. Hand it the target
+      // scene via BM26_SCENE_SWITCH_FILE and exit 75 — do NOT self-spawn, or
+      // there'd be two engines / an untracked orphan.
+      if (process.env.BM26_SUPERVISED === '1') {
+        const handoff = process.env.BM26_SCENE_SWITCH_FILE;
+        if (!handoff) {
+          console.error('  ❌ BM26_SUPERVISED set without BM26_SCENE_SWITCH_FILE — cannot hand off scene switch');
+          process.exit(1);
+        }
+        fs.writeFileSync(handoff, JSON.stringify({ scene }));
+        console.log(`  🔁 Scene switch to '${scene}' — handing restart to supervisor (exit 75).`);
+        process.exit(75);
+      }
+      // Standalone: self-supervise with a detached replacement, then exit 75.
       console.log(`  🔁 Respawning engine for scene '${scene}': node ${childArgs.join(' ')}`);
       const child = spawn(process.execPath, childArgs, {
         cwd: process.cwd(),
@@ -1894,9 +1909,7 @@ async function main() {
       });
       child.unref();
       // Exit code 75 (EX_TEMPFAIL) signals an INTENTIONAL scene-switch
-      // restart to any supervisor watching this process. A supervisor that
-      // respawns the engine itself should pass the new scene; the detached
-      // child above is the self-supervised (standalone) safety net.
+      // restart to any supervisor watching this process.
       process.exit(75);
     });
   };

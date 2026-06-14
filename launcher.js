@@ -53,6 +53,10 @@ const SIM_CONFIG_PATH = path.join(SIM_DIR, 'config.yaml');
 // Runtime state lives in ~/tmp per the project temp-file convention.
 const LOCK_DIR = path.join(os.homedir(), 'tmp');
 const LOCK_PATH = path.join(LOCK_DIR, 'bm26_titanic_launcher.lock.json');
+// The supervised engine writes the requested scene here, then exits 75, when
+// the operator switches scene in the sim — we own the (tracked) restart.
+const SCENE_SWITCH_FILE = path.join(LOCK_DIR, 'bm26_engine_scene_switch.json');
+const ENGINE_RESTART_EXIT_CODE = 75;
 
 const DEFAULT_SCENE = 'titanic';
 const DEFAULT_PATTERN = '00_golden_hour_wash';
@@ -409,7 +413,10 @@ function prefixStream(tag, stream, out) {
   });
 }
 
-function startChild(tag, command, args, cwd, extraEnv = {}) {
+// `onExit(code, signal)` may return (or resolve to) true to claim an exit as
+// handled — the launcher then does NOT tear the stack down. Used for the
+// engine's intentional scene-switch restart (exit 75).
+function startChild(tag, command, args, cwd, extraEnv = {}, onExit = null) {
   log('launcher', `Starting ${tag}: ${command} ${args.join(' ')}`);
   const child = spawn(command, args, {
     cwd,
@@ -431,8 +438,15 @@ function startChild(tag, command, args, cwd, extraEnv = {}) {
     if (shuttingDown) return;
     // On a console Ctrl+C the children can die before our own SIGINT handler
     // runs — give the signal a moment to arrive before calling it a crash.
-    setTimeout(() => {
+    setTimeout(async () => {
       if (shuttingDown) return;
+      if (onExit) {
+        try {
+          if (await onExit(code, signal)) return; // claimed (e.g. scene switch)
+        } catch (err) {
+          logError(`${tag} exit handler failed: ${err.message}`);
+        }
+      }
       logError(`${tag} exited unexpectedly (code=${code}, signal=${signal}). Tearing down.`);
       teardown(1);
     }, CRASH_VERDICT_DELAY_MS);
@@ -745,14 +759,51 @@ async function main() {
   log('launcher', '✅ Simulation is ready.');
 
   // 2. Engine — model must match the sim scene (05_full_stack_smoke.md).
-  startChild('engine', 'node',
-    ['engine.js', '--model', opts.scene, '--pattern', opts.pattern], ENGINE_DIR);
-  await waitForHttp('engine api', `http://127.0.0.1:${ports.marsin_engine_port}/status`, 120000);
-  // The engine restores its persisted deck state at boot, which silently
-  // overrides the --pattern CLI flag. Re-assert the requested pattern via the
-  // API so a launch is deterministic.
-  await httpPostJson(`http://127.0.0.1:${ports.marsin_engine_port}/pattern`, { pattern: opts.pattern });
-  log('launcher', `  ✓ engine pattern set to ${opts.pattern}`);
+  // The engine runs supervised: when the operator switches scene in the sim,
+  // it hands the new scene back via SCENE_SWITCH_FILE and exits 75; we restart
+  // it (tracked) on the new model instead of treating that as a crash. So a
+  // scene switch never tears the stack down or orphans a detached engine.
+  const engineUrl = `http://127.0.0.1:${ports.marsin_engine_port}`;
+
+  async function startEngine(scene) {
+    startChild('engine', 'node',
+      ['engine.js', '--model', scene, '--pattern', opts.pattern], ENGINE_DIR,
+      { BM26_SUPERVISED: '1', BM26_SCENE_SWITCH_FILE: SCENE_SWITCH_FILE },
+      handleEngineExit);
+    await waitForHttp('engine api', `${engineUrl}/status`, 120000);
+    // The engine restores persisted deck state at boot, which overrides the
+    // --pattern CLI flag; re-assert it so a launch/restart is deterministic.
+    await httpPostJson(`${engineUrl}/pattern`, { pattern: opts.pattern });
+    log('launcher', `  ✓ engine pattern set to ${opts.pattern}`);
+  }
+
+  async function handleEngineExit(code) {
+    if (code !== ENGINE_RESTART_EXIT_CODE) return false; // real crash → teardown
+    let scene = opts.scene;
+    try {
+      const data = JSON.parse(fs.readFileSync(SCENE_SWITCH_FILE, 'utf8'));
+      if (data && data.scene) scene = data.scene;
+      fs.unlinkSync(SCENE_SWITCH_FILE);
+    } catch (err) {
+      logError(`Engine asked to restart but the scene handoff was unreadable (${err.message}); reusing '${scene}'.`);
+    }
+    log('launcher', `🔁 Engine scene switch → '${scene}'; restarting engine (tracked).`);
+    opts.scene = scene;
+    try {
+      const lock = readLock();
+      if (lock && lock.pid === process.pid) {
+        lock.scene = scene;
+        fs.writeFileSync(LOCK_PATH, JSON.stringify(lock, null, 2));
+      }
+    } catch (err) {
+      // Lock update is best-effort; the running stack is the source of truth.
+    }
+    await startEngine(scene);
+    log('launcher', `✅ Engine restarted on scene '${scene}'.`);
+    return true; // claimed — keep the rest of the stack up
+  }
+
+  await startEngine(opts.scene);
   log('launcher', '✅ Engine is ready.');
 
   // Open the sim only now that the engine is up: the sim's boot probes
