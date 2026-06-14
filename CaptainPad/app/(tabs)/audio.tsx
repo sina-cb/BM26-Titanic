@@ -78,6 +78,7 @@ interface AudioConfig {
   bands: {
     lowMaxHz: number; midMaxHz: number;
     attackMs: number; releaseMs: number; noiseGate: number;
+    inputGain?: number; // software mic-preamp (audio.bands.inputGain)
   };
   kick:  { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
   // Audio structure detector (build/drop/sustain cues, docs/30). Optional:
@@ -414,12 +415,12 @@ const PINNED_LIVE_DEFAULTS: Record<string, number> = (() => {
 // Trail buffer + window-picker constants. Same AsyncStorage key as
 // before (operator preference roams across rebuilds).
 const SIGNAL_WINDOW_KEY = '@CaptainPad:audioTrailWindowS';
-// Global meter-sensitivity gain (display-only, 0–5×). Persisted so the
-// operator's preference roams across rebuilds, same as the trail window.
-const METER_GAIN_KEY = '@CaptainPad:audioMeterGain';
-const METER_GAIN_MIN = 0;
-const METER_GAIN_MAX = 5;
-const METER_GAIN_DEFAULT = 1;
+// Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
+// is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
+// low/mid/high/kick above the noise gate for the meters AND the detectors /
+// patterns. Range kept generous for a quiet playa mic / line feed.
+const INPUT_GAIN_MIN = 0;
+const INPUT_GAIN_MAX = 10;
 const WINDOW_OPTIONS_S = [5, 10, 15, 30] as const;
 const DEFAULT_WINDOW_S = 10;
 const TRAIL_SAMPLE_HZ = 15;            // 15 Hz visual cadence — enough resolution for a smooth polyline
@@ -630,10 +631,12 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
 }
 
 function PinnedAudioMeters({
-  audioStatus, oscStatus,
+  audioStatus, oscStatus, inputGain, onCommitInputGain,
 }: {
   audioStatus: AudioStatus | null;
   oscStatus: OscPillState | null;
+  inputGain: number;
+  onCommitInputGain: (g: number) => void;
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
@@ -663,29 +666,6 @@ function PinnedAudioMeters({
   const setWindow = useCallback((s: number) => {
     setWindowS(s);
     AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s))
-      .catch(() => { /* benign — persistence is best-effort */ });
-  }, []);
-
-  // ── Global meter-sensitivity gain (display-only, 0–5×) — persisted.
-  const [meterGain, setMeterGainState] = useState<number>(METER_GAIN_DEFAULT);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(METER_GAIN_KEY).then(raw => {
-      if (!alive || raw == null) return;
-      const parsed = parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= METER_GAIN_MIN && parsed <= METER_GAIN_MAX) {
-        setMeterGainState(parsed);
-      }
-    }).catch(() => { /* benign — first launch */ });
-    return () => { alive = false; };
-  }, []);
-  const setMeterGain = useCallback((g: number) => {
-    const clamped = Math.max(METER_GAIN_MIN, Math.min(METER_GAIN_MAX, g));
-    setMeterGainState(clamped);
-  }, []);
-  const commitMeterGain = useCallback((g: number) => {
-    const clamped = Math.max(METER_GAIN_MIN, Math.min(METER_GAIN_MAX, g));
-    AsyncStorage.setItem(METER_GAIN_KEY, String(clamped))
       .catch(() => { /* benign — persistence is best-effort */ });
   }, []);
 
@@ -808,24 +788,24 @@ function PinnedAudioMeters({
                 rawSamples={trails.raw[i]}
                 postSamples={trails.post[i]}
                 bufferLen={bufferLen}
-                gain={meterGain}
               />
             ))}
           </View>
-          {/* Global meter-sensitivity gain — sits UNDER the MIC meters
-              (operator request). Display-only: scales every meter (mic +
-              stems) so weak signals are readable; does not touch the engine. */}
+          {/* INPUT GAIN — software mic-preamp, UNDER the MIC meters (operator
+              request). A REAL engine gain (patches audio.bands.inputGain): it
+              lifts low/mid/high/kick above the noise gate so a quiet mic/feed
+              drives the meters AND the detectors/patterns. */}
           <View style={{ marginTop: 10, marginHorizontal: 4 }}>
             <FaderRow
-              label="METER GAIN"
+              label="INPUT GAIN"
               suffix="×"
-              min={METER_GAIN_MIN}
-              max={METER_GAIN_MAX}
+              min={INPUT_GAIN_MIN}
+              max={INPUT_GAIN_MAX}
               step={0.1}
-              value={meterGain}
-              hint="Display-only meter sensitivity (0–5×). Boosts the bars/trails so weak signals show; does not change engine levels or what patterns react to."
-              onDrag={setMeterGain}
-              onCommit={commitMeterGain}
+              value={inputGain}
+              hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so LOW/MID/HIGH/KICK lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
+              onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
+              onCommit={onCommitInputGain}
             />
           </View>
         </View>
@@ -851,7 +831,6 @@ function PinnedAudioMeters({
                 rawSamples={trails.raw[MIC_SIGNALS.length + i]}
                 postSamples={trails.post[MIC_SIGNALS.length + i]}
                 bufferLen={bufferLen}
-                gain={meterGain}
               />
             ))}
             {/* BPM pill — biggest single number on the strip. No trail
@@ -1606,6 +1585,17 @@ function AudioConfigBody({
     else { setPatchError(null); reload(); }
   }, [cfg, reload]);
 
+  // Software INPUT GAIN (audio.bands.inputGain) — real engine gain set from
+  // the pinned strip slider. Optimistic local update, then patch + reload.
+  const commitInputGain = useCallback(async (g: number) => {
+    if (!cfg) return;
+    const clamped = Math.max(0, Math.min(64, g));
+    setCfg(prev => prev && ({ ...prev, bands: { ...prev.bands, inputGain: clamped } }));
+    const r = await patchAudioConfig({ bands: { inputGain: clamped } });
+    if (!r.ok) { setPatchError(r.error || 'failed to set input gain'); reload(); }
+    else { setPatchError(null); }
+  }, [cfg, reload]);
+
   // Structure detector enable/disable (docs/30). Nested live field —
   // structureDetector.enabled is in the audio_config live allow-list.
   const toggleDetector = useCallback(async () => {
@@ -1696,7 +1686,12 @@ function AudioConfigBody({
           Mounted only after cfg loads (we're already inside that
           gate). All live-data subscriptions live INSIDE this
           component — the body below never reads liveParams. */}
-      <PinnedAudioMeters audioStatus={status} oscStatus={oscStatus} />
+      <PinnedAudioMeters
+        audioStatus={status}
+        oscStatus={oscStatus}
+        inputGain={cfg?.bands?.inputGain ?? 1}
+        onCommitInputGain={commitInputGain}
+      />
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
