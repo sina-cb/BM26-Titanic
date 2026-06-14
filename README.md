@@ -16,10 +16,11 @@ profiles — in your browser when each is ready. Run it from the repo
 root:
 
 ```bash
-node launcher.js dev
+node launcher.js prod --scene titanic
 ```
 
-Pick the profile for what you're doing:
+That's the show stack: the simulation + rendering engine on the Titanic
+scene. Pick the profile for what you're doing:
 
 | Command | Brings up | Sim rendering |
 |---|---|---|
