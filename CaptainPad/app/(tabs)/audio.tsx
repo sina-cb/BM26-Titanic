@@ -928,8 +928,8 @@ function StructureSignalColumn({ label, value, samples, bufferLen, accent, value
   );
 }
 
-function StructureDetectorCard({ cardStyle, detectorOn, busy, onToggle }: {
-  cardStyle: any; detectorOn: boolean; busy: boolean; onToggle: () => void;
+function StructureDetectorCard({ cardStyle, detectorOn }: {
+  cardStyle: any; detectorOn: boolean;
 }) {
   const C = usePalette();
   const live = useLiveParamValues(STRUCTURE_LIVE_DEFAULTS) as Record<string, number>;
@@ -984,16 +984,25 @@ function StructureDetectorCard({ cardStyle, detectorOn, busy, onToggle }: {
           <WindowPicker value={windowS} onChange={setWindow} />
         }
       />
-      <MasterToggle
-        on={detectorOn}
-        busy={busy}
-        onPress={onToggle}
-        label={detectorOn ? '● DETECTING' : 'DISABLED'}
-        subtitle={detectorOn
-          ? 'Publishing audioStructure / buildScore / energyRatio / dropPulse to the CPC.'
-          : 'Tap to enable. Traces below stay flat until the detector is running.'}
-        accent={detectorOn ? ACCENT_AUTO : ACCENT_AUTO}
-      />
+      {/* LOCKED — drop/build/sustain detection is under active development and
+          is intentionally not enableable yet (it needs accuracy tuning against
+          real labeled audio; see the Notion task). Disabled by default in the
+          engine AND no enable affordance here. The plots below are a preview
+          of the signals it will publish once it's reliable. */}
+      <View style={{
+        borderRadius: 10, borderWidth: 1, borderColor: '#f0a23b',
+        backgroundColor: 'rgba(240,162,59,0.10)',
+        paddingHorizontal: 14, paddingVertical: 12,
+      }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#f0a23b', letterSpacing: 0.8 }}>
+          🚧 UNDER DEVELOPMENT — DISABLED
+        </Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.text, marginTop: 3 }}>
+          Drop / build / sustain detection is being tuned against real audio and is
+          turned off for now (no effect on the lights). The traces below are a preview
+          of what it will publish once it is reliable.
+        </Text>
+      </View>
 
       {/* Current state badge + vocals indicator. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, marginBottom: 6 }}>
@@ -1596,18 +1605,9 @@ function AudioConfigBody({
     else { setPatchError(null); }
   }, [cfg, reload]);
 
-  // Structure detector enable/disable (docs/30). Nested live field —
-  // structureDetector.enabled is in the audio_config live allow-list.
-  const toggleDetector = useCallback(async () => {
-    if (!cfg) return;
-    const target = !(cfg.structureDetector?.enabled ?? false);
-    setBusy('detector');
-    setCfg(prev => prev && ({ ...prev, structureDetector: { ...(prev.structureDetector || {}), enabled: target } }));
-    const r = await patchAudioConfig({ structureDetector: { enabled: target } });
-    setBusy(null);
-    if (!r.ok) { setPatchError(r.error || 'failed to toggle detector'); reload(); }
-    else { setPatchError(null); reload(); }
-  }, [cfg, reload]);
+  // NOTE: the structure detector has NO enable affordance for now — it's
+  // under development and intentionally locked off (see StructureDetectorCard
+  // + the Notion task). It stays disabled by default in the engine.
 
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice
@@ -1764,8 +1764,6 @@ function AudioConfigBody({
         <StructureDetectorCard
           cardStyle={CARD}
           detectorOn={detectorOn}
-          busy={busy === 'detector'}
-          onToggle={toggleDetector}
         />
 
         {/* ── Cross-machine mic-not-found banner ──────────────────────
