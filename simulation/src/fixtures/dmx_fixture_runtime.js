@@ -532,6 +532,14 @@ export class DmxFixtureRuntime {
     }
   }
 
+  // Diagnostic body tint for the "show unpatched as red" overlay. Sim-only;
+  // the caller skips selected fixtures so selection tint is never clobbered.
+  setUnpatchedRed(on) {
+    if (this.shellMat) {
+      this.shellMat.color.setHex(on ? 0xff2222 : 0x333333);
+    }
+  }
+
   // ── Cleanup ──────────────────────────────────────────────────────────
 
   destroy() {

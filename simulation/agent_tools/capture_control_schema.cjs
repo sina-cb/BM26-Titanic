@@ -1,14 +1,14 @@
 /**
  * capture_control_schema.cjs — Dump the live control tree as JSON.
  *
- * Parity oracle tooling for the UI rehaul (tasks 015/018): run once
- * against the legacy UI and once against the modern UI on the SAME scene,
- * then diff the two JSON files to prove control-level parity.
+ * Snapshots the MarsinGui control tree (folders, controls, types, ranges,
+ * options) for regression diffs. Born as the UI-rehaul parity oracle
+ * (tasks 015/018); now a general control-tree capture tool.
  *
  * Usage (servers must be running, see 00_see_the_world.md):
  *   node capture_control_schema.cjs [--url <sim-url>] [--out <file.json>]
  *
- * Defaults: legacy titanic scene URL; output to
+ * Defaults: titanic scene URL; output to
  * ../../.agent_renders/control_schema_<unix>.json
  */
 

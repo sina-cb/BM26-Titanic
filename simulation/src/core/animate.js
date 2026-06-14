@@ -6,7 +6,7 @@ import {
   controls, composer, params,
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
   lightingEnabled, lightingMode, engineReady, engineEnabled,
-  scene
+  scene, selectedFixtureIndices, selectedDmxIndices
 } from "./state.js";
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
@@ -179,6 +179,35 @@ function _rebuildBatchCache() {
     _batchLastBuiltVersion = _batchCacheVersion; // prevent retry-loop
   }
 }
+// ─── Unpatched-red overlay helpers ───────────────────────────────────────
+// Tracks whether the overlay ran last frame so a single reset pass clears the
+// red tint the frame after it is switched off (then we stop touching bodies).
+let _unpatchedOverlayWasActive = false;
+
+function _fixtureIsUnpatched(fixture) {
+  const u = Math.floor(Number(fixture?.config?.dmxUniverse));
+  const a = Math.floor(Number(fixture?.config?.dmxAddress));
+  return !(Number.isFinite(u) && u >= 1 && Number.isFinite(a) && a >= 1);
+}
+
+function _tintUnpatched(list, selectedSet, show) {
+  if (!list) return;
+  for (const fixture of list) {
+    if (!fixture || typeof fixture.setUnpatchedRed !== 'function') continue;
+    // Selection tint owns the body color — leave selected fixtures alone.
+    if (selectedSet && selectedSet.has(fixture.index)) continue;
+    fixture.setUnpatchedRed(show && _fixtureIsUnpatched(fixture));
+  }
+}
+
+function _applyUnpatchedRedOverlay() {
+  const show = !!params.showUnpatchedRed;
+  if (!show && !_unpatchedOverlayWasActive) return; // nothing to do / already cleared
+  _tintUnpatched(window.parFixtures, selectedFixtureIndices, show);
+  _tintUnpatched(window.dmxSceneFixtures, selectedDmxIndices, show);
+  _unpatchedOverlayWasActive = show;
+}
+
 export function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -362,8 +391,11 @@ export function animate() {
                gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
                bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
             } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
-               // Mixed mode: unpatched pixels stay black
-               rn = 0; gn = 0; bn = 0;
+               // Mixed mode: unpatched pixels stay black — unless the operator
+               // has enabled the unpatched-red overlay (a sim-only diagnostic;
+               // these pixels carry no patch, so nothing reaches sACN/DMX).
+               if (params.showUnpatchedRed) { rn = 0.8; gn = 0; bn = 0; }
+               else { rn = 0; gn = 0; bn = 0; }
             } else {
                rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
                gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
@@ -398,6 +430,14 @@ export function animate() {
   };
   updateVisuals(window.dmxSceneFixtures);
   updateVisuals(window.parFixtures);
+
+  // ─── Unpatched-red overlay (sim-only diagnostic) ───
+  // Tints the bodies of fixtures with no valid DMX patch red so the
+  // operator can spot what still needs mapping. Purely cosmetic — it
+  // never touches the DMX router or sACN output (unpatched fixtures have
+  // no universe/address to send to). Selected fixtures keep their
+  // selection tint, which owns the body color.
+  _applyUnpatchedRedOverlay();
 
   // ─── sACN Blackout Trigger ───
   if (!window.triggerSacnBlackout) {

@@ -1,12 +1,10 @@
 /**
  * view_presets_row.js — Modern (Preact) camera-preset row.
  *
- * Strangler replacement for the DOM-building half of
- * src/gui/view_presets.js (renderViewPresetsUI). The camera math and
- * persistence stay in the legacy module and are imported here —
- * `animateCameraToPreset` / `saveCameraPresets` are pure logic, and
- * importing the module keeps `window.animateCamera` (agent_render
- * dependency) registered.
+ * Builds the camera-preset row. The camera math and persistence stay in
+ * src/gui/view_presets.js and are imported here — `animateCameraToPreset`
+ * / `saveCameraPresets` are pure logic, and importing the module keeps
+ * `window.animateCamera` (agent_render dependency) registered.
  *
  * Renders into the existing `#view-presets` container with the same
  * classes and `data-view` attributes, so style.css, edit-mode hiding,

@@ -321,6 +321,24 @@ function render() {
   const main = document.createElement('div');
   main.className = 'cm-main';
 
+  // Unpatched-red overlay toggle (sim-only diagnostic; no DMX is sent).
+  // Synced with the "Show Unpatched (Red)" checkbox in the DMX Fixtures
+  // panel — both write the same params.showUnpatchedRed flag.
+  const overlayOn = !!params.showUnpatchedRed;
+  const overlayBtn = document.createElement('button');
+  overlayBtn.className = overlayOn ? 'cm-btn cm-unpatched-toggle cm-on' : 'cm-btn cm-unpatched-toggle';
+  overlayBtn.textContent = overlayOn
+    ? '🔴 Unpatched Highlight: ON'
+    : '⚪ Unpatched Highlight: OFF';
+  overlayBtn.title = 'Tint fixtures with no DMX patch red in the 3D view ' +
+    '(preview only — no DMX data is sent). Synced with "Show Unpatched (Red)" ' +
+    'in the DMX Fixtures panel.';
+  overlayBtn.onclick = () => {
+    params.showUnpatchedRed = !params.showUnpatchedRed;
+    renderIfOpen(); // refresh this button's label/state (the lil-gui checkbox self-syncs via .listen())
+  };
+  main.appendChild(overlayBtn);
+
   const addBtn = document.createElement('button');
   addBtn.className = 'cm-btn cm-add';
   addBtn.textContent = '+ Add Controller';
