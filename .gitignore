@@ -140,3 +140,6 @@ simulation/scenes/*/playlists/hil_*.yaml
 # otherwise swallow the pinned three.js builds needed for playa offline mode.
 !simulation/vendor/three/build/
 !simulation/vendor/three/build/**
+
+# Claude Code local settings + agent worktrees (machine-local / transient)
+.claude/
