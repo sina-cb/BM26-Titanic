@@ -11,7 +11,7 @@
 import fs from 'fs';
 import yaml from 'js-yaml';
 
-import { audioRegistryEntries } from './audio_signals.js';
+import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
 
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 //

@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AudioStructureDetector } from '../lib/audio_structure_detector.js';
+import { AudioStructureDetector } from '../audio/detector/audio_structure_detector.js';
 
 // Minimal ParamCenter double. Supports get/set/subscribe + a setMany
 // helper so a test can update several inputs and fire the subscriber

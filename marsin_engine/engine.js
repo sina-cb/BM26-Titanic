@@ -24,18 +24,18 @@ import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
-import { AudioCapture } from './lib/audio_capture.js';
-import { AudioAnalyzer } from './lib/audio_analyzer.js';
+import { AudioCapture } from './audio/capture/audio_capture.js';
+import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
-import { mergeAudioConfig, pickLiveFields } from './lib/audio_config.js';
+import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
-} from './lib/audio_config_store.js';
-import { listAudioDevices, findConfiguredDevice } from './lib/audio_devices.js';
-import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
-import { AudioStructureDetector } from './lib/audio_structure_detector.js';
+} from './audio/config/audio_config_store.js';
+import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
+import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
+import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
-import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
+import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';

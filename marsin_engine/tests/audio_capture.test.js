@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import { AudioCapture } from '../lib/audio_capture.js';
+import { AudioCapture } from '../audio/capture/audio_capture.js';
 
 /** Build a fake child that AudioCapture can talk to. */
 function makeFakeChild() {

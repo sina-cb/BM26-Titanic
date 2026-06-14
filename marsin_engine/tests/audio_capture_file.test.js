@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFfmpegArgs, isFileDevice } from '../lib/audio_capture.js';
+import { buildFfmpegArgs, isFileDevice } from '../audio/capture/audio_capture.js';
 
 const DEVICE_FORMATS = ['avfoundation', 'dshow', 'pulse', 'alsa'];
 

@@ -22,7 +22,7 @@ import {
   DEFAULT_CHAINS,
   KNOWN_SIGNALS,
   opCatalog,
-} from '../lib/signal_post_processor.js';
+} from '../audio/postproc/signal_post_processor.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 

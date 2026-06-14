@@ -21,8 +21,8 @@ pass (report `.agent/02_reports/202606/20260613_5_audio_corpus_tuning.md`).
 
 | Track | What it controls | Where it lives | How to measure |
 |---|---|---|---|
-| **Pattern feel** | what the LIGHTS react to (smooth low/mid/high, sudden kick) | `DEFAULT_CHAINS` in `lib/signal_post_processor.js` + `config.yaml audio.bands/kick` | `signal_metrics.mjs`: flicker Hz / pulse depth / kick attack+decay |
-| **Detector accuracy** | drop/structure detection | `DETECTOR_DEFAULTS` in `lib/audio_structure_detector.js` | drop P/R/latency + false-positives/min |
+| **Pattern feel** | what the LIGHTS react to (smooth low/mid/high, sudden kick) | `DEFAULT_CHAINS` in `audio/postproc/signal_post_processor.js` + `config.yaml audio.bands/kick` | `signal_metrics.mjs`: flicker Hz / pulse depth / kick attack+decay |
+| **Detector accuracy** | drop/structure detection | `DETECTOR_DEFAULTS` in `audio/detector/audio_structure_detector.js` | drop P/R/latency + false-positives/min |
 
 The detector reads the **raw pre-chain** mirrors (`micLowRaw`, `micFluxRaw`,
 `stems*Raw`), so **chain tuning does NOT affect the detector.** This is the
@@ -190,8 +190,8 @@ THE LOOP (per signal):
 ```
 
 Two knob locations (keep straight): **analyzer front-end** (`config.yaml
-audio.bands` / `audio.kick`, applied in `lib/audio_analyzer.js`) vs
-**post-processing chain** (`DEFAULT_CHAINS` in `lib/signal_post_processor.js`).
+audio.bands` / `audio.kick`, applied in `audio/analyzer/audio_analyzer.js`) vs
+**post-processing chain** (`DEFAULT_CHAINS` in `audio/postproc/signal_post_processor.js`).
 Patterns + meters see the chain output; the detector sees the raw analyzer
 output. **`audio.bands.inputGain` is the software mic-preamp applied first.**
 

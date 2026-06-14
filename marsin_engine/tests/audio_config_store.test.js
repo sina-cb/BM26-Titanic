@@ -16,8 +16,8 @@ import {
   loadSceneAudio, saveSceneAudio,
   saveSelectedMic, saveManualMic, clearSavedMic,
   sceneAudioPath,
-} from '../lib/audio_config_store.js';
-import { pickLiveFields } from '../lib/audio_config.js';
+} from '../audio/config/audio_config_store.js';
+import { pickLiveFields } from '../audio/config/audio_config.js';
 
 function tmpScene() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'mae-scene-'));

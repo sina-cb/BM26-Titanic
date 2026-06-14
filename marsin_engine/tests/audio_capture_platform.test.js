@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import { AudioCapture, buildFfmpegArgs } from '../lib/audio_capture.js';
+import { AudioCapture, buildFfmpegArgs } from '../audio/capture/audio_capture.js';
 
 test('buildFfmpegArgs — macOS default device', () => {
   const args = buildFfmpegArgs({ platform: 'darwin', channels: 1, sampleRate: 44100 });

@@ -13,7 +13,7 @@ import {
   normalizeIp,
   coerceArg,
 } from '../lib/osc_listener.js';
-import { SignalPostProcessor } from '../lib/signal_post_processor.js';
+import { SignalPostProcessor } from '../audio/postproc/signal_post_processor.js';
 
 /**
  * Build a real SignalPostProcessor wired to a paramCenter so the

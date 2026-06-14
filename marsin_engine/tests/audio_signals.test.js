@@ -17,12 +17,12 @@ import assert from 'node:assert/strict';
 import {
   audioRegistryEntries,
   processedSignalKeys,
-} from '../lib/audio_signals.js';
+} from '../audio/postproc/audio_signals.js';
 import { ParamCenter } from '../lib/param_center.js';
 import {
   KNOWN_SIGNALS,
   DEFAULT_CHAINS,
-} from '../lib/signal_post_processor.js';
+} from '../audio/postproc/signal_post_processor.js';
 import { GAIN_BY_KEY } from '../lib/osc_listener.js';
 
 // ── Pre-refactor snapshot ────────────────────────────────────────────────────

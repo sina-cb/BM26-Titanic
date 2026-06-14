@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { summarizeBandSamples, parseArgs } from '../tools/audio_calibrate.js';
+import { summarizeBandSamples, parseArgs } from '../audio/calibrate/audio_calibrate.js';
 
 function approxEqual(actual, expected, eps = 1e-9, msg = '') {
   assert.ok(Math.abs(actual - expected) < eps,

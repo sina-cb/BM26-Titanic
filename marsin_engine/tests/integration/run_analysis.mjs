@@ -45,9 +45,9 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { AudioAnalyzer } from '../../lib/audio_analyzer.js';
-import { SignalPostProcessor } from '../../lib/signal_post_processor.js';
-import { AudioStructureDetector } from '../../lib/audio_structure_detector.js';
+import { AudioAnalyzer } from '../../audio/analyzer/audio_analyzer.js';
+import { SignalPostProcessor } from '../../audio/postproc/signal_post_processor.js';
+import { AudioStructureDetector } from '../../audio/detector/audio_structure_detector.js';
 import { ParamCenter } from '../../lib/param_center.js';
 
 import { writeWavMono, readWavMono } from './wav_io.mjs';

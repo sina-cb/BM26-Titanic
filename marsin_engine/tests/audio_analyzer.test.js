@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AudioAnalyzer } from '../lib/audio_analyzer.js';
+import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 
 const SR = 44100;
 

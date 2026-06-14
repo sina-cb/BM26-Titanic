@@ -19,7 +19,7 @@ import {
   listAudioDevices,
   defaultInputFormatFor,
   findConfiguredDevice,
-} from '../lib/audio_devices.js';
+} from '../audio/capture/audio_devices.js';
 
 const MAC_AV_OUTPUT = `
 [AVFoundation indev @ 0x7f8b1a] AVFoundation video devices:

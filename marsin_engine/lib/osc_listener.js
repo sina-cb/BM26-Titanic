@@ -20,7 +20,7 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
-import { gainByKeyForOsc } from './audio_signals.js';
+import { gainByKeyForOsc } from '../audio/postproc/audio_signals.js';
 
 // Per-signal post-processing (docs/29) runs in the engine via
 // `lib/signal_post_processor.js`. The OSC listener accepts an OPTIONAL

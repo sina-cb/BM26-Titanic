@@ -9,7 +9,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { printMicList } from '../lib/audio_mic_chooser.js';
+import { printMicList } from '../audio/capture/audio_mic_chooser.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);

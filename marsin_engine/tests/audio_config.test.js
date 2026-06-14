@@ -13,7 +13,7 @@ import {
   loadAudioConfig, saveAudioConfig,
   mergeAudioConfig, pickLiveFields, validateLivePatch,
   AUDIO_LIVE_FIELDS,
-} from '../lib/audio_config.js';
+} from '../audio/config/audio_config.js';
 
 function tmpDir() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'marsin-audio-cfg-'));

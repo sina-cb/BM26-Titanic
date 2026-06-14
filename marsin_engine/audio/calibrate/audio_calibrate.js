@@ -34,8 +34,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { AudioCapture } from '../lib/audio_capture.js';
-import { AudioAnalyzer } from '../lib/audio_analyzer.js';
+import { AudioCapture } from '../capture/audio_capture.js';
+import { AudioAnalyzer } from '../analyzer/audio_analyzer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);

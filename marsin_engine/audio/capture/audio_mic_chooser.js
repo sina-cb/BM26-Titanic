@@ -16,7 +16,7 @@ import {
 } from './audio_devices.js';
 import {
   loadSceneAudio, saveSelectedMic, clearSavedMic,
-} from './audio_config_store.js';
+} from '../config/audio_config_store.js';
 
 /** Pretty-print a list to the operator. */
 export function formatDeviceList(devices, { numbered = true } = {}) {
