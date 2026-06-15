@@ -338,7 +338,7 @@ export function animate() {
     // sample the frame for the preview and BEFORE the sACN-out send reads the
     // same buffers below. This is the unbeatable final stage: blackout (off)
     // or brightness-scale each fixture's channels on the live output.
-    applyFixtureOutputOverrides(window.dmxRouter, [window.dmxSceneFixtures, window.parFixtures]);
+    applyFixtureOutputOverrides(window.dmxRouter, [window.dmxSceneFixtures, window.parFixtures], params.groupOverrides);
 
 
     const applyDmx = (fixtureList) => {

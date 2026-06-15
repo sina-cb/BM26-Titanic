@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import {
   applyFixtureOutputOverrides,
   resolveFixtureOverride,
+  resolveGroupOverride,
+  resolveCombinedOverride,
   OUTPUT_INTENSITY_CHANNELS,
 } from '../src/dmx/dmx_output_overrides.js';
 
@@ -107,4 +109,43 @@ test('dimmer + value channels are recognised as intensity', () => {
   assert.ok(OUTPUT_INTENSITY_CHANNELS.has('value'));
   assert.ok(!OUTPUT_INTENSITY_CHANNELS.has('strobe'));
   assert.ok(!OUTPUT_INTENSITY_CHANNELS.has('pan'));
+});
+
+// ── Group master (higher priority than the fixture) ──────────────────────
+
+test('resolveGroupOverride defaults to on / 100 for missing group', () => {
+  assert.deepEqual(resolveGroupOverride(undefined, 'A'), { enabled: true, brightness: 100 });
+  assert.deepEqual(resolveGroupOverride({}, 'A'), { enabled: true, brightness: 100 });
+  assert.deepEqual(resolveGroupOverride({ A: { brightness: 60 } }, 'A'), { enabled: true, brightness: 60 });
+});
+
+test('group brightness wins over fixture unless group is at 100', () => {
+  // group 60 + fixture 80 → 60 (group wins because it is not 100)
+  assert.equal(resolveCombinedOverride({ group: 'A', brightness: 80 }, { A: { brightness: 60 } }).brightness, 60);
+  // group 100 (default) + fixture 80 → 80 (fixture applies)
+  assert.equal(resolveCombinedOverride({ group: 'A', brightness: 80 }, { A: { brightness: 100 } }).brightness, 80);
+  // no group entry + fixture 80 → 80
+  assert.equal(resolveCombinedOverride({ group: 'A', brightness: 80 }, {}).brightness, 80);
+});
+
+test('group On/Off is a master kill: group off forces fixture off', () => {
+  assert.equal(resolveCombinedOverride({ group: 'A', enabled: true }, { A: { enabled: false } }).enabled, false);
+  // group on defers to the fixture
+  assert.equal(resolveCombinedOverride({ group: 'A', enabled: false }, { A: { enabled: true } }).enabled, false);
+  assert.equal(resolveCombinedOverride({ group: 'A', enabled: true }, { A: { enabled: true } }).enabled, true);
+});
+
+test('group brightness scales member output through applyFixtureOutputOverrides', () => {
+  const router = makeRouter(3, 200);
+  const fx = rgbStrobeFixture({ enabled: true, brightness: 100, group: 'A', dmxUniverse: 3, dmxAddress: 1 });
+  applyFixtureOutputOverrides(router, [[fx]], { A: { enabled: true, brightness: 25 } });
+  assert.deepEqual([...router.frame.subarray(0, 3)], [50, 50, 50], 'RGB scaled to group 25%');
+  assert.equal(router.frame[3], 200, 'strobe untouched');
+});
+
+test('group off blacks out the whole footprint even if fixture is on/100', () => {
+  const router = makeRouter(3, 255);
+  const fx = rgbStrobeFixture({ enabled: true, brightness: 100, group: 'A', dmxUniverse: 3, dmxAddress: 1 });
+  applyFixtureOutputOverrides(router, [[fx]], { A: { enabled: false, brightness: 100 } });
+  assert.deepEqual([...router.frame.subarray(0, 4)], [0, 0, 0, 0]);
 });

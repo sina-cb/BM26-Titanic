@@ -1386,6 +1386,31 @@ function setupGUI() {
           groupFolder.close();
         }
 
+        // ── Group master: On/Off + Brightness ──
+        // A real last-layer override on the whole group's DMX output (see
+        // dmx_output_overrides.js). The group takes priority over each
+        // fixture's own override. Stored in params.groupOverrides[groupName]
+        // and persisted with the scene; applied live every frame, so toggling
+        // here hits the lights (and sACN out) immediately.
+        if (!params.groupOverrides) params.groupOverrides = {};
+        if (!params.groupOverrides[groupName]) params.groupOverrides[groupName] = { enabled: true, brightness: 100 };
+        const groupOv = params.groupOverrides[groupName];
+        if (groupOv.enabled === undefined) groupOv.enabled = true;
+        if (groupOv.brightness === undefined) groupOv.brightness = 100;
+        const resyncGroupMembers = () => {
+          (groupMap.get(groupName) || []).forEach(({ index }) => {
+            if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+          });
+        };
+        groupFolder.add(groupOv, 'enabled').name('⏻ Group On').onChange(() => {
+          resyncGroupMembers();
+          debounceAutoSave();
+        });
+        groupFolder.add(groupOv, 'brightness', 0, 100, 1).name('Group Brightness %').onChange(() => {
+          resyncGroupMembers();
+          debounceAutoSave();
+        });
+
         // Trace-generated groups: show fixtures with limited editing (DMX patch only)
         if (isTraceGroup) {
           const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:var(--control-bg);cursor:pointer;font-size:10px;font-family:inherit;';
@@ -1681,6 +1706,11 @@ function setupGUI() {
             params.parLights.forEach((c) => {
               if (c.group === groupName) c.group = newName;
             });
+            // Carry the group master override across the rename (keyed by name).
+            if (params.groupOverrides && params.groupOverrides[groupName]) {
+              params.groupOverrides[newName] = params.groupOverrides[groupName];
+              delete params.groupOverrides[groupName];
+            }
             // Carry the group's view-mask bit across the rename so
             // patterns compiled against MASK_* names stay stable.
             if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, newName);

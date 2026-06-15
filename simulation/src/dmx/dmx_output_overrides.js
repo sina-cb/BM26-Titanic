@@ -25,7 +25,7 @@ export const OUTPUT_INTENSITY_CHANNELS = new Set([
 ]);
 
 /**
- * Resolve a fixture's output gain intent from its live config.
+ * Resolve a fixture's own output override intent from its live config.
  * @returns {{ enabled: boolean, brightness: number }} brightness is 0–100.
  */
 export function resolveFixtureOverride(config) {
@@ -37,14 +37,52 @@ export function resolveFixtureOverride(config) {
 }
 
 /**
+ * Resolve a group's override intent from the groupOverrides map.
+ * Missing group / fields default to on / 100 %.
+ * @param {Object|null|undefined} groupOverrides — { [groupName]: {enabled, brightness} }
+ * @param {string|undefined} groupName
+ * @returns {{ enabled: boolean, brightness: number }}
+ */
+export function resolveGroupOverride(groupOverrides, groupName) {
+  const g = (groupOverrides && groupName) ? groupOverrides[groupName] : null;
+  const enabled = !g || g.enabled !== false;
+  const bRaw = g ? g.brightness : 100;
+  const brightness = (bRaw === undefined || bRaw === null)
+    ? 100 : Math.max(0, Math.min(100, bRaw));
+  return { enabled, brightness };
+}
+
+/**
+ * Combine the group master and the per-fixture override into one effective
+ * override. The GROUP takes priority over the fixture (these are both global
+ * brightnesses, NOT nested/multiplied):
+ *   • Brightness — the group value wins whenever it is set to anything other
+ *     than 100 % (its passthrough default). Only when the group sits at 100 %
+ *     does the fixture's own brightness apply. So group 60 % + fixture 80 % →
+ *     60 %; group 100 % + fixture 80 % → 80 %.
+ *   • On/Off — the group is a master kill: group Off forces the fixture off;
+ *     group On (the default) defers to the fixture's own On/Off.
+ * @returns {{ enabled: boolean, brightness: number }} brightness 0–100.
+ */
+export function resolveCombinedOverride(config, groupOverrides) {
+  const fixture = resolveFixtureOverride(config);
+  const group = resolveGroupOverride(groupOverrides, config.group);
+  return {
+    enabled: group.enabled && fixture.enabled,
+    brightness: group.brightness !== 100 ? group.brightness : fixture.brightness,
+  };
+}
+
+/**
  * Apply On/Off + Brightness overrides onto the merged universe buffers.
  * @param {{ getFullFrame: (u:number)=>(Uint8Array|null|undefined) }} router
  * @param {Array<Array<object>>} fixtureLists — lists of fixture runtimes, each
- *        with `.config` (enabled, brightness, dmxUniverse, dmxAddress),
+ *        with `.config` (enabled, brightness, group, dmxUniverse, dmxAddress),
  *        optional `.patchDef` (universe, addr), and `.fixtureDef`
  *        (footprint, pixels[].channels).
+ * @param {Object} [groupOverrides] — { [groupName]: {enabled, brightness} }
  */
-export function applyFixtureOutputOverrides(router, fixtureLists) {
+export function applyFixtureOutputOverrides(router, fixtureLists, groupOverrides) {
   if (!router || typeof router.getFullFrame !== 'function' || !fixtureLists) return;
 
   for (const list of fixtureLists) {
@@ -52,7 +90,7 @@ export function applyFixtureOutputOverrides(router, fixtureLists) {
     for (const fixture of list) {
       if (!fixture || !fixture.config) continue;
       const config = fixture.config;
-      const { enabled, brightness } = resolveFixtureOverride(config);
+      const { enabled, brightness } = resolveCombinedOverride(config, groupOverrides);
       // No override → leave the merged frame exactly as the sources built it.
       if (enabled && brightness >= 100) continue;
 

@@ -72,6 +72,25 @@ export function normalizeTraces(traces) {
 }
 
 /**
+ * Return a copy of the group-override map containing only groups that carry a
+ * real (non-default) On/Off + Brightness master. Default = enabled & 100 %.
+ */
+export function pruneGroupOverrides(groupOverrides) {
+  const clean = {};
+  if (!groupOverrides || typeof groupOverrides !== "object") return clean;
+  for (const name of Object.keys(groupOverrides)) {
+    const g = groupOverrides[name];
+    if (!g || typeof g !== "object") continue;
+    const enabled = g.enabled !== false;
+    const brightness = (g.brightness === undefined || g.brightness === null) ? 100 : g.brightness;
+    if (!enabled || brightness !== 100) {
+      clean[name] = { enabled, brightness };
+    }
+  }
+  return clean;
+}
+
+/**
  * Walk the YAML config tree and extract all { value: ... } entries into flat params.
  */
 export function extractParams(node, parentKey = null) {
@@ -107,6 +126,13 @@ export function extractParams(node, parentKey = null) {
       params.gradientStops = node[key];
       continue;
     }
+    // Group-level On/Off + Brightness masters, keyed by group name. A plain
+    // map ({ [group]: {enabled, brightness} }), NOT a control sub-section, so
+    // intercept it before the generic { value } recursion below mangles it.
+    if (key === "groupOverrides" && node[key] && typeof node[key] === "object") {
+      params.groupOverrides = node[key];
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -132,6 +158,14 @@ export function reconstructYAML(node, parentKey = null) {
       if (!node.traces) node.traces = [];
     } else if (params.traces && params.traces.length === 0) {
       delete node.traces;
+    }
+    // Persist group masters only when at least one group carries a real
+    // (non-default) override; otherwise keep the scene file clean.
+    const groupClean = pruneGroupOverrides(params.groupOverrides);
+    if (Object.keys(groupClean).length > 0) {
+      if (!node.groupOverrides) node.groupOverrides = {};
+    } else {
+      delete node.groupOverrides;
     }
   }
   for (const key of Object.keys(node)) {
@@ -169,6 +203,10 @@ export function reconstructYAML(node, parentKey = null) {
     }
     if (key === "gradientStops" && Array.isArray(node[key])) {
       node[key] = params.gradientStops;
+      continue;
+    }
+    if (key === "groupOverrides") {
+      node[key] = pruneGroupOverrides(params.groupOverrides);
       continue;
     }
 

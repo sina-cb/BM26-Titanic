@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
+import { resolveCombinedOverride } from "../dmx/dmx_output_overrides.js";
 
 // ── Shared geometries ────────────────────────────────────────────────────
 const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
@@ -365,10 +366,9 @@ export class DmxFixtureRuntime {
   // truth for the gain, reused by the static-preview path below and by the
   // light pool (which frees a disabled fixture's SpotLight).
   outputGain() {
-    if (this.config.enabled === false) return 0;
-    const b = this.config.brightness;
-    if (b === undefined || b === null) return 1;
-    return Math.max(0, Math.min(1, b / 100));
+    const { enabled, brightness } = resolveCombinedOverride(this.config, params.groupOverrides);
+    if (!enabled) return 0;
+    return Math.max(0, Math.min(1, brightness / 100));
   }
 
   // ── Color control (used by lighting engines) ─────────────────────────
