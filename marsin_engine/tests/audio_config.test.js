@@ -170,6 +170,7 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
+      'dropNisThreshold', 'slowZoneRef',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
@@ -184,6 +185,12 @@ test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects b
   assert.equal(badEnum.ok, false);
   const badWin = validateLivePatch({ structureDetector: { dropDeltaWindowMs: 10 } });
   assert.equal(badWin.ok, false);
+  // 'kalman' is the adopted default edge — must validate.
+  const kal = validateLivePatch({ structureDetector: { dropEdgeMode: 'kalman', dropNisThreshold: 6.63, slowZoneRef: 0.5 } });
+  assert.equal(kal.ok, true, kal.error);
+  assert.equal(kal.live.structureDetector.dropEdgeMode, 'kalman');
+  const badNis = validateLivePatch({ structureDetector: { dropNisThreshold: 0.5 } });
+  assert.equal(badNis.ok, false);
 });
 
 test('validateLivePatch accepts a structureDetector patch (docs/30)', () => {

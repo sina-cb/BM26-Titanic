@@ -1429,7 +1429,7 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick, flux }) => {
+        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2 }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1455,6 +1455,11 @@ async function main() {
             { kind: 'scalar', key: 'micHighRaw', value: high     },
             { kind: 'scalar', key: 'micKickRaw', value: kick     },
             { kind: 'scalar', key: 'micFluxRaw', value: flux     },
+            // Dominant-frequency analyzer outputs (dom1/dom2 + energy).
+            { kind: 'scalar', key: 'micDomFreq1',   value: domFreq1   },
+            { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
+            { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
+            { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
           ], 'audio', 'audio:mic');
           // docs/30: run the structure detector at the analyzer hop rate
           // (lowest latency, auto-pauses when the analyzer is off). It

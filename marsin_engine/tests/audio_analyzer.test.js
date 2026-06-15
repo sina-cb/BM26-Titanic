@@ -507,3 +507,36 @@ test('reset() clears the prev-spectrum so flux settles back to ~0', () => {
     assert.ok(r.flux < 0.05, `post-reset steady flux should settle to ~0; got ${r.flux}`);
   }
 });
+
+// ── Dominant-frequency tracking (dom1/dom2 + energy) ─────────────────────
+
+test('dominant-frequency tracker locks onto a pure tone', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // A strong, steady 440 Hz tone — dom1 should lock onto it with energy > 0.
+  an.pushSamples(sineInt16(440, 0.6, 0.7));
+  const r = lastResult(results);
+  // New payload fields exist and are finite.
+  for (const k of ['domFreq1', 'domEnergy1', 'domFreq2', 'domEnergy2']) {
+    assert.ok(Number.isFinite(r[k]), `${k} should be a finite number; got ${r[k]}`);
+  }
+  // dom1 ≈ 440 Hz (parabolic interp → within a couple of bins at fftSize 1024).
+  assert.ok(Math.abs(r.domFreq1 - 440) < 25,
+    `dom1 should lock near 440 Hz; got ${r.domFreq1.toFixed(1)} Hz`);
+  assert.ok(r.domEnergy1 > 0 && r.domEnergy1 <= 1,
+    `dom1 energy should be in (0, 1]; got ${r.domEnergy1}`);
+  // Single tone → dom2 has nothing strong to lock (energy stays low).
+  assert.ok(r.domEnergy2 <= r.domEnergy1,
+    'dom2 energy should not exceed dom1 for a single tone');
+});
+
+test('dominant-frequency tracker follows a frequency change', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(300, 0.5, 0.7));
+  const lowF = lastResult(results).domFreq1;
+  an.pushSamples(sineInt16(1200, 0.5, 0.7));
+  const highF = lastResult(results).domFreq1;
+  assert.ok(Math.abs(lowF - 300) < 30, `dom1 should track 300 Hz; got ${lowF.toFixed(1)}`);
+  assert.ok(Math.abs(highF - 1200) < 40, `dom1 should re-lock to 1200 Hz; got ${highF.toFixed(1)}`);
+});

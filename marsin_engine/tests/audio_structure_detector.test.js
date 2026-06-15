@@ -25,7 +25,7 @@ function makeFakeParamCenter(initial = {}) {
     stemsBassRaw: 0, stemsDrumsRaw: 0, stemsVocalsRaw: 0,
     tempoBpm: 0,
     audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
-    audioVocalsHot: 0, audioDropPulse: 0,
+    audioVocalsHot: 0, audioDropPulse: 0, audioSlowZone: 0,
     ...initial,
   };
   const subscribers = [];
@@ -137,7 +137,7 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   const broadcasts = [];
   // Fresh stems throughout (full mix) so the drop gate passes.
   const { pc, det } = makeDetector(
-    { buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000 },
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000 },
     broadcasts,
   );
   let now = 1000;
@@ -190,6 +190,59 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   assert.ok(pc.store.audioDropPulse > 0);
 });
 
+// ── Kalman+NIS drop edge (the adopted default) ──────────────────────────
+
+test('kalman edge fires a drop on a simultaneous micLow+micFlux step-up', () => {
+  const broadcasts = [];
+  // dropEdgeMode defaults to 'kalman'. No stems fed → !stemsFresh, so the
+  // drop gate passes (full-mix path not required). eventRefractoryMs default
+  // 2000 keeps the loud body from re-firing.
+  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000 }, broadcasts);
+  let now = 1000;
+  const tickMs = 12;
+  // Quiet, steady baseline well past the 1 s warmup (so the filters' cold
+  // start can't false-fire and the χ² gate has a settled reference).
+  for (let i = 0; i < 160; i++) {
+    pc.store.micLowRaw = 0.08; pc.store.micFluxRaw = 0.05;
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  assert.equal(broadcasts.filter(b => b.type === 'dropFired').length, 0,
+    'a flat baseline must not fire a kalman drop');
+  // THE DROP: a sharp simultaneous slam in BOTH sub-energy and flux.
+  for (let i = 0; i < 30; i++) {
+    pc.store.micLowRaw = 0.9; pc.store.micFluxRaw = 0.8;
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 1, `expected exactly one kalman dropFired; got ${drops.length}`);
+  assert.equal(det.getStatus().state, 'SUSTAIN');
+  assert.ok(pc.store.audioDropPulse > 0, 'drop pulse should fire');
+  assert.ok(pc.store.audioSlowZone >= 0 && pc.store.audioSlowZone <= 1);
+});
+
+test('kalman edge does NOT fire on a step-DOWN (breakdown entrance)', () => {
+  const broadcasts = [];
+  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000 }, broadcasts);
+  let now = 1000;
+  const tickMs = 12;
+  // Loud steady body past warmup …
+  for (let i = 0; i < 160; i++) {
+    pc.store.micLowRaw = 0.85; pc.store.micFluxRaw = 0.7;
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  // … then a sudden DROP-OUT into a sustained breakdown (energy steps DOWN
+  // and stays down). The innovation is large but NEGATIVE, so the rising-edge
+  // gate rejects it; the sustained quiet (~1.8 s) engages the slow zone.
+  for (let i = 0; i < 150; i++) {
+    pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.03;
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  assert.equal(broadcasts.filter(b => b.type === 'dropFired').length, 0,
+    'a step-down must not be read as a drop');
+  // The sustained quiet should read as a slow zone.
+  assert.ok(pc.store.audioSlowZone > 0.5, `slow zone should engage in the breakdown; got ${pc.store.audioSlowZone}`);
+});
+
 // ── Drop refractory + self-quiet ────────────────────────────────────────
 
 // Helper: drive the detector to BUILD, then deliver a drop edge. Returns
@@ -216,7 +269,7 @@ function rampToDropAndCount(pc, det, startNow, broadcasts) {
 test('dropFired respects the 2 s refractory window', () => {
   const broadcasts = [];
   const { pc, det } = makeDetector(
-    { buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000,
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000,
       eventRefractoryMs: 2000 },
     broadcasts,
   );
@@ -244,7 +297,7 @@ test('self-quiet suppresses dropFired after N drops in the window', () => {
   // N=2 within a big window, tiny refractory so drops aren't blocked by
   // it, generous quiet. After 2 drops the 3rd+ is suppressed.
   const { pc, det } = makeDetector(
-    { buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000,
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000,
       eventRefractoryMs: 0, falseFireCount: 2,
       falseFireWindowMs: 600000, falseFireQuietMs: 600000 },
     broadcasts,
@@ -274,7 +327,7 @@ test('stale stems → vocalsHot false, status offline, drop confidence lower', (
   // drop. The drop should still fire (gate allows !stemsFresh) but with
   // the 0.7 stems-boost penalty, and getStatus reports 'offline'.
   const { pc, det } = makeDetector(
-    { buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 50 },
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 50 },
     broadcasts,
   );
   let now = 1000;

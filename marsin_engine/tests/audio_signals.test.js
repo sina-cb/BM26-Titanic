@@ -71,6 +71,11 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioEnergyRatio' }) },
   { key: 'audioVocalsHot', label: 'Audio · Vocals Hot', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioVocalsHot' }) },
   { key: 'audioDropPulse', label: 'Audio · Drop Pulse', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioDropPulse' }) },
+  { key: 'audioSlowZone', label: 'Audio · Slow Zone', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioSlowZone' }) },
+  { key: 'micDomFreq1', label: 'Mic · Dom Freq 1', ...LIVE({ range: [0, 22050], broadcastHz: 15, sharedFnName: 'micDomFreq1' }) },
+  { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy1' }) },
+  { key: 'micDomFreq2', label: 'Mic · Dom Freq 2', ...LIVE({ range: [0, 22050], broadcastHz: 15, sharedFnName: 'micDomFreq2' }) },
+  { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy2' }) },
 ];
 
 // Normalize: sort object keys so deep-equal ignores literal key ORDER (the

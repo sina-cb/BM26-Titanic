@@ -68,6 +68,21 @@
 
 import FFT from 'fft.js';
 
+import { DominantFreqTracker } from './dominant_freq_tracker.js';
+
+// Dominant-frequency tracker tuning — validated offline on the EDM corpus
+// (report 202606/..._dominant_freq_tracker.md). EMA smoothing beat the Kalman
+// path (which converges to a fixed-gain EMA), so useKalman:false. energyGain
+// matches PRE_CLAMP_GAIN so dom energy shares the bands' [0,1] softCompress
+// scale. Works at fftSize 1024; bump the analyzer FFT to 2048 (config) to
+// resolve sub-bass partials below ~200 Hz more cleanly.
+const DOM_FREQ_PARAMS = Object.freeze({
+  numTracks: 2, numPeaks: 6, mainLobeBins: 2, relFloor: 0.12, absFloor: 1e-4,
+  maxJumpHz: 80, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
+  deathEnergy: 0.06, deathHops: 12, birthEnergy: 0.10,
+  useKalman: false, emaFreqAlpha: 0.25, emaEnergyAlpha: 0.30, rankAlpha: 0.05,
+});
+
 // Maps the FFT magnitude scale (post sum-of-magnitudes / fftSize, where
 // a single tone at amplitude A lands around A/2) into something useful
 // for visual reactivity once soft-compressed: gain*input ≈ 1 → softCompress
@@ -214,6 +229,14 @@ export class AudioAnalyzer {
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
 
+    // Dominant-frequency tracker (dom1/dom2 + their energy). Consumes the
+    // same positive-frequency magnitude array the flux loop fills each hop
+    // (`_prevMag`), so it adds no extra FFT. PURE add-on — the existing
+    // five outputs are unchanged.
+    this._domTracker = new DominantFreqTracker({
+      sampleRate: this.sampleRate, fftSize: this.fftSize, ...DOM_FREQ_PARAMS,
+    });
+
     this.reconfigure({ bands: opts.bands, kick: opts.kick });
   }
 
@@ -325,6 +348,7 @@ export class AudioAnalyzer {
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
     this._prevMag = null;
+    if (this._domTracker) this._domTracker.reset();
   }
 
   // ── Internal ────────────────────────────────────────────────────────────
@@ -371,6 +395,12 @@ export class AudioAnalyzer {
       prevMag[k] = mag;
     }
     fluxE /= this.fftSize;
+
+    // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
+    // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
+    // ~1 µs/hop). Returns a reused array of {freqHz, energy}, energy-ranked.
+    const dom = this._domTracker.update(prevMag, this.hopSize / this.sampleRate);
+    const dom1 = dom[0], dom2 = dom[1];
 
     // Per-band soft-compression + noise gate + asymmetric envelope.
     //
@@ -510,6 +540,12 @@ export class AudioAnalyzer {
         high: highOut,
         kick: kickOut,
         flux: fluxOut,
+        // Dominant frequencies (Hz) + their energy ([0,1], bands' scale).
+        // dom1 = strongest partial (usually the sub/bass), dom2 = second.
+        domFreq1:   dom1.freqHz,
+        domEnergy1: dom1.energy,
+        domFreq2:   dom2.freqHz,
+        domEnergy2: dom2.energy,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

@@ -50,7 +50,17 @@ const DETECTOR_DEFAULTS = Object.freeze({
   //                dropDeltaWindowMs ago > dropEnergyJump. Plateaus stop
   //                qualifying once the lagged value catches up, killing
   //                in-body re-fires AND the slow-build false edge.
-  dropEdgeMode:      'windowed', // 'level' | 'windowed' (see corpus-tuning report §Task E)
+  //   'kalman'   — DEFAULT. A Kalman+NIS change detector on micLow ∧ micFlux:
+  //                each signal is tracked by a local-level Kalman filter; a
+  //                drop fires when BOTH signals' Normalized Innovation Squared
+  //                (NIS) clear a χ² gate on the SAME hop and both are RISING.
+  //                Adopted from the offline corpus experiment (best F1 vs the
+  //                windowed/level edges: it self-normalises so it can't
+  //                saturate, and the AND-gate kills most false fires). See
+  //                report 202606/..._kalman_nis_drop_detector.md.
+  dropEdgeMode:      'kalman', // 'level' | 'windowed' | 'kalman'
+  dropNisThreshold:  6.63,   // χ²₁ 99% gate for the kalman edge (lower → more sensitive)
+  slowZoneRef:       0.5,    // activity (max micLow/micFlux) at/below which → slow zone
   dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
   eventRefractoryMs: 2000,   // suppress repeat dropFired within this window
@@ -66,6 +76,17 @@ const LONG_ENV_TAU  = 10.0;  // ~10 s long-energy envelope
 const BUILD_TAU     = 2.0;   // ~2 s build-score EMA
 const DROP_PULSE_TAU = 0.6;  // ~600 ms drop-pulse decay
 const BUILD_GAIN    = 4.0;   // maps per-hop flux into the build-score EMA
+
+// Kalman+NIS drop detector (adopted from the offline corpus experiment —
+// local-level model, χ² 99% AND-gate on micLow ∧ micFlux, with a warmup).
+const KALMAN_Q       = 0.01;   // process noise (level random-walk) — tuned winner
+const KALMAN_R_FLOOR = 1e-6;   // measurement-noise floor (just keeps NIS finite on flat
+                               // input; must stay BELOW the envelope-smoothed low band's
+                               // real noise ~5e-5, else it crushes the sub's NIS — the
+                               // adaptive estimate, matching the offline MAD R, does the work)
+const KALMAN_R_ALPHA = 0.02;   // EMA rate for the adaptive measurement-noise estimate
+const DROP_WARMUP_MS = 1000;   // ignore drops in the first second after enable (filter init)
+const SLOW_ZONE_TAU  = 1.5;    // s — slow-zone EMA tau (a sustained zone, not a flicker)
 
 const EPS = 1e-9;
 // energyRatio display map: log1p(rawRatio) / log1p(3) → [0,1]-ish.
@@ -152,6 +173,15 @@ export class AudioStructureDetector {
     this._buildScore = 0;
     this._energyRatio = 0;
     this._dropPulse = 0;
+    this._slowZone = 0;
+
+    // Kalman+NIS drop detector state — one local-level filter per signal
+    // (micLow, micFlux). `started` defers init to the first real reading so
+    // x seeds from the signal, not 0. `rEma` is the adaptive measurement
+    // noise (online analog of the experiment's MAD-derived R).
+    this._kfLow  = { x: 0, P: 1, prevZ: 0, rEma: KALMAN_R_FLOOR, started: false };
+    this._kfFlux = { x: 0, P: 1, prevZ: 0, rEma: KALMAN_R_FLOOR, started: false };
+    this._enabledAtMs = -Infinity;   // warmup anchor (set on the enable edge)
 
     // Trend trackers (review §2.3 — explicit timestamp state for the
     // "rising for > 1 s" / "decaying" / "< 0.3 for > 1 s" conditions).
@@ -209,8 +239,11 @@ export class AudioStructureDetector {
     }
     if (!this._wasEnabled) {
       // Enable edge. State is already clean here — reset() runs on the
-      // constructor and on every disable edge — so we only flip the flag.
+      // constructor and on every disable edge — so we only flip the flag
+      // and stamp the warmup anchor (the kalman drop edge is suppressed
+      // for DROP_WARMUP_MS so the filters' cold start can't false-fire).
       this._wasEnabled = true;
+      this._enabledAtMs = now;
     }
 
     const t0 = (typeof performance !== 'undefined' && performance.now)
@@ -264,6 +297,35 @@ export class AudioStructureDetector {
       this._buildScore += (dt / BUILD_TAU) * (target - this._buildScore);
       this._buildScore = clamp01(this._buildScore);
     }
+
+    // 2b. Kalman+NIS drop edge + slow-zone signal.
+    //   Each of micLow / micFlux is tracked by a local-level Kalman filter;
+    //   the Normalized Innovation Squared (NIS = innovation² / S) spikes when
+    //   the signal steps. A drop = BOTH NIS clear the χ² gate on the same hop
+    //   AND both innovations are RISING (a drop slams energy UP — a breakdown
+    //   ENTRANCE steps down and must not qualify). Self-normalising, so unlike
+    //   buildScore it can't saturate; the AND-gate kills most false fires.
+    const kLow  = this._kalmanNis(this._kfLow,  micLow,     dt);
+    const kFlux = this._kalmanNis(this._kfFlux, micFluxRaw, dt);
+    const warmupOk = (now - this._enabledAtMs) >= DROP_WARMUP_MS;
+    //   A drop = sub-bass slams UP (micLow innovation positive) AND a spectral
+    //   change is happening (micFlux NIS clears the gate — flux is already a
+    //   rectified rising-flux measure, so its sign carries no extra info; the
+    //   micLow RISING test is what rejects a breakdown ENTRANCE, where the sub
+    //   steps DOWN). Requiring both innovations positive on the SAME hop was
+    //   too strict (sub + flux peak a hop or two apart) and halved recall.
+    const kalmanDropEdge = warmupOk
+      && kLow.nis  >= cfg.dropNisThreshold && kLow.y > 0
+      && kFlux.nis >= cfg.dropNisThreshold;
+    const kalmanConf = clamp01(Math.min(kLow.nis, kFlux.nis) / (2 * cfg.dropNisThreshold));
+
+    //   Slow-zone: how much we're in a sparse / breakdown / ambient section.
+    //   Activity = max(micLow, micFlux); slowness rises as activity falls
+    //   below slowZoneRef, EMA-smoothed over ~1.5 s so it marks a ZONE.
+    const activity = Math.max(micLow, micFluxRaw);
+    const slowTarget = clamp01((cfg.slowZoneRef - activity) / cfg.slowZoneRef);
+    if (dt > 0) this._slowZone += (dt / SLOW_ZONE_TAU) * (slowTarget - this._slowZone);
+    this._slowZone = clamp01(this._slowZone);
 
     // 3. Stems booleans (only meaningful when fresh).
     let stemsBass = 0, stemsDrums = 0, stemsVocals = 0;
@@ -329,8 +391,20 @@ export class AudioStructureDetector {
     }
 
     // 5. State machine.
+    const useKalman = cfg.dropEdgeMode === 'kalman';
     const prevState = this._state;
-    switch (this._state) {
+
+    // Kalman drop fires from ANY state — a drop can land straight out of a
+    // breakdown without a textbook 1 s build, which the BUILD-gated windowed
+    // edge would miss. Handled before the switch so it pre-empts the normal
+    // transitions on the firing hop.
+    let droppedThisTick = false;
+    if (useKalman && kalmanDropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
+      this._executeDrop(now, kalmanConf, stemsFresh, cfg, 'DROP→SUSTAIN (kalman)');
+      droppedThisTick = true;
+    }
+
+    if (!droppedThisTick) switch (this._state) {
       case STATE.THIN: {
         if (this._buildScore > cfg.buildThreshold && energyRisingFor1s) {
           this._enterBuild(now);
@@ -340,25 +414,15 @@ export class AudioStructureDetector {
       case STATE.BUILD: {
         this._buildPeak = Math.max(this._buildPeak, this._buildScore);
         const buildDecaying = this._buildScore < this._buildPeak * 0.7;
-        if (dropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
-          // DROP.
-          this._state = STATE.SUSTAIN;
-          // Reset the rising-trend tracker on entry to SUSTAIN. energyRatio
-          // is pinned at the ceiling through a loud body, so the tracker
-          // would otherwise stay "rising" forever and immediately bounce
-          // SUSTAIN→BUILD (state/pulse flapping, and the body mislabeled
-          // BUILD). A genuine NEW build must re-accumulate a fresh > 1 s
-          // rise (after a real energy dip) to re-enter BUILD.
-          this._energyRisingSinceMs = null;
+        if (!useKalman && dropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
+          // DROP (windowed / level edge). _executeDrop resets the rising-trend
+          // tracker on entry to SUSTAIN: energyRatio is pinned at the ceiling
+          // through a loud body, so the tracker would otherwise stay "rising"
+          // forever and immediately bounce SUSTAIN→BUILD. A genuine NEW build
+          // must re-accumulate a fresh > 1 s rise (after a dip) to re-enter.
           const stemsBoost = stemsFull ? 1.0 : 0.7;
-          const conf = clamp01(this._buildScore * dropEdgeRatio * stemsBoost);
-          const buildDurationMs = now - this._buildStartedAtMs;
-          // Pulse only on an ACTUAL fire — _fireDrop may suppress under the
-          // refractory / self-quiet, and a suppressed drop must not re-pulse.
-          if (this._fireDrop(now, conf, buildDurationMs, stemsFresh, cfg)) {
-            this._dropPulse = 1.0;
-          }
-          this._logTransition(now, 'BUILD→SUSTAIN drop', conf);
+          this._executeDrop(now, clamp01(this._buildScore * dropEdgeRatio * stemsBoost),
+            stemsFresh, cfg, 'BUILD→SUSTAIN drop');
         } else if ((now - this._buildStartedAtMs) > 6000 && buildDecaying) {
           this._state = STATE.SUSTAIN; // false build, never dropped
           this._energyRisingSinceMs = null;
@@ -401,6 +465,7 @@ export class AudioStructureDetector {
       { kind: 'scalar', key: 'audioEnergyRatio', value: this._energyRatio },
       { kind: 'scalar', key: 'audioVocalsHot',   value: vocalsHot ? 1.0 : 0.0 },
       { kind: 'scalar', key: 'audioDropPulse',   value: this._dropPulse },
+      { kind: 'scalar', key: 'audioSlowZone',    value: this._slowZone },
     ], 'audioStructureDetector');
 
     // THIN→BUILD logged inside _enterBuild only when it logs; ensure a
@@ -415,6 +480,51 @@ export class AudioStructureDetector {
     this._state = STATE.BUILD;
     this._buildStartedAtMs = now;
     this._buildPeak = this._buildScore;
+  }
+
+  /**
+   * @private execute a drop: → SUSTAIN, reset the rising-trend tracker, fire
+   * (honouring refractory/self-quiet), pulse only on an ACTUAL fire, log.
+   * Shared by the kalman edge (any state) and the windowed/level edge (BUILD).
+   */
+  _executeDrop(now, conf, stemsFresh, cfg, label) {
+    this._state = STATE.SUSTAIN;
+    this._energyRisingSinceMs = null;
+    const buildDurationMs = now - this._buildStartedAtMs;
+    if (this._fireDrop(now, clamp01(conf), buildDurationMs, stemsFresh, cfg)) {
+      this._dropPulse = 1.0;
+    }
+    this._logTransition(now, label, conf);
+  }
+
+  /**
+   * @private one local-level Kalman step → { nis, y }. Tracks a scalar level
+   * with a random-walk model; returns the Normalized Innovation Squared
+   * (innovation² / S) and the signed innovation `y` (so the caller can require
+   * a RISING step for a drop). Measurement noise R is estimated online from
+   * the variance of first-differences (E[(Δz)²] ≈ 2R for a slowly-varying
+   * level + white noise) — the live analog of the experiment's MAD-derived R —
+   * floored so a flat input can't drive NIS to infinity.
+   */
+  _kalmanNis(kf, z, dt) {
+    if (!kf.started) { kf.x = z; kf.prevZ = z; kf.started = true; return { nis: 0, y: 0 }; }
+    const dz = z - kf.prevZ; kf.prevZ = z;
+    // Robust adaptive R: a drop is a huge first-difference outlier; if we let
+    // it into the noise EMA it would inflate R and desensitise the detector
+    // for seconds after (the mean-of-Δ² problem). Clip |dz| to ~3σ of the
+    // current noise estimate before squaring — the online analog of the
+    // experiment's MAD (median) R, which ignored the drop-sized tails.
+    const sigma = Math.sqrt(2 * kf.rEma);              // std of Δz ≈ √(2R)
+    const dzClip = Math.max(-3 * sigma, Math.min(3 * sigma, dz));
+    kf.rEma = (1 - KALMAN_R_ALPHA) * kf.rEma + KALMAN_R_ALPHA * (dzClip * dzClip);
+    const R = Math.max(0.5 * kf.rEma, KALMAN_R_FLOOR);
+    const Pp = kf.P + KALMAN_Q;          // predict (F = 1)
+    const y = z - kf.x;                  // innovation
+    const S = Pp + R;
+    const K = Pp / S;
+    kf.x = kf.x + K * y;                 // update
+    kf.P = (1 - K) * Pp;
+    return { nis: (y * y) / S, y };
   }
 
   /**
@@ -484,6 +594,7 @@ export class AudioStructureDetector {
         { kind: 'scalar', key: 'audioEnergyRatio', value: 0.0 },
         { kind: 'scalar', key: 'audioVocalsHot',   value: 0.0 },
         { kind: 'scalar', key: 'audioDropPulse',   value: 0.0 },
+        { kind: 'scalar', key: 'audioSlowZone',    value: 0.0 },
       ], 'audioStructureDetector');
     } catch (e) {
       this._fatal = true;
@@ -507,6 +618,7 @@ export class AudioStructureDetector {
       buildScore: this._buildScore,
       energyRatio: this._energyRatio,
       dropPulse: this._dropPulse,
+      slowZone: this._slowZone,
       structureDetectorStems: this._lastStemsFresh ? 'fresh' : 'offline',
       barPhaseAvailable: false,
       selfQuiet: now < this._quietUntilMs,

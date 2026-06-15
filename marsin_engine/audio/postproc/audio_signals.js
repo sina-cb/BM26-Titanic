@@ -94,6 +94,7 @@ const DETECTORS = [
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', range: [0, 1], hz: 10 },
   { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5  },
   { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15 },
+  { key: 'audioSlowZone',    label: 'Audio · Slow Zone',    range: [0, 1], hz: 10 },
 ];
 
 function gainDescriptor(key, label) {
@@ -122,6 +123,28 @@ function detectorDescriptor(d) {
     key: d.key, label: d.label, type: 'float',
     range: d.range, default: 0.0, clamp: true,
     persist: false, live: true, broadcastHz: d.hz, portWatch: false,
+    oscAddress: undefined, sharedFnName: d.key,
+    processed: false, hasRawMirror: false, gainKey: null, defaultChainKind: null,
+  };
+}
+
+// Dominant-frequency analyzer outputs (dom1/dom2 + their energy). Live,
+// engine-internal (no OSC inbound), not chain-processed, no gain/raw mirror.
+// Freq keys carry Hz (range up to Nyquist); energy keys are [0,1] on the
+// same softCompress scale as the bands.
+const DOM_NYQUIST_MAX = 22050;
+const DOM_FREQS = [
+  { key: 'micDomFreq1',   label: 'Mic · Dom Freq 1',   range: [0, DOM_NYQUIST_MAX] },
+  { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', range: [0, 1] },
+  { key: 'micDomFreq2',   label: 'Mic · Dom Freq 2',   range: [0, DOM_NYQUIST_MAX] },
+  { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', range: [0, 1] },
+];
+
+function domDescriptor(d) {
+  return {
+    key: d.key, label: d.label, type: 'float',
+    range: d.range, default: 0.0, clamp: true,
+    persist: false, live: true, broadcastHz: 15, portWatch: false,
     oscAddress: undefined, sharedFnName: d.key,
     processed: false, hasRawMirror: false, gainKey: null, defaultChainKind: null,
   };
@@ -189,6 +212,11 @@ function buildDescriptors() {
   // 8) Audio structure detector outputs (observe-and-publish).
   for (const d of DETECTORS) {
     out.push(detectorDescriptor(d));
+  }
+
+  // 9) Dominant-frequency analyzer outputs (dom1/dom2 freq + energy).
+  for (const d of DOM_FREQS) {
+    out.push(domDescriptor(d));
   }
 
   return out;
