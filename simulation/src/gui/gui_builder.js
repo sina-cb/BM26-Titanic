@@ -1464,6 +1464,19 @@ function setupGUI() {
               if (config.intensity === undefined) config.intensity = 5;
               if (config.angle === undefined) config.angle = 20;
               if (config.penumbra === undefined) config.penumbra = 0.5;
+              // Per-fixture output override (On/Off + Brightness %)
+              if (config.enabled === undefined) config.enabled = true;
+              if (config.brightness === undefined) config.brightness = 100;
+              genFixFolder.add(config, 'enabled').name('On').onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+              genFixFolder.add(config, 'brightness', 0, 100, 1).name('Brightness %').onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
               genFixFolder.addColor(config, 'color').onChange(() => {
                 selectThisGenLight();
                 if (window.syncLightFromConfig) window.syncLightFromConfig(index);
@@ -1710,6 +1723,7 @@ function setupGUI() {
             intensity: def?.defaultIntensity || 5,
             angle: def?.defaultAngle || 20,
             penumbra: def?.defaultPenumbra || 0.5,
+            enabled: true, brightness: 100,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
             dmxUniverse: 0, dmxAddress: 0, controllerIp: '',
             controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
@@ -1762,6 +1776,9 @@ function setupGUI() {
           if (config.intensity === undefined) config.intensity = 5;
           if (config.angle === undefined) config.angle = 20;
           if (config.penumbra === undefined) config.penumbra = 0.5;
+          // Per-fixture output override (On/Off + Brightness %)
+          if (config.enabled === undefined) config.enabled = true;
+          if (config.brightness === undefined) config.brightness = 100;
 
           // V2 metadata defaults
           if (config.controllerId === undefined) config.controllerId = 0;
@@ -1857,6 +1874,18 @@ function setupGUI() {
             idxFolder.title(v);
             propagateToSelected(index, 'name', v);
             debounceAutoSave();
+          });
+
+          // On/Off + Brightness — operator override on top of any pattern.
+          idxFolder.add(config, "enabled").name("On").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'enabled', v);
+          });
+          idxFolder.add(config, "brightness", 0, 100, 1).name("Brightness %").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'brightness', v);
           });
 
           idxFolder.addColor(config, "color").onChange((v) => {

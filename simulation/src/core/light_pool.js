@@ -448,6 +448,12 @@ function _collectLightRequests() {
     }
     if (!fixture.pixels || !Array.isArray(fixture.pixels)) continue;
 
+    // Per-fixture On/Off override: a disabled (or zero-brightness) fixture
+    // casts no analytic light, freeing its pooled SpotLight. Brightness
+    // itself is carried by the (already-scaled) emitter color the requests
+    // sample below, so intensity is left untouched — the gain applies once.
+    if (typeof fixture.outputGain === 'function' && fixture.outputGain() <= 0) continue;
+
     const config = fixture.config;
     const intensity = config.intensity || 5;
     const angle = config.angle || 20;

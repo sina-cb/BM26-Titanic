@@ -331,11 +331,14 @@ export class DmxFixtureRuntime {
         p.beam.scale.set(radius, radius, coneLen);
       }
 
-      // Only reset colors to config defaults when DMX is NOT driving them
+      // Only reset colors to config defaults when DMX is NOT driving them.
+      // Apply the On/Off + Brightness gain so a static (un-patched) fixture
+      // honours the override too.
       if (!window._patchesActive) {
-        if (p.beam) p.beam.material.color.set(color);
-        if (p.bulbMat) p.bulbMat.color.set(color);
-        if (p.haloMat) p.haloMat.color.set(color);
+        const gain = this.outputGain();
+        if (p.beam) p.beam.material.color.set(color).multiplyScalar(gain);
+        if (p.bulbMat) p.bulbMat.color.set(color).multiplyScalar(gain);
+        if (p.haloMat) p.haloMat.color.set(color).multiplyScalar(gain);
       }
     });
   }
@@ -353,26 +356,42 @@ export class DmxFixtureRuntime {
     this.updateVisualsFromHitbox();
   }
 
+  // ── Per-fixture output override (On/Off + Brightness) ────────────────
+  // Operator override applied on top of whatever drives the fixture
+  // (pattern engine, sACN, or static config color). `enabled === false`
+  // turns the fixture fully dark while keeping its body visible; otherwise
+  // the emitted color is scaled by `brightness` (0–100 %, default 100). The
+  // analytic SpotLight samples the (already-scaled) emitter color, so the
+  // cast light dims with it — the gain is applied exactly once.
+  outputGain() {
+    if (this.config.enabled === false) return 0;
+    const b = this.config.brightness;
+    if (b === undefined || b === null) return 1;
+    return Math.max(0, Math.min(1, b / 100));
+  }
+
   // ── Color control (used by lighting engines) ─────────────────────────
 
   setColor(r, g, b) {
-    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
+    const gain = this.outputGain();
+    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b)).map(c => c * gain);
     this.pixels.forEach(p => {
       if (p.beam) p.beam.material.color.setRGB(rn, gn, bn);
       if (p.bulbMat) p.bulbMat.color.setRGB(rn, gn, bn);
       if (p.haloMat) p.haloMat.color.setRGB(rn, gn, bn);
       if (p.dots) p.dots.forEach(d => {
         if (d.mesh && d.mesh.material) d.mesh.material.color.setRGB(
-          Math.min(1, rn + 0.3),
-          Math.min(1, gn + 0.3),
-          Math.min(1, bn + 0.3)
+          Math.min(1, rn + 0.3 * gain),
+          Math.min(1, gn + 0.3 * gain),
+          Math.min(1, bn + 0.3 * gain)
         );
       });
     });
   }
 
   setBulbColor(r, g, b) {
-    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
+    const gain = this.outputGain();
+    const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b)).map(c => c * gain);
     this.pixels.forEach(p => {
       if (p.bulbMat) {
         if (p.bulbMat.color.r !== rn || p.bulbMat.color.g !== gn || p.bulbMat.color.b !== bn) {
@@ -382,9 +401,9 @@ export class DmxFixtureRuntime {
       }
       if (p.dots) p.dots.forEach(d => {
         if (d.mesh && d.mesh.material) {
-          const dotR = Math.min(1, rn + 0.3);
-          const dotG = Math.min(1, gn + 0.3);
-          const dotB = Math.min(1, bn + 0.3);
+          const dotR = Math.min(1, rn + 0.3 * gain);
+          const dotG = Math.min(1, gn + 0.3 * gain);
+          const dotB = Math.min(1, bn + 0.3 * gain);
           if (d.mesh.material.color.r !== dotR || d.mesh.material.color.g !== dotG || d.mesh.material.color.b !== dotB) {
             d.mesh.material.color.setRGB(dotR, dotG, dotB);
           }
@@ -415,7 +434,8 @@ export class DmxFixtureRuntime {
 
   _applyPixelColor(pIndex, r, g, b) {
     if (pIndex >= 0 && pIndex < this.pixels.length) {
-      const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b));
+      const gain = this.outputGain();
+      const [rn, gn, bn] = scaleSimulationPreviewRgb(...sanitizeRgb(r, g, b)).map(c => c * gain);
       const p = this.pixels[pIndex];
       if (p.beam && (Math.abs(p.beam.material.color.r - rn) > 0.005 || Math.abs(p.beam.material.color.g - gn) > 0.005 || Math.abs(p.beam.material.color.b - bn) > 0.005)) {
         p.beam.material.color.setRGB(rn, gn, bn);
