@@ -103,12 +103,24 @@ Rationale (and the explicit choice over stuffing it into `scene_config.yaml`):
 wiring:
   version: 1
 
+  # Scale calibration — the SINGLE source of truth for real-world length.
+  # The FBX is in arbitrary model units; we do NOT assume "1 unit = 1 metre".
+  # Place two ray-traced reference points on a feature of KNOWN real length
+  # (a deck plank, a beam, a doorway), declare that length, and every run
+  # length is derived relative to this scale. See §6.1.
+  calibration:
+    unit: ft                 # the real-world unit everything is reported in
+    refA: { x: 0.0,  y: 0.30, z: 12.0, surface: outside }   # ray-traced point A
+    refB: { x: 0.0,  y: 0.30, z: -12.0, surface: outside }  # ray-traced point B
+    realDistance: 78.5       # A↔B measured IRL, in `unit` (e.g. hull length)
+    # scale (real per model-unit) = realDistance / |refB - refA|  — computed, not stored
+
   # Default physical assumptions, used for length → BOM rounding.
   defaults:
-    cableGap: 0.04          # metres the cable floats off the surface (clearance)
+    cableGap: 0.04          # model-units the cable floats off the surface (clearance)
     slack: 0.15             # +15% length headroom on every run
-    powerStockFt: [15, 25, 50, 100]   # extension-cord lengths we own
-    dataStockFt:  [10, 25, 50, 75, 100]  # ethernet lengths we own
+    powerStockFt: [15, 25, 50, 100]   # extension-cord lengths we own  (Q5 — confirm)
+    dataStockFt:  [10, 25, 50, 75, 100]  # ethernet lengths we own     (Q5 — confirm)
 
   nodes:
     - id: pc_booth
@@ -374,28 +386,67 @@ logic (which already branches on `profileDef.render.*`).
 
 ## 6. Length & Bill of Materials
 
-### 6.1 Per-run length
+### 6.1 Scale calibration — the reference segment (source of truth)
+
+The FBX is in **arbitrary model units**; nothing in the sim guarantees "1 unit
+= 1 metre," and the import scale is not trusted. So **all real-world length is
+derived from one operator-set reference segment**, exactly as asked: place two
+points a known real distance apart, and every other measurement is relative to
+that scale.
 
 ```
-length(run) = curveLength([fromPoint, ...waypointPoints, toPoint]) * (1 + slack)
+refA, refB  = two ray-traced points on the model (placed like any waypoint, §4)
+dModel      = |refB - refA|              # distance in model units
+realPerUnit = calibration.realDistance / dModel    # e.g. ft per model-unit
+
+# every length in the BOM is then:
+realLength(segment) = modelLength(segment) * realPerUnit
+```
+
+Properties / guard-rails (each a real failure mode):
+
+- **One scale, applied everywhere.** `realPerUnit` is computed once from the
+  calibration block and multiplied into every run length, the cable-gap
+  clearance, and the BOM totals. Change the reference (move a point, or edit
+  `realDistance`) and **all** traces re-measure together — they are relative to
+  the segment, never independently unit-ful.
+- **Calibration is mandatory before any length is reported.** Per the codex
+  "no fallback behaviors": if `calibration` is missing, or `dModel` is ~0
+  (the two points coincide), the BOM **refuses to compute and shows a loud
+  "Not calibrated" banner** rather than silently assuming metres. A wrong
+  cable length is worse than a blank one.
+- **Pick a long, well-defined reference** (hull length, deck span) — the longer
+  the reference relative to your runs, the smaller the relative error. The
+  panel shows the resulting `realPerUnit` and the back-computed length of a
+  couple of known features so the operator can sanity-check the scale.
+- **The reference points are ordinary ray-traced points** (§4) — placed with
+  the same inside/outside/free snap, stored the same way. The scale bar lives
+  *on the model*, so it travels with the scene.
+
+### 6.2 Per-run length
+
+```
+modelLen(run) = curveLength([fromPoint, ...waypointPoints, toPoint])   # model units
+realLen(run)  = modelLen(run) * realPerUnit * (1 + slack)              # §6.1 scale
 ```
 
 `fromPoint` / `toPoint` resolve nodes (their world position) or group-start
-anchors (the group's first-fixture world position). Sim units are metres.
+anchors (the group's first-fixture world position). The curve is the *rendered*
+Catmull-Rom drape (§4.4), not the straight chord sum.
 
-### 6.2 Stock rounding
+### 6.3 Stock rounding
 
 Each run is rounded **up** to the smallest stock length that fits, from
-`defaults.powerStockFt` (power) or `defaults.dataStockFt` (data):
+`defaults.powerStockFt` (power) or `defaults.dataStockFt` (data). Lengths are
+already in real units (`calibration.unit`, ft) from §6.2:
 
 ```
-ft   = metres * 3.28084
-pick = smallest S in stock where S >= ft, else flag "OVER MAX — needs a join"
+pick = smallest S in stock where S >= realLen(run), else flag "OVER MAX — needs a join"
 ```
 
 An over-max run is surfaced as a **loud warning**, never silently truncated.
 
-### 6.3 BOM output
+### 6.4 BOM output
 
 The Wiring panel renders a live table, and an **Export BOM** button writes
 `~/tmp/<scene>_wiring_bom.md` (scratch dir per the codex; the operator copies
@@ -420,11 +471,63 @@ WARNINGS
   (none)   # or: "r_swA_swB measures 104 ft — exceeds 100 ft max stock; add a coupler or a midspan switch"
 ```
 
-### 6.4 Port-budget check (optional, §3.3 `ports`)
+### 6.5 Port-budget check (optional, §3.3 `ports`)
 
 If a node declares `ports`, the panel checks that the number of runs leaving it
 does not exceed its data/power port count and flags overflow. Catches "Switch A
 has 8 ports but you've hung 11 groups off it" before the playa does.
+
+### 6.6 Printable harness sheets — multi-view export
+
+The deliverable is not just a text BOM; it is a **print-ready harness packet
+that shows the cabling from several camera angles**, so a builder can hold one
+sheet and see where each run goes. This reuses machinery that already exists:
+
+- **Camera presets** are already defined per scene in
+  `scenes/<scene>/cameras.yaml` (Titanic ships `Front`, `Side`, `Aerial`,
+  `Dramatic`, `Night Walk`) and driven by `view_presets.js` `animateCamera()`.
+- **Headless multi-view rendering already works**: `agent_tools/agent_render.cjs`
+  loops every preset key from `cameras.yaml` and writes
+  `{ts}_{view}.png`. We render with the **`wiring` profile active** so each
+  shot shows nodes + runs + labels over the flat model.
+
+**Export Harness Packet** button → produces a single packet:
+
+```
+~/tmp/<scene>_wiring_packet/
+  front.png        side.png        aerial.png      ...   # one per camera preset
+  harness.md       # BOM table (§6.4) + scale note + each view embedded inline
+```
+
+`harness.md` interleaves the BOM with the rendered views, e.g.:
+
+```
+# Titanic Wiring Harness  (scale: 78.5 ft over reference segment)
+
+## Front view
+![front](front.png)
+
+## Aerial view
+![aerial](aerial.png)
+...
+## Bill of Materials
+<the §6.4 table>
+```
+
+Two axes of "different views," both supported:
+
+1. **Camera views** — the `cameras.yaml` presets above (the primary ask).
+2. **Harness isolation** *(optional toggle in the panel)* — render the packet
+   with only one switch's bundle visible (port side, then starboard), so each
+   page reads cleanly. Run/bundle visibility is just a flag on the wiring layer
+   (§5), so the exporter flips it between passes — no new rendering path.
+
+The PNGs are captured headlessly via the existing render skill
+(`.agent/01_skills/00_see_the_world.md`, `agent_render.cjs`); on software-GL
+machines use `--viewport 1280x720`. Output lands in `~/tmp/` (codex scratch
+rule); the operator drops the packet into the Notion build card or prints it.
+A later phase can add a one-click PDF assembly, but markdown-with-images prints
+fine from any browser and keeps us CDN-free / offline-ready.
 
 ---
 
@@ -433,6 +536,13 @@ has 8 ports but you've hung 11 groups off it" before the playa does.
 A new **Wiring** panel (left drawer), visible only in the `wiring` profile,
 built on the existing drawer/panel infrastructure (`left_drawer.js`,
 `panel_layout.js`).
+
+**Calibration tool** — a "Set Scale" mode: click point **A**, click point **B**
+(both ray-traced like any waypoint), then type the real distance + unit. The
+panel immediately shows `realPerUnit` and a couple of back-computed sanity
+lengths (§6.1). A scale-bar gizmo stays drawn between A and B so the reference
+is always visible and re-editable. Until this is set, the BOM shows
+"Not calibrated."
 
 **Node palette** — buttons to add a node of each `type`. Click a button, then
 click in the scene: free nodes drop at the cursor; surface nodes snap (I/O/F
@@ -453,8 +563,13 @@ trace handles, `userData.isTrace`-style). Dragging re-snaps to the surface in
 that point's current mode; the tube and BOM update live. Nodes drag the same
 way.
 
-**Panel readouts** — per-run length + stock pick, per-bundle totals, the global
-BOM summary, and any warnings (over-max runs, port overflow, dangling anchors).
+**Export Harness Packet** — one button renders every `cameras.yaml` view with
+the wiring profile active and writes the multi-view packet + BOM to `~/tmp/`
+(§6.6).
+
+**Panel readouts** — the scale (`realPerUnit` + reference length), per-run
+length + stock pick, per-bundle totals, the global BOM summary, and any
+warnings (not-calibrated, over-max runs, port overflow, dangling anchors).
 
 **Visual inspection** — author renders are captured with the standard skill
 (`.agent/01_skills/00_see_the_world.md`, `agent_render.cjs --show-ui` to keep
@@ -470,13 +585,14 @@ All new source uses **snake_case** filenames; classes inside stay PascalCase;
 
 | File | Responsibility |
 |---|---|
-| `simulation/src/wiring/wiring_model.js` | Load/validate/serialize `wiring.yaml`; resolve node & group-start endpoints; length + BOM compute. Pure data — no THREE. Throws loudly on invalid topology. |
-| `simulation/src/wiring/wiring_snap.js` | The inside/outside/free raycast snap (§4.2). Takes `(raycaster, modelMeshes, mode, gap)` → `{ point, normal }`. Shared by cursor preview and commit. |
-| `simulation/src/wiring/wiring_render.js` | Build/refresh the THREE layer: node icons+labels, run tubes (Catmull-Rom → TubeGeometry), bundle strands, group-start anchor rings. Visibility gated on `profileDef.render.wiringMode`. |
-| `simulation/src/wiring/wiring_tracer.js` | Interaction state machine: palette, run tool, waypoint placement, I/O/F mode, TransformControls editing. |
-| `simulation/src/gui/wiring_panel.js` | The left-drawer panel: palette, inspectors, BOM table, Export BOM, warnings. |
+| `simulation/src/wiring/wiring_model.js` | Load/validate/serialize `wiring.yaml`; resolve node & group-start endpoints; compute `realPerUnit` from the calibration segment (§6.1); length + BOM compute. Pure data — no THREE. Throws loudly on invalid topology / refuses to measure when uncalibrated. |
+| `simulation/src/wiring/wiring_snap.js` | The inside/outside/free raycast snap (§4.2). Takes `(raycaster, modelMeshes, mode, gap)` → `{ point, normal }`. Shared by cursor preview, waypoint commit, and the calibration A/B picks. |
+| `simulation/src/wiring/wiring_render.js` | Build/refresh the THREE layer: node icons+labels, run tubes (Catmull-Rom → TubeGeometry), bundle strands, group-start anchor rings, calibration scale-bar. Visibility gated on `profileDef.render.wiringMode`. |
+| `simulation/src/wiring/wiring_tracer.js` | Interaction state machine: calibration tool, palette, run tool, waypoint placement, I/O/F mode, TransformControls editing. |
+| `simulation/src/wiring/wiring_packet.js` | Drives the multi-view packet (§6.6): loops `cameras.yaml` presets via `animateCamera`/`agent_render.cjs`, flips bundle isolation, assembles `harness.md` + PNGs into `~/tmp/`. |
+| `simulation/src/gui/wiring_panel.js` | The left-drawer panel: calibration, palette, inspectors, BOM table, Export Harness Packet, warnings. |
 | `simulation/src/core/profile_registry.js` | **edit:** add the `wiring` profile (§5). |
-| `simulation/scenes/<scene>/wiring.yaml` | Per-scene persisted topology (starts empty / absent). |
+| `simulation/scenes/<scene>/wiring.yaml` | Per-scene persisted topology + calibration (starts empty / absent). |
 
 Persistence rides the existing scene save path (the same `:6970` save server
 that writes `scene_config.yaml` / `views.yaml`); `wiring.yaml` is written
@@ -495,11 +611,13 @@ sprite/canvas-text approach the sim already uses for fixture labels.
 |---|---|---|
 | **1** | `wiring.yaml` schema + `wiring_model.js` load/validate/serialize (loud failures); unit-cover the validator. | 2–3 h |
 | **2** | `wiring_snap.js` inside/outside/free snap; verify against a thin and a thick hull wall with screenshots. | 2 h |
-| **3** | `wiring` profile in `profile_registry.js`; fixtures dim, model goes flat. | 1 h |
-| **4** | `wiring_render.js` — nodes, run tubes, group-start anchors, bundles. | 3–4 h |
-| **5** | `wiring_tracer.js` — palette, run tool, waypoint placement, edit gizmos. | 4–5 h |
-| **6** | `wiring_panel.js` — inspectors, live BOM, Export BOM, warnings, port check. | 3 h |
-| **7** | Author the reference Titanic harness (PC→server→A→B→group starts) into `scenes/titanic/wiring.yaml` and render it. | 2 h |
+| **3** | Calibration: reference segment + `realPerUnit`; BOM refuses to measure uncalibrated. Unit-cover the scale math. | 2 h |
+| **4** | `wiring` profile in `profile_registry.js`; fixtures dim, model goes flat. | 1 h |
+| **5** | `wiring_render.js` — nodes, run tubes, group-start anchors, bundles, scale-bar. | 3–4 h |
+| **6** | `wiring_tracer.js` — calibration + palette + run tool + waypoint placement + edit gizmos. | 4–5 h |
+| **7** | `wiring_panel.js` — inspectors, live BOM, warnings, port check. | 3 h |
+| **8** | `wiring_packet.js` — multi-view harness packet (camera presets + bundle isolation → `~/tmp/`). | 2–3 h |
+| **9** | Author the reference Titanic harness (PC→server→A→B→group starts) into `scenes/titanic/wiring.yaml`, calibrate, and render the packet. | 2 h |
 
 Phases 1–2 are independently testable and unblock everything else; they are the
 recommended first slice.
@@ -536,15 +654,21 @@ recommended first slice.
 > actually gets pulled. Revisit auto-route only if hand-tracing proves tedious.
 
 > [!NOTE]
-> **Q4 — BOM in CaptainPad.** Should the BOM/harness be visible on the iPad
-> during build, or is the sim + exported markdown enough?
-> **Recommendation:** Exported markdown (→ Notion) for v1. A CaptainPad
-> read-only "Harness" tab is a clean follow-up once the data model is proven.
+> **Q4 — RESOLVED: print at multiple views.** Decided: the export is a
+> **printable harness packet rendered from the camera presets**
+> (`cameras.yaml`: Front / Side / Aerial / …), each with the wiring profile
+> active, assembled with the BOM into `harness.md` + PNGs (§6.6). Markdown +
+> images for v1 (prints from any browser, offline-ready); a CaptainPad
+> read-only "Harness" tab and one-click PDF remain clean follow-ups.
 
 > [!NOTE]
-> **Q5 — Units & rounding.** BOM rounds up to owned stock lengths. Confirm the
-> real inventory (`powerStockFt` / `dataStockFt`) and the slack factor (15%
-> assumed) so the rounding reflects what's actually in the truck.
+> **Q5 — PARTIALLY RESOLVED: length comes from a calibrated reference segment.**
+> Decided: the sim is **not** assumed to be in real units. The operator sets a
+> reference pair of points and the real distance between them, and **all run
+> lengths are derived relative to that scale** (§6.1) — uncalibrated scenes
+> refuse to report length. *Still to confirm:* the actual stock inventory
+> (`powerStockFt` / `dataStockFt`) and the slack factor (15% placeholder) so the
+> stock rounding (§6.3) matches what's really in the truck.
 
 ---
 
@@ -559,4 +683,8 @@ recommended first slice.
 - **Serves the mission** — a labeled, measurable harness shortens strike,
   de-risks "is the exterior actually getting power+data," and leaves a
   build-night artifact instead of tribal knowledge.
-- **Scratch files to `~/tmp/`** — exported BOM lands in `~/tmp/`, not the tree.
+- **Scratch files to `~/tmp/`** — the exported harness packet (BOM + per-view
+  PNGs) lands in `~/tmp/`, not the tree.
+- **Honest measurement** — length is calibrated from an operator-set reference
+  segment (§6.1), never assumed; uncalibrated scenes refuse to report length
+  rather than print a wrong cable order.
