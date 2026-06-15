@@ -147,6 +147,7 @@ function usage(stream = process.stdout) {
   lines.push(
     '',
     '  Commands:',
+    '    setup              Install dependencies in simulation/, marsin_engine/, CaptainPad/',
     '    status             Show whether a stack is running and probe its endpoints',
     '    stop               Stop the running stack (uses the launcher lock file)',
     '',
@@ -198,8 +199,8 @@ function parseArgs(argv) {
     usage(process.stderr);
     process.exit(2);
   }
-  if (opts.command !== 'status' && opts.command !== 'stop' && !PROFILES[opts.command]) {
-    logError(`Unknown profile '${opts.command}'. Valid: ${Object.keys(PROFILES).join(', ')}, status, stop`);
+  if (opts.command !== 'status' && opts.command !== 'stop' && opts.command !== 'setup' && !PROFILES[opts.command]) {
+    logError(`Unknown profile '${opts.command}'. Valid: ${Object.keys(PROFILES).join(', ')}, status, stop, setup`);
     process.exit(2);
   }
   return opts;
@@ -456,6 +457,7 @@ function validate(opts, profileDef) {
   }
   if (problems.length > 0) {
     for (const p of problems) logError(p);
+    logError('Run `node launcher.js setup` to install all subsystem dependencies.');
     process.exit(1);
   }
 }
@@ -714,6 +716,38 @@ function waitForTcp(tag, port, timeoutMs) {
 }
 
 // ── status / stop subcommands ───────────────────────────────────────────
+// ── setup subcommand: one-time dependency install for every subsystem ────
+// (Runs `npm install` — a deliberate, online setup step, NOT a runtime/playa
+// action. There is no root package.json; deps live per-subsystem.)
+function npmInstall(dir) {
+  return new Promise((resolve, reject) => {
+    log('launcher', `Installing dependencies in ${path.relative(ROOT, dir) || '.'}/ …`);
+    const child = spawn('npm', ['install'], { cwd: dir, stdio: 'inherit', shell: IS_WIN });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`npm install failed in ${dir} (exit ${code}).`));
+    });
+  });
+}
+
+async function cmdSetup() {
+  for (const dir of [SIM_DIR, ENGINE_DIR, CAPTAINPAD_DIR]) {
+    if (!fs.existsSync(path.join(dir, 'package.json'))) {
+      logError(`No package.json in ${dir} — wrong checkout?`);
+      process.exit(1);
+    }
+    try {
+      await npmInstall(dir);
+    } catch (err) {
+      logError(err.message);
+      process.exit(1);
+    }
+  }
+  log('launcher', '✅ Setup complete — dependencies installed in all three subsystems.');
+  log('launcher', '   Now run: node launcher.js dev   (or prod / dev-lite)');
+}
+
 async function cmdStatus() {
   const lock = readLock();
   if (!lock) {
@@ -777,6 +811,7 @@ async function cmdStop() {
 // ── Main ────────────────────────────────────────────────────────────────
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.command === 'setup') return cmdSetup();
   if (opts.command === 'status') return cmdStatus();
   if (opts.command === 'stop') return cmdStop();
 

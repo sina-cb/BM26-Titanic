@@ -32,7 +32,14 @@ to the physical DMX rig.
 - For a permanent iPad build of CaptainPad: an **Expo/EAS** account (see
   [`CaptainPad/README.md`](CaptainPad/README.md)).
 
-First-time dependency install for the whole stack:
+First-time dependency install for the whole stack (one command, all OSes —
+there is no root `package.json`, deps live per-subsystem):
+
+```bash
+node launcher.js setup
+```
+
+Or install each subsystem by hand (PowerShell uses `;` instead of `&&`):
 
 ```bash
 cd simulation && npm install && cd ../marsin_engine && npm install && cd ../CaptainPad && npm install && cd ..
