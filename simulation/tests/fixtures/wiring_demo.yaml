@@ -1,0 +1,74 @@
+# Demo wiring for the Wiring Tracer Phase-1 data core (docs/36_wiring_tracer.md).
+# Two traced wires: a black "ground test" and a yellow "e-stop".
+wiring:
+  version: 2
+
+  scale:
+    unit: ft
+    references:
+      - id: bench_ref
+        role: primary
+        points:
+          - { x: 0, y: 0, z: 0 }
+          - { x: 0, y: 0, z: 10 }   # 10 model-units == 10 ft  -> 1 ft per unit
+        actualDistance: 10
+
+  defaults:
+    cableGap: 0.04
+    slack: 0.15
+
+  cableTypes:
+    ground_wire:
+      family: power
+      connector: ring_lug
+      stockLengths: [3, 6, 10, 25]
+      color: '#000000'        # black
+      radius: 0.03
+      weatherproof: false
+    estop_wire:
+      family: power
+      connector: e_stop
+      stockLengths: [25, 50, 100]
+      color: '#ffd400'        # yellow
+      radius: 0.03
+      weatherproof: true
+
+  components:
+    - id: panel
+      name: Safety Panel
+      type: adapter
+      placement: { x: 0, y: 1, z: 0 }
+      ports:
+        - { id: gnd,   accepts: [ground_wire] }
+        - { id: estop, accepts: [estop_wire] }
+
+  anchors:
+    - id: chassis
+      placement: { x: 0, y: 1, z: 5, surface: inside }
+    - id: estop_btn
+      placement: { x: 0, y: 1, z: 40, surface: outside }
+
+  routes:
+    - id: ground_test
+      name: ground test
+      endpoints:
+        - { component: panel, port: gnd }
+        - { anchor: chassis }
+      cables:
+        - { type: ground_wire }
+      waypoints:
+        - { x: 0, y: 1, z: 2.5, side: inside, off: 0.04 }
+
+    - id: estop
+      name: e-stop
+      endpoints:
+        - { component: panel, port: estop }
+        - { anchor: estop_btn }
+      cables:
+        - { type: estop_wire }
+      waypoints:
+        - { x: 0, y: 1, z: 20, side: outside, off: 0.04 }
+
+  printViews:
+    - { id: pv_all,   name: All Wiring,  camera: front, filter: {} }
+    - { id: pv_power, name: Power Only,  camera: aerial, filter: { family: power } }
