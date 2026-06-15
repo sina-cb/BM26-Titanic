@@ -13,6 +13,7 @@ import { rebuildParLights } from "./fixtures.js";
 import { toggleAllPanels } from "../gui/panel_visibility.js";
 import { toggleControlDrawer } from "../gui/control_drawer.js";
 import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
+import { isSceneModalOpen } from "../gui/scene_manager.js";
 
 // ─── Snap-to-Surface Mode State ──────────────────────────────────────────
 let snapMode = false;
@@ -385,6 +386,12 @@ export function onPointerDown(event) {
 export function onKeyDown(event) {
   // Ignore keyboard shortcuts if the user is typing in an input or textarea
   if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
+    return;
+  }
+
+  // A scene add/delete modal owns the keyboard while open — don't let sim
+  // shortcuts fire underneath it. The modal handles its own Esc/Enter.
+  if (isSceneModalOpen()) {
     return;
   }
 
