@@ -13,7 +13,7 @@
  *
  * Profiles:
  *   prod      sim + engine. Sim in its lightest rendering mode
- *             (pixel_mapping, 0 spotlights) — no fancy lighting.
+ *             (edit profile, 0 spotlights) — minimal resources, no fancy lighting.
  *   dev       sim + engine + CaptainPad Expo dev server. Sim in full
  *             analytic mode with 60 spotlights.
  *   dev-lite  Like dev, but no fancy lighting (emissive, 0 spotlights).
@@ -99,7 +99,7 @@ const PROFILES = {
   prod: {
     description: 'Show stack: sim + engine, lightest sim rendering (no fancy lighting)',
     processes: ['sim', 'engine'],
-    simParams: { profile: 'pixel_mapping', spotlights: 0 },
+    simParams: { profile: 'edit', spotlights: 0 },
   },
   dev: {
     description: 'Full dev stack: sim + engine + CaptainPad Expo, full analytic lighting, 60 spotlights',
@@ -526,7 +526,11 @@ function startChild(tag, command, args, cwd, extraEnv = {}, onExit = null) {
 // ── Browser auto-open (best-effort, never fatal, not a stack child) ─────
 function browserOpenCommand(url) {
   if (process.platform === 'darwin') return { cmd: 'open', args: [url] };
-  if (IS_WIN) return { cmd: 'cmd', args: ['/c', 'start', '', url] };
+  // Windows: do NOT use `cmd /c start` — cmd treats `&` as a command separator
+  // even inside a quoted URL, truncating the query string (?a=1&b=2 opens only
+  // ?a=1). rundll32's URL handler takes the URL as a single argv with no shell
+  // parsing, so the whole query string survives.
+  if (IS_WIN) return { cmd: 'rundll32', args: ['url.dll,FileProtocolHandler', url] };
   return { cmd: 'xdg-open', args: [url] };
 }
 
