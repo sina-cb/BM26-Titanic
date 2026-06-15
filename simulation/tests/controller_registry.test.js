@@ -306,17 +306,47 @@ test('migration is ATOMIC per port: an unknowable footprint defers the whole por
 
 // ── Shared universes / controller-level rules ───────────────────────────
 
-test('a universe spanning two controllers unpatches the higher-id controller port', () => {
+test('two controllers may carry the SAME universe with non-overlapping channels', () => {
+  // Operator decision 2026-06-15: a shared universe number across
+  // distinct controllers (independent sACN unicast targets) is NOT a
+  // conflict. Both ports patch normally as long as their channel ranges
+  // do not overlap.
   const r = reg({ controllers: [
     { id: 1, name: 'A', ip: '10.0.0.1', ports: [
-      { port: 1, universe: 3, chain: [{ fixture: 'Par 1', at: 1 }] }] },
+      { port: 1, universe: 3, chain: [{ fixture: 'Par 1', at: 1 }] }] },   // 1–10
     { id: 2, name: 'B', ip: '10.0.0.2', ports: [
-      { port: 1, universe: 3, chain: [{ fixture: 'Par 2', at: 20 }] }] },
+      { port: 1, universe: 3, chain: [{ fixture: 'Par 2', at: 20 }] }] },  // 20–29
   ] });
   const p = computeProjection(r, configMap(par('Par 1'), par('Par 2')), PINS);
-  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
-  assert.deepEqual(fieldsOf(p, 'Par 2'), UNPATCHED);
-  assert.ok(p.violations.some(v => v.code === 'dup_universe'));
+  assert.equal(p.violations.length, 0, 'a shared universe is no longer a violation');
+  assert.deepEqual(fieldsOf(p, 'Par 1'),
+    { controllerIp: '10.0.0.1', dmxUniverse: 3, dmxAddress: 1, controllerId: 1 });
+  assert.deepEqual(fieldsOf(p, 'Par 2'),
+    { controllerIp: '10.0.0.2', dmxUniverse: 3, dmxAddress: 20, controllerId: 2 });
+  // The full universe map aggregates both controllers' claims.
+  assert.deepEqual(p.universeMaps.get(3).map(c => [c.start, c.end, c.name]), [
+    [1, 10, 'Par 1'],
+    [20, 29, 'Par 2'],
+  ]);
+});
+
+test('a shared universe with OVERLAPPING channels still flags overlap (cross-controller)', () => {
+  // The legitimate safety net survives: two controllers on the same
+  // universe claiming overlapping channels is a real conflict — both
+  // claims paint red and an `overlap` violation is raised, but neither
+  // is silently unpatched (explicit addresses stand, decision 19).
+  const r = reg({ controllers: [
+    { id: 1, name: 'A', ip: '10.0.0.1', ports: [
+      { port: 1, universe: 3, chain: [{ fixture: 'Par 1', at: 1 }] }] },   // 1–10
+    { id: 2, name: 'B', ip: '10.0.0.2', ports: [
+      { port: 1, universe: 3, chain: [{ fixture: 'Par 2', at: 5 }] }] },   // 5–14 collides
+  ] });
+  const p = computeProjection(r, configMap(par('Par 1'), par('Par 2')), PINS);
+  assert.ok(p.violations.some(v => v.code === 'overlap'), 'cross-controller overlap detected');
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1, 'kept');
+  assert.equal(fieldsOf(p, 'Par 2').dmxAddress, 5, 'kept');
+  const items = [...p.portLayouts.values()].flat();
+  assert.equal(items.filter(i => i.conflict).length, 2, 'both claims marked red');
 });
 
 test('malformed and duplicate IPs unpatch the offending controller', () => {
@@ -430,7 +460,10 @@ test('pins at DIFFERENT addresses with colliding footprints flag pin_overlap', (
   assert.deepEqual(fieldsOf(p, 'Fog 1'), UNPATCHED);
 });
 
-test('effects pins survive a contested-universe port; normal pins die with it', () => {
+test('a shared universe across controllers patches both; effects pins stay independent', () => {
+  // Post-2026-06-15: a shared universe is no longer contested, so a
+  // non-overlapping normal fixture on the second controller patches
+  // normally. Effects pins remain independent of the port universe.
   const r = reg({ controllers: [
     { id: 1, name: 'A', ip: '10.0.0.1', ports: [
       { port: 1, universe: 3, chain: [{ fixture: 'Par 1', at: 1 }] }] },
@@ -442,9 +475,12 @@ test('effects pins survive a contested-universe port; normal pins die with it', 
   ] });
   const fog = { name: 'Fog 1', fixtureType: 'TEFogMachine' };
   const p = computeProjection(r, configMap(par('Par 1'), par('Par 2'), fog), PINS);
-  assert.ok(p.violations.some(v => v.code === 'dup_universe'));
-  assert.deepEqual(fieldsOf(p, 'Par 2'), UNPATCHED, 'address on a contested universe is unsendable');
-  assert.equal(fieldsOf(p, 'Fog 1').dmxAddress, 512, 'effects pin unaffected by the contest');
+  assert.equal(p.violations.length, 0, 'shared universe + non-overlapping channels = clean');
+  assert.equal(fieldsOf(p, 'Par 1').dmxAddress, 1);
+  assert.deepEqual(fieldsOf(p, 'Par 2'),
+    { controllerIp: '10.0.0.2', dmxUniverse: 3, dmxAddress: 100, controllerId: 2 },
+    'non-overlapping address on a shared universe now patches');
+  assert.equal(fieldsOf(p, 'Fog 1').dmxAddress, 512, 'effects pin projects its U1 pin');
 });
 
 // ── projectOntoConfigs (live config mutation + metadata) ───────────────
