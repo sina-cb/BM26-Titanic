@@ -571,26 +571,17 @@ export function computeProjection(registry, configsByName, pins) {
     ipOwners.set(controller.ip, controller);
   }
 
-  // ── Universe ownership: one universe never spans two controllers ─────
-  // Deterministic loser: the controller with the HIGHER id projects
-  // unpatched on the contested universe (docs/33 projection table).
-  const universeOwner = new Map(); // universe → controller
-  const contestedPorts = new Set();
+  // ── Port iteration order ─────────────────────────────────────────────
+  // The SAME universe carried by two different controllers is explicitly
+  // ALLOWED (operator decision 2026-06-15): controllers are independent
+  // sACN unicast targets, so a shared universe number is not a conflict.
+  // The only real hazard — two claims landing on overlapping CHANNELS
+  // within a universe — is caught by the per-universe overlap sweep
+  // below, which aggregates occupancy across ALL controllers. Ports are
+  // iterated in stable id order purely for deterministic claim ordering.
   const allPortsSorted = [];
   for (const controller of [...registry.controllers].sort((a, b) => a.id - b.id)) {
     for (const port of controller.ports) allPortsSorted.push({ controller, port });
-  }
-  for (const { controller, port } of allPortsSorted) {
-    const owner = universeOwner.get(port.universe);
-    if (owner === undefined) {
-      universeOwner.set(port.universe, controller);
-    } else if (owner !== controller) {
-      addViolation('dup_universe', `Universe ${port.universe} is carried by both ` +
-        `'${owner.name}' and '${controller.name}' — a universe belongs to exactly one ` +
-        `controller; '${controller.name}' port ${port.port} projects unpatched`,
-      controller, port);
-      contestedPorts.add(port);
-    }
   }
 
   // ── Per-entry projection (allocation model, docs/33 decision 19) ────
@@ -603,8 +594,8 @@ export function computeProjection(registry, configsByName, pins) {
   // flags overlaps as WARNINGS — every address is explicit operator
   // state, so a conflict paints red and stands, it is never silently
   // unpatched. Hard unpatches that remain: outside 1–512, U1 rules,
-  // missing definition, orphan, bad/duplicate IP, contested universe,
-  // and unmigrated legacy entries.
+  // missing definition, orphan, bad/duplicate IP, and unmigrated legacy
+  // entries.
   const occupancy = new Map();  // universe → claims for the map + overlap sweep
   const pinnedOccupancy = [];   // valid effects pins (gang-fire-aware check)
 
@@ -628,8 +619,7 @@ export function computeProjection(registry, configsByName, pins) {
         `${port.universe} is outside 1–${MAX_UNIVERSE} (the sACN limit) — its fixtures ` +
         'project unpatched; fix the universe number', controller, port);
     }
-    const portDead = badControllers.has(controller) || contestedPorts.has(port) ||
-      universeOutOfRange;
+    const portDead = badControllers.has(controller) || universeOutOfRange;
     const isEffectsPort = port.universe === EFFECTS_UNIVERSE;
 
     for (const entry of port.chain) {
@@ -772,8 +762,9 @@ export function computeProjection(registry, configsByName, pins) {
         unpatch(name);
         continue;
       }
-      // An address on a contested universe / dead controller is
-      // unsendable — unlike a CONFLICT, this is a hard unpatch.
+      // An address on a dead controller (bad/duplicate IP, or an
+      // out-of-range universe) is unsendable — unlike a CONFLICT, this
+      // is a hard unpatch.
       if (portDead) {
         layout.push({ entry, name, address: entry.at, footprint, valid: false, pinned: true, manual: true });
         unpatch(name);

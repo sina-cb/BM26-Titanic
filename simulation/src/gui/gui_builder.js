@@ -6,6 +6,7 @@
  */
 import * as THREE from "three";
 import yaml from "js-yaml";
+import chroma from "chroma-js";
 import {
   scene, camera, renderer, composer, controls,
   transformControl, interactiveObjects,
@@ -1385,6 +1386,31 @@ function setupGUI() {
           groupFolder.close();
         }
 
+        // ── Group master: On/Off + Brightness ──
+        // A real last-layer override on the whole group's DMX output (see
+        // dmx_output_overrides.js). The group takes priority over each
+        // fixture's own override. Stored in params.groupOverrides[groupName]
+        // and persisted with the scene; applied live every frame, so toggling
+        // here hits the lights (and sACN out) immediately.
+        if (!params.groupOverrides) params.groupOverrides = {};
+        if (!params.groupOverrides[groupName]) params.groupOverrides[groupName] = { enabled: true, brightness: 100 };
+        const groupOv = params.groupOverrides[groupName];
+        if (groupOv.enabled === undefined) groupOv.enabled = true;
+        if (groupOv.brightness === undefined) groupOv.brightness = 100;
+        const resyncGroupMembers = () => {
+          (groupMap.get(groupName) || []).forEach(({ index }) => {
+            if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+          });
+        };
+        groupFolder.add(groupOv, 'enabled').name('⏻ Group On').onChange(() => {
+          resyncGroupMembers();
+          debounceAutoSave();
+        });
+        groupFolder.add(groupOv, 'brightness', 0, 100, 1).name('Group Brightness %').onChange(() => {
+          resyncGroupMembers();
+          debounceAutoSave();
+        });
+
         // Trace-generated groups: show fixtures with limited editing (DMX patch only)
         if (isTraceGroup) {
           const gBtnStyle2 = 'flex:1;padding:2px 0;border:none;border-radius:3px;background:var(--control-bg);cursor:pointer;font-size:10px;font-family:inherit;';
@@ -1463,6 +1489,19 @@ function setupGUI() {
               if (config.intensity === undefined) config.intensity = 5;
               if (config.angle === undefined) config.angle = 20;
               if (config.penumbra === undefined) config.penumbra = 0.5;
+              // Per-fixture output override (On/Off + Brightness %)
+              if (config.enabled === undefined) config.enabled = true;
+              if (config.brightness === undefined) config.brightness = 100;
+              genFixFolder.add(config, 'enabled').name('On').onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
+              genFixFolder.add(config, 'brightness', 0, 100, 1).name('Brightness %').onChange(() => {
+                selectThisGenLight();
+                if (window.syncLightFromConfig) window.syncLightFromConfig(index);
+                debounceAutoSave();
+              });
               genFixFolder.addColor(config, 'color').onChange(() => {
                 selectThisGenLight();
                 if (window.syncLightFromConfig) window.syncLightFromConfig(index);
@@ -1667,6 +1706,11 @@ function setupGUI() {
             params.parLights.forEach((c) => {
               if (c.group === groupName) c.group = newName;
             });
+            // Carry the group master override across the rename (keyed by name).
+            if (params.groupOverrides && params.groupOverrides[groupName]) {
+              params.groupOverrides[newName] = params.groupOverrides[groupName];
+              delete params.groupOverrides[groupName];
+            }
             // Carry the group's view-mask bit across the rename so
             // patterns compiled against MASK_* names stay stable.
             if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, newName);
@@ -1709,6 +1753,7 @@ function setupGUI() {
             intensity: def?.defaultIntensity || 5,
             angle: def?.defaultAngle || 20,
             penumbra: def?.defaultPenumbra || 0.5,
+            enabled: true, brightness: 100,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
             dmxUniverse: 0, dmxAddress: 0, controllerIp: '',
             controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
@@ -1761,6 +1806,9 @@ function setupGUI() {
           if (config.intensity === undefined) config.intensity = 5;
           if (config.angle === undefined) config.angle = 20;
           if (config.penumbra === undefined) config.penumbra = 0.5;
+          // Per-fixture output override (On/Off + Brightness %)
+          if (config.enabled === undefined) config.enabled = true;
+          if (config.brightness === undefined) config.brightness = 100;
 
           // V2 metadata defaults
           if (config.controllerId === undefined) config.controllerId = 0;
@@ -1856,6 +1904,18 @@ function setupGUI() {
             idxFolder.title(v);
             propagateToSelected(index, 'name', v);
             debounceAutoSave();
+          });
+
+          // On/Off + Brightness — operator override on top of any pattern.
+          idxFolder.add(config, "enabled").name("On").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'enabled', v);
+          });
+          idxFolder.add(config, "brightness", 0, 100, 1).name("Brightness %").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'brightness', v);
           });
 
           idxFolder.addColor(config, "color").onChange((v) => {
@@ -2133,9 +2193,13 @@ function setupGUI() {
         const selected = (i === traceIndex && isSelected);
         const color = selected ? 0xffff00 : 0xff8800; // Yellow vs Orange
         const opacity = selected ? 1.0 : 0.7;
-        tObj.materials.lineMat.color.setHex(color);
-        tObj.materials.lineMat.opacity = opacity;
-        tObj.materials.dotMat.color.setHex(color);
+        // Selection highlights the wireframe path only. The preview dots are
+        // intentionally left alone so their per-point spacing gradient stays
+        // readable (overriding them would defeat the gradient feature).
+        if (tObj.materials.lineMat) {
+          tObj.materials.lineMat.color.setHex(color);
+          tObj.materials.lineMat.opacity = opacity;
+        }
       });
     }
     window.setTraceSelected = setTraceSelected;
@@ -2188,36 +2252,144 @@ function setupGUI() {
     }
     window.flyToTrace = flyToTrace;
 
-    function computeTracePoints(trace) {
-      const pts = [];
-      // Get fixture width for spacing (use fixture dimensions if available)
-      const fixtureType = trace.fixtureType || 'UkingPar';
-      const fixtureDef = getDefinition(fixtureType);
-      const fixtureWidth = DmxFixtureRuntime.getFixtureWidth(fixtureDef);
-      // Effective spacing: at least the fixture width, or user-specified spacing
-      const effectiveSpacing = Math.max(trace.spacing || 2, fixtureWidth);
-
+    // Build the path geometry for a trace as a parametric arclength curve.
+    // Returns { length, at(s), tangentAt(s) } where `s` is arclength in
+    // meters from the path start (0..length). This is the single source of
+    // truth used by both the even base layout and the per-point offset
+    // post-processing, so a point at arclength `s` always lands on the path
+    // regardless of shape (line, circle/arc, or corner).
+    function buildTracePath(trace) {
       if (trace.shape === 'circle') {
         const r = trace.radius || 5;
         const arcRad = THREE.MathUtils.degToRad(trace.arc || 360);
-        const circumference = r * arcRad;
-        const count = Math.max(1, Math.round(circumference / effectiveSpacing));
-        for (let i = 0; i < count; i++) {
-          const angle = (i / count) * arcRad;
-          pts.push(new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r));
-        }
-      } else {
-        // line: world-space start to end
-        const start = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
-        const end   = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
-        const totalLen = start.distanceTo(end);
-        const count = Math.max(2, Math.round(totalLen / effectiveSpacing));
-        for (let i = 0; i < count; i++) {
-          const t = i / (count - 1);
-          pts.push(new THREE.Vector3().lerpVectors(start, end, t));
+        const length = r * arcRad;
+        return {
+          length,
+          // Position at arclength s (local circle space, before group transform)
+          at(s) {
+            const angle = length > 1e-9 ? (s / length) * arcRad : 0;
+            return new THREE.Vector3(Math.cos(angle) * r, 0, Math.sin(angle) * r);
+          },
+          // Unit tangent (direction of increasing s) at arclength s
+          tangentAt(s) {
+            const angle = length > 1e-9 ? (s / length) * arcRad : 0;
+            // d/dangle of (cos,0,sin) = (-sin,0,cos)
+            return new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle)).normalize();
+          },
+        };
+      }
+      if (trace.shape === 'corner') {
+        // Corner: two straight segments meeting at a corner vertex
+        // (start→corner→end). Arclength runs start→corner (0..lenA) then
+        // corner→end (lenA..lenA+lenB), so one point list slides smoothly
+        // across the bend and offsets/gradient compose like any other shape.
+        const start  = new THREE.Vector3(trace.startX ?? -5, trace.startY ?? 5, trace.startZ ?? 0);
+        const corner = new THREE.Vector3(trace.cornerX ?? 0, trace.cornerY ?? 5, trace.cornerZ ?? 0);
+        const end    = new THREE.Vector3(trace.endX ?? 5, trace.endY ?? 5, trace.endZ ?? 5);
+        const lenA = start.distanceTo(corner);
+        const lenB = corner.distanceTo(end);
+        const length = lenA + lenB;
+        const dirA = lenA > 1e-9
+          ? new THREE.Vector3().subVectors(corner, start).divideScalar(lenA)
+          : new THREE.Vector3(1, 0, 0);
+        const dirB = lenB > 1e-9
+          ? new THREE.Vector3().subVectors(end, corner).divideScalar(lenB)
+          : dirA.clone();
+        return {
+          length,
+          at(s) {
+            if (s <= lenA) return start.clone().addScaledVector(dirA, s);
+            return corner.clone().addScaledVector(dirB, s - lenA);
+          },
+          tangentAt(s) { return (s <= lenA ? dirA : dirB).clone(); },
+        };
+      }
+      // line: world-space start to end
+      const start = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+      const end = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
+      const length = start.distanceTo(end);
+      const dir = length > 1e-9
+        ? new THREE.Vector3().subVectors(end, start).divideScalar(length)
+        : new THREE.Vector3(1, 0, 0);
+      return {
+        length,
+        at(s) { return start.clone().addScaledVector(dir, s); },
+        tangentAt() { return dir.clone(); },
+      };
+    }
+
+    function computeTracePoints(trace) {
+      const path = buildTracePath(trace);
+
+      // ─── 1. Base even layout: arclength position per point ────────────────
+      // A "closed" circle (full 360° arc) wraps, so points are evenly spaced
+      // around the loop without an endpoint at the seam. A line / partial arc
+      // / corner is "open" — the last point sits exactly at the end. Shared
+      // with the point-drag math via computeTraceBaseArclengths so they never
+      // diverge.
+      const baseS = computeTraceBaseArclengths(trace, path);
+
+      // ─── 2. Post-process: apply per-point arclength offsets ───────────────
+      // `trace.pointOffsets[k]` is a small signed shift in meters along the
+      // path tangent. Default (undefined / 0) → byte-identical even layout.
+      // Each offset is clamped so a point cannot cross its neighbours or
+      // leave the path, keeping ordering stable. This block is intentionally
+      // generic (operates on the arclength list + path) so it composes with
+      // any base count and any path shape (line, circle/arc, corner).
+      const offsets = Array.isArray(trace.pointOffsets) ? trace.pointOffsets : null;
+      const finalS = baseS.slice();
+      if (offsets) {
+        const margin = 0.05; // keep a sliver of gap so points never coincide
+        for (let i = 0; i < finalS.length; i++) {
+          const off = offsets[i];
+          if (!off) continue; // 0 / undefined → leave at even position
+          let s = baseS[i] + off;
+          // Clamp between neighbours (or path ends) to preserve ordering.
+          const lower = i > 0 ? finalS[i - 1] + margin : 0;
+          const upper = i < finalS.length - 1 ? baseS[i + 1] - margin : path.length;
+          s = Math.min(Math.max(s, lower), Math.min(upper, path.length));
+          finalS[i] = Math.max(s, 0);
         }
       }
-      return pts;
+
+      return finalS.map((s) => path.at(s));
+    }
+
+    // Per-point colors for the preview dots based on spacing to the next
+    // point. Gradient scheme (documented for the operator):
+    //   • GREEN  → spacing at/near the even target (lights evenly placed)
+    //   • BLUE   → smaller gap than target (lights bunched together)
+    //   • RED    → larger gap than target (lights stretched apart)
+    // The target is the mean inter-point distance, so the gradient is
+    // relative to "what even spacing would be" for this trace. The last
+    // point inherits the colour of the segment ending at it.
+    function computeTraceDotColors(pts) {
+      const n = pts.length;
+      if (n === 0) return [];
+      if (n === 1) return [chroma('#22cc66').hex()];
+
+      const gaps = [];
+      for (let i = 0; i < n - 1; i++) gaps.push(pts[i].distanceTo(pts[i + 1]));
+      const target = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+
+      // Diverging blue→green→red scale, readable on the dark sim theme.
+      const scale = chroma.scale(['#2a7fff', '#22cc66', '#ff4422']).mode('lab');
+      const colorForGap = (gap) => {
+        if (target < 1e-6) return scale(0.5).hex();
+        // ratio 1 → even (green). Map [0.5x .. 1.5x] target onto [0..1].
+        const ratio = gap / target;
+        const t = THREE.MathUtils.clamp((ratio - 0.5) / 1.0, 0, 1);
+        return scale(t).hex();
+      };
+
+      const colors = [];
+      for (let i = 0; i < n; i++) {
+        // A point's colour reflects the gap leading INTO it (segment i-1→i),
+        // except the first point which uses the gap leading OUT of it.
+        const gap = i === 0 ? gaps[0] : gaps[i - 1];
+        colors.push(colorForGap(gap));
+      }
+      return colors;
     }
 
     // Orient a trace handle so local X aligns with the start→end path direction
@@ -2253,14 +2425,19 @@ function setupGUI() {
         visuals.push(lineMesh);
         interactiveObjects.push(lineMesh);
 
-        // Preview dots at light positions
+        // Preview dots at light positions — each dot gets its OWN material
+        // instance so it can be tinted by the spacing gradient. The point
+        // index `k` lets the drag handler know which point moved.
         const lightPts = computeTracePoints(trace);
+        const dotColors = computeTraceDotColors(lightPts);
         const dotGeo = new THREE.SphereGeometry(0.3, 8, 8); // slightly larger for easier clicking
-        const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
-        lightPts.forEach(p => {
+        const dotMats = [];
+        lightPts.forEach((p, k) => {
+          const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(dotColors[k]) });
+          dotMats.push(dotMat);
           const dot = new THREE.Mesh(dotGeo, dotMat);
           dot.position.copy(p);
-          dot.userData = { isTraceVisual: true, traceIndex };
+          dot.userData = { isTraceVisual: true, traceIndex, pointIndex: k };
           grp.add(dot);
           visuals.push(dot);
           interactiveObjects.push(dot);
@@ -2304,7 +2481,91 @@ function setupGUI() {
         aimLine.computeLineDistances();
         grp.add(aimLine);
 
-        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], visuals, traceIndex, materials: { lineMat, dotMat }, aimLine };
+        return { group: grp, hitbox: null, handles: [startHandle, endHandle, aimHandle], visuals, traceIndex, materials: { lineMat, dotMats }, aimLine };
+
+      } else if (trace.shape === 'corner') {
+        // ─── CORNER: two segments (start→corner→end), three draggable handles ───
+        // Mirrors the line build, with an extra middle (corner) handle.
+        const startPos  = new THREE.Vector3(trace.startX ?? -5, trace.startY ?? 5, trace.startZ ?? 0);
+        const cornerPos = new THREE.Vector3(trace.cornerX ?? 0, trace.cornerY ?? 5, trace.cornerZ ?? 0);
+        const endPos    = new THREE.Vector3(trace.endX ?? 5, trace.endY ?? 5, trace.endZ ?? 5);
+
+        const grp = new THREE.Group();
+        const visuals = [];
+
+        // Wireframe polyline through the three defining points
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([startPos, cornerPos, endPos]);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
+        const lineMesh = new THREE.Line(lineGeo, lineMat);
+        lineMesh.userData = { isTraceVisual: true, traceIndex };
+        grp.add(lineMesh);
+        visuals.push(lineMesh);
+        interactiveObjects.push(lineMesh);
+
+        // Preview dots at light positions — each gets its own material for the
+        // spacing gradient and a pointIndex so it can be dragged along the path.
+        const lightPts = computeTracePoints(trace);
+        const dotColors = computeTraceDotColors(lightPts);
+        const dotGeo = new THREE.SphereGeometry(0.3, 8, 8);
+        const dotMats = [];
+        lightPts.forEach((p, k) => {
+          const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(dotColors[k]) });
+          dotMats.push(dotMat);
+          const dot = new THREE.Mesh(dotGeo, dotMat);
+          dot.position.copy(p);
+          dot.userData = { isTraceVisual: true, traceIndex, pointIndex: k };
+          grp.add(dot);
+          visuals.push(dot);
+          interactiveObjects.push(dot);
+        });
+
+        scene.add(grp);
+
+        // Three draggable handle spheres at scene root (start / corner / end)
+        const handleGeo = new THREE.SphereGeometry(0.4, 12, 12);
+        const startMat  = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.7 });
+        const cornerMat = new THREE.MeshBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0.7 });
+        const endMat    = new THREE.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.7 });
+
+        const startHandle = new THREE.Mesh(handleGeo, startMat);
+        startHandle.position.copy(startPos);
+        startHandle.userData = { isTrace: true, traceIndex, handleType: 'start' };
+        orientTraceHandle(startHandle, startPos, cornerPos);
+        scene.add(startHandle);
+        interactiveObjects.push(startHandle);
+
+        const cornerHandle = new THREE.Mesh(handleGeo, cornerMat);
+        cornerHandle.position.copy(cornerPos);
+        cornerHandle.userData = { isTrace: true, traceIndex, handleType: 'corner' };
+        orientTraceHandle(cornerHandle, startPos, cornerPos);
+        scene.add(cornerHandle);
+        interactiveObjects.push(cornerHandle);
+
+        const endHandle = new THREE.Mesh(handleGeo, endMat);
+        endHandle.position.copy(endPos);
+        endHandle.userData = { isTrace: true, traceIndex, handleType: 'end' };
+        orientTraceHandle(endHandle, cornerPos, endPos);
+        scene.add(endHandle);
+        interactiveObjects.push(endHandle);
+
+        // Aim handle (yellow sphere) — same behavior as the line
+        const aimHandleGeo = new THREE.SphereGeometry(0.35, 12, 12);
+        const aimHandleMat = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.8 });
+        const aimHandle = new THREE.Mesh(aimHandleGeo, aimHandleMat);
+        aimHandle.position.set(trace.aimX || 0, trace.aimY || 0, trace.aimZ || 0);
+        aimHandle.userData = { isTrace: true, traceIndex, handleType: 'aim' };
+        scene.add(aimHandle);
+        interactiveObjects.push(aimHandle);
+
+        // Dashed line from first light point to aim handle
+        const aimOrigin = lightPts.length > 0 ? lightPts[0] : startPos.clone();
+        const aimLineGeo = new THREE.BufferGeometry().setFromPoints([aimOrigin, aimHandle.position]);
+        const aimLineMat = new THREE.LineDashedMaterial({ color: 0xffcc00, dashSize: 0.5, gapSize: 0.3, transparent: true, opacity: 0.5 });
+        const aimLine = new THREE.Line(aimLineGeo, aimLineMat);
+        aimLine.computeLineDistances();
+        grp.add(aimLine);
+
+        return { group: grp, hitbox: null, handles: [startHandle, cornerHandle, endHandle, aimHandle], visuals, traceIndex, materials: { lineMat, dotMats }, aimLine };
 
       } else {
         // ─── CIRCLE: center hitbox (existing approach) ───
@@ -2335,14 +2596,18 @@ function setupGUI() {
         visuals.push(lineMesh);
         interactiveObjects.push(lineMesh);
 
-        // Preview dots
+        // Preview dots — own material per dot for the spacing gradient,
+        // and a point index `k` so the drag handler can identify them.
         const lightPts = computeTracePoints(trace);
+        const dotColors = computeTraceDotColors(lightPts);
         const dotGeo = new THREE.SphereGeometry(0.3, 8, 8); // slightly larger
-        const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
-        lightPts.forEach(p => {
+        const dotMats = [];
+        lightPts.forEach((p, k) => {
+          const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(dotColors[k]) });
+          dotMats.push(dotMat);
           const dot = new THREE.Mesh(dotGeo, dotMat);
           dot.position.copy(p);
-          dot.userData = { isTraceVisual: true, traceIndex };
+          dot.userData = { isTraceVisual: true, traceIndex, pointIndex: k };
           grp.add(dot);
           visuals.push(dot);
           interactiveObjects.push(dot);
@@ -2388,7 +2653,7 @@ function setupGUI() {
         // Do not add to `grp`, add to `scene` so its dashed lines don't get double transformed by the group's rotation.
         scene.add(aimLine);
 
-        return { group: grp, hitbox, handles: [aimHandle], visuals, traceIndex, materials: { lineMat, dotMat }, aimLine };
+        return { group: grp, hitbox, handles: [aimHandle], visuals, traceIndex, materials: { lineMat, dotMats }, aimLine };
       }
     }
 
@@ -2474,6 +2739,104 @@ function setupGUI() {
            tObj.aimLine.geometry.setFromPoints([aimOrigin, obj.position]);
            tObj.aimLine.computeLineDistances();
         }
+      } else if (trace.shape === 'corner' &&
+                 (obj.userData.handleType === 'start' ||
+                  obj.userData.handleType === 'corner' ||
+                  obj.userData.handleType === 'end')) {
+        // ─── CORNER handle moved (start / corner / end) ───
+        // Mirrors the line handle path: write the moved point back to the
+        // right trace.{start,corner,end}{X,Y,Z}, drag the aim handle by the
+        // same delta, re-orient the handles along the two segments, and live-
+        // rebuild the 3-point polyline + dots.
+        const ht = obj.userData.handleType;
+        const keyX = ht === 'start' ? 'startX' : (ht === 'corner' ? 'cornerX' : 'endX');
+        const keyY = ht === 'start' ? 'startY' : (ht === 'corner' ? 'cornerY' : 'endY');
+        const keyZ = ht === 'start' ? 'startZ' : (ht === 'corner' ? 'cornerZ' : 'endZ');
+
+        const dx = obj.position.x - (trace[keyX] ?? 0);
+        const dy = obj.position.y - (trace[keyY] ?? 5);
+        const dz = obj.position.z - (trace[keyZ] ?? 0);
+
+        // Move aim handle by same delta (keeps the aim offset stable)
+        trace.aimX = (trace.aimX || 0) + dx;
+        trace.aimY = (trace.aimY || 0) + dy;
+        trace.aimZ = (trace.aimZ || 0) + dz;
+
+        trace[keyX] = obj.position.x;
+        trace[keyY] = obj.position.y;
+        trace[keyZ] = obj.position.z;
+
+        const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
+        if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
+
+        // Re-orient handles along their adjacent segments
+        const s = new THREE.Vector3(trace.startX ?? -5, trace.startY ?? 5, trace.startZ ?? 0);
+        const c = new THREE.Vector3(trace.cornerX ?? 0, trace.cornerY ?? 5, trace.cornerZ ?? 0);
+        const e = new THREE.Vector3(trace.endX ?? 5, trace.endY ?? 5, trace.endZ ?? 5);
+        const startH = (tObj.handles || []).find(h => h.userData.handleType === 'start');
+        const cornerH = (tObj.handles || []).find(h => h.userData.handleType === 'corner');
+        const endH = (tObj.handles || []).find(h => h.userData.handleType === 'end');
+        if (startH) orientTraceHandle(startH, s, c);
+        if (cornerH) orientTraceHandle(cornerH, s, c);
+        if (endH) orientTraceHandle(endH, c, e);
+
+        // Update dashed aim line origin
+        if (tObj.aimLine && aimHandle) {
+          const pts = computeTracePoints(trace);
+          const aimOrigin = pts.length > 0 ? pts[0] : s.clone();
+          tObj.aimLine.geometry.setFromPoints([aimOrigin, aimHandle.position]);
+          tObj.aimLine.computeLineDistances();
+        }
+
+        // Live-rebuild the 3-point polyline + dots, using the SAME contract as
+        // buildTraceObject (own material per dot for the spacing gradient + a
+        // pointIndex so they stay draggable along the path) and re-registering
+        // them in interactiveObjects so dragging a corner handle never strips
+        // the trace of its gradient or per-point drag handles.
+        if (tObj.group) {
+          // Drop the previous dots/line from interactiveObjects so stale meshes
+          // can't keep catching raycasts after this rebuild.
+          (tObj.visuals || []).forEach((v) => {
+            const idx = interactiveObjects.indexOf(v);
+            if (idx !== -1) interactiveObjects.splice(idx, 1);
+          });
+          scene.remove(tObj.group);
+
+          const grp = new THREE.Group();
+          const lineGeo = new THREE.BufferGeometry().setFromPoints([s, c, e]);
+          const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
+          const lineMesh = new THREE.Line(lineGeo, lineMat);
+          lineMesh.userData = { isTraceVisual: true, traceIndex: tIdx };
+          grp.add(lineMesh);
+
+          const visuals = [lineMesh];
+          interactiveObjects.push(lineMesh);
+
+          const pts = computeTracePoints(trace);
+          const dotColors = computeTraceDotColors(pts);
+          const dotGeo = new THREE.SphereGeometry(0.3, 8, 8);
+          const dotMats = [];
+          pts.forEach((p, k) => {
+            const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(dotColors[k]) });
+            dotMats.push(dotMat);
+            const d = new THREE.Mesh(dotGeo, dotMat);
+            d.position.copy(p);
+            d.userData = { isTraceVisual: true, traceIndex: tIdx, pointIndex: k };
+            grp.add(d);
+            visuals.push(d);
+            interactiveObjects.push(d);
+          });
+
+          grp.visible = params.generatorsVisible !== false;
+          if (tObj.aimLine) {
+            grp.add(tObj.aimLine);
+            tObj.aimLine.visible = params.generatorsVisible !== false;
+          }
+          scene.add(grp);
+          tObj.group = grp;
+          tObj.visuals = visuals;
+          tObj.materials = { lineMat, dotMats };
+        }
       } else if (obj.userData.handleType === 'start' || obj.userData.handleType === 'end') {
         // Line handle moved — compute delta and move aim handle too
         const prevKey = obj.userData.handleType === 'start' ? 'startX' : 'endX';
@@ -2519,20 +2882,48 @@ function setupGUI() {
           tObj.aimLine.computeLineDistances();
         }
 
-        // Live-update the wireframe line + dots without full rebuild
+        // Live-update the wireframe line + dots without full rebuild. The
+        // dots are rebuilt with the SAME contract as buildTraceObject (own
+        // material per dot for the spacing gradient + a pointIndex so they
+        // stay draggable along the path) and re-registered in
+        // interactiveObjects, so dragging a line endpoint never strips a
+        // trace of its gradient or per-point drag handles.
         if (tObj.group) {
+          // Drop the previous dots from interactiveObjects so stale meshes
+          // can't keep catching raycasts after this rebuild.
+          (tObj.visuals || []).forEach((v) => {
+            const idx = interactiveObjects.indexOf(v);
+            if (idx !== -1) interactiveObjects.splice(idx, 1);
+          });
           scene.remove(tObj.group);
+
           const grp = new THREE.Group();
           const s = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
           const e = new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0);
           const lineGeo = new THREE.BufferGeometry().setFromPoints([s, e]);
           const lineMat = new THREE.LineBasicMaterial({ color: 0xff8800, transparent: true, opacity: 0.7 });
-          grp.add(new THREE.Line(lineGeo, lineMat));
+          const lineMesh = new THREE.Line(lineGeo, lineMat);
+          lineMesh.userData = { isTraceVisual: true, traceIndex: tIdx };
+          grp.add(lineMesh);
+
+          const visuals = [lineMesh];
+          interactiveObjects.push(lineMesh);
+
           const pts = computeTracePoints(trace);
-          const dotGeo = new THREE.SphereGeometry(0.15, 6, 6);
-          const dotMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
-          pts.forEach(p => { const d = new THREE.Mesh(dotGeo, dotMat); d.position.copy(p); grp.add(d); });
-          
+          const dotColors = computeTraceDotColors(pts);
+          const dotGeo = new THREE.SphereGeometry(0.3, 8, 8);
+          const dotMats = [];
+          pts.forEach((p, k) => {
+            const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(dotColors[k]) });
+            dotMats.push(dotMat);
+            const d = new THREE.Mesh(dotGeo, dotMat);
+            d.position.copy(p);
+            d.userData = { isTraceVisual: true, traceIndex: tIdx, pointIndex: k };
+            grp.add(d);
+            visuals.push(d);
+            interactiveObjects.push(d);
+          });
+
           grp.visible = params.generatorsVisible !== false;
           if (tObj.aimLine) {
             grp.add(tObj.aimLine); // re-attach the preserved dash line to the new group
@@ -2540,7 +2931,8 @@ function setupGUI() {
           }
           scene.add(grp);
           tObj.group = grp;
-          tObj.materials = { lineMat, dotMat }; // Preserve material refs for highlighting
+          tObj.visuals = visuals;
+          tObj.materials = { lineMat, dotMats }; // Preserve material refs for highlighting
         }
       } else {
         // Circle hitbox
@@ -2580,6 +2972,152 @@ function setupGUI() {
       return true;
     };
 
+    // ─── Per-point drag (slide a light along its path) ────────────────────
+    // The preview dots are draggable: dragging one projects the pointer ray
+    // onto the trace path, finds the nearest arclength `s`, and stores the
+    // signed difference from that point's even base position as
+    // `trace.pointOffsets[k]`. This mirrors the reference PixelMapper model
+    // (drag is constrained to the path, never free 3D motion). All path math
+    // lives here next to `buildTracePath`. Interaction plumbing (raycast,
+    // disabling orbit) stays in interaction.js and calls these via `window`.
+    let _dotDrag = null; // { traceIndex, pointIndex }
+
+    // World-space position of arclength `s` on a trace's path. Circle paths
+    // are authored in the group's local space, so they are pushed through the
+    // group world matrix; line paths are already world-space.
+    function traceWorldAt(trace, tObj, path, s) {
+      const local = path.at(s);
+      if (trace.shape === 'circle' && tObj && tObj.group) {
+        tObj.group.updateMatrixWorld(true);
+        return local.applyMatrix4(tObj.group.matrixWorld);
+      }
+      return local;
+    }
+
+    // Find the arclength on `path` whose world point is closest to the given
+    // ray (origin + direction). Samples coarsely then refines — robust for
+    // both straight lines and arcs without needing a closed-form solution.
+    function closestArclengthToRay(trace, tObj, path, rayOrigin, rayDir) {
+      const evalDist = (s) => {
+        const wp = traceWorldAt(trace, tObj, path, s);
+        // Distance from world point to the (infinite) ray.
+        const toPt = new THREE.Vector3().subVectors(wp, rayOrigin);
+        const proj = toPt.dot(rayDir);
+        const closestOnRay = rayOrigin.clone().addScaledVector(rayDir, proj);
+        return wp.distanceToSquared(closestOnRay);
+      };
+
+      const len = path.length;
+      if (len < 1e-9) return 0;
+      const COARSE = 200;
+      let bestS = 0;
+      let bestD = Infinity;
+      for (let i = 0; i <= COARSE; i++) {
+        const s = (i / COARSE) * len;
+        const d = evalDist(s);
+        if (d < bestD) { bestD = d; bestS = s; }
+      }
+      // Golden-section-ish local refinement around the coarse winner.
+      let lo = Math.max(0, bestS - len / COARSE);
+      let hi = Math.min(len, bestS + len / COARSE);
+      for (let iter = 0; iter < 30; iter++) {
+        const m1 = lo + (hi - lo) / 3;
+        const m2 = hi - (hi - lo) / 3;
+        if (evalDist(m1) < evalDist(m2)) hi = m2; else lo = m1;
+      }
+      return (lo + hi) / 2;
+    }
+
+    window._beginTraceDotDrag = function(traceIndex, pointIndex) {
+      const trace = params.traces[traceIndex];
+      if (!trace) return false;
+      pushUndo();
+      _dotDrag = { traceIndex, pointIndex };
+      return true;
+    };
+
+    // Called continuously while dragging. `rayOrigin`/`rayDir` describe the
+    // pointer ray in world space (built by interaction.js from the camera).
+    window._updateTraceDotDrag = function(rayOrigin, rayDir) {
+      if (!_dotDrag) return false;
+      const { traceIndex, pointIndex } = _dotDrag;
+      const trace = params.traces[traceIndex];
+      const tObj = window.traceObjects[traceIndex];
+      if (!trace || !tObj) return false;
+
+      const path = buildTracePath(trace);
+
+      // Re-derive this point's even base arclength so the stored value is a
+      // pure offset (composes with whatever base count exists today).
+      const baseAll = computeTraceBaseArclengths(trace, path);
+      if (pointIndex < 0 || pointIndex >= baseAll.length) return false;
+      const baseS = baseAll[pointIndex];
+
+      const targetS = closestArclengthToRay(trace, tObj, path, rayOrigin, rayDir);
+      if (!Array.isArray(trace.pointOffsets)) trace.pointOffsets = [];
+      // Keep the offsets array sized to the point count (pad with 0).
+      while (trace.pointOffsets.length < baseAll.length) trace.pointOffsets.push(0);
+      trace.pointOffsets[pointIndex] = targetS - baseS;
+
+      // Live update: recompute dot positions + spacing gradient in place so
+      // dragging feels fluid (no destroy/rebuild churn of the whole trace).
+      refreshTraceDots(traceIndex);
+      if (trace.generated) generateGroupFromTrace(traceIndex, true);
+      return true;
+    };
+
+    window._endTraceDotDrag = function() {
+      if (!_dotDrag) return;
+      _dotDrag = null;
+      debounceAutoSave();
+    };
+
+    // Recompute the base (even, pre-offset) arclengths for a trace. Shared by
+    // computeTracePoints and the drag math so the two never disagree.
+    function computeTraceBaseArclengths(trace, path) {
+      // COUNT is authoritative: the user sets the number of lights directly
+      // (fixture width is informational only — see the Lights control). This
+      // is the single source of truth for the even base layout, shared by
+      // computeTracePoints' offset post-processing so the two never diverge.
+      const count = Math.max(1, Math.round(trace.count ?? 8));
+      const baseS = [];
+      if (trace.shape === 'circle') {
+        // A full 360° arc wraps (no seam endpoint); a partial arc is open.
+        const isClosed = Math.abs((trace.arc || 360) - 360) < 1e-6;
+        const denom = isClosed ? count : Math.max(1, count - 1);
+        for (let i = 0; i < count; i++) {
+          baseS.push((i / denom) * path.length);
+        }
+      } else if (count === 1) {
+        // line / corner with a single light → place it at the path start.
+        baseS.push(0);
+      } else {
+        // line / corner: open path, both endpoints included.
+        for (let i = 0; i < count; i++) {
+          baseS.push((i / (count - 1)) * path.length);
+        }
+      }
+      return baseS;
+    }
+
+    // Update existing preview dots' positions + colours for a trace without a
+    // full rebuild (used during live point drags).
+    function refreshTraceDots(traceIndex) {
+      const trace = params.traces[traceIndex];
+      const tObj = window.traceObjects[traceIndex];
+      if (!trace || !tObj) return;
+      const pts = computeTracePoints(trace);
+      const colors = computeTraceDotColors(pts);
+      const dots = (tObj.visuals || []).filter(v => v.userData && v.userData.isTraceVisual && v.userData.pointIndex !== undefined);
+      dots.forEach((dot) => {
+        const k = dot.userData.pointIndex;
+        if (k < pts.length) {
+          dot.position.copy(pts[k]); // circle dots live in the group's local space
+          if (dot.material) dot.material.color.set(colors[k]);
+        }
+      });
+    }
+
     function generateGroupFromTrace(traceIndex, skipUndo = false) {
       const trace = params.traces[traceIndex];
       if (!trace) return;
@@ -2599,10 +3137,12 @@ function setupGUI() {
 
       // Compute points
       const pts = computeTracePoints(trace);
-      const isLine = trace.shape === 'line';
+      // Line AND corner produce world-space points (absolute coords).
+      // Only circle points are local to a transformed group.
+      const isWorldSpace = trace.shape === 'line' || trace.shape === 'corner';
       const grp = window.traceObjects[traceIndex]?.group;
-      if (!isLine && grp) grp.updateMatrixWorld(true);
-      const worldMatrix = (!isLine && grp) ? grp.matrixWorld : null;
+      if (!isWorldSpace && grp) grp.updateMatrixWorld(true);
+      const worldMatrix = (!isWorldSpace && grp) ? grp.matrixWorld : null;
 
       let lockedDeltaX = null;
       let lockedDeltaY = null;
@@ -2835,7 +3375,7 @@ function setupGUI() {
         params.traces.push({
           name: `Circle ${params.traces.length + 1}`,
           shape: 'circle', radius: 5, arc: 360,
-          spacing: 2, x: 0, y: 5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
+          count: 8, x: 0, y: 5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
           aimMode: 'lookAt', aimX: 0, aimY: 0, aimZ: 0,
           lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
           groupName: `Ring ${params.traces.length + 1}`,
@@ -2856,7 +3396,7 @@ function setupGUI() {
           shape: 'line',
           startX: -5, startY: 5, startZ: 0,
           endX: 5, endY: 5, endZ: 0,
-          spacing: 2,
+          count: 8,
           aimMode: 'direction', aimX: 0, aimY: -1, aimZ: 0,
           lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
           groupName: `Line ${params.traces.length + 1}`,
@@ -2868,8 +3408,31 @@ function setupGUI() {
         debounceAutoSave();
       };
 
+      const newCornerBtn = document.createElement('button');
+      newCornerBtn.textContent = '⌐ New Corner';
+      newCornerBtn.style.cssText = btnStyle;
+      newCornerBtn.onclick = () => {
+        params.traces.push({
+          name: `Corner ${params.traces.length + 1}`,
+          shape: 'corner',
+          startX: -5, startY: 5, startZ: 0,
+          cornerX: 0, cornerY: 5, cornerZ: 0,
+          endX: 0, endY: 5, endZ: 5,
+          count: 8,
+          aimMode: 'direction', aimX: 0, aimY: -1, aimZ: 0,
+          lightColor: '#ffaa44', lightIntensity: 10, lightAngle: 30,
+          groupName: `Corner ${params.traces.length + 1}`,
+          fixtureType: 'UkingPar',
+          generated: false,
+        });
+        rebuildTraceObjects();
+        renderGeneratorGUI();
+        debounceAutoSave();
+      };
+
       newBtnDiv.appendChild(newCircleBtn);
       newBtnDiv.appendChild(newLineBtn);
+      newBtnDiv.appendChild(newCornerBtn);
 
       // Remove old button bar if present
       const genChildren = genFolder.domElement.querySelector('.children');
@@ -2933,11 +3496,15 @@ function setupGUI() {
         }
       };
 
+      // Per-shape glyph for folder labels (circle ○ / corner ⌐ / line —)
+      const traceGlyph = (shape) =>
+        shape === 'circle' ? '○' : (shape === 'corner' ? '⌐' : '—');
+
       // Trace sub-folders
       params.traces.forEach((trace, i) => {
         // lil-gui returns the SAME folder if titles match, breaking all click listeners.
         // Append invisible zero-width spaces (\u200B) to guarantee every label is unique.
-        const baseLabel = `${trace.shape === 'circle' ? '○' : '—'} ${trace.name || `Trace ${i+1}`}`;
+        const baseLabel = `${traceGlyph(trace.shape)} ${trace.name || `Trace ${i+1}`}`;
         const label = baseLabel + '\u200B'.repeat(i);
         const tFolder = genFolder.addFolder(label);
         tFolder.domElement.classList.add('gui-card');
@@ -2955,7 +3522,7 @@ function setupGUI() {
 
         tFolder.add(trace, 'name').name('Name').onFinishChange(() => {
           trace.groupName = trace.name;
-          tFolder.title(`${trace.shape === 'circle' ? '○' : '—'} ${trace.name}`);
+          tFolder.title(`${traceGlyph(trace.shape)} ${trace.name}`);
           if (trace.generated) generateGroupFromTrace(i, true);
           debounceAutoSave();
         });
@@ -2987,6 +3554,33 @@ function setupGUI() {
             updateTracePreview(i);
             debounceAutoSave();
           });
+        } else if (trace.shape === 'corner') {
+          // Corner: Start / Corner / End XYZ (mirrors the line's point folders)
+          if (trace.startX === undefined) trace.startX = -5;
+          if (trace.startY === undefined) trace.startY = 5;
+          if (trace.startZ === undefined) trace.startZ = 0;
+          if (trace.cornerX === undefined) trace.cornerX = 0;
+          if (trace.cornerY === undefined) trace.cornerY = 5;
+          if (trace.cornerZ === undefined) trace.cornerZ = 0;
+          if (trace.endX === undefined) trace.endX = 0;
+          if (trace.endY === undefined) trace.endY = 5;
+          if (trace.endZ === undefined) trace.endZ = 5;
+
+          const startF = tFolder.addFolder('Start Point (green)');
+          startF.close();
+          startF.add(trace, 'startX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          const cornerF = tFolder.addFolder('Corner Point (blue)');
+          cornerF.close();
+          cornerF.add(trace, 'cornerX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          cornerF.add(trace, 'cornerY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          cornerF.add(trace, 'cornerZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          const endF = tFolder.addFolder('End Point (red)');
+          endF.close();
+          endF.add(trace, 'endX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
         } else {
           // Line: Start/End XYZ
           if (trace.startX === undefined) trace.startX = -10;
@@ -3008,19 +3602,41 @@ function setupGUI() {
           endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
         }
 
-        // Show computed light count
+        // Lights (count) — the user sets the number of lights directly.
+        // This replaces the legacy spacing slider; COUNT is authoritative.
+        if (trace.count === undefined) trace.count = 8;
         const lightPts = computeTracePoints(trace);
         const countInfo = { count: `${lightPts.length} lights` };
         const countCtrl = tFolder.add(countInfo, 'count').name('Preview').disable();
 
-        if (trace.spacing === undefined) trace.spacing = 1.0;
-        tFolder.add(trace, 'spacing', 0.5, 10, 0.25).name('Spacing (m)').onChange(() => {
+        tFolder.add(trace, 'count', 1, 200, 1).name('Lights').onChange(() => {
           const pts = computeTracePoints(trace);
           countInfo.count = `${pts.length} lights`;
           countCtrl.updateDisplay();
           updateTracePreview(i);
+          if (trace.generated) generateGroupFromTrace(i, true);
           debounceAutoSave();
         });
+
+        // Reset point offsets — clears any per-point drags so the lights
+        // snap back to the even distribution (and the gradient back to green).
+        const resetOffDiv = document.createElement('div');
+        resetOffDiv.style.cssText = 'padding:2px 6px;';
+        const resetOffBtn = document.createElement('button');
+        resetOffBtn.textContent = '⤺ Reset point offsets';
+        resetOffBtn.title = 'Snap all lights back to even spacing along the path';
+        resetOffBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+        resetOffBtn.onclick = (e) => {
+          if (e) e.stopPropagation();
+          trace.pointOffsets = [];
+          updateTracePreview(i);
+          if (trace.generated) generateGroupFromTrace(i, true);
+          debounceAutoSave();
+          resetOffBtn.blur();
+        };
+        resetOffDiv.appendChild(resetOffBtn);
+        const spacingChildren = tFolder.domElement.querySelector('.children');
+        if (spacingChildren) spacingChildren.appendChild(resetOffDiv);
 
         // Aim mode
         if (trace.aimMode === undefined) trace.aimMode = 'lookAt';
