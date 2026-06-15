@@ -44,11 +44,17 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'node:module';
 import yaml from 'js-yaml';
 import { execSync, spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Shared offline-safe port cleanup (CommonJS, no extra deps) — replaces the
+// old `npx kill-port` which needs the network.
+const require = createRequire(import.meta.url);
+const { freeStackPorts } = require('../tools/port_cleanup.cjs');
 
 function loadConfig() {
   try {
@@ -79,7 +85,9 @@ function parseArgs() {
     list: false,
     destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
-    port: cServer.port || 6968,
+    // Fail loud (below) if neither config nor --port supplies a valid port —
+    // never silently guess one.
+    port: Number.isInteger(cServer.port) ? cServer.port : null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -88,7 +96,7 @@ function parseArgs() {
       case '--model': case '-m':    opts.modelName = args[++i]; break;
       case '--fps':                 opts.fps = parseInt(args[++i], 10) || 40; break;
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
-      case '--port':                opts.port = parseInt(args[++i], 10) || 6968; break;
+      case '--port':                opts.port = parseInt(args[++i], 10); break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
       case '--dest':                opts.destinations = [args[++i]]; break;
@@ -111,6 +119,10 @@ function parseArgs() {
 `);
         process.exit(0);
     }
+  }
+  if (!Number.isInteger(opts.port) || opts.port <= 0) {
+    console.error('  ❌ No API port: set `server.port` in marsin_engine/config.yaml or pass --port <n>. Refusing to guess.');
+    process.exit(1);
   }
   return opts;
 }
@@ -782,17 +794,18 @@ async function main() {
 `);
 
   if (!opts.dryRun) {
-    // Kill existing ports
+    // Free OUR OWN port (the API server) of any stale engine before binding —
+    // offline-safe and identity-checked (no `npx kill-port`, which needs the
+    // network). We deliberately do NOT touch `web_client.port`: the engine does
+    // not serve a web client (that block is reserved/unused, see
+    // 07_run_marsin_engine.md), and `web_client.port` is CaptainPad's port —
+    // killing it on a scene-switch restart would take CaptainPad down. (The old
+    // code read a non-existent `client.web.port`, so it was silently dead.)
     const portsToKill = [];
     if (engineConfig.server && engineConfig.server.port) portsToKill.push(engineConfig.server.port);
-    if (engineConfig.client && engineConfig.client.web && engineConfig.client.web.port) portsToKill.push(engineConfig.client.web.port);
-    
+
     if (portsToKill.length > 0) {
-      try {
-        execSync(`npx -y kill-port ${portsToKill.join(' ')}`, { stdio: 'ignore', shell: process.platform === 'win32' });
-      } catch (e) {
-        // Ignore errors if ports are already free
-      }
+      freeStackPorts(portsToKill, { log: (m) => console.log(`  🧹 ${m}`) });
     }
   }
 

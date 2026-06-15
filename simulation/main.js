@@ -31,6 +31,7 @@ import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
+import { engineHttpUrl } from "./src/core/engine_endpoint.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -567,7 +568,7 @@ Promise.all([
       if (window.onLightingChange) window.onLightingChange();
     }
   } else {
-    fetch(`http://${window.location.hostname}:6968/status`)
+    fetch(engineHttpUrl('/status'))
       .then(r => r.json())
       .catch(async () => {
         const { params, setLightingMode } = await import("./src/core/state.js");
@@ -755,7 +756,7 @@ function setupSceneIndicator() {
     // Skipped on a static host (no engine reachable by construction — the sim
     // runs its in-browser Pixelblaze engine there).
     if (val && !isStaticHost()) {
-      const engineSceneUrl = `http://${window.location.hostname}:6968/scene`;
+      const engineSceneUrl = engineHttpUrl('/scene');
       fetch(engineSceneUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

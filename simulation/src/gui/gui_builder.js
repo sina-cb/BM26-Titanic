@@ -34,6 +34,7 @@ import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { updateFloodLights } from "../core/flood_lights.js";
+import { engineHttpUrl } from "../core/engine_endpoint.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -1835,8 +1836,7 @@ function setupGUI() {
               if (isStaticHost()) {
                 logStaticHostSkip('engine /global-effect (port 6968)');
               } else {
-                const host = window.location.hostname;
-                fetch(`http://${host}:6968/global-effect`, {
+                fetch(engineHttpUrl('/global-effect'), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ effect: 'fogger', state: !!state })

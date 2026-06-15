@@ -21,9 +21,9 @@ function resolveSceneCamerasPath(sceneName) {
   return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
 }
 
-// Read port from config.yaml
-const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
-const SAVE_PORT = serverConfig.save_port || 6970;
+// Read port from config.yaml (fail-loud: no silent port guessing)
+const { loadSimPorts } = require('../lib/load_ports.cjs');
+const SAVE_PORT = loadSimPorts(path.join(SIM_ROOT, 'config.yaml')).save_port;
 
 // Atomic + durable write: write to a sibling temp file, fsync it, then
 // rename over the target. A crash mid-write can no longer leave a

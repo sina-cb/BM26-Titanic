@@ -25,18 +25,12 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-// ── Config ───────────────────────────────────────────────────────────────────
+// ── Config (fail-loud: no silent port guessing) ──────────────────────────────
 const args = process.argv.slice(2);
-let port = 6972;
-let udpPort = 5568;
-
-// Try to read port from config.yaml
-try {
-  const cfgPath = path.join(__dirname, '..', 'config.yaml');
-  const cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8'));
-  if (cfg.sacn_output_port) port = cfg.sacn_output_port;
-  if (cfg.sacn_udp_port) udpPort = cfg.sacn_udp_port;
-} catch (_) { /* use default */ }
+const { loadSimPorts } = require('../lib/load_ports.cjs');
+const _simPorts = loadSimPorts(path.join(__dirname, '..', 'config.yaml'));
+const port = _simPorts.sacn_output_port;
+const udpPort = _simPorts.sacn_udp_port;
 
 const STALE_SENDER_MS = 15000; // Close senders after 15s of no data
 const SOURCE_NAME = 'BM26-Simulation';

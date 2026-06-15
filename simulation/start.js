@@ -8,12 +8,13 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const configPath = path.join(__dirname, 'config.yaml');
-const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
-const HTTP_PORT = config.http_port || 6969;
-const SAVE_PORT = config.save_port || HTTP_PORT + 1;
-const SACN_PORT = config.sacn_port || HTTP_PORT + 2;
-const SACN_OUTPUT_PORT = config.sacn_output_port || 6972;
+const { loadSimPorts } = require('./lib/load_ports.cjs');
+
+const ports = loadSimPorts();
+const HTTP_PORT = ports.http_port;
+const SAVE_PORT = ports.save_port;
+const SACN_PORT = ports.sacn_port;
+const SACN_OUTPUT_PORT = ports.sacn_output_port;
 
 // ── Scene selection via --scene <name> ──────────────────────────────────
 const sceneIdx = process.argv.indexOf('--scene');

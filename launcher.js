@@ -44,6 +44,8 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 
+const portCleanup = require('./tools/port_cleanup.cjs');
+
 const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
 const ENGINE_DIR = path.join(ROOT, 'marsin_engine');
@@ -208,7 +210,7 @@ function readPorts() {
   const text = fs.readFileSync(SIM_CONFIG_PATH, 'utf8');
   const keys = [
     'http_port', 'save_port', 'sacn_port', 'sacn_output_port',
-    'marsin_engine_port', 'captainpad_web_port',
+    'marsin_engine_port', 'captainpad_web_port', 'sacn_udp_port',
   ];
   const ports = {};
   for (const key of keys) {
@@ -388,6 +390,33 @@ async function assertPortsFree(ports) {
     }
     if (!free) {
       logError(`Port ${port} is still in use. Free it or rerun without --no-kill.`);
+      process.exit(1);
+    }
+  }
+}
+
+// The sim's sACN Receiver binds UDP :5568 (the E1.31 port). The TCP cleanup
+// above can't see UDP, so check it explicitly before starting the sim: kill a
+// stale stack receiver, but FAIL LOUD on a foreign holder (QLC+, a console,
+// Resolume, …) — it would silently swallow all sACN and leave the rig dark.
+function assertSacnUdpAvailable(udpPort) {
+  let pids;
+  try {
+    pids = portCleanup.listenersOnPort(udpPort, { udp: true });
+  } catch (err) {
+    log('launcher', `Could not inspect UDP :${udpPort} (${err.message}) — continuing.`);
+    return;
+  }
+  for (const pid of pids) {
+    if (pid === process.pid) continue;
+    const cmd = portCleanup.commandlineOf(pid);
+    if (!cmd) continue;
+    if (portCleanup.STACK_PROCESS_SIGNATURES.some((sig) => cmd.includes(sig))) {
+      log('launcher', `Freeing sACN UDP :${udpPort} — killing stale stack process pid ${pid}`);
+      portCleanup.killPid(pid);
+    } else {
+      logError(`sACN UDP :${udpPort} is held by a non-stack process (pid ${pid}: ${cmd.slice(0, 100)}).`);
+      logError('That process will swallow all sACN — the rig would stay dark. Free it, then rerun.');
       process.exit(1);
     }
   }
@@ -787,6 +816,7 @@ async function main() {
   const captainPadUrl = `http://localhost:${ports.captainpad_web_port}/`;
 
   // 1. Simulation servers (HTTP, save, sACN in/out).
+  assertSacnUdpAvailable(ports.sacn_udp_port);
   startChild('sim', 'node', ['start.js', '--scene', opts.scene], SIM_DIR);
   await waitForHttp('sim http', `http://127.0.0.1:${ports.http_port}/simulation/`, 90000);
   await waitForTcp('sim save server', ports.save_port, 30000);
