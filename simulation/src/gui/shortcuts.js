@@ -49,7 +49,7 @@ export const SHORTCUT_GROUPS = [
     items: [
       { keys: ['H'], desc: 'Cycle UI: show all → hide editing chrome → hide all' },
       { keys: ['B'], desc: 'Toggle the Lighting Controls drawer' },
-      { keys: ['Ctrl', '?'], desc: 'Open this shortcuts help' },
+      { keys: ['Ctrl', 'Shift', 'W'], desc: 'Open this shortcuts help' },
     ],
   },
 ];

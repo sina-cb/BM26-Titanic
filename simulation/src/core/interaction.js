@@ -400,8 +400,8 @@ export function onKeyDown(event) {
     return;
   }
 
-  // Ctrl+? (Shift+/ → '?') toggles the keyboard-shortcuts help overlay.
-  if ((event.ctrlKey || event.metaKey) && event.key === '?') {
+  // Ctrl+Shift+W toggles the keyboard-shortcuts help overlay.
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'w') {
     event.preventDefault();
     toggleHelpPanel();
     return;
