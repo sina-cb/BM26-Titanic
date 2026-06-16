@@ -16,17 +16,18 @@ of truth. (See `audio/README.md`.)
 ## 1. The story
 
 We light the Titanic to live EDM. The **Audio Analysis Companion** is the tool we
-use to *design* the audio reactivity: it reads audio (mic / line / file), runs
-the engine's analysis + post-processing, lets us **see** every signal, **tune**
-it, **shape** it into the cues we want, and then **output the chosen signals to
-the marsin engine over OSC**, where they land in the Central Parameter Center
-(CPC) and drive patterns (per `docs/26`).
+use to *design* the audio reactivity: it reads audio (mic / line / file) **and**
+ingests an external stem/BPM analyzer (**Audio Slice**, §6.2), runs the engine's
+analysis + post-processing, lets us **see** every signal, **tune** it, **shape**
+it into the cues we want, and then **output the chosen signals to the marsin
+engine over OSC**, where they land in the Central Parameter Center (CPC) and
+drive patterns (per `docs/26`).
 
 ```
-   audio in ──▶ [ Sources ] ──▶ [ post-proc Ops ] ──▶ [ Output UI ] ──OSC──▶ marsin engine CPC ──▶ patterns
-   (mic/line/file)  raw signals     gain/smooth/Kalman/      pick what to       (osc.port 10000)        (docs/26 routing)
-                                    DanceMaker/…             send + OSC addr
-                         └────────────────▶ [ Visualizers ] (spectrum / waveform / dom-dance)
+   audio in ─────────▶ [ Sources ] ──▶ [ post-proc Ops ] ──▶ [ Output UI ] ──OSC──▶ marsin engine CPC ──▶ patterns
+   (mic/line/file)      raw signals     gain/smooth/Kalman/      pick what to       (osc.port 10000)        (docs/26 routing)
+   Audio Slice ──OSC──▶ (stems/BPM)     DanceMaker/…             send + OSC addr
+   (local CLI, §6.2)        └────────────────▶ [ Visualizers ] (spectrum / waveform / dom-dance)
 ```
 
 Two complementary lanes already exist and remain valid:
@@ -83,6 +84,10 @@ which declares the conversion explicitly.
 - `rawDom1 / rawDom2` (`freqWindow` — center freq + `[loHz, hiHz]` window + energy).
 - structure taps: `audioStructure`, `buildScore`, `energyRatio`, `slowZone`,
   `dropPulse` (`intensity`/`event`); `bpm`/`beat`/`beatInBar`/`barPhase`/`downbeat`.
+- **Audio Slice taps** (external stem/BPM analyzer over OSC, §6.2 — local-only):
+  `rawStemBass / rawStemDrums / rawStemVocals` (`intensity`), `rawSliceBpm`
+  (`bpm`), `rawSliceBeat` (`event`). Present only when the Audio Slice lane is
+  enabled; address→source map is config-driven.
 
 **Ops** (pure, allocation-free, O(1)/sample or O(1)/hop — DSP-literature backed):
 - `Gain` (`intensity→intensity`), `Smooth`/`LPF`, `Envelope`, `Schmitt`
@@ -132,9 +137,12 @@ list that can drift). Signals fall into two origins:
   audioSwitchPattern · audioSwitchColor`.
 - **External-source keys** also in the registry but **not** produced by the
   Companion's mic analysis — `stemsBass/Drums/Vocals` (+ gains, raw mirrors) and
-  `tempoBpm` come from an external stem analyser / LX tempo over OSC (`docs/24`).
-  The Companion can *route* to them but does not *generate* them; the Output UI
-  flags them as external so an operator doesn't expect the mic to drive them.
+  `tempoBpm`. Their genuine producer is **Audio Slice** (the external stem/BPM
+  analyzer, §6.2) — or an LX tempo source — over OSC (`docs/24`). When the Audio
+  Slice lane is enabled the Companion ingests them as the `rawStem*` / `rawSliceBpm`
+  Sources and *does* drive these keys; otherwise it can only *route* to them. The
+  Output UI flags them as external so an operator doesn't expect the bare mic to
+  drive them.
 
 Because the catalog is the engine's own registry (declared once), what the
 Companion sends matches what the engine already understands — no separate key
@@ -169,13 +177,63 @@ Per-visualizer settings (kept minimal): **Y-axis fixed range vs dynamic
 
 ---
 
-## 6. The INPUT (source) stage
+## 6. Inputs
+
+The Companion has **two input lanes**, both feeding the framework as `raw…`
+Sources. Lane 1 is the engine's own PCM analysis; lane 2 is an external stem/BPM
+analyzer (**Audio Slice**) over OSC.
+
+### 6.1 PCM lane (mic / line / file → the engine analyzer)
 
 `Audio source → [ gain + smoothing ] → FFT → everything`. A single PCM-domain
 stage (software preamp gain + an optional gentle pre-FFT low-pass to denoise)
 conditions the signal once, so bands / kick / dom / FFT all see one clean
 source. No per-consumer gain, no kick special-casing. (Freq-domain stages do not
 post-process; only the time-domain input and the per-signal scalar chains do.)
+
+### 6.2 Audio Slice lane (external stem/BPM analyzer, OSC-in) — **local-only**
+
+**Audio Slice** is a separate program (not part of this repo) that does heavier
+analysis than the in-engine DSP can — **stem separation** (bass / drums / vocals)
+and its own **BPM/beat** estimate. It is launched **from the CLI with a config
+file**, and it streams the resulting signals **over OSC to a configurable IP +
+port**. The Companion treats it as a managed input service:
+
+1. **Launch + supervise.** When enabled, the Companion spawns Audio Slice from its
+   CLI with the configured binary path + config (same supervised-subprocess
+   discipline as ffmpeg capture / the engine's children — restart on exit, clean
+   teardown). It is optional: if disabled, the lane is simply absent (fail-loud if
+   *enabled* but the binary/config is missing — never a silent no-op).
+2. **Receive.** The Companion opens an **OSC listener** on the configured
+   `host:port` (this is the address Audio Slice is told to send to) and maps
+   incoming OSC addresses to raw Sources.
+3. **Expose as `raw` Sources** in the graph (§2.2), so Audio Slice's outputs get
+   the same visualize → post-proc → output treatment as the mic-derived signals:
+   - `rawStemBass / rawStemDrums / rawStemVocals` (`intensity`),
+   - `rawSliceBpm` (`bpm`), `rawSliceBeat` (`event`) — and whatever else Audio
+     Slice emits; the address→source map is config-driven, not hard-coded.
+
+These are the **genuine producers** of the registry's `stemsBass/Drums/Vocals` and
+`tempoBpm` keys (§3) — the keys the GPT review flagged as "external-source." When
+Audio Slice is running, the mic lane and the stem lane coexist: the operator can
+drive low-freq looks from `rawLow` *and* a clean isolated `rawStemBass`, beats from
+either `audioBpm` (in-engine) or `rawSliceBpm` (Audio Slice).
+
+**Routing.** Two supported paths (config picks one):
+- **Direct → engine** (production): Audio Slice sends straight to the engine's OSC
+  port (`10000`), landing `stems*`/`tempoBpm` in CPC via the existing `docs/24`
+  path — the Companion need not be running.
+- **→ Companion** (design/tuning): Audio Slice sends to the Companion's OSC-in
+  port, where the signals appear as raw Sources to **see, post-process, and
+  re-output** through the Output UI (§7) just like the mic signals.
+
+> **⚠ Local-only — must be built and tested on the operator's machine.** The Audio
+> Slice binary exists only on Sina's local machine; it is **not** available in CI,
+> the remote container, or the corpus harness. So the launch + OSC-in integration
+> (and any parity/latency testing of stems/BPM) can only be developed and verified
+> locally. Treat it as a local-dev build slice: the framework code (config schema,
+> OSC listener, raw Sources, supervised launch) can be written anywhere, but
+> end-to-end validation requires the local Audio Slice install.
 
 ---
 
@@ -252,7 +310,25 @@ audioCompanion:
     oscHost: 127.0.0.1
     oscPort: 10000       # engine osc.port (docs/24)
     signals: []          # [{ signal: 'micLow', oscAddress: '/marsin/mic/low' }, …]
+  audioSlice:            # external stem/BPM analyzer lane (§6.2) — LOCAL ONLY
+    enabled: false       # spawn + supervise Audio Slice; absent if false (fail-loud if enabled w/ missing binary)
+    binary: null         # path to the Audio Slice CLI (operator's local machine)
+    configPath: null     # config file passed to Audio Slice on launch
+    listenHost: 127.0.0.1 # where the Companion's OSC-in listener binds …
+    listenPort: 10001    # … and the host:port Audio Slice is told to send to (≠ engine 10000)
+    route: companion     # 'companion' (raw Sources, design lane) | 'engine' (straight to CPC, docs/24)
+    sources:             # OSC address → raw Source map (config-driven, not hard-coded)
+      - { oscAddress: '/slice/stem/bass',   source: rawStemBass }
+      - { oscAddress: '/slice/stem/drums',  source: rawStemDrums }
+      - { oscAddress: '/slice/stem/vocals', source: rawStemVocals }
+      - { oscAddress: '/slice/bpm',         source: rawSliceBpm }
+      - { oscAddress: '/slice/beat',        source: rawSliceBeat }
 ```
+
+**Audio Slice is local-only** (§6.2): its binary lives on the operator's machine,
+so this block only does anything on a local stack. On CI / the remote container,
+`audioSlice.enabled` stays `false` and the lane is absent. The launch + OSC-in
+integration must be validated locally.
 
 Starting the engine sets up audio; the Companion is part of that bring-up, not a
 side process you remember to launch.
@@ -266,9 +342,11 @@ Registered in the central ports table (`.agent/00_gol/13_multi_agent.md`):
 | Service | Default | Source of truth |
 |---|---|---|
 | Audio Companion (HTTP/WS) | `6973` | `config.yaml::audioCompanion.port` / `--port` |
+| Audio Slice OSC-in (local-only, §6.2) | `10001` | `config.yaml::audioCompanion.audioSlice.listenPort` |
 
 (6970 — the Companion's old default — collides with the Simulation save server;
-the Companion moves to **6973**. Its OSC output targets the engine's `10000`.)
+the Companion moves to **6973**. Its OSC *output* targets the engine's `10000`;
+its Audio Slice OSC *input* listens on `10001`, distinct from the engine port.)
 
 ---
 
@@ -333,6 +411,10 @@ fixed-vs-dynamic axis settings, or a theme system.
   list" (which the current code is ~80% of). It is currently unscoped.
 - **Kalman** + **`DanceMaker`** as first-class ops (dom-dance **parity test**).
 - the **OscSink** + **Output UI** (§7), **engine-launch + config** (§8).
+- the **Audio Slice input lane** (§6.2) — launch/supervise the external CLI
+  analyzer, OSC-in listener, `rawStem*` / `rawSliceBpm` / `rawSliceBeat` Sources.
+  ⚠ **local-only**: buildable anywhere, but end-to-end validation needs the
+  operator's local Audio Slice install.
 - the **jitter buffer + steady clock** (§13) — the realtime fix.
 - the **UI theme rehaul**: reuse the Sim's proven token pipeline
   (`simulation/src/gui/theme.js` + `simulation/style.css`, palettes mirror
