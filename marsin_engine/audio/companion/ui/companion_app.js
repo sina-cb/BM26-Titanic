@@ -473,15 +473,25 @@ function drawSpectrum(ctx, spec, dom) {
     drawWindow(ctx, dom.lo1, dom.hi1, '240,162,59', W, H);
     drawWindow(ctx, dom.lo2, dom.hi2, '192,132,252', W, H);
   }
-  // spectrum bars (temporal EMA so they glide instead of flickering)
+  // spectrum as a SMOOTH FILLED CURVE (not bars): temporal EMA (no flicker) +
+  // light 3-tap spatial smoothing (no stair-steps) + quadratic curve through
+  // the bin tops with a gradient fill.
   if (spec && spec.length) {
-    if (!specSmooth || specSmooth.length !== spec.length) specSmooth = new Float32Array(spec.length);
-    const a = 0.35, n = spec.length, bw = W / n;
-    ctx.fillStyle = '#46586b';
+    const n = spec.length;
+    if (!specSmooth || specSmooth.length !== n) specSmooth = new Float32Array(n);
+    const a = 0.35;
+    for (let i = 0; i < n; i++) specSmooth[i] = a * clamp01(spec[i]) + (1 - a) * specSmooth[i];
+    const px = new Array(n), py = new Array(n);
     for (let i = 0; i < n; i++) {
-      specSmooth[i] = a * clamp01(spec[i]) + (1 - a) * specSmooth[i];
-      const h = specSmooth[i] * H; ctx.fillRect(i * bw, H - h, Math.max(1, bw - 0.5), h);
+      const v = 0.25 * specSmooth[Math.max(0, i - 1)] + 0.5 * specSmooth[i] + 0.25 * specSmooth[Math.min(n - 1, i + 1)];
+      px[i] = (i / (n - 1)) * W; py[i] = H - v * H;
     }
+    const curve = () => { ctx.moveTo(px[0], py[0]); for (let i = 0; i < n - 1; i++) { const mx = (px[i] + px[i + 1]) / 2, my = (py[i] + py[i + 1]) / 2; ctx.quadraticCurveTo(px[i], py[i], mx, my); } ctx.lineTo(px[n - 1], py[n - 1]); };
+    ctx.beginPath(); ctx.moveTo(0, H); ctx.lineTo(px[0], py[0]); curve(); ctx.lineTo(W, H); ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(78,161,255,0.45)'); grad.addColorStop(1, 'rgba(78,161,255,0.03)');
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.strokeStyle = '#6db0ff'; ctx.lineWidth = 1.5; ctx.beginPath(); curve(); ctx.stroke();
   }
   // dom1/dom2 location markers
   if (dom) {
@@ -502,9 +512,15 @@ function drawWave(ctx, wave) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
   ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
   if (!wave || !wave.length) return;
-  ctx.strokeStyle = '#34d3b5'; ctx.lineWidth = 1.2; ctx.beginPath();
-  const n = wave.length, step = W / (n - 1);
-  for (let i = 0; i < n; i++) { const x = i * step, y = H / 2 - wave[i] * (H / 2 * 0.92); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+  ctx.strokeStyle = '#34d3b5'; ctx.lineWidth = 1.3; ctx.beginPath();
+  const n = wave.length, step = W / (n - 1), yOf = (v) => H / 2 - v * (H / 2 * 0.92);
+  // quadratic-smoothed polyline through the samples → a continuous wave, not steps
+  ctx.moveTo(0, yOf(wave[0]));
+  for (let i = 0; i < n - 1; i++) {
+    const x1 = i * step, y1 = yOf(wave[i]), mx = (x1 + (i + 1) * step) / 2, my = (y1 + yOf(wave[i + 1])) / 2;
+    ctx.quadraticCurveTo(x1, y1, mx, my);
+  }
+  ctx.lineTo(W, yOf(wave[n - 1]));
   ctx.stroke();
 }
 

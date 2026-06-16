@@ -170,9 +170,12 @@ const SPECTRUM_BINS = 96, WAVE_POINTS = 128;
 let lastPcm = new Int16Array(HOP);
 const waveBuf = new Float32Array(WAVE_POINTS);
 function downWave(int16) {
-  const len = int16.length, step = len / WAVE_POINTS;
+  // Average each segment (not decimate) → anti-aliased, smooth scope line.
+  const len = int16.length, seg = len / WAVE_POINTS;
   for (let i = 0; i < WAVE_POINTS; i++) {
-    const v = (int16[Math.min(len - 1, Math.floor(i * step))] / 32768) * inputGain;   // gain scales the scope too
+    const s = Math.floor(i * seg), e = Math.max(s + 1, Math.min(len, Math.floor((i + 1) * seg)));
+    let sum = 0; for (let j = s; j < e; j++) sum += int16[j];
+    const v = (sum / (e - s) / 32768) * inputGain;   // gain scales the scope too
     waveBuf[i] = v > 1 ? 1 : v < -1 ? -1 : v;
   }
   return Array.from(waveBuf);
