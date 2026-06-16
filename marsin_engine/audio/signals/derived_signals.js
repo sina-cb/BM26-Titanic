@@ -50,19 +50,30 @@ export class DerivedSignals {
     if (!this._fatal) this._zero();
   }
 
+  /** @private warn ONCE per non-finite input key (fail loud, don't spam/die). */
+  _warnNonFinite(key, val) {
+    if (!this._nfWarned) this._nfWarned = new Set();
+    if (this._nfWarned.has(key)) return;
+    this._nfWarned.add(key);
+    console.warn(`[derivedSignals] non-finite ${key}=${val} — treating as 0 (key dropout?)`);
+  }
+
   /** Per-hop step. `now` ms (analyzer hop clock), `dt` seconds since last hop. */
   tick(now, dt) {
     if (this._fatal) return;
     const pc = this.paramCenter;
+    // Finite guard (fail loud, don't die): a key dropout / NaN must not poison
+    // the BPM/note/party state for the session. Non-finite → 0 + warn once.
+    const g = (key) => { const v = pc.get(key); if (Number.isFinite(v)) return v; this._warnNonFinite(key, v); return 0; };
     try {
-      const b = this._bpm.update(pc.get('micFluxRaw'), pc.get('micKickRaw'), dt);
-      const n = this._note.update(pc.get('micDomFreq1'), pc.get('micDomEnergy1'), pc.get('micDomFreq2'), pc.get('micDomEnergy2'));
-      const p = this._party.update(pc.get('micLowRaw'), pc.get('micMidRaw'), pc.get('micHighRaw'), dt, now);
+      const b = this._bpm.update(g('micFluxRaw'), g('micKickRaw'), dt);
+      const n = this._note.update(g('micDomFreq1'), g('micDomEnergy1'), g('micDomFreq2'), g('micDomEnergy2'));
+      const p = this._party.update(g('micLowRaw'), g('micMidRaw'), g('micHighRaw'), dt, now);
       const s = this._switch.update({
         nowMs: now, dt,
-        dropPulse: pc.get('audioDropPulse'), energyRatio: pc.get('audioEnergyRatio'),
-        buildScore: pc.get('audioBuildScore'), slowZone: pc.get('audioSlowZone'),
-        structure: pc.get('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
+        dropPulse: g('audioDropPulse'), energyRatio: g('audioEnergyRatio'),
+        buildScore: g('audioBuildScore'), slowZone: g('audioSlowZone'),
+        structure: g('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
         pitchClass: n.pitchClass, noteStable: n.stable,
       });
       pc.setMany([

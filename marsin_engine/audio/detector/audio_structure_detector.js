@@ -279,8 +279,14 @@ export class AudioStructureDetector {
     // RAW (pre-gain) inputs (review §2.1) — including micFluxRaw, the
     // pre-chain spectral-flux mirror, so an operator nudging micFluxGain
     // can't shift the build score (consistent with the other raw reads).
-    const micLow     = this.paramCenter.get('micLowRaw');
-    const micFluxRaw = this.paramCenter.get('micFluxRaw');
+    const micLowRead     = this.paramCenter.get('micLowRaw');
+    const micFluxRead    = this.paramCenter.get('micFluxRaw');
+    // Finite guard (fail loud, don't die): a key dropout / NaN must not poison
+    // the envelopes + Kalman state for the whole session. Treat non-finite as
+    // 0 for this hop and warn once. (Codex P0: fail loudly — we warn — but a
+    // transient dropout must not silently kill the detector.)
+    const micLow     = Number.isFinite(micLowRead)  ? micLowRead  : (this._warnNonFinite('micLowRaw', micLowRead), 0);
+    const micFluxRaw = Number.isFinite(micFluxRead) ? micFluxRead : (this._warnNonFinite('micFluxRaw', micFluxRead), 0);
 
     // 1. Short / long energy envelopes (causal one-pole IIR).
     if (dt > 0) {
@@ -514,7 +520,10 @@ export class AudioStructureDetector {
     // for seconds after (the mean-of-Δ² problem). Clip |dz| to ~3σ of the
     // current noise estimate before squaring — the online analog of the
     // experiment's MAD (median) R, which ignored the drop-sized tails.
-    const sigma = Math.sqrt(2 * kf.rEma);              // std of Δz ≈ √(2R)
+    // rEma ≈ E[(Δz)²] = Var(Δz), so σ(Δz) = √rEma (NOT √(2·rEma) — that was a
+    // units bug that made the clip ~1.4× too loose, letting loud passages
+    // inflate R and suppress drops afterwards).
+    const sigma = Math.sqrt(kf.rEma);
     const dzClip = Math.max(-3 * sigma, Math.min(3 * sigma, dz));
     kf.rEma = (1 - KALMAN_R_ALPHA) * kf.rEma + KALMAN_R_ALPHA * (dzClip * dzClip);
     const R = Math.max(0.5 * kf.rEma, KALMAN_R_FLOOR);
@@ -568,6 +577,14 @@ export class AudioStructureDetector {
     }
     console.log(`[audioStructure] ${new Date(now).toISOString()} dropFired confidence=${confidence.toFixed(2)} buildMs=${Math.round(buildDurationMs)} stemsFresh=${stemsFresh}`);
     return true;
+  }
+
+  /** @private warn ONCE per non-finite input key (fail loud, don't spam/die). */
+  _warnNonFinite(key, val) {
+    if (!this._nfWarned) this._nfWarned = new Set();
+    if (this._nfWarned.has(key)) return;
+    this._nfWarned.add(key);
+    console.warn(`[audioStructure] non-finite ${key}=${val} — treating as 0 this hop (key dropout?)`);
   }
 
   /** @private one stdout line per state transition (operator wants all). */

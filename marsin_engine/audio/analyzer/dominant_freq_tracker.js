@@ -130,6 +130,12 @@ export class DominantFreqTracker {
     this.relFloor     = opts.relFloor     ?? 0.12;
     this.absFloor     = opts.absFloor     ?? 1e-4;
     this.maxJumpHz    = opts.maxJumpHz    ?? 80;
+    // Association gate is PROPORTIONAL to frequency (constant-Q): a flat 80 Hz
+    // is >1 semitone at the bass (so a coasting bass track wrongly grabs a
+    // different nearby note → freq smear/jump), but tiny up high. Gate =
+    // clamp(freq·maxJumpFrac, minJumpHz, maxJumpHz). ~6% ≈ one semitone.
+    this.maxJumpFrac  = opts.maxJumpFrac  ?? 0.06;
+    this.minJumpHz    = opts.minJumpHz    ?? 12;
     this.minFreqHz    = opts.minFreqHz    ?? 30;
     this.maxFreqHz    = opts.maxFreqHz    ?? 8000;
     this.energyGain   = opts.energyGain   ?? 8.0;
@@ -291,7 +297,8 @@ export class DominantFreqTracker {
         const df = Math.abs(this._peakFreq[i] - t.freqHz);
         if (df < bestDf) { bestDf = df; best = i; }
       }
-      if (best >= 0 && bestDf <= this.maxJumpHz) {
+      const gate = Math.min(this.maxJumpHz, Math.max(this.minJumpHz, t.freqHz * this.maxJumpFrac));
+      if (best >= 0 && bestDf <= gate) {
         this._matched[best] = 1;
         this._updateTrack(t, this._peakFreq[best], this._peakEner[best], this._peakLo[best], this._peakHi[best]);
         if (t.energy < this.deathEnergy) t.lowHops++; else t.lowHops = 0;

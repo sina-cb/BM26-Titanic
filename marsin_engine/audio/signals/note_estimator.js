@@ -170,19 +170,27 @@ export class NoteEstimator {
     };
   }
 
-  /** @private median of the pitch-class ring (mod-12 aware via circular mean fallback). */
+  /**
+   * @private MODE of the pitch-class ring — the most frequent class. Pitch
+   * classes are CIRCULAR (0..11, where 11 and 0 are adjacent), so a plain
+   * numeric median is wrong near the B↔C wrap (median of {11,0,11,0,11} = 11,
+   * but {0,11,0,11,0} = 0 — it flips on count parity, and a real cluster
+   * straddling the wrap collapses to ~F). A histogram mode is circular-safe
+   * and is exactly "the dominant note" we want.
+   */
   _medianPc() {
-    const n = this._medFilled;
-    if (n === 0) return this._committedPc;
-    // Pitch classes are circular; a plain median is fine when they cluster,
-    // which they do on a held note. Use plain median of the populated values.
-    const s = this._medScratch;
-    let m = 0;
-    for (let i = 0; i < n; i++) { const v = this._medBuf[i]; if (!Number.isNaN(v)) s[m++] = v; }
-    if (m === 0) return this._committedPc;
-    // insertion sort (m <= medianN, tiny)
-    for (let i = 1; i < m; i++) { const v = s[i]; let j = i - 1; while (j >= 0 && s[j] > v) { s[j + 1] = s[j]; j--; } s[j + 1] = v; }
-    return s[m >> 1] | 0;
+    if (this._medFilled === 0) return this._committedPc;
+    const counts = this._pcCounts || (this._pcCounts = new Int32Array(12));
+    counts.fill(0);
+    let any = false;
+    for (let i = 0; i < this._medFilled; i++) {
+      const v = this._medBuf[i];
+      if (!Number.isNaN(v)) { const pc = ((v % 12) + 12) % 12 | 0; counts[pc]++; any = true; }
+    }
+    if (!any) return this._committedPc;
+    let best = 0;
+    for (let pc = 1; pc < 12; pc++) if (counts[pc] > counts[best]) best = pc;
+    return best;
   }
 }
 
