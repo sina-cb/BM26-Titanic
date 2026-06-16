@@ -32,7 +32,7 @@ import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview
 import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
-import { LedStrand } from "../fixtures/led_strand.js";
+import { LedStrand, setLedPixelScale } from "../fixtures/led_strand.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
@@ -3411,6 +3411,19 @@ function setupGUI() {
       (window.ledStrandFixtures || []).forEach(f => f.setGuidesVisible(v));
     };
 
+    // LED Pixel Size — scales the glowing point representation live.
+    if (params.ledPixelSize === undefined) params.ledPixelSize = 1.0;
+    setLedPixelScale(params.ledPixelSize);
+    strandFolder.add(params, 'ledPixelSize', 0.2, 3.0, 0.05).name('LED Pixel Size').listen().onChange(v => {
+      setLedPixelScale(v);
+      (window.ledStrandFixtures || []).forEach(f => f.setPixelSize(v));
+    });
+    window.setLedPixelSize = (v) => {
+      params.ledPixelSize = v;
+      setLedPixelScale(v);
+      (window.ledStrandFixtures || []).forEach(f => f.setPixelSize(v));
+    };
+
     window.ledStrandFixtures = [];
 
     function rebuildLedStrands() {
@@ -3422,6 +3435,7 @@ function setupGUI() {
         const fixture = new LedStrand(config, index, scene, interactiveObjects);
         fixture.setVisibility(params.strandsEnabled !== false);
         fixture.setGuidesVisible(params.showLedGuides !== false);
+        fixture.setPixelSize(params.ledPixelSize ?? 1.0);
         window.ledStrandFixtures.push(fixture);
       });
     }
