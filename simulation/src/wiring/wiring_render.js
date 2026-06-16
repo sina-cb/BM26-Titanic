@@ -85,13 +85,14 @@ export function buildWiringGroup(model) {
         new THREE.TubeGeometry(curve, segs, HALO_RADIUS + ci * 0.06, 10, false),
         new THREE.MeshBasicMaterial({ color: 0xf2f4f8, transparent: true, opacity: 0.28 }),
       );
+      halo.userData.wiring = { kind: 'halo', family: def.family, route: route.id };
       group.add(halo);
 
       const tube = new THREE.Mesh(
         new THREE.TubeGeometry(curve, segs, radius, 10, false),
         new THREE.MeshBasicMaterial({ color: hexColor(def.color) }),
       );
-      tube.userData = { wiringRoute: route.id, wiringCable: def.id };
+      tube.userData.wiring = { kind: 'cable', family: def.family, route: route.id, cable: def.id };
       group.add(tube);
     });
 
@@ -99,6 +100,7 @@ export function buildWiringGroup(model) {
     const mid = curve.getPoint(0.5);
     const label = makeLabel(route.name, '#ffffff');
     label.position.copy(mid).add(new THREE.Vector3(0, 1.2, 0));
+    label.userData.wiring = { kind: 'label', sub: 'route', route: route.id };
     group.add(label);
   }
 
@@ -109,9 +111,11 @@ export function buildWiringGroup(model) {
       new THREE.MeshBasicMaterial({ color: 0x39e0ff }),
     );
     box.position.set(c.placement.x, c.placement.y, c.placement.z);
+    box.userData.wiring = { kind: 'marker', sub: 'component' };
     group.add(box);
     const label = makeLabel(`${c.name} [${c.type}]`, '#9ff0ff');
     label.position.copy(box.position).add(new THREE.Vector3(0, COMPONENT_SIZE, 0));
+    label.userData.wiring = { kind: 'label', sub: 'component' };
     group.add(label);
   }
 
@@ -122,9 +126,11 @@ export function buildWiringGroup(model) {
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
     );
     sphere.position.set(a.placement.x, a.placement.y, a.placement.z);
+    sphere.userData.wiring = { kind: 'marker', sub: 'anchor' };
     group.add(sphere);
     const label = makeLabel(a.id, '#dfe4ee');
     label.position.copy(sphere.position).add(new THREE.Vector3(0, ANCHOR_RADIUS + 0.6, 0));
+    label.userData.wiring = { kind: 'label', sub: 'anchor' };
     group.add(label);
   }
 
