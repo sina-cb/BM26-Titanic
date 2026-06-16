@@ -214,7 +214,7 @@ const analyzer = new AudioAnalyzer({
     // (mirrors the engine's LIVE_BUCKET_MIN_INTERVAL_MS). Mic capture delivers
     // analysis frames in BURSTS, so broadcasting every one made the UI jerky —
     // exactly the latency/jitter CaptainPad avoids by coalescing.
-    latestFrame = {
+    pendingFrames.push({
       type: 'frame', t: clockMs, signals,
       dom: {
         f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
@@ -234,8 +234,7 @@ const analyzer = new AudioAnalyzer({
         hue: paramCenter.get('audioNoteHue'),
         sp: paramCenter.get('audioSwitchPattern'), sc: paramCenter.get('audioSwitchColor'),
       },
-    };
-    frameDirty = true;
+    });
   },
 });
 
@@ -253,9 +252,18 @@ const specAnalyzer = new AudioAnalyzer({
   nowFn: () => clockMs, onAnalysis: () => {},
 });
 
-let latestFrame = null, frameDirty = false;
+let pendingFrames = [];
 const BROADCAST_MS = 16;   // ~60 Hz, matches the UI render cadence → no stepping
-setInterval(() => { if (frameDirty && latestFrame) { broadcast(latestFrame); frameDirty = false; } }, BROADCAST_MS);
+setInterval(() => {
+  if (pendingFrames.length > 0) {
+    if (pendingFrames.length === 1) {
+      broadcast(pendingFrames[0]);
+    } else {
+      broadcast({ type: 'frames', frames: pendingFrames });
+    }
+    pendingFrames = [];
+  }
+}, BROADCAST_MS);
 
 // ── Audio sources ──────────────────────────────────────────────────────────
 let mode = 'test';        // 'test' | 'mic' | 'file'
@@ -395,6 +403,7 @@ function startCapture(device) {
 }
 function setMode(next, opts = {}) {
   stopSource();
+  pendingFrames = [];
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
   scope.fill(0);   // clear the rolling oscilloscope window between sources
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;

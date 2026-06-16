@@ -49,6 +49,7 @@ const S = {
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
+const frameQueue = [];
 
 // ── WS ─────────────────────────────────────────────────────────────────────
 function connect() {
@@ -67,29 +68,17 @@ function connect() {
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
       for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
+      frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
     } else if (m.type === 'frame') {
-      // Only update the LATEST value here; the scrolling trace is advanced in
-      // the draw loop at a steady 60 fps. Mic capture delivers frames in
-      // bursts, so advancing the trace per-message made the scroll jerky.
-      for (const s in m.signals) { const v = m.signals[s]; if (v) S.live[s] = v; }
-      if (m.dom) {
-        S.dom = m.dom;
-        S.live.dom1 = { raw: m.dom.e1, post: m.dom.e1 };   // dom energy as a signal
-        S.live.dom2 = { raw: m.dom.e2, post: m.dom.e2 };
-      }
-      if (m.struct) S.struct = m.struct;
-      if (m.spectrum) S.spectrum = m.spectrum;
-      if (m.wave) S.wave = m.wave;
-      if (m.derived) {
-        if (m.derived.sp > 0.5 && S.derived.sp <= 0.5) S.spFlash = 1;
-        if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
-        S.derived = m.derived;
-      }
+      frameQueue.push(m);
+    } else if (m.type === 'frames') {
+      frameQueue.push(...m.frames);
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
       S.mode = m.mode; buildSourceBar();
+      frameQueue.length = 0;
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
       S.inputGain = m.value; buildGainBar();
@@ -446,16 +435,43 @@ $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
-  // Advance the scrolling trace at the steady render rate from the latest
-  // values (decoupled from bursty WS arrival → smooth animation on mic too).
-  if (S.signals.length) {
-    for (const s of S.signals) {
-      const tr = S.trace[s]; if (!tr) continue;
-      const lv = S.live[s] || { raw: 0, post: 0 };
-      tr.raw[S.head] = clamp01(lv.raw); tr.post[S.head] = clamp01(lv.post);
-    }
-    S.head = (S.head + 1) % TRAIL;
+  // Process queued frames. If the queue is growing, speed up consumption.
+  let limit = 1;
+  if (frameQueue.length > 30) {
+    limit = Math.ceil(frameQueue.length / 15);
   }
+  
+  for (let k = 0; k < limit; k++) {
+    if (frameQueue.length === 0) break;
+    const m = frameQueue.shift();
+    
+    // Update live state with this frame
+    for (const s in m.signals) { const v = m.signals[s]; if (v) S.live[s] = v; }
+    if (m.dom) {
+      S.dom = m.dom;
+      S.live.dom1 = { raw: m.dom.e1, post: m.dom.e1 };
+      S.live.dom2 = { raw: m.dom.e2, post: m.dom.e2 };
+    }
+    if (m.struct) S.struct = m.struct;
+    if (m.spectrum) S.spectrum = m.spectrum;
+    if (m.wave) S.wave = m.wave;
+    if (m.derived) {
+      if (m.derived.sp > 0.5 && S.derived.sp <= 0.5) S.spFlash = 1;
+      if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
+      S.derived = m.derived;
+    }
+
+    // Advance the scrolling trace for EVERY frame processed (smooth scroll)
+    if (S.signals.length) {
+      for (const s of S.signals) {
+        const tr = S.trace[s]; if (!tr) continue;
+        const lv = S.live[s] || { raw: 0, post: 0 };
+        tr.raw[S.head] = clamp01(lv.raw); tr.post[S.head] = clamp01(lv.post);
+      }
+      S.head = (S.head + 1) % TRAIL;
+    }
+  }
+
   // main panel: the DOM DANCE view, or the selected signal's trace
   const sig = S.selected;
   const ctx = $('trace').getContext('2d');
