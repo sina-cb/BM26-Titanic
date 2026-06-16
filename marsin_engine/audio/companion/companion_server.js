@@ -227,7 +227,7 @@ const analyzer = new AudioAnalyzer({
         slow: paramCenter.get('audioSlowZone'),
       },
       spectrum: Array.from(specAnalyzer.getSpectrum(SPECTRUM_BINS)),   // hi-res freq visualizer
-      wave: downWave(lastPcm),                                     // audio signal (oscilloscope)
+      wave: downWave(),                                            // audio signal (rolling scope)
       derived: {
         bpm: paramCenter.get('audioBpm'), beat: paramCenter.get('audioBeat'),
         party: paramCenter.get('audioParty'), note: paramCenter.get('audioNote'),
@@ -268,16 +268,32 @@ const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed
 const frameBuf = new Int16Array(HOP);
 
 // Spectrum + waveform visualizer data (full freq band + audio signal).
-const SPECTRUM_BINS = 192, WAVE_POINTS = 128;   // finer freq granularity (hi-res specAnalyzer)
+const SPECTRUM_BINS = 256, WAVE_POINTS = 256;   // finer freq + scope granularity
 let lastPcm = new Int16Array(HOP);
+// Rolling oscilloscope window: the waveform shows the last SCOPE_SAMPLES of audio
+// (~93 ms), not just the most recent 11.6 ms hop — a readable scrolling scope
+// instead of a tiny jittery slice. Fed one hop at a time from pushFrame.
+const SCOPE_SAMPLES = 4096;
+const scope = new Float32Array(SCOPE_SAMPLES);
+function pushScope(int16) {
+  const n = int16.length;
+  if (n >= SCOPE_SAMPLES) {
+    for (let i = 0; i < SCOPE_SAMPLES; i++) scope[i] = int16[n - SCOPE_SAMPLES + i] / 32768;
+    return;
+  }
+  scope.copyWithin(0, n);                       // shift older samples left …
+  const base = SCOPE_SAMPLES - n;
+  for (let i = 0; i < n; i++) scope[base + i] = int16[i] / 32768;   // … append newest hop
+}
 const waveBuf = new Float32Array(WAVE_POINTS);
-function downWave(int16) {
-  // Average each segment (not decimate) → anti-aliased, smooth scope line.
-  const len = int16.length, seg = len / WAVE_POINTS;
+function downWave() {
+  // Average each segment of the rolling scope (not decimate) → anti-aliased,
+  // smooth scope line over the full ~93 ms window.
+  const len = SCOPE_SAMPLES, seg = len / WAVE_POINTS;
   for (let i = 0; i < WAVE_POINTS; i++) {
     const s = Math.floor(i * seg), e = Math.max(s + 1, Math.min(len, Math.floor((i + 1) * seg)));
-    let sum = 0; for (let j = s; j < e; j++) sum += int16[j];
-    const v = (sum / (e - s) / 32768) * inputGain;   // gain scales the scope too
+    let sum = 0; for (let j = s; j < e; j++) sum += scope[j];
+    const v = (sum / (e - s)) * inputGain;       // scope is already normalized; gain scales it
     waveBuf[i] = v > 1 ? 1 : v < -1 ? -1 : v;
   }
   return Array.from(waveBuf);
@@ -304,7 +320,7 @@ function pushFrame(int16) {
     cal.chunks.push(int16.slice());              // copy — the capture buffer is reused
     if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
   }
-  lastPcm = int16; recordFrame(int16.length);
+  lastPcm = int16; pushScope(int16); recordFrame(int16.length);
   clockMs += (int16.length / SR) * 1000;
   specAnalyzer.pushSamples(int16);   // fill the hi-res spectrum first …
   analyzer.pushSamples(int16);       // … then the main analyzer (its onAnalysis reads getSpectrum)
@@ -340,7 +356,7 @@ function startReplay() {
       return;
     }
     const chunk = cal.chunks[i++];
-    lastPcm = chunk;
+    lastPcm = chunk; pushScope(chunk);
     clockMs += (chunk.length / SR) * 1000;
     specAnalyzer.pushSamples(chunk); analyzer.pushSamples(chunk);
   }, Math.round((HOP / SR) * 1000));
@@ -380,6 +396,7 @@ function startCapture(device) {
 function setMode(next, opts = {}) {
   stopSource();
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
+  scope.fill(0);   // clear the rolling oscilloscope window between sources
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
   adiag.last = 0; adiag.prevLow = null; adiag.deltas.length = 0; adiag.steps.length = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
