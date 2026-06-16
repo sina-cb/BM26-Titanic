@@ -33,6 +33,13 @@ const DOT_TEXTURE = (() => {
 const CORE_SIZE = 0.22;
 const GLOW_SIZE = 0.9;
 
+// Global pixel-size multiplier, driven by the "LED Pixel Size" control. Applied
+// to new strands at build time; live changes go through LedStrand.setPixelSize.
+let PIXEL_SCALE = 1;
+export function setLedPixelScale(scale) {
+  PIXEL_SCALE = (Number.isFinite(scale) && scale > 0) ? scale : 1;
+}
+
 export class LedStrand {
   constructor(config, index, scene, interactiveObjects) {
     this.config = config;
@@ -138,7 +145,7 @@ export class LedStrand {
       glowGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       glowGeo.setAttribute('color', new THREE.BufferAttribute(this._glowColors, 3));
       const glowMat = new THREE.PointsMaterial({
-        size: GLOW_SIZE, map: DOT_TEXTURE, vertexColors: true, transparent: true,
+        size: GLOW_SIZE * PIXEL_SCALE, map: DOT_TEXTURE, vertexColors: true, transparent: true,
         blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
         opacity: 0.55, toneMapped: false,
       });
@@ -151,7 +158,7 @@ export class LedStrand {
       coreGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       coreGeo.setAttribute('color', new THREE.BufferAttribute(this._coreColors, 3));
       const coreMat = new THREE.PointsMaterial({
-        size: CORE_SIZE, map: DOT_TEXTURE, vertexColors: true, transparent: true,
+        size: CORE_SIZE * PIXEL_SCALE, map: DOT_TEXTURE, vertexColors: true, transparent: true,
         blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
         toneMapped: false,
       });
@@ -229,6 +236,13 @@ export class LedStrand {
     // Handles follow both master visibility and the guides toggle.
     this.startHandle.visible = visible && this._guidesVisible;
     this.endHandle.visible = visible && this._guidesVisible;
+  }
+
+  /** Live-update this strand's pixel size (multiplier of the base point sizes). */
+  setPixelSize(scale) {
+    const s = (Number.isFinite(scale) && scale > 0) ? scale : 1;
+    if (this.corePoints) this.corePoints.material.size = CORE_SIZE * s;
+    if (this.glowPoints) this.glowPoints.material.size = GLOW_SIZE * s;
   }
 
   /**
