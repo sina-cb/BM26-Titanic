@@ -259,11 +259,17 @@ export class DominantFreqTracker {
       let lo = k, hi = k;
       while (lo > 1 && (k - lo) < maxBins && mag[lo - 1] >= thr) lo--;
       while (hi < this.numBins - 1 && (hi - k) < maxBins && mag[hi + 1] >= thr) hi++;
-      let sum = 0;
-      for (let b = lo; b <= hi; b++) sum += mag[b];
+      // Sum energy over the cluster AND its energy-weighted CENTROID — the
+      // centroid (the average frequency of the dominance window, mag-weighted)
+      // is the reported dom frequency: smoother + more stable than the raw
+      // peak bin, since it averages over the whole cluster. Kalman then
+      // smooths it further across hops.
+      let sum = 0, fsum = 0;
+      for (let b = lo; b <= hi; b++) { const m = mag[b]; sum += m; fsum += m * (b * this.binHz); }
       const energy = softCompress(this.energyGain * this.inputGain * (sum / this.fftSize));
+      const centroidHz = sum > 0 ? fsum / sum : freqHz;
 
-      this._peakFreq[i] = freqHz;
+      this._peakFreq[i] = centroidHz;
       this._peakEner[i] = energy;
       this._peakLo[i] = lo * this.binHz;
       this._peakHi[i] = hi * this.binHz;

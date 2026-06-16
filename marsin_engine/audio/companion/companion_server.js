@@ -152,7 +152,7 @@ const analyzer = new AudioAnalyzer({
 // Coalesced broadcast: emit the freshest frame at a steady ~45 Hz, decoupled
 // from the bursty analysis cadence (the engine/CaptainPad smoothing pattern).
 let latestFrame = null, frameDirty = false;
-const BROADCAST_MS = 22;
+const BROADCAST_MS = 16;   // ~60 Hz, matches the UI render cadence → no stepping
 setInterval(() => { if (frameDirty && latestFrame) { broadcast(latestFrame); frameDirty = false; } }, BROADCAST_MS);
 
 // ── Audio sources ──────────────────────────────────────────────────────────

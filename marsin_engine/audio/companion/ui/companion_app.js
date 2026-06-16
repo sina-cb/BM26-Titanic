@@ -165,7 +165,8 @@ function renderChain() {
   chain.forEach((op, i) => {
     const card = el('div', 'op');
     card.style.setProperty('--acc', accent(sig));
-    const head = el('div', 'op-head', `<span class="op-type">${op.type}</span>`);
+    const opLabel = op.type === 'lpf' ? 'lpf <span class="op-tag">(smooth)</span>' : op.type;
+    const head = el('div', 'op-head', `<span class="op-type">${opLabel}</span>`);
     const tools = el('div', 'op-tools');
     const mk = (txt, fn, title) => { const b = el('button', 'op-btn', txt); b.title = title; b.onclick = fn; return b; };
     tools.appendChild(mk('◀', () => moveOp(i, -1), 'move left'));
@@ -457,6 +458,7 @@ function drawMini(ctx, tr, color) {
 // ── spectrum + waveform (global visualizers) ────────────────────────────────
 const SPEC_MIN_HZ = 20, SPEC_MAX_HZ = 22050;
 const freqToX = (f, W) => (f <= SPEC_MIN_HZ ? 0 : Math.log(f / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ) * W);
+let specSmooth = null;   // temporal EMA of the spectrum bins (smooth bars)
 function drawSpectrum(ctx, spec, dom) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
   // log-frequency grid + labels
@@ -471,11 +473,15 @@ function drawSpectrum(ctx, spec, dom) {
     drawWindow(ctx, dom.lo1, dom.hi1, '240,162,59', W, H);
     drawWindow(ctx, dom.lo2, dom.hi2, '192,132,252', W, H);
   }
-  // spectrum bars
+  // spectrum bars (temporal EMA so they glide instead of flickering)
   if (spec && spec.length) {
-    const n = spec.length, bw = W / n;
+    if (!specSmooth || specSmooth.length !== spec.length) specSmooth = new Float32Array(spec.length);
+    const a = 0.35, n = spec.length, bw = W / n;
     ctx.fillStyle = '#46586b';
-    for (let i = 0; i < n; i++) { const v = clamp01(spec[i]), h = v * H; ctx.fillRect(i * bw, H - h, Math.max(1, bw - 0.5), h); }
+    for (let i = 0; i < n; i++) {
+      specSmooth[i] = a * clamp01(spec[i]) + (1 - a) * specSmooth[i];
+      const h = specSmooth[i] * H; ctx.fillRect(i * bw, H - h, Math.max(1, bw - 0.5), h);
+    }
   }
   // dom1/dom2 location markers
   if (dom) {

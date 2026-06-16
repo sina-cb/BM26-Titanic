@@ -85,9 +85,10 @@ const DOM_FREQ_PARAMS = Object.freeze({
   // Low birth/death + slow death so two partials stay populated whenever
   // there is ANY musical content (no spurious 0 Hz on a busy mix).
   deathEnergy: 0.02, deathHops: 20, birthEnergy: 0.035,
-  // Kalman tracking (operator-requested): the freqs move smoothly under a
-  // scalar random-walk filter, responsive enough to follow the music.
-  useKalman: true, kfFreqQ: 12, kfFreqR: 40, kfEnergyQ: 0.02, kfEnergyR: 0.02, rankAlpha: 0.05,
+  // Kalman tracking tuned for STABILITY (freqs were jumping): low process
+  // noise + high measurement noise → the filter trusts its model and glides;
+  // rankAlpha low so dom1/dom2 don't swap labels on momentary energy crossings.
+  useKalman: true, kfFreqQ: 4, kfFreqR: 80, kfEnergyQ: 0.02, kfEnergyR: 0.02, rankAlpha: 0.03,
 });
 
 // Maps the FFT magnitude scale (post sum-of-magnitudes / fftSize, where

@@ -150,6 +150,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   border-radius:8px;padding:9px;min-width:150px}
 .op-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
 .op-type{font-weight:700;letter-spacing:.5px;color:var(--acc)}
+.op-tag{color:var(--muted);font-weight:400;font-size:9.5px;letter-spacing:0}
 .op-tools{display:flex;gap:3px}
 .op-btn{background:var(--raised);border:1px solid var(--border);color:var(--muted);border-radius:5px;
   width:22px;height:22px;font:inherit;cursor:pointer;line-height:1}
