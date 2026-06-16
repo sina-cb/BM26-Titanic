@@ -44,9 +44,9 @@ wiring:
 
   anchors:
     - id: chassis
-      placement: { x: 0, y: 1, z: 5, surface: inside }
+      placement: { x: 4, y: 3, z: 2, surface: inside }
     - id: estop_btn
-      placement: { x: 0, y: 1, z: 40, surface: outside }
+      placement: { x: 3, y: 4, z: 9, surface: outside }
 
   routes:
     - id: ground_test
@@ -57,7 +57,8 @@ wiring:
       cables:
         - { type: ground_wire }
       waypoints:
-        - { x: 0, y: 1, z: 2.5, side: inside, off: 0.04 }
+        - { x: 4, y: 1, z: 0, side: inside, off: 0.04 }
+        - { x: 4, y: 3, z: 0, side: inside, off: 0.04 }
 
     - id: estop
       name: e-stop
@@ -67,7 +68,9 @@ wiring:
       cables:
         - { type: estop_wire }
       waypoints:
-        - { x: 0, y: 1, z: 20, side: outside, off: 0.04 }
+        - { x: 0, y: 1, z: 4, side: inside, off: 0.04 }
+        - { x: 0, y: 4, z: 4, side: inside, off: 0.04 }
+        - { x: 0, y: 4, z: 9, side: outside, off: 0.04 }
 
   printViews:
     - { id: pv_all,   name: All Wiring,  camera: front, filter: {} }

@@ -53,13 +53,13 @@ test('BOM computes calibrated lengths and rounds to per-type stock', () => {
 
   const lines = Object.fromEntries(bom.lines.map((l) => [l.route, l]));
 
-  // ground test: 0->2.5->5 == 5 units * 1 ft/unit * 1.15 slack = 5.75 ft -> 6 ft stock
-  assert.ok(Math.abs(lines.ground_test.measured - 5.75) < 1e-6);
-  assert.equal(lines.ground_test.stock, 6);
+  // ground test: 4+2+2 == 8 units * 1 ft/unit * 1.15 slack = 9.2 ft -> 10 ft stock
+  assert.ok(Math.abs(lines.ground_test.measured - 9.2) < 1e-6);
+  assert.equal(lines.ground_test.stock, 10);
 
-  // e-stop: 0->20->40 == 40 units * 1.15 = 46 ft -> 50 ft stock
-  assert.ok(Math.abs(lines.estop.measured - 46) < 1e-6);
-  assert.equal(lines.estop.stock, 50);
+  // e-stop: 4+3+5+3 == 15 units * 1.15 = 17.25 ft -> 25 ft stock
+  assert.ok(Math.abs(lines.estop.measured - 17.25) < 1e-6);
+  assert.equal(lines.estop.stock, 25);
 
   // formatted output is non-empty and mentions both wires' types
   const text = formatBomText(bom);
