@@ -21,6 +21,11 @@ function resolveSceneCamerasPath(sceneName) {
   return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
 }
 
+function resolveSceneWiringPath(sceneName) {
+  const safeName = (sceneName || 'titanic').replace(/[^a-z0-9_-]/gi, '_');
+  return path.join(SCENES_ROOT, safeName, 'wiring.yaml');
+}
+
 // Read port from config.yaml
 const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
 const SAVE_PORT = serverConfig.save_port || 6970;
@@ -286,6 +291,23 @@ http.createServer((req, res) => {
     req.on('end', () => {
       const outPath = resolveSceneCamerasPath(sceneName);
       console.log(`[SAVE SERVER] POST /save-cameras (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
+      try {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, body);
+        console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
+        res.end('Saved');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Write error:`, e);
+        res.statusCode = 500;
+        res.end('Error');
+      }
+    });
+  } else if (req.method === 'POST' && pathname === '/save-wiring') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      const outPath = resolveSceneWiringPath(sceneName);
+      console.log(`[SAVE SERVER] POST /save-wiring (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, body);

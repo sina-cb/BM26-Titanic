@@ -25,7 +25,6 @@ import { createGround, createStarField, loadModel, onModelLoaded } from "./src/c
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
-import { initWiringLayer } from "./src/wiring/wiring_boot.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
@@ -218,11 +217,10 @@ async function init() {
   scene.add(transformControl.getHelper());
   setTransformControl(transformControl);
 
-  // Load model (triggers setupGUI when done)
+  // Load model (triggers setupGUI when done). The Wiring layer is owned by the
+  // 🔌 Wiring section in Lighting Controls (built during setupGUI).
   loadModel((obj) => {
     onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures);
-    // Opt-in 3D wiring overlay (?wiring=1). Fails loudly if requested+broken.
-    initWiringLayer(scene).catch((err) => { console.error(err); });
   });
 
   // Events
