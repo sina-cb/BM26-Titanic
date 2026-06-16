@@ -50,14 +50,31 @@ const PARAM_REGISTRY = [
     oscAddress: '/marsin/param/rotate', sharedFnName: 'rotate',
   },
   {
+    // `slew: true` opts these into the engine-side timed color
+    // transition (docs/36). The canonical `value` stays the operator's
+    // TARGET (UI/persist/broadcast see the new color instantly); a
+    // parallel `_rendered` value ramps toward it over `colorTransitionMs`
+    // and is what actually gets injected into the WASM VM each frame.
     key: 'colorPalette1', label: 'Color 1', type: 'hsv',
     default: { h: 0.0, s: 1.0, v: 1.0 }, range: [0, 1], clamp: true, persist: true,
+    slew: true,
     oscAddress: '/marsin/param/colorPalette1', sharedFnName: 'colorPalette1',
   },
   {
     key: 'colorPalette2', label: 'Color 2', type: 'hsv',
     default: { h: 0.5, s: 1.0, v: 1.0 }, range: [0, 1], clamp: true, persist: true,
+    slew: true,
     oscAddress: '/marsin/param/colorPalette2', sharedFnName: 'colorPalette2',
+  },
+  {
+    // Duration (ms) of the global color crossfade applied to the two
+    // colorPalette params above. 0 = instant (today's snap behavior).
+    // Operator-tunable + persisted; NOT itself slewed. See docs/36.
+    // No pattern exports `colorTransitionMs`, so it never binds to a
+    // WASM control — it's read directly by tickColorTransitions().
+    key: 'colorTransitionMs', label: 'Color Fade', type: 'float',
+    default: 800, range: [0, 10000], clamp: true, persist: true,
+    oscAddress: '/marsin/param/colorTransitionMs', sharedFnName: 'colorTransitionMs',
   },
   // ── Audio reactivity knobs (docs/24 §4.3 + §5) ─────────────────────────
   //
@@ -334,6 +351,39 @@ function deepCopy(v) {
   return v;
 }
 
+// ── Color-transition interpolation (docs/36) ───────────────────────────────
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+// Smoothstep easing so the fade eases in/out instead of running linear.
+function easeInOut(t) {
+  return t * t * (3 - 2 * t);
+}
+
+// Hue lives on a circle (0..1 wraps). Interpolate the SHORTEST arc so
+// e.g. 0.95 → 0.05 crosses red, not the entire spectrum.
+function lerpHue(a, b, t) {
+  let d = b - a;
+  if (d > 0.5) d -= 1;
+  if (d < -0.5) d += 1;
+  return (a + d * t + 1) % 1;
+}
+
+function lerpFloat(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// Interpolate an {h,s,v} value: hue along the short arc, s/v linear.
+function lerpHsv(from, to, t) {
+  return {
+    h: lerpHue(from.h ?? 0, to.h ?? 0, t),
+    s: lerpFloat(from.s ?? 1, to.s ?? 1, t),
+    v: lerpFloat(from.v ?? 1, to.v ?? 1, t),
+  };
+}
+
 /**
  * Extract the semantic role from a shared function name.
  * e.g., 'speed' → 'speed', 'colorPalette1' → 'colorpalette1'
@@ -417,6 +467,23 @@ export class ParamCenter {
     if (this._statePath) {
       this._loadFromDisk();
     }
+
+    // ── Color-transition ramp state (docs/36) ─────────────────────────
+    // Built AFTER _loadFromDisk so `_rendered` seeds from the persisted
+    // value — the rig boots AT the saved color, not fading up to it.
+    //   _rendered[key]   — HSV last injected into the WASM VM
+    //   _rampFrom[key]   — HSV at the moment the target last changed
+    //                      (null === no active ramp)
+    //   _rampStartMs[key]— clock at ramp start (null === start on next tick)
+    this._slewKeys = this._registry.filter(e => e.slew).map(e => e.key);
+    this._rendered = {};
+    this._rampFrom = {};
+    this._rampStartMs = {};
+    for (const key of this._slewKeys) {
+      this._rendered[key] = deepCopy(this._store[key].value);
+      this._rampFrom[key] = null;
+      this._rampStartMs[key] = null;
+    }
   }
 
   // ── Core API ──────────────────────────────────────────────────────────
@@ -457,6 +524,14 @@ export class ParamCenter {
     slot.lastSource = source;
     slot.lastOrigin = origin || source;
     slot.lastRevision = this._revision;
+
+    // Slewed params (the color palettes): (re)arm the ramp from wherever
+    // _rendered currently sits toward this new target. _rampStartMs=null
+    // means "start timing on the next tick". docs/36.
+    if (entry.slew) {
+      this._rampFrom[key] = deepCopy(this._rendered[key]);
+      this._rampStartMs[key] = null;
+    }
 
     return { status: 'ok', revision: this._revision };
   }
@@ -759,12 +834,53 @@ export class ParamCenter {
   }
 
   applySnapshot(wasmHost) {
+    // Pattern swap: snap rendered color to the target (the PATTERN
+    // changed, not the color — no fade), so the new pattern boots at
+    // the current palette and any in-flight ramp is cancelled. docs/36.
+    for (const key of this._slewKeys) {
+      this._rendered[key] = deepCopy(this._store[key].value);
+      this._rampFrom[key] = null;
+      this._rampStartMs[key] = null;
+    }
     for (const chId in this._channels) {
       this._applyToHandle(wasmHost, this._channels[chId]);
     }
     for (const key in this._store) {
       this._store[key].dirty = false;
     }
+  }
+
+  /**
+   * Advance the color-transition ramps one frame and mark the slewed
+   * params dirty while they're still moving so flushDirty() injects the
+   * interpolated value. Call once per engine frame BEFORE flushDirty().
+   * No-op (zero cost) once every ramp has settled. docs/36 §4.3.
+   * @param {number} nowMs — monotonic clock (engine passes performance.now())
+   */
+  tickColorTransitions(nowMs) {
+    const transSlot = this._store.colorTransitionMs;
+    const transMs = transSlot ? transSlot.value : 0;
+    for (const key of this._slewKeys) {
+      const from = this._rampFrom[key];
+      if (from === null) continue; // settled — nothing to do
+      if (this._rampStartMs[key] === null) this._rampStartMs[key] = nowMs;
+      const target = this._store[key].value;
+      const t = transMs <= 0
+        ? 1
+        : clamp01((nowMs - this._rampStartMs[key]) / transMs);
+      this._rendered[key] = lerpHsv(from, target, easeInOut(t));
+      this._store[key].dirty = true; // force injection of _rendered
+      if (t >= 1) {
+        this._rendered[key] = deepCopy(target);
+        this._rampFrom[key] = null;
+        this._rampStartMs[key] = null;
+      }
+    }
+  }
+
+  /** @private — value to inject into WASM for a key (rendered if slewed). */
+  _injectValue(entry, slot) {
+    return entry.slew ? this._rendered[entry.key] : slot.value;
   }
 
   /**
@@ -785,7 +901,8 @@ export class ParamCenter {
       const slot = this._store[key];
       const entry = this._registryByKey[key];
       if (entry.type === 'hsv') {
-        wasmHost.setControl(ch.handle, mapping.id, slot.value.h, slot.value.s, slot.value.v);
+        const v = this._injectValue(entry, slot);
+        wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
       } else {
         wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
       }
@@ -809,13 +926,14 @@ export class ParamCenter {
         const mapping = ch.controlMap[key];
         const entry = this._registryByKey[key];
         if (entry.type === 'hsv') {
-          wasmHost.setControl(ch.handle, mapping.id, slot.value.h, slot.value.s, slot.value.v);
+          const v = this._injectValue(entry, slot);
+          wasmHost.setControl(ch.handle, mapping.id, v.h, v.s, v.v);
         } else {
           wasmHost.setControl(ch.handle, mapping.id, slot.value, 0, 0);
         }
       }
     }
-    
+
     for (const key in this._store) {
       this._store[key].dirty = false;
     }

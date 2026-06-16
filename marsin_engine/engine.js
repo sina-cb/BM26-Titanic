@@ -573,6 +573,11 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // ── Global size: cheap no-op when scale unchanged. ──────────────
     mixer.wasmHost.applySizeScale(globalSizeMultiplier());
 
+    // Advance global color-transition ramps (docs/36) so colorPalette1/2
+    // fade toward their target over `colorTransitionMs`. Marks the slewed
+    // params dirty while moving; must run BEFORE flushDirty injects them.
+    if (paramCenter) paramCenter.tickColorTransitions(now);
+
     // Flush pending shared parameters (CPC) to all active VMs before frame compute
     if (paramCenter) paramCenter.flushDirty(mixer.wasmHost);
 

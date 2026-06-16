@@ -1,31 +1,42 @@
 /**
- * ColorPickerModal — single tabbed modal for both global colours.
+ * ColorPickerModal — global colour picker for the Deck + Mixer chrome.
  *
- * The Deck used to expose two separate "C1" and "C2" hue-only swatches
- * that each opened their own modal. The May 2026 redesign collapsed
- * both colours behind one COLORS button so the operator can either tap
- * a curated preset pair (Presets tab) or tweak the two hues individually
- * (Manual tab) — all in one place.
+ * Rendered from CPCControls, which lives on BOTH the Deck tab and the
+ * Mixer tab, so every behavior here reaches both surfaces for free.
  *
- * S/V are still locked to 100% on write — see the "always pure" rationale
- * in CPCControls.tsx. Curated pairs are loaded from the engine
- * (`GET /color-palettes`, sourced from config.yaml → `colorPalettes:`).
+ * Three behaviors (docs/36):
+ *   1. Easy colour choosing — Presets tab applies a curated pair on a
+ *      single tap (sourced from the engine, config.yaml → colorPalettes).
+ *   2. Manual colour play — the Manual tab's hue sliders apply LIVE as
+ *      you drag (throttled ~30 Hz), so the rig paints in real time. The
+ *      engine fades between colours over `colorTransitionMs` (the
+ *      TRANSITION field below), so a drag looks like a smooth wash, not a
+ *      strobe of intermediate hues.
+ *   3. Tap-outside / CANCEL revert — because we write live, dismissing
+ *      without APPLY restores the colours captured when the modal opened.
  *
- * The Apply button writes BOTH `colorPalette1` and `colorPalette2` in a
- * single `/param-center` POST so the engine's broadcast round-trips a
- * single sharedParams update — no flicker between hue changes.
+ * S/V are pinned to 100% on every write — stage lights stay punchy. If
+ * we ever want stage-dim, add a brightness param, don't reopen S/V here.
  */
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView } from 'react-native';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { View, Text, TextInput, TouchableOpacity, Pressable, Modal, ScrollView } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { useSharedParamValues } from '@/hooks/useEngineState';
 import { getCachedColorPalettes, updateParamCenter, warmColorPalettesCache } from '@/utils/api';
 
-// Picker policy: hue-only. Every write pins S=V=1.0. Stage lights
-// should stay punchy; if we ever want stage-dim, do it as a separate
-// brightness param, not by re-opening S/V in this picker.
+// Picker policy: hue-only. Every write pins S=V=1.0.
 const FULL_S = 1;
 const FULL_V = 1;
+
+// Live-apply throttle. ~30 Hz matches the engine's sharedParams
+// broadcast debounce — fast enough to feel continuous, slow enough not
+// to flood the POST path during a drag.
+const LIVE_THROTTLE_MS = 33;
+
+// Operator-facing transition bounds (seconds). Mirrors the engine's
+// `colorTransitionMs` range [0, 10000] in docs/36.
+const TRANSITION_MAX_S = 10;
 
 export type ColorPalettePreset = {
   id: string;
@@ -53,74 +64,125 @@ export function ColorPickerModal({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [h1, setH1] = useState(initialH1);
   const [h2, setH2] = useState(initialH2);
-  // Initialise from the module-level cache (warmed at app boot in
-  // _layout.tsx) so the Presets tab renders immediately on first open.
-  // The previous version started with [] and depended on a per-open
-  // fetch landing before the user finished a tap; on a fresh app start
-  // that fetch often raced api_base resolution and the modal would
-  // open with an empty grid.
   const [presets, setPresets] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
 
-  // Reset working hues to the live engine values every time the modal
-  // is reopened. Without this, edits made then cancelled would leak
-  // into the next open as stale defaults.
+  // Baseline captured on open — what tap-outside / CANCEL reverts to,
+  // since the Manual tab writes live while you drag.
+  const baselineRef = useRef({ h1: initialH1, h2: initialH2 });
+
+  // Live engine value of the global colour-fade time, surfaced in the
+  // TRANSITION field. The field edits a local string; we commit to the
+  // engine on submit/blur (not per keystroke).
+  const { colorTransitionMs } = useSharedParamValues({ colorTransitionMs: 800 }) as { colorTransitionMs: number };
+  const [transText, setTransText] = useState('');
+
+  // Reset working state to live engine values every time the modal
+  // reopens, and snapshot the baseline for revert.
   useEffect(() => {
     if (visible) {
       setH1(initialH1);
       setH2(initialH2);
       setTab(initialTab);
+      baselineRef.current = { h1: initialH1, h2: initialH2 };
+      setTransText(formatSeconds(colorTransitionMs));
     }
+    // colorTransitionMs intentionally omitted — we only seed the field
+    // on open, not on every live broadcast (would fight the operator's
+    // in-progress typing).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, initialH1, initialH2, initialTab]);
 
-  // Cache-first preset load. Module-level cache is populated by the app's
-  // root layout on boot; we use it synchronously above. When the modal
-  // opens we ALSO kick a background refresh so:
-  //   1. If the boot warm hit a transient engine-offline window and the
-  //      cache is still empty, this attempt self-heals.
-  //   2. If the engine's curated `colorPalettes:` list changed since the
-  //      last warm (operator edited config.yaml + reload), the modal
-  //      picks up the new pairs without an app restart.
+  // Cache-first preset load (warmed at app boot in _layout.tsx); also
+  // kick a background refresh on open so a transient empty cache
+  // self-heals and operator edits to config.yaml's colorPalettes show
+  // up without an app restart.
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
     (async () => {
-      // Sync from the latest cache first — if the boot warm finished
-      // AFTER this component mounted (e.g. opened deck before cache
-      // settled, then opened the picker), useState's initial value
-      // would still be the empty snapshot we captured at mount.
-      // Operator bug May 26 2026: deck color picker showed Manual
-      // tab only while the mixer (mounted later) showed presets.
       const cached = getCachedColorPalettes();
-      if (cached.length > 0 && presets.length === 0 && !cancelled) {
-        setPresets(cached);
-      }
+      if (cached.length > 0 && presets.length === 0 && !cancelled) setPresets(cached);
       const next = await warmColorPalettesCache({ force: presets.length === 0 && cached.length === 0 });
       if (cancelled) return;
-      if (Array.isArray(next) && next.length > 0) {
-        // Set unconditionally when we have items — comparing by reference
-        // could miss an in-place cache refresh. The render below is cheap.
-        if (presets.length === 0 || next !== presets) setPresets(next);
+      if (Array.isArray(next) && next.length > 0 && (presets.length === 0 || next !== presets)) {
+        setPresets(next);
       }
     })();
     return () => { cancelled = true; };
   }, [visible, presets]);
 
-  const apply = useCallback((nextH1: number, nextH2: number, andClose = true) => {
-    // Atomic both-colour write so the engine broadcasts one
-    // sharedParams update — no flicker between C1 and C2 hops.
+  // ── Live writers ────────────────────────────────────────────────────
+  // Atomic dual-write so the engine broadcasts one sharedParams update
+  // (no C1/C2 flicker), exactly as the old APPLY did.
+  const writeColors = useCallback((nh1: number, nh2: number) => {
     updateParamCenter({
-      colorPalette1: { h: nextH1, s: FULL_S, v: FULL_V },
-      colorPalette2: { h: nextH2, s: FULL_S, v: FULL_V },
+      colorPalette1: { h: nh1, s: FULL_S, v: FULL_V },
+      colorPalette2: { h: nh2, s: FULL_S, v: FULL_V },
     });
-    if (andClose) onClose();
-  }, [onClose]);
+  }, []);
+  const [liveWrite, cancelLiveWrite] = useThrottle(writeColors, LIVE_THROTTLE_MS);
+
+  const onManualH1 = useCallback((v: number) => { setH1(v); liveWrite(v, h2); }, [h2, liveWrite]);
+  const onManualH2 = useCallback((v: number) => { setH2(v); liveWrite(h1, v); }, [h1, liveWrite]);
+
+  // APPLY: value is already live; just push the final position
+  // un-throttled (so the last drag frame is never lost) and close. Drop
+  // any pending throttled write first so it can't fire after this.
+  const apply = useCallback(() => {
+    cancelLiveWrite();
+    writeColors(h1, h2);
+    onClose();
+  }, [h1, h2, writeColors, onClose, cancelLiveWrite]);
+
+  // CANCEL / tap-outside / Android-back: revert to the baseline (the
+  // engine fades back) and close. The TRANSITION field is a setting, not
+  // a play value, so it is NOT reverted — it commits on its own. Drop any
+  // pending throttled write FIRST, else a just-released drag would re-apply
+  // the abandoned colour a few ms after the revert lands.
+  const cancel = useCallback(() => {
+    cancelLiveWrite();
+    const b = baselineRef.current;
+    writeColors(b.h1, b.h2);
+    onClose();
+  }, [writeColors, onClose, cancelLiveWrite]);
+
+  // Preset tap: apply both hues live and close (one tap = done).
+  const pickPreset = useCallback((p: ColorPalettePreset) => {
+    cancelLiveWrite();
+    setH1(p.c1); setH2(p.c2);
+    writeColors(p.c1, p.c2);
+    onClose();
+  }, [writeColors, onClose, cancelLiveWrite]);
+
+  // Commit the TRANSITION field to the engine (parse seconds → ms). On
+  // non-numeric input, restore the field from the live engine value and
+  // skip the write — never silently reinterpret garbage as 0 (codex P0).
+  const commitTransition = useCallback(() => {
+    const sec = parseFloat(transText);
+    if (!Number.isFinite(sec)) {
+      setTransText(formatSeconds(colorTransitionMs));
+      return;
+    }
+    const clamped = Math.max(0, Math.min(TRANSITION_MAX_S, sec));
+    updateParamCenter({ colorTransitionMs: Math.round(clamped * 1000) });
+    setTransText(formatSeconds(clamped * 1000)); // normalise display
+  }, [transText, colorTransitionMs]);
 
   const hasPresets = presets.length > 0;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}>
-        <View style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={cancel}>
+      {/* Backdrop: tapping anywhere outside the card cancels (docs/36 §6). */}
+      <Pressable
+        onPress={cancel}
+        accessibilityLabel="Close colour picker"
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
+      >
+        {/* Card swallows taps so interacting inside never dismisses. */}
+        <Pressable
+          onPress={() => {}}
+          style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}
+        >
           {/* ── Header: title + live combined preview ──────────────── */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase' }}>
@@ -139,32 +201,81 @@ export function ColorPickerModal({
 
           {/* ── Tab body ───────────────────────────────────────────── */}
           {tab === 'presets' && hasPresets ? (
-            <PresetsTab presets={presets} onPick={(p) => { setH1(p.c1); setH2(p.c2); apply(p.c1, p.c2, true); }} />
+            <PresetsTab presets={presets} onPick={pickPreset} />
           ) : (
-            <ManualTab h1={h1} h2={h2} setH1={setH1} setH2={setH2} />
+            <ManualTab h1={h1} h2={h2} setH1={onManualH1} setH2={onManualH2} />
           )}
+
+          {/* ── Transition time (always visible, both tabs) ────────── */}
+          <TransitionField
+            value={transText}
+            onChangeText={setTransText}
+            onCommit={commitTransition}
+          />
 
           {/* ── Footer (Manual-only — presets apply on tap) ───────── */}
           {tab === 'manual' || !hasPresets ? (
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, alignItems: 'center' }}>
-              <TouchableOpacity onPress={onClose} style={{ padding: 12 }}>
+              <TouchableOpacity onPress={cancel} style={{ padding: 12 }}>
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary }}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => apply(h1, h2, true)}
+                onPress={apply}
                 style={{ backgroundColor: C.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 }}
               >
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#000' }}>APPLY</Text>
               </TouchableOpacity>
             </View>
           ) : null}
-        </View>
-      </View>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
+
+/**
+ * ColorQueueModal — "pick one pair to ARM" selector for the Deck/Mixer
+ * quick-cue queue. Same backdrop + card + preset grid as the main picker,
+ * but it does NOT touch the engine: tapping a pair hands it back via
+ * onSelect so the caller can arm it (the colour only goes live later when
+ * the operator taps the armed slot). Tap-outside / back dismiss without
+ * selecting. A chooser — no Manual tab, no transition field. docs/36 §5b.
+ */
+export function ColorQueueModal({ visible, presets, onSelect, onClose }: {
+  visible: boolean;
+  presets: ColorPalettePreset[];
+  onSelect: (p: ColorPalettePreset) => void;
+  onClose: () => void;
+}) {
+  const C = usePalette();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
+        accessibilityLabel="Close queue picker"
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
+      >
+        <Pressable
+          onPress={() => {}}
+          style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}
+        >
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase', marginBottom: 14 }}>
+            Queue Colour
+          </Text>
+          {presets.length ? (
+            <PresetsTab presets={presets} onPick={(p) => { onSelect(p); onClose(); }} />
+          ) : (
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 12 }}>
+              No colour palettes available.
+            </Text>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
 
 function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   const C = usePalette();
@@ -187,14 +298,14 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
 }
 
 /**
- * Presets grid. Each card shows the pair as a split-circle swatch +
- * the curated name. Tap applies BOTH hues atomically and dismisses
- * the modal — a single tap is the whole interaction.
+ * Presets grid. Each card shows the pair as a split-circle swatch + the
+ * curated name. Tap applies BOTH hues and dismisses — one tap is the
+ * whole interaction (the engine fades to the new pair).
  */
 function PresetsTab({ presets, onPick }: { presets: ColorPalettePreset[]; onPick: (p: ColorPalettePreset) => void }) {
   const C = usePalette();
   return (
-    <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
+    <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' }}>
       {presets.map((p) => (
         <TouchableOpacity
           key={p.id}
@@ -224,9 +335,9 @@ function PresetsTab({ presets, onPick }: { presets: ColorPalettePreset[]; onPick
 }
 
 /**
- * Manual tab — two hue sliders side-by-side (C1 on top, C2 below) so
- * operators who need a one-off colour can still get it without leaving
- * the picker. APPLY in the footer commits both as a single write.
+ * Manual tab — two hue sliders (C1 top, C2 below). Dragging writes the
+ * rig LIVE (the parent throttles + fades), so the operator "plays" the
+ * colour. APPLY just confirms; CANCEL reverts.
  */
 function ManualTab({ h1, h2, setH1, setH2 }: {
   h1: number; h2: number;
@@ -238,7 +349,7 @@ function ManualTab({ h1, h2, setH1, setH2 }: {
       <HueRow label="Colour 1" h={h1} setH={setH1} />
       <HueRow label="Colour 2" h={h2} setH={setH2} />
       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon }}>
-        Saturation and brightness are locked to 100% to keep stage colours pure.
+        Drag to play colours live. Saturation and brightness stay at 100%.
       </Text>
     </View>
   );
@@ -263,10 +374,55 @@ function HueRow({ label, h, setH }: { label: string; h: number; setH: (v: number
 }
 
 /**
+ * TRANSITION field — the global colour-fade time in seconds. A plain
+ * numeric text field (operator request 2026-06-13): type a number, it
+ * commits to the engine's `colorTransitionMs` on submit/blur. 0 = snap.
+ */
+function TransitionField({ value, onChangeText, onCommit }: {
+  value: string; onChangeText: (t: string) => void; onCommit: () => void;
+}) {
+  const C = usePalette();
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.ghostBorder,
+    }}>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+          Transition
+        </Text>
+        <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 2 }}>
+          Fade time when colours change · 0 = instant
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          onSubmitEditing={onCommit}
+          onBlur={onCommit}
+          keyboardType="decimal-pad"
+          returnKeyType="done"
+          accessibilityLabel="Colour transition time in seconds"
+          placeholder="0"
+          placeholderTextColor={C.icon}
+          style={{
+            width: 64, textAlign: 'right',
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text,
+            backgroundColor: C.surfaceContainerHigh,
+            borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+            paddingVertical: 8, paddingHorizontal: 10,
+          }}
+        />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.secondary, fontSize: 12 }}>s</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
  * Split-circle swatch showing both palette hues at once. Used in the
- * modal header (live preview of pending change) and in every preset
- * card. We render two half-circles via a clipped overlay so we don't
- * need an SVG dependency.
+ * modal header, every preset card, and the Deck/Mixer COLORS button.
  */
 export function DualSwatch({ h1, h2, size }: { h1: number; h2: number; size: number }) {
   const C = usePalette();
@@ -281,6 +437,49 @@ export function DualSwatch({ h1, h2, size }: { h1: number; h2: number; size: num
       <View style={{ flex: 1, backgroundColor: hsvToRgbString(h2, FULL_S, FULL_V) }} />
     </View>
   );
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+// Leading + trailing throttle. Fires immediately if the interval has
+// elapsed, otherwise schedules a single trailing call with the latest
+// args so the final slider position always lands. Returns `[call, cancel]`
+// — `cancel()` drops any pending trailing write, which APPLY/CANCEL use so
+// a just-released drag can't clobber the final/baseline write a few ms
+// later (the modal stays mounted, so the timer would otherwise survive).
+function useThrottle<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const lastRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<A | null>(null);
+  const cancel = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    pendingRef.current = null;
+  }, []);
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  const call = useCallback((...args: A) => {
+    pendingRef.current = args;
+    const now = Date.now();
+    const remaining = ms - (now - lastRef.current);
+    if (remaining <= 0) {
+      lastRef.current = now;
+      fnRef.current(...args);
+    } else if (!timerRef.current) {
+      timerRef.current = setTimeout(() => {
+        lastRef.current = Date.now();
+        timerRef.current = null;
+        if (pendingRef.current) fnRef.current(...pendingRef.current);
+      }, remaining);
+    }
+  }, [ms]);
+  return [call, cancel] as const;
+}
+
+// ms → friendly seconds string ("0", "0.8", "2.5").
+function formatSeconds(ms: number): string {
+  const sec = (Number.isFinite(ms) ? ms : 0) / 1000;
+  return String(Math.round(sec * 10) / 10);
 }
 
 // Local hsv→rgb so this module doesn't depend on the helper colocated
