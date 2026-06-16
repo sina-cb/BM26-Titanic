@@ -357,6 +357,10 @@ export class AudioAnalyzer {
     if (!mag) return out;
     const half = mag.length;
     const minHz = 20, maxHz = this.sampleRate / 2, ratio = maxHz / minHz;
+    // Apply the software INPUT GAIN (mic preamp) so the spectrum scales with
+    // the operator's gain like the bands do — otherwise a quiet mic shows a
+    // flat/tiny histogram no matter the gain.
+    const g = (this.bands && this.bands.inputGain != null) ? this.bands.inputGain : 1;
     const hzToBinF = (hz) => (hz * this.fftSize) / this.sampleRate;
     for (let i = 0; i < nBins; i++) {
       const b0 = Math.max(1, Math.floor(hzToBinF(minHz * Math.pow(ratio, i / nBins))));
@@ -365,7 +369,7 @@ export class AudioAnalyzer {
       if (b1 > half) b1 = half;
       let mx = 0;
       for (let b = b0; b < b1; b++) if (mag[b] > mx) mx = mag[b];
-      out[i] = softCompress(PRE_CLAMP_GAIN * (mx / this.fftSize));
+      out[i] = softCompress(PRE_CLAMP_GAIN * g * (mx / this.fftSize));
     }
     return out;
   }
@@ -436,6 +440,7 @@ export class AudioAnalyzer {
     // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
     // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
     // ~1 µs/hop). Returns a reused array of {freqHz, energy}, energy-ranked.
+    this._domTracker.inputGain = this.bands.inputGain ?? 1;   // gain scales dom energy too
     const dom = this._domTracker.update(prevMag, this.hopSize / this.sampleRate);
     const dom1 = dom[0], dom2 = dom[1];
 

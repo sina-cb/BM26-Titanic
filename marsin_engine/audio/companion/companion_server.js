@@ -171,7 +171,10 @@ let lastPcm = new Int16Array(HOP);
 const waveBuf = new Float32Array(WAVE_POINTS);
 function downWave(int16) {
   const len = int16.length, step = len / WAVE_POINTS;
-  for (let i = 0; i < WAVE_POINTS; i++) waveBuf[i] = int16[Math.min(len - 1, Math.floor(i * step))] / 32768;
+  for (let i = 0; i < WAVE_POINTS; i++) {
+    const v = (int16[Math.min(len - 1, Math.floor(i * step))] / 32768) * inputGain;   // gain scales the scope too
+    waveBuf[i] = v > 1 ? 1 : v < -1 ? -1 : v;
+  }
   return Array.from(waveBuf);
 }
 

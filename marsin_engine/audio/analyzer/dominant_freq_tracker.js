@@ -148,6 +148,9 @@ export class DominantFreqTracker {
     // above clusterThresh × peak (bounded by clusterMaxHz).
     this.clusterThresh = opts.clusterThresh ?? 0.35;
     this.clusterMaxHz  = opts.clusterMaxHz  ?? 500;
+    // Software input gain (mic preamp) — scales the reported energy so dom
+    // energy tracks the operator's gain like the bands/spectrum. Live-settable.
+    this.inputGain     = opts.inputGain     ?? 1;
 
     this._minBin = Math.max(1, Math.floor(this.minFreqHz / this.binHz));
     this._maxBin = Math.min(this.numBins - 2, Math.ceil(this.maxFreqHz / this.binHz));
@@ -258,7 +261,7 @@ export class DominantFreqTracker {
       while (hi < this.numBins - 1 && (hi - k) < maxBins && mag[hi + 1] >= thr) hi++;
       let sum = 0;
       for (let b = lo; b <= hi; b++) sum += mag[b];
-      const energy = softCompress(this.energyGain * (sum / this.fftSize));
+      const energy = softCompress(this.energyGain * this.inputGain * (sum / this.fftSize));
 
       this._peakFreq[i] = freqHz;
       this._peakEner[i] = energy;
