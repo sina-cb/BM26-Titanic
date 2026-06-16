@@ -223,6 +223,48 @@ export function ColorPickerModal({
 
 // ── Sub-components ─────────────────────────────────────────────────────
 
+/**
+ * ColorQueueModal — "pick one pair to ARM" selector for the Deck/Mixer
+ * quick-cue queue. Same backdrop + card + preset grid as the main picker,
+ * but it does NOT touch the engine: tapping a pair hands it back via
+ * onSelect so the caller can arm it (the colour only goes live later when
+ * the operator taps the armed slot). Tap-outside / back dismiss without
+ * selecting. A chooser — no Manual tab, no transition field. docs/35 §5b.
+ */
+export function ColorQueueModal({ visible, presets, onSelect, onClose }: {
+  visible: boolean;
+  presets: ColorPalettePreset[];
+  onSelect: (p: ColorPalettePreset) => void;
+  onClose: () => void;
+}) {
+  const C = usePalette();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
+        accessibilityLabel="Close queue picker"
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
+      >
+        <Pressable
+          onPress={() => {}}
+          style={{ width: 360, maxHeight: '85%', backgroundColor: C.surfaceContainerLowest, padding: 20, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder }}
+        >
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14, textTransform: 'uppercase', marginBottom: 14 }}>
+            Queue Colour
+          </Text>
+          {presets.length ? (
+            <PresetsTab presets={presets} onPick={(p) => { onSelect(p); onClose(); }} />
+          ) : (
+            <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 12 }}>
+              No colour palettes available.
+            </Text>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function TabButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   const C = usePalette();
   return (

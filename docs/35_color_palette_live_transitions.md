@@ -263,29 +263,37 @@ reachable identically from Deck and Mixer.
 
 ## 5b. Quick-cue colour queue (Deck + Mixer chrome)
 
-Operator request 2026-06-16: switch colours *fast*, without opening the
-modal. A **queue strip** sits immediately to the right of the COLORS
-button in `CPCControls` (so it's on both the Deck and the Mixer):
+Operator request 2026-06-16: switch colours *fast*, with a one-pair cue.
+A **QUEUE tile** sits immediately to the right of the COLORS button in
+`CPCControls` — a visual *twin* of the COLORS tile (same width/height/
+border/`DualSwatch`), on both the Deck and the Mixer. It holds **one**
+armed pair at a time:
 
-- A horizontally-scrolling row of the curated palette swatches
-  (`getCachedColorPalettes()` — same source as the picker's Presets tab).
-- **First tap arms** a pair as the *next* colour — highlighted border,
-  caption flips to `TAP TO GO`, a `✕` appears. **Nothing goes live yet.**
-- **Tapping the armed swatch again sends it live** — the parent writes
-  `colorPalette1/2` and the engine fades to it over `colorTransitionMs`
-  (§4). Tapping a *different* swatch re-arms to that one instead.
-- **`✕` cancels** the cue (no colour change).
+- **Empty** — shows a dashed `+` placeholder, caption `QUEUE`. Tapping it
+  opens `ColorQueueModal`, a select-only chooser (the same preset grid as
+  the picker's Presets tab) sourced from `getCachedColorPalettes()`.
+- **Selecting a pair arms it** — the tile shows that pair as a `DualSwatch`
+  (identical to the COLORS visual), caption flips to `GO`, a `✕` appears
+  top-right. **Nothing goes live yet** — the chooser never writes the
+  engine.
+- **Tapping the armed tile sends it live** — writes `colorPalette1/2` (the
+  same params the main picker writes), so the engine fades to it over
+  `colorTransitionMs` (§4). It stays armed so you can re-fire; to change
+  the cue, `✕` then re-pick.
+- **`✕` (top-right) removes** the cue (no colour change).
 
-The cue is **local + ephemeral** to the pad that's holding it — it is not
-broadcast or persisted; only *firing* writes the shared params (which then
-broadcast like any other colour change). Two pads can each hold their own
-cue. State lives in `CPCControls` (`queued`, `onCueTap`); the strip is
-`QueuedColorStrip`, styled to match the COLORS/BPM tiles (same height,
-border, surface) so it reads as one cluster. It renders nothing until the
-palette list has loaded — no fabricated placeholder.
+The armed pair is a **frozen snapshot**: it carries its own `c1/c2`, so
+editing the main colour (picker or live drag) never changes what's armed.
+The cue is **local + ephemeral** to the pad holding it — not broadcast or
+persisted; only *firing* writes the shared params (which then broadcast
+like any other colour change). State lives in `CPCControls` (`queued`,
+`queuePickerOpen`, `onSlotTap`); the tile is `QueuedColorSlot`, the chooser
+is `ColorQueueModal` (exported from `ColorPickerModal.tsx`, reusing its
+backdrop/card/grid). The `✕` is a sibling overlay, not nested in the main
+touchable, so it can't double-fire the slot.
 
-This is purely additive: it reuses the picker's preset source and the §4
-engine fade. No engine or API change.
+This is purely additive: it reuses the picker's preset source + grid and
+the §4 engine fade. No engine or API change.
 
 ## 6. Slice 3 — tap-outside to cancel
 
