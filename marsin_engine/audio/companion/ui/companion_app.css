@@ -115,6 +115,10 @@ body{background:var(--bg);color:var(--text);
 .sig-name{font-weight:700;color:var(--acc)}
 .sig-mini canvas{display:block}
 .sig-val{text-align:right;color:var(--muted)}
+.input-row{--acc:#34d3b5;grid-template-columns:1fr;margin-bottom:8px}
+.input-row .sig-name{color:#34d3b5}
+.sig-sub{display:block;color:var(--muted);font-size:9px;margin-top:2px}
+.input-ctrls{display:flex;flex-direction:column;gap:16px;max-width:440px}
 .views-label{margin-top:14px}
 .view-row{--acc:#f0a23b;grid-template-columns:1fr}
 .view-row .sig-name{color:#cdd6e0}

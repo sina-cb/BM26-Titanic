@@ -77,10 +77,18 @@ const source = {
 // Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
 // source (test/mic/file). This is the "microphone gain" the operator tunes.
 let inputGain = 1.0;
+// Source-stage smoothing (gentle one-pole LP on the PCM before the FFT) — a
+// small default removes mic noise; 0 = off. Part of the INPUT post-proc.
+let sourceSmoothHz = 12000;
 function applyInputGain(v) {
   inputGain = Math.max(0, Math.min(64, +v));
   analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain }, kick: analyzer.kick });
   specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, inputGain }, kick: specAnalyzer.kick });
+}
+function applySmooth(v) {
+  sourceSmoothHz = Math.max(0, Math.min(22050, +v));
+  analyzer.reconfigure({ bands: { ...analyzer.bands, sourceSmoothHz }, kick: analyzer.kick });
+  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, sourceSmoothHz }, kick: specAnalyzer.kick });
 }
 
 // "Dom freq DANCE" — a ghostly follower of each dom freq + cluster width.
@@ -123,7 +131,7 @@ const derived = new DerivedSignals({ paramCenter });   // BPM/party/note/switch 
 let clockMs = 0, lastMs = 0;
 const analyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: FFT, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
+  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
   kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },   // EDM corpus-tuned (clean pulse)
   nowFn: () => clockMs,
   onAnalysis: (r) => {
@@ -184,7 +192,7 @@ const analyzer = new AudioAnalyzer({
 // frames); its onAnalysis is a no-op — we only read getSpectrum().
 const specAnalyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: 4096, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
+  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
   kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
   nowFn: () => clockMs, onAnalysis: () => {},
 });
@@ -335,6 +343,7 @@ function handleMessage(ws, raw) {
   if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
   else if (m.type === 'setGain' && /Gain$/.test(m.key || '')) paramCenter.set(m.key, +m.value);
   else if (m.type === 'setInputGain') { applyInputGain(m.value); broadcast({ type: 'inputGain', value: inputGain }); }
+  else if (m.type === 'setSmooth') { applySmooth(m.value); broadcast({ type: 'smooth', value: sourceSmoothHz }); }
   else if (m.type === 'calibrate') startCalibration();
   else if (m.type === 'setMode') setMode(m.mode, { file: m.file, device: m.device });
   else if (m.type === 'setChain') ws.send(JSON.stringify({ type: 'chainResult', signal: m.signal, ...applyChain(m.signal, m.chain) }));
@@ -356,7 +365,7 @@ const server = http.createServer((req, res) => {
   if (p === '/') p = '/index.html';
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot(), inputGain }));
+    res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz }));
     return;
   }
   if (p === '/browse') {  // server-side directory listing (folders + audio files)
@@ -388,7 +397,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   clients.add(ws);
-  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), inputGain, mode, datasetsDir: DATASETS_DIR }));
+  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR }));
   ws.on('message', (d) => {
     try { handleMessage(ws, d.toString()); }
     catch (e) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: String(e && e.message) } }); }

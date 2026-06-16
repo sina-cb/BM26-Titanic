@@ -40,7 +40,7 @@ import yaml from 'js-yaml';
 // behaviors", the analyzer rejects a `bands` payload that's missing
 // any of these — config.yaml supplies them at boot.
 export const AUDIO_LIVE_FIELDS = Object.freeze({
-  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
+  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
   // structureDetector — audio build/drop/sustain detector (docs/30).
   // Disabled by default; the detector module is instantiated at boot
@@ -90,6 +90,8 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
   bands: Object.freeze({
     // Software input gain (mic-preamp). 0 = mute, 1 = unity, up to 64×.
     inputGain: (v) => (v >= 0 && v <= 64) ? null : `must be in [0, 64]; got ${v}`,
+    // Source-stage smoothing LP cutoff (Hz); 0 = off. Up to ~Nyquist.
+    sourceSmoothHz: (v) => (v >= 0 && v <= 22050) ? null : `must be in [0, 22050]; got ${v}`,
   }),
   structureDetector: Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,

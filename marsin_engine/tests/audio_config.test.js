@@ -166,7 +166,7 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // EMA coefficients are hardcoded in audio_analyzer.js. `structureDetector`
   // is the build/drop/sustain detector group (docs/30).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',

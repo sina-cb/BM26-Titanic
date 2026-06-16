@@ -245,6 +245,11 @@ export class AudioAnalyzer {
       sampleRate: this.sampleRate, fftSize: this.fftSize, ...DOM_FREQ_PARAMS,
     });
 
+    // Source-stage smoothing (Audio → [gain + smoothing] → FFT). One-pole LP
+    // state + its alpha, set from bands.sourceSmoothHz in reconfigure (0 = off).
+    this._srcLp = 0;
+    this._srcSmoothAlpha = 0;
+
     this.reconfigure({ bands: opts.bands, kick: opts.kick });
   }
 
@@ -314,6 +319,11 @@ export class AudioAnalyzer {
     this.bands = next.bands;
     this.kick  = next.kick;
 
+    // Source-stage smoothing: gentle one-pole LP on the PCM before the FFT
+    // (denoise). bands.sourceSmoothHz = cutoff in Hz; 0 / absent / invalid = off.
+    const fc = +next.bands.sourceSmoothHz;
+    this._srcSmoothAlpha = (fc > 0 && fc < nyquist) ? (1 - Math.exp(-2 * Math.PI * fc / this.sampleRate)) : 0;
+
     // Pre-compute bin ranges so the hot path doesn't multiply.
     this._binLow  = [hzToBin(20,         this.sampleRate, this.fftSize), hzToBin(lowMaxHz, this.sampleRate, this.fftSize)];
     this._binMid  = [hzToBin(lowMaxHz,   this.sampleRate, this.fftSize), hzToBin(midMaxHz, this.sampleRate, this.fftSize)];
@@ -324,9 +334,19 @@ export class AudioAnalyzer {
   /** Push a chunk of Int16 mono samples; emits analyses as hops fill. */
   pushSamples(int16) {
     const n = int16.length;
+    // SOURCE STAGE (Audio → [gain + smoothing] → FFT): apply the input gain
+    // (mic preamp) and an optional gentle one-pole low-pass to the PCM BEFORE
+    // it enters the FFT ring, so the WHOLE system (bands, kick, flux, FFT,
+    // dom) sees one consistently-conditioned signal — no per-consumer gain, no
+    // kick special-casing. Gain on PCM is mathematically identical to the old
+    // gain-on-band-energy for the bands (FFT is linear) and cancels in the
+    // kick's ratio, so at gain=1 / smoothing-off this is byte-identical.
+    const g = this.bands.inputGain ?? 1;
+    const sm = this._srcSmoothAlpha;   // 0 = smoothing off
     for (let i = 0; i < n; i++) {
-      // Int16 → Float32 in [-1, 1).
-      this._ring[this._ringHead] = int16[i] / 32768;
+      let v = (int16[i] / 32768) * g;
+      if (sm > 0) { this._srcLp += sm * (v - this._srcLp); v = this._srcLp; }
+      this._ring[this._ringHead] = v;
       this._ringHead = (this._ringHead + 1) % this.fftSize;
     }
     this._samplesSinceHop += n;
@@ -358,10 +378,8 @@ export class AudioAnalyzer {
     if (!mag) return out;
     const half = mag.length;
     const minHz = 20, maxHz = this.sampleRate / 2, ratio = maxHz / minHz;
-    // Apply the software INPUT GAIN (mic preamp) so the spectrum scales with
-    // the operator's gain like the bands do — otherwise a quiet mic shows a
-    // flat/tiny histogram no matter the gain.
-    const g = (this.bands && this.bands.inputGain != null) ? this.bands.inputGain : 1;
+    // Input gain is already applied to the PCM (source stage) before the FFT,
+    // so `mag` already reflects it — no extra multiply here.
     const hzToBinF = (hz) => (hz * this.fftSize) / this.sampleRate;
     for (let i = 0; i < nBins; i++) {
       const b0 = Math.max(1, Math.floor(hzToBinF(minHz * Math.pow(ratio, i / nBins))));
@@ -370,7 +388,7 @@ export class AudioAnalyzer {
       if (b1 > half) b1 = half;
       let mx = 0;
       for (let b = b0; b < b1; b++) if (mag[b] > mx) mx = mag[b];
-      out[i] = softCompress(PRE_CLAMP_GAIN * g * (mx / this.fftSize));
+      out[i] = softCompress(PRE_CLAMP_GAIN * (mx / this.fftSize));
     }
     return out;
   }
@@ -390,6 +408,7 @@ export class AudioAnalyzer {
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
     this._prevMag = null;
+    this._srcLp = 0;
     if (this._domTracker) this._domTracker.reset();
   }
 
@@ -441,7 +460,7 @@ export class AudioAnalyzer {
     // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
     // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
     // ~1 µs/hop). Returns a reused array of {freqHz, energy}, energy-ranked.
-    this._domTracker.inputGain = this.bands.inputGain ?? 1;   // gain scales dom energy too
+    // (dom energy uses prevMag, which already reflects the source-stage gain.)
     const dom = this._domTracker.update(prevMag, this.hopSize / this.sampleRate);
     const dom1 = dom[0], dom2 = dom[1];
 
@@ -464,18 +483,13 @@ export class AudioAnalyzer {
     const gate = this.bands.noiseGate;
     const gateScale = 1 - gate;
     const applyGate = (v) => (v <= gate ? 0 : (v - gate) / gateScale);
-    // Global INPUT GAIN — scales the raw band energies BEFORE softCompress +
-    // gate, i.e. a software mic-preamp. A quiet mic / line feed leaves the
-    // band energies below the noise gate, which zeroes low/mid/high AND
-    // starves the kick detector (its `instant` is gated to 0, so the
-    // `_kickEma > 0` fire-guard never passes). Lifting the energies above the
-    // gate restores all four. Default 1.0 (no change for hot feeds);
-    // operator-tunable 0–N via audio.bands.inputGain. See the mic/gain note
-    // in report 202606/..._audio_corpus_tuning.md.
-    const inputGain = this.bands.inputGain ?? 1;
-    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * lowE));
-    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * midE));
-    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * inputGain * highE));
+    // INPUT GAIN is now applied at the SOURCE (to the PCM in pushSamples),
+    // BEFORE the FFT, so it already scales lowE/midE/highE/kickE/fluxE here —
+    // no per-band gain multiply needed (and the kick is no longer a special
+    // case). Gain-on-PCM ≡ gain-on-band-energy for the bands (FFT linear).
+    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE));
+    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE));
+    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE));
     const attackAlpha  = 1 - Math.exp(-frameMs / this.bands.attackMs);
     const releaseAlpha = 1 - Math.exp(-frameMs / this.bands.releaseMs);
     const env = (prev, target) => {
@@ -499,15 +513,13 @@ export class AudioAnalyzer {
     // sit more than CEILING_RATIO × a several-second baseline.
     // Kick prominence is computed on the LINEAR (un-compressed) energy, NOT
     // the softCompressed value (softCompress saturates toward 1 at high level,
-    // collapsing the kick-vs-baseline ratio). It is ALSO DECOUPLED from the
-    // display inputGain: the kick is a RATIO detector, so a linear input gain
-    // cancels in the ratio and changes nothing — EXCEPT it would lift the mic
-    // noise floor above the silence gate and fire phantom kicks on amplified
-    // room hiss when the operator turns inputGain up. So the kick runs on the
-    // RAW band energy: inputGain only affects the display bands. softCompress
-    // + the noise gate remain as a SILENCE FLOOR (`kickGated > 0`) so the
-    // noise floor (HVAC, mic self-noise) can't fire a kick in true quiet.
-    const kickLin   = PRE_CLAMP_GAIN * kickE;          // raw — decoupled from inputGain
+    // collapsing the kick-vs-baseline ratio). The kick now uses the SAME
+    // source-conditioned PCM as everything else (gain + smoothing applied
+    // pre-FFT) — no special-casing. It's a RATIO detector, so the source gain
+    // cancels in `kickLin / _kickEma` and firing is unchanged; the noise gate
+    // (`kickGated > 0`) stays as a SILENCE FLOOR, and the source-stage
+    // smoothing + the operator's gain manage the amplified-noise-floor case.
+    const kickLin   = PRE_CLAMP_GAIN * kickE;          // source-conditioned (gain applied pre-FFT)
     const kickGated = applyGate(softCompress(kickLin)); // silence floor only
     if (this._kickEmaWarmedUp) {
       const alpha = kickLin > this._kickEma
@@ -574,7 +586,7 @@ export class AudioAnalyzer {
     // like the other outputs. Purely additive — the four existing
     // fields are byte-for-byte unchanged. SuperFlux-lite (Böck &
     // Widmer 2013; research memo §A2).
-    const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * inputGain * fluxE));
+    const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * fluxE));   // gain applied pre-FFT (source)
 
     try {
       this._onAnalysis({

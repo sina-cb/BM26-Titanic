@@ -36,6 +36,7 @@ const S = {
   devices: [],        // [{ id, label, ffmpegDevice, inputFormat }]
   device: '',         // selected ffmpegDevice ('' = platform default)
   inputGain: 1.0,     // global software preamp (analyzer bands.inputGain)
+  sourceSmoothHz: 12000,   // source-stage PCM smoothing cutoff (0 = off)
   cal: { phase: 'idle', result: null },
   dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
   struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
@@ -64,6 +65,7 @@ function connect() {
       if (m.mode) S.mode = m.mode;
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
+      if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
       for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
     } else if (m.type === 'frame') {
@@ -91,6 +93,8 @@ function connect() {
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
       S.inputGain = m.value; buildGainBar();
+    } else if (m.type === 'smooth') {
+      S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
     } else if (m.type === 'calStatus') {
       S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
     } else if (m.type === 'calResult') {
@@ -122,6 +126,12 @@ function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color 
 // ── sidebar (signal list) ──────────────────────────────────────────────────
 function buildSidebar() {
   const box = $('signals'); box.innerHTML = '';
+  // INPUT — the source post-proc stage (gain + smoothing) that feeds the whole
+  // pipeline. Sits at the top: Audio source → [INPUT post-proc] → FFT → signals.
+  const inRow = el('button', 'sig-row input-row' + ('input' === S.selected ? ' active' : ''));
+  inRow.innerHTML = '<span class="sig-name">◤ INPUT</span><span class="sig-sub">source · pre-FFT</span>';
+  inRow.onclick = () => { S.selected = 'input'; buildSidebar(); renderChain(); };
+  box.appendChild(inRow);
   for (const s of S.signals) {
     const row = el('button', 'sig-row' + (s === S.selected ? ' active' : ''));
     row.style.setProperty('--acc', accent(s));
@@ -162,6 +172,12 @@ function buildSource() {
 function renderChain() {
   const box = $('chain'); box.innerHTML = '';
   const sig = S.selected;
+  if (sig === 'input') {
+    $('chain-title').textContent = 'INPUT · source post-proc → FFT';
+    $('chain-title').style.color = '#34d3b5';
+    box.appendChild(inputControls());
+    return;
+  }
   $('chain-title').textContent = (SIGNAL_META[sig]?.label || sig) + ' · chain';
   $('chain-title').style.color = accent(sig);
   // dom1/dom2 + the visualizer views are read-only — no editable chain.
@@ -305,6 +321,24 @@ function buildSourceBar() {
   box.appendChild(tag);
 }
 
+// ── INPUT source post-proc controls (gain + pre-FFT smoothing) ──────────────
+function inputControls() {
+  const wrap = el('div', 'input-ctrls');
+  const gain = el('div', 'param');
+  gain.innerHTML = `<div class="param-head"><span class="pn">INPUT GAIN</span><span class="pv" id="ic-gain">×${S.inputGain.toFixed(1)}</span></div>`;
+  const gr = el('input', 'param-range'); gr.type = 'range'; gr.min = 0; gr.max = 16; gr.step = 0.1; gr.value = S.inputGain;
+  gr.oninput = () => { S.inputGain = +gr.value; $('ic-gain').textContent = '×' + (+gr.value).toFixed(1); send({ type: 'setInputGain', value: +gr.value }); buildGainBar(); };
+  gain.appendChild(gr); wrap.appendChild(gain);
+  const sm = el('div', 'param');
+  const fmtHz = (v) => (v ? (v / 1000).toFixed(1) + ' kHz' : 'off');
+  sm.innerHTML = `<div class="param-head"><span class="pn">SMOOTH <span class="op-tag">(pre-FFT denoise)</span></span><span class="pv" id="ic-sm">${fmtHz(S.sourceSmoothHz)}</span></div>`;
+  const sr = el('input', 'param-range'); sr.type = 'range'; sr.min = 0; sr.max = 22050; sr.step = 250; sr.value = S.sourceSmoothHz;
+  sr.oninput = () => { S.sourceSmoothHz = +sr.value; $('ic-sm').textContent = fmtHz(+sr.value); send({ type: 'setSmooth', value: +sr.value }); };
+  sm.appendChild(sr); wrap.appendChild(sm);
+  wrap.appendChild(el('div', 'chain-note', 'Audio source → [gain + smoothing] → FFT → every signal. Lower SMOOTH cutoff = more denoise (0 = off).'));
+  return wrap;
+}
+
 // ── input gain + calibration ────────────────────────────────────────────────
 function buildGainBar() {
   const box = $('gainbar'); if (!box) return; box.innerHTML = '';
@@ -430,6 +464,11 @@ function draw() {
     $('big-raw').textContent = (S.dom.danceF1 || 0).toFixed(0) + 'Hz';
     $('big-post').textContent = (S.dom.danceF2 || 0).toFixed(0) + 'Hz';
     $('big-post').style.color = '#c084fc';
+  } else if (sig === 'input') {
+    drawWave(ctx, S.wave);   // the source (gained + smoothed) audio feeding the FFT
+    $('big-raw').textContent = 'source';
+    $('big-post').textContent = '×' + S.inputGain.toFixed(1);
+    $('big-post').style.color = '#34d3b5';
   } else {
     const tr = S.trace[sig];
     if (tr) drawTrace(ctx, tr, accent(sig), 2);

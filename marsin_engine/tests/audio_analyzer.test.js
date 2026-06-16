@@ -138,11 +138,15 @@ test('kick prominence is input-gain-invariant (no softCompress saturation)', () 
   assert.equal(k2, k8, `kick count must be gain-invariant: inputGain2=${k2} vs inputGain8=${k8}`);
 });
 
-test('kick does NOT fire on a noisy room floor, even at high inputGain', () => {
-  // Regression: the kick is DECOUPLED from inputGain, so turning the display
-  // gain up cannot lift mic self-noise / room hiss above the kick silence
-  // floor and fire phantom kicks. Low-amplitude white noise (a quiet room),
-  // NOT pure digital silence.
+test('kick does NOT fire on a quiet room at calibrated (unity) gain', () => {
+  // Input gain is now a SOURCE stage (applied to the PCM before the FFT), so
+  // the kick reads the same conditioned signal as every other band — it is no
+  // longer specially decoupled from inputGain (operator design: "kick
+  // shouldn't be a different situation"). At unity / calibrated gain the noise
+  // gate + ratio detector still keep a quiet room silent. NOTE the trade-off:
+  // at EXTREME gain on a quiet room, amplified hiss can now fire — that's the
+  // operator's responsibility (calibration sets a healthy gain; the optional
+  // source smoothing suppresses HF noise). Low-amplitude white noise here.
   let seed = 12345;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
   function noiseKicks(inputGain) {
@@ -155,9 +159,7 @@ test('kick does NOT fire on a noisy room floor, even at high inputGain', () => {
     }
     return results.filter(r => r.kick >= 0.999).length;
   }
-  for (const g of [1, 8, 16]) {
-    assert.equal(noiseKicks(g), 0, `room-noise must not fire kicks at inputGain=${g}`);
-  }
+  assert.equal(noiseKicks(1), 0, 'quiet room must not fire kicks at unity gain');
 });
 
 test('1000 Hz sine lights up MID', () => {

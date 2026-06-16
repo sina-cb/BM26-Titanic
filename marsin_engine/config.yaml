@@ -57,6 +57,10 @@ audio:
     # low/mid/high/kick lift above the gate; tunable live from the iPad AUDIO
     # strip (INPUT GAIN). Range [0, 64].
     inputGain: 1.0
+    # Source-stage smoothing: gentle one-pole low-pass on the PCM BEFORE the
+    # FFT (denoise). Cutoff in Hz; 0 = off (default — engine behaviour
+    # unchanged). The Companion sets a small value to clean the mic input.
+    sourceSmoothHz: 0
   kick:
     minHz: 50
     maxHz: 110
