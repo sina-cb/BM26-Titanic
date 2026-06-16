@@ -7,7 +7,7 @@ to end (companion → tune signals → OSC → engine CPC) and reconciles the ol
 now-fragmented audio docs.
 
 ## Deliverables
-1. **`docs/36_marsin_audio_framework.md`** — the unifying framework + story:
+1. **`docs/37_marsin_audio_framework.md`** — the unifying framework + story:
    typed-port op graph (raw **Sources** → **Ops** incl. Kalman / DanceMaker →
    **OSC Sink** into CPC), native-signal selection, in-app post-processing,
    visualizers, an **Output UI** to choose what lands in the engine over OSC,

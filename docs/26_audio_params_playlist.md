@@ -2,9 +2,9 @@
 
 **Status:** Under Review  
 **Author:** Antigravity  
-**Related Docs:** `36_marsin_audio_framework.md` (where the audio signals come from) · `25_marsin_audio_analysis.md` · `15_central_param_center_cpc.md` · `16_captain_pad.md`
+**Related Docs:** `37_marsin_audio_framework.md` (where the audio signals come from) · `25_marsin_audio_analysis.md` · `15_central_param_center_cpc.md` · `16_captain_pad.md`
 
-> Still valid — this doc covers *routing* CPC audio signals → pattern/global params (the consumer side). The signals themselves are produced by the framework, `docs/36`.
+> Still valid — this doc covers *routing* CPC audio signals → pattern/global params (the consumer side). The signals themselves are produced by the framework, `docs/37`.
 
 ---
 

@@ -1,9 +1,9 @@
 # Design: Audio Structure Detector (Build / Drop / Sustain Cues)
 
-> **⚠ SUPERSEDED — folded into [docs/36 — The Marsin Audio Framework](./36_marsin_audio_framework.md).**
-> The detector shipped (Kalman+NIS drop, slow-zone, build/energy) and is now a framework Source + ops. New structure-signal design lands in docs/36. Kept for history.
+> **⚠ SUPERSEDED — folded into [docs/37 — The Marsin Audio Framework](./37_marsin_audio_framework.md).**
+> The detector shipped (Kalman+NIS drop, slow-zone, build/energy) and is now a framework Source + ops. New structure-signal design lands in docs/37. Kept for history.
 
-**Status:** Superseded by docs/36 (detector implemented; was: Draft)
+**Status:** Superseded by docs/37 (detector implemented; was: Draft)
 **Operator request (summarized):** make the rig feel like it *anticipates* the music — light the build-up before the drop lands, not a bar after it — without coupling the work to any larger framework and without ever silently overriding the operator's manual cue.
 
 **Related:**

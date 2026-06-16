@@ -1,9 +1,9 @@
 # Marsin Audio Analysis — Design
 
-> **⚠ SUPERSEDED — folded into [docs/36 — The Marsin Audio Framework](./36_marsin_audio_framework.md).**
-> The in-engine analyzer specced here is now the framework's `rawLow/Mid/High/Kick/Flux` + dom Sources. Kept for history; new design lands in docs/36.
+> **⚠ SUPERSEDED — folded into [docs/37 — The Marsin Audio Framework](./37_marsin_audio_framework.md).**
+> The in-engine analyzer specced here is now the framework's `rawLow/Mid/High/Kick/Flux` + dom Sources. Kept for history; new design lands in docs/37.
 
-**Status:** Superseded by docs/36 (was: v1 design, in implementation)
+**Status:** Superseded by docs/37 (was: v1 design, in implementation)
 **Spec author:** MarsinEngine team
 **Related docs:** `15_central_param_center_cpc.md` · `24_osc_integration.md` · `16_captain_pad.md`
 

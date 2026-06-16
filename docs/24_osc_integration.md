@@ -1,6 +1,6 @@
 # 24 — OSC Integration for MarsinEngine
 
-**Related docs:** `36_marsin_audio_framework.md` (the first-party Audio Companion is a primary OSC source into this adapter) · `34_pro_audio_via_osc_sidecar.md` (external-analyzer lane) · `15_central_param_center_cpc.md` (CPC, the sink).
+**Related docs:** `37_marsin_audio_framework.md` (the first-party Audio Companion is a primary OSC source into this adapter) · `34_pro_audio_via_osc_sidecar.md` (external-analyzer lane) · `15_central_param_center_cpc.md` (CPC, the sink).
 
 ## 1. Overview
 
@@ -56,7 +56,7 @@ state.
 │                                                                       │
 │  ┌────────────────┐                                                   │
 │  │  OscListener   │  UDP                                              │
-│  │  (port 6970)   │ ◀──────── External OSC senders                    │
+│  │  (port 10000)  │ ◀──────── External OSC senders                    │
 │  │                │           • Audio analyser (stems, BPM, beats)    │
 │  │  - parse addr  │           • TouchOSC iPad / iPhone                │
 │  │  - lookup map  │           • Resolume / Touchdesigner / QLab       │
@@ -146,7 +146,7 @@ already loads keeps deployment trivial — no extra files, no env vars.
 ```yaml
 osc:
   enabled: true
-  port: 6970
+  port: 10000
   host: 0.0.0.0          # interface to bind; 0.0.0.0 = listen on all
 
   # Named-sender allowlist. When non-empty, only packets whose source
@@ -185,7 +185,7 @@ osc:
 | Field            | Default     | Behaviour                                                                                                              |
 | ---------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `enabled`        | `false`     | Section absent or `enabled: false` → no listener, no port bind, zero overhead.                                         |
-| `port`           | `6970`      | Sits next to engine (6968) and sACN bridge (6971). Documented in [§9.4 of CPC doc](./15_central_param_center_cpc.md#94-config). |
+| `port`           | `10000`      | Distinct from the sim save server (6970); sits clear of engine (6968) / sACN bridges (6971-6972). Documented in [§9.4 of CPC doc](./15_central_param_center_cpc.md#94-config). |
 | `host`           | `0.0.0.0`   | Bind to all interfaces. Set to `127.0.0.1` to restrict to loopback for safety.                                         |
 | `allowedSenders` | `[]` (open) | Empty list ⇒ **any** sender accepted (tagged `source: 'osc', origin: 'osc:<ip>:<port>'`). Non-empty ⇒ strict allowlist. |
 | `bindings`       | `{}`        | Empty map. Canonical addresses still work; nothing custom.                                                             |
@@ -250,7 +250,7 @@ is present, the listener treats the list as a strict allowlist:
 
 This closes the playa-network exposure issue: a stray laptop on the
 show Wi-Fi can no longer mutate shared params just because it can
-reach UDP 6970.
+reach UDP 10000.
 
 #### IP normalization
 
@@ -567,7 +567,7 @@ export class OscListener {
   /**
    * @param {object} opts
    * @param {ParamCenter} opts.paramCenter — required
-   * @param {number}   opts.port               — UDP port (default 6970)
+   * @param {number}   opts.port               — UDP port (default 10000)
    * @param {string}   opts.host               — bind interface (default '0.0.0.0')
    * @param {object}   opts.bindings           — see §3.1 / §6.4
    * @param {Array<{name:string, ip:string}>} opts.allowedSenders — empty = open; non-empty = strict allowlist
@@ -1016,7 +1016,7 @@ once per second.
 {
   "type": "oscStats",
   "enabled": true,
-  "port": 6970,
+  "port": 10000,
   "host": "0.0.0.0",
   "allowedSendersCount": 2,
   "bindingsCount": 5,
@@ -1346,7 +1346,7 @@ A scripted end-to-end check that the existing
 `.agent/00_gol/05_marsin_engine_auto_checks.md` flow can extend:
 
 ```
-1. Boot engine with osc.enabled = true, port 6970.
+1. Boot engine with osc.enabled = true, port 10000.
 2. Send /marsin/param/speed 0.42 once.
    → GET /param-center: speed.value == 0.42, lastSource == 'osc'.
 
