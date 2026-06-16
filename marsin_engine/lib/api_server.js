@@ -2776,7 +2776,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         return res.end(JSON.stringify(cached.payload));
       }
       Promise.all([
-        import('./audio_devices.js'),
+        import('../audio/capture/audio_devices.js'),
         import('./ffmpeg_resolver.js'),
       ]).then(async ([{ listAudioDevices }, { resolveFfmpegPath }]) => {
         try {
@@ -2830,7 +2830,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url === '/audio/chains/catalog') {
       // docs/29 §REST endpoints — op catalog for the iPad's "+ ADD OP"
       // picker (Phase 5). Cached client-side per engine version.
-      import('./signal_post_processor.js').then(({ opCatalog }) => {
+      import('../audio/postproc/signal_post_processor.js').then(({ opCatalog }) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(opCatalog()));
       });
@@ -2917,7 +2917,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // inside an async closure isn't worth the complexity in this
         // sync handler — require it at the top of the file would be
         // cleaner, but this keeps the cross-file deps obvious.
-        import('./audio_config.js').then(async ({ validateLivePatch }) => {
+        import('../audio/config/audio_config.js').then(async ({ validateLivePatch }) => {
           const v = validateLivePatch(data);
           if (!v.ok) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
