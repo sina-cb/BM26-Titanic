@@ -475,7 +475,9 @@ export class AudioCapture {
   // the right count and corrects drift against the wall clock.
   _ensureJbTimer() {
     if (this._jbTimer || !this._jb) return;
-    const tickMs = Math.max(2, Math.round((this.frameSamples / this.sampleRate) * 1000 / 2));
+    // Drain ~4× per hop so release times track the true hop instants closely
+    // (a coarser tick quantizes the cadence and inflates analyzerHopMs jitter).
+    const tickMs = Math.max(2, Math.round((this.frameSamples / this.sampleRate) * 1000 / 4));
     this._jbTimer = setInterval(() => {
       const hops = this._jb.pull(_now());
       for (const hop of hops) {
