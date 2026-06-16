@@ -1,11 +1,11 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
-import { updateParamCenter } from '@/utils/api';
+import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
 import { OscStatusPill } from '@/components/OscStatusPill';
-import { ColorPickerModal, DualSwatch } from '@/components/ColorPickerModal';
+import { ColorPickerModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
@@ -89,6 +89,38 @@ export const CPCControls = () => {
   // hue-only writes, atomic dual apply, presets sourced from
   // config.yaml. We only track open/closed here.
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
+
+  // ── Quick-cue colour queue (operator request 2026-06-16) ────────────
+  // A strip of curated palette swatches sits right of the COLORS button.
+  // First tap ARMS a pair as the next colour (no modal, no light change);
+  // tapping the armed swatch again sends it LIVE (the engine then fades
+  // to it over colorTransitionMs — docs/35). The ✕ cancels the cue. The
+  // cue is a local, ephemeral "next" on THIS pad — it isn't broadcast or
+  // persisted; only firing writes the shared colorPalette params.
+  const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
+  const [queued, setQueued] = useState<ColorPalettePreset | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next = await warmColorPalettesCache({ force: palettes.length === 0 });
+      if (!cancelled && Array.isArray(next) && next.length > 0) setPalettes(next);
+    })();
+    return () => { cancelled = true; };
+    // Load once on mount; the picker modal handles config.yaml live edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Tap an armed swatch → go live; tap any other → re-arm to that one.
+  const onCueTap = useCallback((p: ColorPalettePreset) => {
+    if (queued && queued.id === p.id) {
+      updateParamCenter({
+        colorPalette1: { h: p.c1, s: 1, v: 1 },
+        colorPalette2: { h: p.c2, s: 1, v: 1 },
+      });
+      setQueued(null);
+    } else {
+      setQueued(p);
+    }
+  }, [queued]);
   // Collapsible Global Params + Audio Reactivity rows (operator review
   // May 2026): the top strip eats 2× the vertical space the pattern
   // selection actually needs, especially in landscape on the iPad
@@ -219,6 +251,17 @@ export const CPCControls = () => {
               h2={params.colorPalette2?.h ?? 0.5}
               isPortrait={isPortrait}
               onPress={() => setColorPickerOpen(true)}
+            />
+
+            {/* Quick-cue queue strip — sits right of the COLORS button.
+                Tap to arm a next colour, tap again to send it live, ✕ to
+                cancel. See onCueTap / QueuedColorStrip. */}
+            <QueuedColorStrip
+              palettes={palettes}
+              queued={queued}
+              onTap={onCueTap}
+              onCancel={() => setQueued(null)}
+              isPortrait={isPortrait}
             />
 
             {/* BPM tile sits just before the OSC pill — a "tempo + source
@@ -355,6 +398,85 @@ function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: numb
         <DualSwatch h1={h1} h2={h2} size={22} />
       </View>
     </TouchableOpacity>
+  );
+}
+
+/**
+ * QueuedColorStrip — quick-cue palette next to the COLORS button.
+ *
+ * A horizontally-scrolling row of curated palette swatches. Tapping a
+ * swatch ARMS it (highlighted border + "TAP TO GO" caption + ✕); tapping
+ * the armed swatch again fires it live (the parent writes colorPalette1/2,
+ * the engine fades per docs/35). ✕ cancels the cue. Styled to match the
+ * COLORS / BPM tiles (same height, border, surface) so it reads as part
+ * of the same cluster. Renders nothing until palettes have loaded — no
+ * fabricated placeholder list.
+ */
+function QueuedColorStrip({ palettes, queued, onTap, onCancel, isPortrait }: {
+  palettes: ColorPalettePreset[];
+  queued: ColorPalettePreset | null;
+  onTap: (p: ColorPalettePreset) => void;
+  onCancel: () => void;
+  isPortrait: boolean;
+}) {
+  const C = usePalette();
+  if (!palettes.length) return null;
+  const armed = !!queued;
+  const sw = isPortrait ? 18 : 20;
+  return (
+    <View style={{
+      flex: 1, minWidth: isPortrait ? 76 : 120, height: GLOBALS_TILE_HEIGHT,
+      paddingVertical: 4, paddingHorizontal: 6,
+      borderRadius: 8, borderWidth: 1, borderColor: armed ? C.primary : C.ghostBorder,
+      backgroundColor: C.surface,
+      justifyContent: 'space-between',
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text
+          numberOfLines={1}
+          style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: armed ? C.primary : C.secondary,
+            textTransform: 'uppercase', letterSpacing: 0.8, flexShrink: 1,
+          }}
+        >
+          {armed ? 'TAP TO GO' : 'QUEUE'}
+        </Text>
+        {armed ? (
+          <TouchableOpacity
+            onPress={onCancel}
+            accessibilityLabel="Cancel queued colour"
+            accessibilityRole="button"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.secondary }}>✕</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ alignItems: 'center', gap: 6, paddingRight: 4 }}
+      >
+        {palettes.map((p) => {
+          const isQ = queued?.id === p.id;
+          return (
+            <TouchableOpacity
+              key={p.id}
+              onPress={() => onTap(p)}
+              accessibilityLabel={isQ ? `Send ${p.name} live` : `Queue ${p.name}`}
+              accessibilityRole="button"
+              style={{
+                borderRadius: sw / 2 + 3, padding: 2,
+                borderWidth: 2, borderColor: isQ ? C.primary : 'transparent',
+              }}
+            >
+              <DualSwatch h1={p.c1} h2={p.c2} size={sw} />
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 

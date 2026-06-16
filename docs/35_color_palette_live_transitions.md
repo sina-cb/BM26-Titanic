@@ -261,6 +261,32 @@ picker keeps the Deck's GLOBAL PARAMS strip uncluttered and means the
 operator sets "how I switch colors" in the same place they switch them —
 reachable identically from Deck and Mixer.
 
+## 5b. Quick-cue colour queue (Deck + Mixer chrome)
+
+Operator request 2026-06-16: switch colours *fast*, without opening the
+modal. A **queue strip** sits immediately to the right of the COLORS
+button in `CPCControls` (so it's on both the Deck and the Mixer):
+
+- A horizontally-scrolling row of the curated palette swatches
+  (`getCachedColorPalettes()` — same source as the picker's Presets tab).
+- **First tap arms** a pair as the *next* colour — highlighted border,
+  caption flips to `TAP TO GO`, a `✕` appears. **Nothing goes live yet.**
+- **Tapping the armed swatch again sends it live** — the parent writes
+  `colorPalette1/2` and the engine fades to it over `colorTransitionMs`
+  (§4). Tapping a *different* swatch re-arms to that one instead.
+- **`✕` cancels** the cue (no colour change).
+
+The cue is **local + ephemeral** to the pad that's holding it — it is not
+broadcast or persisted; only *firing* writes the shared params (which then
+broadcast like any other colour change). Two pads can each hold their own
+cue. State lives in `CPCControls` (`queued`, `onCueTap`); the strip is
+`QueuedColorStrip`, styled to match the COLORS/BPM tiles (same height,
+border, surface) so it reads as one cluster. It renders nothing until the
+palette list has loaded — no fabricated placeholder.
+
+This is purely additive: it reuses the picker's preset source and the §4
+engine fade. No engine or API change.
+
 ## 6. Slice 3 — tap-outside to cancel
 
 In `ColorPickerModal`, make the backdrop a pressable that triggers
