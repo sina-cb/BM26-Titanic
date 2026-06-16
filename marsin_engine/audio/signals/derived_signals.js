@@ -38,7 +38,7 @@ export class DerivedSignals {
       throw new TypeError('DerivedSignals: paramCenter with get()/setMany() is required');
     }
     this.paramCenter = paramCenter;
-    this._bpm = new BpmTracker(PARAMS.bpm);
+    this._bpm = new BpmTracker();   // v2: tuned DEFAULTS baked in (2-state lock + beat/bar)
     this._party = new PartyMode(PARAMS.party);
     this._note = new NoteEstimator(PARAMS.note);
     this._switch = new SwitchSignals(PARAMS.sw);
@@ -84,6 +84,9 @@ export class DerivedSignals {
         { kind: 'scalar', key: 'audioNoteHue',       value: n.hue },
         { kind: 'scalar', key: 'audioSwitchPattern', value: s.switchPattern ? 1.0 : 0.0 },
         { kind: 'scalar', key: 'audioSwitchColor',   value: s.switchColor ? 1.0 : 0.0 },
+        { kind: 'scalar', key: 'audioBeatInBar',     value: b.beatInBar || 0 },
+        { kind: 'scalar', key: 'audioBarPhase',      value: b.barPhase || 0 },
+        { kind: 'scalar', key: 'audioDownbeat',      value: b.downbeat ? 1.0 : 0.0 },
       ], 'derivedSignals');
     } catch (e) {
       this._fatal = true;
@@ -97,6 +100,8 @@ export class DerivedSignals {
       { kind: 'scalar', key: 'audioParty', value: 0.0 }, { kind: 'scalar', key: 'audioNote', value: 0.0 },
       { kind: 'scalar', key: 'audioNoteHue', value: 0.0 }, { kind: 'scalar', key: 'audioSwitchPattern', value: 0.0 },
       { kind: 'scalar', key: 'audioSwitchColor', value: 0.0 },
+      { kind: 'scalar', key: 'audioBeatInBar', value: 0.0 }, { kind: 'scalar', key: 'audioBarPhase', value: 0.0 },
+      { kind: 'scalar', key: 'audioDownbeat', value: 0.0 },
     ], 'derivedSignals');
   }
 }

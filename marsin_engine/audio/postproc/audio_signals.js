@@ -106,6 +106,9 @@ const DERIVED = [
   { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10 },
   { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15 },
   { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15 },
+  { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30 },
+  { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30 },
+  { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30 },
 ];
 
 function gainDescriptor(key, label) {

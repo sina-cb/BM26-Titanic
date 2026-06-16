@@ -83,6 +83,9 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioNoteHue', label: 'Audio · Note Hue', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioNoteHue' }) },
   { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioSwitchPattern' }) },
   { key: 'audioSwitchColor', label: 'Audio · Switch Color', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioSwitchColor' }) },
+  { key: 'audioBeatInBar', label: 'Audio · Beat In Bar', ...LIVE({ range: [0, 4], broadcastHz: 30, sharedFnName: 'audioBeatInBar' }) },
+  { key: 'audioBarPhase', label: 'Audio · Bar Phase', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioBarPhase' }) },
+  { key: 'audioDownbeat', label: 'Audio · Downbeat', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioDownbeat' }) },
 ];
 
 // Normalize: sort object keys so deep-equal ignores literal key ORDER (the
