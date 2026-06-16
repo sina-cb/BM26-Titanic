@@ -278,9 +278,9 @@ armed pair at a time:
   engine.
 - **Tapping the armed tile sends it live** — writes `colorPalette1/2` (the
   same params the main picker writes), so the engine fades to it over
-  `colorTransitionMs` (§4). It stays armed so you can re-fire; to change
-  the cue, `✕` then re-pick.
-- **`✕` (top-right) removes** the cue (no colour change).
+  `colorTransitionMs` (§4) — **then the cue clears back to empty**, ready
+  for the next pick.
+- **`✕` (top-right) removes** the cue without sending (no colour change).
 
 The armed pair is a **frozen snapshot**: it carries its own `c1/c2`, so
 editing the main colour (picker or live drag) never changes what's armed.

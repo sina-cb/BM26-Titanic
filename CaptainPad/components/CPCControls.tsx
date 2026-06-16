@@ -95,8 +95,9 @@ export const CPCControls = () => {
   // it opens a chooser (ColorQueueModal) to pick one curated pair, which
   // ARMS the slot (no light change). Armed: tapping the slot sends that
   // pair LIVE — same colorPalette1/2 the main picker writes, so the
-  // engine fades to it over colorTransitionMs (docs/35). The ✕ (top-right)
-  // removes the cue. The armed pair is a FROZEN snapshot: editing the main
+  // engine fades to it over colorTransitionMs (docs/35) — then the cue
+  // clears back to empty. The ✕ (top-right) removes the cue without
+  // sending. The armed pair is a FROZEN snapshot: editing the main
   // colour never changes it. Cue is local + ephemeral to this pad — only
   // firing writes the shared params.
   const [palettes, setPalettes] = useState<ColorPalettePreset[]>(() => getCachedColorPalettes());
@@ -112,13 +113,15 @@ export const CPCControls = () => {
     // Load once on mount; the picker modal handles config.yaml live edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Tap the slot: armed → send live; empty → open the chooser.
+  // Tap the slot: armed → send live then clear the cue (back to empty);
+  // empty → open the chooser.
   const onSlotTap = useCallback(() => {
     if (queued) {
       updateParamCenter({
         colorPalette1: { h: queued.c1, s: 1, v: 1 },
         colorPalette2: { h: queued.c2, s: 1, v: 1 },
       });
+      setQueued(null);
     } else {
       setQueuePickerOpen(true);
     }
