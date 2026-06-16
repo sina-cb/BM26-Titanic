@@ -80,6 +80,32 @@ let inputGain = 1.0;
 // Source-stage smoothing (gentle one-pole LP on the PCM before the FFT) — a
 // small default removes mic noise; 0 = off. Part of the INPUT post-proc.
 let sourceSmoothHz = 12000;
+// Realtime/smoothness diagnostic: measures how evenly the capture delivers
+// audio frames (the "discretized packets" symptom = bursty arrival / gaps) and
+// whether analysis keeps up with realtime. Reset on source switch.
+const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
+function recordFrame(n) {
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (diag.lastWall) { diag.deltas.push(now - diag.lastWall); if (diag.deltas.length > 4000) diag.deltas.shift(); }
+  else diag.startWall = now;
+  diag.lastWall = now; diag.frames++; diag.samples += n;
+}
+function diagReport() {
+  const d = diag.deltas.slice().sort((a, b) => a - b);
+  const q = (p) => (d.length ? d[Math.min(d.length - 1, Math.floor(d.length * p))] : 0);
+  const mean = d.reduce((a, b) => a + b, 0) / (d.length || 1);
+  const std = Math.sqrt(d.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (d.length || 1));
+  const expected = (HOP / SR) * 1000;
+  const elapsed = Math.max(0.001, (diag.lastWall - diag.startWall) / 1000);
+  return {
+    type: 'diag', mode, frames: diag.frames, elapsedSec: +elapsed.toFixed(1), expectedFrameMs: +expected.toFixed(2),
+    interArrivalMs: { median: +q(0.5).toFixed(2), p95: +q(0.95).toFixed(2), p99: +q(0.99).toFixed(2), max: +(d[d.length - 1] || 0).toFixed(2), jitterStd: +std.toFixed(2) },
+    gapsOver2x: d.filter((x) => x > expected * 2).length,
+    effectiveFps: +(diag.frames / elapsed).toFixed(1),
+    realtimeRatio: +((diag.samples / SR) / elapsed).toFixed(3),   // ~1.0 = realtime; <1 = falling behind
+  };
+}
+
 function applyInputGain(v) {
   inputGain = Math.max(0, Math.min(64, +v));
   analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain }, kick: analyzer.kick });
@@ -248,7 +274,7 @@ function pushFrame(int16) {
     cal.chunks.push(int16.slice());              // copy — the capture buffer is reused
     if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
   }
-  lastPcm = int16;
+  lastPcm = int16; recordFrame(int16.length);
   clockMs += (int16.length / SR) * 1000;
   specAnalyzer.pushSamples(int16);   // fill the hi-res spectrum first …
   analyzer.pushSamples(int16);       // … then the main analyzer (its onAnalysis reads getSpectrum)
@@ -322,6 +348,7 @@ function startCapture(device) {
 function setMode(next, opts = {}) {
   stopSource();
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
+  diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device || null);
@@ -345,6 +372,7 @@ function handleMessage(ws, raw) {
   else if (m.type === 'setInputGain') { applyInputGain(m.value); broadcast({ type: 'inputGain', value: inputGain }); }
   else if (m.type === 'setSmooth') { applySmooth(m.value); broadcast({ type: 'smooth', value: sourceSmoothHz }); }
   else if (m.type === 'calibrate') startCalibration();
+  else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') setMode(m.mode, { file: m.file, device: m.device });
   else if (m.type === 'setChain') ws.send(JSON.stringify({ type: 'chainResult', signal: m.signal, ...applyChain(m.signal, m.chain) }));
   else if (m.type === 'export') ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));

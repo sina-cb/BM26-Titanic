@@ -382,6 +382,24 @@ export class DominantFreqTracker {
       if (t.active) { o.freqHz = t.freqHz; o.energy = t.energy < 1 ? t.energy : 1; o.loHz = t.loHz; o.hiHz = t.hiHz; }
       else { o.freqHz = 0; o.energy = 0; o.loHz = 0; o.hiHz = 0; }
     }
+    // Separation: dom2's CENTROID must not sit inside dom1's cluster window
+    // (overlapping windows are fine, a redundant centroid is not). If it does,
+    // retarget dom2 to the strongest current peak whose centroid is OUTSIDE
+    // dom1's window — a genuinely distinct partial.
+    const d1 = this._out[0];
+    if (this.numTracks >= 2 && d1.freqHz > 0) {
+      const d2 = this._out[1];
+      if (d2.freqHz >= d1.loHz && d2.freqHz <= d1.hiHz) {
+        let bestI = -1, bestE = this.birthEnergy;
+        for (let i = 0; i < this._peakCount; i++) {
+          const f = this._peakFreq[i];
+          if (f >= d1.loHz && f <= d1.hiHz) continue;     // inside dom1's window → skip
+          if (this._peakEner[i] > bestE) { bestE = this._peakEner[i]; bestI = i; }
+        }
+        if (bestI >= 0) { d2.freqHz = this._peakFreq[bestI]; d2.energy = this._peakEner[bestI]; d2.loHz = this._peakLo[bestI]; d2.hiHz = this._peakHi[bestI]; }
+        else { d2.freqHz = 0; d2.energy = 0; d2.loHz = 0; d2.hiHz = 0; }   // nothing distinct → no dom2
+      }
+    }
     return this._out;
   }
 }
