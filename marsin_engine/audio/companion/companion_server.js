@@ -189,6 +189,9 @@ const analyzer = new AudioAnalyzer({
   bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
   kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },   // EDM corpus-tuned (clean pulse)
   nowFn: () => clockMs,
+  // Feed the oscilloscope the SAME source-conditioned PCM (gain + smoothing)
+  // that feeds the FFT — so SMOOTH visibly affects the waveform, not just gain.
+  onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
     recordAnalysis(r.low ?? 0);   // §13: analyzer-cadence + chunkiness diagnostic
@@ -271,6 +274,35 @@ let testTimer = null;
 let capture = null;
 let ffmpegPath = 'ffmpeg';
 
+// File mode is BROWSER-SOURCED: the browser plays the file in an <audio>
+// element (native audio-out + seek + pause) and taps the WebAudio graph,
+// streaming hop-sized Int16 mono PCM @ 44.1 kHz to us over a BINARY WS frame.
+// We feed THAT straight into the same analyzer, so the analysis is exactly the
+// audio the operator hears — perfectly synced, scrub-and-pause aware (when the
+// browser pauses it simply stops sending PCM). No ffmpeg, no server-side seek.
+// `currentFile` is the path the browser is playing (for the /file byte server).
+let browserSource = false;
+let currentFile = '';
+// Re-frame the browser's PCM chunks (arbitrary length) into exact HOP frames so
+// the analyzer sees the same cadence as every other source.
+let browserResid = new Int16Array(0);
+function feedBrowserPcm(int16) {
+  if (!browserSource) return;   // ignore stale PCM after a mode switch
+  // Concatenate any residual + the new chunk, then emit as many full HOP
+  // frames as we can; keep the remainder for next time.
+  let buf = int16;
+  if (browserResid.length) {
+    buf = new Int16Array(browserResid.length + int16.length);
+    buf.set(browserResid, 0); buf.set(int16, browserResid.length);
+  }
+  let off = 0;
+  while (buf.length - off >= HOP) {
+    pushFrame(buf.subarray(off, off + HOP));
+    off += HOP;
+  }
+  browserResid = off < buf.length ? buf.slice(off) : new Int16Array(0);
+}
+
 let sampleCursor = 0, seed = 0x2f6e2b1;
 const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
 const frameBuf = new Int16Array(HOP);
@@ -280,28 +312,32 @@ const SPECTRUM_BINS = 256, WAVE_POINTS = 256;   // finer freq + scope granularit
 let lastPcm = new Int16Array(HOP);
 // Rolling oscilloscope window: the waveform shows the last SCOPE_SAMPLES of audio
 // (~93 ms), not just the most recent 11.6 ms hop — a readable scrolling scope
-// instead of a tiny jittery slice. Fed one hop at a time from pushFrame.
+// instead of a tiny jittery slice. Fed the analyzer's SOURCE-CONDITIONED PCM
+// (gain + smoothing already applied — the exact signal feeding the FFT) via the
+// analyzer's onConditioned hook, so the scope reflects BOTH gain AND smoothing.
 const SCOPE_SAMPLES = 4096;
 const scope = new Float32Array(SCOPE_SAMPLES);
-function pushScope(int16) {
-  const n = int16.length;
+function pushScope(cond) {
+  // `cond` is already-conditioned PCM (gain + smoothing applied, [-,+] floats).
+  const n = cond.length;
   if (n >= SCOPE_SAMPLES) {
-    for (let i = 0; i < SCOPE_SAMPLES; i++) scope[i] = int16[n - SCOPE_SAMPLES + i] / 32768;
+    for (let i = 0; i < SCOPE_SAMPLES; i++) scope[i] = cond[n - SCOPE_SAMPLES + i];
     return;
   }
   scope.copyWithin(0, n);                       // shift older samples left …
   const base = SCOPE_SAMPLES - n;
-  for (let i = 0; i < n; i++) scope[base + i] = int16[i] / 32768;   // … append newest hop
+  for (let i = 0; i < n; i++) scope[base + i] = cond[i];   // … append newest hop
 }
 const waveBuf = new Float32Array(WAVE_POINTS);
 function downWave() {
   // Average each segment of the rolling scope (not decimate) → anti-aliased,
-  // smooth scope line over the full ~93 ms window.
+  // smooth scope line over the full ~93 ms window. The scope already carries
+  // gain + smoothing (conditioned PCM), so NO gain multiply here.
   const len = SCOPE_SAMPLES, seg = len / WAVE_POINTS;
   for (let i = 0; i < WAVE_POINTS; i++) {
     const s = Math.floor(i * seg), e = Math.max(s + 1, Math.min(len, Math.floor((i + 1) * seg)));
     let sum = 0; for (let j = s; j < e; j++) sum += scope[j];
-    const v = (sum / (e - s)) * inputGain;       // scope is already normalized; gain scales it
+    const v = sum / (e - s);
     waveBuf[i] = v > 1 ? 1 : v < -1 ? -1 : v;
   }
   return Array.from(waveBuf);
@@ -328,10 +364,10 @@ function pushFrame(int16) {
     cal.chunks.push(int16.slice());              // copy — the capture buffer is reused
     if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
   }
-  lastPcm = int16; pushScope(int16); recordFrame(int16.length);
+  lastPcm = int16; recordFrame(int16.length);
   clockMs += (int16.length / SR) * 1000;
   specAnalyzer.pushSamples(int16);   // fill the hi-res spectrum first …
-  analyzer.pushSamples(int16);       // … then the main analyzer (its onAnalysis reads getSpectrum)
+  analyzer.pushSamples(int16);       // … then the main analyzer (onConditioned feeds the scope, onAnalysis reads getSpectrum)
 }
 
 // ── calibration: record → measure → recommend gain → replay ─────────────────
@@ -364,7 +400,7 @@ function startReplay() {
       return;
     }
     const chunk = cal.chunks[i++];
-    lastPcm = chunk; pushScope(chunk);
+    lastPcm = chunk;   // scope is fed by the analyzer's onConditioned hook below
     clockMs += (chunk.length / SR) * 1000;
     specAnalyzer.pushSamples(chunk); analyzer.pushSamples(chunk);
   }, Math.round((HOP / SR) * 1000));
@@ -375,6 +411,7 @@ function stopSource() {
   if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }
   if (cal.replayTimer) { clearInterval(cal.replayTimer); cal.replayTimer = null; }
   cal.recording = false; cal.replaying = false;
+  browserSource = false; browserResid = new Int16Array(0);
 }
 function startTest() {
   testTimer = setInterval(() => { genFrame(frameBuf); pushFrame(frameBuf); }, Math.round((HOP / SR) * 1000));
@@ -411,7 +448,15 @@ function setMode(next, opts = {}) {
   mode = (next === 'mic' || next === 'file') ? next : 'test';
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device || null);
-  else if (mode === 'file') startCapture(`file:${opts.file}`);
+  else if (mode === 'file') {
+    // Browser-sourced: the <audio> element plays + taps the file and streams
+    // PCM to us. We don't spawn ffmpeg; we just remember the path so the /file
+    // endpoint can serve its bytes to the browser, and wait for PCM frames.
+    if (!opts.file) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: 'no file selected' } }); return; }
+    currentFile = opts.file;
+    browserSource = true;
+    broadcast({ type: 'sourceStatus', mode, status: { enabled: true, browser: true, file: currentFile } });
+  }
 }
 
 // ── chain edit + export ─────────────────────────────────────────────────────
@@ -447,12 +492,48 @@ function handleMessage(ws, raw) {
 
 // ── HTTP (serve the UI) + WS ────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+// Audio MIME types for the /file byte server (browser <audio> playback).
+const MIME_AUDIO = {
+  '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.aiff': 'audio/aiff',
+  '.aif': 'audio/aiff', '.wma': 'audio/x-ms-wma',
+};
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent((req.url || '/').split('?')[0]);
   if (p === '/') p = '/index.html';
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz }));
+    return;
+  }
+  if (p === '/file') {
+    // Serve the bytes of an audio file to the browser's <audio> element, with
+    // HTTP Range support so the operator can seek/scrub. Only audio extensions
+    // are served (no arbitrary file read).
+    const fp = new URL(req.url, 'http://x').searchParams.get('path') || '';
+    if (!fp || !AUDIO_EXT.has(path.extname(fp).toLowerCase())) { res.writeHead(400); res.end('bad file'); return; }
+    fs.stat(fp, (err, st) => {
+      if (err || !st.isFile()) { res.writeHead(404); res.end('not found'); return; }
+      const total = st.size;
+      const type = MIME_AUDIO[path.extname(fp).toLowerCase()] || 'application/octet-stream';
+      const range = req.headers.range;
+      if (range) {
+        const m = /bytes=(\d*)-(\d*)/.exec(range);
+        let start = m && m[1] ? parseInt(m[1], 10) : 0;
+        let end = m && m[2] ? parseInt(m[2], 10) : total - 1;
+        if (Number.isNaN(start) || start < 0) start = 0;
+        if (Number.isNaN(end) || end >= total) end = total - 1;
+        if (start > end) { res.writeHead(416, { 'content-range': `bytes */${total}` }); res.end(); return; }
+        res.writeHead(206, {
+          'content-type': type, 'accept-ranges': 'bytes',
+          'content-range': `bytes ${start}-${end}/${total}`, 'content-length': end - start + 1,
+        });
+        fs.createReadStream(fp, { start, end }).pipe(res);
+      } else {
+        res.writeHead(200, { 'content-type': type, 'accept-ranges': 'bytes', 'content-length': total });
+        fs.createReadStream(fp).pipe(res);
+      }
+    });
     return;
   }
   if (p === '/browse') {  // server-side directory listing (folders + audio files)
@@ -485,7 +566,20 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   clients.add(ws);
   ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR }));
-  ws.on('message', (d) => {
+  ws.on('message', (d, isBinary) => {
+    // Binary frames carry the browser file-source PCM (Int16 mono @ 44.1 kHz).
+    // Route them straight to the analyzer; never JSON-parse them.
+    if (isBinary) {
+      try {
+        const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
+        // s16le little-endian view over the received bytes (even length only).
+        const n = buf.length >> 1;
+        const i16 = new Int16Array(n);
+        for (let i = 0; i < n; i++) i16[i] = buf.readInt16LE(i * 2);
+        feedBrowserPcm(i16);
+      } catch (e) { /* drop a malformed PCM frame; never crash the source */ }
+      return;
+    }
     try { handleMessage(ws, d.toString()); }
     catch (e) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: String(e && e.message) } }); }
   });

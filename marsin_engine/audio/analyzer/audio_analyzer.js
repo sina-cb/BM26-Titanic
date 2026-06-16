@@ -156,6 +156,13 @@ export class AudioAnalyzer {
     this.fftSize     = fftSize;
     this.hopSize     = (opts.hopSize | 0) || (fftSize >> 1);
     this._onAnalysis = opts.onAnalysis;
+    // Optional hook: receives the SOURCE-CONDITIONED PCM (gain + smoothing
+    // applied, exactly what feeds the FFT) for each pushSamples() chunk, as a
+    // Float32Array of [-,+] floats. Lets a consumer (e.g. the Audio Companion's
+    // oscilloscope) show the SAME signal the analysis sees — one source of
+    // truth, no duplicated LP math. Absent → no extra work in the hot path.
+    this._onConditioned = (typeof opts.onConditioned === 'function') ? opts.onConditioned : null;
+    this._condBuf = null;   // reusable conditioned-sample scratch (lazily sized)
     this._nowFn      = opts.nowFn || (() => Date.now());
 
     this._fft = new FFT(fftSize);
@@ -343,12 +350,22 @@ export class AudioAnalyzer {
     // kick's ratio, so at gain=1 / smoothing-off this is byte-identical.
     const g = this.bands.inputGain ?? 1;
     const sm = this._srcSmoothAlpha;   // 0 = smoothing off
+    // Mirror the conditioned PCM into a reusable scratch buffer ONLY when a
+    // consumer asked for it (the oscilloscope) — no allocation/branch cost in
+    // the engine's hot path where _onConditioned is null.
+    let cond = null;
+    if (this._onConditioned) {
+      if (!this._condBuf || this._condBuf.length < n) this._condBuf = new Float32Array(n);
+      cond = this._condBuf;
+    }
     for (let i = 0; i < n; i++) {
       let v = (int16[i] / 32768) * g;
       if (sm > 0) { this._srcLp += sm * (v - this._srcLp); v = this._srcLp; }
       this._ring[this._ringHead] = v;
       this._ringHead = (this._ringHead + 1) % this.fftSize;
+      if (cond) cond[i] = v;
     }
+    if (cond) this._onConditioned(cond.subarray(0, n));
     this._samplesSinceHop += n;
     this._totalSamples    += n;
 

@@ -378,22 +378,23 @@ test('Schmitt: refractoryMs blocks re-fire within window', () => {
 // Source: design doc §Operator catalog row "Hold" — TD CHOP Hold + Speed.
 // If now − lastInputAt > timeoutMs: y = y_prev · exp(−dt/τ_decay).
 // Else y = max(x, y_prev · exp(−dt/τ_decay)).
-test('Hold: latches peak, then decays exponentially after timeout', () => {
-  // timeoutMs=100, decayMs=100 → τ_decay = 0.1 s.
+test('Hold: latches peak, holds FLAT through the timeout, then decays', () => {
+  // timeoutMs=100, decayMs=100 → τ_decay = 0.1 s. The op holds flat for the
+  // timeout window (no decay inside it — that was the old bug), then decays.
   const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
   proc.putChain('micKick', [{ id: 'h', type: 'hold', params: { timeoutMs: 100, decayMs: 100 } }]);
-  // Tick 1: x=1, dt=0.025. lastInputAt=25ms; clock=25ms. y = max(1, 0*exp(...)) = 1.
+  // Tick 1: x=1, dt=0.025. lastInputAt=25ms; clock=25ms. Latch → y = 1.
   let y = proc.process('micKick', 1.0, 0.025);
   approxEqual(y, 1.0);
-  // Tick 2: x=0, dt=0.025. clock=50ms. now-lastInputAt = 50-25 = 25 ≤ 100 → y = max(0, 1*exp(-0.025/0.1)) = exp(-0.25) ≈ 0.7788.
+  // Tick 2: x=0, dt=0.025. clock=50ms. now-lastInputAt = 25 ≤ 100 → FLAT hold → y = 1.
   y = proc.process('micKick', 0, 0.025);
-  approxEqual(y, Math.exp(-0.25), 1e-9);
-  // Tick 3: x=0, dt=0.025. clock=75ms. now-lastInputAt = 50 ≤ 100 → y = max(0, prev*exp(-0.25)) = exp(-0.5).
+  approxEqual(y, 1.0, 1e-9);
+  // Tick 3: x=0, dt=0.025. clock=75ms. now-lastInputAt = 50 ≤ 100 → FLAT hold → y = 1.
   y = proc.process('micKick', 0, 0.025);
-  approxEqual(y, Math.exp(-0.5), 1e-9);
-  // Tick 4: x=0, dt=0.100. clock=175ms. now-lastInputAt = 150 > 100 → y = prev * exp(-0.1/0.1) = exp(-0.5)*exp(-1).
+  approxEqual(y, 1.0, 1e-9);
+  // Tick 4: x=0, dt=0.100. clock=175ms. now-lastInputAt = 150 > 100 → decay → y = 1·exp(-0.1/0.1) = exp(-1).
   y = proc.process('micKick', 0, 0.100);
-  approxEqual(y, Math.exp(-0.5) * Math.exp(-1), 1e-9);
+  approxEqual(y, Math.exp(-1), 1e-9);
 });
 
 test('Hold: positive sample re-latches even before timeout expires', () => {

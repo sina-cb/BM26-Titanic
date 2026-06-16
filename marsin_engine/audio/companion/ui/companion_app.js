@@ -46,6 +46,36 @@ const S = {
   derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0 },
   spFlash: 0, scFlash: 0,
 };
+// Per-op-param SANE slider ranges (a UI concern — lives here, client-side).
+// The op-schema min/max (signal_post_processor.js OP_SCHEMA) are validation
+// bounds and are huge (e.g. envelope attack/release 0.1–10000), so the raw
+// slider end is unusable for fine adjustment. These uiRange entries give each
+// param a musically-sensible {min,max,step} for the SLIDER only — the typed
+// number input stays unbounded and still pushes the real value (validateChain
+// on the server is the true bound).
+const UI_RANGE = {
+  gain:       { value: { min: 0, max: 4, step: 0.05 } },
+  bias:       { value: { min: -1, max: 1, step: 0.01 } },
+  clamp:      { min: { min: 0, max: 1, step: 0.01 }, max: { min: 0, max: 1, step: 0.01 } },
+  lpf:        { cutoffHz: { min: 0.1, max: 40, step: 0.1 } },
+  envelope:   { attackMs: { min: 0, max: 200, step: 1 }, releaseMs: { min: 0, max: 600, step: 1 } },
+  schmitt:    { tHigh: { min: 0, max: 1, step: 0.01 }, tLow: { min: 0, max: 1, step: 0.01 }, refractoryMs: { min: 0, max: 1000, step: 5 } },
+  hold:       { timeoutMs: { min: 0, max: 2000, step: 10 }, decayMs: { min: 0, max: 2000, step: 10 } },
+  curve:      { gamma: { min: 0.1, max: 5, step: 0.1 } },
+  slew:       { maxStepPerSec: { min: 0, max: 20, step: 0.1 } },
+  compressor: { threshold: { min: 0, max: 1, step: 0.01 }, ratio: { min: 1, max: 20, step: 0.1 }, attackMs: { min: 0, max: 200, step: 1 }, releaseMs: { min: 0, max: 600, step: 1 } },
+  biquad:     { cutoffHz: { min: 0.1, max: 40, step: 0.1 }, Q: { min: 0.1, max: 10, step: 0.05 } },
+  slope:      { scale: { min: 0, max: 20, step: 0.1 } },
+  normalizer: { windowSec: { min: 1, max: 60, step: 1 }, strength: { min: 0, max: 1, step: 0.01 } },
+};
+// Slider {min,max,step} for an op param: the sane uiRange if one exists, else
+// the op-schema bounds (so any new/unlisted param still gets a working slider).
+function sliderRange(opType, pname, pdef) {
+  const ui = UI_RANGE[opType]?.[pname];
+  if (ui) return ui;
+  const min = pdef.min ?? 0, max = pdef.max ?? 1;
+  return { min, max, step: stepFor(min, max) };
+}
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
@@ -223,7 +253,12 @@ function opParams(sig, op, i) {
       sel.onchange = () => { op.params[pname] = sel.value; pushChain(sig); };
       row.appendChild(sel);
     } else {
-      const min = pdef.min ?? 0, max = pdef.max ?? 1, step = stepFor(min, max);
+      // SLIDER uses a sane musical range (uiRange) for easy adjustment; the
+      // typed NUMBER input is unbounded and still pushes the real value (the
+      // server's validateChain is the true bound). The slider value is clamped
+      // into [min,max] only so the thumb stays on-track — the param keeps the
+      // typed value.
+      const { min, max, step } = sliderRange(op.type, pname, pdef);
       const head = el('div', 'param-head');
       head.appendChild(el('span', 'pn', pname));
       // Editable number box — type an exact value (server validateChain still
@@ -231,7 +266,8 @@ function opParams(sig, op, i) {
       const num = el('input', 'pv-input'); num.type = 'number'; num.step = step; num.value = fmt(cur);
       head.appendChild(num);
       row.appendChild(head);
-      const r = el('input', 'param-range'); r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = cur;
+      const r = el('input', 'param-range'); r.type = 'range'; r.min = min; r.max = max; r.step = step;
+      r.value = Math.max(min, Math.min(max, cur));   // keep the thumb on-track even if the saved value is out of slider range
       r.oninput = () => { op.params[pname] = +r.value; num.value = fmt(+r.value); };
       r.onchange = () => pushChain(sig);
       num.onchange = () => {
@@ -261,18 +297,146 @@ function addOp(sig, type) {
 function removeOp(i) { S.chains[S.selected].splice(i, 1); renderChain(); pushChain(S.selected); }
 function moveOp(i, d) { const c = S.chains[S.selected]; const j = i + d; if (j < 0 || j >= c.length) return; [c[i], c[j]] = [c[j], c[i]]; renderChain(); pushChain(S.selected); }
 
+// ── file player (BROWSER-SOURCED file mode) ─────────────────────────────────
+// In file mode the BROWSER is the player + the source: an <audio> element does
+// native audio-out + seek + pause, and a WebAudio tap streams hop-sized Int16
+// mono PCM @ 44.1 kHz to the server over a BINARY WS frame. The server feeds
+// THAT into the same analyzer, so what's analysed is exactly what's heard —
+// perfectly synced, and pausing/seeking the <audio> pauses/seeks the analysis.
+// Offline: no libs; the WebAudio tap uses an AudioWorklet (Blob module URL, so
+// no extra served file) with a ScriptProcessor fallback.
+const PCM_SR = 44100;
+const filePlayer = {
+  audio: null, ctx: null, node: null, srcNode: null, path: '', ready: false,
+  // PCM tap (worklet) processor source — captures mono float frames, converts
+  // to Int16 and posts them; the main thread forwards them over the WS.
+  _workletCode: `
+    class PcmTap extends AudioWorkletProcessor {
+      process(inputs) {
+        const ch = inputs[0] && inputs[0][0];
+        if (ch && ch.length) {
+          const i16 = new Int16Array(ch.length);
+          for (let i = 0; i < ch.length; i++) {
+            let s = ch[i]; s = s > 1 ? 1 : s < -1 ? -1 : s;
+            i16[i] = s < 0 ? s * 32768 : s * 32767;
+          }
+          this.port.postMessage(i16, [i16.buffer]);
+        }
+        return true;
+      }
+    }
+    registerProcessor('pcm-tap', PcmTap);
+  `,
+  async load(path) {
+    this.stop();
+    this.path = path;
+    // <audio> for native playback (audio-out + seek + pause).
+    const a = new Audio();
+    a.src = '/file?path=' + encodeURIComponent(path);
+    a.preload = 'auto'; a.crossOrigin = 'anonymous';
+    this.audio = a;
+    // WebAudio graph: <audio> → tap (→ server PCM) AND → destination (so the
+    // operator hears it). Force the context to 44.1 kHz so the PCM matches the
+    // analyzer's rate with no resampling.
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx({ sampleRate: PCM_SR });
+    this.ctx = ctx;
+    const srcNode = ctx.createMediaElementSource(a);
+    this.srcNode = srcNode;
+    let tap;
+    try {
+      const url = URL.createObjectURL(new Blob([this._workletCode], { type: 'text/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      tap = new AudioWorkletNode(ctx, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      tap.port.onmessage = (ev) => sendPcm(ev.data);
+    } catch (e) {
+      // Fallback: ScriptProcessorNode (deprecated but universal, single-file).
+      const sp = ctx.createScriptProcessor(1024, 1, 1);
+      sp.onaudioprocess = (ev) => {
+        const ch = ev.inputBuffer.getChannelData(0);
+        const i16 = new Int16Array(ch.length);
+        for (let i = 0; i < ch.length; i++) { let s = ch[i]; s = s > 1 ? 1 : s < -1 ? -1 : s; i16[i] = s < 0 ? s * 32768 : s * 32767; }
+        sendPcm(i16);
+      };
+      tap = sp;
+    }
+    this.node = tap;
+    // <audio> → tap → destination, and also tap output → destination for sound.
+    srcNode.connect(tap);
+    tap.connect(ctx.destination);
+    this.ready = true;
+    a.ontimeupdate = () => renderTransport();
+    a.onplay = () => { ctx.resume(); renderTransport(); };
+    a.onpause = () => renderTransport();
+    a.onended = () => renderTransport();
+    a.onloadedmetadata = () => renderTransport();
+    // Tell the server we're the (browser) file source for this path.
+    send({ type: 'setMode', mode: 'file', file: path });
+    try { await a.play(); } catch { /* autoplay may need a user gesture; play btn covers it */ }
+    renderTransport();
+  },
+  play() { if (this.audio) { this.ctx?.resume(); this.audio.play().catch(() => {}); } },
+  pause() { if (this.audio) this.audio.pause(); },
+  toggle() { if (!this.audio) return; this.audio.paused ? this.play() : this.pause(); },
+  seek(frac) { if (this.audio && this.audio.duration) this.audio.currentTime = frac * this.audio.duration; },
+  stop() {
+    if (this.audio) { try { this.audio.pause(); } catch { /* ignore */ } this.audio.src = ''; this.audio = null; }
+    if (this.node) { try { this.node.disconnect(); } catch { /* ignore */ } this.node = null; }
+    if (this.srcNode) { try { this.srcNode.disconnect(); } catch { /* ignore */ } this.srcNode = null; }
+    if (this.ctx) { try { this.ctx.close(); } catch { /* ignore */ } this.ctx = null; }
+    this.ready = false; this.path = '';
+  },
+};
+function sendPcm(i16) {
+  // Binary WS frame: the server reads it as s16le mono and feeds the analyzer.
+  if (ws && ws.readyState === 1 && S.mode === 'file') ws.send(i16.buffer);
+}
+const fmtTime = (s) => { if (!Number.isFinite(s)) return '0:00'; const m = Math.floor(s / 60), x = Math.floor(s % 60); return m + ':' + (x < 10 ? '0' : '') + x; };
+function renderTransport() {
+  const box = $('transport'); if (!box) return;
+  const inFile = S.mode === 'file' && filePlayer.audio;
+  box.style.display = inFile ? 'flex' : 'none';
+  if (!inFile) { box.innerHTML = ''; return; }
+  const a = filePlayer.audio;
+  const dur = a.duration || 0, cur = a.currentTime || 0;
+  const frac = dur ? cur / dur : 0;
+  // Build the controls once; thereafter just update the live bits.
+  if (!box.dataset.built) {
+    box.innerHTML = '';
+    const playBtn = el('button', 'tp-btn', '▶'); playBtn.id = 'tp-play';
+    playBtn.onclick = () => filePlayer.toggle();
+    const seek = el('input', 'tp-seek'); seek.id = 'tp-seek'; seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.step = 1; seek.value = 0;
+    seek.oninput = () => filePlayer.seek(+seek.value / 1000);
+    const time = el('span', 'tp-time'); time.id = 'tp-time';
+    box.appendChild(playBtn); box.appendChild(seek); box.appendChild(time);
+    box.dataset.built = '1';
+  }
+  $('tp-play').textContent = a.paused ? '▶' : '⏸';
+  const seek = $('tp-seek'); if (document.activeElement !== seek) seek.value = Math.round(frac * 1000);
+  $('tp-time').textContent = fmtTime(cur) + ' / ' + fmtTime(dur);
+}
+
 // ── source selector (Test / Mic / File) ─────────────────────────────────────
+// The TEST SOURCE panel (the synthetic SUB/MID/HIGH/KICK knobs) is only
+// meaningful for the test generator — hide it in mic / file mode.
+function syncSourcePanel() {
+  const panel = $('source-panel'); if (!panel) return;
+  panel.style.display = S.mode === 'test' ? '' : 'none';
+}
 function buildSourceBar() {
+  syncSourcePanel();
   const box = $('sourcebar'); if (!box) return; box.innerHTML = '';
   const seg = el('div', 'seg');
   for (const [m, label] of [['test', 'Test'], ['mic', 'Mic / Line'], ['file', 'File']]) {
     const b = el('button', 'seg-btn' + (S.mode === m ? ' active' : ''), label);
     b.onclick = () => {
       if (m === 'file') {
-        S.mode = 'file'; buildSourceBar();           // reveal inline input
+        S.mode = 'file'; buildSourceBar();           // reveal inline input + transport
         openBrowse(S.browseDir || S.datasetsDir);    // and open the file browser
         return;
       }
+      filePlayer.stop();                             // leaving file mode → release the browser player
       if (m === 'mic') {
         S.mode = 'mic'; buildSourceBar();            // reveal the device picker
         send({ type: 'listDevices' });               // populate it (like CaptainPad)
@@ -289,8 +453,12 @@ function buildSourceBar() {
   const fwrap = el('span', 'file-wrap' + (S.mode === 'file' ? ' show' : ''));
   const inp = el('input', 'file-input'); inp.id = 'file-path'; inp.placeholder = '/path/to/track.mp3'; inp.value = S.filePath || '';
   inp.oninput = () => { S.filePath = inp.value; };
-  const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) { send({ type: 'setMode', mode: 'file', file: f }); const bm = $('browse-modal'); if (bm) bm.style.display = 'none'; } };
+  const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) { S.filePath = f; filePlayer.load(f); const bm = $('browse-modal'); if (bm) bm.style.display = 'none'; flash('loaded ' + f.split(/[/\\]/).pop()); } };
   fwrap.appendChild(inp); fwrap.appendChild(go); box.appendChild(fwrap);
+
+  // File-mode transport (audio-out + play/pause + seek) — shown only in file mode.
+  const tp = el('div', 'transport'); tp.id = 'transport'; box.appendChild(tp);
+  renderTransport();
 
   // Device picker (shown in mic mode) — CaptainPad-style: list inputs, pick one.
   const mwrap = el('span', 'mic-wrap' + (S.mode === 'mic' ? ' show' : ''));
@@ -385,7 +553,7 @@ function openBrowse(dir) {
 }
 function pickFile(p) {
   S.filePath = p; S.mode = 'file';
-  send({ type: 'setMode', mode: 'file', file: p });
+  filePlayer.load(p);                                  // browser plays + taps + streams PCM
   $('browse-modal').style.display = 'none';
   buildSourceBar(); flash('loaded ' + p.split(/[/\\]/).pop());
 }

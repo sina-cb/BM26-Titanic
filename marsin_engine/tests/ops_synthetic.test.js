@@ -294,23 +294,27 @@ test('hold: decayMs changes the decay trajectory', () => {
 // changing only timeoutMs leaves process() output bit-identical. If the op is
 // fixed so timeoutMs gates the sample-and-hold (hold flat, THEN decay), this
 // test should be updated to assert a visible difference.
-test('hold: timeoutMs has NO effect on output (documents engine finding)', () => {
-  // Sweep several representative input patterns; for each, timeoutMs=5 vs
-  // timeoutMs=5000 must produce identical output.
-  const patterns = [
-    [1, 0, 0, 0, 0, 0, 0, 0],                 // pulse then silence
-    [1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],        // pulse then a low floor
-    [1, 0.5, 0.25, 0.12, 0.06, 0.03, 0.0],    // pulse then a decaying input
-    [1, 0, 0, 0, 0.05, 0.05, 0.05],           // gap then a tiny re-excitation
-  ];
-  for (const sig of patterns) {
-    const shortT = runOp({ id: 'h', type: 'hold', params: { timeoutMs: 5, decayMs: 100 } }, sig);
-    const longT = runOp({ id: 'h', type: 'hold', params: { timeoutMs: 5000, decayMs: 100 } }, sig);
-    for (let i = 0; i < sig.length; i++) {
-      approx(shortT[i], longT[i], 1e-12,
-        `hold timeoutMs is dead: pattern ${JSON.stringify(sig)} @${i}`);
-    }
+// Engine fix (was: the operator's "param change shows no diff" — hold.timeoutMs
+// was a dead knob because the old code decayed INSIDE the hold window too, making
+// the two branches algebraically identical). The op now holds FLAT for timeoutMs,
+// THEN decays. This test verifies timeoutMs visibly changes the output.
+test('hold: timeoutMs holds the peak flat longer before decaying', () => {
+  const sig = [1, 0, 0, 0, 0, 0, 0, 0];     // pulse then silence
+  const shortT = runOp({ id: 'h', type: 'hold', params: { timeoutMs: 5, decayMs: 100 } }, sig);
+  const longT  = runOp({ id: 'h', type: 'hold', params: { timeoutMs: 5000, decayMs: 100 } }, sig);
+  // both latch the peak on the trigger sample …
+  approx(shortT[0], 1, 1e-9, 'short latches peak');
+  approx(longT[0], 1, 1e-9, 'long latches peak');
+  // … but a 5 ms timeout (< one ~11.6 ms hop) expires immediately and decays,
+  // while a 5000 ms timeout holds 1.0 flat across the whole window.
+  let differ = false;
+  for (let i = 1; i < sig.length; i++) {
+    assert.ok(longT[i] >= shortT[i] - 1e-9, `long timeout holds ≥ short @${i}`);
+    if (Math.abs(longT[i] - shortT[i]) > 1e-6) differ = true;
+    approx(longT[i], 1.0, 1e-9, `long timeout holds flat @${i}`);
+    assert.ok(shortT[i] < 1.0, `short timeout has begun decaying @${i}`);
   }
+  assert.ok(differ, 'timeoutMs must change the output (it was a dead knob before the fix)');
 });
 
 // ── curve (shape lookup + gamma) ─────────────────────────────────────────────

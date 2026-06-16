@@ -54,7 +54,7 @@ audio:
     releaseMs: 180
     noiseGate: 0.04
     inputGain: 1
-    sourceSmoothHz: 0
+    sourceSmoothHz: 12000
   kick:
     minHz: 50
     maxHz: 110

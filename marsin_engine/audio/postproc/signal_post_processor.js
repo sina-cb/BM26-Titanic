@@ -883,24 +883,26 @@ export class SignalPostProcessor {
         return y;
       }
       case 'hold': {
-        // Source: design doc §Operator catalog row "Hold" — TD CHOP
-        // Hold + Speed mash-up. Sample-and-hold with timeout:
-        // track lastInputAt. If now − lastInputAt > timeoutMs:
-        //   y = y_prev · exp(−dt/τ_decay). Else y = max(x, y_prev · exp(−dt/τ_decay)).
-        // The "input" trigger here is x > 0 (any positive sample updates
-        // the lastInputAt clock); for trigger-style upstreams (Schmitt)
-        // this means a 1.0 pulse holds, then decays after the timeout.
+        // Sample-and-hold with a FLAT hold window, THEN exponential decay.
+        // A new peak (x rising to/above the held value) latches the value and
+        // (re)arms the hold; while x stays below it, the value is held FLAT for
+        // `timeoutMs`, after which it decays with `decayMs`. For a trigger-style
+        // upstream (Schmitt) a 1.0 pulse latches, holds flat for the timeout,
+        // then fades. (Fixes the old no-op `timeoutMs`: the previous code decayed
+        // INSIDE the window too, so the two branches were algebraically identical
+        // and the timeout never changed the output — see ops_synthetic.test.js.)
         const { timeoutMs, decayMs } = op.params;
         const tauD = decayMs / 1000;
         const now = rt.clock + dt * 1000;
         rt.clock = now;
-        if (x > 0) rt.lastInputAt = now;
-        const decayed = rt.yPrev * Math.exp(-dt / tauD);
         let y;
-        if (now - rt.lastInputAt > timeoutMs) {
-          y = decayed;
+        if (x >= rt.yPrev) {                          // new/equal peak → S&H + (re)arm
+          y = x;
+          rt.lastInputAt = now;
+        } else if (now - rt.lastInputAt <= timeoutMs) {
+          y = rt.yPrev;                               // inside the flat hold window — no decay
         } else {
-          y = x > decayed ? x : decayed;
+          y = rt.yPrev * Math.exp(-dt / tauD);        // window expired — exponential decay
         }
         rt.yPrev = y;
         return y;
