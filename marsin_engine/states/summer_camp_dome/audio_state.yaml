@@ -27,3 +27,5 @@ kick:
   threshold: 1.8
   refractoryMs: 140
   decayMs: 70
+structureDetector:
+  enabled: true

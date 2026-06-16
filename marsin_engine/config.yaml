@@ -64,6 +64,14 @@ audio:
     # 70 ms (was 120): a crisp kick PULSE that doesn't linger high. The
     # micKick chain (schmitt + short hold) shapes the final pulse on top.
     decayMs: 70
+  # Structure detector — build/drop/sustain + slow-zone, published to CPC as
+  # audioStructure / audioBuildScore / audioEnergyRatio / audioDropPulse /
+  # audioSlowZone, plus a sparse dropFired WS event. Enabled here so the
+  # adopted Kalman+NIS drop detector runs on boot (dropEdgeMode defaults to
+  # 'kalman'). Tune live via PATCH /audio/config (dropNisThreshold lower =
+  # more sensitive; slowZoneRef = activity level read as "slow").
+  structureDetector:
+    enabled: true
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★
