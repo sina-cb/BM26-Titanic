@@ -1,5 +1,7 @@
 # 24 — OSC Integration for MarsinEngine
 
+**Related docs:** `36_marsin_audio_framework.md` (the first-party Audio Companion is a primary OSC source into this adapter) · `34_pro_audio_via_osc_sidecar.md` (external-analyzer lane) · `15_central_param_center_cpc.md` (CPC, the sink).
+
 ## 1. Overview
 
 This document defines how MarsinEngine receives OSC (Open Sound Control)

@@ -20,7 +20,7 @@
  * structure outputs (state / build / energy / drop-pulse / slow-zone), plus a
  * sparse dropFired event.
  *
- * Standalone: `node audio/companion/companion_server.js [--port 6970]`.
+ * Standalone: `node audio/companion/companion_server.js [--port 6973]`.
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -433,7 +433,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => clients.delete(ws));
 });
 
-const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6970; })();
+const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6973; })();
 resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch(() => { ffmpegPath = 'ffmpeg'; }).finally(() => {
   setMode('test');   // boot in test mode (no device needed)
   server.listen(PORT, () => {

@@ -25,10 +25,10 @@ streams the numbers to the browser. The UI (`ui/`) only draws + sends edits.
 
 ```bash
 cd marsin_engine
-node audio/companion/companion_server.js          # → http://localhost:6970
-# (optional) --port 6971
+node audio/companion/companion_server.js          # → http://localhost:6973
+# (optional) --port 6974
 ```
-Open `http://localhost:6970` in a browser. No engine instance, no mic, no
+Open `http://localhost:6973` in a browser. No engine instance, no mic, no
 build step required — the Companion runs the analyzer + chains itself.
 
 ## Use

@@ -1,6 +1,9 @@
 # Design: Node-Based Audio Post-Processing + AUDIO Tab Reshape
 
-**Status:** Implemented (2026-05)
+> **⚠ SUPERSEDED — generalized into [docs/36 — The Marsin Audio Framework](./36_marsin_audio_framework.md).**
+> The per-signal CHOP-style chains here are now the framework's typed-port op graph (Sources → Ops → OscSink). The ops + chain framework described below are still the implementation; the framework adds typed ports, branching, Kalman/DanceMaker ops, and the OSC output. Kept for history.
+
+**Status:** Superseded by docs/36 (chain framework still implemented; was: Implemented 2026-05)
 **Operator request (summarized):**
 1. General UI improvements to the AUDIO tab.
 2. Pin a live signals card to the top so meters are always visible while tuning.

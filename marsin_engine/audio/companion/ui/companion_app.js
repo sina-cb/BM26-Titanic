@@ -52,7 +52,7 @@ let ws = null;
 
 // ── WS ─────────────────────────────────────────────────────────────────────
 function connect() {
-  const url = `ws://${location.hostname || 'localhost'}:${location.port || 6970}/ws`;
+  const url = `ws://${location.hostname || 'localhost'}:${location.port || 6973}/ws`;
   ws = new WebSocket(url);
   ws.onopen = () => { S.connected = true; setStatus('● live', 'ok'); };
   ws.onclose = () => { S.connected = false; setStatus('disconnected', 'err'); setTimeout(connect, 1500); };
