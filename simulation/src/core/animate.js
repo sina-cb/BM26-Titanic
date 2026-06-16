@@ -17,6 +17,7 @@ import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
+import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -332,6 +333,13 @@ export function animate() {
          mapPixelsToSacn(_batchRenderList, window.dmxRouter);
       }
     }
+
+    // Last-layer operator override — runs AFTER the router merge and AFTER
+    // map/demap have (re)written the universe buffers, but BEFORE fixtures
+    // sample the frame for the preview and BEFORE the sACN-out send reads the
+    // same buffers below. This is the unbeatable final stage: blackout (off)
+    // or brightness-scale each fixture's channels on the live output.
+    applyFixtureOutputOverrides(window.dmxRouter, [window.dmxSceneFixtures, window.parFixtures], params.groupOverrides);
 
 
     const applyDmx = (fixtureList) => {

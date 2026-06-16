@@ -84,6 +84,47 @@ function listPatterns() {
   return [...numbered, ...named];
 }
 
+// A scene name must be a single safe path segment: it starts with an
+// alphanumeric and then allows alphanumerics, underscore and hyphen. We
+// REJECT anything else rather than rewriting it. The old "sanitize" step
+// (replace bad chars with '_' then strip leading/trailing '_') was not
+// injective — "../titanic" collapsed to "titanic", so a crafted delete
+// could destroy the wrong scene. Rejecting keeps the codex "fail loud,
+// no silent fallback" contract.
+function isValidSceneName(name) {
+  return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name);
+}
+
+// Minimal config a freshly-created scene starts from: the standard Model
+// Transform, an empty DMX fixture array, and an empty LED strand array.
+// Missing cameras/patches/views/controllers are the legitimate "new scene"
+// case the client already handles (main.js bootstrap), so we only seed
+// scene_config.yaml — the operator builds the rest in-app and saves.
+const NEW_SCENE_TEMPLATE = {
+  modelTransform: {
+    _section: { label: '📦 Model Transform', collapsed: true },
+    modelX: { value: 0, label: 'Pos X', min: -500, max: 500, step: 1, listen: true },
+    modelY: { value: 0, label: 'Pos Y', min: -500, max: 500, step: 1, listen: true },
+    modelZ: { value: 0, label: 'Pos Z', min: -500, max: 500, step: 1, listen: true },
+    rotX: { value: 0, label: 'Rot X °', min: -180, max: 180, step: 1, listen: true },
+    rotY: { value: 0, label: 'Rot Y °', min: -180, max: 180, step: 1, listen: true },
+    rotZ: { value: 0, label: 'Rot Z °', min: -180, max: 180, step: 1, listen: true },
+  },
+  parLights: {
+    _section: { label: '🔌 DMX Fixtures', type: 'fixtureArray', collapsed: false },
+    parsEnabled: { value: true, label: 'Master Enabled' },
+    masterExposure: { value: 0.2, label: 'Sim Exposure (Preview Only)', min: 0, max: 2, step: 0.05 },
+    simBrightness: { value: 1, label: 'Sim Brightness (Preview Only)', min: 0, max: 2, step: 0.05 },
+    maxSpotlights: { value: 60, label: 'Max Spotlights', min: 1, max: 200, step: 1 },
+    fixtures: [],
+  },
+  ledStrands: {
+    _section: { label: '💡 LED Strands', type: 'ledStrandArray', collapsed: true },
+    strandsEnabled: { value: true, label: 'Master Enabled' },
+    strands: [],
+  },
+};
+
 function writeSceneManifest() {
   try {
     fs.mkdirSync(SCENES_ROOT, { recursive: true });
@@ -361,6 +402,68 @@ http.createServer((req, res) => {
         res.end('Saved');
       } catch (e) {
         console.error(`[SAVE SERVER] Model save error:`, e);
+        res.statusCode = 500;
+        res.end('Error: ' + e.message);
+      }
+    });
+  } else if (req.method === 'POST' && pathname === '/create-scene') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { name } = JSON.parse(body);
+        if (!isValidSceneName(name)) {
+          res.statusCode = 400;
+          res.end('Invalid scene name');
+          return;
+        }
+        const sceneDir = path.join(SCENES_ROOT, name);
+        // Refuse if anything already lives at this path — never adopt or
+        // merge into a pre-existing directory (codex P0: fail loud).
+        if (fs.existsSync(sceneDir)) {
+          res.statusCode = 409;
+          res.end('Scene already exists');
+          return;
+        }
+        fs.mkdirSync(sceneDir, { recursive: true });
+        writeFileAtomic(path.join(sceneDir, 'scene_config.yaml'), yaml.dump(NEW_SCENE_TEMPLATE, { lineWidth: -1 }));
+        console.log(`[SAVE SERVER] ✅ Created scene: ${sceneDir}`);
+        writeSceneManifest();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ scene: name }));
+      } catch (e) {
+        console.error(`[SAVE SERVER] Scene create error:`, e);
+        res.statusCode = 500;
+        res.end('Error: ' + e.message);
+      }
+    });
+  } else if (req.method === 'POST' && pathname === '/delete-scene') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { name } = JSON.parse(body);
+        if (!isValidSceneName(name)) {
+          res.statusCode = 400;
+          res.end('Invalid scene name');
+          return;
+        }
+        const sceneDir = path.join(SCENES_ROOT, name);
+        // Defense in depth: a validated name is already a single safe
+        // segment, but re-confirm the resolved dir sits directly under
+        // scenes/ and is a real scene (has scene_config.yaml) before any
+        // recursive removal.
+        if (path.dirname(sceneDir) !== SCENES_ROOT || !fs.existsSync(path.join(sceneDir, 'scene_config.yaml'))) {
+          res.statusCode = 404;
+          res.end('Not found');
+          return;
+        }
+        fs.rmSync(sceneDir, { recursive: true, force: true });
+        console.log(`[SAVE SERVER] 🗑️  Deleted scene: ${sceneDir}`);
+        writeSceneManifest();
+        res.end('Deleted');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Scene delete error:`, e);
         res.statusCode = 500;
         res.end('Error: ' + e.message);
       }

@@ -50,6 +50,7 @@ import {
 } from "./src/gui/panel_layout.js";
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import { setupHelpPanel } from "./src/gui/help_panel.js";
+import { setupSceneManager } from "./src/gui/scene_manager.js";
 import { setupLeftDrawers } from "./src/gui/left_drawer.js";
 import "./src/gui/control_schema.js";
 
@@ -255,7 +256,9 @@ if (window.__readonlyMode) {
     #pattern-editor-panel,
     #sacn-in-monitor-panel,
     #sacn-out-monitor-panel,
-    #info-panel {
+    #info-panel,
+    #scene-add-btn,
+    #scene-del-btn {
       display: none !important;
     }
   `;
@@ -611,6 +614,7 @@ Promise.all([
     setupControllerMapEditor();
     initModernSacnMonitors();
     setupSceneIndicator();
+    setupSceneManager();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
         if (window.onLightingChange) window.onLightingChange();

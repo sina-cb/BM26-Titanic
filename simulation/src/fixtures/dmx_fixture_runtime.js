@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
+import { resolveCombinedOverride } from "../dmx/dmx_output_overrides.js";
 
 // ── Shared geometries ────────────────────────────────────────────────────
 const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
@@ -331,11 +332,14 @@ export class DmxFixtureRuntime {
         p.beam.scale.set(radius, radius, coneLen);
       }
 
-      // Only reset colors to config defaults when DMX is NOT driving them
+      // Only reset colors to config defaults when DMX is NOT driving them.
+      // Apply the On/Off + Brightness gain so a static (un-patched) fixture
+      // honours the override too.
       if (!window._patchesActive) {
-        if (p.beam) p.beam.material.color.set(color);
-        if (p.bulbMat) p.bulbMat.color.set(color);
-        if (p.haloMat) p.haloMat.color.set(color);
+        const gain = this.outputGain();
+        if (p.beam) p.beam.material.color.set(color).multiplyScalar(gain);
+        if (p.bulbMat) p.bulbMat.color.set(color).multiplyScalar(gain);
+        if (p.haloMat) p.haloMat.color.set(color).multiplyScalar(gain);
       }
     });
   }
@@ -351,6 +355,20 @@ export class DmxFixtureRuntime {
       THREE.MathUtils.degToRad(this.config.rotZ || 0)
     ), 'YXZ');
     this.updateVisualsFromHitbox();
+  }
+
+  // ── Per-fixture output override (On/Off + Brightness) ────────────────
+  // Operator override applied as the LAST LAYER on the merged DMX frame
+  // (see applyFixtureOutputOverrides in animate.js) so it beats every
+  // pattern, effect and sACN source on the sACN output. `enabled === false`
+  // blacks the fixture's whole footprint; brightness (0–100 %, default 100)
+  // scales its intensity channels. This helper is the single source of
+  // truth for the gain, reused by the static-preview path below and by the
+  // light pool (which frees a disabled fixture's SpotLight).
+  outputGain() {
+    const { enabled, brightness } = resolveCombinedOverride(this.config, params.groupOverrides);
+    if (!enabled) return 0;
+    return Math.max(0, Math.min(1, brightness / 100));
   }
 
   // ── Color control (used by lighting engines) ─────────────────────────

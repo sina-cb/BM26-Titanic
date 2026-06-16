@@ -13,6 +13,7 @@ import { rebuildParLights } from "./fixtures.js";
 import { cyclePanelVisibility } from "../gui/panel_visibility.js";
 import { toggleControlDrawer } from "../gui/control_drawer.js";
 import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
+import { isSceneModalOpen } from "../gui/scene_manager.js";
 
 // ─── Snap-to-Surface Mode State ──────────────────────────────────────────
 let snapMode = false;
@@ -243,6 +244,47 @@ export function onTransformChange() {
   }
 }
 
+// ─── Trace preview-dot drag (slide a light along its path) ────────────────
+// Building blocks live in gui_builder.js (window._beginTraceDotDrag /
+// _updateTraceDotDrag / _endTraceDotDrag); this just owns the pointer
+// plumbing: disable orbit, feed a world-space ray each move, finish on up.
+let traceDotDragging = false;
+
+function buildPointerRay(event) {
+  const ndc = new THREE.Vector2(
+    (event.clientX / window.innerWidth) * 2 - 1,
+    -(event.clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(ndc, camera);
+  return {
+    origin: raycaster.ray.origin.clone(),
+    dir: raycaster.ray.direction.clone().normalize(),
+  };
+}
+
+function onTraceDotDragMove(event) {
+  if (!traceDotDragging) return;
+  const ray = buildPointerRay(event);
+  window._updateTraceDotDrag(ray.origin, ray.dir);
+}
+
+function onTraceDotDragEnd() {
+  if (!traceDotDragging) return;
+  traceDotDragging = false;
+  window.removeEventListener('pointermove', onTraceDotDragMove, true);
+  window.removeEventListener('pointerup', onTraceDotDragEnd, true);
+  controls.enabled = true;
+  if (window._endTraceDotDrag) window._endTraceDotDrag();
+}
+
+function beginTraceDotDrag(traceIndex, pointIndex) {
+  if (!window._beginTraceDotDrag(traceIndex, pointIndex)) return;
+  traceDotDragging = true;
+  controls.enabled = false; // freeze the camera while sliding the point
+  window.addEventListener('pointermove', onTraceDotDragMove, true);
+  window.addEventListener('pointerup', onTraceDotDragEnd, true);
+}
+
 // ─── Pointer Down ────────────────────────────────────────────────────────
 export function onPointerDown(event) {
   // Only handle left clicks, ignore UI clicks. The handler is on
@@ -340,6 +382,11 @@ export function onPointerDown(event) {
       deselectAllFixtures();
       if (window.openTraceFolder) window.openTraceFolder(hit.userData.traceIndex);
       syncGuiFolders();
+      // A preview dot (has a pointIndex) starts a path-constrained drag so the
+      // operator can slide that single light forward/backward along the path.
+      if (hit.userData.pointIndex !== undefined && window._beginTraceDotDrag) {
+        beginTraceDotDrag(hit.userData.traceIndex, hit.userData.pointIndex);
+      }
       return;
     }
 
@@ -385,6 +432,12 @@ export function onPointerDown(event) {
 export function onKeyDown(event) {
   // Ignore keyboard shortcuts if the user is typing in an input or textarea
   if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
+    return;
+  }
+
+  // A scene add/delete modal owns the keyboard while open — don't let sim
+  // shortcuts fire underneath it. The modal handles its own Esc/Enter.
+  if (isSceneModalOpen()) {
     return;
   }
 
