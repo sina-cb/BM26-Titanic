@@ -71,8 +71,22 @@ const paramCenter = new ParamCenter(null);
 // Tweakable test-signal source (the UI edits these in 'test' mode).
 const source = {
   subLevel: 0.5, midLevel: 0.3, highLevel: 0.25,
-  kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02, inputGain: 1.0,
+  kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02,
 };
+// Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
+// source (test/mic/file). This is the "microphone gain" the operator tunes.
+let inputGain = 1.0;
+function applyInputGain(v) {
+  inputGain = Math.max(0, Math.min(64, +v));
+  analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain }, kick: analyzer.kick });
+}
+
+// Calibration: record a section of the live input, measure its peak meter
+// level, recommend a gain to reach a healthy target, then REPLAY the recorded
+// section through the analyzer so the operator can confirm before/after.
+const CAL_TARGET = 0.7;          // target peak band level
+const CAL_MAX_MS = 5000;         // record length
+const cal = { recording: false, replaying: false, chunks: [], startClock: 0, peakBand: 0, replayTimer: null };
 
 // Candidate chains the UI designs (start from the engine defaults).
 const chains = JSON.parse(JSON.stringify(DEFAULT_CHAINS));
@@ -92,11 +106,12 @@ const detector = new AudioStructureDetector({
 let clockMs = 0, lastMs = 0;
 const analyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: FFT, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04, inputGain: source.inputGain },
+  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
   kick: { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 },
   nowFn: () => clockMs,
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
+    if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
     const signals = {}; const writes = [];
     for (const sig of MIC_SIGNALS) {
       const raw = r[RAW_OF[sig]] ?? 0;
@@ -106,17 +121,30 @@ const analyzer = new AudioAnalyzer({
     }
     paramCenter.setMany(writes, 'audio', 'audio:mic');
     detector.tick(clockMs, dt);                      // REAL structure detector
-    broadcast({
+    // Store the latest frame; a steady timer coalesces the broadcast to ~45 Hz
+    // (mirrors the engine's LIVE_BUCKET_MIN_INTERVAL_MS). Mic capture delivers
+    // analysis frames in BURSTS, so broadcasting every one made the UI jerky —
+    // exactly the latency/jitter CaptainPad avoids by coalescing.
+    latestFrame = {
       type: 'frame', t: clockMs, signals,
-      dom: { f1: r.domFreq1, e1: r.domEnergy1, f2: r.domFreq2, e2: r.domEnergy2 },
+      dom: { f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1, f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2 },
       struct: {
         state: paramCenter.get('audioStructure'), build: paramCenter.get('audioBuildScore'),
         energy: paramCenter.get('audioEnergyRatio'), pulse: paramCenter.get('audioDropPulse'),
         slow: paramCenter.get('audioSlowZone'),
       },
-    });
+      spectrum: Array.from(analyzer.getSpectrum(SPECTRUM_BINS)),   // full freq-band visualizer
+      wave: downWave(lastPcm),                                     // audio signal (oscilloscope)
+    };
+    frameDirty = true;
   },
 });
+
+// Coalesced broadcast: emit the freshest frame at a steady ~45 Hz, decoupled
+// from the bursty analysis cadence (the engine/CaptainPad smoothing pattern).
+let latestFrame = null, frameDirty = false;
+const BROADCAST_MS = 22;
+setInterval(() => { if (frameDirty && latestFrame) { broadcast(latestFrame); frameDirty = false; } }, BROADCAST_MS);
 
 // ── Audio sources ──────────────────────────────────────────────────────────
 let mode = 'test';        // 'test' | 'mic' | 'file'
@@ -127,7 +155,17 @@ let ffmpegPath = 'ffmpeg';
 let sampleCursor = 0, seed = 0x2f6e2b1;
 const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
 const frameBuf = new Int16Array(HOP);
-let lastInputGain = source.inputGain;
+
+// Spectrum + waveform visualizer data (full freq band + audio signal).
+const SPECTRUM_BINS = 96, WAVE_POINTS = 128;
+let lastPcm = new Int16Array(HOP);
+const waveBuf = new Float32Array(WAVE_POINTS);
+function downWave(int16) {
+  const len = int16.length, step = len / WAVE_POINTS;
+  for (let i = 0; i < WAVE_POINTS; i++) waveBuf[i] = int16[Math.min(len - 1, Math.floor(i * step))] / 32768;
+  return Array.from(waveBuf);
+}
+
 function genFrame(buf) {
   for (let i = 0; i < buf.length; i++) {
     const t = (sampleCursor + i) / SR;
@@ -143,38 +181,87 @@ function genFrame(buf) {
   }
   sampleCursor += buf.length;
 }
-function pushFrame(int16) { clockMs += (int16.length / SR) * 1000; analyzer.pushSamples(int16); }
+function pushFrame(int16) {
+  if (cal.replaying) return;                     // ignore live input while replaying
+  if (cal.recording) {
+    cal.chunks.push(int16.slice());              // copy — the capture buffer is reused
+    if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
+  }
+  lastPcm = int16;
+  clockMs += (int16.length / SR) * 1000; analyzer.pushSamples(int16);
+}
+
+// ── calibration: record → measure → recommend gain → replay ─────────────────
+function startCalibration() {
+  cal.recording = true; cal.replaying = false; cal.chunks = []; cal.peakBand = 0; cal.startClock = clockMs;
+  broadcast({ type: 'calStatus', phase: 'recording', durationMs: CAL_MAX_MS });
+}
+function finishCalibration() {
+  cal.recording = false;
+  const peak = cal.peakBand;
+  const rec = peak > 1e-3 ? inputGain * (CAL_TARGET / peak) : inputGain;
+  broadcast({
+    type: 'calResult', peak: +peak.toFixed(3), currentGain: +inputGain.toFixed(2),
+    recommendedGain: +Math.max(0.1, Math.min(64, rec)).toFixed(2),
+    seconds: +(cal.chunks.length * HOP / SR).toFixed(1),
+    verdict: peak < 0.4 ? 'low — raise gain' : peak > 0.95 ? 'hot — lower gain' : 'healthy',
+  });
+  startReplay();
+}
+function startReplay() {
+  if (!cal.chunks.length) return;
+  cal.replaying = true; analyzer.reset(); detector.reset(); lastMs = 0;
+  let i = 0;
+  broadcast({ type: 'calStatus', phase: 'replaying' });
+  cal.replayTimer = setInterval(() => {
+    if (i >= cal.chunks.length) {
+      clearInterval(cal.replayTimer); cal.replayTimer = null; cal.replaying = false;
+      analyzer.reset(); detector.reset(); lastMs = 0;
+      broadcast({ type: 'calStatus', phase: 'done' });
+      return;
+    }
+    const chunk = cal.chunks[i++];
+    lastPcm = chunk;
+    clockMs += (chunk.length / SR) * 1000; analyzer.pushSamples(chunk);
+  }, Math.round((HOP / SR) * 1000));
+}
 
 function stopSource() {
   if (testTimer) { clearInterval(testTimer); testTimer = null; }
   if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }
+  if (cal.replayTimer) { clearInterval(cal.replayTimer); cal.replayTimer = null; }
+  cal.recording = false; cal.replaying = false;
 }
 function startTest() {
-  testTimer = setInterval(() => {
-    if (source.inputGain !== lastInputGain) {
-      analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain: source.inputGain }, kick: analyzer.kick });
-      lastInputGain = source.inputGain;
-    }
-    genFrame(frameBuf); pushFrame(frameBuf);
-  }, Math.round((HOP / SR) * 1000));
+  testTimer = setInterval(() => { genFrame(frameBuf); pushFrame(frameBuf); }, Math.round((HOP / SR) * 1000));
 }
 function startCapture(device) {
-  capture = new AudioCapture({
-    backend: 'ffmpeg', ffmpegPath, platform: 'auto', device: device || null,
-    sampleRate: SR, channels: 1, frameSamples: HOP, loop: true,
-    onFrame: (i16) => pushFrame(i16),
-    onStatus: (st) => broadcast({ type: 'sourceStatus', mode, status: st }),
-  });
-  capture.start();
+  // AudioCapture can throw SYNCHRONOUSLY before ffmpeg spawns — e.g. on
+  // Windows with no pinned device (`device_not_configured`). Catch it so the
+  // server never dies; surface the error and push the device list so the UI
+  // can prompt for a pick (like the engine's --choose_mic).
+  try {
+    capture = new AudioCapture({
+      backend: 'ffmpeg', ffmpegPath, platform: 'auto', device: device || null,
+      sampleRate: SR, channels: 1, frameSamples: HOP, loop: true,
+      onFrame: (i16) => pushFrame(i16),
+      onStatus: (st) => broadcast({ type: 'sourceStatus', mode, status: st }),
+    });
+    capture.start();
+    broadcast({ type: 'sourceStatus', mode, status: { enabled: true } });
+  } catch (e) {
+    capture = null;
+    broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: String(e && e.message), needsDevice: e && e.code === 'device_not_configured' } });
+    listAudioDevices({ ffmpegPath }).then(d => broadcast({ type: 'devices', ...d })).catch(() => { /* ignore */ });
+  }
 }
 function setMode(next, opts = {}) {
   stopSource();
   analyzer.reset(); detector.reset(); lastMs = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
-  if (mode === 'test') startTest();
+  if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device || null);
   else if (mode === 'file') startCapture(`file:${opts.file}`);
-  broadcast({ type: 'sourceStatus', mode, status: { enabled: true } });
 }
 
 // ── chain edit + export ─────────────────────────────────────────────────────
@@ -191,6 +278,8 @@ function handleMessage(ws, raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
   if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
   else if (m.type === 'setGain' && /Gain$/.test(m.key || '')) paramCenter.set(m.key, +m.value);
+  else if (m.type === 'setInputGain') { applyInputGain(m.value); broadcast({ type: 'inputGain', value: inputGain }); }
+  else if (m.type === 'calibrate') startCalibration();
   else if (m.type === 'setMode') setMode(m.mode, { file: m.file, device: m.device });
   else if (m.type === 'setChain') ws.send(JSON.stringify({ type: 'chainResult', signal: m.signal, ...applyChain(m.signal, m.chain) }));
   else if (m.type === 'export') ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));
@@ -211,7 +300,7 @@ const server = http.createServer((req, res) => {
   if (p === '/') p = '/index.html';
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot() }));
+    res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot(), inputGain }));
     return;
   }
   if (p === '/browse') {  // server-side directory listing (folders + audio files)
@@ -243,8 +332,11 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   clients.add(ws);
-  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), mode, datasetsDir: DATASETS_DIR }));
-  ws.on('message', (d) => handleMessage(ws, d.toString()));
+  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), inputGain, mode, datasetsDir: DATASETS_DIR }));
+  ws.on('message', (d) => {
+    try { handleMessage(ws, d.toString()); }
+    catch (e) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: String(e && e.message) } }); }
+  });
   ws.on('close', () => clients.delete(ws));
 });
 

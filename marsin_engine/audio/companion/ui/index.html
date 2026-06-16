@@ -23,6 +23,7 @@
   <div class="subbar">
     <span class="subbar-label">SOURCE</span>
     <div id="sourcebar" class="sourcebar"></div>
+    <div id="gainbar" class="gainbar"></div>
   </div>
 
   <main class="layout">
@@ -49,6 +50,17 @@
           </div>
         </div>
       </div>
+      <div class="viz-row">
+        <div class="viz-panel">
+          <div class="viz-title">FREQUENCY SPECTRUM <span class="viz-sub">dom1 / dom2 location + cluster window</span></div>
+          <canvas id="spectrum" width="1100" height="150"></canvas>
+        </div>
+        <div class="viz-panel">
+          <div class="viz-title">AUDIO SIGNAL</div>
+          <canvas id="wave" width="1100" height="84"></canvas>
+        </div>
+      </div>
+
       <div class="trace-panel">
         <canvas id="trace" width="1100" height="260"></canvas>
         <div class="readouts">

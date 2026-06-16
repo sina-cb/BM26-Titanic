@@ -64,6 +64,8 @@ class Track {
     this.active = false;
     this.freqHz = 0;       // smoothed frequency
     this.energy = 0;       // smoothed [0,1)-ish energy
+    this.loHz = 0;         // cluster window low edge (the dominance region)
+    this.hiHz = 0;         // cluster window high edge
     this.rankEnergy = 0;   // slow energy for stable output ordering
     this.lowHops = 0;      // consecutive hops below death threshold
     this.id = 0;
@@ -119,7 +121,12 @@ export class DominantFreqTracker {
 
     this.numTracks    = opts.numTracks    ?? 2;
     this.numPeaks     = opts.numPeaks     ?? 6;
-    this.mainLobeBins = opts.mainLobeBins ?? 2;
+    this.mainLobeBins = opts.mainLobeBins ?? 2;       // (legacy; energy now uses a dynamic window)
+    // Dynamic energy window — frequency-proportional band summed around the
+    // peak (constant-Q-ish), so dom energy tracks the partial's loudness.
+    this.energyWindowFrac  = opts.energyWindowFrac  ?? 0.12;  // ±12% of the freq …
+    this.energyWindowMinHz = opts.energyWindowMinHz ?? 40;    // … clamped to [40, 400] Hz
+    this.energyWindowMaxHz = opts.energyWindowMaxHz ?? 400;
     this.relFloor     = opts.relFloor     ?? 0.12;
     this.absFloor     = opts.absFloor     ?? 1e-4;
     this.maxJumpHz    = opts.maxJumpHz    ?? 80;
@@ -137,6 +144,10 @@ export class DominantFreqTracker {
     this.kfEnergyQ = opts.kfEnergyQ ?? 0.01;
     this.kfEnergyR = opts.kfEnergyR ?? 0.02;
     this.rankAlpha = opts.rankAlpha ?? 0.05;
+    // Cluster window: the dominance region is the peak ± neighbours staying
+    // above clusterThresh × peak (bounded by clusterMaxHz).
+    this.clusterThresh = opts.clusterThresh ?? 0.35;
+    this.clusterMaxHz  = opts.clusterMaxHz  ?? 500;
 
     this._minBin = Math.max(1, Math.floor(this.minFreqHz / this.binHz));
     this._maxBin = Math.min(this.numBins - 2, Math.ceil(this.maxFreqHz / this.binHz));
@@ -144,6 +155,8 @@ export class DominantFreqTracker {
     // Pre-allocated scratch (no per-hop allocation in update()).
     this._peakFreq = new Float64Array(this.numPeaks);
     this._peakEner = new Float64Array(this.numPeaks);
+    this._peakLo   = new Float64Array(this.numPeaks);
+    this._peakHi   = new Float64Array(this.numPeaks);
     this._peakCount = 0;
     // Candidate collection buffers (over all local maxima before top-K).
     this._candBin  = new Int32Array(this.numBins);
@@ -153,14 +166,14 @@ export class DominantFreqTracker {
     this._tracks = [];
     for (let i = 0; i < this.numTracks; i++) this._tracks.push(new Track());
     this._out = [];
-    for (let i = 0; i < this.numTracks; i++) this._out.push({ freqHz: 0, energy: 0 });
+    for (let i = 0; i < this.numTracks; i++) this._out.push({ freqHz: 0, energy: 0, loHz: 0, hiHz: 0 });
     this._nextId = 1;
   }
 
   reset() {
     for (const t of this._tracks) {
       t.active = false;
-      t.freqHz = 0; t.energy = 0; t.rankEnergy = 0;
+      t.freqHz = 0; t.energy = 0; t.loHz = 0; t.hiHz = 0; t.rankEnergy = 0;
       t.lowHops = 0; t.id = 0; t.fP = 1; t.eP = 1;
     }
     this._nextId = 1;
@@ -231,18 +244,26 @@ export class DominantFreqTracker {
       const binF = k + (delta > 0.5 ? 0.5 : delta < -0.5 ? -0.5 : delta);
       const freqHz = binF * this.binHz;
 
-      // main-lobe energy: sum raw magnitudes over +-mainLobeBins,
-      // normalized by fftSize to match the analyzer's band absolute scale
-      // (band energy = sum(mag)/fftSize), then softCompress.
-      let lobe = 0;
-      const lo = Math.max(0, k - this.mainLobeBins);
-      const hi = Math.min(this.numBins - 1, k + this.mainLobeBins);
-      for (let b = lo; b <= hi; b++) lobe += mag[b];
-      lobe /= this.fftSize;
-      const energy = softCompress(this.energyGain * lobe);
+      // Cluster (dominance-region) window: expand left/right from the peak
+      // while the magnitude stays above clusterThresh × the peak, bounded by
+      // clusterMaxHz — i.e. "the cluster of frequencies in that dominance
+      // area". The summed energy over this cluster is the partial's intensity
+      // (its ups and downs), and [loHz, hiHz] is the window we draw on the
+      // spectrum. Data-driven: widens for a fat bass, tightens for a pure lead.
+      const peakMag = mag[k];
+      const thr = peakMag * this.clusterThresh;
+      const maxBins = Math.max(1, Math.round(this.clusterMaxHz / this.binHz));
+      let lo = k, hi = k;
+      while (lo > 1 && (k - lo) < maxBins && mag[lo - 1] >= thr) lo--;
+      while (hi < this.numBins - 1 && (hi - k) < maxBins && mag[hi + 1] >= thr) hi++;
+      let sum = 0;
+      for (let b = lo; b <= hi; b++) sum += mag[b];
+      const energy = softCompress(this.energyGain * (sum / this.fftSize));
 
       this._peakFreq[i] = freqHz;
       this._peakEner[i] = energy;
+      this._peakLo[i] = lo * this.binHz;
+      this._peakHi[i] = hi * this.binHz;
     }
   }
 
@@ -263,11 +284,11 @@ export class DominantFreqTracker {
       }
       if (best >= 0 && bestDf <= this.maxJumpHz) {
         this._matched[best] = 1;
-        this._updateTrack(t, this._peakFreq[best], this._peakEner[best]);
+        this._updateTrack(t, this._peakFreq[best], this._peakEner[best], this._peakLo[best], this._peakHi[best]);
         if (t.energy < this.deathEnergy) t.lowHops++; else t.lowHops = 0;
       } else {
-        // no measurement: coast, decay energy toward 0.
-        this._updateTrack(t, t.freqHz, 0);
+        // no measurement: coast, decay energy toward 0 (keep last window).
+        this._updateTrack(t, t.freqHz, 0, t.loHz, t.hiHz);
         t.lowHops++;
       }
       if (t.lowHops >= this.deathHops) {
@@ -298,6 +319,8 @@ export class DominantFreqTracker {
         slot.id = this._nextId++;
         slot.freqHz = this._peakFreq[i];
         slot.energy = this._peakEner[i];
+        slot.loHz = this._peakLo[i];
+        slot.hiHz = this._peakHi[i];
         slot.rankEnergy = this._peakEner[i];
         slot.lowHops = 0;
         slot.fP = this.kfFreqR;   // seed covariance at measurement noise
@@ -306,7 +329,8 @@ export class DominantFreqTracker {
     }
   }
 
-  _updateTrack(t, measFreq, measEnergy) {
+  _updateTrack(t, measFreq, measEnergy, measLo, measHi) {
+    if (measEnergy > 0) { t.loHz = measLo; t.hiHz = measHi; }   // keep last window on coast
     if (this.useKalman) {
       // Scalar Kalman per dimension (random-walk model: x_{k} = x_{k-1}).
       // freq:
@@ -339,8 +363,8 @@ export class DominantFreqTracker {
     for (let i = 0; i < this.numTracks; i++) {
       const t = tracks[idx[i]];
       const o = this._out[i];
-      if (t.active) { o.freqHz = t.freqHz; o.energy = t.energy < 1 ? t.energy : 1; }
-      else { o.freqHz = 0; o.energy = 0; }
+      if (t.active) { o.freqHz = t.freqHz; o.energy = t.energy < 1 ? t.energy : 1; o.loHz = t.loHz; o.hiHz = t.hiHz; }
+      else { o.freqHz = 0; o.energy = 0; o.loHz = 0; o.hiHz = 0; }
     }
     return this._out;
   }

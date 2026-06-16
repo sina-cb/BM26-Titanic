@@ -77,10 +77,17 @@ import { DominantFreqTracker } from './dominant_freq_tracker.js';
 // scale. Works at fftSize 1024; bump the analyzer FFT to 2048 (config) to
 // resolve sub-bass partials below ~200 Hz more cleanly.
 const DOM_FREQ_PARAMS = Object.freeze({
-  numTracks: 2, numPeaks: 6, mainLobeBins: 2, relFloor: 0.12, absFloor: 1e-4,
-  maxJumpHz: 80, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
-  deathEnergy: 0.06, deathHops: 12, birthEnergy: 0.10,
-  useKalman: false, emaFreqAlpha: 0.25, emaEnergyAlpha: 0.30, rankAlpha: 0.05,
+  numTracks: 2, numPeaks: 8, relFloor: 0.06, absFloor: 1e-4,
+  maxJumpHz: 90, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
+  // Data-driven cluster window (the "dominance area") → energy + the band we
+  // draw on the spectrum.
+  clusterThresh: 0.35, clusterMaxHz: 500,
+  // Low birth/death + slow death so two partials stay populated whenever
+  // there is ANY musical content (no spurious 0 Hz on a busy mix).
+  deathEnergy: 0.02, deathHops: 20, birthEnergy: 0.035,
+  // Kalman tracking (operator-requested): the freqs move smoothly under a
+  // scalar random-walk filter, responsive enough to follow the music.
+  useKalman: true, kfFreqQ: 12, kfFreqR: 40, kfEnergyQ: 0.02, kfEnergyR: 0.02, rankAlpha: 0.05,
 });
 
 // Maps the FFT magnitude scale (post sum-of-magnitudes / fftSize, where
@@ -333,6 +340,36 @@ export class AudioAnalyzer {
     }
   }
 
+  /**
+   * Downsampled, log-spaced magnitude spectrum of the most recent hop, for a
+   * spectrum-analyzer visual. Reuses the FFT magnitudes the flux loop already
+   * computed (`_prevMag`) — no extra FFT. Each output bin is the peak
+   * magnitude over a log-spaced frequency slice from 20 Hz → Nyquist, mapped
+   * through the same softCompress(PRE_CLAMP_GAIN·E) as the bands → [0, 1).
+   * Returns zeros until the first hop fills the spectrum.
+   *
+   * @param {number} [nBins=96]
+   * @returns {Float32Array}
+   */
+  getSpectrum(nBins = 96) {
+    const out = new Float32Array(nBins);
+    const mag = this._prevMag;
+    if (!mag) return out;
+    const half = mag.length;
+    const minHz = 20, maxHz = this.sampleRate / 2, ratio = maxHz / minHz;
+    const hzToBinF = (hz) => (hz * this.fftSize) / this.sampleRate;
+    for (let i = 0; i < nBins; i++) {
+      const b0 = Math.max(1, Math.floor(hzToBinF(minHz * Math.pow(ratio, i / nBins))));
+      let b1 = Math.ceil(hzToBinF(minHz * Math.pow(ratio, (i + 1) / nBins)));
+      if (b1 <= b0) b1 = b0 + 1;
+      if (b1 > half) b1 = half;
+      let mx = 0;
+      for (let b = b0; b < b1; b++) if (mag[b] > mx) mx = mag[b];
+      out[i] = softCompress(PRE_CLAMP_GAIN * (mx / this.fftSize));
+    }
+    return out;
+  }
+
   /** Reset all internal state (smoothing, kick envelope, ring buffer). */
   reset() {
     this._ring.fill(0);
@@ -540,12 +577,18 @@ export class AudioAnalyzer {
         high: highOut,
         kick: kickOut,
         flux: fluxOut,
-        // Dominant frequencies (Hz) + their energy ([0,1], bands' scale).
-        // dom1 = strongest partial (usually the sub/bass), dom2 = second.
+        // Dominant frequencies (Hz) + their energy ([0,1], bands' scale) +
+        // the cluster window [lo,hi] Hz (the dominance region). dom1 = strongest
+        // partial (usually the sub/bass), dom2 = second. (lo/hi are extra,
+        // additive fields — the engine ignores them; the Companion draws them.)
         domFreq1:   dom1.freqHz,
         domEnergy1: dom1.energy,
+        domLo1:     dom1.loHz,
+        domHi1:     dom1.hiHz,
         domFreq2:   dom2.freqHz,
         domEnergy2: dom2.energy,
+        domLo2:     dom2.loHz,
+        domHi2:     dom2.hiHz,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

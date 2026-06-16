@@ -27,6 +27,21 @@ body{background:var(--bg);color:var(--text);
 .file-go{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
   padding:5px 12px;font:inherit;cursor:pointer}
 .src-tag{color:var(--muted);font-size:10.5px}
+
+/* input gain + calibration (right side of the source bar) */
+.gainbar{display:flex;align-items:center;gap:12px;margin-left:auto}
+.gain-wrap{display:flex;align-items:center;gap:8px}
+.gain-lab{color:var(--muted);letter-spacing:1px;font-size:10px}
+.gain-range{width:140px}
+.gain-val{color:var(--text);min-width:38px;font-weight:700}
+.cal-btn{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;
+  padding:5px 12px;font:inherit;cursor:pointer}
+.cal-btn:hover{border-color:var(--accent)}
+.cal-btn.rec{color:var(--err);border-color:var(--err);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.5}}
+.cal-res{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:8px}
+.cal-res b{color:var(--text)}
+.cal-apply{background:var(--accent);color:#1a1205;border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
 .mic-wrap{display:none;align-items:center;gap:6px}
 .mic-wrap.show{display:flex}
 .device-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
@@ -94,6 +109,12 @@ body{background:var(--bg);color:var(--text);
 .sig-val{text-align:right;color:var(--muted)}
 
 .stage{display:flex;flex-direction:column;min-width:0;padding:14px;gap:14px;overflow:auto}
+.viz-row{display:flex;flex-direction:column;gap:10px}
+.viz-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
+.viz-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:7px}
+.viz-sub{color:#566;letter-spacing:0;font-size:10px;margin-left:6px}
+#spectrum{display:block;width:100%;height:150px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
+#wave{display:block;width:100%;height:84px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
 .trace-panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
 #trace{display:block;width:100%;height:260px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
 .readouts{position:absolute;top:20px;right:24px;text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
@@ -128,7 +149,11 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .op-arrow{color:var(--muted);align-self:center;font-size:15px}
 .op-params{display:flex;flex-direction:column;gap:8px}
 .param .pn{color:var(--muted);font-size:10.5px}
-.param .pv{float:right;color:var(--text);font-size:10.5px}
+.param-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:3px}
+.pv-input{width:62px;background:var(--raised);color:var(--text);border:1px solid var(--border);
+  border-radius:4px;padding:2px 5px;font:inherit;font-size:10.5px;text-align:right}
+.param-range{width:100%}
+.chain-note{color:var(--muted);font-size:11px;padding:8px 2px}
 .param select,.add-sel{width:100%;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px;font:inherit}
 .param-static{color:var(--muted);font-size:10.5px}
 .param-static b{color:var(--text)}

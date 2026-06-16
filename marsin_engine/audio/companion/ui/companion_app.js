@@ -15,7 +15,11 @@ const SIGNAL_META = {
   micHigh: { label: 'HIGH', accent: '#8b9bff' },
   micKick: { label: 'KICK', accent: '#ff5d6c' },
   micFlux: { label: 'FLUX', accent: '#c084fc' },
+  dom1:    { label: 'DOM1', accent: '#f0a23b' },
+  dom2:    { label: 'DOM2', accent: '#c084fc' },
 };
+const DOM_SIGNALS = ['dom1', 'dom2'];          // derived from the frame's dom{}
+const VIEWS = [{ id: 'spectrum', label: 'SPECTRUM' }, { id: 'wave', label: 'WAVEFORM' }];
 const TRAIL = 360;
 
 const S = {
@@ -31,9 +35,13 @@ const S = {
   browseDir: '',      // current browser dir
   devices: [],        // [{ id, label, ffmpegDevice, inputFormat }]
   device: '',         // selected ffmpegDevice ('' = platform default)
+  inputGain: 1.0,     // global software preamp (analyzer bands.inputGain)
+  cal: { phase: 'idle', result: null },
   dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
   struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
   dropFlash: 0,
+  spectrum: [],       // full freq-band visualizer (log-spaced magnitudes)
+  wave: [],           // audio-signal visualizer (oscilloscope)
 };
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
@@ -48,26 +56,37 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'hello') {
-      S.signals = m.signals; S.ops = m.ops; S.chains = m.chains; S.source = m.source; S.gains = m.gains;
+      S.signals = [...m.signals, ...DOM_SIGNALS]; S.chainable = m.signals;
+      S.ops = m.ops; S.chains = m.chains; S.source = m.source; S.gains = m.gains;
       if (m.mode) S.mode = m.mode;
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
+      if (m.inputGain != null) S.inputGain = m.inputGain;
       for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
-      buildSidebar(); buildSource(); renderChain(); buildSourceBar();
+      buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
     } else if (m.type === 'frame') {
-      for (const s of S.signals) {
-        const v = m.signals[s]; if (!v) continue;
-        S.live[s] = v;
-        const tr = S.trace[s];
-        tr.raw[S.head] = clamp01(v.raw); tr.post[S.head] = clamp01(v.post);
+      // Only update the LATEST value here; the scrolling trace is advanced in
+      // the draw loop at a steady 60 fps. Mic capture delivers frames in
+      // bursts, so advancing the trace per-message made the scroll jerky.
+      for (const s in m.signals) { const v = m.signals[s]; if (v) S.live[s] = v; }
+      if (m.dom) {
+        S.dom = m.dom;
+        S.live.dom1 = { raw: m.dom.e1, post: m.dom.e1 };   // dom energy as a signal
+        S.live.dom2 = { raw: m.dom.e2, post: m.dom.e2 };
       }
-      S.head = (S.head + 1) % TRAIL;
-      if (m.dom) S.dom = m.dom;
       if (m.struct) S.struct = m.struct;
+      if (m.spectrum) S.spectrum = m.spectrum;
+      if (m.wave) S.wave = m.wave;
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
       S.mode = m.mode; buildSourceBar();
-      if (m.status && m.status.error) flash('source: ' + m.status.error, true);
+      if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
+    } else if (m.type === 'inputGain') {
+      S.inputGain = m.value; buildGainBar();
+    } else if (m.type === 'calStatus') {
+      S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
+    } else if (m.type === 'calResult') {
+      S.cal.result = m; renderCal();
     } else if (m.type === 'devices') {
       S.devices = m.devices || [];
       if (m.error) flash('devices: ' + m.error, true);
@@ -112,7 +131,6 @@ function buildSource() {
   const knobs = [
     ['subLevel', 'SUB', 0, 1], ['midLevel', 'MID', 0, 1], ['highLevel', 'HIGH', 0, 1],
     ['kickLevel', 'KICK', 0, 1], ['kickHz', 'KICK/s', 0, 8], ['noiseLevel', 'NOISE', 0, 0.2],
-    ['inputGain', 'INPUT GAIN', 0, 10],
   ];
   for (const [key, label, min, max] of knobs) {
     const row = el('div', 'knob');
@@ -130,6 +148,11 @@ function renderChain() {
   const sig = S.selected;
   $('chain-title').textContent = (SIGNAL_META[sig]?.label || sig) + ' · chain';
   $('chain-title').style.color = accent(sig);
+  // dom1/dom2 + the visualizer views are read-only — no editable chain.
+  if (!S.chainable || !S.chainable.includes(sig)) {
+    box.appendChild(el('div', 'chain-note', 'read-only signal — no post-processing chain'));
+    return;
+  }
   const chain = S.chains[sig] || [];
   chain.forEach((op, i) => {
     const card = el('div', 'op');
@@ -178,11 +201,23 @@ function opParams(sig, op, i) {
       sel.onchange = () => { op.params[pname] = sel.value; pushChain(sig); };
       row.appendChild(sel);
     } else {
-      const min = pdef.min ?? 0, max = pdef.max ?? 1;
-      row.innerHTML = `<span class="pn">${pname}</span><span class="pv" id="pv-${i}-${pname}">${fmt(cur)}</span>`;
-      const r = el('input'); r.type = 'range'; r.min = min; r.max = max; r.step = stepFor(min, max); r.value = cur;
-      r.oninput = () => { op.params[pname] = +r.value; $(`pv-${i}-${pname}`).textContent = fmt(+r.value); };
+      const min = pdef.min ?? 0, max = pdef.max ?? 1, step = stepFor(min, max);
+      const head = el('div', 'param-head');
+      head.appendChild(el('span', 'pn', pname));
+      // Editable number box — type an exact value (server validateChain still
+      // bounds it; an invalid entry flashes via chainResult).
+      const num = el('input', 'pv-input'); num.type = 'number'; num.step = step; num.value = fmt(cur);
+      head.appendChild(num);
+      row.appendChild(head);
+      const r = el('input', 'param-range'); r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = cur;
+      r.oninput = () => { op.params[pname] = +r.value; num.value = fmt(+r.value); };
       r.onchange = () => pushChain(sig);
+      num.onchange = () => {
+        let v = parseFloat(num.value); if (Number.isNaN(v)) { num.value = fmt(op.params[pname] ?? cur); return; }
+        op.params[pname] = v;
+        r.value = Math.max(min, Math.min(max, v));   // clamp the SLIDER only; param keeps the typed value
+        pushChain(sig);
+      };
       row.appendChild(r);
     }
     wrap.appendChild(row);
@@ -232,7 +267,7 @@ function buildSourceBar() {
   const fwrap = el('span', 'file-wrap' + (S.mode === 'file' ? ' show' : ''));
   const inp = el('input', 'file-input'); inp.id = 'file-path'; inp.placeholder = '/path/to/track.mp3'; inp.value = S.filePath || '';
   inp.oninput = () => { S.filePath = inp.value; };
-  const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) send({ type: 'setMode', mode: 'file', file: f }); };
+  const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) { send({ type: 'setMode', mode: 'file', file: f }); const bm = $('browse-modal'); if (bm) bm.style.display = 'none'; } };
   fwrap.appendChild(inp); fwrap.appendChild(go); box.appendChild(fwrap);
 
   // Device picker (shown in mic mode) — CaptainPad-style: list inputs, pick one.
@@ -251,6 +286,40 @@ function buildSourceBar() {
 
   const tag = el('span', 'src-tag', S.mode === 'test' ? 'synthetic source' : S.mode === 'mic' ? `live input · ${S.devices.length} device${S.devices.length === 1 ? '' : 's'}` : 'file replay');
   box.appendChild(tag);
+}
+
+// ── input gain + calibration ────────────────────────────────────────────────
+function buildGainBar() {
+  const box = $('gainbar'); if (!box) return; box.innerHTML = '';
+  const gw = el('span', 'gain-wrap', '<span class="gain-lab">INPUT GAIN</span>');
+  const r = el('input', 'gain-range'); r.type = 'range'; r.min = 0; r.max = 16; r.step = 0.1; r.value = S.inputGain ?? 1;
+  const val = el('span', 'gain-val'); val.id = 'gain-val'; val.textContent = '×' + (S.inputGain ?? 1).toFixed(1);
+  r.oninput = () => { S.inputGain = +r.value; val.textContent = '×' + (+r.value).toFixed(1); send({ type: 'setInputGain', value: +r.value }); };
+  gw.appendChild(r); gw.appendChild(val); box.appendChild(gw);
+  const cal = el('button', 'cal-btn', '● Calibrate (5s)'); cal.id = 'cal-btn';
+  cal.onclick = () => send({ type: 'calibrate' });
+  box.appendChild(cal);
+  const res = el('span', 'cal-res'); res.id = 'cal-res'; box.appendChild(res);
+  renderCal();
+}
+function renderCal() {
+  const btn = $('cal-btn'), res = $('cal-res'); if (!btn || !res) return;
+  const ph = S.cal.phase;
+  btn.classList.toggle('rec', ph === 'recording');
+  btn.textContent = ph === 'recording' ? '● recording…' : ph === 'replaying' ? '▷ replaying…' : '● Calibrate (5s)';
+  res.innerHTML = '';
+  const r = S.cal.result;
+  if (r && ph !== 'recording') {
+    const txt = el('span', null, `peak <b>${r.peak.toFixed(2)}</b> · ${r.verdict} · suggest <b>×${r.recommendedGain.toFixed(1)}</b> `);
+    res.appendChild(txt);
+    if (Math.abs(r.recommendedGain - r.currentGain) > 0.05) {
+      const apply = el('button', 'cal-apply', 'Apply'); apply.onclick = () => {
+        S.inputGain = r.recommendedGain; send({ type: 'setInputGain', value: r.recommendedGain });
+        buildGainBar(); flash('gain → ×' + r.recommendedGain.toFixed(1));
+      };
+      res.appendChild(apply);
+    }
+  }
 }
 
 // ── server-side file browser (defaults to the datasets dir) ─────────────────
@@ -314,14 +383,32 @@ $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
-  // main trace (S.trace is empty until the first `hello` populates it).
+  // Advance the scrolling trace at the steady render rate from the latest
+  // values (decoupled from bursty WS arrival → smooth animation on mic too).
+  if (S.signals.length) {
+    for (const s of S.signals) {
+      const tr = S.trace[s]; if (!tr) continue;
+      const lv = S.live[s] || { raw: 0, post: 0 };
+      tr.raw[S.head] = clamp01(lv.raw); tr.post[S.head] = clamp01(lv.post);
+    }
+    S.head = (S.head + 1) % TRAIL;
+  }
+  // selected signal trace (main panel)
   const sig = S.selected;
   const tr = S.trace[sig];
   if (tr) drawTrace($('trace').getContext('2d'), tr, accent(sig), 2);
   const lv = S.live[sig] || { raw: 0, post: 0 };
-  $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
+  // dom1/dom2 show their frequency in the readout; bands show raw/post.
+  if (sig === 'dom1' || sig === 'dom2') {
+    $('big-raw').textContent = (sig === 'dom1' ? S.dom.f1 : S.dom.f2).toFixed(0) + ' Hz';
+  } else {
+    $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
+  }
   $('big-post').textContent = clamp01(lv.post).toFixed(2);
   $('big-post').style.color = accent(sig);
+  // GLOBAL visualizers (always on, for every signal view)
+  drawSpectrum($('spectrum').getContext('2d'), S.spectrum, S.dom);
+  drawWave($('wave').getContext('2d'), S.wave);
   // sidebar minis + values
   for (const s of S.signals) {
     const c = document.getElementById('mini-' + s); if (c && S.trace[s]) drawMini(c.getContext('2d'), S.trace[s], accent(s));
@@ -345,6 +432,54 @@ function drawTrace(ctx, tr, color, lw) {
 function drawMini(ctx, tr, color) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
   ctx.strokeStyle = color; trLine(ctx, tr.post, W, H, 1.3, 1);
+}
+
+// ── spectrum + waveform (global visualizers) ────────────────────────────────
+const SPEC_MIN_HZ = 20, SPEC_MAX_HZ = 22050;
+const freqToX = (f, W) => (f <= SPEC_MIN_HZ ? 0 : Math.log(f / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ) * W);
+function drawSpectrum(ctx, spec, dom) {
+  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
+  // log-frequency grid + labels
+  ctx.font = '9px monospace';
+  for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+    const x = freqToX(f, W);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    ctx.fillStyle = '#556'; ctx.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 2, H - 3);
+  }
+  // dom cluster windows (shaded) behind the bars
+  if (dom) {
+    drawWindow(ctx, dom.lo1, dom.hi1, '240,162,59', W, H);
+    drawWindow(ctx, dom.lo2, dom.hi2, '192,132,252', W, H);
+  }
+  // spectrum bars
+  if (spec && spec.length) {
+    const n = spec.length, bw = W / n;
+    ctx.fillStyle = '#46586b';
+    for (let i = 0; i < n; i++) { const v = clamp01(spec[i]), h = v * H; ctx.fillRect(i * bw, H - h, Math.max(1, bw - 0.5), h); }
+  }
+  // dom1/dom2 location markers
+  if (dom) {
+    drawMarker(ctx, dom.f1, '#f0a23b', 'dom1', W, H);
+    drawMarker(ctx, dom.f2, '#c084fc', 'dom2', W, H);
+  }
+}
+function drawWindow(ctx, lo, hi, rgb, W, H) {
+  if (!(hi > lo)) return; const x0 = freqToX(lo, W), x1 = freqToX(hi, W);
+  ctx.fillStyle = `rgba(${rgb},0.15)`; ctx.fillRect(x0, 0, Math.max(2, x1 - x0), H);
+}
+function drawMarker(ctx, f, color, label, W, H) {
+  if (!(f > 0)) return; const x = freqToX(f, W);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.fillText(`${label} ${f.toFixed(0)}Hz`, x + 3, 11);
+}
+function drawWave(ctx, wave) {
+  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  if (!wave || !wave.length) return;
+  ctx.strokeStyle = '#34d3b5'; ctx.lineWidth = 1.2; ctx.beginPath();
+  const n = wave.length, step = W / (n - 1);
+  for (let i = 0; i < n; i++) { const x = i * step, y = H / 2 - wave[i] * (H / 2 * 0.92); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+  ctx.stroke();
 }
 
 connect();
