@@ -400,26 +400,52 @@ async function assertPortsFree(ports) {
 // above can't see UDP, so check it explicitly before starting the sim: kill a
 // stale stack receiver, but FAIL LOUD on a foreign holder (QLC+, a console,
 // Resolume, …) — it would silently swallow all sACN and leave the rig dark.
-function assertSacnUdpAvailable(udpPort) {
-  let pids;
-  try {
-    pids = portCleanup.listenersOnPort(udpPort, { udp: true });
-  } catch (err) {
-    log('launcher', `Could not inspect UDP :${udpPort} (${err.message}) — continuing.`);
+// The sim's sACN Receiver binds UDP :5568 (the E1.31 port). The TCP cleanup
+// can't see UDP, so check it explicitly before starting the sim. With killing
+// enabled (the default, no --no-kill) we CLAIM the port — killing whatever
+// holds it, foreign processes included (e.g. UnrealEditor, QLC+, a console),
+// because anything squatting :5568 silently swallows all sACN and darks the
+// rig. With --no-kill we never touch a foreign process and fail loud instead.
+async function assertSacnUdpAvailable(udpPort, kill) {
+  const holders = () => {
+    try {
+      return portCleanup.listenersOnPort(udpPort, { udp: true }).filter((p) => p !== process.pid);
+    } catch (err) {
+      return null; // lsof/netstat unavailable — can't inspect
+    }
+  };
+
+  let pids = holders();
+  if (pids === null) {
+    log('launcher', `Could not inspect UDP :${udpPort} — continuing.`);
     return;
   }
-  for (const pid of pids) {
-    if (pid === process.pid) continue;
-    const cmd = portCleanup.commandlineOf(pid);
-    if (!cmd) continue;
-    if (portCleanup.STACK_PROCESS_SIGNATURES.some((sig) => cmd.includes(sig))) {
-      log('launcher', `Freeing sACN UDP :${udpPort} — killing stale stack process pid ${pid}`);
-      portCleanup.killPid(pid);
-    } else {
-      logError(`sACN UDP :${udpPort} is held by a non-stack process (pid ${pid}: ${cmd.slice(0, 100)}).`);
-      logError('That process will swallow all sACN — the rig would stay dark. Free it, then rerun.');
-      process.exit(1);
+  if (pids.length === 0) return;
+
+  if (!kill) {
+    for (const pid of pids) {
+      logError(`sACN UDP :${udpPort} is held by pid ${pid} (${portCleanup.commandlineOf(pid).slice(0, 100)}).`);
     }
+    logError('It would swallow all sACN and dark the rig. Rerun without --no-kill to claim the port, or free it yourself.');
+    process.exit(1);
+  }
+
+  for (const pid of pids) {
+    const cmd = portCleanup.commandlineOf(pid);
+    const ours = portCleanup.STACK_PROCESS_SIGNATURES.some((sig) => cmd.includes(sig));
+    log('launcher', `Claiming sACN UDP :${udpPort} — killing ${ours ? 'stale stack' : 'foreign'} process pid ${pid} (${cmd.slice(0, 80)})`);
+    portCleanup.killPid(pid);
+  }
+
+  // Wait for the OS to release the port before the sim's receiver binds it.
+  const deadline = Date.now() + 5000;
+  let remaining = holders();
+  while (remaining && remaining.length > 0 && Date.now() < deadline) {
+    await sleep(250);
+    remaining = holders();
+  }
+  if (remaining && remaining.length > 0) {
+    logError(`sACN UDP :${udpPort} is still held (pid ${remaining[0]}) after the kill — the sim may not receive sACN.`);
   }
 }
 
@@ -855,7 +881,7 @@ async function main() {
   const captainPadUrl = `http://localhost:${ports.captainpad_web_port}/`;
 
   // 1. Simulation servers (HTTP, save, sACN in/out).
-  assertSacnUdpAvailable(ports.sacn_udp_port);
+  await assertSacnUdpAvailable(ports.sacn_udp_port, opts.kill);
   startChild('sim', 'node', ['start.js', '--scene', opts.scene], SIM_DIR);
   await waitForHttp('sim http', `http://127.0.0.1:${ports.http_port}/simulation/`, 90000);
   await waitForTcp('sim save server', ports.save_port, 30000);
