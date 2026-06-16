@@ -74,6 +74,10 @@ async function main() {
   await new Promise((r) => setTimeout(r, 1200));
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
   let frames = 0;
+  // Visualizer-payload evidence: how big are the spectrum/wave arrays the client
+  // actually receives, how often do frames arrive (client update rate), and does
+  // the data move frame-to-frame (live) or sit frozen?
+  const fp = { specLen: 0, waveLen: 0, lastT: 0, gaps: [], specChange: [], prevSpec: null };
 
   await new Promise((resolve, reject) => {
     const fail = (e) => reject(new Error(e));
@@ -85,7 +89,23 @@ async function main() {
     });
     ws.on('message', (buf) => {
       let m; try { m = JSON.parse(buf); } catch { return; }
-      if (m.type === 'frame') { frames++; return; }
+      if (m.type === 'frame') {
+        frames++;
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        if (fp.lastT) { fp.gaps.push(now - fp.lastT); if (fp.gaps.length > 4000) fp.gaps.shift(); }
+        fp.lastT = now;
+        if (Array.isArray(m.spectrum)) {
+          fp.specLen = m.spectrum.length;
+          if (fp.prevSpec) {                       // mean |Δ| vs previous frame = "is it live?"
+            let s = 0; const n = Math.min(fp.prevSpec.length, m.spectrum.length);
+            for (let i = 0; i < n; i++) s += Math.abs(m.spectrum[i] - fp.prevSpec[i]);
+            fp.specChange.push(n ? s / n : 0); if (fp.specChange.length > 4000) fp.specChange.shift();
+          }
+          fp.prevSpec = m.spectrum;
+        }
+        if (Array.isArray(m.wave)) fp.waveLen = m.wave.length;
+        return;
+      }
       if (m.type === 'sourceStatus' && m.status && m.status.error) {
         log(`  ⚠ source error: ${m.status.error}${m.status.needsDevice ? ' (pin a --device)' : ''}`);
       }
@@ -117,8 +137,21 @@ async function main() {
     log('');
     log('  capture arrival (EXPECTED to look bursty on mic — not a gate):');
     log(`    interArrivalMs: ${JSON.stringify(d.interArrivalMs)}  gapsOver2x=${d.gapsOver2x}`);
+    if (d.jitter) log(`    jitterBuffer: ${JSON.stringify(d.jitter)}`);
     log('');
-    const verdicts = rows.map((r) => r[3]).filter((g) => g !== 'INFO');
+    // Visualizer payload evidence (the histogram + raw-audio "low sample rate" report).
+    const g = fp.gaps.slice().sort((x, y) => x - y);
+    const gq = (p) => (g.length ? g[Math.min(g.length - 1, Math.floor(g.length * p))] : 0);
+    const clientFps = fp.gaps.length ? (1000 / (fp.gaps.reduce((a, b) => a + b, 0) / fp.gaps.length)) : 0;
+    const chg = fp.specChange;
+    const chgMean = chg.length ? chg.reduce((a, b) => a + b, 0) / chg.length : 0;
+    log('  VISUALIZER PAYLOAD (the histogram / raw-audio resolution question):');
+    log(`    spectrum bins (histogram resolution): ${fp.specLen}`);
+    log(`    wave points (oscilloscope resolution): ${fp.waveLen}`);
+    log(`    client frame update rate: ${clientFps.toFixed(1)} Hz  (inter-frame ms median ${gq(0.5).toFixed(1)}, p95 ${gq(0.95).toFixed(1)}, max ${(g[g.length-1]||0).toFixed(1)})`);
+    log(`    spectrum liveness (mean |Δ| frame-to-frame): ${chgMean.toFixed(5)}  (≈0 = frozen, higher = updating)`);
+    log('');
+    const verdicts = rows.map((r) => r[3]).filter((g2) => g2 !== 'INFO');
     const overall = verdicts.includes('FAIL') ? 'FAIL' : verdicts.includes('WARN') ? 'WARN' : 'PASS';
     log(`  OVERALL: ${overall}   (frames=${frames}, ${d.elapsedSec}s)`);
     if (SOURCE === 'mic') {
