@@ -4,7 +4,7 @@
  * Rendered from CPCControls, which lives on BOTH the Deck tab and the
  * Mixer tab, so every behavior here reaches both surfaces for free.
  *
- * Three behaviors (docs/35):
+ * Three behaviors (docs/36):
  *   1. Easy colour choosing — Presets tab applies a curated pair on a
  *      single tap (sourced from the engine, config.yaml → colorPalettes).
  *   2. Manual colour play — the Manual tab's hue sliders apply LIVE as
@@ -35,7 +35,7 @@ const FULL_V = 1;
 const LIVE_THROTTLE_MS = 33;
 
 // Operator-facing transition bounds (seconds). Mirrors the engine's
-// `colorTransitionMs` range [0, 10000] in docs/35.
+// `colorTransitionMs` range [0, 10000] in docs/36.
 const TRANSITION_MAX_S = 10;
 
 export type ColorPalettePreset = {
@@ -120,47 +120,59 @@ export function ColorPickerModal({
       colorPalette2: { h: nh2, s: FULL_S, v: FULL_V },
     });
   }, []);
-  const liveWrite = useThrottle(writeColors, LIVE_THROTTLE_MS);
+  const [liveWrite, cancelLiveWrite] = useThrottle(writeColors, LIVE_THROTTLE_MS);
 
   const onManualH1 = useCallback((v: number) => { setH1(v); liveWrite(v, h2); }, [h2, liveWrite]);
   const onManualH2 = useCallback((v: number) => { setH2(v); liveWrite(h1, v); }, [h1, liveWrite]);
 
   // APPLY: value is already live; just push the final position
-  // un-throttled (so the last drag frame is never lost) and close.
+  // un-throttled (so the last drag frame is never lost) and close. Drop
+  // any pending throttled write first so it can't fire after this.
   const apply = useCallback(() => {
+    cancelLiveWrite();
     writeColors(h1, h2);
     onClose();
-  }, [h1, h2, writeColors, onClose]);
+  }, [h1, h2, writeColors, onClose, cancelLiveWrite]);
 
   // CANCEL / tap-outside / Android-back: revert to the baseline (the
   // engine fades back) and close. The TRANSITION field is a setting, not
-  // a play value, so it is NOT reverted — it commits on its own.
+  // a play value, so it is NOT reverted — it commits on its own. Drop any
+  // pending throttled write FIRST, else a just-released drag would re-apply
+  // the abandoned colour a few ms after the revert lands.
   const cancel = useCallback(() => {
+    cancelLiveWrite();
     const b = baselineRef.current;
     writeColors(b.h1, b.h2);
     onClose();
-  }, [writeColors, onClose]);
+  }, [writeColors, onClose, cancelLiveWrite]);
 
   // Preset tap: apply both hues live and close (one tap = done).
   const pickPreset = useCallback((p: ColorPalettePreset) => {
+    cancelLiveWrite();
     setH1(p.c1); setH2(p.c2);
     writeColors(p.c1, p.c2);
     onClose();
-  }, [writeColors, onClose]);
+  }, [writeColors, onClose, cancelLiveWrite]);
 
-  // Commit the TRANSITION field to the engine (parse seconds → ms).
+  // Commit the TRANSITION field to the engine (parse seconds → ms). On
+  // non-numeric input, restore the field from the live engine value and
+  // skip the write — never silently reinterpret garbage as 0 (codex P0).
   const commitTransition = useCallback(() => {
     const sec = parseFloat(transText);
-    const clamped = Number.isFinite(sec) ? Math.max(0, Math.min(TRANSITION_MAX_S, sec)) : 0;
+    if (!Number.isFinite(sec)) {
+      setTransText(formatSeconds(colorTransitionMs));
+      return;
+    }
+    const clamped = Math.max(0, Math.min(TRANSITION_MAX_S, sec));
     updateParamCenter({ colorTransitionMs: Math.round(clamped * 1000) });
     setTransText(formatSeconds(clamped * 1000)); // normalise display
-  }, [transText]);
+  }, [transText, colorTransitionMs]);
 
   const hasPresets = presets.length > 0;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={cancel}>
-      {/* Backdrop: tapping anywhere outside the card cancels (docs/35 §6). */}
+      {/* Backdrop: tapping anywhere outside the card cancels (docs/36 §6). */}
       <Pressable
         onPress={cancel}
         accessibilityLabel="Close colour picker"
@@ -229,7 +241,7 @@ export function ColorPickerModal({
  * but it does NOT touch the engine: tapping a pair hands it back via
  * onSelect so the caller can arm it (the colour only goes live later when
  * the operator taps the armed slot). Tap-outside / back dismiss without
- * selecting. A chooser — no Manual tab, no transition field. docs/35 §5b.
+ * selecting. A chooser — no Manual tab, no transition field. docs/36 §5b.
  */
 export function ColorQueueModal({ visible, presets, onSelect, onClose }: {
   visible: boolean;
@@ -431,15 +443,22 @@ export function DualSwatch({ h1, h2, size }: { h1: number; h2: number; size: num
 
 // Leading + trailing throttle. Fires immediately if the interval has
 // elapsed, otherwise schedules a single trailing call with the latest
-// args so the final slider position always lands.
+// args so the final slider position always lands. Returns `[call, cancel]`
+// — `cancel()` drops any pending trailing write, which APPLY/CANCEL use so
+// a just-released drag can't clobber the final/baseline write a few ms
+// later (the modal stays mounted, so the timer would otherwise survive).
 function useThrottle<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const lastRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<A | null>(null);
+  const cancel = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    pendingRef.current = null;
+  }, []);
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-  return useCallback((...args: A) => {
+  const call = useCallback((...args: A) => {
     pendingRef.current = args;
     const now = Date.now();
     const remaining = ms - (now - lastRef.current);
@@ -454,6 +473,7 @@ function useThrottle<A extends unknown[]>(fn: (...args: A) => void, ms: number) 
       }, remaining);
     }
   }, [ms]);
+  return [call, cancel] as const;
 }
 
 // ms → friendly seconds string ("0", "0.8", "2.5").

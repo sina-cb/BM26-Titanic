@@ -1,4 +1,4 @@
-# 35. Color Palette — live switching + timed transitions
+# 36. Color Palette — live switching + timed transitions
 
 **Status:** IMPLEMENTED — pending CaptainPad on-device review ·
 **Author:** agent session 2026-06-13 · **Operator:** Sina Solaimanpour ·
@@ -324,7 +324,7 @@ the baseline**. (APPLY and preset-tap remain the only "commit" paths.)
 | CPC schema / persistence / OSC / PortWatch | `colorTransitionMs` flows through existing machinery — `GET /param-center/schema`, `param_center_state.yaml`, `/marsin/param/colorTransitionMs`, `qry params` — no new endpoints. |
 | `CaptainPad/components/ColorPickerModal.tsx` | Baseline capture; throttled live apply in Manual tab; `cancel()` revert; tap-outside backdrop; FADE slider row. |
 | `CaptainPad/utils/api.ts` | (Only if a throttle helper isn't already present) small `useThrottledCallback`. |
-| Docs | This file (`docs/35`); back-link from `docs/15 §6.1` (the `slew` field) and a one-line pointer in `docs/16_captain_pad.md`. |
+| Docs | This file (`docs/36`); back-link from `docs/15 §6.1` (the `slew` field) and a one-line pointer in `docs/16_captain_pad.md`. |
 
 No new HTTP/WS endpoints; `colorTransitionMs` is just another shared param.
 

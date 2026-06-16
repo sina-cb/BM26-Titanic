@@ -51,7 +51,7 @@ const PARAM_REGISTRY = [
   },
   {
     // `slew: true` opts these into the engine-side timed color
-    // transition (docs/35). The canonical `value` stays the operator's
+    // transition (docs/36). The canonical `value` stays the operator's
     // TARGET (UI/persist/broadcast see the new color instantly); a
     // parallel `_rendered` value ramps toward it over `colorTransitionMs`
     // and is what actually gets injected into the WASM VM each frame.
@@ -69,7 +69,7 @@ const PARAM_REGISTRY = [
   {
     // Duration (ms) of the global color crossfade applied to the two
     // colorPalette params above. 0 = instant (today's snap behavior).
-    // Operator-tunable + persisted; NOT itself slewed. See docs/35.
+    // Operator-tunable + persisted; NOT itself slewed. See docs/36.
     // No pattern exports `colorTransitionMs`, so it never binds to a
     // WASM control — it's read directly by tickColorTransitions().
     key: 'colorTransitionMs', label: 'Color Fade', type: 'float',
@@ -351,7 +351,7 @@ function deepCopy(v) {
   return v;
 }
 
-// ── Color-transition interpolation (docs/35) ───────────────────────────────
+// ── Color-transition interpolation (docs/36) ───────────────────────────────
 
 function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -468,7 +468,7 @@ export class ParamCenter {
       this._loadFromDisk();
     }
 
-    // ── Color-transition ramp state (docs/35) ─────────────────────────
+    // ── Color-transition ramp state (docs/36) ─────────────────────────
     // Built AFTER _loadFromDisk so `_rendered` seeds from the persisted
     // value — the rig boots AT the saved color, not fading up to it.
     //   _rendered[key]   — HSV last injected into the WASM VM
@@ -527,7 +527,7 @@ export class ParamCenter {
 
     // Slewed params (the color palettes): (re)arm the ramp from wherever
     // _rendered currently sits toward this new target. _rampStartMs=null
-    // means "start timing on the next tick". docs/35.
+    // means "start timing on the next tick". docs/36.
     if (entry.slew) {
       this._rampFrom[key] = deepCopy(this._rendered[key]);
       this._rampStartMs[key] = null;
@@ -836,7 +836,7 @@ export class ParamCenter {
   applySnapshot(wasmHost) {
     // Pattern swap: snap rendered color to the target (the PATTERN
     // changed, not the color — no fade), so the new pattern boots at
-    // the current palette and any in-flight ramp is cancelled. docs/35.
+    // the current palette and any in-flight ramp is cancelled. docs/36.
     for (const key of this._slewKeys) {
       this._rendered[key] = deepCopy(this._store[key].value);
       this._rampFrom[key] = null;
@@ -854,7 +854,7 @@ export class ParamCenter {
    * Advance the color-transition ramps one frame and mark the slewed
    * params dirty while they're still moving so flushDirty() injects the
    * interpolated value. Call once per engine frame BEFORE flushDirty().
-   * No-op (zero cost) once every ramp has settled. docs/35 §4.3.
+   * No-op (zero cost) once every ramp has settled. docs/36 §4.3.
    * @param {number} nowMs — monotonic clock (engine passes performance.now())
    */
   tickColorTransitions(nowMs) {

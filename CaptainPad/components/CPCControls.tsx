@@ -95,7 +95,7 @@ export const CPCControls = () => {
   // it opens a chooser (ColorQueueModal) to pick one curated pair, which
   // ARMS the slot (no light change). Armed: tapping the slot sends that
   // pair LIVE — same colorPalette1/2 the main picker writes, so the
-  // engine fades to it over colorTransitionMs (docs/35) — then the cue
+  // engine fades to it over colorTransitionMs (docs/36) — then the cue
   // clears back to empty. The ✕ (top-right) removes the cue without
   // sending. The armed pair is a FROZEN snapshot: editing the main
   // colour never changes it. Cue is local + ephemeral to this pad — only
