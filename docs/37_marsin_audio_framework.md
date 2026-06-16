@@ -287,10 +287,14 @@ internet). Design rules:
    surface to the UI with the device picker (no crash). On Windows prefer a
    **pinned WASAPI low-latency** device; an external mic/line beats the laptop
    mic (which AGC/gates/band-limits — see the WindowsLaptopMics note).
-4. **Jitter buffer** between capture and analysis: buffer bursty frames, feed the
-   analyzer at a steady hop cadence → smooth signals even when the OS delivers
-   audio in bursts. Measured by the `{type:'diag'}` endpoint (inter-arrival
-   jitter, gaps, realtimeRatio).
+4. **Jitter buffer + steady clock** between capture and analysis — **the fix for
+   the "discretized packets" symptom** (full spec in §13). ffmpeg delivers audio
+   in bursts; today the FFT runs synchronously on each burst and `dt` is taken
+   from wall-clock between bursts, so every dt-driven filter sees a jagged
+   timeline. The fix is a sample FIFO + a drift-corrected hop clock that feeds the
+   analyzer one hop per nominal `HOP/SR` period, with `dt` = the *fixed* hop
+   period. Proven by the §13 realtime test, not just the raw `{type:'diag'}`
+   capture metrics.
 5. **Offline-safe**: vendored deps only (`fft.js`, bundled ffmpeg). No CDNs, no
    model downloads, no runtime `npm install`.
 6. **One DSP source of truth**: the Companion imports the engine's analysis;
@@ -312,13 +316,96 @@ switch-pattern / switch-color), and the standalone **Companion** (test/mic/file
 sources, INPUT stage, hi-res spectrum + waveform + dom-dance visualizers, chain
 editor, calibration, `{type:'diag'}`).
 
-**Target (this framework):** generalize the chains into the **typed-port op
-graph** (§2), make **Kalman** and **`DanceMaker`** first-class ops (with a
-dom-dance **parity test**), add the **OscSink** + **Output UI** (§7), the
-**engine-launch + config** integration (§8), the **jitter buffer** (§10.4), and
-the **UI theme rehaul** (CaptainPad/Sim theme + color-theme selector,
-configurable visualizers). Build phases are in
+The Companion **UI today** is a single-screen tool with a *linear* per-signal op
+list (no graph), fixed-axis spectrum/waveform/dom-dance canvases, a device picker,
+calibration, and `{type:'diag'}`. Rendering is correctly decoupled from the
+network (server coalesces to ~60 Hz, client advances on rAF) and it is
+offline-clean (no CDN/web-font). It does **not** yet have: the node-graph editor,
+branching chains, the Output panel / `OscSink`, OSC anything, per-visualizer
+fixed-vs-dynamic axis settings, or a theme system.
+
+**Target (this framework) — explicitly not-yet-built:**
+- generalize the linear chains into the **typed-port op graph** (§2) and a
+  **node-graph editor UI**. ⚠ The graph editor (draggable nodes, typed-port
+  hit-targets ≥24 px, hover-highlight of compatible ports, red wire on invalid
+  drop, topological layout) is the single hardest UI piece and needs **its own
+  plan slice** — or an explicit descope to "linear chains per signal + an Output
+  list" (which the current code is ~80% of). It is currently unscoped.
+- **Kalman** + **`DanceMaker`** as first-class ops (dom-dance **parity test**).
+- the **OscSink** + **Output UI** (§7), **engine-launch + config** (§8).
+- the **jitter buffer + steady clock** (§13) — the realtime fix.
+- the **UI theme rehaul**: reuse the Sim's proven token pipeline
+  (`simulation/src/gui/theme.js` + `simulation/style.css`, palettes mirror
+  `CaptainPad/constants/theme.ts`) rather than the Companion's bespoke 9-var
+  palette; move JS-side signal-accent hex into CSS variables; add HiDPI/`dpr`
+  canvas sizing + resize handling; a11y (focus-trap modals, Escape-to-close,
+  `aria-label`s, AA contrast on axis labels); and configurable visualizers.
+
+Build phases are in
 `.agent/02_reports/202606/20260616_2_marsin_audio_framework_plan.md`.
+
+---
+
+## 13. Realtime: jitter buffer, steady clock, and the smoothness test
+
+The operator's "discretized packets" symptom is **not** a rendering bug — it is
+that analysis is *clocked by ffmpeg's bursty pipe*. Each stdout chunk carries many
+hops (or a partial), and the analyzer drains them synchronously, so the whole DSP
+chain (bands, dom Kalman, dance spring, BPM PLL, structure IIRs) runs in bursts.
+Worse, `dt` is computed from wall-clock between bursts, so the first hop of a burst
+gets a large `dt` and the rest get `dt≈0` — corrupting every dt-driven filter (the
+critically-damped spring is no longer critically damped under variable `dt`;
+`_kalmanNis` even accepts a `dt` it ignores). The 60 Hz broadcast coalescing only
+hides this in the Companion UI; the engine→CPC→pattern path has no such smoothing,
+so burstiness reaches the lights.
+
+**Fix — FIFO + drift-corrected hop clock (lives in the capture layer, so engine
+and Companion both inherit it):**
+
+```
+ffmpeg --(bursts)--▶ sample ring FIFO --(steady hop clock)--▶ analyzer.pushSamples(HOP) --▶ CPC
+```
+
+- **Pre-fill** ~3 hops (~35 ms) before draining; **cap** at ~8 hops (~93 ms) —
+  if exceeded, drop the oldest hop (warn-once) to bound latency. 35 ms ≪ the
+  180 ms band release, so the added latency is invisible.
+- **Clock:** an accumulator/catch-up timer keyed off `performance.now()` drains
+  `floor((expectedSamples − consumed)/HOP)` whole hops per tick (usually 1,
+  occasionally 0/2 to correct drift) — pins long-term cadence to the real clock
+  with even per-hop spacing, immune to Node's coarse timers.
+- **`dt` = nominal `HOP/SR`** (≈11.6 ms) handed to the whole chain — the FIFO
+  guarantees the hops are real, evenly-spaced audio, so nominal `dt` is the
+  truthful one. Wall-clock stays only for refractory/timeout windows.
+- **Underrun (FIFO < 1 hop):** skip the tick, never zero-fill (codex P0 — no
+  silent fallback); warn-once on sustained underrun and surface it to diag.
+- **Capture-side:** add ffmpeg low-latency flags (`-flush_packets 1`, input
+  `-flags low_delay` / per-backend buffer size) so the OS/ffmpeg buffer stops
+  dictating burst size — currently absent. (Windows AGC/"enhancements" are
+  OS-side and ffmpeg/dshow can't disable them; that stays an operator runbook
+  item — prefer an external line-in / WASAPI device, see §10.3.)
+
+**The smoothness test (for the operator's local agent, real mic).** Run `mode:mic`
+on a 60 s EDM source ≥30 s, read `{type:'diag'}`. The existing capture
+inter-arrival metric *will* look bursty — that's expected; gate on the
+**post-buffer** numbers instead. Add fields: `analyzerHopMs` (drain-clock
+inter-hop median/p95/jitterStd), `bufferDepthHops` (mean/max), `underruns`,
+`broadcastMs`, and `micLowStepP95` (p95 of `|micLow[n]−micLow[n−1]|`, a direct
+chunkiness measure).
+
+| Metric | Pass | Fail |
+|---|---|---|
+| `analyzerHopMs` median | 11.6 ±0.5 ms | >±1.5 ms |
+| `analyzerHopMs` jitterStd | < 2 ms | > 4 ms |
+| `gapsOver2x` (analyzer hops) | 0 / 30 s | > 2 |
+| `bufferDepthHops` max | ≤ 6 (~70 ms) | > 8 sustained |
+| `underruns` | 0 | > 3 |
+| `realtimeRatio` | 0.99–1.01 | outside 0.97–1.03 |
+| `broadcastMs` p95 | ≤ 20 ms | > 33 ms |
+| `micLowStepP95` (mic vs file mode, same clip) | within ~1.5× of `file` | > 2× |
+
+The decisive check: mic-mode `analyzerHopMs` jitter and `micLowStepP95` should
+**approach `file` mode** (perfectly clocked) on the same clip. If they match
+within ~1.5×, the discretization is gone.
 
 ---
 
@@ -383,6 +470,21 @@ keeps a loud passage from inflating R and desensitising the detector afterwards;
 `σ = √rEma` (a prior `√(2·rEma)` units bug made the clip ~1.4× too loose — fixed
 per the cold-review).
 
+> ⚠ **Known defect — the shipped `kalman` edge under-fires (must re-tune before
+> it stays the default).** On the labeled corpus regression
+> (`tests/integration/audio_analysis_validation.test.mjs`) the current tuning
+> fires **0 drops** on `clean_drop` (3 tests red). Root cause (cold-review,
+> confirmed by instrumenting the chain): `KALMAN_Q = 0.01` is large relative to
+> the envelope-smoothed band, so the innovation variance `S = (P+Q)+R` floors at
+> ≈`Q`, and a real-but-smoothed sub-bass step (~0.21 single-hop) can't reach
+> `NIS ≥ 6.63`; the **same-hop** `low ∧ flux` AND-gate is also too strict because
+> the sub-slam and the flux burst are 1–2 hops apart. Fix direction: lower
+> `KALMAN_Q` (≈1e-4–1e-3) so adaptive-R sets the NIS scale, and/or relax the gate
+> to a short ±N-hop **co-occurrence** window — then re-validate on the corpus
+> until the 3 tests pass. The `level` / `windowed` edge modes are unaffected; this
+> defect is specific to the `kalman` mode that ships as the default. Until the
+> re-tune lands, do **not** treat `kalman` as the corpus-validated best mode.
+
 **Not Kalman (documented here to avoid confusion):**
 - **Dom-dance** (`companion_server.js` `springStep`) is a **critically-damped
   spring** (`DANCE_OMEGA = 7` rad/s, ~0.4 s settle, no overshoot), not a Kalman —
@@ -396,12 +498,15 @@ A reviewer asked us to consider **One-Euro** as an alternative to the dom Kalman
 `Kalman` op (§2.2) keeps today's behavior, and One-Euro could ship as a sibling
 smoothing op the operator selects per lane.
 
-### 12.3 Parameters to expose (config)
+### 12.3 Parameters to expose (config) — **target, not yet built**
 
-Today the dom params are a frozen `DOM_FREQ_PARAMS` in `audio_analyzer.js` and the
-drop params are consts in the detector. The framework **exposes the high-value
-knobs under the engine's `audio.*` block** (one source of truth, shared by engine
-+ Companion — §8.1), so they're tunable without code edits:
+Today the dom params are a frozen `DOM_FREQ_PARAMS` in `audio_analyzer.js`, the
+drop params are module consts in the detector, and `audio/config/audio_config.js`
+has **no `dom` or `drop` validator group** — so none of the below is live-tunable
+yet, and the Companion UI exposes only gains/inputGain/smoothing/chains. This is a
+**build target**: expose the high-value knobs under the engine's `audio.*` block
+(one source of truth, shared by engine + Companion — §8.1), validated in
+`audio_config.js`, so they're tunable without code edits:
 
 ```yaml
 audio:
@@ -417,6 +522,8 @@ audio:
     # KALMAN_Q / KALMAN_R_ALPHA exposed as drop.kfQ / drop.rAlpha
 ```
 
-The Companion's tuning UI edits these live (PATCH `/audio/config`, already the
-hot-restart path) so the operator dials dom stability and drop sensitivity by ear,
-on the real rig, and the values persist in `config.yaml`.
+Once built, the Companion's tuning UI edits these live (PATCH `/audio/config`,
+already the hot-restart path for the existing keys) so the operator dials dom
+stability and drop sensitivity by ear, on the real rig, and the values persist in
+`config.yaml`. This is also the operator's field workaround for the drop-detector
+defect above — so it should land alongside the re-tune.
