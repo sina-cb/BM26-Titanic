@@ -48,7 +48,8 @@ audio:
   bands:
     lowMaxHz: 200
     midMaxHz: 4000
-    attackMs: 8
+    # 6 ms (was 8): snappier band edge for EDM reactivity (corpus-tuned).
+    attackMs: 6
     releaseMs: 180
     noiseGate: 0.04
     # Software input gain (mic-preamp), applied to all band energies + the
@@ -59,8 +60,12 @@ audio:
   kick:
     minHz: 50
     maxHz: 110
-    threshold: 1.8
-    refractoryMs: 140
+    # EDM corpus-tuned for a CLEAN PULSE (was 1.8 / 140):
+    #   threshold 2.4 — rejects sustained-bassline false-fires (transient kicks only).
+    #   refractoryMs 220 — kills sub-beat double/jitter fires (57%→0%); < one beat
+    #   even at 270 BPM, so real consecutive kicks survive. See report 202606 tuning.
+    threshold: 2.4
+    refractoryMs: 220
     # 70 ms (was 120): a crisp kick PULSE that doesn't linger high. The
     # micKick chain (schmitt + short hold) shapes the final pulse on top.
     decayMs: 70

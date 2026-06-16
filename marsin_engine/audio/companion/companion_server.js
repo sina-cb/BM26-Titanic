@@ -106,8 +106,8 @@ const detector = new AudioStructureDetector({
 let clockMs = 0, lastMs = 0;
 const analyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: FFT, hopSize: HOP,
-  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
-  kick: { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 70 },
+  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
+  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },   // EDM corpus-tuned (clean pulse)
   nowFn: () => clockMs,
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;

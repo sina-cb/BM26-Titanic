@@ -80,10 +80,10 @@ test('DEFAULT_CHAINS has an entry per known signal', () => {
 });
 
 test('default mic chains are Gain(→*Gain CPC paramKey) + tuned smoothing LPF', () => {
-  // The non-kick signals shipped GAIN-ONLY (flickery). The corpus-tuning
-  // pass (report 202606/..._audio_corpus_tuning.md §Task C) appended a
-  // per-signal smoothing LPF: low 3.5 Hz, mid 5.5 Hz, high 10 Hz.
-  const cutoff = { micLow: 3.5, micMid: 5.5, micHigh: 10.0 };
+  // The non-kick signals shipped GAIN-ONLY (flickery). A per-signal smoothing
+  // LPF was appended, later raised to low 5.5 Hz, mid 8 Hz, high 14 Hz (EDM
+  // tuning, report 202606) for faster band rise at unchanged flicker.
+  const cutoff = { micLow: 5.5, micMid: 8.0, micHigh: 14.0 };
   for (const sig of ['micLow', 'micMid', 'micHigh']) {
     const chain = DEFAULT_CHAINS[sig];
     assert.equal(chain.length, 2, `${sig} default chain should be gain + lpf`);

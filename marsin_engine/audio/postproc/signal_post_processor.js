@@ -89,8 +89,13 @@ export const KNOWN_SIGNALS = Object.freeze(processedSignalKeys());
 // dance-smooth while preserving the beat-locked pulse, and gives flux a
 // gentle build-up glow. Measured on miced real audio: e.g. micLow flicker
 // 6.5→4.2 Hz, micFlux 54.6→34.8 Hz, pulse depth preserved.
+// Per-signal smoothing-LPF cutoffs. mic bands raised to 5.5/8/14 Hz (was
+// 3.5/5.5/10) — EDM corpus tuning: ~30% faster band rise (low 73→52 ms, mid
+// 50→38 ms) with flicker essentially unchanged. The LPF, not the analyzer
+// envelope, is the band responsiveness lever. micFlux kept gentle for a
+// build-up glow. (report 202606 audio tuning.)
 const SMOOTHING_HZ = Object.freeze({
-  micLow: 3.5, micMid: 5.5, micHigh: 10.0, micFlux: 4.5,
+  micLow: 5.5, micMid: 8.0, micHigh: 14.0, micFlux: 4.5,
   stemsBass: 3.5, stemsDrums: 12.0, stemsVocals: 5.0,
 });
 
@@ -100,14 +105,17 @@ function buildDefaultChains() {
   const out = {};
   for (const key of KNOWN_SIGNALS) {
     if (key === 'micKick') {
-      // SUDDEN kick: fast attack, short envelope release (180→60 ms), tight
-      // schmitt refractory, short hold decay (120→60 ms) — crisp trigger,
-      // no long release smear. (Measured: kick decay 2334→464 ms.)
+      // PULSE-SHAPER (not a de-bouncer). With the analyzer's refractory now at
+      // 220 ms the RAW kick is already one clean pulse per hit, so this chain
+      // only SHAPES it: schmitt latches the decaying pulse into a crisp 0/1
+      // square (tHigh 0.6 so only true fires pass), hold gives a visible
+      // minimum LED width. envelope/hold shortened to 50 ms for a crisp flash.
+      // (EDM corpus tuning, report 202606.)
       out[key] = [
         { id: gainOpIdFor('micKick'), type: 'gain',     enabled: true, params: { paramKey: 'micKickGain' } },
-        { id: 'kick_envelope',        type: 'envelope', enabled: true, params: { attackMs: 5, releaseMs: 60 } },
-        { id: 'kick_schmitt',         type: 'schmitt',  enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 120 } },
-        { id: 'kick_hold',            type: 'hold',     enabled: true, params: { timeoutMs: 60, decayMs: 60 } },
+        { id: 'kick_envelope',        type: 'envelope', enabled: true, params: { attackMs: 4, releaseMs: 50 } },
+        { id: 'kick_schmitt',         type: 'schmitt',  enabled: true, params: { tHigh: 0.6, tLow: 0.3, refractoryMs: 180 } },
+        { id: 'kick_hold',            type: 'hold',     enabled: true, params: { timeoutMs: 50, decayMs: 50 } },
       ];
       continue;
     }

@@ -146,16 +146,16 @@ test('DEFAULT_CHAINS = Gain + tuned smoothing LPF per signal, sudden micKick tri
   // chain was retuned SUDDEN (release 180→60 ms, hold decay 120→60 ms).
   const expected = {
     micLow: [{ id: 'low_gain', type: 'gain', enabled: true, params: { paramKey: 'micLowGain' } },
-             { id: 'low_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 3.5 } }],
+             { id: 'low_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 5.5 } }],
     micMid: [{ id: 'mid_gain', type: 'gain', enabled: true, params: { paramKey: 'micMidGain' } },
-             { id: 'mid_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 5.5 } }],
+             { id: 'mid_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 8.0 } }],
     micHigh: [{ id: 'high_gain', type: 'gain', enabled: true, params: { paramKey: 'micHighGain' } },
-              { id: 'high_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 10.0 } }],
+              { id: 'high_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 14.0 } }],
     micKick: [
       { id: 'kick_gain', type: 'gain', enabled: true, params: { paramKey: 'micKickGain' } },
-      { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 5, releaseMs: 60 } },
-      { id: 'kick_schmitt', type: 'schmitt', enabled: true, params: { tHigh: 0.5, tLow: 0.3, refractoryMs: 120 } },
-      { id: 'kick_hold', type: 'hold', enabled: true, params: { timeoutMs: 60, decayMs: 60 } },
+      { id: 'kick_envelope', type: 'envelope', enabled: true, params: { attackMs: 4, releaseMs: 50 } },
+      { id: 'kick_schmitt', type: 'schmitt', enabled: true, params: { tHigh: 0.6, tLow: 0.3, refractoryMs: 180 } },
+      { id: 'kick_hold', type: 'hold', enabled: true, params: { timeoutMs: 50, decayMs: 50 } },
     ],
     micFlux: [{ id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } },
               { id: 'flux_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 4.5 } }],
