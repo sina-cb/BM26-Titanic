@@ -27,14 +27,34 @@ now-fragmented audio docs.
    server) → Companion moves to **6973**.
 
 ## Phasing (build, after the doc lands — candidate agent fan-out)
-- P1 framework core: `Port` types + `Op` base + registry + raw `Source`s + core
-  ops (Gain/Smooth/Kalman) + `OscSink`. Port the dom-dance to a **`DanceMaker`**
-  op with a **parity test** vs the current spring output.
+> Updated 2026-06-16 after the 4-review consolidation
+> (`20260616_3_…`) + operator additions (Audio Slice lane, ops migration).
+> P0 now leads — the shipped drop detector is broken.
+
+- **P0 drop-detector re-tune** (blocking): lower `KALMAN_Q` and/or relax the
+  same-hop AND to a ±N-hop co-occurrence window; re-validate on the corpus until
+  `tests/integration/audio_analysis_validation.test.mjs` passes. Fix the stale
+  `useKalman:false` comment in `audio_analyzer.js`. (docs/37 §12.2)
+- P1 framework core: `Port` types (incl. `freqWindow`) + `Op` base + registry +
+  raw `Source`s + `OscSink`. **Migrate ALL 13 existing ops** (Gain/Bias/Clamp/
+  Lpf/Biquad/Envelope/Slew/Curve/Compressor/Slope/Normalizer/Schmitt/Hold) from
+  `signal_post_processor.js` into the typed-port node interface, then **remove the
+  old `OP_SCHEMA` + `apply()` path** (one code path per op; snapshot/parity tests
+  guard behavior). Port the dom-dance to a **`DanceMaker`** op with a **parity
+  test** vs the current spring; add the **`Kalman`** op. (docs/37 §2.2, §11)
+- P1 realtime (was P4): **jitter buffer + drift-corrected hop clock + nominal
+  `dt`** (docs/37 §13) — the real fix for "discretized packets"; extend
+  `{type:'diag'}` with the post-buffer metrics + ffmpeg low-latency flags.
+- P1 config exposure: `audio.dom.*` / `audio.structureDetector.drop.*` validators
+  in `audio_config.js` + Companion tuning UI (also the field workaround for P0).
 - P2 engine integration: `audioCompanion:` config block, engine boot
-  starts/supervises the Companion, OSC output → CPC, OSC auto-enable.
-- P3 UI: CaptainPad/Sim theme + color-theme selector, configurable visualizers,
-  the **Output UI** (choose signals → OSC mappings).
-- P4 realtime: jitter buffer + capture-latency tuning (driven by the new
-  `{type:'diag'}` metrics on the operator's mic).
+  starts/supervises the Companion (and, when enabled, **Audio Slice** —
+  local-only), OSC output → CPC, OSC verify (not auto-enable; §7 read-back).
+- P2 **Audio Slice lane** (local-only, docs/37 §6.2): supervised CLI launch +
+  OSC-in listener (port 10001) + `rawStem*` / `rawSliceBpm` / `rawSliceBeat`
+  Sources. Buildable anywhere; end-to-end validation requires the local binary.
+- P2 UI: HiDPI/`dpr` + resize fix, theme rehaul on the Sim's `theme.js` token
+  pipeline, a11y, configurable visualizers, the **Output UI**. Decide graph-editor
+  scope (full node graph vs linear-chains + Output list) before building.
 
 Docs authored coherently here; the build phases parallelize across sub-agents.

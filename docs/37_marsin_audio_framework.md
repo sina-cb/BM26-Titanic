@@ -89,12 +89,31 @@ which declares the conversion explicitly.
   (`bpm`), `rawSliceBeat` (`event`). Present only when the Audio Slice lane is
   enabled; address→source map is config-driven.
 
-**Ops** (pure, allocation-free, O(1)/sample or O(1)/hop — DSP-literature backed):
-- `Gain` (`intensity→intensity`), `Smooth`/`LPF`, `Envelope`, `Schmitt`
-  (`intensity→event`), `Hold`, `Normalizer`/AGC — carried from `docs/29`.
+**Ops** (pure, allocation-free, O(1)/sample or O(1)/hop — DSP-literature backed).
+The framework's canonical op set is the **already-implemented** scalar ops in
+`audio/postproc/signal_post_processor.js` (`OP_SCHEMA` + `apply()`) — they are
+adopted as-is and wrapped in the typed-port node interface (the **migration task**
+below). All are `intensity→intensity` unless noted:
+
+| Op | Signature | What it does (params) |
+|---|---|---|
+| `Gain` | intensity→intensity | ×static `value` **or** ×live CPC value at `paramKey` |
+| `Bias` | intensity→intensity | + constant `value` |
+| `Clamp` | intensity→intensity | re-clamp into `[min, max]` |
+| `Lpf` | intensity→intensity | one-pole IIR low-pass / EMA (`cutoffHz`) — the "Smooth" op |
+| `Biquad` | intensity→intensity | RBJ-cookbook LPF (`cutoffHz`, `Q`) |
+| `Envelope` | intensity→intensity | asymmetric VU follower (`attackMs`/`releaseMs`) |
+| `Slew` | intensity→intensity | slew-rate limiter (`maxStepPerSec`) |
+| `Curve` | intensity→intensity | shape lookup (`shape`: linear/easeIn/easeOut/exp, `gamma`) |
+| `Compressor` | intensity→intensity | dB-domain hard-knee (`threshold`/`ratio`/`attackMs`/`releaseMs`) |
+| `Slope` | intensity→intensity | discrete derivative/sec, scaled (`scale`, `bipolar` keeps sign) |
+| `Normalizer` (AGC) | intensity→intensity | sliding floor/peak auto-level to `[0,1]` (`windowSec`/`strength`) |
+| `Schmitt` | intensity→**event** | hysteresis trigger + refractory (`tHigh`/`tLow`/`refractoryMs`) |
+| `Hold` | event/intensity→intensity | sample-and-hold + timeout + exp decay (`timeoutMs`/`decayMs`) |
+
 - `Kalman` — a first-class op (local-level / confidence-scaled), for smoothing a
   `frequency`/`intensity`/`bpm` stream. (Today's drop-NIS, BPM, dom, note
-  Kalmans become instances of this op; see §9 / the cold-review findings.)
+  Kalmans become instances of this op; see §12 / the cold-review findings.)
 - **`DanceMaker`** — `freqWindow → freqWindow`: the critically-damped spring
   that turns a jumpy dom freq into the smooth, ghostly "dance" (the gliding
   orbs). It spring-smooths the center `freqHz` and the window width
@@ -403,6 +422,16 @@ branching chains, the Output panel / `OscSink`, OSC anything, per-visualizer
 fixed-vs-dynamic axis settings, or a theme system.
 
 **Target (this framework) — explicitly not-yet-built:**
+- **Migrate the existing ops into the framework + remove the old code.** The 13
+  scalar ops (§2.2) already live in `audio/postproc/signal_post_processor.js`
+  (`OP_SCHEMA` + the `apply()` switch + per-op runtime state). Wrap each in the
+  typed-port node interface (`inputs[]`/`outputs[]`, declared port types) so they
+  become graph nodes, keeping behavior identical (snapshot/parity tests over the
+  existing chains guard against drift). **Then clean up the old path**: the
+  hand-rolled `apply()` switch, the parallel `OP_SCHEMA`, and any
+  signal-specific special-casing collapse into the single op registry — no two
+  code paths for the same op. This is a defined cleanup task, not a rewrite: the
+  DSP math is reused verbatim, only its packaging changes.
 - generalize the linear chains into the **typed-port op graph** (§2) and a
   **node-graph editor UI**. ⚠ The graph editor (draggable nodes, typed-port
   hit-targets ≥24 px, hover-highlight of compatible ports, red wire on invalid
