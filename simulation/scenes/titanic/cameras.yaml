@@ -1,4 +1,24 @@
 presets:
+  - name: Wiring
+    key: wiring
+    position:
+      x: 38
+      'y': 16
+      z: 18
+    target:
+      x: 23
+      'y': 9.5
+      z: -3
+  - name: Wiring Top
+    key: wiring-top
+    position:
+      x: 24
+      'y': 30
+      z: -2
+    target:
+      x: 23
+      'y': 8
+      z: -3
   - name: Front
     key: front
     position:

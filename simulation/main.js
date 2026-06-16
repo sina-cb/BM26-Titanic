@@ -25,6 +25,7 @@ import { createGround, createStarField, loadModel, onModelLoaded } from "./src/c
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
+import { initWiringLayer } from "./src/wiring/wiring_boot.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
@@ -111,6 +112,7 @@ async function init() {
   scene.background = new THREE.Color(0x030310);
   scene.fog = new THREE.FogExp2(0x030310, 0.0004);
   setScene(scene);
+  window.__scene = scene; // exposed for tooling / the wiring layer
 
   // Camera
   const camera = new THREE.PerspectiveCamera(
@@ -217,7 +219,11 @@ async function init() {
   setTransformControl(transformControl);
 
   // Load model (triggers setupGUI when done)
-  loadModel((obj) => onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures));
+  loadModel((obj) => {
+    onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures);
+    // Opt-in 3D wiring overlay (?wiring=1). Fails loudly if requested+broken.
+    initWiringLayer(scene).catch((err) => { console.error(err); });
+  });
 
   // Events
   window.addEventListener("resize", onResize);
