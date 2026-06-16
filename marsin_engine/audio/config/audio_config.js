@@ -51,7 +51,7 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // state machine actually reads).
   structureDetector: [
     'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-    'dropNisThreshold', 'slowZoneRef',
+    'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
     'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
   ],
 });
@@ -63,9 +63,10 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
  */
 const LIVE_STRING_ENUMS = Object.freeze({
   structureDetector: Object.freeze({
-    // 'kalman' (default) — adopted from the offline corpus experiment:
-    // a Kalman+NIS change detector on micLow ∧ micFlux (best F1 vs the
-    // windowed/level edges). 'windowed'/'level' kept for back-compat.
+    // 'windowed' (DEFAULT) — rate-of-change discriminator; the corpus-validated
+    // product default. 'kalman' is OPT-IN (Kalman+NIS on micLow ∧ micFlux); its
+    // shipped tuning under-fires on the corpus (pending re-tune via dropKalmanQ
+    // / dropCoWindowMs), so it is not the default. 'level' kept for back-compat.
     dropEdgeMode: ['level', 'windowed', 'kalman'],
   }),
 });
@@ -101,6 +102,11 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // here (lower → more sensitive). slowZoneRef = the activity level
     // (max of micLow/micFlux) at/below which we read as a "slow zone".
     dropNisThreshold:  (v) => (v > 1.0 && v <= 100.0) ? null : `must be in (1.0, 100.0]; got ${v}`,
+    // Kalman-edge process noise — LOW so adaptive R sets the NIS scale (a high Q
+    // floors S and the detector can't reach the gate; that was the under-fire bug).
+    dropKalmanQ:       (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    // Kalman-edge co-occurrence window: low & flux NIS may clear within this many ms.
+    dropCoWindowMs:    (v) => (v >= 0 && v <= 2000) ? null : `must be in [0, 2000]; got ${v}`,
     slowZoneRef:       (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
     stemsTimeoutMs:    (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     eventRefractoryMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,

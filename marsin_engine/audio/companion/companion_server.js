@@ -90,6 +90,23 @@ function recordFrame(n) {
   else diag.startWall = now;
   diag.lastWall = now; diag.frames++; diag.samples += n;
 }
+// Second diagnostic stage (docs/37 §13): the metric that actually proves
+// smoothness is NOT capture arrival (always bursty for a pipe — expected) but
+// (a) the ANALYZER hop cadence (wall-clock spacing of onAnalysis calls — bursty
+// today, steady once a jitter buffer lands) and (b) signal CHUNKINESS
+// (micLowStepP95 = p95 of |micLow[n]-micLow[n-1]| across hops, timing-independent).
+// Compare mic mode vs file mode (perfectly clocked) on the same clip: if they
+// match, the discretization is gone.
+const adiag = { last: 0, deltas: [], prevLow: null, steps: [] };
+function recordAnalysis(micLow) {
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (adiag.last) { adiag.deltas.push(now - adiag.last); if (adiag.deltas.length > 8000) adiag.deltas.shift(); }
+  adiag.last = now;
+  if (adiag.prevLow !== null && Number.isFinite(micLow)) {
+    adiag.steps.push(Math.abs(micLow - adiag.prevLow)); if (adiag.steps.length > 8000) adiag.steps.shift();
+  }
+  if (Number.isFinite(micLow)) adiag.prevLow = micLow;
+}
 function diagReport() {
   const d = diag.deltas.slice().sort((a, b) => a - b);
   const q = (p) => (d.length ? d[Math.min(d.length - 1, Math.floor(d.length * p))] : 0);
@@ -97,10 +114,21 @@ function diagReport() {
   const std = Math.sqrt(d.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (d.length || 1));
   const expected = (HOP / SR) * 1000;
   const elapsed = Math.max(0.001, (diag.lastWall - diag.startWall) / 1000);
+  // Analyzer-cadence percentiles (the post-capture stage the §13 test gates on).
+  const ad = adiag.deltas.slice().sort((a, b) => a - b);
+  const aq = (p) => (ad.length ? ad[Math.min(ad.length - 1, Math.floor(ad.length * p))] : 0);
+  const aMean = ad.reduce((a, b) => a + b, 0) / (ad.length || 1);
+  const aStd = Math.sqrt(ad.reduce((a, b) => a + (b - aMean) * (b - aMean), 0) / (ad.length || 1));
+  const st = adiag.steps.slice().sort((a, b) => a - b);
+  const stepP95 = st.length ? st[Math.min(st.length - 1, Math.floor(st.length * 0.95))] : 0;
   return {
     type: 'diag', mode, frames: diag.frames, elapsedSec: +elapsed.toFixed(1), expectedFrameMs: +expected.toFixed(2),
     interArrivalMs: { median: +q(0.5).toFixed(2), p95: +q(0.95).toFixed(2), p99: +q(0.99).toFixed(2), max: +(d[d.length - 1] || 0).toFixed(2), jitterStd: +std.toFixed(2) },
     gapsOver2x: d.filter((x) => x > expected * 2).length,
+    // §13 gate metrics — analyzer hop cadence + signal chunkiness:
+    analyzerHopMs: { median: +aq(0.5).toFixed(2), p95: +aq(0.95).toFixed(2), jitterStd: +aStd.toFixed(2) },
+    analyzerGapsOver2x: ad.filter((x) => x > expected * 2).length,
+    micLowStepP95: +stepP95.toFixed(4),
     effectiveFps: +(diag.frames / elapsed).toFixed(1),
     realtimeRatio: +((diag.samples / SR) / elapsed).toFixed(3),   // ~1.0 = realtime; <1 = falling behind
   };
@@ -150,7 +178,7 @@ spp.loadChains(chains);
 const detector = new AudioStructureDetector({
   paramCenter,
   broadcast: (msg) => { if (msg && msg.type === 'dropFired') broadcast({ type: 'dropFired', ts: msg.ts, confidence: msg.confidence }); },
-  getConfig: () => ({ enabled: true }),   // Kalman drop is the default edge
+  getConfig: () => ({ enabled: true }),   // edge mode = DETECTOR_DEFAULTS ('windowed')
 });
 const derived = new DerivedSignals({ paramCenter });   // BPM/party/note/switch cues
 
@@ -162,6 +190,7 @@ const analyzer = new AudioAnalyzer({
   nowFn: () => clockMs,
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
+    recordAnalysis(r.low ?? 0);   // §13: analyzer-cadence + chunkiness diagnostic
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
     const signals = {}; const writes = [];
     for (const sig of MIC_SIGNALS) {
@@ -349,6 +378,7 @@ function setMode(next, opts = {}) {
   stopSource();
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
+  adiag.last = 0; adiag.prevLow = null; adiag.deltas.length = 0; adiag.steps.length = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device || null);

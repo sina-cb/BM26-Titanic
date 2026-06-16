@@ -71,6 +71,16 @@ lane (a bare `frequency` scalar can't carry the window). A `freqWindow` degrades
 to `frequency` by dropping the window (an explicit `FreqWindowToFreq` converter),
 never implicitly.
 
+> **`freqWindow` is a graph/visual-internal type — NOT a single CPC key.** The
+> CPC registry (`audio/postproc/audio_signals.js`) has scalar keys only:
+> `micDomFreq1/2` (center Hz) and `micDomEnergy1/2` (energy); the `loHz/hiHz`
+> window lives only in the analyzer/Companion payload and is used for
+> visualization + `DanceMaker`. So an `OscSink` on a `freqWindow` lane **fans out
+> to the scalar keys** (freq → `micDomFreq*`, energy → `micDomEnergy*`); the
+> window bounds are not sent to CPC unless explicit `micDomLo*/Hi*` keys are
+> added to the registry first (a deliberate, separate decision — they have no
+> consumer today).
+
 Rule: **like connects to like.** `intensity → intensity`, `frequency →
 frequency`, `freqWindow → freqWindow`, etc. To cross types you must insert a
 converter op (e.g. `FreqToNote`, `FreqWindowToFreq`, `EnergyToEvent (Schmitt)`),
@@ -149,7 +159,7 @@ list that can drift). Signals fall into two origins:
 
 - **Companion-produced** (the mic analysis this app actually computes):
   `micLow · micMid · micHigh · micKick · micFlux` (+ their `*Raw` mirrors) ·
-  `micDomFreq1/2` + `micDomEnergy1/2` (+ cluster windows) ·
+  `micDomFreq1/2` + `micDomEnergy1/2` (cluster windows are visual-only, not CPC keys — see §2.1) ·
   `audioStructure · audioBuildScore · audioEnergyRatio · audioVocalsHot ·
   audioSlowZone · audioDropPulse` · `audioBpm · audioBeat · audioBeatInBar ·
   audioBarPhase · audioDownbeat` · `audioParty · audioNote · audioNoteHue ·
@@ -261,7 +271,11 @@ either `audioBpm` (in-engine) or `rawSliceBpm` (Audio Slice).
 A dedicated **Output** panel lets the operator:
 1. pick which signals to send (native or post-processed graph outputs);
 2. map each to a CPC target (an OSC address → CPC key, per `docs/24`);
-3. set the send rate / format (`intensity` → float, `event` → bang, etc.);
+3. set the send rate / format. **Events go on the wire as a scalar `1.0`/`0.0`
+   float, NOT an OSC bang** — the engine's `OscListener` requires an argument at
+   `args[argIndex]` and `coerceArg()` only accepts numeric/boolean/string
+   scalars, so an arg-less bang is counted invalid and never reaches CPC
+   (`docs/24`). (`intensity` → float, `bpm` → float, `event` → `1.0` edge.)
 4. see the live **send** stream and, where possible, a **CPC read-back**
    confirmation (see below).
 
@@ -462,13 +476,23 @@ Build phases are in
 The operator's "discretized packets" symptom is **not** a rendering bug — it is
 that analysis is *clocked by ffmpeg's bursty pipe*. Each stdout chunk carries many
 hops (or a partial), and the analyzer drains them synchronously, so the whole DSP
-chain (bands, dom Kalman, dance spring, BPM PLL, structure IIRs) runs in bursts.
-Worse, `dt` is computed from wall-clock between bursts, so the first hop of a burst
-gets a large `dt` and the rest get `dt≈0` — corrupting every dt-driven filter (the
-critically-damped spring is no longer critically damped under variable `dt`;
-`_kalmanNis` even accepts a `dt` it ignores). The 60 Hz broadcast coalescing only
-hides this in the Companion UI; the engine→CPC→pattern path has no such smoothing,
-so burstiness reaches the lights.
+chain (bands, dom Kalman, dance spring, BPM PLL, structure IIRs) is *computed* in
+bursts — the values exist, but they were produced on a lumpy timeline and then
+delivered in clumps.
+
+**A `dt` caveat (the two code paths differ — don't over-claim):** the **engine**
+path takes `dt` from wall-clock between `onAnalysis` calls (`engine.js:1439`), so
+under bursty delivery its first-of-burst hop gets a large `dt` and the rest
+`dt≈0` — corrupting every dt-driven filter (the critically-damped spring is no
+longer critically damped). The **Companion** path is better: it advances `clockMs`
+from the *sample count* and derives `dt` from that audio clock
+(`companion_server.js`), so its `dt` is steady even when frames arrive in bursts.
+The burst-drain + broadcast-clumping problem is real on **both** paths; the
+"large dt then dt≈0" corruption is specifically the **engine** path. Either way,
+once a steady drain clock exists the right `dt` is the **fixed** `HOP/SR`, and
+`_kalmanNis` still accepts a `dt` it ignores (a latent bug only under variable
+rate). The 60 Hz broadcast coalescing hides the clumping in the Companion UI; the
+engine→CPC→pattern path has no such smoothing, so burstiness reaches the lights.
 
 **Fix — FIFO + drift-corrected hop clock (lives in the capture layer, so engine
 and Companion both inherit it):**
@@ -581,20 +605,22 @@ keeps a loud passage from inflating R and desensitising the detector afterwards;
 `σ = √rEma` (a prior `√(2·rEma)` units bug made the clip ~1.4× too loose — fixed
 per the cold-review).
 
-> ⚠ **Known defect — the shipped `kalman` edge under-fires (must re-tune before
-> it stays the default).** On the labeled corpus regression
-> (`tests/integration/audio_analysis_validation.test.mjs`) the current tuning
-> fires **0 drops** on `clean_drop` (3 tests red). Root cause (cold-review,
-> confirmed by instrumenting the chain): `KALMAN_Q = 0.01` is large relative to
-> the envelope-smoothed band, so the innovation variance `S = (P+Q)+R` floors at
-> ≈`Q`, and a real-but-smoothed sub-bass step (~0.21 single-hop) can't reach
-> `NIS ≥ 6.63`; the **same-hop** `low ∧ flux` AND-gate is also too strict because
-> the sub-slam and the flux burst are 1–2 hops apart. Fix direction: lower
-> `KALMAN_Q` (≈1e-4–1e-3) so adaptive-R sets the NIS scale, and/or relax the gate
-> to a short ±N-hop **co-occurrence** window — then re-validate on the corpus
-> until the 3 tests pass. The `level` / `windowed` edge modes are unaffected; this
-> defect is specific to the `kalman` mode that ships as the default. Until the
-> re-tune lands, do **not** treat `kalman` as the corpus-validated best mode.
+> ✅ **Resolved (2026-06-16): default flipped to `windowed`; `kalman` made opt-in
+> + improved.** The shipped `kalman` edge under-fired — on the corpus regression
+> (`tests/integration/audio_analysis_validation.test.mjs`) it fired **0 drops** on
+> `clean_drop`. Root cause: `KALMAN_Q = 0.01` was large relative to the
+> envelope-smoothed band, so `S = (P+Q)+R` floored at ≈`Q` and a real-but-smoothed
+> sub-bass step (~0.21/hop) couldn't reach `NIS ≥ 6.63`; the **same-hop** `low ∧
+> flux` AND-gate also missed the 1–2-hop offset between the sub-slam and the flux
+> burst. **Shipped fix:** the product default is now `windowed` (the
+> corpus-validated edge — all 3 tests green), set explicitly in `config.yaml`. The
+> `kalman` edge stays available opt-in and was improved: `KALMAN_Q` is now the
+> config knob **`dropKalmanQ` (default 0.001)** so adaptive-R sets the NIS scale,
+> and the same-hop AND became a **`dropCoWindowMs` (default 60 ms) co-occurrence
+> window**. Both are validated in `audio_config.js` and live-tunable. Before
+> `kalman` could be promoted back to default it must beat `windowed` on the corpus
+> *and* hold the false-positive controls — not yet re-validated, so `windowed`
+> stays the default.
 
 **Not Kalman (documented here to avoid confusion):**
 - **Dom-dance** (`companion_server.js` `springStep`) is a **critically-damped

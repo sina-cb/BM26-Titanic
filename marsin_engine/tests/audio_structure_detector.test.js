@@ -194,10 +194,12 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
 
 test('kalman edge fires a drop on a simultaneous micLow+micFlux step-up', () => {
   const broadcasts = [];
-  // dropEdgeMode defaults to 'kalman'. No stems fed → !stemsFresh, so the
-  // drop gate passes (full-mix path not required). eventRefractoryMs default
-  // 2000 keeps the loud body from re-firing.
-  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000 }, broadcasts);
+  // dropEdgeMode 'kalman' is now OPT-IN (product default is 'windowed' — the
+  // shipped kalman tuning under-fires on the corpus, pending re-tune). This
+  // test exercises the kalman edge explicitly. No stems fed → !stemsFresh, so
+  // the drop gate passes (full-mix path not required). The default refractory
+  // keeps the loud body from re-firing.
+  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000, dropEdgeMode: 'kalman' }, broadcasts);
   let now = 1000;
   const tickMs = 12;
   // Quiet, steady baseline well past the 1 s warmup (so the filters' cold
@@ -222,7 +224,7 @@ test('kalman edge fires a drop on a simultaneous micLow+micFlux step-up', () => 
 
 test('kalman edge does NOT fire on a step-DOWN (breakdown entrance)', () => {
   const broadcasts = [];
-  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000 }, broadcasts);
+  const { pc, det } = makeDetector({ stemsTimeoutMs: 100000, dropEdgeMode: 'kalman' }, broadcasts);
   let now = 1000;
   const tickMs = 12;
   // Loud steady body past warmup …

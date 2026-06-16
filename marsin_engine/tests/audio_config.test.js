@@ -170,7 +170,7 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-      'dropNisThreshold', 'slowZoneRef',
+      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
@@ -191,6 +191,13 @@ test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects b
   assert.equal(kal.live.structureDetector.dropEdgeMode, 'kalman');
   const badNis = validateLivePatch({ structureDetector: { dropNisThreshold: 0.5 } });
   assert.equal(badNis.ok, false);
+  // kalman re-tune knobs (exposed 2026-06-16): dropKalmanQ ∈ (0,1], dropCoWindowMs ∈ [0,2000].
+  const tune = validateLivePatch({ structureDetector: { dropKalmanQ: 0.001, dropCoWindowMs: 60 } });
+  assert.equal(tune.ok, true, tune.error);
+  assert.equal(tune.live.structureDetector.dropKalmanQ, 0.001);
+  assert.equal(tune.live.structureDetector.dropCoWindowMs, 60);
+  assert.equal(validateLivePatch({ structureDetector: { dropKalmanQ: 0 } }).ok, false);
+  assert.equal(validateLivePatch({ structureDetector: { dropCoWindowMs: 5000 } }).ok, false);
 });
 
 test('validateLivePatch accepts a structureDetector patch (docs/30)', () => {

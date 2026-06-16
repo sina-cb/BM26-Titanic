@@ -75,12 +75,14 @@ audio:
     decayMs: 70
   # Structure detector — build/drop/sustain + slow-zone, published to CPC as
   # audioStructure / audioBuildScore / audioEnergyRatio / audioDropPulse /
-  # audioSlowZone, plus a sparse dropFired WS event. Enabled here so the
-  # adopted Kalman+NIS drop detector runs on boot (dropEdgeMode defaults to
-  # 'kalman'). Tune live via PATCH /audio/config (dropNisThreshold lower =
-  # more sensitive; slowZoneRef = activity level read as "slow").
+  # audioSlowZone, plus a sparse dropFired WS event. Enabled here so it runs on
+  # boot. dropEdgeMode 'windowed' is the corpus-validated product default; 'kalman'
+  # is opt-in and currently under-fires (pending re-tune via dropKalmanQ /
+  # dropCoWindowMs) — see docs/37 §12.2. Tune live via PATCH /audio/config
+  # (dropNisThreshold lower = more sensitive; slowZoneRef = activity read as "slow").
   structureDetector:
     enabled: true
+    dropEdgeMode: windowed
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★

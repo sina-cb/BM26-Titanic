@@ -50,20 +50,24 @@ const DETECTOR_DEFAULTS = Object.freeze({
   //                dropDeltaWindowMs ago > dropEnergyJump. Plateaus stop
   //                qualifying once the lagged value catches up, killing
   //                in-body re-fires AND the slow-build false edge.
-  //   'kalman'   — DEFAULT. A Kalman+NIS change detector on micLow ∧ micFlux:
-  //                each signal is tracked by a local-level Kalman filter; a
-  //                drop fires when BOTH signals' Normalized Innovation Squared
-  //                (NIS) clear a χ² gate on the SAME hop and both are RISING.
-  //                Adopted from the offline corpus experiment (best F1 vs the
-  //                windowed/level edges: it self-normalises so it can't
-  //                saturate, and the AND-gate kills most false fires). See
-  //                report 202606/..._kalman_nis_drop_detector.md.
-  dropEdgeMode:      'kalman', // 'level' | 'windowed' | 'kalman'
+  //   'kalman'   — OPT-IN (NOT default). A Kalman+NIS change detector on
+  //                micLow ∧ micFlux: each signal is tracked by a local-level
+  //                Kalman filter; a drop fires when BOTH signals' Normalized
+  //                Innovation Squared (NIS) clear a χ² gate within a short
+  //                co-occurrence window and micLow is RISING. The shipped
+  //                tuning UNDER-FIRES on the labeled corpus (KALMAN_Q floored
+  //                the NIS scale; report 202606/..._kalman_nis_drop_detector.md
+  //                + the 2026-06-16 review). dropKalmanQ + dropCoWindowMs are
+  //                exposed for the pending re-tune; until that lands + passes
+  //                the corpus regression, the product default stays 'windowed'.
+  dropEdgeMode:      'windowed', // 'level' | 'windowed' | 'kalman'(opt-in, see above)
   dropNisThreshold:  6.63,   // χ²₁ 99% gate for the kalman edge (lower → more sensitive)
+  dropKalmanQ:       0.001,  // kalman-edge process noise (was a hardcoded 0.01 that floored NIS)
+  dropCoWindowMs:    60,     // kalman-edge: low & flux NIS may clear within this window (not same-hop)
   slowZoneRef:       0.5,    // activity (max micLow/micFlux) at/below which → slow zone
   dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
-  eventRefractoryMs: 2000,   // suppress repeat dropFired within this window
+  eventRefractoryMs: 3500,   // suppress repeat dropFired within this window
   falseFireCount:    3,      // N drops …
   falseFireWindowMs: 30000,  // … within M ms …
   falseFireQuietMs:  60000,  // … → suppress dropFired for this long
@@ -181,6 +185,12 @@ export class AudioStructureDetector {
     // noise (online analog of the experiment's MAD-derived R).
     this._kfLow  = { x: 0, P: 1, prevZ: 0, rEma: KALMAN_R_FLOOR, started: false };
     this._kfFlux = { x: 0, P: 1, prevZ: 0, rEma: KALMAN_R_FLOOR, started: false };
+    // Kalman-edge co-occurrence stamps: the last hop each signal's NIS cleared
+    // the gate. A drop fires when both are within `dropCoWindowMs` (low must be
+    // rising) — looser than the old same-hop AND, which halved recall because
+    // the sub-slam and the flux burst land a hop or two apart.
+    this._lowHotAtMs  = -Infinity;
+    this._fluxHotAtMs = -Infinity;
     this._enabledAtMs = -Infinity;   // warmup anchor (set on the enable edge)
 
     // Trend trackers (review §2.3 — explicit timestamp state for the
@@ -311,18 +321,21 @@ export class AudioStructureDetector {
     //   AND both innovations are RISING (a drop slams energy UP — a breakdown
     //   ENTRANCE steps down and must not qualify). Self-normalising, so unlike
     //   buildScore it can't saturate; the AND-gate kills most false fires.
-    const kLow  = this._kalmanNis(this._kfLow,  micLow,     dt);
-    const kFlux = this._kalmanNis(this._kfFlux, micFluxRaw, dt);
+    const kLow  = this._kalmanNis(this._kfLow,  micLow,     dt, cfg.dropKalmanQ);
+    const kFlux = this._kalmanNis(this._kfFlux, micFluxRaw, dt, cfg.dropKalmanQ);
     const warmupOk = (now - this._enabledAtMs) >= DROP_WARMUP_MS;
     //   A drop = sub-bass slams UP (micLow innovation positive) AND a spectral
     //   change is happening (micFlux NIS clears the gate — flux is already a
     //   rectified rising-flux measure, so its sign carries no extra info; the
     //   micLow RISING test is what rejects a breakdown ENTRANCE, where the sub
-    //   steps DOWN). Requiring both innovations positive on the SAME hop was
-    //   too strict (sub + flux peak a hop or two apart) and halved recall.
-    const kalmanDropEdge = warmupOk
-      && kLow.nis  >= cfg.dropNisThreshold && kLow.y > 0
-      && kFlux.nis >= cfg.dropNisThreshold;
+    //   steps DOWN). Requiring both NIS on the SAME hop was too strict (sub +
+    //   flux peak a hop or two apart) and halved recall — so we stamp the last
+    //   hop each cleared its gate and fire when both are within dropCoWindowMs.
+    if (kLow.nis  >= cfg.dropNisThreshold && kLow.y > 0) this._lowHotAtMs  = now;
+    if (kFlux.nis >= cfg.dropNisThreshold)               this._fluxHotAtMs = now;
+    const lowHot  = (now - this._lowHotAtMs)  <= cfg.dropCoWindowMs;
+    const fluxHot = (now - this._fluxHotAtMs) <= cfg.dropCoWindowMs;
+    const kalmanDropEdge = warmupOk && lowHot && fluxHot;
     const kalmanConf = clamp01(Math.min(kLow.nis, kFlux.nis) / (2 * cfg.dropNisThreshold));
 
     //   Slow-zone: how much we're in a sparse / breakdown / ambient section.
@@ -512,7 +525,7 @@ export class AudioStructureDetector {
    * level + white noise) — the live analog of the experiment's MAD-derived R —
    * floored so a flat input can't drive NIS to infinity.
    */
-  _kalmanNis(kf, z, dt) {
+  _kalmanNis(kf, z, dt, Q = KALMAN_Q) {
     if (!kf.started) { kf.x = z; kf.prevZ = z; kf.started = true; return { nis: 0, y: 0 }; }
     const dz = z - kf.prevZ; kf.prevZ = z;
     // Robust adaptive R: a drop is a huge first-difference outlier; if we let
@@ -527,7 +540,7 @@ export class AudioStructureDetector {
     const dzClip = Math.max(-3 * sigma, Math.min(3 * sigma, dz));
     kf.rEma = (1 - KALMAN_R_ALPHA) * kf.rEma + KALMAN_R_ALPHA * (dzClip * dzClip);
     const R = Math.max(0.5 * kf.rEma, KALMAN_R_FLOOR);
-    const Pp = kf.P + KALMAN_Q;          // predict (F = 1)
+    const Pp = kf.P + Q;                 // predict (F = 1)
     const y = z - kf.x;                  // innovation
     const S = Pp + R;
     const K = Pp / S;
