@@ -3400,6 +3400,17 @@ function setupGUI() {
       (window.ledStrandFixtures || []).forEach(f => f.setVisibility(v));
     });
 
+    // LED Guides toggle — hides the strand guide lines + drag handles (and any
+    // non-light vis points), leaving only the lights themselves.
+    if (params.showLedGuides === undefined) params.showLedGuides = true;
+    strandFolder.add(params, 'showLedGuides').name('Enable LED Guides').listen().onChange(v => {
+      (window.ledStrandFixtures || []).forEach(f => f.setGuidesVisible(v));
+    });
+    window.setLedGuidesVisible = (v) => {
+      params.showLedGuides = v;
+      (window.ledStrandFixtures || []).forEach(f => f.setGuidesVisible(v));
+    };
+
     window.ledStrandFixtures = [];
 
     function rebuildLedStrands() {
@@ -3410,6 +3421,7 @@ function setupGUI() {
       params.ledStrands.forEach((config, index) => {
         const fixture = new LedStrand(config, index, scene, interactiveObjects);
         fixture.setVisibility(params.strandsEnabled !== false);
+        fixture.setGuidesVisible(params.showLedGuides !== false);
         window.ledStrandFixtures.push(fixture);
       });
     }
