@@ -129,6 +129,7 @@ function diagReport() {
     analyzerHopMs: { median: +aq(0.5).toFixed(2), p95: +aq(0.95).toFixed(2), jitterStd: +aStd.toFixed(2) },
     analyzerGapsOver2x: ad.filter((x) => x > expected * 2).length,
     micLowStepP95: +stepP95.toFixed(4),
+    jitter: (typeof capture !== 'undefined' && capture && capture.jitterStats) ? capture.jitterStats() : null,
     effectiveFps: +(diag.frames / elapsed).toFixed(1),
     realtimeRatio: +((diag.samples / SR) / elapsed).toFixed(3),   // ~1.0 = realtime; <1 = falling behind
   };
@@ -363,6 +364,8 @@ function startCapture(device) {
     capture = new AudioCapture({
       backend: 'ffmpeg', ffmpegPath, platform: 'auto', device: device || null,
       sampleRate: SR, channels: 1, frameSamples: HOP, loop: true,
+      captureBufferMs: 50,       // low-latency dshow/pulse bound (docs/37 §13)
+      jitterBufferHops: 4,       // steady-clock smoothing of the residual jitter
       onFrame: (i16) => pushFrame(i16),
       onStatus: (st) => broadcast({ type: 'sourceStatus', mode, status: st }),
     });

@@ -1491,6 +1491,7 @@ async function main() {
         loop:         cfg.capture.loop,
         frameSamples: cfg.hopSize,
         captureBufferMs:      cfg.capture.captureBufferMs,
+        jitterBufferHops:     cfg.capture.jitterBufferHops,
         stopTimeoutMs:        cfg.capture.stopTimeoutMs,
         stderrWarnIntervalMs: cfg.capture.stderrWarnIntervalMs,
         onFrame:  (i16) => audioState.analyzer.pushSamples(i16),

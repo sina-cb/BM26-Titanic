@@ -32,6 +32,10 @@
 
 import { spawn } from 'node:child_process';
 
+import { JitterBuffer } from './jitter_buffer.js';
+
+const _now = () => ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
+
 const RESTART_BACKOFF_INITIAL_MS = 1000;
 const RESTART_BACKOFF_CAP_MS = 30_000;
 const STDERR_WARN_INTERVAL_MS = 60_000;
@@ -253,6 +257,19 @@ export class AudioCapture {
     // Low-latency capture buffer (ms) — bounds the device-layer batch size so
     // the analyzer is fed at a fine cadence (docs/37 §13). 50 ms default.
     this.captureBufferMs          = opts.captureBufferMs         ?? 50;
+    // Jitter buffer (docs/37 §13): when > 0, hop frames are buffered and
+    // released on a steady drift-corrected clock instead of synchronously as
+    // ffmpeg bursts them in — smoothing the residual jitter the dshow tune
+    // leaves. 0 = off (synchronous passthrough; keeps unit-test behaviour).
+    this._jitterBufferHops        = opts.jitterBufferHops        ?? 0;
+    this._jb = this._jitterBufferHops > 0
+      ? new JitterBuffer({
+          hopSamples: this.frameSamples, sampleRate: this.sampleRate,
+          prefillHops: this._jitterBufferHops,
+          maxHops: Math.max(this._jitterBufferHops * 2, this._jitterBufferHops + 4),
+        })
+      : null;
+    this._jbTimer = null;
 
     // A `file:` source is platform-neutral — keep it verbatim and skip the
     // mic-resolution logic entirely. For live capture, resolveDevice throws
@@ -320,6 +337,11 @@ export class AudioCapture {
       clearInterval(this._fpsTimer);
       this._fpsTimer = null;
     }
+    if (this._jbTimer) {
+      clearInterval(this._jbTimer);
+      this._jbTimer = null;
+    }
+    if (this._jb) this._jb.reset();
     const child = this._child;
     if (!child) {
       this._emitStatus({ phase: 'stopped' });
@@ -436,9 +458,38 @@ export class AudioCapture {
       }
       this._framesSinceLastTick++;
       this._lastFrameAtMs = Date.now();
-      try { this._onFrame(i16); }
-      catch (e) { console.warn(`[AudioCapture] onFrame threw: ${e && e.message}`); }
+      if (this._jb) {
+        // Copy: the view aliases a shared/reused read buffer and the jitter
+        // buffer holds it across timer ticks. slice() detaches it.
+        this._jb.push(i16.slice());
+        this._ensureJbTimer();
+      } else {
+        try { this._onFrame(i16); }
+        catch (e) { console.warn(`[AudioCapture] onFrame threw: ${e && e.message}`); }
+      }
     }
+  }
+
+  // Steady drain clock: release whatever hops are due at the nominal hop
+  // cadence. Driven faster than the hop rate; the buffer's accumulator picks
+  // the right count and corrects drift against the wall clock.
+  _ensureJbTimer() {
+    if (this._jbTimer || !this._jb) return;
+    const tickMs = Math.max(2, Math.round((this.frameSamples / this.sampleRate) * 1000 / 2));
+    this._jbTimer = setInterval(() => {
+      const hops = this._jb.pull(_now());
+      for (const hop of hops) {
+        try { this._onFrame(hop); }
+        catch (e) { console.warn(`[AudioCapture] onFrame threw: ${e && e.message}`); }
+      }
+    }, tickMs);
+    if (this._jbTimer.unref) this._jbTimer.unref();
+  }
+
+  /** Jitter-buffer telemetry (null when disabled) — surfaced in the §13 diag. */
+  jitterStats() {
+    if (!this._jb) return null;
+    return { depthHops: this._jb.depthHops, underruns: this._jb.underruns, dropped: this._jb.dropped, prefillHops: this._jitterBufferHops };
   }
 
   _onStderr(buf) {

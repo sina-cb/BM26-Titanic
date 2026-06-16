@@ -522,9 +522,13 @@ ffmpeg --(bursts)--▶ sample ring FIFO --(steady hop clock)--▶ analyzer.pushS
   > **Measured (HIL, 2026-06-16, Windows + Amazon USB mic, pre-fix):** dshow
   > delivered audio in **~480 ms super-chunks** (max inter-arrival 496 ms,
   > analyzerHopMs jitterStd 71 ms, ~2 UI updates/s) vs a file source's ~40 ms.
-  > This is exactly **ZRanger's warning**: DirectShow is the slow Windows path
-  > (his order: ASIO > WASAPI low-latency > WASAPI > DirectSound/dshow). The
-  > `-audio_buffer_size` fix attacks it directly; re-run the HIL test to confirm.
+  > This is exactly the Windows audio-capture guidance from **ZRanger
+  > (<https://github.com/zranger1>)** — DirectShow is the slow Windows path
+  > (his order: ASIO > WASAPI low-latency > WASAPI > DirectSound/dshow), and
+  > laptop-mic DSP/AGC should be disabled in favour of an external interface. The
+  > `-audio_buffer_size` fix attacks the batching directly; the HIL re-run
+  > confirmed it (max inter-arrival 496 ms → 49 ms, jitter 71 → 20, ~10× the
+  > frame yield).
   > **If dshow still batches** (some drivers ignore the buffer hint), ffmpeg has
   > **no native WASAPI/ASIO input**, so the real cure is a non-ffmpeg capture
   > backend (PortAudio / `naudiodon`, which exposes WASAPI low-latency + ASIO host

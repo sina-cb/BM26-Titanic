@@ -14,7 +14,7 @@ vis:
 server:
   port: 6968
 playlist:
-  active: true
+  active: false
   delay_s: '15'
   shuffle: true
 web_client:
@@ -40,12 +40,9 @@ audio:
     sampleRate: 44100
     channels: 1
     inputFormat: null
-    loop: true            # only applies to file: sources — loop the clip forever
-    # Low-latency capture buffer (ms). Bounds how big a batch the device layer
-    # hands ffmpeg — the Windows dshow default batches into ~½-second super-chunks
-    # (measured), which is the "discretized packets" symptom. 50 ms is a good
-    # default; lower (20-30) if the device/driver allows. See docs/37 §13.
+    loop: true
     captureBufferMs: 50
+    jitterBufferHops: 4
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
   fftSize: 1024
@@ -53,38 +50,17 @@ audio:
   bands:
     lowMaxHz: 200
     midMaxHz: 4000
-    # 6 ms (was 8): snappier band edge for EDM reactivity (corpus-tuned).
     attackMs: 6
     releaseMs: 180
     noiseGate: 0.04
-    # Software input gain (mic-preamp), applied to all band energies + the
-    # kick BEFORE the noise gate. 1.0 = unity. Raise it for a quiet mic so
-    # low/mid/high/kick lift above the gate; tunable live from the iPad AUDIO
-    # strip (INPUT GAIN). Range [0, 64].
-    inputGain: 1.0
-    # Source-stage smoothing: gentle one-pole low-pass on the PCM BEFORE the
-    # FFT (denoise). Cutoff in Hz; 0 = off (default — engine behaviour
-    # unchanged). The Companion sets a small value to clean the mic input.
+    inputGain: 1
     sourceSmoothHz: 0
   kick:
     minHz: 50
     maxHz: 110
-    # EDM corpus-tuned for a CLEAN PULSE (was 1.8 / 140):
-    #   threshold 2.4 — rejects sustained-bassline false-fires (transient kicks only).
-    #   refractoryMs 220 — kills sub-beat double/jitter fires (57%→0%); < one beat
-    #   even at 270 BPM, so real consecutive kicks survive. See report 202606 tuning.
     threshold: 2.4
     refractoryMs: 220
-    # 70 ms (was 120): a crisp kick PULSE that doesn't linger high. The
-    # micKick chain (schmitt + short hold) shapes the final pulse on top.
     decayMs: 70
-  # Structure detector — build/drop/sustain + slow-zone, published to CPC as
-  # audioStructure / audioBuildScore / audioEnergyRatio / audioDropPulse /
-  # audioSlowZone, plus a sparse dropFired WS event. Enabled here so it runs on
-  # boot. dropEdgeMode 'windowed' is the corpus-validated product default; 'kalman'
-  # is opt-in and currently under-fires (pending re-tune via dropKalmanQ /
-  # dropCoWindowMs) — see docs/37 §12.2. Tune live via PATCH /audio/config
-  # (dropNisThreshold lower = more sensitive; slowZoneRef = activity read as "slow").
   structureDetector:
     enabled: true
     dropEdgeMode: windowed
