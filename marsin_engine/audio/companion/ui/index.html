@@ -20,6 +20,11 @@
     </div>
   </header>
 
+  <div class="subbar">
+    <span class="subbar-label">SOURCE</span>
+    <div id="sourcebar" class="sourcebar"></div>
+  </div>
+
   <main class="layout">
     <aside class="sidebar">
       <div class="panel-label">SIGNALS</div>
@@ -27,6 +32,23 @@
     </aside>
 
     <section class="stage">
+      <div class="live-readouts">
+        <div class="lr-card dom">
+          <div class="lr-title">DOMINANT FREQ</div>
+          <div class="dom-row"><span class="dom-lab" style="color:#f0a23b">dom1</span><span class="dom-f" id="dom1-f">0 Hz</span><span class="dom-meter"><i id="dom1-bar" style="background:#f0a23b"></i></span><span class="dom-e" id="dom1-e">0.00</span></div>
+          <div class="dom-row"><span class="dom-lab" style="color:#c084fc">dom2</span><span class="dom-f" id="dom2-f">0 Hz</span><span class="dom-meter"><i id="dom2-bar" style="background:#c084fc"></i></span><span class="dom-e" id="dom2-e">0.00</span></div>
+        </div>
+        <div class="lr-card struct">
+          <div class="lr-title">STRUCTURE <span id="drop-flash" class="drop-flash">● DROP</span></div>
+          <div class="struct-row"><span id="state-pill" class="state-pill s-thin">THIN</span>
+            <div class="sbars">
+              <div class="sbar"><span>build</span><i id="build-bar"></i></div>
+              <div class="sbar"><span>energy</span><i id="energy-bar"></i></div>
+              <div class="sbar"><span>slow</span><i id="slow-bar" style="background:#7CFC00"></i></div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="trace-panel">
         <canvas id="trace" width="1100" height="260"></canvas>
         <div class="readouts">

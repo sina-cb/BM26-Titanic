@@ -25,7 +25,13 @@ const S = {
   head: 0,
   live: {},           // signal -> {raw, post}
   connected: false,
+  mode: 'test',       // 'test' | 'mic' | 'file'
+  filePath: '',
+  dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
+  struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
+  dropFlash: 0,
 };
+const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
 
 // ── WS ─────────────────────────────────────────────────────────────────────
@@ -39,8 +45,9 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.type === 'hello') {
       S.signals = m.signals; S.ops = m.ops; S.chains = m.chains; S.source = m.source; S.gains = m.gains;
+      if (m.mode) S.mode = m.mode;
       for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
-      buildSidebar(); buildSource(); renderChain();
+      buildSidebar(); buildSource(); renderChain(); buildSourceBar();
     } else if (m.type === 'frame') {
       for (const s of S.signals) {
         const v = m.signals[s]; if (!v) continue;
@@ -49,6 +56,16 @@ function connect() {
         tr.raw[S.head] = clamp01(v.raw); tr.post[S.head] = clamp01(v.post);
       }
       S.head = (S.head + 1) % TRAIL;
+      if (m.dom) S.dom = m.dom;
+      if (m.struct) S.struct = m.struct;
+    } else if (m.type === 'dropFired') {
+      S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
+    } else if (m.type === 'sourceStatus') {
+      S.mode = m.mode; buildSourceBar();
+      if (m.status && m.status.error) flash('source: ' + m.status.error, true);
+    } else if (m.type === 'devices') {
+      // (device picker uses this; ignored if absent)
+      S.devices = m.devices || [];
     } else if (m.type === 'chainResult') {
       if (m.ok) { S.chains[m.signal] = m.chain; if (m.signal === S.selected) renderChain(); flash('saved'); }
       else { flash('invalid: ' + m.error, true); }
@@ -181,6 +198,55 @@ function addOp(sig, type) {
 function removeOp(i) { S.chains[S.selected].splice(i, 1); renderChain(); pushChain(S.selected); }
 function moveOp(i, d) { const c = S.chains[S.selected]; const j = i + d; if (j < 0 || j >= c.length) return; [c[i], c[j]] = [c[j], c[i]]; renderChain(); pushChain(S.selected); }
 
+// ── source selector (Test / Mic / File) ─────────────────────────────────────
+function buildSourceBar() {
+  const box = $('sourcebar'); if (!box) return; box.innerHTML = '';
+  const seg = el('div', 'seg');
+  for (const [m, label] of [['test', 'Test'], ['mic', 'Mic / Line'], ['file', 'File']]) {
+    const b = el('button', 'seg-btn' + (S.mode === m ? ' active' : ''), label);
+    b.onclick = () => {
+      if (m === 'file') {
+        S.mode = 'file'; buildSourceBar();           // reveal the file input first
+        const inp = $('file-path'); const f = inp ? inp.value.trim() : '';
+        if (f) send({ type: 'setMode', mode: 'file', file: f });
+        else flash('enter a file path, then Load');
+        return;
+      }
+      send({ type: 'setMode', mode: m }); S.mode = m; buildSourceBar();
+    };
+    seg.appendChild(b);
+  }
+  box.appendChild(seg);
+  const fwrap = el('span', 'file-wrap' + (S.mode === 'file' ? ' show' : ''));
+  const inp = el('input', 'file-input'); inp.id = 'file-path'; inp.placeholder = '/path/to/track.mp3'; inp.value = S.filePath || '';
+  inp.oninput = () => { S.filePath = inp.value; };
+  const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) send({ type: 'setMode', mode: 'file', file: f }); };
+  fwrap.appendChild(inp); fwrap.appendChild(go); box.appendChild(fwrap);
+  const tag = el('span', 'src-tag', S.mode === 'test' ? 'synthetic source' : S.mode === 'mic' ? 'live input' : 'file replay');
+  box.appendChild(tag);
+}
+
+// ── live readouts: dom-freq + structure ─────────────────────────────────────
+function renderLive() {
+  const d = S.dom, st = S.struct;
+  $('dom1-f').textContent = (d.f1 || 0).toFixed(0) + ' Hz';
+  $('dom2-f').textContent = (d.f2 || 0).toFixed(0) + ' Hz';
+  $('dom1-bar').style.width = (clamp01(d.e1) * 100).toFixed(0) + '%';
+  $('dom2-bar').style.width = (clamp01(d.e2) * 100).toFixed(0) + '%';
+  $('dom1-e').textContent = clamp01(d.e1).toFixed(2);
+  $('dom2-e').textContent = clamp01(d.e2).toFixed(2);
+  const SN = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
+  const sName = SN[Math.round(st.state)] || 'THIN';
+  const pill = $('state-pill'); pill.textContent = sName; pill.className = 'state-pill s-' + sName.toLowerCase();
+  $('build-bar').style.width = (clamp01(st.build) * 100).toFixed(0) + '%';
+  $('energy-bar').style.width = (clamp01(st.energy) * 100).toFixed(0) + '%';
+  $('slow-bar').style.width = (clamp01(st.slow) * 100).toFixed(0) + '%';
+  // drop pulse / fired flash
+  S.dropFlash *= 0.9; if (S.dropFlash < 0.02) S.dropFlash = 0;
+  const glow = Math.max(clamp01(st.pulse), S.dropFlash);
+  $('drop-flash').style.opacity = glow.toFixed(2);
+}
+
 // ── export modal ────────────────────────────────────────────────────────────
 function showExport(text) {
   $('export-text').value = text;
@@ -192,18 +258,20 @@ $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
-  // main trace
+  // main trace (S.trace is empty until the first `hello` populates it).
   const sig = S.selected;
-  drawTrace($('trace').getContext('2d'), S.trace[sig], accent(sig), 2);
+  const tr = S.trace[sig];
+  if (tr) drawTrace($('trace').getContext('2d'), tr, accent(sig), 2);
   const lv = S.live[sig] || { raw: 0, post: 0 };
   $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
   $('big-post').textContent = clamp01(lv.post).toFixed(2);
   $('big-post').style.color = accent(sig);
   // sidebar minis + values
   for (const s of S.signals) {
-    const c = document.getElementById('mini-' + s); if (c) drawMini(c.getContext('2d'), S.trace[s], accent(s));
+    const c = document.getElementById('mini-' + s); if (c && S.trace[s]) drawMini(c.getContext('2d'), S.trace[s], accent(s));
     const v = document.getElementById('sv-' + s); if (v) v.textContent = clamp01((S.live[s] || {}).post || 0).toFixed(2);
   }
+  renderLive();
   requestAnimationFrame(draw);
 }
 function trLine(ctx, buf, W, H, lw, alpha) {
