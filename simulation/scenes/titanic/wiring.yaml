@@ -1,0 +1,73 @@
+# Titanic wiring — demo harness for the 3D overlay (?wiring=1).
+# Coordinates sit on the right-front structure (near real fixtures) so the
+# two wires are visibly placed on the ship. See docs/36_wiring_tracer.md.
+wiring:
+  version: 2
+
+  scale:
+    unit: ft
+    references:
+      - id: right_deck_edge
+        role: primary
+        # Right Front Deck generator edge, ~30 ft in reality.
+        points:
+          - { x: 22.0209, y: 12.2551, z: -1.2891 }
+          - { x: 31.8841, y: 4.9593, z: -9.0182 }
+        actualDistance: 30
+
+  defaults:
+    cableGap: 0.04
+    slack: 0.15
+
+  cableTypes:
+    ground_wire:
+      family: power
+      connector: ring_lug
+      stockLengths: [10, 25, 50, 100]
+      color: '#000000'        # black
+      radius: 0.03
+      weatherproof: false
+    estop_wire:
+      family: power
+      connector: e_stop
+      stockLengths: [25, 50, 100]
+      color: '#ffd400'        # yellow
+      radius: 0.03
+      weatherproof: true
+
+  components:
+    - id: panel
+      name: Safety Panel
+      type: adapter
+      placement: { x: 22.0, y: 12.3, z: -1.3, surface: outside }
+      ports:
+        - { id: gnd,   accepts: [ground_wire] }
+        - { id: estop, accepts: [estop_wire] }
+
+  anchors:
+    - id: chassis
+      placement: { x: 22.63, y: 9.98, z: 1.40, surface: inside }
+    - id: estop_btn
+      placement: { x: 23.25, y: 8.13, z: -8.89, surface: outside }
+
+  routes:
+    - id: ground_test
+      name: ground test
+      endpoints:
+        - { component: panel, port: gnd }
+        - { anchor: chassis }
+      cables:
+        - { type: ground_wire }
+      waypoints:
+        - { x: 22.3, y: 11.1, z: 0.0, side: outside, off: 0.05 }
+
+    - id: estop
+      name: e-stop
+      endpoints:
+        - { component: panel, port: estop }
+        - { anchor: estop_btn }
+      cables:
+        - { type: estop_wire }
+      waypoints:
+        - { x: 22.6, y: 10.6, z: -4.0, side: outside, off: 0.05 }
+        - { x: 23.0, y: 9.1,  z: -6.6, side: outside, off: 0.05 }
