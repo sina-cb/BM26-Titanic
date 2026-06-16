@@ -24,6 +24,7 @@
  */
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,6 +46,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
 const SR = 44100, FFT = 1024, HOP = 512;
+
+// Server-side file browser for the File source. Defaults to the datasets dir:
+// `--datasets <dir>` / $COMPANION_DATASETS, else the corpus build dir, else $HOME.
+const AUDIO_EXT = new Set(['.wav', '.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.aiff', '.aif', '.wma']);
+function resolveDatasetsDir() {
+  const flagI = process.argv.indexOf('--datasets');
+  const flag = flagI > 0 ? process.argv[flagI + 1] : null;
+  const candidates = [flag, process.env.COMPANION_DATASETS, path.join(os.homedir(), 'tmp', 'corpus', 'built'), os.homedir()];
+  for (const c of candidates) {
+    if (!c) continue;
+    try { if (fs.statSync(c).isDirectory()) return c; } catch { /* skip */ }
+  }
+  return os.homedir();
+}
+const DATASETS_DIR = resolveDatasetsDir();
 const MIC_SIGNALS = ['micLow', 'micMid', 'micHigh', 'micKick', 'micFlux'];
 const RAW_OF = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
 
@@ -198,6 +214,23 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot() }));
     return;
   }
+  if (p === '/browse') {  // server-side directory listing (folders + audio files)
+    const dir = new URL(req.url, 'http://x').searchParams.get('dir') || DATASETS_DIR;
+    fs.readdir(dir, { withFileTypes: true }, (err, ents) => {
+      res.writeHead(err ? 400 : 200, { 'content-type': 'application/json' });
+      if (err) { res.end(JSON.stringify({ error: String(err.message), dir })); return; }
+      const entries = [];
+      for (const e of ents) {
+        const isDir = e.isDirectory();
+        if (!isDir && !AUDIO_EXT.has(path.extname(e.name).toLowerCase())) continue;
+        if (e.name.startsWith('.')) continue;
+        entries.push({ name: e.name, path: path.join(dir, e.name), isDir });
+      }
+      entries.sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name)));
+      res.end(JSON.stringify({ dir, parent: path.dirname(dir), entries }));
+    });
+    return;
+  }
   const file = path.join(UI_DIR, path.normalize(p).replace(/^([/\\])+/, ''));
   if (!file.startsWith(UI_DIR)) { res.writeHead(403); res.end(); return; }
   fs.readFile(file, (err, data) => {
@@ -210,7 +243,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   clients.add(ws);
-  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), mode }));
+  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), mode, datasetsDir: DATASETS_DIR }));
   ws.on('message', (d) => handleMessage(ws, d.toString()));
   ws.on('close', () => clients.delete(ws));
 });

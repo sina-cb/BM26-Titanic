@@ -27,6 +27,10 @@ const S = {
   connected: false,
   mode: 'test',       // 'test' | 'mic' | 'file'
   filePath: '',
+  datasetsDir: '',    // server default browse dir
+  browseDir: '',      // current browser dir
+  devices: [],        // [{ id, label, ffmpegDevice, inputFormat }]
+  device: '',         // selected ffmpegDevice ('' = platform default)
   dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
   struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
   dropFlash: 0,
@@ -46,6 +50,7 @@ function connect() {
     if (m.type === 'hello') {
       S.signals = m.signals; S.ops = m.ops; S.chains = m.chains; S.source = m.source; S.gains = m.gains;
       if (m.mode) S.mode = m.mode;
+      if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
       buildSidebar(); buildSource(); renderChain(); buildSourceBar();
     } else if (m.type === 'frame') {
@@ -64,8 +69,9 @@ function connect() {
       S.mode = m.mode; buildSourceBar();
       if (m.status && m.status.error) flash('source: ' + m.status.error, true);
     } else if (m.type === 'devices') {
-      // (device picker uses this; ignored if absent)
       S.devices = m.devices || [];
+      if (m.error) flash('devices: ' + m.error, true);
+      buildSourceBar();
     } else if (m.type === 'chainResult') {
       if (m.ok) { S.chains[m.signal] = m.chain; if (m.signal === S.selected) renderChain(); flash('saved'); }
       else { flash('invalid: ' + m.error, true); }
@@ -206,10 +212,14 @@ function buildSourceBar() {
     const b = el('button', 'seg-btn' + (S.mode === m ? ' active' : ''), label);
     b.onclick = () => {
       if (m === 'file') {
-        S.mode = 'file'; buildSourceBar();           // reveal the file input first
-        const inp = $('file-path'); const f = inp ? inp.value.trim() : '';
-        if (f) send({ type: 'setMode', mode: 'file', file: f });
-        else flash('enter a file path, then Load');
+        S.mode = 'file'; buildSourceBar();           // reveal inline input
+        openBrowse(S.browseDir || S.datasetsDir);    // and open the file browser
+        return;
+      }
+      if (m === 'mic') {
+        S.mode = 'mic'; buildSourceBar();            // reveal the device picker
+        send({ type: 'listDevices' });               // populate it (like CaptainPad)
+        send({ type: 'setMode', mode: 'mic', device: S.device || null });
         return;
       }
       send({ type: 'setMode', mode: m }); S.mode = m; buildSourceBar();
@@ -217,14 +227,60 @@ function buildSourceBar() {
     seg.appendChild(b);
   }
   box.appendChild(seg);
+
+  // File input (shown in file mode).
   const fwrap = el('span', 'file-wrap' + (S.mode === 'file' ? ' show' : ''));
   const inp = el('input', 'file-input'); inp.id = 'file-path'; inp.placeholder = '/path/to/track.mp3'; inp.value = S.filePath || '';
   inp.oninput = () => { S.filePath = inp.value; };
   const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) send({ type: 'setMode', mode: 'file', file: f }); };
   fwrap.appendChild(inp); fwrap.appendChild(go); box.appendChild(fwrap);
-  const tag = el('span', 'src-tag', S.mode === 'test' ? 'synthetic source' : S.mode === 'mic' ? 'live input' : 'file replay');
+
+  // Device picker (shown in mic mode) — CaptainPad-style: list inputs, pick one.
+  const mwrap = el('span', 'mic-wrap' + (S.mode === 'mic' ? ' show' : ''));
+  const sel = el('select', 'device-select'); sel.id = 'device-select';
+  const def = el('option', null, 'Default input'); def.value = ''; if (!S.device) def.selected = true; sel.appendChild(def);
+  for (const d of (S.devices || [])) {
+    const o = el('option', null, d.label || d.id); o.value = d.ffmpegDevice || '';
+    if (d.ffmpegDevice && d.ffmpegDevice === S.device) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => { S.device = sel.value; send({ type: 'setMode', mode: 'mic', device: sel.value || null }); flash('input: ' + (sel.selectedOptions[0]?.textContent || 'default')); };
+  const refresh = el('button', 'file-go', '⟳'); refresh.title = 'refresh device list'; refresh.onclick = () => send({ type: 'listDevices' });
+  mwrap.appendChild(sel); mwrap.appendChild(refresh);
+  box.appendChild(mwrap);
+
+  const tag = el('span', 'src-tag', S.mode === 'test' ? 'synthetic source' : S.mode === 'mic' ? `live input · ${S.devices.length} device${S.devices.length === 1 ? '' : 's'}` : 'file replay');
   box.appendChild(tag);
 }
+
+// ── server-side file browser (defaults to the datasets dir) ─────────────────
+function openBrowse(dir) {
+  $('browse-modal').style.display = 'flex';
+  fetch('/browse?dir=' + encodeURIComponent(dir || ''))
+    .then(r => r.json())
+    .then((d) => {
+      if (d.error) { flash('browse: ' + d.error, true); return; }
+      S.browseDir = d.dir;
+      $('browse-path').textContent = d.dir;
+      $('browse-up').onclick = () => openBrowse(d.parent);
+      const list = $('browse-list'); list.innerHTML = '';
+      if (!d.entries.length) list.appendChild(el('div', 'browse-empty', 'no folders or audio files here'));
+      for (const e of d.entries) {
+        const row = el('button', 'browse-row ' + (e.isDir ? 'dir' : 'file'),
+          `<span class="bi">${e.isDir ? '📁' : '♪'}</span><span class="bn">${e.name}</span>`);
+        row.onclick = e.isDir ? () => openBrowse(e.path) : () => pickFile(e.path);
+        list.appendChild(row);
+      }
+    })
+    .catch(err => flash('browse failed: ' + err.message, true));
+}
+function pickFile(p) {
+  S.filePath = p; S.mode = 'file';
+  send({ type: 'setMode', mode: 'file', file: p });
+  $('browse-modal').style.display = 'none';
+  buildSourceBar(); flash('loaded ' + p.split(/[/\\]/).pop());
+}
+$('browse-close').onclick = () => $('browse-modal').style.display = 'none';
 
 // ── live readouts: dom-freq + structure ─────────────────────────────────────
 function renderLive() {

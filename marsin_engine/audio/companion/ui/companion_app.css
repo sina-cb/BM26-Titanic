@@ -27,6 +27,22 @@ body{background:var(--bg);color:var(--text);
 .file-go{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
   padding:5px 12px;font:inherit;cursor:pointer}
 .src-tag{color:var(--muted);font-size:10.5px}
+.mic-wrap{display:none;align-items:center;gap:6px}
+.mic-wrap.show{display:flex}
+.device-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:5px 8px;font:inherit;min-width:240px;max-width:380px}
+
+/* file browser modal */
+.browse-box{width:min(620px,92vw)}
+.browse-path{flex:1;color:var(--accent);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 10px}
+.browse-list{max-height:420px;overflow:auto;display:flex;flex-direction:column;gap:2px;margin-top:8px}
+.browse-row{display:flex;align-items:center;gap:9px;background:var(--panel2);border:1px solid transparent;
+  border-radius:6px;padding:8px 10px;color:var(--text);font:inherit;cursor:pointer;text-align:left;width:100%}
+.browse-row:hover{border-color:var(--border);background:var(--raised)}
+.browse-row.dir .bn{color:var(--text)}
+.browse-row.file .bn{color:var(--accent)}
+.browse-row .bi{width:18px;text-align:center;opacity:.85}
+.browse-empty{color:var(--muted);padding:14px;text-align:center}
 
 /* live readouts: dom-freq + structure */
 .live-readouts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
