@@ -33,6 +33,7 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand, setLedPixelScale } from "../fixtures/led_strand.js";
+import { buildWiringSection } from "./wiring_section.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
@@ -3597,6 +3598,9 @@ function setupGUI() {
     
     buildGUI(configTree, gui);
   }
+
+  // ─── Wiring section (components, routes, layers) ───
+  buildWiringSection(gui, scene);
 
   // Apply initial handlers so visual states immediately map on load
   if (window.applyAllHandlers) {

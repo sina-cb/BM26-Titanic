@@ -4,7 +4,7 @@
  * The wiring group's children are tagged (wiring_render.js) with
  * `userData.wiring = { kind, family?, route?, sub? }`. This module turns a
  * toggle-state object into per-object `.visible` flags, so the UI panel
- * (wiring_ui.js) and tests can drive the same source of truth.
+ * (wiring_section.js) and tests can drive the same source of truth.
  */
 
 export function buildDefaultLayerState(model) {
@@ -32,12 +32,14 @@ export function applyWiringVisibility(group, state) {
   }
 }
 
-/** Visible-object counts by kind — used by the integration test for assertions. */
+/** Visible-object counts by kind — used by the integration test for assertions.
+ *  Uses EFFECTIVE visibility (walks the parent chain) so a hidden group counts 0. */
 export function wiringVisibleSummary(group) {
+  const effective = (o) => { let n = o; while (n) { if (!n.visible) return false; n = n.parent; } return true; };
   const s = { cable: 0, halo: 0, marker: 0, label: 0 };
   for (const child of group.children) {
     const w = child.userData && child.userData.wiring;
-    if (w && child.visible) s[w.kind] = (s[w.kind] || 0) + 1;
+    if (w && effective(child)) s[w.kind] = (s[w.kind] || 0) + 1;
   }
   return s;
 }
