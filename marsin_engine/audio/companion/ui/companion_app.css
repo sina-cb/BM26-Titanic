@@ -115,6 +115,10 @@ body{background:var(--bg);color:var(--text);
 .sig-name{font-weight:700;color:var(--acc)}
 .sig-mini canvas{display:block}
 .sig-val{text-align:right;color:var(--muted)}
+.views-label{margin-top:14px}
+.view-row{--acc:#f0a23b;grid-template-columns:1fr}
+.view-row .sig-name{color:#cdd6e0}
+.view-row.active .sig-name{color:var(--accent)}
 
 .stage{display:flex;flex-direction:column;min-width:0;padding:14px;gap:14px;overflow:auto}
 .viz-row{display:flex;flex-direction:column;gap:10px}

@@ -19,7 +19,7 @@ const SIGNAL_META = {
   dom2:    { label: 'DOM2', accent: '#c084fc' },
 };
 const DOM_SIGNALS = ['dom1', 'dom2'];          // derived from the frame's dom{}
-const VIEWS = [{ id: 'spectrum', label: 'SPECTRUM' }, { id: 'wave', label: 'WAVEFORM' }];
+const VIEWS = [{ id: 'dance', label: '✦ DOM DANCE' }];   // dedicated dom-freq dance view
 const TRAIL = 360;
 
 const S = {
@@ -129,6 +129,14 @@ function buildSidebar() {
       <span class="sig-mini"><canvas id="mini-${s}" width="120" height="26"></canvas></span>
       <span class="sig-val" id="sv-${s}">0.00</span>`;
     row.onclick = () => { S.selected = s; buildSidebar(); renderChain(); };
+    box.appendChild(row);
+  }
+  // view tabs (dedicated visualizers)
+  box.appendChild(el('div', 'panel-label views-label', 'VIEWS'));
+  for (const v of VIEWS) {
+    const row = el('button', 'sig-row view-row' + (v.id === S.selected ? ' active' : ''));
+    row.innerHTML = `<span class="sig-name">${v.label}</span>`;
+    row.onclick = () => { S.selected = v.id; buildSidebar(); renderChain(); };
     box.appendChild(row);
   }
 }
@@ -414,19 +422,23 @@ function draw() {
     }
     S.head = (S.head + 1) % TRAIL;
   }
-  // selected signal trace (main panel)
+  // main panel: the DOM DANCE view, or the selected signal's trace
   const sig = S.selected;
-  const tr = S.trace[sig];
-  if (tr) drawTrace($('trace').getContext('2d'), tr, accent(sig), 2);
-  const lv = S.live[sig] || { raw: 0, post: 0 };
-  // dom1/dom2 show their frequency in the readout; bands show raw/post.
-  if (sig === 'dom1' || sig === 'dom2') {
-    $('big-raw').textContent = (sig === 'dom1' ? S.dom.f1 : S.dom.f2).toFixed(0) + ' Hz';
+  const ctx = $('trace').getContext('2d');
+  if (sig === 'dance') {
+    drawDance(ctx);
+    $('big-raw').textContent = (S.dom.danceF1 || 0).toFixed(0) + 'Hz';
+    $('big-post').textContent = (S.dom.danceF2 || 0).toFixed(0) + 'Hz';
+    $('big-post').style.color = '#c084fc';
   } else {
-    $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
+    const tr = S.trace[sig];
+    if (tr) drawTrace(ctx, tr, accent(sig), 2);
+    const lv = S.live[sig] || { raw: 0, post: 0 };
+    if (sig === 'dom1' || sig === 'dom2') $('big-raw').textContent = (sig === 'dom1' ? S.dom.f1 : S.dom.f2).toFixed(0) + ' Hz';
+    else $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
+    $('big-post').textContent = clamp01(lv.post).toFixed(2);
+    $('big-post').style.color = accent(sig);
   }
-  $('big-post').textContent = clamp01(lv.post).toFixed(2);
-  $('big-post').style.color = accent(sig);
   // GLOBAL visualizers (always on, for every signal view)
   drawSpectrum($('spectrum').getContext('2d'), S.spectrum, S.dom);
   drawWave($('wave').getContext('2d'), S.wave);
@@ -520,6 +532,31 @@ function drawMarker(ctx, f, color, label, W, H) {
   if (!(f > 0)) return; const x = freqToX(f, W);
   ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.fillText(`${label} ${f.toFixed(0)}Hz`, x + 3, 11);
+}
+// ── DOM DANCE view: gliding glowing orbs (spring-smoothed) along a freq axis ─
+const DANCE_MIN_HZ = 30, DANCE_MAX_HZ = 8000;
+const danceX = (f, W) => (f <= DANCE_MIN_HZ ? 0 : Math.log(f / DANCE_MIN_HZ) / Math.log(DANCE_MAX_HZ / DANCE_MIN_HZ) * W);
+const danceTrail = { a: [], b: [] };
+function drawDance(ctx) {
+  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
+  ctx.font = '9px monospace';
+  for (const f of [50, 100, 200, 500, 1000, 2000, 5000]) {
+    const x = danceX(f, W);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    ctx.fillStyle = '#556'; ctx.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 2, H - 4);
+  }
+  const d = S.dom;
+  drawOrb(ctx, danceTrail.a, danceX(d.danceF1 || 0, W), H * 0.36, d.danceW1 || 0, clamp01(d.e1), '240,162,59', d.danceF1, 'dom1');
+  drawOrb(ctx, danceTrail.b, danceX(d.danceF2 || 0, W), H * 0.64, d.danceW2 || 0, clamp01(d.e2), '192,132,252', d.danceF2, 'dom2');
+}
+function drawOrb(ctx, trail, x, y, widthHz, energy, rgb, freq, label) {
+  const r = 7 + energy * 30 + Math.min(38, widthHz / 9);   // size ← energy + cluster width
+  trail.push({ x, y, r }); if (trail.length > 36) trail.shift();
+  for (let i = 0; i < trail.length; i++) { const t = trail[i]; ctx.fillStyle = `rgba(${rgb},${(i / trail.length) * 0.3})`; ctx.beginPath(); ctx.arc(t.x, t.y, t.r * 0.65, 0, Math.PI * 2); ctx.fill(); }
+  const g = ctx.createRadialGradient(x, y, 1, x, y, r);
+  g.addColorStop(0, `rgba(${rgb},0.95)`); g.addColorStop(0.5, `rgba(${rgb},0.4)`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = `rgb(${rgb})`; ctx.font = '11px monospace'; ctx.fillText(`${label} ${(freq || 0).toFixed(0)}Hz`, x + r + 5, y + 3);
 }
 function drawWave(ctx, wave) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
