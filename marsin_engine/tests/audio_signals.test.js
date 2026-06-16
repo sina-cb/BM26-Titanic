@@ -76,6 +76,13 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy1' }) },
   { key: 'micDomFreq2', label: 'Mic · Dom Freq 2', ...LIVE({ range: [0, 22050], broadcastHz: 15, sharedFnName: 'micDomFreq2' }) },
   { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy2' }) },
+  { key: 'audioBpm', label: 'Audio · BPM', ...LIVE({ range: [0, 300], broadcastHz: 5, sharedFnName: 'audioBpm' }) },
+  { key: 'audioBeat', label: 'Audio · Beat', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioBeat' }) },
+  { key: 'audioParty', label: 'Audio · Party', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioParty' }) },
+  { key: 'audioNote', label: 'Audio · Note', ...LIVE({ range: [0, 11], broadcastHz: 10, sharedFnName: 'audioNote' }) },
+  { key: 'audioNoteHue', label: 'Audio · Note Hue', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioNoteHue' }) },
+  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioSwitchPattern' }) },
+  { key: 'audioSwitchColor', label: 'Audio · Switch Color', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioSwitchColor' }) },
 ];
 
 // Normalize: sort object keys so deep-equal ignores literal key ORDER (the

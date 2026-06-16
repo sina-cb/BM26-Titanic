@@ -37,6 +37,7 @@ import {
   SignalPostProcessor, KNOWN_SIGNALS, DEFAULT_CHAINS, opCatalog, validateChain,
 } from '../postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../detector/audio_structure_detector.js';
+import { DerivedSignals } from '../signals/derived_signals.js';
 import { AudioCapture } from '../capture/audio_capture.js';
 import { listAudioDevices } from '../capture/audio_devices.js';
 import { ParamCenter } from '../../lib/param_center.js';
@@ -102,6 +103,7 @@ const detector = new AudioStructureDetector({
   broadcast: (msg) => { if (msg && msg.type === 'dropFired') broadcast({ type: 'dropFired', ts: msg.ts, confidence: msg.confidence }); },
   getConfig: () => ({ enabled: true }),   // Kalman drop is the default edge
 });
+const derived = new DerivedSignals({ paramCenter });   // BPM/party/note/switch cues
 
 let clockMs = 0, lastMs = 0;
 const analyzer = new AudioAnalyzer({
@@ -121,6 +123,7 @@ const analyzer = new AudioAnalyzer({
     }
     paramCenter.setMany(writes, 'audio', 'audio:mic');
     detector.tick(clockMs, dt);                      // REAL structure detector
+    derived.tick(clockMs, dt);                       // BPM / party / note / switch cues
     // Store the latest frame; a steady timer coalesces the broadcast to ~45 Hz
     // (mirrors the engine's LIVE_BUCKET_MIN_INTERVAL_MS). Mic capture delivers
     // analysis frames in BURSTS, so broadcasting every one made the UI jerky —
@@ -135,6 +138,12 @@ const analyzer = new AudioAnalyzer({
       },
       spectrum: Array.from(analyzer.getSpectrum(SPECTRUM_BINS)),   // full freq-band visualizer
       wave: downWave(lastPcm),                                     // audio signal (oscilloscope)
+      derived: {
+        bpm: paramCenter.get('audioBpm'), beat: paramCenter.get('audioBeat'),
+        party: paramCenter.get('audioParty'), note: paramCenter.get('audioNote'),
+        hue: paramCenter.get('audioNoteHue'),
+        sp: paramCenter.get('audioSwitchPattern'), sc: paramCenter.get('audioSwitchColor'),
+      },
     };
     frameDirty = true;
   },

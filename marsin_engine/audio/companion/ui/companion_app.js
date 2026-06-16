@@ -42,7 +42,10 @@ const S = {
   dropFlash: 0,
   spectrum: [],       // full freq-band visualizer (log-spaced magnitudes)
   wave: [],           // audio-signal visualizer (oscilloscope)
+  derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0 },
+  spFlash: 0, scFlash: 0,
 };
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
 
@@ -76,6 +79,11 @@ function connect() {
       if (m.struct) S.struct = m.struct;
       if (m.spectrum) S.spectrum = m.spectrum;
       if (m.wave) S.wave = m.wave;
+      if (m.derived) {
+        if (m.derived.sp > 0.5 && S.derived.sp <= 0.5) S.spFlash = 1;
+        if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
+        S.derived = m.derived;
+      }
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -370,6 +378,18 @@ function renderLive() {
   S.dropFlash *= 0.9; if (S.dropFlash < 0.02) S.dropFlash = 0;
   const glow = Math.max(clamp01(st.pulse), S.dropFlash);
   $('drop-flash').style.opacity = glow.toFixed(2);
+  // derived signals
+  const dv = S.derived;
+  if ($('bpm-val')) {
+    $('bpm-val').textContent = dv.bpm > 0 ? dv.bpm.toFixed(0) : '—';
+    const pp = $('party-pill'); pp.textContent = dv.party > 0.5 ? 'PARTY' : 'calm'; pp.className = 'party-pill' + (dv.party > 0.5 ? ' on' : '');
+    const nn = $('note-val'); const pc = Math.round(dv.note);
+    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
+    $('beat-dot').style.opacity = clamp01(dv.beat).toFixed(2);
+    S.spFlash *= 0.85; S.scFlash *= 0.85;
+    $('sp-flash').style.opacity = S.spFlash.toFixed(2);
+    $('sc-flash').style.opacity = S.scFlash.toFixed(2);
+  }
 }
 
 // ── export modal ────────────────────────────────────────────────────────────

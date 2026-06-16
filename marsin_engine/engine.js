@@ -42,6 +42,7 @@ import {
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
 import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
+import { DerivedSignals } from './audio/signals/derived_signals.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
@@ -1329,6 +1330,11 @@ async function main() {
   });
   audioState.structureDetector = audioStructureDetector;
 
+  // Derived signals (BPM / beat / party / note / switch cues) — observe-and-
+  // publish, runs right after the detector each hop off the live CPC keys.
+  const derivedSignals = new DerivedSignals({ paramCenter });
+  audioState.derivedSignals = derivedSignals;
+
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
   // hand. Defined here so it closes over paramCenter + broadcasts.
@@ -1466,6 +1472,8 @@ async function main() {
           // reads the live keys just written above and publishes its own
           // five keys + the sparse dropFired event. No-ops when disabled.
           audioStructureDetector.tick(nowMs, dt);
+          // Derived signals read the keys the analyzer + detector just wrote.
+          derivedSignals.tick(nowMs, dt);
         },
       });
       audioState.capture = new AudioCapture({

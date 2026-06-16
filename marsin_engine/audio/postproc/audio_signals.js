@@ -97,6 +97,17 @@ const DETECTORS = [
   { key: 'audioSlowZone',    label: 'Audio · Slow Zone',    range: [0, 1], hz: 10 },
 ];
 
+// Derived signals (BPM / beat / party / note / switch cues) — observe-and-publish.
+const DERIVED = [
+  { key: 'audioBpm',           label: 'Audio · BPM',            range: [0, 300], hz: 5  },
+  { key: 'audioBeat',          label: 'Audio · Beat',           range: [0, 1],   hz: 30 },
+  { key: 'audioParty',         label: 'Audio · Party',          range: [0, 1],   hz: 5  },
+  { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10 },
+  { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10 },
+  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15 },
+  { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15 },
+];
+
 function gainDescriptor(key, label) {
   return {
     key, label, type: 'float',
@@ -217,6 +228,11 @@ function buildDescriptors() {
   // 9) Dominant-frequency analyzer outputs (dom1/dom2 freq + energy).
   for (const d of DOM_FREQS) {
     out.push(domDescriptor(d));
+  }
+
+  // 10) Derived signals (BPM / beat / party / note / switch cues).
+  for (const d of DERIVED) {
+    out.push(detectorDescriptor(d));
   }
 
   return out;
