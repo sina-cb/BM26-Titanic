@@ -513,11 +513,25 @@ ffmpeg --(bursts)--▶ sample ring FIFO --(steady hop clock)--▶ analyzer.pushS
   truthful one. Wall-clock stays only for refractory/timeout windows.
 - **Underrun (FIFO < 1 hop):** skip the tick, never zero-fill (codex P0 — no
   silent fallback); warn-once on sustained underrun and surface it to diag.
-- **Capture-side:** add ffmpeg low-latency flags (`-flush_packets 1`, input
-  `-flags low_delay` / per-backend buffer size) so the OS/ffmpeg buffer stops
-  dictating burst size — currently absent. (Windows AGC/"enhancements" are
-  OS-side and ffmpeg/dshow can't disable them; that stays an operator runbook
-  item — prefer an external line-in / WASAPI device, see §10.3.)
+- **Capture-side (SHIPPED 2026-06-16 — the bigger win on Windows):** the device
+  layer, not the analyzer, was the dominant batcher. `buildFfmpegArgs` now emits
+  `-fflags nobuffer -flags low_delay`, `-flush_packets 1`, and a per-backend
+  buffer bound — **dshow `-audio_buffer_size <captureBufferMs>` (default 50 ms)**,
+  pulse `-fragment_size`. Tunable via `audio.capture.captureBufferMs`.
+
+  > **Measured (HIL, 2026-06-16, Windows + Amazon USB mic, pre-fix):** dshow
+  > delivered audio in **~480 ms super-chunks** (max inter-arrival 496 ms,
+  > analyzerHopMs jitterStd 71 ms, ~2 UI updates/s) vs a file source's ~40 ms.
+  > This is exactly **ZRanger's warning**: DirectShow is the slow Windows path
+  > (his order: ASIO > WASAPI low-latency > WASAPI > DirectSound/dshow). The
+  > `-audio_buffer_size` fix attacks it directly; re-run the HIL test to confirm.
+  > **If dshow still batches** (some drivers ignore the buffer hint), ffmpeg has
+  > **no native WASAPI/ASIO input**, so the real cure is a non-ffmpeg capture
+  > backend (PortAudio / `naudiodon`, which exposes WASAPI low-latency + ASIO host
+  > APIs and is offline-installable) **or** letting **Audio Slice** (§6.2) own
+  > capture on a low-latency API and feed signals over OSC. Tracked as a backend
+  > follow-up. Windows AGC/"enhancements" are OS-side (ffmpeg/dshow can't disable
+  > them) — operator runbook item; prefer an external line-in / interface (§10.3).
 
 **The smoothness test (for the operator's local agent, real mic).** Run `mode:mic`
 on a 60 s EDM source ≥30 s, read `{type:'diag'}`. The existing capture

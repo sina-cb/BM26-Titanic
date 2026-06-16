@@ -41,6 +41,11 @@ audio:
     channels: 1
     inputFormat: null
     loop: true            # only applies to file: sources — loop the clip forever
+    # Low-latency capture buffer (ms). Bounds how big a batch the device layer
+    # hands ffmpeg — the Windows dshow default batches into ~½-second super-chunks
+    # (measured), which is the "discretized packets" symptom. 50 ms is a good
+    # default; lower (20-30) if the device/driver allows. See docs/37 §13.
+    captureBufferMs: 50
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
   fftSize: 1024

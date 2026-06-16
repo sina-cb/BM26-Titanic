@@ -165,16 +165,42 @@ export function buildFfmpegArgs(cfg) {
     err.code = 'unsupported_platform';
     throw err;
   }
+  const sampleRate = cfg.sampleRate ?? 44100;
+  const channels   = cfg.channels   ?? 1;
+  // Low-latency capture: force the device layer to hand audio over in SMALL
+  // chunks so the analyzer is fed at a fine cadence. The platform defaults
+  // batch audio into big super-chunks (Windows dshow measured ~480 ms on a USB
+  // mic → the "discretized packets" symptom: signals update ~2×/s). captureBufferMs
+  // (default 50) bounds that batch. See docs/37 §13 + the HIL realtime test.
+  const captureBufferMs = cfg.captureBufferMs ?? 50;
+  const lowLatencyIn = [];
+  if (inputFormat === 'dshow') {
+    // dshow `audio_buffer_size` is in MILLISECONDS — the key Windows knob.
+    lowLatencyIn.push('-audio_buffer_size', String(captureBufferMs));
+  } else if (inputFormat === 'pulse') {
+    // pulse `fragment_size` is in BYTES: sampleRate · channels · 2 (s16) · ms/1000.
+    const bytes = Math.max(256, Math.round(sampleRate * channels * 2 * (captureBufferMs / 1000)));
+    lowLatencyIn.push('-fragment_size', String(bytes));
+  }
+  // (avfoundation has no portable small-buffer flag; the output flush below + a
+  // small device default keep it acceptable.)
   return [
     '-hide_banner',
     '-loglevel', 'warning',
     // -nostdin keeps ffmpeg from grabbing the parent terminal's stdin.
     '-nostdin',
+    // Don't let the demuxer sit on input; emit as soon as audio is available.
+    '-fflags', 'nobuffer',
+    '-flags', 'low_delay',
+    ...lowLatencyIn,
     '-f',  inputFormat,
     '-i',  device,
-    '-ac', String(cfg.channels   ?? 1),
-    '-ar', String(cfg.sampleRate ?? 44100),
+    '-ac', String(channels),
+    '-ar', String(sampleRate),
     '-f',  's16le',
+    // Flush each packet to stdout immediately (the s16le muxer otherwise buffers,
+    // re-introducing batchiness regardless of the device buffer).
+    '-flush_packets', '1',
     '-',
   ];
 }
@@ -224,6 +250,9 @@ export class AudioCapture {
     this._spawnFn      = opts.spawnFn || spawn;
     this._stopTimeoutMs           = opts.stopTimeoutMs           ?? 2000;
     this._stderrWarnIntervalMs    = opts.stderrWarnIntervalMs    ?? STDERR_WARN_INTERVAL_MS;
+    // Low-latency capture buffer (ms) — bounds the device-layer batch size so
+    // the analyzer is fed at a fine cadence (docs/37 §13). 50 ms default.
+    this.captureBufferMs          = opts.captureBufferMs         ?? 50;
 
     // A `file:` source is platform-neutral — keep it verbatim and skip the
     // mic-resolution logic entirely. For live capture, resolveDevice throws
@@ -266,6 +295,7 @@ export class AudioCapture {
       channels:    this.channels,
       sampleRate:  this.sampleRate,
       loop:        this.loop,
+      captureBufferMs: this.captureBufferMs,
     });
   }
 

@@ -1490,6 +1490,7 @@ async function main() {
         // short show clip doesn't stop the meters); ignored for live mics.
         loop:         cfg.capture.loop,
         frameSamples: cfg.hopSize,
+        captureBufferMs:      cfg.capture.captureBufferMs,
         stopTimeoutMs:        cfg.capture.stopTimeoutMs,
         stderrWarnIntervalMs: cfg.capture.stderrWarnIntervalMs,
         onFrame:  (i16) => audioState.analyzer.pushSamples(i16),

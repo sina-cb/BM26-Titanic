@@ -16,14 +16,15 @@
  *   node tests/hil/hil_audio_realtime_test.mjs --device "<name>"   # pin a device
  *   node tests/hil/hil_audio_realtime_test.mjs --source file --file /path/clip.wav
  *
- * THE DECISIVE CHECK (do both, compare):
- *   1) run with --source file --file <a 60s EDM clip>   → the reference
- *      (file mode is perfectly clocked by a timer).
- *   2) run with --source mic, same clip playing into the mic.
- *   If mic-mode analyzerHopMs.jitterStd and micLowStepP95 are within ~1.5× of
- *   the file-mode numbers, the discretization is gone. The capture-side
- *   interArrivalMs WILL look bursty in mic mode — that is EXPECTED; gate on the
- *   analyzer/chunkiness metrics, not capture arrival.
+ * REFERENCES (NOTE: only `test` mode is perfectly clocked — `file` AND `mic`
+ * both go through ffmpeg, so both can look bursty):
+ *   - `--source test`  → the steady-clock reference (setInterval at the hop rate).
+ *   - `--source file`  → ffmpeg decoding a file; realistic but still ffmpeg-batched.
+ *   - `--source mic`   → the real concern.
+ * THE DECISIVE CHECK: compare mic-mode analyzerHopMs.jitterStd + the capture
+ * interArrivalMs max gap BEFORE vs AFTER a capture/jitter-buffer fix on the SAME
+ * device. A big drop = the discretization is closing. (interArrivalMs being
+ * bursty is the symptom we're fixing here, not a metric to wave away.)
  *
  * Exit code: 0 if overall PASS, 1 if any FAIL (so it can gate CI on the rig).
  */
@@ -121,8 +122,9 @@ async function main() {
     const overall = verdicts.includes('FAIL') ? 'FAIL' : verdicts.includes('WARN') ? 'WARN' : 'PASS';
     log(`  OVERALL: ${overall}   (frames=${frames}, ${d.elapsedSec}s)`);
     if (SOURCE === 'mic') {
-      log('  → Re-run with: --source file --file <same clip>  and compare micLowStepP95');
-      log('    + analyzerHopMs.jitterStd. Within ~1.5× of file = discretization gone.');
+      log('  → Save these numbers. After a capture/jitter-buffer fix, re-run mic on the');
+      log('    SAME device and compare: analyzerHopMs.jitterStd + interArrivalMs.max');
+      log('    should drop sharply. (`--source test` is the steady-clock reference.)');
     }
     cleanup();
     setTimeout(() => process.exit(overall === 'FAIL' ? 1 : 0), 100);
