@@ -80,6 +80,7 @@ let inputGain = 1.0;
 function applyInputGain(v) {
   inputGain = Math.max(0, Math.min(64, +v));
   analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain }, kick: analyzer.kick });
+  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, inputGain }, kick: specAnalyzer.kick });
 }
 
 // Calibration: record a section of the live input, measure its peak meter
@@ -136,7 +137,7 @@ const analyzer = new AudioAnalyzer({
         energy: paramCenter.get('audioEnergyRatio'), pulse: paramCenter.get('audioDropPulse'),
         slow: paramCenter.get('audioSlowZone'),
       },
-      spectrum: Array.from(analyzer.getSpectrum(SPECTRUM_BINS)),   // full freq-band visualizer
+      spectrum: Array.from(specAnalyzer.getSpectrum(SPECTRUM_BINS)),   // hi-res freq visualizer
       wave: downWave(lastPcm),                                     // audio signal (oscilloscope)
       derived: {
         bpm: paramCenter.get('audioBpm'), beat: paramCenter.get('audioBeat'),
@@ -151,6 +152,18 @@ const analyzer = new AudioAnalyzer({
 
 // Coalesced broadcast: emit the freshest frame at a steady ~45 Hz, decoupled
 // from the bursty analysis cadence (the engine/CaptainPad smoothing pattern).
+// Higher-resolution FFT used ONLY for the spectrum visualizer — 4096-pt
+// (~10.7 Hz/bin vs the main analyzer's 43 Hz) for finer, less-stair-stepped
+// frequency granularity. Kept SEPARATE so the main analyzer stays 1024-pt and
+// the bands/kick/dom/BPM remain low-latency + as-tuned. Same hop (fed the same
+// frames); its onAnalysis is a no-op — we only read getSpectrum().
+const specAnalyzer = new AudioAnalyzer({
+  sampleRate: SR, fftSize: 4096, hopSize: HOP,
+  bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0 },
+  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
+  nowFn: () => clockMs, onAnalysis: () => {},
+});
+
 let latestFrame = null, frameDirty = false;
 const BROADCAST_MS = 16;   // ~60 Hz, matches the UI render cadence → no stepping
 setInterval(() => { if (frameDirty && latestFrame) { broadcast(latestFrame); frameDirty = false; } }, BROADCAST_MS);
@@ -166,7 +179,7 @@ const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed
 const frameBuf = new Int16Array(HOP);
 
 // Spectrum + waveform visualizer data (full freq band + audio signal).
-const SPECTRUM_BINS = 96, WAVE_POINTS = 128;
+const SPECTRUM_BINS = 192, WAVE_POINTS = 128;   // finer freq granularity (hi-res specAnalyzer)
 let lastPcm = new Int16Array(HOP);
 const waveBuf = new Float32Array(WAVE_POINTS);
 function downWave(int16) {
@@ -203,7 +216,9 @@ function pushFrame(int16) {
     if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
   }
   lastPcm = int16;
-  clockMs += (int16.length / SR) * 1000; analyzer.pushSamples(int16);
+  clockMs += (int16.length / SR) * 1000;
+  specAnalyzer.pushSamples(int16);   // fill the hi-res spectrum first …
+  analyzer.pushSamples(int16);       // … then the main analyzer (its onAnalysis reads getSpectrum)
 }
 
 // ── calibration: record → measure → recommend gain → replay ─────────────────
@@ -237,7 +252,8 @@ function startReplay() {
     }
     const chunk = cal.chunks[i++];
     lastPcm = chunk;
-    clockMs += (chunk.length / SR) * 1000; analyzer.pushSamples(chunk);
+    clockMs += (chunk.length / SR) * 1000;
+    specAnalyzer.pushSamples(chunk); analyzer.pushSamples(chunk);
   }, Math.round((HOP / SR) * 1000));
 }
 
@@ -272,7 +288,7 @@ function startCapture(device) {
 }
 function setMode(next, opts = {}) {
   stopSource();
-  analyzer.reset(); detector.reset(); lastMs = 0;
+  analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device || null);
