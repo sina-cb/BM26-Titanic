@@ -493,11 +493,24 @@ function drawSpectrum(ctx, spec, dom) {
     ctx.fillStyle = grad; ctx.fill();
     ctx.strokeStyle = '#6db0ff'; ctx.lineWidth = 1.5; ctx.beginPath(); curve(); ctx.stroke();
   }
-  // dom1/dom2 location markers
+  // dom-freq DANCE — a ghostly glowing band that GLIDES to the dom freq/width
+  if (dom) {
+    drawGhost(ctx, dom.danceF1, dom.danceW1, '240,162,59', W, H);
+    drawGhost(ctx, dom.danceF2, dom.danceW2, '192,132,252', W, H);
+  }
+  // dom1/dom2 location markers (sharp, on top of the ghost)
   if (dom) {
     drawMarker(ctx, dom.f1, '#f0a23b', 'dom1', W, H);
     drawMarker(ctx, dom.f2, '#c084fc', 'dom2', W, H);
   }
+}
+function drawGhost(ctx, f, w, rgb, W, H) {
+  if (!(f > 0)) return;
+  const xc = freqToX(f, W), x0 = freqToX(Math.max(SPEC_MIN_HZ, f - w / 2), W), x1 = freqToX(f + w / 2, W);
+  const grad = ctx.createLinearGradient(x0, 0, x1, 0);
+  grad.addColorStop(0, `rgba(${rgb},0)`); grad.addColorStop(0.5, `rgba(${rgb},0.28)`); grad.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = grad; ctx.fillRect(x0, 0, Math.max(2, x1 - x0), H);
+  ctx.strokeStyle = `rgba(${rgb},0.7)`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xc, 0); ctx.lineTo(xc, H); ctx.stroke();
 }
 function drawWindow(ctx, lo, hi, rgb, W, H) {
   if (!(hi > lo)) return; const x0 = freqToX(lo, W), x1 = freqToX(hi, W);

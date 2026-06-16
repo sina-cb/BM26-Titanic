@@ -83,6 +83,20 @@ function applyInputGain(v) {
   specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, inputGain }, kick: specAnalyzer.kick });
 }
 
+// "Dom freq DANCE" — a ghostly follower of each dom freq + cluster width.
+// When the dom jumps (50→90 Hz) the dance GLIDES there smoothly via a
+// critically-damped spring (position+velocity), designed for fluid visual
+// generation. Width glides too. Spatial: it's a frequency the visuals can
+// chase smoothly instead of snapping.
+const DANCE_OMEGA = 7;   // rad/s — ~0.4 s ghostly settle, no overshoot
+const dance = { f1: 0, vf1: 0, w1: 0, vw1: 0, f2: 0, vf2: 0, w2: 0, vw2: 0 };
+function springStep(x, v, target, dt) {
+  const k = DANCE_OMEGA * DANCE_OMEGA, c = 2 * DANCE_OMEGA;   // critically damped
+  v += (k * (target - x) - c * v) * dt;
+  x += v * dt;
+  return [x, v];
+}
+
 // Calibration: record a section of the live input, measure its peak meter
 // level, recommend a gain to reach a healthy target, then REPLAY the recorded
 // section through the analyzer so the operator can confirm before/after.
@@ -125,13 +139,24 @@ const analyzer = new AudioAnalyzer({
     paramCenter.setMany(writes, 'audio', 'audio:mic');
     detector.tick(clockMs, dt);                      // REAL structure detector
     derived.tick(clockMs, dt);                       // BPM / party / note / switch cues
+    // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
+    const sdt = dt > 0 ? dt : HOP / SR;
+    const w1t = Math.max(0, (r.domHi1 || 0) - (r.domLo1 || 0)), w2t = Math.max(0, (r.domHi2 || 0) - (r.domLo2 || 0));
+    [dance.f1, dance.vf1] = springStep(dance.f1, dance.vf1, r.domFreq1 || 0, sdt);
+    [dance.w1, dance.vw1] = springStep(dance.w1, dance.vw1, w1t, sdt);
+    [dance.f2, dance.vf2] = springStep(dance.f2, dance.vf2, r.domFreq2 || 0, sdt);
+    [dance.w2, dance.vw2] = springStep(dance.w2, dance.vw2, w2t, sdt);
     // Store the latest frame; a steady timer coalesces the broadcast to ~45 Hz
     // (mirrors the engine's LIVE_BUCKET_MIN_INTERVAL_MS). Mic capture delivers
     // analysis frames in BURSTS, so broadcasting every one made the UI jerky —
     // exactly the latency/jitter CaptainPad avoids by coalescing.
     latestFrame = {
       type: 'frame', t: clockMs, signals,
-      dom: { f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1, f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2 },
+      dom: {
+        f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
+        f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2,
+        danceF1: dance.f1, danceW1: dance.w1, danceF2: dance.f2, danceW2: dance.w2,
+      },
       struct: {
         state: paramCenter.get('audioStructure'), build: paramCenter.get('audioBuildScore'),
         energy: paramCenter.get('audioEnergyRatio'), pulse: paramCenter.get('audioDropPulse'),
