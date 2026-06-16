@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
+    "http-server": "^14.1.1",
     "puppeteer": "^24.37.5",
     "three": "^0.177.0"
   }

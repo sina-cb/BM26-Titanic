@@ -35,8 +35,11 @@ export function createSacnOutput({
     for (const dest of destArray) {
       senders[uid].push(new Sender({
         universe: parseInt(uid, 10),
+        // Destination port only — never pass reuseAddr here. With reuseAddr
+        // the sacn lib binds the sender socket to *:5568 and steals inbound
+        // datagrams from the sim bridge receiver on the same host (see the
+        // "sACN senders bind UDP :5568" card on the Notion task tracker).
         port: 5568,
-        reuseAddr: true,
         useUnicastDestination: dest,
         defaultPacketOptions: {
           sourceName,

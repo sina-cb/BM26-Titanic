@@ -1,4 +1,4 @@
-const ENGINE_WS = `ws://${window.location.hostname}:6968`;
+import { engineWsUrl } from "../core/engine_endpoint.js";
 
 let warningEl = null;
 let titleEl = null;
@@ -69,7 +69,7 @@ function connectEngineWebSocket() {
   }
 
   try {
-    ws = new WebSocket(ENGINE_WS);
+    ws = new WebSocket(engineWsUrl());
   } catch (err) {
     console.warn('Failed to construct WebSocket:', err);
     return;

@@ -46,7 +46,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
-import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel } from '@/utils/api';
+import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -197,6 +197,17 @@ export interface EngineLiveState {
   audioStatus: AudioStatus | null;
   /** Map of CPC key → schema entry. Empty until the first /param-center/schema fetch resolves. */
   paramSchema: Record<string, ParamSchemaEntry>;
+  /**
+   * The engine's active model name, as reported by GET /status
+   * (`activeModel`). Fixed for the lifetime of an engine process — it
+   * is set from the engine's launch `--model` flag — so we seed it once
+   * via testConnection() on init and re-seed when the control bus
+   * reconnects (which is also how we pick up a switch to a different
+   * engine IP). Null until the first /status probe resolves or while
+   * the engine is unreachable; consumers degrade gracefully (the header
+   * simply omits the model chip, mirroring the OFFLINE status pill).
+   */
+  activeModel: string | null;
 }
 
 /**
@@ -271,6 +282,7 @@ const EMPTY_STATE: EngineLiveState = {
   oscStats: null,
   audioStatus: null,
   paramSchema: {},
+  activeModel: null,
 };
 
 let _cached: EngineLiveState = EMPTY_STATE;
@@ -540,6 +552,27 @@ function _ensureSignalsInitialized() {
   engineSignalsEvents.subscribe(_onMessage);
 }
 
+// The active model name only travels on the REST /status endpoint (the
+// engine has no `status` WS broadcast — see marsin_engine/lib/api_server.js
+// `/status` handler). It is fixed for the lifetime of an engine process,
+// so a single probe per connection is enough — there is deliberately NO
+// polling here. We re-probe whenever the control bus (re)connects, which
+// also covers the operator pointing CaptainPad at a different engine IP.
+function _seedActiveModel() {
+  testConnection()
+    .then((r) => {
+      if (!r.ok || !r.data) return;
+      const model = r.data.activeModel;
+      if (typeof model !== 'string' || model.length === 0) return;
+      // The engine reports 'unknown' when it has no resolved model — treat that
+      // as "no model" so the header chip hides rather than showing "unknown".
+      const normalized = model === 'unknown' ? null : model;
+      if (normalized === _cached.activeModel) return;
+      _emit({ ..._cached, activeModel: normalized });
+    })
+    .catch(() => undefined);
+}
+
 function _ensureInitialized() {
   if (_initialized) return;
   _initialized = true;
@@ -547,6 +580,12 @@ function _ensureInitialized() {
   // Control plane: mixer, oscStats, audioStatus, and the ONE-SHOT
   // sharedParams warm-up the engine sends on /ws/control connect.
   engineEvents.subscribe(_onMessage);
+  // Re-probe the active model name on every control-bus (re)connect.
+  // The status event fires immediately with the current state, so this
+  // also drives the initial seed once the socket is up.
+  engineEvents.subscribeStatus((s) => {
+    if (s.connected) _seedActiveModel();
+  });
   // Params plane (post-May-2026 topic split): the canonical CPC
   // updates (sharedParams) arrive here when operators turn knobs.
   // Without this subscribe sharedParams would be frozen at the
@@ -636,6 +675,12 @@ function _ensureInitialized() {
       });
     })
     .catch(() => undefined);
+
+  // REST seed for the active model so the first header paint is correct
+  // even before the control WS finishes connecting (the subscribeStatus
+  // hook above re-seeds on every reconnect). Fails silently — the header
+  // simply omits the model chip until a probe lands.
+  _seedActiveModel();
 }
 
 /**
@@ -975,6 +1020,18 @@ export function useOscStatus(): OscPillState | null {
  */
 export function useMaster(): number {
   return useEngineSlice<number>((s) => s.master);
+}
+
+/**
+ * Selector for the engine's active model name (GET /status →
+ * `activeModel`). Returns null until the first /status probe resolves
+ * or while the engine is unreachable — headers degrade gracefully by
+ * omitting the model chip in that case (same posture as the OFFLINE
+ * status pill). Reference-stable per-key slice so the header chrome
+ * stays still through every mixer / vis tick.
+ */
+export function useActiveModel(): string | null {
+  return useEngineSlice<string | null>((s) => s.activeModel);
 }
 
 /**

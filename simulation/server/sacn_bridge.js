@@ -25,10 +25,11 @@ const sceneIdx = process.argv.indexOf('--scene');
 const sceneName = sceneIdx !== -1 && process.argv[sceneIdx + 1] ? process.argv[sceneIdx + 1] : 'titanic';
 const sceneConfigPath = path.join(SIM_ROOT, 'scenes', sceneName, 'scene_config.yaml');
 
-// ── Read config ────────────────────────────────────────────────────────
-const serverConfig = yaml.load(fs.readFileSync(path.join(SIM_ROOT, 'config.yaml'), 'utf8'));
-const SACN_PORT = serverConfig.sacn_port || 6971;
-const SACN_UDP_PORT = serverConfig.sacn_udp_port || 5568;
+// ── Read config (fail-loud: no silent port guessing) ────────────────────
+const { loadSimPorts } = require('../lib/load_ports.cjs');
+const _simPorts = loadSimPorts(path.join(SIM_ROOT, 'config.yaml'));
+const SACN_PORT = _simPorts.sacn_port;
+const SACN_UDP_PORT = _simPorts.sacn_udp_port;
 
 // ── Derive universes from ALL scene patches.yaml files ─────────────────
 function getAllPatchUniverses() {
@@ -139,7 +140,8 @@ function loadRoutesForScene(sName) {
                const sender = new Sender({
                  universe: u,
                  useUnicastDestination: ip,
-                 reuseAddr: true,
+                 // Destination port only — reuseAddr would bind this sender to
+                 // *:5568 and steal datagrams from our own Receiver (task 010).
                  port: SACN_UDP_PORT
                });
                uMap.set(ip, {

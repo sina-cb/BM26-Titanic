@@ -10,7 +10,7 @@ import {
 } from "./state.js";
 import { pushUndo, undo, redo } from "./undo.js";
 import { rebuildParLights } from "./fixtures.js";
-import { toggleAllPanels } from "../gui/panel_visibility.js";
+import { cyclePanelVisibility } from "../gui/panel_visibility.js";
 import { toggleControlDrawer } from "../gui/control_drawer.js";
 import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
 import { isSceneModalOpen } from "../gui/scene_manager.js";
@@ -453,8 +453,8 @@ export function onKeyDown(event) {
     return;
   }
 
-  // Ctrl+? (Shift+/ → '?') toggles the keyboard-shortcuts help overlay.
-  if ((event.ctrlKey || event.metaKey) && event.key === '?') {
+  // Ctrl+Shift+W toggles the keyboard-shortcuts help overlay.
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'w') {
     event.preventDefault();
     toggleHelpPanel();
     return;
@@ -510,9 +510,9 @@ export function onKeyDown(event) {
     return;
   }
 
-  // H key: hide/show all floating panels
+  // H key: cycle UI visibility (show all → hide non-critical → hide all)
   if (event.key.toLowerCase() === 'h' && !event.ctrlKey && !event.metaKey) {
-    toggleAllPanels();
+    cyclePanelVisibility();
     return;
   }
 

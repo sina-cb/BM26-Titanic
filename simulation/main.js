@@ -21,6 +21,7 @@ import {
 } from "./src/core/state.js";
 import { pushUndo } from "./src/core/undo.js";
 import { extractParams } from "./src/core/config.js";
+import { applyBootUrlOverrides } from "./src/core/url_overrides.js";
 import { createGround, createStarField, loadModel, onModelLoaded } from "./src/core/environment.js";
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
 import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
@@ -30,6 +31,7 @@ import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
+import { engineHttpUrl } from "./src/core/engine_endpoint.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -478,6 +480,11 @@ Promise.all([
 
       setConfigTree(window.initialParams);
       extractParams(window.initialParams);
+      // Boot-time URL overrides (?profile=, ?lighting_mode=, ?renderer=) must
+      // win over the YAML/persisted values extractParams just loaded, and must
+      // do so BEFORE init()/setupLighting() reads params.lightingProfile and
+      // builds the analytic SpotLight rig. See src/core/url_overrides.js.
+      applyBootUrlOverrides(_urlParams);
       // No reconcile here: bits are reconciled against the EXPORTED
       // PIXELS (the engine's validation universe) inside saveModelJS,
       // which boot calls right after init.
@@ -564,7 +571,7 @@ Promise.all([
       if (window.onLightingChange) window.onLightingChange();
     }
   } else {
-    fetch(`http://${window.location.hostname}:6968/status`)
+    fetch(engineHttpUrl('/status'))
       .then(r => r.json())
       .catch(async () => {
         const { params, setLightingMode } = await import("./src/core/state.js");
@@ -725,12 +732,59 @@ function setupSceneIndicator() {
 
   select.addEventListener('change', (e) => {
     const val = e.target.value;
+    // Build the next URL from the CURRENT one so every active query param
+    // (profile, spotlights, lighting_mode, renderer, …) survives the reload —
+    // only `scene` changes.
     const url = new URL(window.location.href);
     if (val) {
       url.searchParams.set('scene', val);
     } else {
       url.searchParams.delete('scene');
     }
+
+    // Tell the engine to follow the scene change: it loads (and renders) the
+    // most-recently exported marsin_engine/models/<scene>.js for the new scene,
+    // then restarts itself onto the new model and re-binds the same port.
+    //
+    // This POST is FIRE-AND-FORGET on purpose. The engine acknowledges and then
+    // tears its own HTTP/WS server down ~50ms later to restart on the new model
+    // (see marsin_engine/lib/api_server.js POST /scene). Awaiting the response
+    // here used to race that teardown: when the engine dropped the socket while
+    // the reply was in flight, the await never settled, the handler stalled, and
+    // `window.location.href` below never ran — the sim froze on the old scene
+    // with stale controls (operator report 2026-06-14). We use `keepalive` so
+    // the request still completes across the navigation we trigger immediately
+    // after, and surface any synchronous dispatch failure loudly to the console
+    // without ever blocking the operator's scene change.
+    //
+    // Skipped on a static host (no engine reachable by construction — the sim
+    // runs its in-browser Pixelblaze engine there).
+    if (val && !isStaticHost()) {
+      const engineSceneUrl = engineHttpUrl('/scene');
+      fetch(engineSceneUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene: val }),
+        keepalive: true,
+      }).then((resp) => {
+        if (!resp.ok) {
+          console.error(`[Scene] Engine refused scene switch to '${val}' (HTTP ${resp.status}).`);
+        } else {
+          console.log(`[Scene] Engine following scene change → '${val}'`);
+        }
+      }).catch((err) => {
+        console.error(`[Scene] Could not reach engine at ${engineSceneUrl} to switch scene to '${val}':`, err);
+      });
+    }
+
+    // A scene switch is a deliberate operator navigation, not an accidental
+    // tab close. Flush any pending config save and disarm the unsaved-changes
+    // guard so the browser does NOT raise its blocking "Leave site?" dialog —
+    // that dialog silently stalled the reload and left the sim frozen on the
+    // old scene with stale/empty controls (operator report 2026-06-14).
+    if (window.flushAndDisarmUnloadGuard) window.flushAndDisarmUnloadGuard();
+
+    // Reload immediately — never gated behind the engine round-trip above.
     window.location.href = url.toString();
   });
 }

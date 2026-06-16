@@ -16,6 +16,7 @@ import { getProfileDef } from "./profile_registry.js";
 import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
+import { engineHttpUrl } from "./engine_endpoint.js";
 import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
@@ -460,7 +461,7 @@ export function animate() {
 
       try {
         if (btn) btn.style.opacity = '0.5';
-        const response = await fetch(`http://${window.location.hostname}:6968/global-blackout`, {
+        const response = await fetch(engineHttpUrl('/global-blackout'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ state: nextState }),

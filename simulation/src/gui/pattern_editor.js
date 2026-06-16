@@ -12,6 +12,7 @@ import { GUI } from "./gui_engine.js";
 import { TOP_MIN, registerPanel } from "./panel_layout.js";
 import { setupSyntaxHighlight } from "./syntax_highlight.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
+import { engineHttpUrl } from "../core/engine_endpoint.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
 const patternEngine = new MarsinEngine();
@@ -207,7 +208,7 @@ function postGlobal(key, value) {
     logStaticHostSkip('engine /param-center POST (port 6968)');
     return;
   }
-  fetch(`http://${window.location.hostname}:6968/param-center`, {
+  fetch(engineHttpUrl('/param-center'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ [key]: value })
@@ -244,7 +245,7 @@ async function ensureGlobalParamsGui() {
     logStaticHostSkip('engine /param-center GET (port 6968)');
   } else {
     try {
-      const res = await fetch(`http://${window.location.hostname}:6968/param-center`);
+      const res = await fetch(engineHttpUrl('/param-center'));
       if (res.ok) {
         const data = await res.json();
         if (data && data.params) {

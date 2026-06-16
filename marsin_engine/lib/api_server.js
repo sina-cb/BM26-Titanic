@@ -1788,6 +1788,69 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           } catch (_) { /* response already sent */ }
         }
       });
+    } else if (req.method === 'POST' && req.url === '/scene') {
+      // Scene/model coordination (sim → engine). When the operator picks a
+      // different scene in the sim's #scene-select dropdown, the sim POSTs the
+      // new scene name here so the engine follows and renders that scene's
+      // model — the most-recently exported marsin_engine/models/<scene>.js.
+      //
+      // Cross-scene switches always change the pixel count (every scene's
+      // model differs), and the render loop / WASM buffers are sized once at
+      // boot — so an in-process hot swap is impossible by construction (see
+      // the engine's existing "model is STALE" refusal). The robust path is a
+      // clean engine restart with the new --model, driven by the
+      // requestSceneSwitch hook the engine wires onto engineCore.
+      //
+      // Codex P0 (fail loudly, no fallback): a missing model file is a 404,
+      // never a silent substitution.
+      readBody(data => {
+        try {
+          const scene = data && typeof data.scene === 'string' ? data.scene.trim() : '';
+          if (!scene) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: 'scene (string) required' }));
+          }
+          // Reject path-traversal / nested names — model files are flat under
+          // marsin_engine/models/.
+          if (scene !== path.basename(scene)) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `invalid scene name '${scene}'` }));
+          }
+          const modelFile = path.join(patternsDir, '..', 'models', `${scene}.js`);
+          if (!fs.existsSync(modelFile)) {
+            res.writeHead(404);
+            return res.end(JSON.stringify({
+              error: `Engine model not found: ${modelFile}. Save/export the scene's model from the sim first.`,
+            }));
+          }
+
+          const current = opts.modelName || null;
+          if (scene === current) {
+            // Already rendering this scene — nothing to switch. The on-disk
+            // file watcher already hot-reloads same-scene edits in place.
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'ok', scene, restarting: false, activeModel: current }));
+          }
+
+          if (typeof engineCore.requestSceneSwitch !== 'function') {
+            res.writeHead(500);
+            return res.end(JSON.stringify({ error: 'engine does not support scene switching (no requestSceneSwitch hook)' }));
+          }
+
+          console.log(`\n  🎬 Scene switch requested via /scene: '${current}' → '${scene}'. Restarting engine with the new model…`);
+          // Respond BEFORE the restart tears the process down, so the sim
+          // gets a clean acknowledgement instead of a dropped connection.
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', scene, restarting: true, from: current }));
+          // Defer the restart a tick so the HTTP response fully flushes.
+          setTimeout(() => engineCore.requestSceneSwitch(scene), 50);
+        } catch (err) {
+          try {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: String(err && err.message || err) }));
+          } catch (_) { /* response already sent */ }
+        }
+      });
     } else if (req.method === 'POST' && req.url === '/control') {
       readBody(data => {
         if (data.id === undefined) {
@@ -3823,6 +3886,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fetched from /model/view-selection-options at mount, which reads
   // the live model object and is therefore fresh on the next reload.)
   server.broadcastMixerState = broadcastMixerState;
+
+  // Forceful close for the scene-switch restart path: terminate every live
+  // WS client (they hold the connection open, which would otherwise delay
+  // server.close() and the port release) and stop accepting connections so a
+  // replacement engine can re-bind :6968 immediately.
+  server.closeNow = () => {
+    try {
+      for (const wssInst of Object.values(wssByTopic)) {
+        for (const client of wssInst.clients) {
+          try { client.terminate(); } catch (_) { /* ignore */ }
+        }
+      }
+    } catch (_) { /* ignore */ }
+    try { server.close(); } catch (_) { /* ignore */ }
+  };
 
   return server;
 }

@@ -2,9 +2,9 @@
  * help_panel.js — Keyboard-shortcuts help overlay + bottom-right hint.
  *
  * A single modal overlay (#help-panel-overlay) lists every shortcut from
- * shortcuts.js, grouped by category. It is opened with Ctrl+? (wired in
+ * shortcuts.js, grouped by category. It is opened with Ctrl+Shift+W (wired in
  * interaction.js), by clicking the always-present bottom-right hint
- * (#help-hint), and closed with Escape, the × button, the same Ctrl+?
+ * (#help-hint), and closed with Escape, the × button, the same Ctrl+Shift+W
  * toggle, or a click on the dim backdrop.
  *
  * DOM is built imperatively (same idiom as the other legacy panels) and
@@ -85,7 +85,7 @@ function buildOverlay() {
 
   const footer = document.createElement('div');
   footer.className = 'help-panel-footer';
-  footer.textContent = 'Press Ctrl+? or Esc to close';
+  footer.textContent = 'Press Ctrl+Shift+W or Esc to close';
   card.appendChild(footer);
 
   overlay.appendChild(card);
@@ -96,7 +96,7 @@ function buildOverlay() {
 function buildHint() {
   const hint = document.createElement('button');
   hint.id = 'help-hint';
-  hint.title = 'Keyboard shortcuts (Ctrl+?)';
+  hint.title = 'Keyboard shortcuts (Ctrl+Shift+W)';
   const q = document.createElement('span');
   q.className = 'help-hint-mark';
   q.textContent = '?';
@@ -105,7 +105,7 @@ function buildHint() {
   label.textContent = 'Shortcuts';
   const combo = document.createElement('span');
   combo.className = 'help-hint-combo';
-  combo.textContent = 'Ctrl+?';
+  combo.textContent = 'Ctrl+Shift+W';
   hint.appendChild(q);
   hint.appendChild(label);
   hint.appendChild(combo);

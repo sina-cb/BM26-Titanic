@@ -35,6 +35,7 @@ import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { updateFloodLights } from "../core/flood_lights.js";
+import { engineHttpUrl } from "../core/engine_endpoint.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -420,12 +421,14 @@ function setupGUI() {
   }
   window._setSceneDirty = _setSceneDirty;
 
-  window.addEventListener('beforeunload', (e) => {
+  // Flush the newest serialized config to the save server via sendBeacon —
+  // the only transport guaranteed to survive a page unload. Shared by the
+  // accidental-close guard (beforeunload) and by intentional in-app
+  // navigations (e.g. a scene switch) that flush deliberately. Returns true
+  // if there was pending work that we attempted to flush.
+  function flushPendingSaveBeacon() {
     const pendingSave = window.__sceneDirty || !!saveTimeout;
-    if (!pendingSave || window._isAppBooting || isStaticHost()) return;
-    // Best-effort flush of the latest serialized config: sendBeacon is
-    // the only transport guaranteed to survive unload. Re-serialize
-    // first so the beacon carries the newest state, not the last save.
+    if (!pendingSave || window._isAppBooting || isStaticHost()) return false;
     try {
       if (!window._isRebuildingFixtures) {
         reconstructYAML(configTree);
@@ -439,8 +442,29 @@ function setupGUI() {
     } catch (err) {
       console.error('Unload flush failed:', err);
     }
+    return true;
+  }
+
+  // Intentional in-app navigation (scene switch) helper: flush any pending
+  // save, then DISARM the accidental-close guard so the beforeunload handler
+  // below no-ops and the browser never raises its blocking "Leave site?"
+  // dialog. Without this, switching scene while the config is dirty popped
+  // the native confirm prompt, which silently stalled the reload — the sim
+  // appeared frozen on the old scene with stale/empty controls
+  // (operator report 2026-06-14). Clearing the debounce + dirty flag is safe
+  // because we just flushed the latest state to disk above.
+  function flushAndDisarmUnloadGuard() {
+    flushPendingSaveBeacon();
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    window.__sceneDirty = false;
+  }
+  window.flushAndDisarmUnloadGuard = flushAndDisarmUnloadGuard;
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!flushPendingSaveBeacon()) return;
     // Still prompt: the beacon is fire-and-forget, the operator should
-    // get the chance to stay and save deliberately.
+    // get the chance to stay and save deliberately on an accidental close.
     e.preventDefault();
     e.returnValue = '';
   });
@@ -1860,8 +1884,7 @@ function setupGUI() {
               if (isStaticHost()) {
                 logStaticHostSkip('engine /global-effect (port 6968)');
               } else {
-                const host = window.location.hostname;
-                fetch(`http://${host}:6968/global-effect`, {
+                fetch(engineHttpUrl('/global-effect'), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ effect: 'fogger', state: !!state })
@@ -4171,20 +4194,12 @@ function setupGUI() {
   }
 
   // ─── Build the entire GUI from the config tree ───
+  // URL overrides (?profile=, ?lighting_mode=, ?renderer=) are applied
+  // authoritatively at boot, right after extractParams() — see
+  // src/core/url_overrides.js. By the time we get here both params and the
+  // config tree already hold the final values, so the controllers built
+  // below render them correctly with no late, order-dependent patching.
   if (configTree) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const profileOverride = urlParams.get('profile');
-    if (profileOverride && configTree.options && configTree.options.lightingProfile) {
-      configTree.options.lightingProfile.value = profileOverride;
-      params.lightingProfile = profileOverride;
-    }
-
-    const rendererOverride = urlParams.get('renderer');
-    if ((rendererOverride === 'webgpu' || rendererOverride === 'webgl') && configTree.options && configTree.options.rendererMode) {
-      configTree.options.rendererMode.value = rendererOverride;
-      params.rendererMode = rendererOverride;
-    }
-    
     buildGUI(configTree, gui);
   }
 
