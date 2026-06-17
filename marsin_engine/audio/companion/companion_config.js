@@ -30,14 +30,22 @@ export const COMPANION_CONFIG_PATH = path.join(__dirname, 'companion_config.yaml
 // ── Raw sources the operator can design a signal FROM (contract §types) ──────
 // Each raw source maps to a value the analyzer produces every hop. Intensity
 // sources are [0,1] band/kick/flux energies; frequency sources carry Hz.
+// A dom LANE produces BOTH a frequency (Hz) and an energy [0,1] every hop. As of
+// the 2026-06-17 dom split, each is its OWN raw source → its OWN designed signal
+// with its OWN op chain (freq and energy are independently post-processable). The
+// freq source reads the analyzer's domFreq field (type:'frequency'); the energy
+// source reads the domEnergy field (type:'intensity'). ANALYZER_FIELD is built
+// from these analyzer keys, so the runner reads r.domEnergy1/2 automatically.
 export const RAW_SOURCES = Object.freeze({
-  rawLow:  { type: 'intensity', label: 'LOW',  analyzer: 'low'  },
-  rawMid:  { type: 'intensity', label: 'MID',  analyzer: 'mid'  },
-  rawHigh: { type: 'intensity', label: 'HIGH', analyzer: 'high' },
-  rawKick: { type: 'intensity', label: 'KICK', analyzer: 'kick' },
-  rawFlux: { type: 'intensity', label: 'FLUX', analyzer: 'flux' },
-  rawDom1: { type: 'frequency', label: 'DOM1', analyzer: 'domFreq1' },
-  rawDom2: { type: 'frequency', label: 'DOM2', analyzer: 'domFreq2' },
+  rawLow:        { type: 'intensity', label: 'LOW',         analyzer: 'low'  },
+  rawMid:        { type: 'intensity', label: 'MID',         analyzer: 'mid'  },
+  rawHigh:       { type: 'intensity', label: 'HIGH',        analyzer: 'high' },
+  rawKick:       { type: 'intensity', label: 'KICK',        analyzer: 'kick' },
+  rawFlux:       { type: 'intensity', label: 'FLUX',        analyzer: 'flux' },
+  rawDom1:       { type: 'frequency', label: 'DOM1 FREQ',   analyzer: 'domFreq1'   },
+  rawDom2:       { type: 'frequency', label: 'DOM2 FREQ',   analyzer: 'domFreq2'   },
+  rawDom1Energy: { type: 'intensity', label: 'DOM1 ENERGY', analyzer: 'domEnergy1' },
+  rawDom2Energy: { type: 'intensity', label: 'DOM2 ENERGY', analyzer: 'domEnergy2' },
 });
 
 export const SIGNAL_TYPES = Object.freeze(['intensity', 'frequency']);
@@ -58,28 +66,16 @@ export const VIEW_TYPES = Object.freeze({
   'trace-overlay': { label: 'trace overlay', accepts: null },
 });
 
-// ── Dom signal = freq + energy (2026-06-17 contract §"Dom signal = freq + energy") ──
-// A dom SOURCE produces BOTH a frequency (Hz) and an energy [0,1] every hop. A
-// frequency signal designed from a dom source is therefore a freq+energy PAIR:
-// the chain shapes the Hz (the value that flows through the SignalPostProcessor),
-// and the paired ENERGY rides alongside it — read from the analyzer's raw dom
-// energy field. When the signal is an OUTPUT, the osc_out tap emits the freq to
-// its own address AND the paired energy to the dom-energy address below.
-//
-// This is a Companion-side pairing (no op-schema fork): the osc_out op stays
-// `{ address, cpcKey }`; the energy address/key/field are DERIVED from the dom
-// source via this frozen map. The energy keys (micDomEnergy1/2) are the engine's
-// canonical raw-mirror CPC keys (audio/postproc/audio_signals.js) and the engine
-// must bind /marsin/dom/energy1·2 → micDomEnergy1/2 for the emit to land in CPC.
-export const DOM_ENERGY = Object.freeze({
-  rawDom1: { field: 'domEnergy1', address: '/marsin/dom/energy1', cpcKey: 'micDomEnergy1' },
-  rawDom2: { field: 'domEnergy2', address: '/marsin/dom/energy2', cpcKey: 'micDomEnergy2' },
-});
-
-/** The dom-energy pairing for a frequency signal's source, or null. */
-export function domEnergyFor(source) {
-  return DOM_ENERGY[source] || null;
-}
+// ── Dom split: freq and energy are independent signals (2026-06-17) ───────────
+// A dom lane used to be ONE frequency signal that emitted its shaped Hz AND
+// auto-emitted its (un-post-processable) paired energy. As of the dom split each
+// dom lane is TWO independent designed signals — a FREQUENCY signal (source
+// rawDom1/2 → /marsin/dom/freq1·2) and an INTENSITY ENERGY signal (source
+// rawDom1Energy/2Energy → /marsin/dom/energy1·2), each with its own op chain so
+// the energy is post-processable exactly like the freq. The energy address/key
+// is no longer DERIVED from the freq source: the energy signal carries its own
+// curated osc_out name (micDomEnergy1/2 → CURATED_OUTPUTS below). The old
+// DOM_ENERGY map + domEnergyFor() auto-pair are therefore retired.
 
 // ── osc_out NAME → cpcKey / address (single-name rehaul) ──────────────────────
 // The osc_out op carries ONE operator-facing `name`. cpcKey + address are
@@ -102,6 +98,11 @@ export const CURATED_OUTPUTS = Object.freeze({
   micKick:     '/marsin/mic/kick',
   micDomFreq1: '/marsin/dom/freq1',
   micDomFreq2: '/marsin/dom/freq2',
+  // Dom ENERGY (dom split): the engine binds /marsin/dom/energy1·2 →
+  // micDomEnergy1/2 (audio/postproc/audio_signals.js), so an energy signal named
+  // micDomEnergy1/2 keeps that canonical engine-bound address.
+  micDomEnergy1: '/marsin/dom/energy1',
+  micDomEnergy2: '/marsin/dom/energy2',
 });
 
 /**
@@ -219,8 +220,14 @@ export function defaultCompanionConfig() {
       intensity('mid',  'micMid',      'rawMid',  8.0),
       intensity('high', 'micHigh',     'rawHigh', 14.0),
       intensity('kick', 'micKick',     'rawKick', 18.0),
-      frequency('dom1', 'micDomFreq1', 'rawDom1'),
-      frequency('dom2', 'micDomFreq2', 'rawDom2'),
+      // Dom split: each dom lane is TWO independent signals — a FREQ signal and
+      // an ENERGY signal, each with its own op chain (each independently post-
+      // processable). The freq stays freq-only; the energy is an intensity band
+      // with a gentle smoothing LPF like the other intensity defaults.
+      frequency('dom1',       'micDomFreq1',   'rawDom1'),
+      frequency('dom2',       'micDomFreq2',   'rawDom2'),
+      intensity('dom1Energy', 'micDomEnergy1', 'rawDom1Energy', 10.0),
+      intensity('dom2Energy', 'micDomEnergy2', 'rawDom2Energy', 10.0),
     ],
     // The legacy DOM DANCE is now a dancing-balls VIEW instance fed BOTH dom
     // signals (not a hardcoded one-off) — contract §"dancing-balls".

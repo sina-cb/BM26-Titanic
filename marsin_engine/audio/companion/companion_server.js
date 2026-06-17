@@ -61,7 +61,7 @@ import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
 import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS, VIEW_TYPES,
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal, validateView,
-  domEnergyFor, parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
+  parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
@@ -502,14 +502,12 @@ function processDesignedSignals(r, dt) {
     // Every designed signal owns a runner (buildRunners builds one per signal,
     // intensity or frequency). The `?? raw` is defensive only.
     const post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
-    // Dom signal = freq + energy (contract): a frequency signal designed from a
-    // dom source carries a paired ENERGY [0,1], read straight from the analyzer's
-    // raw dom-energy field (the micDomEnergy1/2 mirror). It rides ALONGSIDE the
-    // shaped Hz — the chain shapes the freq; the energy is the unshaped analyzer
-    // value. Null for non-dom signals so the UI knows it's freq-only.
-    const dom = domEnergyFor(sig.source);
-    const energy = dom ? (r[dom.field] ?? 0) : null;
-    out[sig.id] = (energy != null) ? { raw, post, energy } : { raw, post };
+    // Dom split (2026-06-17): a dom lane's freq and energy are now SEPARATE
+    // signals, each emitting ONLY its own post-processed osc_out value. The freq
+    // signal emits its shaped Hz; the energy signal (source rawDom1/2Energy) is an
+    // ordinary intensity signal that runs its own chain on r.domEnergy1/2 and
+    // emits its own post value. No more auto-paired energy emit on the freq tap.
+    out[sig.id] = { raw, post };
     // A frequency signal carrying a danceMaker op IS the dance for its dom lane.
     if (sig.type === 'frequency' && hasDanceMaker(sig)) {
       if (sig.source === 'rawDom1') danceFromOp.dom1 = post;
@@ -517,12 +515,8 @@ function processDesignedSignals(r, dt) {
     }
     const tap = oscOutOf(sig);
     if (tap) {
-      // Freq → the operator's osc_out address. A DOM output is a freq+energy
-      // pair, so we ALSO emit the paired energy to its canonical dom-energy
-      // address (/marsin/dom/energy1·2 → micDomEnergy1/2). One tap, two emits —
-      // a dom signal is inherently a pair (no op-schema fork; see companion_config).
+      // Each signal emits ONLY its own osc_out value to its derived address.
       sendOsc(resolveOscOut(tap.params.name).address, post);
-      if (dom) sendOsc(dom.address, energy);
     }
   }
   return out;

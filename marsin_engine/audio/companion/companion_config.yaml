@@ -96,6 +96,40 @@ signals:
         params:
           name: micDomFreq2
     output: true
+  # Dom split: each dom lane's ENERGY is its OWN intensity signal with its own
+  # op chain (independently post-processable), routed to /marsin/dom/energy1·2.
+  - id: dom1Energy
+    label: micDomEnergy1
+    source: rawDom1Energy
+    type: intensity
+    chain:
+      - id: dom1Energy_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 10
+      - id: dom1Energy_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomEnergy1
+    output: true
+  - id: dom2Energy
+    label: micDomEnergy2
+    source: rawDom2Energy
+    type: intensity
+    chain:
+      - id: dom2Energy_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 10
+      - id: dom2Energy_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomEnergy2
+    output: true
 # Custom VIEWS (VISUALIZERS). The legacy DOM DANCE is now a dancing-balls view
 # instance fed both dom signals (contract §"Companion custom VIEWS").
 views:

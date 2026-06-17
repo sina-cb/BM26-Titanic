@@ -21,7 +21,7 @@ import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, VIEW_TYPES,
   defaultCompanionConfig, validateCompanionConfig, validateSignal, validateView,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
-  domEnergyFor, parseCaptureDevice, captureDeviceString, DOM_ENERGY, resolveOscOut,
+  parseCaptureDevice, captureDeviceString, resolveOscOut,
 } from '../audio/companion/companion_config.js';
 import { ParamCenter } from '../lib/param_center.js';
 import { OscListener } from '../lib/osc_listener.js';
@@ -332,23 +332,66 @@ test('event-style value 1.0/0.0 lands as a scalar (NOT a bang)', async () => {
   assert.equal(on, 1.0);
 });
 
-// ── 4) Dom signal = freq + energy (2026-06-17 contract) ──────────────────────
+// ── 4) Dom split: freq + energy are independent signals (2026-06-17) ─────────
 
-test('domEnergyFor pairs each dom source with its energy field/address/cpcKey', () => {
-  const d1 = domEnergyFor('rawDom1');
-  assert.deepEqual(d1, { field: 'domEnergy1', address: '/marsin/dom/energy1', cpcKey: 'micDomEnergy1' });
-  const d2 = domEnergyFor('rawDom2');
-  assert.deepEqual(d2, { field: 'domEnergy2', address: '/marsin/dom/energy2', cpcKey: 'micDomEnergy2' });
-  // Intensity / non-dom sources have NO energy pairing.
-  assert.equal(domEnergyFor('rawLow'), null);
-  assert.equal(domEnergyFor('rawDom3'), null);
+test('a dom energy signal validates as intensity from source rawDom1Energy', () => {
+  const r = validateSignal({
+    id: 'dom1Energy', label: 'micDomEnergy1', source: 'rawDom1Energy', type: 'intensity',
+    chain: [
+      { id: 'lpf', type: 'lpf', enabled: true, params: { cutoffHz: 10 } },
+      { id: 'out', type: 'osc_out', enabled: true, params: { name: 'micDomEnergy1' } },
+    ],
+  });
+  assert.equal(r.ok, true, r.error || '');
+  assert.equal(r.normalized.type, 'intensity');
+  assert.equal(r.normalized.source, 'rawDom1Energy');
+  assert.equal(r.normalized.output, true);
 });
 
-test('DOM_ENERGY targets the engine canonical raw-mirror energy keys', () => {
-  // The energy cpcKeys MUST be the engine's micDomEnergy1/2 raw-mirror keys
-  // (audio/postproc/audio_signals.js) so the emit lands in CPC.
-  assert.equal(DOM_ENERGY.rawDom1.cpcKey, 'micDomEnergy1');
-  assert.equal(DOM_ENERGY.rawDom2.cpcKey, 'micDomEnergy2');
+test('resolveOscOut maps the curated dom-energy names to their engine-bound address', () => {
+  assert.deepEqual(resolveOscOut('micDomEnergy1'),
+    { name: 'micDomEnergy1', cpcKey: 'micDomEnergy1', address: '/marsin/dom/energy1' });
+  assert.deepEqual(resolveOscOut('micDomEnergy2'),
+    { name: 'micDomEnergy2', cpcKey: 'micDomEnergy2', address: '/marsin/dom/energy2' });
+});
+
+test('default config splits each dom lane into independent freq + energy signals', () => {
+  const cfg = validateCompanionConfig(defaultCompanionConfig());
+  const byId = new Map(cfg.signals.map(s => [s.id, s]));
+  // dom1 freq lane — frequency, freq-only, routes to /marsin/dom/freq1.
+  const d1 = byId.get('dom1');
+  assert.equal(d1.type, 'frequency');
+  assert.equal(d1.source, 'rawDom1');
+  assert.deepEqual(resolveOscOut(d1.chain.at(-1).params.name).address, '/marsin/dom/freq1');
+  // dom1 energy lane — INDEPENDENT intensity signal with its OWN chain, routes
+  // to /marsin/dom/energy1.
+  const e1 = byId.get('dom1Energy');
+  assert.equal(e1.type, 'intensity');
+  assert.equal(e1.source, 'rawDom1Energy');
+  assert.equal(e1.output, true);
+  assert.ok(e1.chain.some(op => op.type === 'lpf'), 'energy signal carries its own op chain (lpf)');
+  assert.equal(resolveOscOut(e1.chain.at(-1).params.name).address, '/marsin/dom/energy1');
+  // dom2 lanes likewise.
+  assert.equal(byId.get('dom2').source, 'rawDom2');
+  assert.equal(byId.get('dom2Energy').source, 'rawDom2Energy');
+  assert.equal(resolveOscOut(byId.get('dom2Energy').chain.at(-1).params.name).address, '/marsin/dom/energy2');
+});
+
+test('back-compat: an OLD combined dom config (no energy split) still loads', () => {
+  // Pre-split persisted design: ONE dom freq signal per lane, no energy signal.
+  // It must still validate/load (it just lacks the energy split until re-defaulted).
+  const old = {
+    osc: { host: '127.0.0.1', port: 10000 },
+    signals: [
+      { id: 'dom1', label: 'micDomFreq1', source: 'rawDom1', type: 'frequency',
+        chain: [{ id: 'dom1_out', type: 'osc_out', enabled: true, params: { name: 'micDomFreq1' } }],
+        output: true },
+    ],
+  };
+  const cfg = validateCompanionConfig(old);
+  assert.equal(cfg.signals.length, 1);
+  assert.equal(cfg.signals[0].source, 'rawDom1');
+  assert.equal(cfg.signals[0].type, 'frequency');
 });
 
 // The energy OSC PATH lands in the CPC ONLY once the engine registry binds
