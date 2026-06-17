@@ -113,6 +113,10 @@ function connect() {
       seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
+      // Boot in mic mode → load the device list so the dropdown resolves the
+      // configured device (hello.device) to its real label and shows it
+      // selected, instead of stranding on "Default input".
+      if (S.mode === 'mic') send({ type: 'listDevices' });
     } else if (m.type === 'frame') {
       frameQueue.push(m);
     } else if (m.type === 'frames') {
@@ -749,10 +753,18 @@ function buildSourceBar() {
   const mwrap = el('span', 'mic-wrap' + (S.mode === 'mic' ? ' show' : ''));
   const sel = el('select', 'device-select'); sel.id = 'device-select';
   const def = el('option', null, 'Default input'); def.value = ''; if (!S.device) def.selected = true; sel.appendChild(def);
+  let matched = false;
   for (const d of (S.devices || [])) {
     const o = el('option', null, d.label || d.id); o.value = d.ffmpegDevice || '';
-    if (d.ffmpegDevice && d.ffmpegDevice === S.device) o.selected = true;
+    if (d.ffmpegDevice && d.ffmpegDevice === S.device) { o.selected = true; matched = true; }
     sel.appendChild(o);
+  }
+  // Config device set but not in the (possibly not-yet-loaded) list — still
+  // show it SELECTED so the dropdown reflects the configured mic on boot
+  // rather than silently falling back to "Default input". Refresh resolves it
+  // to the real label once the device list lands.
+  if (S.device && !matched) {
+    const o = el('option', null, S.device); o.value = S.device; o.selected = true; sel.appendChild(o);
   }
   sel.onchange = () => { S.device = sel.value; send({ type: 'setMode', mode: 'mic', device: sel.value || null }); flash('input: ' + (sel.selectedOptions[0]?.textContent || 'default')); };
   const refresh = el('button', 'file-go', '⟳'); refresh.title = 'refresh device list'; refresh.onclick = () => send({ type: 'listDevices' });
