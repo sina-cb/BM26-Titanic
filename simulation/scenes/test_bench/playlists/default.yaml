@@ -73,22 +73,7 @@ entries:
       sliderCount: 0.76
       sliderSharpness: 0.26
       sliderDirection: 0.6
-    modulations:
-      - id: mod_sliderDirection_stemsBass
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: stemsBass
-        target:
-          scope: pattern
-          parameter: sliderDirection
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.2
-        curve: easeOut
+    modulations: []
     notes: null
   - id: e_default_3_03_dual_axis_crush
     pattern: 03_dual_axis_crush
@@ -98,22 +83,7 @@ entries:
       sliderCount: 0.31
       sliderBeamWidth: 0.77
       sliderDirection: 0.67
-    modulations:
-      - id: mod_sliderDirection_stemsDrums
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: stemsDrums
-        target:
-          scope: pattern
-          parameter: sliderDirection
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.2
-        curve: easeOut
+    modulations: []
     notes: null
   - id: e_default_4_04_beat_folded_helix
     pattern: 04_beat_folded_helix

@@ -886,18 +886,43 @@ export function ModulationPopover({
 
   const selectMode = useCallback((next: ModulationMode) => {
     if (next === mode) return;
-    // Only default a range when the operator hasn't set one — never clobber
-    // an existing mapping's saved range or a value they just typed.
-    if (!rangeTouchedRef.current) {
-      if (next === 'multiply') { setRangeMin('1.0'); setRangeMax('1.2'); }
-      else if (next === 'override') { setRangeMin('0'); setRangeMax('1'); }
-      // offset: keep whatever the unipolar/swing defaults already are.
+    // Seed a sensible default range for the new mode when the operator hasn't
+    // dialed one in (never clobber an existing mapping's saved range or a value
+    // they just typed) — AND, regardless of "touched", reseed when the current
+    // visible range is DEGENERATE for the target mode, so a stale range can't
+    // silently turn into a param-killer on a mode switch:
+    //   - multiply by a max ≤ 0 pins the param to 0 (e.g. carrying a [0,0.x]
+    //     offset or a bipolar swing into multiply) → reseed to [1.0, 1.2].
+    const curMax = Number(rangeMax);
+    const multiplyDegenerate = !(Number.isFinite(curMax) && curMax > 0);
+    if (next === 'multiply') {
+      if (!rangeTouchedRef.current || multiplyDegenerate) { setRangeMin('1.0'); setRangeMax('1.2'); }
+    } else if (next === 'override') {
+      if (!rangeTouchedRef.current) { setRangeMin('0'); setRangeMax('1'); }
+    } else { // offset — restore the offset default (was missing: a multiply
+      // [1.0,1.2] would otherwise strand in the offset boxes as a +1.0 slam).
+      if (!rangeTouchedRef.current) { setRangeMin('0'); setRangeMax('0.35'); }
     }
+    // Polarity only applies to offset; drop a stale `bipolar` when leaving
+    // offset so it can't ride along into multiply/override.
+    if (next !== 'offset' && polarity === 'bipolar') setPolarity('unipolar');
     setMode(next);
-  }, [mode]);
+  }, [mode, rangeMax, polarity]);
 
   const save = async () => {
     if (busy) return; // double-tap guard
+    // Range inputs must be real numbers — an empty/blank box previously
+    // coerced to 0 (via `Number('') || 0`), silently saving a no-op or a
+    // param-killer (e.g. multiply range [1.0, 0] fades the param to black).
+    // Fail loud instead: block the save with an inline error.
+    const rangeFieldsOk = (mode === 'offset' && polarity === 'bipolar')
+      ? Number.isFinite(Number(swing)) && swing.trim() !== ''
+      : Number.isFinite(Number(rangeMin)) && rangeMin.trim() !== ''
+        && Number.isFinite(Number(rangeMax)) && rangeMax.trim() !== '';
+    if (!rangeFieldsOk) {
+      setError('Enter a numeric range before saving.');
+      return;
+    }
     setBusy(true); setError(null);
     // Write EXACTLY what the preview computed — `previewRange` already
     // resolves bipolar-offset SWING into a symmetric [-mag, mag], reads the

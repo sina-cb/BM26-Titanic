@@ -184,6 +184,19 @@ export class ModulationController {
    * teardown) so we don't keep stale baseline-restore state.
    */
   _restoreBaselinesAndClear(_unused) {
+    // If the last frame we broadcast HAD params, emit one final empty
+    // `modulationState` so the iPad's green ghost overlay clears immediately
+    // when the deck disappears mid-modulation (otherwise it lingers stale
+    // until the deck returns). Mirrors the >0 → 0 transition gate in applyFrame.
+    if (this._lastBroadcastHadParams) {
+      this._lastBroadcastHadParams = false;
+      this.broadcast({
+        type: 'modulationState',
+        deckId: 'main',
+        pattern: this.activePattern || null,
+        parameters: {},
+      });
+    }
     if (this._lastWrittenTargets.size === 0) return;
     this._lastWrittenTargets.clear();
   }
