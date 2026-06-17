@@ -44,7 +44,13 @@
  * @typedef {('continuous')} ModulationType
  *   v1 type. 'trigger' reserved (§3.2 of the design doc).
  *
- * @typedef {('offset'|'scale')} ModulationMode
+ * @typedef {('offset'|'multiply'|'override')} ModulationMode
+ *   offset   — add the scaled signal to the static param value.
+ *   multiply — use the scaled signal as a MULTIPLIER over the static value
+ *              (default range [1.0, 1.2]).
+ *   override — drive the param DIRECTLY from the scaled signal, ignoring the
+ *              static UI value (the `!` override). ('scale' is accepted as a
+ *              legacy alias for 'multiply' on load.)
  * @typedef {('unipolar'|'bipolar')} ModulationPolarity
  * @typedef {('linear'|'easeIn'|'easeOut'|'exp')} ModulationCurve
  *
@@ -82,7 +88,13 @@
 const VALID_TYPES = new Set(['continuous']);
 const VALID_SOURCE_SCOPES = new Set(['cpc']);
 const VALID_TARGET_SCOPES = new Set(['pattern']);
-const VALID_MODES = new Set(['offset', 'scale']);
+const VALID_MODES = new Set(['offset', 'multiply', 'override']);
+// Range bounds. The output is always clamp01'd, so the range only needs to be
+// generous enough for an offset (±) and a multiplier (multiply default is
+// [1.0, 1.2]; a boost up to a few × is plenty). Negative ranges are allowed
+// (e.g. an inverting [-1, 0]).
+const RANGE_MIN = -4;
+const RANGE_MAX = 4;
 const VALID_POLARITIES = new Set(['unipolar', 'bipolar']);
 const VALID_CURVES = new Set(['linear', 'easeIn', 'easeOut', 'exp']);
 
@@ -120,34 +132,44 @@ export function applyContinuousModulation({
   range = [0, 0],
   curve = 'linear',
 }) {
-  const baseClamped = clamp01(baseNorm);
-  const sClamped = clamp01(sourceNorm);
-  const [minDelta, maxDelta] = range;
+  const base = clamp01(baseNorm);
+  // CURVE IS APPLIED TO THE SIGNAL ITSELF — we shape the [0,1] source through
+  // the curve function, then feed the SHAPED signal into the range/mode math
+  // below. (Per operator: "add the signal through a curve function, not the
+  // application of the signal in the param update".)
+  const sc = applyCurve(clamp01(sourceNorm), curve);
+  const [min, max] = range;
+  // The "scaled signal": the curved [0,1] signal mapped linearly into the
+  // operator's range. The range may be negative / inverted (e.g. [-1, 0]).
+  const scaled = min + sc * (max - min);
 
-  let delta;
+  // OVERRIDE — drive the parameter directly from the scaled signal, ignoring
+  // the static UI value entirely (the `!` override).
+  if (mode === 'override') {
+    return clamp01(scaled);
+  }
+
+  // MULTIPLY — the scaled signal is a MULTIPLIER over the static value
+  // (default range [1.0, 1.2]). Polarity does not apply to a multiplier.
+  if (mode === 'multiply') {
+    return clamp01(base * scaled);
+  }
+
+  // OFFSET — add to the static value.
   if (polarity === 'bipolar') {
-    // Bipolar uses a symmetric-curve formulation: compute the
-    // signed deviation from the source's neutral point (0.5)
-    // FIRST, then apply the curve to the magnitude only, then
-    // re-attach the sign. This preserves the "source=0.5 → no
-    // movement" invariant for every curve (otherwise easeIn/exp
-    // would shift the no-move point off 0.5, surprising the
-    // operator). The scale factor `2 * max(|min|, |max|)` is the
-    // peak swing; the magnitude-only curve shapes the response
-    // toward the peak without breaking symmetry.
-    const bipolarS = (sClamped - 0.5) * 2.0;
-    const sign = bipolarS < 0 ? -1 : 1;
-    const curvedMag = applyCurve(Math.abs(bipolarS), curve);
-    delta = sign * curvedMag * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
-  } else {
-    const sCurved = applyCurve(sClamped, curve);
-    delta = minDelta + sCurved * (maxDelta - minDelta);
+    // The signal's CENTRE (0.5) = the static value (no change); below centre
+    // pulls toward static+min, above centre pushes toward static+max. Spans
+    // [static+min, static+max] and handles asymmetric/negative ranges (the
+    // curve already shaped the signal). For a symmetric range like [-0.3,0.3]
+    // this is the classic ±swing around the static value.
+    const bs = sc * 2 - 1;                       // [-1, 1]
+    const offset = bs >= 0 ? bs * max : bs * (-min);
+    return clamp01(base + offset);
   }
-
-  if (mode === 'scale') {
-    return clamp01(baseClamped * (1.0 + delta));
-  }
-  return clamp01(baseClamped + delta);
+  // OFFSET / unipolar — a one-sided offset: static + scaled signal. At signal
+  // rest (0) the offset is `min` (0 for the usual [0, x] range, so the param
+  // sits at its static value); as the signal rises it adds up to `max`.
+  return clamp01(base + scaled);
 }
 
 /**
@@ -279,8 +301,10 @@ export function validateModulationMapping(m) {
   if (typeof tgt.parameter !== 'string' || tgt.parameter.length === 0) {
     throw new Error(`Modulation ${mod.id}: target.parameter must be a non-empty string`);
   }
+  // Back-compat: 'scale' was the old name for the multiply mode — migrate it.
+  if (mod.mode === 'scale') mod.mode = 'multiply';
   if (!VALID_MODES.has(mod.mode)) {
-    throw new Error(`Modulation ${mod.id}: mode must be 'offset' or 'scale'`);
+    throw new Error(`Modulation ${mod.id}: mode must be 'offset', 'multiply', or 'override'`);
   }
   if (!VALID_POLARITIES.has(mod.polarity)) {
     throw new Error(`Modulation ${mod.id}: polarity must be 'unipolar' or 'bipolar'`);
@@ -293,8 +317,8 @@ export function validateModulationMapping(m) {
     throw new Error(`Modulation ${mod.id}: range must be [min, max] of finite numbers`);
   }
   const [lo, hi] = mod.range;
-  if (lo < -1 || lo > 1 || hi < -1 || hi > 1) {
-    throw new Error(`Modulation ${mod.id}: range values must be within [-1, 1]`);
+  if (lo < RANGE_MIN || lo > RANGE_MAX || hi < RANGE_MIN || hi > RANGE_MAX) {
+    throw new Error(`Modulation ${mod.id}: range values must be within [${RANGE_MIN}, ${RANGE_MAX}]`);
   }
   return /** @type {ModulationMapping} */ (mod);
 }
