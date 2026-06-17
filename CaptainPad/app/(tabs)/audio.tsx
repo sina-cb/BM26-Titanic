@@ -135,32 +135,10 @@ function makeSubCard(C: Palette) {
   } as const;
 }
 
-function SectionHeader({ icon, title, hint, right }: {
-  icon: string; title: string; hint?: string; right?: React.ReactNode;
-}) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
-      <View style={{
-        width: 36, height: 36, borderRadius: 8,
-        backgroundColor: C.primaryContainer, alignItems: 'center', justifyContent: 'center',
-      }}>
-        <IconSymbol name={icon as any} size={20} color={C.primary} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 0.8 }}>
-          {title}
-        </Text>
-        {hint ? (
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-            {hint}
-          </Text>
-        ) : null}
-      </View>
-      {right ? <View>{right}</View> : null}
-    </View>
-  );
-}
+// `SectionHeader` (icon tile + title + hint, used by the retired MIC
+// ANALYSIS card) was removed on 2026-06-17 with that card — it had no
+// other consumer. The SETTINGS disclosure renders its own inline header.
+// Restore from git history if a future card needs the icon-tile header.
 
 function SubHeader({ title, right }: { title: string; right?: React.ReactNode }) {
   const C = usePalette();
@@ -249,46 +227,12 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 // the bar+label block out of <SignalColumn /> (it shares the same
 // clamp-to-[0,1] + percent label pattern).
 
-// ── Master toggle (large pill, used at top of the page) ─────────────────
-
-function MasterToggle({ on, busy, onPress, label, subtitle, accent = ACCENT_AUTO }: {
-  on: boolean; busy?: boolean; onPress: () => void; label: string; subtitle?: string; accent?: string;
-}) {
-  const C = usePalette();
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={busy}
-      style={{
-        flexDirection: 'row', alignItems: 'center', gap: 14,
-        paddingVertical: 14, paddingHorizontal: 18, borderRadius: 12,
-        backgroundColor: on ? accent : C.surfaceContainerHigh,
-        borderWidth: 1, borderColor: on ? accent : C.ghostBorder,
-        opacity: busy ? 0.7 : 1,
-      }}
-    >
-      <View style={{
-        width: 22, height: 22, borderRadius: 11,
-        backgroundColor: on ? '#000' : C.surface,
-        borderWidth: 2, borderColor: on ? '#000' : C.ghostBorder,
-        alignItems: 'center', justifyContent: 'center',
-      }}>
-        {on ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: accent }} /> : null}
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: on ? '#000' : C.text, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-          {label}
-        </Text>
-        {subtitle ? (
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: on ? '#000' : C.secondary, marginTop: 2 }}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      {busy ? <ActivityIndicator size="small" color={on ? '#000' : C.primary} /> : null}
-    </TouchableOpacity>
-  );
-}
+// ── Master toggle (large pill) — RETIRED (2026-06-17) ───────────────────
+// `MasterToggle` drove the MIC ANALYSIS enable/disable card. That card was
+// removed when the Audio Companion became the sole analyzer (the in-engine
+// listener is obsolete and fought the Companion for the device). The
+// component was its only consumer, so it was deleted. Restore from git
+// history if a large enable/disable pill is needed again.
 
 // ── Mic picker ──────────────────────────────────────────────────────────
 
@@ -426,6 +370,15 @@ function slotValueText(slot: SignalSlot, value: number): string {
 // of the audio page, so it's given a generous, touch-friendly height.
 const PINNED_TRACE_HEIGHT = 64;
 
+// AUDIO SIGNALS grid — the signals lay out as a 3-column × N-row grid
+// (operator brief 2026-06-17) rather than one horizontally-scrolling
+// row, to read cleaner on the iPad and mirror the Audio Companion's
+// desktop layout. 3 cells across, wrapping to new rows; the BPM tile
+// rides along as its own cell. `flexWrap` + percentage-width cells give
+// the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
+// container is unreliable across cells, so we pad inside each cell).
+const SIGNAL_GRID_COLUMNS = 3;
+
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
 // low/mid/high/kick above the noise gate for the meters AND the detectors /
@@ -460,7 +413,7 @@ function SignalColumn({ slot, raw, post, active, traceHeight }: {
   const pv = normalizeSlot(slot, post);
   const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
   return (
-    <View style={{ flex: 1, marginHorizontal: 4 }}>
+    <View style={{ flex: 1 }}>
       {/* header — slot label + live POST value */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
         <Text numberOfLines={1} style={{
@@ -533,9 +486,8 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
 }
 
 function PinnedAudioMeters({
-  audioStatus, oscStatus, inputGain, onCommitInputGain,
+  oscStatus, inputGain, onCommitInputGain,
 }: {
-  audioStatus: AudioStatus | null;
   oscStatus: OscPillState | null;
   inputGain: number;
   onCommitInputGain: (g: number) => void;
@@ -585,24 +537,13 @@ function PinnedAudioMeters({
   // length controls went with it (the trace window is now a fixed, calm
   // ~10 s-equivalent scroll — see ADVANCE_HZ in AudioTraceCanvas).
 
-  const micOn       = audioStatus?.enabled === true;
-  const micPhase    = audioStatus?.phase ?? (micOn ? 'unknown' : 'off');
-  // Engine commit 5d830d6 added coded error states. When audioStatus
-  // reports `configured_mic_not_found` or `device_enumeration_failed`
-  // the engine is intentionally not running capture and `enabled` is
-  // false — so the pill needs to escalate from "MIC OFF" (passive) to
-  // "MIC ERR" (warn) so the operator notices on the meter strip even
-  // before scrolling to the banner below.
-  const micCodedErr =
-    audioStatus?.error === 'configured_mic_not_found' ||
-    audioStatus?.error === 'device_enumeration_failed';
-  const micTone: 'on' | 'off' | 'warn' =
-    micCodedErr                 ? 'warn' :
-    !micOn                      ? 'off'  :
-    micPhase === 'error'        ? 'warn' :
-    micPhase === 'restarting'   ? 'warn' :
-                                  'on';
-  const micLabel = micCodedErr ? 'MIC ERR' : (micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF');
+  // The in-engine MIC status pill (MIC LISTENING / RESTARTING / ERR /
+  // OFF) was removed on 2026-06-17 — it reflected the retired in-engine
+  // mic listener, which is obsolete now that the Audio Companion is the
+  // sole analyzer. The cross-machine "configured_mic_not_found" /
+  // "device_enumeration_failed" capture errors still surface in the
+  // MicNotFoundBanner below. The OSC + BPM SYNC pills (which reflect the
+  // Companion's OSC path) stay.
   const oscState  = oscStatus?.state ?? null;
   const oscTone: 'on' | 'off' | 'warn' =
     oscState === 'live'     ? 'on'   :
@@ -630,7 +571,6 @@ function PinnedAudioMeters({
           One picker controls ALL 7 trails (operator never has to think
           about which axis they're tuning). */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-        <StatusPill label={micLabel} tone={micTone} />
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
         <View style={{ flex: 1 }} />
@@ -639,71 +579,71 @@ function PinnedAudioMeters({
           color: C.secondary, letterSpacing: 0.8,
         }}>LIVE · 60 FPS</Text>
       </View>
-      {/* Meters row — DYNAMIC: one SignalColumn per live audio signal the
+      {/* Meters GRID — DYNAMIC: one SignalColumn per live audio signal the
           Companion routes in (low/mid/high/kick, dom1/dom2, energy, slow,
-          build, party, …). The set isn't fixed, so the columns scroll
-          horizontally and the BPM tile rides the right end. INPUT GAIN
-          sits under the meters. */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-        <View style={{ flex: 1, paddingRight: 12 }}>
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: C.secondary, textTransform: 'uppercase',
-            letterSpacing: 1, marginBottom: 8,
-          }}>AUDIO SIGNALS</Text>
-          {slots.length === 0 ? (
-            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
-              No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
-            </Text>
-          ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'flex-start', paddingRight: 8 }}>
-              {slots.map((slot) => (
-                <View key={slot.key} style={{ width: 132 }}>
-                  <SignalColumn
-                    slot={slot}
-                    raw={valueOf(slot.rawKey)}
-                    post={valueOf(slot.postKey)}
-                    active={active}
-                    traceHeight={PINNED_TRACE_HEIGHT}
-                  />
-                </View>
-              ))}
-            </ScrollView>
-          )}
-          {/* INPUT GAIN — software mic-preamp, UNDER the meters. A REAL
-              engine gain (patches audio.bands.inputGain): it lifts the mic
-              bands above the noise gate so a quiet mic/feed drives the
-              meters AND the detectors/patterns. */}
-          <View style={{ marginTop: 10, marginHorizontal: 4, maxWidth: 360 }}>
-            <FaderRow
-              label="INPUT GAIN"
-              suffix="×"
-              min={INPUT_GAIN_MIN}
-              max={INPUT_GAIN_MAX}
-              step={0.1}
-              value={inputGain}
-              hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so the mic bands lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
-              onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
-              onCommit={onCommitInputGain}
-            />
+          build, party, …). Laid out as a 3-column × N-row grid that wraps
+          to new rows (operator brief 2026-06-17) — cleaner than the old
+          single horizontally-scrolling row and closer to the Audio
+          Companion's desktop layout. The BPM tile is the grid's first
+          cell. INPUT GAIN sits under the grid. */}
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+        color: C.secondary, textTransform: 'uppercase',
+        letterSpacing: 1, marginBottom: 8,
+      }}>AUDIO SIGNALS</Text>
+      {slots.length === 0 ? (
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
+          No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
+        </Text>
+      ) : (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {/* BPM tile — biggest single number on the strip — rides as the
+              grid's first cell. No trail under it: BPM ticks at the song's
+              pace, not the analyser's. */}
+          <View style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 14 }}>
+            <View style={{
+              paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
+              backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
+              borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
+                BPM
+              </Text>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
+                {bpm ?? '—'}
+              </Text>
+            </View>
           </View>
+          {slots.map((slot) => (
+            <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 14 }}>
+              <SignalColumn
+                slot={slot}
+                raw={valueOf(slot.rawKey)}
+                post={valueOf(slot.postKey)}
+                active={active}
+                traceHeight={PINNED_TRACE_HEIGHT}
+              />
+            </View>
+          ))}
         </View>
-        {/* BPM tile — biggest single number on the strip. No trail under it:
-            BPM ticks at the song's pace, not the analyser's. */}
-        <View style={{
-          marginLeft: 8, paddingHorizontal: 12, paddingVertical: 4,
-          borderRadius: 10,
-          backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
-          borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
-          minWidth: 72, alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
-            BPM
-          </Text>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
-            {bpm ?? '—'}
-          </Text>
-        </View>
+      )}
+      {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
+          gain (patches audio.bands.inputGain): it lifts the mic bands
+          above the noise gate so a quiet mic/feed drives the meters AND
+          the detectors/patterns. */}
+      <View style={{ marginTop: 4, marginHorizontal: 6, maxWidth: 360 }}>
+        <FaderRow
+          label="INPUT GAIN"
+          suffix="×"
+          min={INPUT_GAIN_MIN}
+          max={INPUT_GAIN_MAX}
+          step={0.1}
+          value={inputGain}
+          hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so the mic bands lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
+          onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
+          onCommit={onCommitInputGain}
+        />
       </View>
     </View>
   );
@@ -1279,18 +1219,6 @@ function AudioConfigBody({
     reload();
   }, [reload]);
 
-  // Master enable/disable. Restarts ffmpeg capture under the hood.
-  const toggleEnabled = useCallback(async () => {
-    if (!cfg) return;
-    const target = !cfg.enabled;
-    setBusy('enable');
-    setCfg(prev => prev && ({ ...prev, enabled: target }));
-    const r = await patchAudioConfig({ enabled: target });
-    setBusy(null);
-    if (!r.ok) { setPatchError(r.error || 'failed to toggle'); reload(); }
-    else { setPatchError(null); reload(); }
-  }, [cfg, reload]);
-
   // Software INPUT GAIN (audio.bands.inputGain) — real engine gain set from
   // the pinned strip slider. Optimistic local update, then patch + reload.
   const commitInputGain = useCallback(async (g: number) => {
@@ -1427,7 +1355,6 @@ function AudioConfigBody({
           gate). All live-data subscriptions live INSIDE this
           component — the body below never reads liveParams. */}
       <PinnedAudioMeters
-        audioStatus={status}
         oscStatus={oscStatus}
         inputGain={cfg?.bands?.inputGain ?? 1}
         onCommitInputGain={commitInputGain}
@@ -1456,34 +1383,18 @@ function AudioConfigBody({
           </View>
         ) : null}
 
-        {/* ── 1. MASTER ENABLE / DISABLE ──────────────────────────────
-            Stays at the top of the scrolling body (above CHAINS) per
-            the coordinator brief — operators reach for this constantly
-            when troubleshooting "why is the kick not firing?" and we
-            don't want them hunting for it inside SETTINGS. */}
-        <View style={CARD}>
-          <SectionHeader
-            icon="power"
-            title="MIC ANALYSIS"
-            hint="Enable the on-device microphone listener (FFT → bands + kick → CPC)."
-          />
-          <MasterToggle
-            on={enabled}
-            busy={busy === 'enable'}
-            onPress={toggleEnabled}
-            label={enabled ? '● LISTENING' : 'DISABLED'}
-            subtitle={enabled
-              ? `${phase.toUpperCase()} · ${status?.captureFps ?? 0} fps · ${cfg.capture.sampleRate} Hz`
-              : 'Tap to start listening. Chains + SETTINGS below are read-only until enabled.'}
-            accent={enabled ? phaseColor : ACCENT_AUTO}
-          />
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 12 }}>
-            This toggle only affects the in-engine mic listener. Signals the Audio Companion
-            designs and routes in over OSC arrive independently and stay live when this is off.
-          </Text>
-        </View>
+        {/* MIC ANALYSIS — RETIRED (2026-06-17). The master enable/disable
+            toggle (MasterToggle) drove the in-engine mic listener's
+            FFT → bands + kick analyzer. That analyzer is obsolete now that
+            the Marsin Audio Companion is the sole analyzer: the engine no
+            longer analyzes audio, and the toggle only fought the Companion
+            for the capture device (producing a confusing "MIC RESTARTING"
+            state). The card + its toggle + the toggleEnabled handler + the
+            in-engine MIC status pill were removed. Capture SOURCE / device
+            config still lives in SETTINGS below. Restore from git history
+            if the in-engine analyzer ever returns. */}
 
-        {/* ── 2. BPM → SPEED SYNC (compact) ─────────────────────────────
+        {/* ── 1. BPM → SPEED SYNC (compact) ─────────────────────────────
             Operator brief 2026-05-26 — pulled out of SETTINGS so the
             mapping is reachable without expanding a disclosure. Tap
             the SYNC pill to flip; min/max sliders side-by-side. The
