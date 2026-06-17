@@ -121,6 +121,14 @@ const TOPIC_BY_TYPE = Object.freeze({
   // docs/29: replayed after every successful PUT/PATCH/reset so iPad
   // reconciles its local cache without re-fetching.
   audioChainsChanged:          TOPICS.CONTROL,
+  // Audio TUNING config (bands.inputGain / bands.sourceSmoothHz /
+  // capture.device / enabled — the operator-tunable analyzer subset).
+  // Broadcast after every PATCH /audio/config + reset so EVERY
+  // subscriber (CaptainPad AND the Audio Companion) mirrors the engine's
+  // single source of truth without re-fetching. Replayed on /ws/control
+  // connect. Low volume, operator-driven — lives next to audioChains-
+  // Changed / audioStatus.
+  audioConfig:                 TOPICS.CONTROL,
 
   // ── /ws/viz ────────────────────────────────────────────────────
   vis:                         TOPICS.VIZ,

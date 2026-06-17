@@ -36,6 +36,7 @@ const S = {
   device: '',
   inputGain: 1.0,
   sourceSmoothHz: 12000,
+  engineLinkConnected: false,   // SHARED-tuning sync to the engine is live
   cal: { phase: 'idle', result: null },
   dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
   struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
@@ -89,6 +90,7 @@ function connect() {
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
+      if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
       seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
@@ -106,6 +108,21 @@ function connect() {
       S.inputGain = m.value; buildGainBar();
     } else if (m.type === 'smooth') {
       S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
+    } else if (m.type === 'engineLink') {
+      // Engine SHARED-tuning sync status (single source of truth). When
+      // connected, gain/smooth/device mirror the engine + CaptainPad live.
+      // When down, we degrade gracefully (analyzing on local tuning). Surface
+      // errors / offline notes so a local-only divergence can't hide.
+      S.engineLinkConnected = !!m.connected;
+      if (m.error) flash('engine sync: ' + m.error, true);
+      else if (m.note) flash(m.note, true);
+    } else if (m.type === 'engineDevice') {
+      // Shared mic device pushed from the engine (CaptainPad / engine picked
+      // it). Mirror the picker selection.
+      if (m.device != null) S.device = m.device;
+      buildSourceBar();
+    } else if (m.type === 'flash') {
+      flash(m.text, !!m.error);
     } else if (m.type === 'calStatus') {
       S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
     } else if (m.type === 'calResult') {

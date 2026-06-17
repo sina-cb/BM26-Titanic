@@ -63,6 +63,7 @@ import {
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal,
   COMPANION_CONFIG_PATH,
 } from './companion_config.js';
+import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -204,6 +205,91 @@ function applySmooth(v) {
   sourceSmoothHz = Math.max(0, Math.min(22050, +v));
   analyzer.reconfigure({ bands: { ...analyzer.bands, sourceSmoothHz }, kick: analyzer.kick });
   specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, sourceSmoothHz }, kick: specAnalyzer.kick });
+}
+
+// ── Engine config link (single source of truth for SHARED audio TUNING) ──────
+// The engine config is authoritative for input gain / source smoothing /
+// capture device. `engineLink` (created at boot when an engine endpoint
+// resolves) SUBSCRIBES to the engine's `audioConfig` broadcasts and WRITES
+// the Companion's own UI changes back via PATCH /audio/config — so a change
+// anywhere (CaptainPad, the engine, or this UI) reflects everywhere.
+//
+// Analysis stays INDEPENDENT (audio/README.md): this is an OPTIONAL enhancer
+// that degrades gracefully when the engine is down. Null until boot resolves
+// an endpoint AND the link is constructed.
+let engineLink = null;
+
+/**
+ * Apply the engine's SHARED audio TUNING to the Companion's live analyzer.
+ * Called on the engine link's seed + every `audioConfig` broadcast (the echo
+ * of any PATCH, from CaptainPad, the engine, or this UI's write-through).
+ *
+ * Only the SHARED subset is consumed here — bands.inputGain, bands.source-
+ * SmoothHz, capture.device. The Companion-ONLY signal DESIGN (signals /
+ * chains / osc_out in companion_config.yaml) is untouched (task scope).
+ *
+ * Idempotent + loop-safe: applyInputGain/applySmooth only reconfigure the
+ * analyzer + echo to UI clients; they never write back to the engine, so an
+ * incoming config frame can't ping-pong. Values that didn't change are
+ * skipped so we don't thrash the capture stream on an unrelated PATCH.
+ */
+function applyEngineSharedTuning(config) {
+  if (!config || typeof config !== 'object') return;
+  const bands = config.bands && typeof config.bands === 'object' ? config.bands : null;
+  if (bands) {
+    if (Number.isFinite(bands.inputGain) && bands.inputGain !== inputGain) {
+      applyInputGain(bands.inputGain);
+      broadcast({ type: 'inputGain', value: inputGain });
+    }
+    if (Number.isFinite(bands.sourceSmoothHz) && bands.sourceSmoothHz !== sourceSmoothHz) {
+      applySmooth(bands.sourceSmoothHz);
+      broadcast({ type: 'smooth', value: sourceSmoothHz });
+    }
+  }
+  const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
+  if (cap && cap.device !== undefined) {
+    const nextDevice = cap.device;
+    if (nextDevice !== configDevice) {
+      configDevice = nextDevice;
+      // If we're live on a mic, restart capture on the new device so the
+      // Companion analyzes the SAME input the engine/CaptainPad selected.
+      // In test/file mode the device is just remembered for the next mic
+      // switch (no disruptive restart). broadcast the device so the UI's
+      // picker reflects the shared selection.
+      if (mode === 'mic') setMode('mic', { device: configDevice });
+      broadcast({ type: 'engineDevice', device: configDevice });
+    }
+  }
+}
+
+/**
+ * WRITE THROUGH a SHARED tuning change to the engine (single source of
+ * truth), then apply locally. The engine persists + rebroadcasts, and
+ * applyEngineSharedTuning reconciles on the echo. We ALSO apply locally
+ * right away (optimistic) so:
+ *   - the Companion stays responsive even though the PATCH is async, and
+ *   - graceful degradation: if the engine is down/unreachable the local
+ *     apply is the ONLY apply and analysis keeps going on the new value.
+ *
+ * `localApply` is a closure that applies + echoes the value to UI clients.
+ * `partial` is the PATCH /audio/config body for the same change. Codex P0:
+ * a failed write-through is surfaced LOUDLY (a flash to the UI), never a
+ * silent swallow — the operator must know the engine didn't persist it.
+ */
+function writeThroughShared(localApply, partial) {
+  // Optimistic local apply first — keeps the analyzer + UI snappy and is
+  // the fallback path when the engine link is absent or down.
+  localApply();
+  if (!engineLink || !engineLink.connected) {
+    // No engine to be the source of truth right now. We DID apply locally
+    // (analysis never blocks), but tell the operator it's local-only so a
+    // "silent-wrong" divergence can't hide (codex: fail loud on misuse).
+    broadcast({ type: 'engineLink', connected: false, note: 'engine offline — tuning applied locally only' });
+    return;
+  }
+  engineLink.patch(partial).catch((e) => {
+    broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: `PATCH failed: ${e && e.message}` });
+  });
 }
 
 // "Dom freq DANCE" — a ghostly follower of each dom freq + cluster width.
@@ -569,11 +655,38 @@ function catalog() {
 function handleMessage(ws, raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
   if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
-  else if (m.type === 'setInputGain') { applyInputGain(m.value); broadcast({ type: 'inputGain', value: inputGain }); }
-  else if (m.type === 'setSmooth') { applySmooth(m.value); broadcast({ type: 'smooth', value: sourceSmoothHz }); }
+  else if (m.type === 'setInputGain') {
+    // SHARED tuning → write through to the engine (single source of truth),
+    // then apply + echo locally. The engine echo reconciles via applyEngine-
+    // SharedTuning; if the engine is down we still applied locally.
+    const v = m.value;
+    writeThroughShared(
+      () => { applyInputGain(v); broadcast({ type: 'inputGain', value: inputGain }); },
+      { bands: { inputGain: Math.max(0, Math.min(64, +v)) } },
+    );
+  }
+  else if (m.type === 'setSmooth') {
+    const v = m.value;
+    writeThroughShared(
+      () => { applySmooth(v); broadcast({ type: 'smooth', value: sourceSmoothHz }); },
+      { bands: { sourceSmoothHz: Math.max(0, Math.min(22050, +v)) } },
+    );
+  }
   else if (m.type === 'calibrate') startCalibration();
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
-  else if (m.type === 'setMode') setMode(m.mode, { file: m.file, device: m.device });
+  else if (m.type === 'setMode') {
+    // Mode (test/mic/file) is Companion-LOCAL, but the mic DEVICE is SHARED.
+    // When the operator picks a mic device here, write it through to the
+    // engine so the selection is the single source of truth everywhere; the
+    // local setMode still runs immediately so the Companion's own capture
+    // switches without waiting on the engine.
+    setMode(m.mode, { file: m.file, device: m.device });
+    if (m.mode === 'mic' && m.device !== undefined && engineLink && engineLink.connected) {
+      engineLink.patch({ capture: { device: m.device } }).catch((e) => {
+        broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: String(e && e.message) });
+      });
+    }
+  }
   else if (m.type === 'addSignal') {
     const res = addSignal(m.source);
     if (res.ok) broadcast({ type: 'signals', signals: design.signals });
@@ -674,6 +787,10 @@ wss.on('connection', (ws) => {
     signals: design.signals, osc: design.osc,
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
+    // Engine SHARED-tuning link state so the UI can show whether gain /
+    // smooth / device are mirrored to the engine (single source of truth)
+    // or running local-only (engine offline → graceful degradation).
+    engineLink: { connected: !!(engineLink && engineLink.connected) },
   }));
   ws.on('message', (d, isBinary) => {
     if (isBinary) {
@@ -699,6 +816,12 @@ wss.on('connection', (ws) => {
 // back to the test source. The OSC TARGET likewise comes from config (engine
 // osc host/port) so we never hardcode where outputs go.
 let configDevice = null;
+// Engine API endpoint for the SHARED-tuning live sync (resolved from
+// config.yaml at boot). Null only if config.yaml can't be read (pure
+// standalone) — then there's no engine to sync against and the Companion
+// runs fully local. The link itself reconnects in the background if the
+// endpoint is set but the engine isn't up yet.
+let engineEndpoint = null;
 function applyEngineConfig() {
   const cfgPath = path.join(__dirname, '..', '..', 'config.yaml');
   let cfg;
@@ -714,8 +837,34 @@ function applyEngineConfig() {
     design.osc = { host: '127.0.0.1', port: cfg.osc.port };
   }
   if (comp && comp.device !== undefined) configDevice = comp.device;
+  // Resolve the engine API endpoint we live-sync the SHARED audio TUNING
+  // against (single source of truth). Loopback default — engine + Companion
+  // share the Pi (same rationale as the OSC target above).
+  engineEndpoint = resolveEngineEndpoint(cfg);
   if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
   return 'test';
+}
+
+/**
+ * Construct + start the engine config link if an endpoint resolved. The link
+ * SUBSCRIBES to the engine's `audioConfig` broadcasts (seeding the analyzer's
+ * gain/smooth/device on connect) and is the write-through target for this
+ * UI's shared-tuning changes. Optional: if the engine is never reachable the
+ * Companion keeps analyzing on its local values and the link retries forever.
+ */
+function startEngineLink() {
+  if (!engineEndpoint) return;
+  engineLink = new EngineConfigLink({
+    host: engineEndpoint.host,
+    port: engineEndpoint.port,
+    onConfig: (config) => applyEngineSharedTuning(config),
+    onStatus: (connected, info) => {
+      broadcast({ type: 'engineLink', connected, ...(info || {}) });
+      if (connected) console.log(`  🔗 engine config link UP → ${engineLink.wsUrl} (shared audio tuning synced)`);
+      else console.log(`  🔌 engine config link DOWN → ${engineLink.wsUrl} (analyzing on local tuning; reconnecting…)`);
+    },
+  });
+  engineLink.start();
 }
 
 const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6966; })();
@@ -724,7 +873,14 @@ resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch((
   // Mic boot can fail with no device (e.g. headless); test is always safe and
   // the operator can switch sources live. Honor config but never crash boot.
   setMode(bootMode === 'mic' ? 'mic' : 'test', { device: configDevice });
+  // Bring up the engine SHARED-tuning link AFTER the analyzer exists (the
+  // onConfig callback drives applyInputGain/applySmooth on it). Reconnects
+  // in the background; analysis never blocks on it.
+  startEngineLink();
   server.listen(PORT, () => {
     console.log(`Audio Companion (signal designer) → http://localhost:${PORT}  → OSC ${design.osc.host}:${design.osc.port}`);
+    if (engineEndpoint) {
+      console.log(`     ↔ engine tuning sync: ${engineEndpoint.host}:${engineEndpoint.port} (single source of truth; degrades gracefully)`);
+    }
   });
 });

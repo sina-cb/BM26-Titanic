@@ -403,6 +403,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // connect so the Audio Analysis tab paints the right state without
   // waiting up to a second for the next 1Hz heartbeat (docs/25 §6.3).
   let lastAudioStatus = null;
+  // Same replay-on-connect contract as lastAudioStatus, but for the
+  // operator-tunable audio CONFIG (bands.inputGain / sourceSmoothHz /
+  // capture.device / enabled). Broadcast on PATCH /audio/config + reset
+  // so EVERY /ws/control subscriber (CaptainPad and the Audio Companion)
+  // mirrors the engine's single source of truth. The Companion uses this
+  // to drive its live analyzer gain/smooth/device. Null until the first
+  // config broadcast — a fresh client then seeds via GET /audio/config.
+  let lastAudioConfig = null;
   // Cached most-recent payloads for replay on WS connect. lastSharedParams
   // is the full canonical CPC doc; lastLiveParams is the audio-derived
   // subset that broadcasts on the `liveParams` channel — see
@@ -3636,6 +3644,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     try {
       if (lastOscStats)    ws.send(JSON.stringify(lastOscStats));
       if (lastAudioStatus) ws.send(JSON.stringify(lastAudioStatus));
+      // Audio TUNING config replay (single source of truth → all
+      // subscribers). Prefer the cached last broadcast; otherwise emit
+      // the engine's current config so a Companion connecting BEFORE the
+      // first PATCH still seeds its analyzer gain/smooth/device.
+      const audioCfg = lastAudioConfig
+        || (engineCore && engineCore.audioState && engineCore.audioState.config
+            ? { type: 'audioConfig', config: engineCore.audioState.config }
+            : null);
+      if (audioCfg) ws.send(JSON.stringify(audioCfg));
     } catch (e) {
       // ignore
     }
@@ -3879,6 +3896,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (data && data.type === 'audioStatus') {
       payload = data;
       lastAudioStatus = data;
+    } else if (data && data.type === 'audioConfig') {
+      // Audio TUNING config rebroadcast (PATCH /audio/config + reset).
+      // Cached so a late-joining /ws/control client (CaptainPad OR the
+      // Audio Companion) gets the current tuning replayed on connect.
+      payload = data;
+      lastAudioConfig = data;
     } else {
       payload = { type: 'stats', ...data };
     }

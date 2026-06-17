@@ -1563,6 +1563,12 @@ async function main() {
       saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
     } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    // Rebroadcast the new config to EVERY /ws/control subscriber so the
+    // engine stays the single source of truth: CaptainPad mirrors its
+    // sliders and the Audio Companion drives its live analyzer gain /
+    // smooth / device off this frame (two-way sync). Low volume,
+    // operator-driven — see ws_topic_routing `audioConfig`.
+    broadcastStatsRef.publish({ type: 'audioConfig', config: audioState.config });
     return audioState.config;
   };
 
@@ -1606,6 +1612,10 @@ async function main() {
       saveSceneAudio(audioState.sceneDir, stripped);
     } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    // Same single-source-of-truth rebroadcast as applyLiveUpdate so a
+    // "Reset to defaults" snaps the Companion's live gain / smooth back
+    // in lockstep with CaptainPad.
+    broadcastStatsRef.publish({ type: 'audioConfig', config: audioState.config });
     return next;
   };
 
