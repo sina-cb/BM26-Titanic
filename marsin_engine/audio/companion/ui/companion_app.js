@@ -220,15 +220,20 @@ function buildSidebar() {
   }
 }
 
-// Adding a signal prompts for a RAW source (contract: intensity/frequency).
+// Adding a signal opens a themed picker (no native prompt) — a grid of the raw
+// sources, each card showing its label + type; click adds it and closes.
 function promptAddSignal() {
-  const ids = Object.keys(S.rawSources);
-  const lines = ids.map((id, i) => `${i + 1}) ${S.rawSources[id].label} (${S.rawSources[id].type})`);
-  const pick = window.prompt('Add a signal — pick a raw source:\n' + lines.join('\n') + '\n\nEnter a number:', '1');
-  if (pick == null) return;
-  const idx = parseInt(pick, 10) - 1;
-  if (!(idx >= 0 && idx < ids.length)) { flash('no such source', true); return; }
-  send({ type: 'addSignal', source: ids[idx] });
+  const grid = $('add-grid');
+  grid.innerHTML = '';
+  for (const id of Object.keys(S.rawSources)) {
+    const src = S.rawSources[id];
+    const card = el('button', 'add-card');
+    card.style.setProperty('--src-accent', SOURCE_ACCENT[id] || '#9aa');
+    card.innerHTML = `<span class="add-card-label">${src.label}</span><span class="add-card-type">${src.type}</span>`;
+    card.onclick = () => { send({ type: 'addSignal', source: id }); $('add-modal').style.display = 'none'; };
+    grid.appendChild(card);
+  }
+  $('add-modal').style.display = 'flex';
 }
 function removeSignal(id) {
   const sig = signalById(id);
@@ -712,6 +717,11 @@ $('export-btn').onclick = () => send({ type: 'export' });
 $('export-close').onclick = () => $('export-modal').style.display = 'none';
 $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text').value); flash('copied'); };
 const saveBtn = $('export-save'); if (saveBtn) saveBtn.onclick = () => send({ type: 'exportSave' });
+$('add-close').onclick = () => $('add-modal').style.display = 'none';
+// Click the dark backdrop (outside the box) to dismiss any modal.
+for (const mid of ['add-modal', 'export-modal', 'browse-modal']) {
+  const m = $(mid); if (m) m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
+}
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
