@@ -217,6 +217,7 @@ function signalName(sig) {
 const CURATED_OUTPUTS = {
   micLow: '/marsin/mic/low', micMid: '/marsin/mic/mid', micHigh: '/marsin/mic/high',
   micKick: '/marsin/mic/kick', micDomFreq1: '/marsin/dom/freq1', micDomFreq2: '/marsin/dom/freq2',
+  micDomEnergy1: '/marsin/dom/energy1', micDomEnergy2: '/marsin/dom/energy2',
 };
 function slugName(name) {
   return (typeof name === 'string' ? name : '')

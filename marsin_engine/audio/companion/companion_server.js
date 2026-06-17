@@ -768,24 +768,22 @@ function setMode(next, opts = {}) {
 function uid(prefix) { return `${prefix}_${Math.random().toString(36).slice(2, 7)}`; }
 
 // Add a signal from a raw source. A new signal is IMMEDIATELY an OUTPUT: it is
-// born with a terminal `osc_out` tap already attached, routed to the engine at
-// `/marsin/audio/<cpcKey>` where cpcKey defaults to the source label lowercased
-// plus a short uid (the operator can rename via the cpcKey field). This means
-// the moment a signal is added it shows up in CaptainPad (the manifest POST in
-// `pushManifest` notifies the engine). Returns { ok, signal } | { ok:false, error }.
+// born with a terminal `osc_out` tap already attached. Single-name rehaul: the
+// tap carries ONE `name` (the operator-facing identifier that derives the
+// cpcKey + /marsin/audio/<slug> address AND is the display label); the operator
+// renames it via the name field. The default name is source-derived + a short
+// uid so two signals from the same source never collide. The moment a signal is
+// added it shows up in CaptainPad (pushManifest notifies the engine). Returns
+// { ok, signal } | { ok:false, error }.
 function addSignal(sourceId) {
   const src = RAW_SOURCES[sourceId];
   if (!src) return { ok: false, error: `unknown raw source "${sourceId}"` };
   const slug = sourceId.replace(/^raw/, '').toLowerCase();
   const id = uid(slug);
-  const label = src.label;
-  // cpcKey: source-derived + a short uid so two signals from the same source
-  // never collide. The operator can rename it; address tracks /marsin/audio/<key>.
-  const cpcKey = `${slug}_${Math.random().toString(36).slice(2, 6)}`;
-  const address = `/marsin/audio/${cpcKey}`;
+  const name = `${slug}_${Math.random().toString(36).slice(2, 6)}`;
   const sig = {
-    id, label, source: sourceId, type: src.type, output: true,
-    chain: [{ id: `${id}_out`, type: 'osc_out', enabled: true, params: { address, cpcKey } }],
+    id, label: name, source: sourceId, type: src.type, output: true,
+    chain: [{ id: `${id}_out`, type: 'osc_out', enabled: true, params: { name } }],
   };
   const v = validateSignal(sig);
   if (!v.ok) return { ok: false, error: v.error };

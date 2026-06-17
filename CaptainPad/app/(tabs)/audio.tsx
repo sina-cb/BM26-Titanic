@@ -1176,7 +1176,7 @@ function AudioConfigBody({
   // the pinned strip slider. Optimistic local update, then patch + reload.
   const commitInputGain = useCallback(async (g: number) => {
     if (!cfg) return;
-    const clamped = Math.max(0, Math.min(64, g));
+    const clamped = Math.max(INPUT_GAIN_MIN, Math.min(INPUT_GAIN_MAX, g));
     setCfg(prev => prev && ({ ...prev, bands: { ...prev.bands, inputGain: clamped } }));
     const r = await patchAudioConfig({ bands: { inputGain: clamped } });
     if (!r.ok) { setPatchError(r.error || 'failed to set input gain'); reload(); }
@@ -1371,7 +1371,7 @@ function AudioConfigBody({
                 SETTINGS
               </Text>
               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-                Source · Overall gain · Device · Engine · Reset
+                Overall gain · Device · Engine · Reset
               </Text>
             </View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary }}>
