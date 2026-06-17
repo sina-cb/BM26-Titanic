@@ -615,9 +615,10 @@ function applyContinuousModulation(
 
   // OFFSET — add to the static value.
   if (polarity === 'bipolar') {
+    // SYMMETRIC ±swing: 0.5 = static, swings by mag = max(|min|,|max|).
     const bs = sc * 2 - 1; // [-1, 1]
-    const offset = bs >= 0 ? bs * max : bs * (-min);
-    return modClamp01(baseClamped + offset);
+    const mag = Math.max(Math.abs(min), Math.abs(max));
+    return modClamp01(baseClamped + bs * mag);
   }
   // OFFSET / unipolar — one-sided: base + scaled signal.
   return modClamp01(baseClamped + scaled);

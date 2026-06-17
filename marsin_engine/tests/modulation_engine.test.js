@@ -66,19 +66,24 @@ test('offset + bipolar: spans [static+min, static+max] (linear)', () => {
   approx(up, 0.7);     // static + max
 });
 
-test('offset + bipolar: asymmetric range [-1, 0] is honored (any scaling)', () => {
-  const base = 0.8;
-  // sc=1 → bs=1 → offset = 1*max = 0 → static. sc=0 → bs=-1 → offset = -1*(-(-1)) = -1 → static-1.
+test('offset + bipolar is SYMMETRIC: swing = max(|min|,|max|) around static', () => {
+  const base = 0.5;
+  // Asymmetric range [-0.3, 0.1] ⇒ mag = max(0.3,0.1) = 0.3, symmetric ±0.3.
   const up = applyContinuousModulation({
     baseNorm: base, sourceNorm: 1, mode: 'offset', polarity: 'bipolar',
-    range: [-1, 0], curve: 'linear',
+    range: [-0.3, 0.1], curve: 'linear',
+  });
+  const mid = applyContinuousModulation({
+    baseNorm: base, sourceNorm: 0.5, mode: 'offset', polarity: 'bipolar',
+    range: [-0.3, 0.1], curve: 'linear',
   });
   const down = applyContinuousModulation({
     baseNorm: base, sourceNorm: 0, mode: 'offset', polarity: 'bipolar',
-    range: [-1, 0], curve: 'linear',
+    range: [-0.3, 0.1], curve: 'linear',
   });
-  approx(up, base);          // static + max(=0)
-  approx(down, 0);           // static + min(=-1) → clamped at 0
+  approx(up, 0.8);    // static + mag
+  approx(mid, 0.5);   // static (0.5 = neutral under linear)
+  approx(down, 0.2);  // static - mag (symmetric, not the asymmetric +0.1/-0.3)
 });
 
 test('CURVE is applied to the SIGNAL: easeIn moves less at mid-signal (offset/unipolar)', () => {

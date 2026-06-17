@@ -157,14 +157,15 @@ export function applyContinuousModulation({
 
   // OFFSET — add to the static value.
   if (polarity === 'bipolar') {
-    // The signal's CENTRE (0.5) = the static value (no change); below centre
-    // pulls toward static+min, above centre pushes toward static+max. Spans
-    // [static+min, static+max] and handles asymmetric/negative ranges (the
-    // curve already shaped the signal). For a symmetric range like [-0.3,0.3]
-    // this is the classic ±swing around the static value.
+    // SYMMETRIC ±swing around the static value: the signal's CENTRE (0.5) =
+    // static, and it swings symmetrically by mag = max(|min|, |max|). signal
+    // 0 → static-mag, 0.5 → static, 1 → static+mag. (The UI stores bipolar as a
+    // symmetric [-mag, mag] range; an asymmetric REST range is treated by its
+    // larger magnitude so the swing stays symmetric. Curve already shaped the
+    // signal, so 0.5-neutral holds under linear.)
     const bs = sc * 2 - 1;                       // [-1, 1]
-    const offset = bs >= 0 ? bs * max : bs * (-min);
-    return clamp01(base + offset);
+    const mag = Math.max(Math.abs(min), Math.abs(max));
+    return clamp01(base + bs * mag);
   }
   // OFFSET / unipolar — a one-sided offset: static + scaled signal. At signal
   // rest (0) the offset is `min` (0 for the usual [0, x] range, so the param
