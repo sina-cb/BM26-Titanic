@@ -1,12 +1,17 @@
 # companion_config.yaml — Audio Companion signal-designer output design.
 # Persisted by the UI "Export config" action; loaded on boot.
 # Schema + loader: audio/companion/companion_config.js. (2026-06-17 contract.)
+#
+# Single-name rehaul: each osc_out carries ONE `name`. cpcKey + address are
+# DERIVED (cpcKey=slug(name), address=/marsin/audio/<cpcKey>). The curated
+# defaults are named for their canonical CPC key (micLow … micDomFreq2) so
+# they keep their engine-bound addresses (CURATED_OUTPUTS in companion_config.js).
 osc:
   host: 127.0.0.1
   port: 10000
 signals:
   - id: low
-    label: LOW
+    label: micLow
     source: rawLow
     type: intensity
     chain:
@@ -19,11 +24,10 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/mic/low
-          cpcKey: micLow
+          name: micLow
     output: true
   - id: mid
-    label: MID
+    label: micMid
     source: rawMid
     type: intensity
     chain:
@@ -36,11 +40,10 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/mic/mid
-          cpcKey: micMid
+          name: micMid
     output: true
   - id: high
-    label: HIGH
+    label: micHigh
     source: rawHigh
     type: intensity
     chain:
@@ -53,11 +56,10 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/mic/high
-          cpcKey: micHigh
+          name: micHigh
     output: true
   - id: kick
-    label: KICK
+    label: micKick
     source: rawKick
     type: intensity
     chain:
@@ -70,11 +72,10 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/mic/kick
-          cpcKey: micKick
+          name: micKick
     output: true
   - id: dom1
-    label: DOM1
+    label: micDomFreq1
     source: rawDom1
     type: frequency
     chain:
@@ -82,11 +83,10 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/dom/freq1
-          cpcKey: micDomFreq1
+          name: micDomFreq1
     output: true
   - id: dom2
-    label: DOM2
+    label: micDomFreq2
     source: rawDom2
     type: frequency
     chain:
@@ -94,8 +94,7 @@ signals:
         type: osc_out
         enabled: true
         params:
-          address: /marsin/dom/freq2
-          cpcKey: micDomFreq2
+          name: micDomFreq2
     output: true
 # Custom VIEWS (VISUALIZERS). The legacy DOM DANCE is now a dancing-balls view
 # instance fed both dom signals (contract §"Companion custom VIEWS").

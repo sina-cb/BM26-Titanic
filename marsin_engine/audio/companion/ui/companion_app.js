@@ -194,14 +194,33 @@ const clamp01 = (x) => (x > 1 ? 1 : x > 0 ? x : 0);
 const signalById = (id) => S.signals.find(s => s.id === id);
 const viewById = (id) => S.views.find(v => v.id === id);
 const accent = (id) => { const s = signalById(id); return s ? (SOURCE_ACCENT[s.source] || '#9aa') : '#9aa'; };
-// A signal's DISPLAY NAME is its osc_out cpcKey (the CPC key it feeds the
-// engine), falling back to the source-based label when there's no osc_out /
-// no cpcKey yet (contract 2026-06-17). The internal id is never the name.
+// A signal's DISPLAY NAME is its osc_out `name` (single-name rehaul) — the one
+// operator-facing identifier that ALSO derives the engine cpcKey + OSC address
+// and is the label shown in CaptainPad. Falls back to the source label when
+// the chain has no osc_out tap. The internal id is never the name.
 function signalName(sig) {
   if (!sig) return '';
   const tap = sig.chain && sig.chain.find(o => o.type === 'osc_out');
-  const cpcKey = tap && tap.params && tap.params.cpcKey;
-  return (typeof cpcKey === 'string' && cpcKey.trim()) ? cpcKey.trim() : sig.label;
+  const name = tap && tap.params && tap.params.name;
+  return (typeof name === 'string' && name.trim()) ? name.trim() : sig.label;
+}
+
+// Client-side mirror of the server's resolveOscOut (companion_config.js) — used
+// ONLY for the read-only "→ address" hint under the name field. A curated name
+// keeps its canonical engine-bound address; any other name slug-derives. Keep
+// in sync with CURATED_OUTPUTS / slug there.
+const CURATED_OUTPUTS = {
+  micLow: '/marsin/mic/low', micMid: '/marsin/mic/mid', micHigh: '/marsin/mic/high',
+  micKick: '/marsin/mic/kick', micDomFreq1: '/marsin/dom/freq1', micDomFreq2: '/marsin/dom/freq2',
+};
+function slugName(name) {
+  return (typeof name === 'string' ? name : '')
+    .trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+function oscAddressForName(name) {
+  if (CURATED_OUTPUTS[name]) return CURATED_OUTPUTS[name];
+  const s = slugName(name);
+  return s ? `/marsin/audio/${s}` : '(invalid name)';
 }
 function setStatus(t, c) { const e = $('status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 let flashT = 0;
@@ -477,10 +496,7 @@ function opParams(sig, op, i) {
   const wrap = el('div', 'op-params');
   const schema = S.ops[op.type]?.params || {};
   for (const [pname, pdef] of Object.entries(schema)) {
-    if (op.params[pname] === undefined && pdef.optional) {
-      // osc_out.cpcKey is an optional label — always show an editable box.
-      if (!(op.type === 'osc_out' && pname === 'cpcKey')) continue;
-    }
+    if (op.params[pname] === undefined && pdef.optional) continue;
     if (op.type === 'gain' && pname === 'paramKey') {
       if (op.params.paramKey) wrap.appendChild(el('div', 'param-static', `gain ← <b>${op.params.paramKey}</b>`));
       continue;
@@ -496,20 +512,26 @@ function opParams(sig, op, i) {
         sel.onchange = () => { op.params[pname] = sel.value; pushChain(sig.id); };
         row.appendChild(sel);
       } else {
-        // free text (osc_out address / cpcKey).
+        // free text — osc_out `name` (the single operator-facing identifier).
         const inp = el('input', 'pv-input'); inp.type = 'text'; inp.style.width = '120px'; inp.style.textAlign = 'left';
         inp.value = cur != null ? cur : '';
-        inp.placeholder = pname === 'address' ? '/marsin/…' : '(cpc key)';
+        inp.placeholder = (op.type === 'osc_out' && pname === 'name') ? '(name)' : '';
         inp.onchange = () => {
           const v = inp.value.trim();
           if (v === '' && pdef.optional) delete op.params[pname];
           else op.params[pname] = v;
           pushChain(sig.id);
-          // The osc_out cpcKey IS the signal's display name — live-update the
-          // sidebar label + chain header the moment it's edited.
-          if (op.type === 'osc_out' && pname === 'cpcKey') { buildSidebar(); renderChain(); }
+          // The osc_out `name` IS the signal's display name AND derives the
+          // CPC key + address — live-update the sidebar label + chain header
+          // (and the derived-address hint) the moment it's edited.
+          if (op.type === 'osc_out' && pname === 'name') { buildSidebar(); renderChain(); }
         };
         row.appendChild(inp);
+        // Read-only derived-address hint: the name SETS the address (the
+        // operator never edits it). Shows where this output routes.
+        if (op.type === 'osc_out' && pname === 'name') {
+          row.appendChild(el('span', 'param-derived', `→ ${oscAddressForName(cur)}`));
+        }
       }
     } else {
       const { min, max, step } = sliderRange(op.type, pname, pdef, sig.type);

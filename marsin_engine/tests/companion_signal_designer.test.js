@@ -15,13 +15,13 @@ import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
 import {
-  opCatalog, validateChain, SignalPostProcessor,
+  opCatalog, validateChain, SignalPostProcessor, slug, oscAddressForName,
 } from '../audio/postproc/signal_post_processor.js';
 import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, VIEW_TYPES,
   defaultCompanionConfig, validateCompanionConfig, validateSignal, validateView,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
-  domEnergyFor, parseCaptureDevice, captureDeviceString, DOM_ENERGY,
+  domEnergyFor, parseCaptureDevice, captureDeviceString, DOM_ENERGY, resolveOscOut,
 } from '../audio/companion/companion_config.js';
 import { ParamCenter } from '../lib/param_center.js';
 import { OscListener } from '../lib/osc_listener.js';
@@ -32,11 +32,12 @@ function makePc() {
 
 // ── 1) osc_out op ─────────────────────────────────────────────────────────────
 
-test('opCatalog includes osc_out with address + optional cpcKey', () => {
+test('opCatalog osc_out carries a single name param (no address/cpcKey)', () => {
   const cat = opCatalog();
   assert.ok(cat.osc_out, 'osc_out present in catalog');
-  assert.equal(cat.osc_out.params.address.type, 'string');
-  assert.equal(cat.osc_out.params.cpcKey.optional, true);
+  assert.equal(cat.osc_out.params.name.type, 'string');
+  assert.equal(cat.osc_out.params.address, undefined, 'no separate address param');
+  assert.equal(cat.osc_out.params.cpcKey, undefined, 'no separate cpcKey param');
 });
 
 test('osc_out is identity in the DSP chain (does not alter the value)', () => {
@@ -44,7 +45,7 @@ test('osc_out is identity in the DSP chain (does not alter the value)', () => {
   const proc = new SignalPostProcessor({ paramCenter: pc });
   proc.putChain('micLow', [
     { id: 'g', type: 'gain', enabled: true, params: { value: 0.5 } },
-    { id: 'o', type: 'osc_out', enabled: true, params: { address: '/marsin/mic/low', cpcKey: 'micLow' } },
+    { id: 'o', type: 'osc_out', enabled: true, params: { name: 'micLow' } },
   ]);
   // 0.8 × 0.5 = 0.4, then osc_out passes through unchanged.
   assert.ok(Math.abs(proc.process('micLow', 0.8, 0.01) - 0.4) < 1e-9);
@@ -52,7 +53,7 @@ test('osc_out is identity in the DSP chain (does not alter the value)', () => {
 
 test('osc_out must be the LAST op (terminal tap)', () => {
   const r = validateChain('micLow', [
-    { id: 'o', type: 'osc_out', params: { address: '/x/y' } },
+    { id: 'o', type: 'osc_out', params: { name: 'xy' } },
     { id: 'g', type: 'gain', params: { value: 1 } },
   ]);
   assert.equal(r.ok, false);
@@ -61,26 +62,65 @@ test('osc_out must be the LAST op (terminal tap)', () => {
 
 test('at most one osc_out per chain', () => {
   const r = validateChain('micLow', [
-    { id: 'o1', type: 'osc_out', params: { address: '/a/b' } },
-    { id: 'o2', type: 'osc_out', params: { address: '/c/d' } },
+    { id: 'o1', type: 'osc_out', params: { name: 'ab' } },
+    { id: 'o2', type: 'osc_out', params: { name: 'cd' } },
   ]);
   assert.equal(r.ok, false);
   assert.match(r.error, /at most one osc_out/);
 });
 
-test('osc_out rejects a non-path address', () => {
-  for (const addr of ['nope', 'mic/low', '/has space']) {
-    const r = validateChain('micLow', [{ id: 'o', type: 'osc_out', params: { address: addr } }]);
-    assert.equal(r.ok, false, `address "${addr}" should reject`);
-    assert.match(r.error, /osc_out address/);
+test('osc_out rejects a name with no usable slug', () => {
+  for (const name of ['', '   ', '!!!', '---']) {
+    const r = validateChain('micLow', [{ id: 'o', type: 'osc_out', params: { name } }]);
+    assert.equal(r.ok, false, `name "${name}" should reject`);
+    // Empty/whitespace fails the generic non-empty-string check; all-punctuation
+    // fails the osc_out slug check — both mention "name".
+    assert.match(r.error, /name/);
   }
 });
 
-test('osc_out accepts a valid OSC path + carries cpcKey through normalization', () => {
-  const r = validateChain('micLow', [{ id: 'o', type: 'osc_out', params: { address: '/marsin/audio/energy', cpcKey: 'audioEnergyRatio' } }]);
+test('osc_out accepts a name and carries it through normalization', () => {
+  const r = validateChain('micLow', [{ id: 'o', type: 'osc_out', params: { name: 'crowd Roar!' } }]);
   assert.equal(r.ok, true, r.error);
-  assert.equal(r.normalized[0].params.address, '/marsin/audio/energy');
-  assert.equal(r.normalized[0].params.cpcKey, 'audioEnergyRatio');
+  assert.equal(r.normalized[0].params.name, 'crowd Roar!');
+});
+
+test('slug derives a cpc-safe key from a name; oscAddressForName builds the path', () => {
+  assert.equal(slug('Crowd Roar!'), 'crowd_roar');
+  assert.equal(slug('  dom1  '), 'dom1');
+  assert.equal(slug('a--b__c'), 'a_b_c');
+  assert.equal(slug('!!!'), '');
+  assert.equal(oscAddressForName('Flux Test'), '/marsin/audio/flux_test');
+});
+
+test('resolveOscOut: curated names keep their canonical address; others slug-derive; empty throws', () => {
+  assert.deepEqual(resolveOscOut('micLow'), { name: 'micLow', cpcKey: 'micLow', address: '/marsin/mic/low' });
+  assert.deepEqual(resolveOscOut('micDomFreq1'), { name: 'micDomFreq1', cpcKey: 'micDomFreq1', address: '/marsin/dom/freq1' });
+  assert.deepEqual(resolveOscOut('Flux Test'), { name: 'Flux Test', cpcKey: 'flux_test', address: '/marsin/audio/flux_test' });
+  assert.throws(() => resolveOscOut('!!!'), /slug is empty/);
+});
+
+test('old-shape osc_out {address,cpcKey} migrates to {name}; label becomes the name', () => {
+  const v = validateSignal({
+    id: 's', label: 'OLD LABEL', source: 'rawLow', type: 'intensity',
+    chain: [{ id: 'o', type: 'osc_out', enabled: true, params: { address: '/marsin/audio/foo', cpcKey: 'foo' } }],
+  });
+  assert.equal(v.ok, true, v.error);
+  const tap = v.normalized.chain[v.normalized.chain.length - 1];
+  assert.equal(tap.params.name, 'foo');
+  assert.equal(tap.params.address, undefined);
+  assert.equal(tap.params.cpcKey, undefined);
+  assert.equal(v.normalized.label, 'foo', 'label collapses to the osc_out name');
+});
+
+test('two outputs resolving to the same cpcKey are rejected (uniqueness)', () => {
+  assert.throws(() => validateCompanionConfig({
+    osc: { host: '127.0.0.1', port: 10000 },
+    signals: [
+      { id: 'a', label: 'A', source: 'rawLow', type: 'intensity', chain: [{ id: 'ao', type: 'osc_out', enabled: true, params: { name: 'dup' } }] },
+      { id: 'b', label: 'B', source: 'rawMid', type: 'intensity', chain: [{ id: 'bo', type: 'osc_out', enabled: true, params: { name: 'Dup!' } }] },
+    ],
+  }), /resolve to cpcKey/);
 });
 
 // ── 2) companion_config ──────────────────────────────────────────────────────

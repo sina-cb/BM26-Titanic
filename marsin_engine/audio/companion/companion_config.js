@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 import yaml from 'js-yaml';
 
-import { KNOWN_SIGNALS, validateChain } from '../postproc/signal_post_processor.js';
+import { KNOWN_SIGNALS, validateChain, slug } from '../postproc/signal_post_processor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +81,67 @@ export function domEnergyFor(source) {
   return DOM_ENERGY[source] || null;
 }
 
+// ── osc_out NAME → cpcKey / address (single-name rehaul) ──────────────────────
+// The osc_out op carries ONE operator-facing `name`. cpcKey + address are
+// DERIVED from it (the operator never edits them directly):
+//   cpcKey  = slug(name)            address = /marsin/audio/<cpcKey>
+//
+// EXCEPTION — the CURATED built-in outputs. The engine binds a fixed set of
+// canonical addresses (/marsin/mic/low → micLow, /marsin/dom/freq1 →
+// micDomFreq1, …) and the rest of the show (AudioStructureDetector,
+// DerivedSignals, every pattern's modulation source) reads those EXACT keys.
+// They must NOT be slug-mangled (e.g. micLow → "miclow" would orphan the
+// mission-critical audio→light path). So a name that EQUALS a curated CPC key
+// keeps that key + its canonical address; every OTHER name slug-derives. The
+// operator still edits only the name; these are derivation rules, not editable
+// fields. Curated map mirrors audio/postproc/audio_signals.js oscAddress fields.
+export const CURATED_OUTPUTS = Object.freeze({
+  micLow:      '/marsin/mic/low',
+  micMid:      '/marsin/mic/mid',
+  micHigh:     '/marsin/mic/high',
+  micKick:     '/marsin/mic/kick',
+  micDomFreq1: '/marsin/dom/freq1',
+  micDomFreq2: '/marsin/dom/freq2',
+});
+
+/**
+ * Resolve an osc_out `name` → its derived { name, cpcKey, address }.
+ *   - a CURATED name keeps its canonical cpcKey + engine-bound address,
+ *   - any other name derives cpcKey = slug(name), address = /marsin/audio/<cpcKey>.
+ * Throws when slug(name) is empty (Codex P0: fail loud, never substitute a
+ * silent fallback key). Callers that want a soft check use slug() directly.
+ */
+export function resolveOscOut(name) {
+  if (CURATED_OUTPUTS[name]) {
+    return { name, cpcKey: name, address: CURATED_OUTPUTS[name] };
+  }
+  const cpcKey = slug(name);
+  if (!cpcKey) {
+    throw new Error(`osc_out name "${name}" has no usable letters/digits (slug is empty)`);
+  }
+  return { name, cpcKey, address: `/marsin/audio/${cpcKey}` };
+}
+
+/**
+ * The terminal osc_out tap of a (validated) signal, or null. The tap is the
+ * LAST op when it is an osc_out (validateChain guarantees terminal position).
+ */
+export function oscOutTapOf(sig) {
+  const last = sig && Array.isArray(sig.chain) && sig.chain.length > 0
+    ? sig.chain[sig.chain.length - 1] : null;
+  return last && last.type === 'osc_out' ? last : null;
+}
+
+/**
+ * The cpcKey an OUTPUT signal resolves to (from its osc_out name), or null for
+ * a non-output signal. Throws via resolveOscOut if the name slugs to empty.
+ */
+export function outputCpcKeyOf(sig) {
+  const tap = oscOutTapOf(sig);
+  if (!tap) return null;
+  return resolveOscOut(tap.params.name).cpcKey;
+}
+
 // ── Source-mode ↔ capture.device mapping (2026-06-17 contract §"Source-mode
 // sync CaptainPad↔Companion") ────────────────────────────────────────────────
 // CaptainPad/engine carry the SOURCE as a single `capture.device` string:
@@ -131,30 +192,35 @@ export const FREQUENCY_ONLY_OPS = Object.freeze(['danceMaker']);
  * raw source → osc_out tap. Intensity bands get a gentle smoothing LPF
  * before the tap so the engine receives a clean value; frequency signals
  * pass straight to the tap (the Hz is meaningful unsmoothed).
+ *
+ * Single-name rehaul: each osc_out carries ONE `name`. The curated defaults
+ * are named for their canonical CPC key (micLow, micDomFreq1, …) so
+ * resolveOscOut maps them back to the engine-bound address (CURATED_OUTPUTS) —
+ * the mission-critical audio→light path keeps its exact keys. label = name.
  */
 export function defaultCompanionConfig() {
-  const intensity = (id, label, source, address, cpcKey, smoothHz) => ({
-    id, label, source, type: 'intensity', output: true,
+  const intensity = (id, name, source, smoothHz) => ({
+    id, label: name, source, type: 'intensity', output: true,
     chain: [
       { id: `${id}_lpf`, type: 'lpf', enabled: true, params: { cutoffHz: smoothHz } },
-      { id: `${id}_out`, type: 'osc_out', enabled: true, params: { address, cpcKey } },
+      { id: `${id}_out`, type: 'osc_out', enabled: true, params: { name } },
     ],
   });
-  const frequency = (id, label, source, address, cpcKey) => ({
-    id, label, source, type: 'frequency', output: true,
+  const frequency = (id, name, source) => ({
+    id, label: name, source, type: 'frequency', output: true,
     chain: [
-      { id: `${id}_out`, type: 'osc_out', enabled: true, params: { address, cpcKey } },
+      { id: `${id}_out`, type: 'osc_out', enabled: true, params: { name } },
     ],
   });
   return {
     osc: { host: '127.0.0.1', port: 10000 },
     signals: [
-      intensity('low',  'LOW',  'rawLow',  '/marsin/mic/low',  'micLow',  5.5),
-      intensity('mid',  'MID',  'rawMid',  '/marsin/mic/mid',  'micMid',  8.0),
-      intensity('high', 'HIGH', 'rawHigh', '/marsin/mic/high', 'micHigh', 14.0),
-      intensity('kick', 'KICK', 'rawKick', '/marsin/mic/kick', 'micKick', 18.0),
-      frequency('dom1', 'DOM1', 'rawDom1', '/marsin/dom/freq1', 'micDomFreq1'),
-      frequency('dom2', 'DOM2', 'rawDom2', '/marsin/dom/freq2', 'micDomFreq2'),
+      intensity('low',  'micLow',      'rawLow',  5.5),
+      intensity('mid',  'micMid',      'rawMid',  8.0),
+      intensity('high', 'micHigh',     'rawHigh', 14.0),
+      intensity('kick', 'micKick',     'rawKick', 18.0),
+      frequency('dom1', 'micDomFreq1', 'rawDom1'),
+      frequency('dom2', 'micDomFreq2', 'rawDom2'),
     ],
     // The legacy DOM DANCE is now a dancing-balls VIEW instance fed BOTH dom
     // signals (not a hardcoded one-off) — contract §"dancing-balls".
@@ -178,6 +244,24 @@ function isPlainObject(v) {
  * engine uses, never a fork (companion HARD RULE). For type-awareness we
  * additionally reject Hz-invalid ops on frequency signals.
  */
+// Back-compat: an OLD persisted osc_out op carried `{ address, cpcKey }` (no
+// `name`). The single-name rehaul replaces those with one `name`. Migrate an
+// old op to the new shape IN PLACE of the chain (without mutating the caller's
+// object) — derive `name` from the existing cpcKey, falling back to the
+// signal's label. NEW-shape ops (already carrying `name`) pass through. This is
+// the ONLY non-error path for a name-less osc_out: a fresh op must always have
+// a name (validateChain rejects one without).
+function migrateOscOutOp(op, fallbackLabel) {
+  if (!op || op.type !== 'osc_out' || !isPlainObject(op.params)) return op;
+  if (typeof op.params.name === 'string') return op;   // already new shape
+  const p = op.params;
+  const legacyName = (typeof p.cpcKey === 'string' && p.cpcKey.trim())
+    ? p.cpcKey.trim()
+    : (typeof fallbackLabel === 'string' && fallbackLabel.trim() ? fallbackLabel.trim() : '');
+  // Drop the old address/cpcKey params; carry the derived name forward.
+  return { id: op.id, type: op.type, enabled: op.enabled, params: { name: legacyName } };
+}
+
 export function validateSignal(sig) {
   if (!isPlainObject(sig)) return { ok: false, error: 'signal must be an object' };
   if (typeof sig.id !== 'string' || !sig.id.trim()) {
@@ -198,16 +282,19 @@ export function validateSignal(sig) {
   if (!Array.isArray(sig.chain)) {
     return { ok: false, error: `signal "${sig.id}".chain must be an array of ops` };
   }
+  // Single-name rehaul: migrate any OLD-shape osc_out ({address,cpcKey}) to the
+  // new {name} shape before validation (back-compat load, Codex P0 no crash).
+  const chain = sig.chain.map(op => migrateOscOutOp(op, sig.label));
   // Type-aware op gate: frequency signals may only carry Hz-valid ops;
   // intensity signals may not carry frequency-only ops (e.g. danceMaker).
   if (sig.type === 'frequency') {
-    for (const op of sig.chain) {
+    for (const op of chain) {
       if (op && typeof op.type === 'string' && !FREQUENCY_OPS.includes(op.type)) {
         return { ok: false, error: `signal "${sig.id}": op "${op.type}" is intensity-only; frequency signals may only use ${FREQUENCY_OPS.join(', ')}` };
       }
     }
   } else {
-    for (const op of sig.chain) {
+    for (const op of chain) {
       if (op && typeof op.type === 'string' && FREQUENCY_ONLY_OPS.includes(op.type)) {
         return { ok: false, error: `signal "${sig.id}": op "${op.type}" is frequency-only; intensity signals may not use ${FREQUENCY_ONLY_OPS.join(', ')}` };
       }
@@ -221,13 +308,20 @@ export function validateSignal(sig) {
   // Hz bounds (e.g. 40–4000 Hz) instead of [0,1] — the SAME validator, only
   // the accepted clamp range widens (companion contract 2026-06-17).
   const ctxKey = KNOWN_SIGNALS[0];
-  const v = validateChain(ctxKey, sig.chain, { hz: sig.type === 'frequency' });
+  const v = validateChain(ctxKey, chain, { hz: sig.type === 'frequency' });
   if (!v.ok) return { ok: false, error: `signal "${sig.id}" chain: ${v.error}` };
-  const output = sig.chain.some(op => op.type === 'osc_out');
+  const output = v.normalized.some(op => op.type === 'osc_out');
+  // ONE NAME EVERYWHERE: the signal's display label IS the osc_out name (the
+  // operator-facing name shown in the Companion AND sent as the manifest label
+  // → CaptainPad). Collapse label + osc_out identity into the single name.
+  // A signal whose chain has no osc_out tap keeps its own label.
+  const tap = v.normalized.length > 0 && v.normalized[v.normalized.length - 1].type === 'osc_out'
+    ? v.normalized[v.normalized.length - 1] : null;
+  const label = tap ? tap.params.name : sig.label;
   return {
     ok: true,
     normalized: {
-      id: sig.id, label: sig.label, source: sig.source, type: sig.type,
+      id: sig.id, label, source: sig.source, type: sig.type,
       chain: v.normalized, output,
     },
   };
@@ -283,12 +377,22 @@ export function validateCompanionConfig(cfg) {
   }
   if (!Array.isArray(cfg.signals)) throw new Error('companion config.signals must be an array');
   const seen = new Set();
+  const seenCpcKeys = new Map();   // cpcKey → signal id (output uniqueness)
   const signals = [];
   const signalsById = new Map();
   for (const sig of cfg.signals) {
     const v = validateSignal(sig);
     if (!v.ok) throw new Error(`companion config: ${v.error}`);
     if (seen.has(v.normalized.id)) throw new Error(`companion config: duplicate signal id "${v.normalized.id}"`);
+    // Codex P0 — two OUTPUT signals must not resolve to the same cpcKey (it
+    // would shadow/clobber each other at the engine). Fail loud, never mangle.
+    const cpcKey = outputCpcKeyOf(v.normalized);
+    if (cpcKey !== null) {
+      if (seenCpcKeys.has(cpcKey)) {
+        throw new Error(`companion config: signals "${seenCpcKeys.get(cpcKey)}" and "${v.normalized.id}" both resolve to cpcKey "${cpcKey}" (name collision)`);
+      }
+      seenCpcKeys.set(cpcKey, v.normalized.id);
+    }
     seen.add(v.normalized.id);
     signalsById.set(v.normalized.id, v.normalized.type);
     signals.push(v.normalized);

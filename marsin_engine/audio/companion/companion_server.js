@@ -62,6 +62,7 @@ import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS, VIEW_TYPES,
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal, validateView,
   domEnergyFor, parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
+  resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { emitDerivedBpm } from './bpm_emit.js';
@@ -119,7 +120,10 @@ function buildRunners() {
 }
 buildRunners();
 
-// The terminal osc_out op of a signal (the output tap), or null.
+// The terminal osc_out op of a signal (the output tap), or null. Disabled taps
+// do not emit. The cpcKey/address are DERIVED from the tap's `name` at the
+// send site via resolveOscOut (single-name rehaul) — the op no longer carries
+// an editable address.
 function oscOutOf(sig) {
   const op = sig.chain[sig.chain.length - 1];
   return op && op.type === 'osc_out' && op.enabled !== false ? op : null;
@@ -179,12 +183,12 @@ function buildManifest() {
   for (const sig of design.signals) {
     const tap = oscOutTap(sig);
     if (!tap) continue;   // not an OUTPUT — nothing to route to the engine
-    const cpcKey = (tap.params && typeof tap.params.cpcKey === 'string' && tap.params.cpcKey.trim())
-      ? tap.params.cpcKey.trim() : sig.id;
+    // cpcKey + address are DERIVED from the operator-facing `name` (single-name
+    // rehaul). A curated name keeps its canonical engine-bound key/address; any
+    // other name slug-derives. The name is also the CaptainPad-visible label.
+    const { cpcKey, address } = resolveOscOut(tap.params.name);
     if (paramCenter.isRegisteredKey(cpcKey)) continue;   // built-in → engine already has it
-    const address = (tap.params && typeof tap.params.address === 'string' && tap.params.address.trim())
-      ? tap.params.address.trim() : `/marsin/audio/${cpcKey}`;
-    signals.push({ cpcKey, address, label: sig.label, type: sig.type });
+    signals.push({ cpcKey, address, label: tap.params.name, type: sig.type });
   }
   return { signals };
 }
@@ -517,7 +521,7 @@ function processDesignedSignals(r, dt) {
       // pair, so we ALSO emit the paired energy to its canonical dom-energy
       // address (/marsin/dom/energy1·2 → micDomEnergy1/2). One tap, two emits —
       // a dom signal is inherently a pair (no op-schema fork; see companion_config).
-      sendOsc(tap.params.address, post);
+      sendOsc(resolveOscOut(tap.params.name).address, post);
       if (dom) sendOsc(dom.address, energy);
     }
   }

@@ -300,21 +300,45 @@ const OP_SCHEMA = Object.freeze({
   },
   osc_out: {
     // 2026-06-17 companion signal-designer contract §"The osc_out op".
+    // UNIFIED-NAME REHAUL (operator brief): the tap now carries ONE operator-
+    // facing `name`. The CPC key and OSC address are DERIVED from it — the
+    // operator never edits them directly:
+    //   cpcKey  = slug(name)
+    //   address = /marsin/audio/<cpcKey>
     // A TERMINAL TAP: it does NOT modify the signal value (identity in
-    // process()) — it MARKS the chain as an OUTPUT and carries the engine
-    // OSC `address` the Audio Companion sends this signal's POST value to,
-    // plus an optional `cpcKey` label (the engine CPC key the address
-    // binds to, for operator readability). The Companion reads osc_out ops
-    // off the chain to know what to emit each analyzer hop; the engine's
-    // own process() treats it as a no-op so a chain with osc_out behaves
-    // identically whether or not OSC sending is wired.
-    description: 'Terminal OSC output tap: send this signal\'s POST value to the engine OSC address. Identity in the DSP chain.',
+    // process()) — it MARKS the chain as an OUTPUT. The Companion reads
+    // osc_out ops off the chain to know what to emit each analyzer hop, and
+    // sends each OUTPUT signal's POST value to the derived address; the
+    // engine's own process() treats it as a no-op so a chain with osc_out
+    // behaves identically whether or not OSC sending is wired.
+    description: 'Terminal OSC output tap: send this signal\'s POST value to the engine. The single editable `name` derives cpcKey=slug(name) and address=/marsin/audio/<cpcKey>. Identity in the DSP chain.',
     params: {
-      address: { type: 'string', default: '/marsin/audio/out' },
-      cpcKey:  { type: 'string', optional: true },
+      name: { type: 'string', default: 'out' },
     },
   },
 });
+
+/**
+ * Derive the engine CPC key from an operator-facing signal NAME.
+ *   trim → lowercase → collapse any run of non-[a-z0-9] to a single '_'
+ *   → strip leading/trailing '_'.
+ * Returns '' when nothing survives (e.g. name was all punctuation) — the
+ * CALLER must treat '' as an ERROR and reject the rename (Codex P0: fail
+ * loud, never silently substitute a fallback key).
+ */
+export function slug(name) {
+  if (typeof name !== 'string') return '';
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/** The OSC address an osc_out `name` routes to: /marsin/audio/<slug(name)>. */
+export function oscAddressForName(name) {
+  return `/marsin/audio/${slug(name)}`;
+}
 
 // Upper bound for clamp min/max in Hz mode — the Nyquist of the engine's
 // 44.1 kHz analyzer (22050 Hz), matching `sourceSmoothHz`'s ceiling in the
@@ -538,11 +562,16 @@ function _validateOp(op, indexForMsg, paramCenter = null, hz = false) {
     }
   }
   if (op.type === 'osc_out') {
-    // The address must be a well-formed OSC path (leading slash, no spaces) —
-    // a typo'd address would silently route nothing (Codex P0: fail loud).
-    const addr = normalizedParams.address;
-    if (typeof addr !== 'string' || addr[0] !== '/' || /\s/.test(addr)) {
-      return { ok: false, error: `op "${op.id}": osc_out address must be an OSC path starting with "/" and contain no whitespace (got "${addr}")` };
+    // The single editable identity is `name`; cpcKey/address are DERIVED from
+    // it. `name` must be a non-empty string whose slug is non-empty — an
+    // all-punctuation name would slug to '' and route nothing (Codex P0: fail
+    // loud, never silently substitute a fallback key).
+    const name = normalizedParams.name;
+    if (typeof name !== 'string' || !name.trim()) {
+      return { ok: false, error: `op "${op.id}": osc_out name must be a non-empty string` };
+    }
+    if (slug(name) === '') {
+      return { ok: false, error: `op "${op.id}": osc_out name "${name}" has no usable letters/digits (slug is empty)` };
     }
   }
 
@@ -1248,10 +1277,10 @@ export class SignalPostProcessor {
       }
       case 'osc_out': {
         // Terminal OSC output tap — IDENTITY in the DSP chain. The op only
-        // carries the engine OSC `address`/`cpcKey` metadata; the Audio
-        // Companion reads it off the chain to send this signal's POST value
-        // over UDP OSC. process() must not alter the value (so a chain reads
-        // the same with or without OSC wired) — return x unchanged.
+        // carries the operator-facing `name` (cpcKey/address are derived from
+        // it); the Audio Companion reads it off the chain to send this
+        // signal's POST value over UDP OSC. process() must not alter the value
+        // (so a chain reads the same with or without OSC wired) — return x.
         return x;
       }
       default:

@@ -222,6 +222,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .param select,.add-sel{width:100%;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px;font:inherit}
 .param-static{color:var(--muted);font-size:10.5px}
 .param-static b{color:var(--text)}
+.param-derived{color:var(--muted);font-size:10px;font-family:ui-monospace,Menlo,monospace;opacity:.8;margin-top:2px}
 .op-add{display:flex;flex-direction:column;gap:8px;border-top-color:var(--border);justify-content:center}
 .reset-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:5px;font:inherit;cursor:pointer}
 .reset-btn:hover{color:var(--text)}
