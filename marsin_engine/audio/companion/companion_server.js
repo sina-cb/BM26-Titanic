@@ -33,7 +33,7 @@
  *   - 'mic'  — the default/system input via the engine's AudioCapture,
  *   - 'file' — replay an audio file via the BROWSER (<audio> + worklet PCM tap).
  *
- * Standalone: `node audio/companion/companion_server.js [--port 6973]`.
+ * Standalone: `node audio/companion/companion_server.js [--port 6966]`.
  */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -718,7 +718,7 @@ function applyEngineConfig() {
   return 'test';
 }
 
-const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6973; })();
+const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6966; })();
 resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch(() => { ffmpegPath = 'ffmpeg'; }).finally(() => {
   const bootMode = applyEngineConfig();
   // Mic boot can fail with no device (e.g. headless); test is always safe and

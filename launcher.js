@@ -23,6 +23,8 @@
  *   --scene <name>     Sim scene AND engine model (default: titanic)
  *   --pattern <name>   Engine boot pattern (default: 00_golden_hour_wash)
  *   --no-kill          Don't kill stale stack listeners on our ports
+ *   -f, --force        Force-kill ANY process holding our ports (incl. foreign);
+ *                      the `prod` profile force-claims by default.
  *   --help             Show usage
  *
  * Behavior contract:
@@ -156,6 +158,7 @@ function usage(stream = process.stdout) {
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
     `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
+    '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
     '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
     '    --help             Show this help',
     ''
@@ -165,7 +168,7 @@ function usage(stream = process.stdout) {
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true, open: true };
+  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true, open: true, force: false };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
       logError(`${flag} requires a value (got ${value === undefined ? 'nothing' : `'${value}'`}).`);
@@ -179,6 +182,7 @@ function parseArgs(argv) {
       case '--scene':   opts.scene = takeValue(arg, argv[++i]); break;
       case '--pattern': opts.pattern = takeValue(arg, argv[++i]); break;
       case '--no-kill': opts.kill = false; break;
+      case '-f': case '--force': opts.force = true; break;
       case '--no-open': opts.open = false; break;
       case '--help': case '-h': usage(); process.exit(0); break;
       default:
@@ -346,19 +350,20 @@ function forceKillTree(pid) {
   }
 }
 
-function killStaleListeners(ports) {
+function killStaleListeners(ports, force = false) {
   for (const port of ports) {
     for (const pid of listenersOnPort(port)) {
       if (pid === process.pid) continue;
       const cmdline = commandlineOf(pid);
       if (!cmdline) continue; // exited between listing and inspection
       const ours = STACK_PROCESS_SIGNATURES.some((sig) => cmdline.includes(sig));
-      if (!ours) {
+      if (!ours && !force) {
         logError(`Port ${port} is held by pid ${pid} (${cmdline.slice(0, 120)}) — not part of this stack; refusing to kill it.`);
-        logError('Free the port yourself, then rerun.');
+        logError('Free the port yourself, or rerun with -f/--force to claim it anyway.');
         process.exit(1);
       }
-      log('launcher', `Killing stale stack process on :${port} (pid ${pid}: ${cmdline.slice(0, 90)})`);
+      const why = ours ? 'stale stack process' : 'FOREIGN process (--force)';
+      log('launcher', `Killing ${why} on :${port} (pid ${pid}: ${cmdline.slice(0, 90)})`);
       try {
         if (IS_WIN) forceKillTree(pid);
         else process.kill(pid, 'SIGTERM');
@@ -861,7 +866,7 @@ async function main() {
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
   // Audio Companion (the sole audio analyzer — feeds the engine over OSC). Its
   // HTTP/WS port is fixed at the companion_server.js default; see docs/37 §9.
-  const COMPANION_PORT = 6973;
+  const COMPANION_PORT = 6966;
   const companionUrl = `http://localhost:${COMPANION_PORT}`;
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
@@ -872,7 +877,13 @@ async function main() {
   if (profileDef.processes.includes('captainpad')) stackPorts.push(ports.captainpad_web_port);
   if (profileDef.processes.includes('companion')) stackPorts.push(COMPANION_PORT);
 
-  if (opts.kill) killStaleListeners(stackPorts);
+  // `prod` is the show stack — it force-claims its ports by default (a stuck
+  // foreign process must never block the rig coming up). Any profile + `-f`.
+  const force = opts.force || opts.command === 'prod';
+  if (force && opts.command === 'prod' && !opts.force) {
+    log('launcher', 'prod profile: force-claiming stack ports (kills any process holding them).');
+  }
+  if (opts.kill) killStaleListeners(stackPorts, force);
   await assertPortsFree(stackPorts);
 
   writeLock({

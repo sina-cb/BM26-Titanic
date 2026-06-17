@@ -365,7 +365,7 @@ faithful design surface. `audioCompanion.*` holds **only** launch / capture-mode
 
 audioCompanion:
   enabled: true          # engine spawns + supervises the Companion process
-  port: 6973             # Companion HTTP/WS (see ports registry)
+  port: 6966             # Companion HTTP/WS (see ports registry)
   source: mic            # boot capture MODE for the design tool: test | mic | file
   device: null           # capture device override (null = inherit audio.capture.device;
                           #   Windows: pin a WASAPI low-latency device — see §10.3)
@@ -406,11 +406,11 @@ Registered in the central ports table (`.agent/00_gol/13_multi_agent.md`):
 
 | Service | Default | Source of truth |
 |---|---|---|
-| Audio Companion (HTTP/WS) | `6973` | `config.yaml::audioCompanion.port` / `--port` |
+| Audio Companion (HTTP/WS) | `6966` | `config.yaml::audioCompanion.port` / `--port` |
 | Audio Slice OSC-in (local-only, §6.2) | `10001` | `config.yaml::audioCompanion.audioSlice.listenPort` |
 
 (6970 — the Companion's old default — collides with the Simulation save server;
-the Companion moves to **6973**. Its OSC *output* targets the engine's `10000`;
+the Companion moves to **6966**. Its OSC *output* targets the engine's `10000`;
 its Audio Slice OSC *input* listens on `10001`, distinct from the engine port.)
 
 ---
