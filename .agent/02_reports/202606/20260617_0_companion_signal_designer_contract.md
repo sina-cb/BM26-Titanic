@@ -69,3 +69,9 @@ file conflicts):
    signal's **live trail plot**, and a **visualization of the modulation being
    applied** — i.e. the mapping (depth/curve/range) and its effect on the target
    param, with the source signal's trail. Make the popup more professional/polished.
+
+## Companion polish queue (apply right after the running companion agent)
+- **Add-signal = themed modal, not `prompt()`.** Replace the browser alert/prompt
+  used by the sidebar [+] with an in-app themed panel (source dropdown + type),
+  styled like the rest of the Companion (matches the export/browse modals). No
+  native dialogs anywhere in the designer.
