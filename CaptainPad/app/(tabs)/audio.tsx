@@ -368,7 +368,7 @@ function slotValueText(slot: SignalSlot, value: number): string {
 
 // Trace canvas height. The pinned strip's trace is the MAIN visualisation
 // of the audio page, so it's given a generous, touch-friendly height.
-const PINNED_TRACE_HEIGHT = 64;
+const PINNED_TRACE_HEIGHT = 40;
 
 // AUDIO SIGNALS grid — the signals lay out as a 3-column × N-row grid
 // (operator brief 2026-06-17) rather than one horizontally-scrolling
@@ -386,10 +386,10 @@ const SIGNAL_GRID_COLUMNS = 3;
 // viewport and clip the lower rows + the INPUT GAIN slider beneath it.
 // Capping the grid and letting it scroll VERTICALLY keeps every row
 // reachable while the status pills + INPUT GAIN stay pinned around it.
-// ~3 rows of signal columns (each ≈ header + bar + 64 px trace + RAW line)
+// ~4 rows of signal columns (each ≈ header + bar + 40 px trace + RAW line)
 // fit in this band; more rows scroll. Kept generous so the common case
-// (≤ 9 signals) never shows a scrollbar.
-const SIGNAL_GRID_MAX_HEIGHT = 320;
+// (≤ 12 signals) never shows a scrollbar.
+const SIGNAL_GRID_MAX_HEIGHT = 360;
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -427,23 +427,23 @@ function SignalColumn({ slot, raw, post, active, traceHeight }: {
   return (
     <View style={{ flex: 1 }}>
       {/* header — slot label + live POST value */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
         <Text numberOfLines={1} style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
           color: accentColor, textTransform: 'uppercase',
-          letterSpacing: 0.6, flexShrink: 1,
+          letterSpacing: 0.5, flexShrink: 1,
         }}>{slot.label}</Text>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text,
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text,
         }}>{slotValueText(slot, post)}</Text>
       </View>
 
       {/* POST bar meter — compact, full intensity. */}
       <View style={{
-        height: 8, borderRadius: 4,
+        height: 6, borderRadius: 3,
         backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden', marginBottom: 3,
+        overflow: 'hidden', marginBottom: 2,
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
@@ -470,7 +470,7 @@ function SignalColumn({ slot, raw, post, active, traceHeight }: {
       {hasRaw ? (
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.6, opacity: 0.7, marginTop: 3,
+          color: C.secondary, letterSpacing: 0.6, opacity: 0.7, marginTop: 2,
         }}>RAW {slotValueText(slot, raw)}</Text>
       ) : null}
     </View>
@@ -623,9 +623,9 @@ function PinnedAudioMeters({
           {/* BPM tile — biggest single number on the strip — rides as the
               grid's first cell. No trail under it: BPM ticks at the song's
               pace, not the analyser's. */}
-          <View style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 14 }}>
+          <View style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
             <View style={{
-              paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
+              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
               backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
               borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
               alignItems: 'center', justifyContent: 'center',
@@ -633,13 +633,13 @@ function PinnedAudioMeters({
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
                 BPM
               </Text>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 26, color: bpm ? '#003a44' : C.icon, marginTop: 1 }}>
                 {bpm ?? '—'}
               </Text>
             </View>
           </View>
           {slots.map((slot) => (
-            <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 14 }}>
+            <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
                 slot={slot}
                 raw={valueOf(slot.rawKey)}

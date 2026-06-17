@@ -1233,7 +1233,8 @@ function _isAudioFamilyKey(key: string, entry?: ParamSchemaEntry): boolean {
 /**
  * Derive the live audio-signal descriptors from the engine schema, in
  * schema order. Excludes the internal `*Raw` mirrors and `*Gain` knobs
- * (they pair onto their parent signal) and `tempoBpm` (its own BPM tile).
+ * (they pair onto their parent signal) and the BPM keys (audioBpm/tempoBpm,
+ * shown in their own headline tile).
  * Pure function of the schema map so callers can memoise on it.
  */
 export function deriveAudioSignals(
@@ -1246,8 +1247,9 @@ export function deriveAudioSignals(
     if (!_isAudioFamilyKey(key, entry)) continue;
     // Companions of a parent signal — never their own meter column.
     if (key.endsWith('Raw') || key.endsWith('Gain')) continue;
-    // tempoBpm has a dedicated tile/card; don't double-render it as a bar.
-    if (key === 'tempoBpm') continue;
+    // BPM has a dedicated headline tile in the audio grid (fed by audioBpm,
+    // falling back to tempoBpm) — don't double-render either as a bar row.
+    if (key === 'tempoBpm' || key === 'audioBpm') continue;
     const range = Array.isArray(entry.range) && entry.range.length === 2
       ? entry.range
       : [0, 1];
