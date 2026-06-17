@@ -122,7 +122,7 @@ function MixerLocalParams({ channel, onControlChange }: {
                 different concept ("the global owns this"). */}
             {hasMapping ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
-                <ModulationReadonlyBadge hasMapping={true} />
+                <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
                 {ghost !== null ? (
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
                     →{ghost.toFixed(2)}

@@ -1712,7 +1712,23 @@ export async function stopScheduledTask(id: string): Promise<ApiResult<{ task: S
 // keys (the contract's curated set), so this type is the open `string`
 // the engine accepts rather than a hand-listed enum that could drift.
 export type ModulationSourceKey = string;
-export type ModulationMode = 'offset' | 'scale';
+// Modulation modes mirror marsin_engine/lib/modulation_engine.js:
+//   offset   — add the scaled signal to the static value.
+//   multiply — use the scaled signal as a MULTIPLIER over the static value.
+//   override — drive the param directly from the scaled signal (the `!`).
+// 'scale' was the legacy name for 'multiply'; the engine migrates it on load
+// and so does CaptainPad (see migrateModulationMode) — it is NOT a valid mode
+// to write, so it is intentionally absent from this union.
+export type ModulationMode = 'offset' | 'multiply' | 'override';
+
+// Migrate a loaded mode string to the current contract. The engine accepts
+// 'scale' as a legacy alias for 'multiply'; mirror that here when reading an
+// existing mapping so editing it doesn't surface an unknown mode.
+export function migrateModulationMode(mode: unknown): ModulationMode {
+  if (mode === 'scale') return 'multiply';
+  if (mode === 'multiply' || mode === 'override') return mode;
+  return 'offset';
+}
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';
 

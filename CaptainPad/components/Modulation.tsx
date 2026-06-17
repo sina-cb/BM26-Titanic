@@ -26,7 +26,7 @@ import { audioAccentHex } from '@/utils/audioSignals';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
-  deleteModulation, fetchPlaylist, ModulationCurve, ModulationMapping,
+  deleteModulation, fetchPlaylist, migrateModulationMode, ModulationCurve, ModulationMapping,
   ModulationMode, ModulationPolarity, ModulationSourceKey, patchModulation, putModulation,
 } from '@/utils/api';
 
@@ -89,7 +89,11 @@ export function useEntryModulations(
       const entry = Array.isArray(entries)
         ? entries.find((e) => e && e.id === entryId)
         : null;
-      setMappings(Array.isArray(entry?.modulations) ? entry!.modulations! : []);
+      // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
+      // engine's validateModulationMapping back-compat) so a stored mapping
+      // never surfaces an unknown mode to the picker / preview math.
+      const loaded = Array.isArray(entry?.modulations) ? entry!.modulations! : [];
+      setMappings(loaded.map((m) => ({ ...m, mode: migrateModulationMode(m.mode) })));
     });
     return () => { cancelled = true; };
   }, [playlistName, entryId, tick]);
@@ -133,13 +137,17 @@ const MOD_GREEN = '#00a86b';
 // fighting the slider track for attention.
 const MOD_GREEN_SOFT = 'rgba(0,168,107,0.12)';
 
-// Clamp to [-1, 1] — engine schema range. We pre-clamp on the popover
-// so a typo'd 99 in the range box becomes 1 instead of bouncing the
-// whole save with a 400 from validateModulationMapping.
-function clamp01Signed(x: number): number {
+// Clamp to the engine's widened modulation range [-4, 4] (RANGE_MIN /
+// RANGE_MAX in modulation_engine.js). We pre-clamp on the popover so a
+// typo'd 99 in the range box becomes 4 instead of bouncing the whole save
+// with a 400 from validateModulationMapping. The window must be wide enough
+// for a multiply boost (>1, default [1.0, 1.2]) and for inverting ranges
+// like [-1, 0].
+const RANGE_LIMIT = 4;
+function clampRange(x: number): number {
   if (!Number.isFinite(x)) return 0;
-  if (x < -1) return -1;
-  if (x > 1) return 1;
+  if (x < -RANGE_LIMIT) return -RANGE_LIMIT;
+  if (x > RANGE_LIMIT) return RANGE_LIMIT;
   return x;
 }
 
@@ -151,8 +159,37 @@ function clamp01Signed(x: number): number {
 // deck — the mixer passes nothing and the buttons collapse to a
 // static badge.
 
+// ── OverrideBadge — the `!` "this param is overridden" indicator ─────
+//
+// An override mapping REPLACES the static slider value with the live
+// signal. That's a meaningfully different relationship than offset /
+// multiply (which still respect the operator's set value), so it gets
+// a distinct, can't-miss `!` badge. Same green family + bold pill
+// styling as the ◎ ON badge so the row reads as one coherent set of
+// modulation affordances.
+function OverrideBadge() {
+  return (
+    <View
+      style={{
+        paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
+        backgroundColor: MOD_GREEN,
+        borderWidth: 1, borderColor: MOD_GREEN,
+        transitionDuration: '0s',
+      } as any}
+      accessibilityLabel="Override: signal replaces the static value"
+    >
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+        color: '#fff', letterSpacing: 0.5,
+      }}>
+        ! OVERRIDE
+      </Text>
+    </View>
+  );
+}
+
 function ModulationBadges({
-  hasMapping, editable, showAddHint, onEdit, onClear,
+  hasMapping, editable, showAddHint, isOverride, onEdit, onClear,
 }: {
   hasMapping: boolean;
   // `editable` means the operator can OPEN the popover (deck only).
@@ -164,6 +201,9 @@ function ModulationBadges({
   // The deck shows it; the mixer hides it so unmapped sliders aren't
   // cluttered with an affordance the operator can't act on there.
   showAddHint: boolean;
+  // Whether the mapping is in OVERRIDE mode — shows the `!` badge so the
+  // operator reads "this param is driven by the signal, not the slider".
+  isOverride?: boolean;
   onEdit?: () => void;
   onClear?: () => void;
 }) {
@@ -197,6 +237,7 @@ function ModulationBadges({
           {hasMapping ? '◎ ON' : '◎'}
         </Text>
       </TouchableOpacity>
+      {hasMapping && isOverride ? <OverrideBadge /> : null}
       {canClear ? (
         <TouchableOpacity
           onPress={onClear}
@@ -271,41 +312,44 @@ function GhostMarker({
 // this band. Maths must mirror modulation_engine.js
 // applyContinuousModulation so what the operator sees matches what
 // the engine fires.
+//
+// Rather than re-derive closed-form bounds per mode (which drifts the
+// moment the engine math changes), we sweep the SHARED transfer
+// function `applyContinuousModulation` across the signal domain [0,1]
+// and take the min/max of the resulting clamped output. Because the
+// curve is monotonic on [0,1] and override/multiply/offset are all
+// monotonic-or-V-shaped in the signal, a coarse sweep captures the
+// true envelope. This is the same function the curve plot and ghost
+// use, so the band can never disagree with them.
 function modulationBandRange(
   base: number,
-  mode: 'offset' | 'scale',
-  polarity: 'unipolar' | 'bipolar',
+  mode: ModulationMode,
+  polarity: ModulationPolarity,
   range: [number, number],
+  curve: ModulationCurve,
 ): { lo: number; hi: number } {
-  const clamp = (x: number) => Math.min(1, Math.max(0, x));
-  const [minD, maxD] = range;
-  if (polarity === 'bipolar') {
-    const peak = Math.max(Math.abs(minD), Math.abs(maxD));
-    if (mode === 'scale') {
-      return { lo: clamp(base * (1 - peak)), hi: clamp(base * (1 + peak)) };
-    }
-    return { lo: clamp(base - peak), hi: clamp(base + peak) };
+  const N = 24;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i <= N; i++) {
+    const s = i / N;
+    const out = applyContinuousModulation(s, base, mode, polarity, range, curve);
+    if (out < lo) lo = out;
+    if (out > hi) hi = out;
   }
-  // unipolar
-  if (mode === 'scale') {
-    const a = clamp(base * (1 + minD));
-    const b = clamp(base * (1 + maxD));
-    return { lo: Math.min(a, b), hi: Math.max(a, b) };
-  }
-  const a = clamp(base + minD);
-  const b = clamp(base + maxD);
-  return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  return { lo, hi };
 }
 
 function ModulationRangeBand({
-  base, mode, polarity, range,
+  base, mode, polarity, range, curve,
 }: {
   base: number;
-  mode: 'offset' | 'scale';
-  polarity: 'unipolar' | 'bipolar';
+  mode: ModulationMode;
+  polarity: ModulationPolarity;
   range: [number, number];
+  curve: ModulationCurve;
 }) {
-  const { lo, hi } = modulationBandRange(base, mode, polarity, range);
+  const { lo, hi } = modulationBandRange(base, mode, polarity, range, curve);
   const width = Math.max(0, hi - lo);
   // Don't paint a hairline / zero-width band — looks like a glitch.
   if (width < 0.005) return null;
@@ -392,6 +436,7 @@ function ModulatedSliderImpl({
             hasMapping={hasMapping}
             editable={enabled}
             showAddHint={true}
+            isOverride={mapping?.mode === 'override'}
             onEdit={() => setPopoverOpen(true)}
             onClear={clearMapping}
           />
@@ -427,6 +472,7 @@ function ModulatedSliderImpl({
             mode={mapping.mode}
             polarity={mapping.polarity}
             range={mapping.range}
+            curve={mapping.curve}
           />
         ) : null}
         <GhostMarker ghost={ghost} />
@@ -483,12 +529,13 @@ export const ModulatedSlider = React.memo(
 // playlist entry" without leaving the mixer. Editing the mapping
 // stays on the deck per design (one source of truth for modulation
 // CRUD — the deck's currently-active entry).
-export function ModulationReadonlyBadge({ hasMapping }: { hasMapping: boolean }) {
+export function ModulationReadonlyBadge({ hasMapping, isOverride }: { hasMapping: boolean; isOverride?: boolean }) {
   return (
     <ModulationBadges
       hasMapping={hasMapping}
       editable={false}
       showAddHint={false}
+      isOverride={isOverride}
     />
   );
 }
@@ -529,8 +576,20 @@ function applyCurve(value: number, curve: ModulationCurve): number {
 }
 
 // The output param value for a given normalised source input, mirroring
-// applyContinuousModulation. `range` is the saved [min,max] (bipolar uses
-// the symmetric [-mag,mag] the popover collapses SWING into).
+// marsin_engine/lib/modulation_engine.js applyContinuousModulation EXACTLY.
+// `range` is the saved [min,max] (bipolar offset uses the symmetric
+// [-mag,mag] the popover collapses SWING into).
+//
+// Contract (keep in lockstep with the engine):
+//   sc     = applyCurve(clamp01(signal), curve)   — curve shapes the SIGNAL.
+//   scaled = min + sc*(max-min)                   — range may be inverted.
+//   override : clamp01(scaled)                    — ignores the base value.
+//   multiply : clamp01(base * scaled)             — scaled signal is a mult;
+//                                                   polarity does NOT apply.
+//   offset/unipolar : clamp01(base + scaled).
+//   offset/bipolar  : bs = sc*2-1;
+//                     offset = bs>=0 ? bs*max : bs*(-min);
+//                     clamp01(base + offset)      — spans [base+min, base+max].
 function applyContinuousModulation(
   source: number,
   base: number,
@@ -540,20 +599,28 @@ function applyContinuousModulation(
   curve: ModulationCurve,
 ): number {
   const baseClamped = modClamp01(base);
-  const sClamped = modClamp01(source);
-  const [minDelta, maxDelta] = range;
-  let delta: number;
-  if (polarity === 'bipolar') {
-    const bipolarS = (sClamped - 0.5) * 2.0;
-    const sign = bipolarS < 0 ? -1 : 1;
-    const curvedMag = applyCurve(Math.abs(bipolarS), curve);
-    delta = sign * curvedMag * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
-  } else {
-    const sCurved = applyCurve(sClamped, curve);
-    delta = minDelta + sCurved * (maxDelta - minDelta);
+  const sc = applyCurve(modClamp01(source), curve);
+  const [min, max] = range;
+  const scaled = min + sc * (max - min);
+
+  // OVERRIDE — drive the param directly from the scaled signal (the `!`).
+  if (mode === 'override') {
+    return modClamp01(scaled);
   }
-  if (mode === 'scale') return modClamp01(baseClamped * (1.0 + delta));
-  return modClamp01(baseClamped + delta);
+
+  // MULTIPLY — the scaled signal is a multiplier. Polarity does not apply.
+  if (mode === 'multiply') {
+    return modClamp01(baseClamped * scaled);
+  }
+
+  // OFFSET — add to the static value.
+  if (polarity === 'bipolar') {
+    const bs = sc * 2 - 1; // [-1, 1]
+    const offset = bs >= 0 ? bs * max : bs * (-min);
+    return modClamp01(baseClamped + offset);
+  }
+  // OFFSET / unipolar — one-sided: base + scaled signal.
+  return modClamp01(baseClamped + scaled);
 }
 
 // ── normalise a live CPC value to [0,1] for a given source signal ────
@@ -728,7 +795,11 @@ export function ModulationPopover({
   const liveSourceNorm = liveSourceRaw === null
     ? null
     : normalizeSourceValue(sourceSignal, liveSourceRaw);
-  const [mode, setMode] = useState<ModulationMode>(existing?.mode ?? 'offset');
+  // Migrate a legacy 'scale' mode to 'multiply' when editing an existing
+  // mapping (mirrors the engine's back-compat in validateModulationMapping).
+  const [mode, setMode] = useState<ModulationMode>(
+    existing ? migrateModulationMode(existing.mode) : 'offset',
+  );
   const [polarity, setPolarity] = useState<ModulationPolarity>(existing?.polarity ?? 'unipolar');
   const [rangeMin, setRangeMin] = useState<string>(String(existing?.range[0] ?? 0));
   const [rangeMax, setRangeMax] = useState<string>(String(existing?.range[1] ?? 0.35));
@@ -750,12 +821,15 @@ export function ModulationPopover({
   // transfer-function plot + TARGET preview reflect exactly what would be
   // written. Bipolar collapses SWING into a symmetric [-mag, mag].
   const previewRange = useMemo<[number, number]>(() => {
-    if (polarity === 'bipolar') {
-      const mag = Math.abs(clamp01Signed(Number(swing) || 0));
+    // SWING ↔ symmetric [-mag, mag] only applies to BIPOLAR OFFSET. Polarity
+    // is meaningless for multiply/override (the engine ignores it), so those
+    // modes always read the raw [min, max] range box.
+    if (mode === 'offset' && polarity === 'bipolar') {
+      const mag = Math.abs(clampRange(Number(swing) || 0));
       return [-mag, mag];
     }
-    return [clamp01Signed(Number(rangeMin) || 0), clamp01Signed(Number(rangeMax) || 0)];
-  }, [polarity, swing, rangeMin, rangeMax]);
+    return [clampRange(Number(rangeMin) || 0), clampRange(Number(rangeMax) || 0)];
+  }, [mode, polarity, swing, rangeMin, rangeMax]);
 
   // The value the engine would currently drive the target to, given the
   // live source value + the operator's in-progress settings. Null when no
@@ -790,32 +864,57 @@ export function ModulationPopover({
   );
   const isExisting = initialIdRef.current !== null;
 
+  // Track whether the operator has hand-edited the range box this popover
+  // lifetime. Switching MODE seeds a sensible default range for the new mode
+  // (multiply → [1.0, 1.2]; override → [0, 1]; offset keeps the existing
+  // default), but only when the operator has NOT already dialed in a range —
+  // editing an existing mapping (which arrives with a saved range) or a
+  // manual range edit both suppress the clobber.
+  const rangeTouchedRef = React.useRef<boolean>(isExisting);
+  const setRangeMinTouched = useCallback((v: string) => {
+    rangeTouchedRef.current = true;
+    setRangeMin(v);
+  }, []);
+  const setRangeMaxTouched = useCallback((v: string) => {
+    rangeTouchedRef.current = true;
+    setRangeMax(v);
+  }, []);
+  const setSwingTouched = useCallback((v: string) => {
+    rangeTouchedRef.current = true;
+    setSwing(v);
+  }, []);
+
+  const selectMode = useCallback((next: ModulationMode) => {
+    if (next === mode) return;
+    // Only default a range when the operator hasn't set one — never clobber
+    // an existing mapping's saved range or a value they just typed.
+    if (!rangeTouchedRef.current) {
+      if (next === 'multiply') { setRangeMin('1.0'); setRangeMax('1.2'); }
+      else if (next === 'override') { setRangeMin('0'); setRangeMax('1'); }
+      // offset: keep whatever the unipolar/swing defaults already are.
+    }
+    setMode(next);
+  }, [mode]);
+
   const save = async () => {
     if (busy) return; // double-tap guard
     setBusy(true); setError(null);
-    // Bipolar uses a single SWING ± magnitude — collapse it into a
-    // symmetric range so the engine's `max(|min|, |max|)` resolves to
-    // exactly the magnitude the operator typed (no silent sign loss).
-    // Unipolar keeps independent min/max as before.
-    const finalRange: [number, number] = polarity === 'bipolar'
-      ? (() => {
-          const mag = Math.abs(clamp01Signed(Number(swing) || 0));
-          return [-mag, mag];
-        })()
-      : [
-          clamp01Signed(Number(rangeMin) || 0),
-          clamp01Signed(Number(rangeMax) || 0),
-        ];
+    // Write EXACTLY what the preview computed — `previewRange` already
+    // resolves bipolar-offset SWING into a symmetric [-mag, mag], reads the
+    // raw [min, max] box for unipolar offset / multiply / override, and
+    // clamps each value into the engine's [-4, 4] window. Reusing it keeps
+    // the saved mapping in lockstep with the curve plot / band the operator
+    // just looked at (no second, drift-prone clamp path).
+    const finalRange: [number, number] = previewRange;
     const mapping: ModulationMapping = {
       id: mappingId,
       type: 'continuous',
       enabled,
       source: { scope: 'cpc', key: source },
       target: { scope: 'pattern', parameter: targetParameter },
+      // Polarity only affects offset; for multiply/override the engine
+      // ignores it, but we persist the current value harmlessly.
       mode, polarity,
-      // Defensive parse: `Number('foo')` is NaN, NaN || 0 = 0. The
-      // engine validates -1 ≤ value ≤ 1 strictly; clamp here so the
-      // operator gets immediate visual feedback instead of a 400.
       range: finalRange,
       curve,
     };
@@ -973,60 +1072,85 @@ export function ModulationPopover({
             </Text>
 
             <PickerRow label="MODE">
-              <Chip active={mode === 'offset'} onPress={() => setMode('offset')}>OFFSET</Chip>
-              <Chip active={mode === 'scale'} onPress={() => setMode('scale')}>SCALE</Chip>
+              <Chip active={mode === 'offset'} onPress={() => selectMode('offset')}>OFFSET</Chip>
+              <Chip active={mode === 'multiply'} onPress={() => selectMode('multiply')}>MULTIPLY</Chip>
+              <Chip active={mode === 'override'} onPress={() => selectMode('override')}>OVERRIDE</Chip>
             </PickerRow>
 
-            <PickerRow label="POLARITY">
-              <Chip
-                active={polarity === 'unipolar'}
-                onPress={() => {
-                  if (polarity === 'unipolar') return;
-                  // bipolar → unipolar: seed min=0, max from current
-                  // swing magnitude so the operator's amplitude
-                  // intent carries across.
-                  const mag = Math.abs(Number(swing) || 0);
-                  setRangeMin('0');
-                  setRangeMax(String(mag || 0.35));
-                  setPolarity('unipolar');
-                }}
-              >UNIPOLAR</Chip>
-              <Chip
-                active={polarity === 'bipolar'}
-                onPress={() => {
-                  if (polarity === 'bipolar') return;
-                  // unipolar → bipolar: seed swing from the larger
-                  // |min|, |max| so the visible band stays roughly the
-                  // same width across the toggle.
-                  const mag = Math.max(
-                    Math.abs(Number(rangeMin) || 0),
-                    Math.abs(Number(rangeMax) || 0),
-                  );
-                  setSwing(String(mag || 0.25));
-                  setPolarity('bipolar');
-                }}
-              >BIPOLAR</Chip>
-            </PickerRow>
+            {/* The `!` override affordance: OVERRIDE replaces the static
+                value entirely, so call it out explicitly in the editor. */}
+            {mode === 'override' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <OverrideBadge />
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, flex: 1 }}>
+                  Override: the signal DRIVES this param directly — the static slider value is ignored.
+                </Text>
+              </View>
+            ) : null}
 
-            {polarity === 'bipolar' ? (
-              // D4a: bipolar collapses to a single SWING ± magnitude.
+            {/* POLARITY only affects OFFSET. For multiply/override the engine
+                ignores it, so the toggle is hidden to avoid a no-op control. */}
+            {mode === 'offset' ? (
+              <PickerRow label="POLARITY">
+                <Chip
+                  active={polarity === 'unipolar'}
+                  onPress={() => {
+                    if (polarity === 'unipolar') return;
+                    // bipolar → unipolar: seed min=0, max from current
+                    // swing magnitude so the operator's amplitude
+                    // intent carries across.
+                    const mag = Math.abs(Number(swing) || 0);
+                    setRangeMin('0');
+                    setRangeMax(String(mag || 0.35));
+                    setPolarity('unipolar');
+                  }}
+                >UNIPOLAR</Chip>
+                <Chip
+                  active={polarity === 'bipolar'}
+                  onPress={() => {
+                    if (polarity === 'bipolar') return;
+                    // unipolar → bipolar: seed swing from the larger
+                    // |min|, |max| so the visible band stays roughly the
+                    // same width across the toggle.
+                    const mag = Math.max(
+                      Math.abs(Number(rangeMin) || 0),
+                      Math.abs(Number(rangeMax) || 0),
+                    );
+                    setSwing(String(mag || 0.25));
+                    setPolarity('bipolar');
+                  }}
+                >BIPOLAR</Chip>
+              </PickerRow>
+            ) : null}
+
+            {mode === 'offset' && polarity === 'bipolar' ? (
+              // D4a: bipolar offset collapses to a single SWING ± magnitude.
               // The engine's bipolar math already does
               // `max(|min|, |max|)` on the saved range, so showing min
               // → max separately silently discarded the sign of one
               // value. One field makes that explicit.
               <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>SWING ±</Text>
-                <NumberInput value={swing} onChange={setSwing} placeholder="0.25" />
+                <NumberInput value={swing} onChange={setSwingTouched} placeholder="0.25" />
                 <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, flex: 1 }}>
                   ± from base (centred on 0.5 source)
                 </Text>
               </View>
             ) : (
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
-                <NumberInput value={rangeMin} onChange={setRangeMin} placeholder="min" />
-                <Text style={{ color: C.secondary }}>→</Text>
-                <NumberInput value={rangeMax} onChange={setRangeMax} placeholder="max" />
+              <View style={{ gap: 4 }}>
+                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
+                  <NumberInput value={rangeMin} onChange={setRangeMinTouched} placeholder="min" />
+                  <Text style={{ color: C.secondary }}>→</Text>
+                  <NumberInput value={rangeMax} onChange={setRangeMaxTouched} placeholder="max" />
+                </View>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9, color: C.icon, marginLeft: 78 }}>
+                  {mode === 'multiply'
+                    ? 'multiplier on the static value (e.g. 1.0 → 1.2). [-4, 4]'
+                    : mode === 'override'
+                      ? 'param value the signal sweeps between (e.g. 0 → 1). [-4, 4]'
+                      : 'offset added to the static value. [-4, 4]'}
+                </Text>
               </View>
             )}
 
