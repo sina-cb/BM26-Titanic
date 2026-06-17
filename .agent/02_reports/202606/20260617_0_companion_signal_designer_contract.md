@@ -57,3 +57,15 @@ shows them **dynamically** in the deck, mixer, and audio tab.
 - Device selection in CaptainPad/engine sets the capture device; the Companion
   (engine-supervised) uses the same device. The Companion's own device picker
   also works. One device config, both honor it.
+
+## Follow-up CaptainPad requirements (2026-06-17, queued)
+Apply in the next CaptainPad pass (after the running audio-viz agent, to avoid
+file conflicts):
+1. **Deck + mixer: curate, don't dump.** Show only a best-practice SUBSET of audio
+   signals (the most useful — e.g. low/mid/high/kick + a beat/bpm cue), not the full
+   set. Keep it uncluttered; the full set lives in the audio tab.
+2. **Modulation pop-up = the rich view.** When configuring a modulation, the popup
+   (Modulation.tsx / AllModulationsPanel / source picker) must show each candidate
+   signal's **live trail plot**, and a **visualization of the modulation being
+   applied** — i.e. the mapping (depth/curve/range) and its effect on the target
+   param, with the source signal's trail. Make the popup more professional/polished.
