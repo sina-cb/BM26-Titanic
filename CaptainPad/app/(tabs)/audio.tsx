@@ -5,8 +5,9 @@
 // Structure (top-down) — matches the operator's mental flow, post
 // operator brief 2026-05-26 (BPM out of SETTINGS, analyzer config
 // embedded per-signal in chain editor):
-//   1. PINNED meter strip (mic + stems + BPM, live, sticks at top)
-//   2. Page title
+//   1. Page title
+//   2. Live meters section (AUDIO SIGNALS grid + BPM, in-flow — the
+//      whole tab is one scrollable area, no pinned strip)
 //   3. patchError banner (only when something just failed)
 //   4. MIC ANALYSIS — the master enable/disable toggle. Stays at the
 //      top of the scroll body so operators can flip it without
@@ -221,8 +222,8 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 
 // `BandMeter` used to render the per-band level read-out inside the MIC
 // LIVE + STEMS LIVE cards. As of operator brief 2026-05-26 those rows
-// were deleted — they duplicate the bars in the pinned
-// <PinnedAudioMeters /> strip at the top of the AUDIO tab. The component
+// were deleted — they duplicate the bars in the
+// <LiveAudioMeters /> section at the top of the AUDIO tab. The component
 // was removed wholesale; if a future card needs a 12-px band meter, lift
 // the bar+label block out of <SignalColumn /> (it shares the same
 // clamp-to-[0,1] + percent label pattern).
@@ -276,12 +277,12 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
   );
 }
 
-// ── Pinned live meters strip ─────────────────────────────────────────────
+// ── Live meters section ──────────────────────────────────────────────────
 //
-// Compact horizontal strip rendered as a SIBLING of the AUDIO tab's
-// ScrollView, so it stays anchored at the top regardless of scroll
-// position (the load-bearing UX win: operator can keep eyes on the
-// meters while tuning sliders further down).
+// The live AUDIO SIGNALS grid + status pills + INPUT GAIN, rendered as a
+// normal in-flow section near the top of the AUDIO tab's single page
+// ScrollView (it used to be a pinned strip; the whole tab now scrolls as
+// one area).
 //
 // Subscribes to ONLY the live audio keys + status hooks — never reads
 // steady params or the AudioConfig blob — so the surrounding body's
@@ -378,18 +379,6 @@ const PINNED_TRACE_HEIGHT = 40;
 // the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
 // container is unreliable across cells, so we pad inside each cell).
 const SIGNAL_GRID_COLUMNS = 3;
-
-// Max height of the AUDIO SIGNALS grid before it scrolls internally. The
-// strip is PINNED above the page ScrollView, so an unbounded 3×N grid
-// (dom / energy / note / switch / bar-phase / downbeat … the Companion can
-// route in many signals) would shove the whole strip taller than the iPad
-// viewport and clip the lower rows + the INPUT GAIN slider beneath it.
-// Capping the grid and letting it scroll VERTICALLY keeps every row
-// reachable while the status pills + INPUT GAIN stay pinned around it.
-// ~4 rows of signal columns (each ≈ header + bar + 40 px trace + RAW line)
-// fit in this band; more rows scroll. Kept generous so the common case
-// (≤ 12 signals) never shows a scrollbar.
-const SIGNAL_GRID_MAX_HEIGHT = 360;
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -497,14 +486,13 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
   );
 }
 
-function PinnedAudioMeters({
+function LiveAudioMeters({
   oscStatus, inputGain, onCommitInputGain,
 }: {
   oscStatus: OscPillState | null;
   inputGain: number;
   onCommitInputGain: (g: number) => void;
 }) {
-  const globalStyles = useGlobalStyles();
   const C = usePalette();
   // DYNAMIC signal set — derived from the engine schema (the audio CPC
   // keys the Companion routes in). The strip renders whatever is live;
@@ -571,17 +559,10 @@ function PinnedAudioMeters({
   const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
 
   return (
-    <View style={{
-      alignSelf: 'stretch',
-      paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16,
-      backgroundColor: C.surfaceContainerHigh,
-      borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
-      ...globalStyles.ambientShadow,
-      zIndex: 10,
-    }}>
-      {/* Status pills row + shared window picker on the right.
-          One picker controls ALL 7 trails (operator never has to think
-          about which axis they're tuning). */}
+    <View style={{ marginBottom: 24 }}>
+      {/* Status pills row + LIVE rate on the right. This is a normal
+          section of the page (no longer a pinned strip) — it flows in the
+          single page ScrollView so the whole AUDIO tab scrolls as one. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
@@ -608,21 +589,14 @@ function PinnedAudioMeters({
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
         </Text>
       ) : (
-        // Vertically-scrollable grid container. `maxHeight` bounds the
-        // pinned strip so a tall 3×N signal set scrolls WITHIN the viewport
-        // instead of pushing the strip past the iPad screen edge and
-        // clipping the lower rows. `nestedScrollEnabled` lets this scroll
-        // independently of the page ScrollView it's pinned above (Android);
-        // on iOS/web the inner ScrollView already captures the gesture.
-        <ScrollView
-          style={{ maxHeight: SIGNAL_GRID_MAX_HEIGHT }}
-          contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          {/* BPM tile — biggest single number on the strip — rides as the
-              grid's first cell. No trail under it: BPM ticks at the song's
-              pace, not the analyser's. */}
+        // Full-height 3×N grid that wraps to new rows. No inner scroll /
+        // height cap — the whole AUDIO tab is ONE page ScrollView, so the
+        // grid simply lays out at full height and scrolls with everything
+        // else (no pinned strip, no nested scroller to fight the page).
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {/* BPM tile — biggest single number — rides as the grid's first
+              cell. No trail under it: BPM ticks at the song's pace, not the
+              analyser's. */}
           <View style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
             <View style={{
               paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
@@ -649,7 +623,7 @@ function PinnedAudioMeters({
               />
             </View>
           ))}
-        </ScrollView>
+        </View>
       )}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands
@@ -1192,7 +1166,7 @@ function AudioConfigBody({
   // at 15-30 Hz; folding them in here re-rendered the ENTIRE config
   // body — every FaderRow, mic picker, BPM range slider — at that
   // cadence. Live meters now live in their own components —
-  // <PinnedAudioMeters /> + <BpmTempoLine /> — which each subscribe to
+  // <LiveAudioMeters /> + <BpmTempoLine /> — which each subscribe to
   // ONLY the live keys they need. Per-band / per-stem gain sliders are
   // retired from this tab (Phase 6); the same params remain editable
   // via chain-editor Gain ops + the deck/mixer chrome's CPCControls.
@@ -1365,23 +1339,11 @@ function AudioConfigBody({
   // ── Render ─────────────────────────────────────────────────────────
   //
   // NB: globalStyles.container is `flexDirection: 'row'` (used by other
-  // tabs to layout sidebars). For AUDIO we want the pinned strip
-  // STACKED ABOVE the scrolling body, full viewport width, so the
-  // outer wrapper here is an explicit COLUMN. The strip sits at the
-  // top edge as its own "rig" piece; the page title + cards scroll
-  // below it.
+  // tabs to layout sidebars). For AUDIO we want a single full-width
+  // COLUMN that is ONE scrollable area — title, live meters, sync, and
+  // settings all flow inside the same page ScrollView (no pinned strip).
   return (
     <View style={{ flex: 1, flexDirection: 'column', backgroundColor: C.background }}>
-      {/* Pinned live meters strip — sibling of the ScrollView so it
-          stays anchored at the top regardless of scroll position.
-          Mounted only after cfg loads (we're already inside that
-          gate). All live-data subscriptions live INSIDE this
-          component — the body below never reads liveParams. */}
-      <PinnedAudioMeters
-        oscStatus={oscStatus}
-        inputGain={cfg?.bands?.inputGain ?? 1}
-        onCommitInputGain={commitInputGain}
-      />
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
@@ -1392,12 +1354,21 @@ function AudioConfigBody({
             the bottom of the SETTINGS disclosure (Phase 6 / docs/29
             §Interactions step 7) and now fires BOTH chain + config
             resets. */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 32, gap: 16 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24, gap: 16 }}>
           <IconSymbol name="waveform" size={32} color={C.primary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
             AUDIO
           </Text>
         </View>
+
+        {/* Live meters — now a normal in-flow section (not a pinned
+            strip), so the whole AUDIO tab is one scrollable area. All
+            live-data subscriptions live INSIDE this component. */}
+        <LiveAudioMeters
+          oscStatus={oscStatus}
+          inputGain={cfg?.bands?.inputGain ?? 1}
+          onCommitInputGain={commitInputGain}
+        />
 
         {patchError ? (
           <View style={{ ...CARD, borderColor: C.error, backgroundColor: 'rgba(186, 26, 26, 0.06)' }}>
