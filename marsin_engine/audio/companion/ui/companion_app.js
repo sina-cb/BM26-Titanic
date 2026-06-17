@@ -646,6 +646,10 @@ const filePlayer = {
       tap = new AudioWorkletNode(ctx, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       tap.port.onmessage = (ev) => sendPcm(ev.data);
     } catch (e) {
+      // AudioWorklet unavailable on this browser — fall back to the deprecated
+      // ScriptProcessorNode so file replay still taps PCM, but tell the operator
+      // (no silent degrade): the fallback works but is higher-latency.
+      flash('audio worklet unavailable — using legacy ScriptProcessor (file mode, higher latency)', true);
       const sp = ctx.createScriptProcessor(1024, 1, 1);
       sp.onaudioprocess = (ev) => {
         const ch = ev.inputBuffer.getChannelData(0);
@@ -1113,9 +1117,11 @@ function drawDancingBalls(ctx, view) {
   if (!fed.length) { ctx.fillStyle = '#667'; ctx.font = '12px monospace'; ctx.fillText('no frequency signals fed to this view', 12, H / 2); return; }
   fed.forEach((s, i) => {
     const lv = S.live[s.id] || {};
-    // Dom signals carry a spring-smoothed dance freq + cluster width (S.dom);
-    // fall back to the live post Hz for any other frequency signal.
-    let freq = lv.post || 0, widthHz = 0, energy = clamp01(lv.energy || 0);
+    // Dom signals carry a spring-smoothed dance freq + cluster width + energy
+    // (S.dom). Any OTHER frequency signal has no separate energy in its frame
+    // (payloads are {raw,post}), so its orb uses a fixed visible brightness and
+    // the live post Hz for position.
+    let freq = lv.post || 0, widthHz = 0, energy = 0.7;
     if (s.source === 'rawDom1') { freq = S.dom.danceF1 || freq; widthHz = S.dom.danceW1 || 0; energy = clamp01(S.dom.e1); }
     else if (s.source === 'rawDom2') { freq = S.dom.danceF2 || freq; widthHz = S.dom.danceW2 || 0; energy = clamp01(S.dom.e2); }
     const trail = viewOrbTrails[s.id] || (viewOrbTrails[s.id] = []);
