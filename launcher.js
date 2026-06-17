@@ -161,10 +161,9 @@ function usage(stream = process.stdout) {
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
     '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
     '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
-    '    --split            Tile sim + CaptainPad side-by-side in Chrome (default',
-    '                       for dev profiles when Chrome is present; falls back to',
-    '                       the default browser if Chrome is missing)',
-    '    --no-split         Always use the default browser (separate tabs/windows)',
+    '    --split            OPT-IN: tile sim + CaptainPad side-by-side in two Chrome',
+    '                       windows (falls back to the default browser if Chrome is',
+    '                       missing). DEFAULT is off — open in your existing browser.',
     '    --help             Show this help',
     ''
   );
@@ -631,11 +630,11 @@ function openProfileUis(opts, profileDef, urls) {
   if (!opts.open) return;
   const has = (name) => profileDef.processes.includes(name);
 
-  // Decide whether to attempt split view: explicit --split forces it on, --no-
-  // split forces it off, and the default ('auto') turns it on for dev profiles
-  // when both the sim and CaptainPad are in play (and Chrome is found below).
-  const wantSplit = opts.split === 'on' ||
-    (opts.split === 'auto' && has('sim') && has('captainpad'));
+  // Split view is OPT-IN ONLY (`--split`). By DEFAULT everything opens in your
+  // existing browser (tabs in the current window) via openInBrowser — cleaner
+  // than popping separate Chrome windows. `--split` tiles sim + CaptainPad in
+  // two Chrome windows; anything else (incl. the 'auto' default) does not split.
+  const wantSplit = opts.split === 'on';
 
   let simHandled = false;
   let captainPadHandled = false;
