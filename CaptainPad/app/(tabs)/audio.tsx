@@ -39,13 +39,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-// react-native-svg is declared in package.json at 15.10.0 (Expo SDK 54
-// compat). Until the operator runs `npm install` + `npx expo prebuild
-// --platform ios --clean` + rebuild, this import resolves at type-check
-// time but the native module is absent — runtime will throw
-// "RNSVGSvgView not found". This is the intentional cost of adding a
-// native dep mid-cycle. See the rework brief, 2026-05-26.
-import Svg, { Polyline } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -59,6 +52,7 @@ import {
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
+import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -391,9 +385,35 @@ function resolveAccent(accent: SignalAccent, palette: Palette): string {
   return accent;
 }
 
-// Pick an accent token for a dynamic signal: KICK red, frequency violet,
-// everything else the live-green auto accent.
+// Per-signal accent palette — MIRRORS the Audio Companion's SOURCE_ACCENT
+// (companion_app.js) so a band reads the SAME colour on the iPad as it does
+// in the desktop designer. These are fixed hex (a signal's identity colour
+// shouldn't flip with the light/dark theme — same posture the Companion
+// takes), chosen to read on both palettes' surfaces.
+const COMPANION_ACCENT: Record<string, string> = {
+  low:   '#34d3b5', // teal
+  mid:   '#4ea1ff', // blue
+  high:  '#8b9bff', // periwinkle
+  kick:  '#ff5d6c', // red
+  flux:  '#c084fc', // violet
+  dom1:  '#f0a23b', // amber
+  dom2:  '#c084fc', // violet
+  bpm:   '#f0a23b', // amber
+  energy: '#1b9e77', // live-green
+  slow:  '#5ac8fa', // cyan
+  build: '#f0a23b', // amber
+  party: '#ff7ac8', // pink
+};
+
+// Pick an accent for a dynamic signal: match the Companion's source colour
+// when we recognise the band; KICK red, dominant-frequency violet, otherwise
+// the live-green auto accent. Recognition is by the trailing band token so a
+// `micLow` / `audioLow` both resolve to the same teal.
 function accentFor(sig: AudioSignalDescriptor): SignalAccent {
+  const k = sig.key.toLowerCase();
+  for (const token of Object.keys(COMPANION_ACCENT)) {
+    if (k.includes(token)) return COMPANION_ACCENT[token];
+  }
   if (/kick/i.test(sig.key)) return 'error';
   if (sig.kind === 'frequency') return '#c084fc';
   return 'auto';
@@ -425,209 +445,94 @@ function slotValueText(slot: SignalSlot, value: number): string {
   return Math.max(0, Math.min(1, value)).toFixed(2);
 }
 
-// Trail buffer + window-picker constants. Same AsyncStorage key as
-// before (operator preference roams across rebuilds).
-const SIGNAL_WINDOW_KEY = '@CaptainPad:audioTrailWindowS';
+// Trace canvas heights. The pinned strip's trace is now the MAIN
+// visualisation of the audio page, so it's given generous, touch-friendly
+// height; the structure-detector preview traces are a touch shorter.
+const PINNED_TRACE_HEIGHT = 64;
+const STRUCTURE_TRACE_HEIGHT = 48;
+
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
 // low/mid/high/kick above the noise gate for the meters AND the detectors /
 // patterns. Range kept generous for a quiet playa mic / line feed.
 const INPUT_GAIN_MIN = 0;
 const INPUT_GAIN_MAX = 10;
-const WINDOW_OPTIONS_S = [5, 10, 15, 30] as const;
-const DEFAULT_WINDOW_S = 10;
-const TRAIL_SAMPLE_HZ = 15;            // 15 Hz visual cadence — enough resolution for a smooth polyline
-const TRAIL_SAMPLE_MS = 1000 / TRAIL_SAMPLE_HZ;
-const MAX_TRAIL_S = WINDOW_OPTIONS_S[WINDOW_OPTIONS_S.length - 1];
-const MAX_BUFFER_LEN = MAX_TRAIL_S * TRAIL_SAMPLE_HZ;
 
-// Stable empty trail handed to a freshly-added signal column for the one
-// frame before its ring buffer is allocated (avoids a transient undefined).
-const EMPTY_TRAIL: readonly number[] = Object.freeze([]);
-
-const TRAIL_HEIGHT = 28;               // SVG plot height per signal column
-const SVG_VIEW_W   = 100;              // viewBox width — strokes scale to the actual rendered width
-const SVG_VIEW_H   = 100;              // viewBox height — y inverted because SVG grows downward
-
-// Build a polyline "x,y x,y …" point string from a sample buffer. Older
-// samples LEFT, newest RIGHT. Empty leading slots are skipped (line
-// just starts later) — keeps the "now" anchored to the right edge.
-function buildPoints(samples: readonly number[], bufferLen: number): string {
-  if (!samples.length || bufferLen <= 1) return '';
-  const take = Math.min(samples.length, bufferLen);
-  const startIdx = bufferLen - take;       // x slot where the line starts
-  const stepX = SVG_VIEW_W / (bufferLen - 1);
-  const parts: string[] = [];
-  for (let i = 0; i < take; i++) {
-    const v = Math.max(0, Math.min(1, samples[samples.length - take + i] ?? 0));
-    const x = (startIdx + i) * stepX;
-    const y = SVG_VIEW_H * (1 - v);        // invert: 0 at bottom, 1 at top
-    parts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
-  }
-  return parts.join(' ');
-}
-
-// One signal column: header label, then two stacked sub-rows — RAW
-// (ghost-toned bar + trace) and POST (solid bar + trace). Stacking
-// them (vs overlaying) means the operator can read each separately
-// and verify gain divergence at a glance.
-function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
+// One signal column — Companion-quality. Header (label + live POST value),
+// a compact POST bar meter, then a single tall SMOOTH trace canvas that
+// overlays a bold POST line (with a translucent area fill) over a thin RAW
+// ghost line in the signal's colour. The trace interpolates client-side at
+// ~60 fps from the throttled live values handed in here (see
+// <AudioTraceCanvas />), so it glides between WS updates without any extra
+// network traffic. Overlaying RAW behind POST (vs the old stacked plots)
+// matches the Companion's CHOP-overlay convention and is denser — letting
+// the trace be the MAIN visualisation of the page.
+function SignalColumn({ slot, raw, post, active, traceHeight }: {
   slot: SignalSlot;
   raw: number;
   post: number;
-  rawSamples: readonly number[];
-  postSamples: readonly number[];
-  bufferLen: number;
+  active: boolean;
+  traceHeight: number;
 }) {
   const C = usePalette();
   const accentColor = resolveAccent(slot.accent, C);
-  // Bars are normalised to [0,1] by the slot's range (intensity is already
-  // [0,1]; frequency/bpm are scaled by their schema max). The header text
-  // shows the TRUE engine value (Hz / bpm / 0..1). Some signals (dom /
-  // detectors / derived) have NO raw mirror — we hide the RAW sub-row for
-  // them and show only the live POST value.
+  // Bars/traces are normalised to [0,1] by the slot's range (intensity is
+  // already [0,1]; frequency/bpm are scaled by their schema max). The header
+  // text shows the TRUE engine value (Hz / bpm / 0..1). Some signals (dom /
+  // detectors / derived) have NO raw mirror — pass null so the RAW ghost is
+  // hidden and only the POST line draws.
   const hasRaw = slot.rawKey !== null;
-  const rv = normalizeSlot(slot, raw);
   const pv = normalizeSlot(slot, post);
-  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
-  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
+  const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
-      {/* header — slot label */}
-      <Text numberOfLines={1} style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-        color: C.secondary, textTransform: 'uppercase',
-        letterSpacing: 0.6, marginBottom: 4,
-      }}>{slot.label}</Text>
-
-      {/* RAW sub-row — tag+value, bar, trace (only when a raw mirror exists) */}
-      {hasRaw ? (
-      <>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.6, opacity: 0.7,
-        }}>RAW</Text>
-        <Text style={{
+      {/* header — slot label + live POST value */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <Text numberOfLines={1} style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: C.text, opacity: 0.7,
-        }}>{slotValueText(slot, raw)}</Text>
-      </View>
-      <View style={{
-        height: 14, borderRadius: 7,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden', marginTop: 2,
-      }}>
-        <View style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${rv * 100}%`, backgroundColor: accentColor,
-          opacity: 0.5,
-        }} />
-      </View>
-      <View style={{
-        marginTop: 2,
-        height: TRAIL_HEIGHT,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        borderRadius: 3,
-        overflow: 'hidden',
-      }}>
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
-          preserveAspectRatio="none"
-        >
-          {rawPoints ? (
-            <Polyline
-              points={rawPoints}
-              fill="none"
-              stroke={accentColor}
-              strokeOpacity={0.55}
-              strokeWidth={1}
-            />
-          ) : null}
-        </Svg>
-      </View>
-      </>
-      ) : null}
-
-      {/* POST sub-row — tag+value, bar, trace */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: hasRaw ? 8 : 0 }}>
+          color: accentColor, textTransform: 'uppercase',
+          letterSpacing: 0.6, flexShrink: 1,
+        }}>{slot.label}</Text>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: accentColor, letterSpacing: 0.6,
-        }}>{hasRaw ? 'POST' : 'LIVE'}</Text>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-          color: C.text,
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text,
         }}>{slotValueText(slot, post)}</Text>
       </View>
+
+      {/* POST bar meter — compact, full intensity. */}
       <View style={{
-        height: 18, borderRadius: 9,
+        height: 8, borderRadius: 4,
         backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden', marginTop: 2,
+        overflow: 'hidden', marginBottom: 3,
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
           width: `${pv * 100}%`, backgroundColor: accentColor,
         }} />
       </View>
-      <View style={{
-        marginTop: 2,
-        height: TRAIL_HEIGHT,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        borderRadius: 3,
-        overflow: 'hidden',
-      }}>
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
-          preserveAspectRatio="none"
-        >
-          {postPoints ? (
-            <Polyline
-              points={postPoints}
-              fill="none"
-              stroke={accentColor}
-              strokeWidth={1.5}
-            />
-          ) : null}
-        </Svg>
-      </View>
-    </View>
-  );
-}
 
-function WindowPicker({ value, onChange }: {
-  value: number; onChange: (s: number) => void;
-}) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      {WINDOW_OPTIONS_S.map(s => {
-        const active = s === value;
-        return (
-          <TouchableOpacity
-            key={s}
-            onPress={() => onChange(s)}
-            style={{
-              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
-              backgroundColor: active ? C.primary : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-            }}
-          >
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-              color: active ? '#fff' : C.secondary, letterSpacing: 0.6,
-            }}>{s}s</Text>
-          </TouchableOpacity>
-        );
-      })}
+      {/* The MAIN visual — smooth 60 fps scrolling RAW(thin)+POST(bold) trace. */}
+      <View style={{ borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, overflow: 'hidden' }}>
+        <AudioTraceCanvas
+          post={pv}
+          raw={rawNorm}
+          color={accentColor}
+          background={C.surfaceContainerLowest}
+          gridColor={C.ghostBorder}
+          height={traceHeight}
+          active={active}
+        />
+      </View>
+
+      {/* RAW value footnote (only when a raw mirror exists) — keeps the
+          gain-divergence read-out the previous stacked layout offered,
+          without a second trace. */}
+      {hasRaw ? (
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: C.secondary, letterSpacing: 0.6, opacity: 0.7, marginTop: 3,
+        }}>RAW {slotValueText(slot, raw)}</Text>
+      ) : null}
     </View>
   );
 }
@@ -683,86 +588,25 @@ function PinnedAudioMeters({
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
 
-  // ── Window picker — persisted to AsyncStorage (same key as before).
-  const [windowS, setWindowS] = useState<number>(DEFAULT_WINDOW_S);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(SIGNAL_WINDOW_KEY).then(raw => {
-      if (!alive || !raw) return;
-      const parsed = parseInt(raw, 10);
-      if (WINDOW_OPTIONS_S.includes(parsed as typeof WINDOW_OPTIONS_S[number])) {
-        setWindowS(parsed);
-      }
-    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
-    return () => { alive = false; };
-  }, []);
-  const setWindow = useCallback((s: number) => {
-    setWindowS(s);
-    AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s))
-      .catch(() => { /* benign — persistence is best-effort */ });
-  }, []);
-
-  // ── Ring buffer — one number[] per (slot, raw|post). Trails hold
-  // NORMALISED [0,1] samples (buildPoints expects [0,1]) so the SVG works
-  // for frequency/bpm signals too. Identity changes on each tick so
-  // SignalColumn's useMemo recomputes the polyline. Bounded at
-  // MAX_BUFFER_LEN; window picker controls the tail length.
-  const [trails, setTrails] = useState<{ raw: number[][]; post: number[][] }>(() => ({
-    raw:  slots.map(() => []),
-    post: slots.map(() => []),
-  }));
-  // Re-shape the ring buffers when the dynamic signal set changes (the
-  // Companion added/removed a signal). We start the new slots' trails
-  // empty rather than trying to re-map old buffers by key — a momentary
-  // flat trace on a freshly-added signal is fine and avoids index drift.
-  const slotCountRef = useRef(slots.length);
-  useEffect(() => {
-    if (slotCountRef.current !== slots.length) {
-      slotCountRef.current = slots.length;
-      setTrails({ raw: slots.map(() => []), post: slots.map(() => []) });
-    }
-  }, [slots]);
-
-  // Always read the latest slots + live doc from refs so the sample timer
-  // callback (started once per focus) doesn't need them in its deps.
-  const slotsRef = useRef(slots);
-  slotsRef.current = slots;
-  const valueOfRef = useRef(valueOf);
-  valueOfRef.current = valueOf;
-
-  // Sample timer — runs ONLY while the audio tab is focused. Pushes one
-  // NORMALISED frame into every ring buffer at TRAIL_SAMPLE_HZ. Tab blur
-  // clears the timer so we don't burn cycles on background tabs.
+  // ── Tab-focus gate — the <AudioTraceCanvas /> rAF loops pause when the
+  // AUDIO tab is blurred so background tabs burn zero CPU (congestion / power
+  // guard). `active` flips false on blur, true on focus.
+  const [active, setActive] = useState(true);
   useFocusEffect(useCallback(() => {
-    const interval = setInterval(() => {
-      const curSlots = slotsRef.current;
-      const read = valueOfRef.current;
-      setTrails(prev => {
-        // Guard against a slot/buffer length mismatch during a set change.
-        if (prev.raw.length !== curSlots.length) {
-          return { raw: curSlots.map(() => []), post: curSlots.map(() => []) };
-        }
-        const nextRaw  = prev.raw.map((buf, i) => {
-          const s = curSlots[i];
-          const v = s.rawKey ? normalizeSlot(s, read(s.rawKey)) : 0;
-          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
-          out.push(v);
-          return out;
-        });
-        const nextPost = prev.post.map((buf, i) => {
-          const s = curSlots[i];
-          const v = normalizeSlot(s, read(s.postKey));
-          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
-          out.push(v);
-          return out;
-        });
-        return { raw: nextRaw, post: nextPost };
-      });
-    }, TRAIL_SAMPLE_MS);
-    return () => clearInterval(interval);
+    setActive(true);
+    return () => setActive(false);
   }, []));
 
-  const bufferLen = windowS * TRAIL_SAMPLE_HZ;
+  // NB: the per-frame trace smoothing + ring buffer now live INSIDE each
+  // <AudioTraceCanvas /> (client-side rAF interpolation). The old 15 Hz
+  // setInterval that pushed every signal's samples into a shared trails
+  // object was removed — it ticked the WHOLE strip at the network cadence
+  // and produced a stepped polyline. The canvas instead reads the latest
+  // throttled value (handed down as a prop from the existing live bus) and
+  // glides between updates at the device frame rate, so there is no extra
+  // network traffic and the motion is smooth. The window picker / trail-
+  // length controls went with it (the trace window is now a fixed, calm
+  // ~10 s-equivalent scroll — see ADVANCE_HZ in AudioTraceCanvas).
 
   const micOn       = audioStatus?.enabled === true;
   const micPhase    = audioStatus?.phase ?? (micOn ? 'unknown' : 'off');
@@ -814,9 +658,8 @@ function PinnedAudioMeters({
         <View style={{ flex: 1 }} />
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.8, marginRight: 8,
-        }}>TRAIL</Text>
-        <WindowPicker value={windowS} onChange={setWindow} />
+          color: C.secondary, letterSpacing: 0.8,
+        }}>LIVE · 60 FPS</Text>
       </View>
       {/* Meters row — DYNAMIC: one SignalColumn per live audio signal the
           Companion routes in (low/mid/high/kick, dom1/dom2, energy, slow,
@@ -836,15 +679,14 @@ function PinnedAudioMeters({
             </Text>
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'flex-start', paddingRight: 8 }}>
-              {slots.map((slot, i) => (
-                <View key={slot.key} style={{ width: 96 }}>
+              {slots.map((slot) => (
+                <View key={slot.key} style={{ width: 132 }}>
                   <SignalColumn
                     slot={slot}
                     raw={valueOf(slot.rawKey)}
                     post={valueOf(slot.postKey)}
-                    rawSamples={trails.raw[i] ?? EMPTY_TRAIL}
-                    postSamples={trails.post[i] ?? EMPTY_TRAIL}
-                    bufferLen={bufferLen}
+                    active={active}
+                    traceHeight={PINNED_TRACE_HEIGHT}
                   />
                 </View>
               ))}
@@ -924,19 +766,17 @@ const STRUCTURE_LIVE_DEFAULTS: Record<string, number> = {
   audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
   audioVocalsHot: 0, audioDropPulse: 0,
 };
-// Trail order: the 3 continuous signals + the (normalised) state line.
-const STRUCTURE_TRAIL_KEYS = [...STRUCTURE_SIGNALS.map(s => s.key), 'audioStructure'];
 
-// Single-trace column — mirrors the POST sub-row of <SignalColumn /> (label,
-// value, bar, trail) so it sits flush with the MIC/STEMS meter style.
-function StructureSignalColumn({ label, value, samples, bufferLen, accent, valueText, barFill }: {
-  label: string; value: number; samples: readonly number[]; bufferLen: number;
-  accent: string; valueText?: string; barFill?: number;
+// Single-trace column — same smooth canvas as <SignalColumn /> but POST-only
+// (these derived signals have no raw mirror), so the structure preview reads
+// flush with the MIC/STEMS meter style.
+function StructureSignalColumn({ label, value, accent, active, valueText, barFill }: {
+  label: string; value: number; accent: string; active: boolean;
+  valueText?: string; barFill?: number;
 }) {
   const C = usePalette();
   const v = Math.max(0, Math.min(1, value));
   const bar = Math.max(0, Math.min(1, barFill ?? v));
-  const points = useMemo(() => buildPoints(samples, bufferLen), [samples, bufferLen]);
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -944,18 +784,21 @@ function StructureSignalColumn({ label, value, samples, bufferLen, accent, value
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{valueText ?? v.toFixed(2)}</Text>
       </View>
       <View style={{
-        height: 18, borderRadius: 9, backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden', marginTop: 2,
+        height: 8, borderRadius: 4, backgroundColor: C.surfaceContainerLowest,
+        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden', marginTop: 2, marginBottom: 3,
       }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${bar * 100}%`, backgroundColor: accent }} />
       </View>
-      <View style={{
-        marginTop: 2, height: TRAIL_HEIGHT, backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 3, overflow: 'hidden',
-      }}>
-        <Svg width="100%" height="100%" viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`} preserveAspectRatio="none">
-          {points ? <Polyline points={points} fill="none" stroke={accent} strokeWidth={1.5} /> : null}
-        </Svg>
+      <View style={{ borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, overflow: 'hidden' }}>
+        <AudioTraceCanvas
+          post={v}
+          raw={null}
+          color={accent}
+          background={C.surfaceContainerLowest}
+          gridColor={C.ghostBorder}
+          height={STRUCTURE_TRACE_HEIGHT}
+          active={active}
+        />
       </View>
     </View>
   );
@@ -967,43 +810,18 @@ function StructureDetectorCard({ cardStyle, detectorOn }: {
   const C = usePalette();
   const live = useLiveParamValues(STRUCTURE_LIVE_DEFAULTS) as Record<string, number>;
 
-  // Trail window — read the SAME persisted key the pinned strip uses, so the
-  // two stay visually consistent (re-read on focus to pick up changes there).
-  const [windowS, setWindowS] = useState<number>(DEFAULT_WINDOW_S);
+  // Tab-focus gate for the preview traces' rAF loops (pause on blur).
+  const [active, setActive] = useState(true);
   useFocusEffect(useCallback(() => {
-    let alive = true;
-    AsyncStorage.getItem(SIGNAL_WINDOW_KEY).then(raw => {
-      if (!alive || !raw) return;
-      const parsed = parseInt(raw, 10);
-      if (WINDOW_OPTIONS_S.includes(parsed as typeof WINDOW_OPTIONS_S[number])) setWindowS(parsed);
-    }).catch(() => { /* benign */ });
-    return () => { alive = false; };
-  }, []));
-  const setWindow = useCallback((s: number) => {
-    setWindowS(s);
-    AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s)).catch(() => { /* benign */ });
-  }, []);
-
-  // Ring buffers (same pattern as PinnedAudioMeters): one per trail key.
-  const [trails, setTrails] = useState<number[][]>(() => STRUCTURE_TRAIL_KEYS.map(() => []));
-  const liveRef = useRef(live); liveRef.current = live;
-  useFocusEffect(useCallback(() => {
-    const interval = setInterval(() => {
-      const snap = liveRef.current;
-      setTrails(prev => prev.map((buf, i) => {
-        const key = STRUCTURE_TRAIL_KEYS[i];
-        // audioStructure is 0..2 → normalise to [0,1] for the trail.
-        const raw = snap[key] ?? 0;
-        const v = key === 'audioStructure' ? raw / 2 : raw;
-        const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
-        out.push(v);
-        return out;
-      }));
-    }, TRAIL_SAMPLE_MS);
-    return () => clearInterval(interval);
+    setActive(true);
+    return () => setActive(false);
   }, []));
 
-  const bufferLen = windowS * TRAIL_SAMPLE_HZ;
+  // NB: the trace smoothing + ring buffer live inside <AudioTraceCanvas />
+  // now (client-side rAF interpolation), so the old 15 Hz setInterval ring
+  // buffer + trail-window picker were removed here too. The derived structure
+  // keys still arrive on the same throttled live bus (useLiveParamValues) —
+  // no new subscription, no extra network traffic.
   const stateMeta = structureStateMeta(live.audioStructure ?? 0, C);
   const vocalsHot = (live.audioVocalsHot ?? 0) >= 0.5;
 
@@ -1013,9 +831,6 @@ function StructureDetectorCard({ cardStyle, detectorOn }: {
         icon="waveform"
         title="STRUCTURE DETECTOR"
         hint="Build / drop / sustain cues (docs/30). Reads the raw pre-chain signals; observe-only."
-        right={
-          <WindowPicker value={windowS} onChange={setWindow} />
-        }
       />
       {/* LOCKED — drop/build/sustain detection is under active development and
           is intentionally not enableable yet (it needs accuracy tuning against
@@ -1062,24 +877,22 @@ function StructureDetectorCard({ cardStyle, detectorOn }: {
       </View>
 
       {/* Trace row — STATE (stepped) + the 3 continuous signals, all in the
-          shared SignalColumn trail style. */}
+          shared smooth-canvas trail style. */}
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 6 }}>
         <StructureSignalColumn
           label="STATE"
           value={(live.audioStructure ?? 0) / 2}
           valueText={detectorOn ? stateMeta.name : '—'}
           barFill={(live.audioStructure ?? 0) / 2}
-          samples={trails[STRUCTURE_TRAIL_KEYS.indexOf('audioStructure')]}
-          bufferLen={bufferLen}
+          active={active}
           accent={detectorOn ? stateMeta.color : C.secondary}
         />
-        {STRUCTURE_SIGNALS.map((slot, i) => (
+        {STRUCTURE_SIGNALS.map((slot) => (
           <StructureSignalColumn
             key={slot.key}
             label={slot.label}
             value={live[slot.key] ?? 0}
-            samples={trails[i]}
-            bufferLen={bufferLen}
+            active={active}
             accent={resolveAccent(slot.accent, C)}
           />
         ))}

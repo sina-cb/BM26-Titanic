@@ -182,8 +182,8 @@ function ModulationBadges({
           borderWidth: 1, borderColor: bColor,
           // Stable colour: no fade animation while React rerenders
           // (the toggle would otherwise look "flashy" on a live deck).
-          transitionDuration: '0s' as any,
-        }}
+          transitionDuration: '0s',
+        } as any}
         activeOpacity={canEdit ? 0.7 : 1}
         accessibilityLabel={hasMapping ? (canEdit ? 'Edit modulation' : 'Modulation active') : 'Add modulation'}
       >
@@ -204,8 +204,8 @@ function ModulationBadges({
             paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6,
             backgroundColor: 'transparent',
             borderWidth: 1, borderColor: MOD_GREEN,
-            transitionDuration: '0s' as any,
-          }}
+            transitionDuration: '0s',
+          } as any}
           activeOpacity={0.7}
           accessibilityLabel="Clear modulation"
         >
