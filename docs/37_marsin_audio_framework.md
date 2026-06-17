@@ -1,42 +1,51 @@
 # 37 — The Marsin Audio Framework
 
-**Status:** Design (active) — unifies the audio analysis + post-processing story
+**Status:** Active — design + in-build (the audio subsystem ships from here)
 **Supersedes / folds in:** `25_marsin_audio_analysis.md` (in-engine analyzer),
 `29_node_based_audio_post_processing.md` (chain framework),
 `30_[todo]_audio_structure_detector.md` (build/drop/sustain detector)
 **Works with (still valid):** `24_osc_integration.md` (OSC → CPC transport),
-`26_audio_params_playlist.md` (routing CPC audio signals → pattern/global params),
-`34_pro_audio_via_osc_sidecar.md` (external heavy-analysis sidecar)
-**Hard rule:** the Companion runs the engine's REAL audio DSP (imports from
-`marsin_engine/audio/…`); it never forks/reimplements analysis logic. One source
-of truth. (See `audio/README.md`.)
+`26_audio_params_playlist.md` (routing CPC audio signals → pattern/global params)
+**Build contract:** `.agent/02_reports/202606/20260617_0_companion_signal_designer_contract.md`
+**Hard rule:** all audio DSP lives in `marsin_engine/audio/…` and runs in exactly
+ONE place — the Companion. It is never forked/reimplemented. (See `audio/README.md`.)
+
+> **Architecture (2026-06-17): the Companion is the SOLE analyzer.** The engine no
+> longer runs its own in-line audio DSP (disabled — the Companion, an
+> engine-supervised subprocess, does all capture + analysis). The operator
+> **designs** signals in the Companion (pick a raw source → a type-aware chain of
+> ops → an **`osc_out`** op), and `osc_out` sends the signal to the engine's OSC
+> port (host/port from config). The engine writes it into CPC, and CaptainPad shows
+> it **dynamically** in the deck, mixer, and audio tab. Stems and the
+> Audio-Slice-direct-to-engine OSC lane are removed (Audio Slice, if used, is
+> ingested by the Companion and re-emitted like any other source). "One source of
+> truth" now means: the Companion is the source; the engine consumes.
 
 ---
 
 ## 1. The story
 
-We light the Titanic to live EDM. The **Audio Analysis Companion** is the tool we
-use to *design* the audio reactivity: it reads audio (mic / line / file) **and**
-ingests an external stem/BPM analyzer (**Audio Slice**, §6.2), runs the engine's
-analysis + post-processing, lets us **see** every signal, **tune** it, **shape**
-it into the cues we want, and then **output the chosen signals to the marsin
-engine over OSC**, where they land in the Central Parameter Center (CPC) and
-drive patterns (per `docs/26`).
+We light the Titanic to live EDM. The **Audio Analysis Companion** is where we
+*design* the audio reactivity. It reads audio (mic / line / file), runs the audio
+DSP, lets us **see** every signal, and lets the operator **build** the signals they
+want: add a signal, pick a **raw source**, stack a **type-aware chain of ops**, and
+end it with an **`osc_out`** op. Each `osc_out` signal is streamed to the marsin
+engine over OSC, lands in the Central Parameter Center (CPC), and shows up
+**dynamically** in CaptainPad (deck / mixer / audio tab) where playlists route it
+to pattern/global params (`docs/26`).
 
 ```
-   audio in ─────────▶ [ Sources ] ──▶ [ post-proc Ops ] ──▶ [ Output UI ] ──OSC──▶ marsin engine CPC ──▶ patterns
-   (mic/line/file)      raw signals     gain/smooth/Kalman/      pick what to       (osc.port 10000)        (docs/26 routing)
-   Audio Slice ──OSC──▶ (stems/BPM)     DanceMaker/…             send + OSC addr
-   (local CLI, §6.2)        └────────────────▶ [ Visualizers ] (spectrum / waveform / dom-dance)
+  audio in ──▶ [ raw source ] ──▶ [ type-aware op chain ] ──▶ [ osc_out ] ──OSC──▶ engine CPC ──▶ CaptainPad (deck/mixer/audio) ──▶ patterns
+  (mic/line/file)  rawLow…/rawDom…   gain/smooth/kalman/…       (engine host/port,    dynamic keys           (docs/26 routing)
+                        │                                        from config)
+                        └────────────▶ [ Visualizers ] (spectrum / waveform / dom-dance)
 ```
 
-Two complementary lanes already exist and remain valid:
-- **OSC-in (docs/24, 34):** an *external* analyser pushes scalars to the engine.
-  The Companion is a **first-party realization** of exactly this pattern — it is
-  the engine's own analysis, packaged as an app, emitting OSC.
-- **Param routing (docs/26):** once a signal is in CPC, CaptainPad playlists map
-  it to pattern/global params. The framework's job ends at "signal in CPC"; how
-  it modulates lights is `docs/26`.
+- The Companion **owns** capture + analysis (sole analyzer, engine-supervised).
+- The **operator designs** the signal set (add/remove signals; each = source + ops
+  + optional `osc_out`); it persists to `companion_config.yaml`.
+- **Param routing (docs/26):** once a signal is in CPC, CaptainPad maps it to
+  pattern/global params. The framework's job ends at "signal in CPC."
 
 ---
 
