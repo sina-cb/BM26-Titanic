@@ -53,6 +53,7 @@ import {
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
+import { audioAccentHex } from '@/utils/audioSignals';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -385,38 +386,14 @@ function resolveAccent(accent: SignalAccent, palette: Palette): string {
   return accent;
 }
 
-// Per-signal accent palette — MIRRORS the Audio Companion's SOURCE_ACCENT
-// (companion_app.js) so a band reads the SAME colour on the iPad as it does
-// in the desktop designer. These are fixed hex (a signal's identity colour
-// shouldn't flip with the light/dark theme — same posture the Companion
-// takes), chosen to read on both palettes' surfaces.
-const COMPANION_ACCENT: Record<string, string> = {
-  low:   '#34d3b5', // teal
-  mid:   '#4ea1ff', // blue
-  high:  '#8b9bff', // periwinkle
-  kick:  '#ff5d6c', // red
-  flux:  '#c084fc', // violet
-  dom1:  '#f0a23b', // amber
-  dom2:  '#c084fc', // violet
-  bpm:   '#f0a23b', // amber
-  energy: '#1b9e77', // live-green
-  slow:  '#5ac8fa', // cyan
-  build: '#f0a23b', // amber
-  party: '#ff7ac8', // pink
-};
-
-// Pick an accent for a dynamic signal: match the Companion's source colour
-// when we recognise the band; KICK red, dominant-frequency violet, otherwise
-// the live-green auto accent. Recognition is by the trailing band token so a
-// `micLow` / `audioLow` both resolve to the same teal.
+// Pick an accent for a dynamic signal. The per-signal identity-colour map
+// (Companion SOURCE_ACCENT mirror) now lives in utils/audioSignals.ts as a
+// single source of truth shared with the deck meters + the modulation
+// source trail — `audioAccentHex` resolves the fixed hex. Kept as a thin
+// wrapper returning a `SignalAccent` so the existing resolveAccent path /
+// literal-hex slots are unchanged.
 function accentFor(sig: AudioSignalDescriptor): SignalAccent {
-  const k = sig.key.toLowerCase();
-  for (const token of Object.keys(COMPANION_ACCENT)) {
-    if (k.includes(token)) return COMPANION_ACCENT[token];
-  }
-  if (/kick/i.test(sig.key)) return 'error';
-  if (sig.kind === 'frequency') return '#c084fc';
-  return 'auto';
+  return audioAccentHex(sig);
 }
 
 function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {

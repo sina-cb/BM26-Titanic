@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
@@ -7,6 +7,7 @@ import { useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, 
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
@@ -446,6 +447,14 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
  * one-line summary) from the live audio doc + the dynamic signal list.
  * Subscribes to the WHOLE live doc so the key set can change at runtime
  * without tripping useLiveParamValues' pinned-key-set contract.
+ *
+ * CURATE, DON'T DUMP: the deck/mixer is the densest screen in the app, so
+ * this row shows ONLY the best-practice subset (LOW / MID / HIGH / KICK +
+ * a beat cue — see utils/audioSignals.ts → curateDeckSignals) rather than
+ * the full dynamic set. The FULL set lives on the AUDIO tab. The curation
+ * gracefully degrades: a curated cue the Companion isn't publishing is
+ * simply omitted. A "+N on AUDIO tab" hint flags how many live signals
+ * aren't shown here so the operator knows where the rest are.
  */
 function DynamicAudioRow({ signals, isPortrait, collapsed }: {
   signals: AudioSignalDescriptor[];
@@ -460,6 +469,10 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
     return v;
   }, [liveDoc]);
 
+  // Best-practice deck subset (LOW/MID/HIGH/KICK + beat cue), in curated
+  // order. The remainder count drives the "+N on AUDIO tab" hint.
+  const curated = useMemo(() => curateDeckSignals(signals), [signals]);
+
   if (signals.length === 0) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', paddingLeft: 4 }}>
@@ -470,13 +483,18 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
     );
   }
 
+  // If NONE of the curated cues are live (an exotic Companion routing that
+  // publishes signals we don't recognise), fall back to the first few live
+  // signals so the row is never blank while audio IS flowing.
+  const shownSet = curated.length > 0 ? curated : signals.slice(0, isPortrait ? 4 : 6);
+  const remainder = signals.length - shownSet.length;
+
   if (collapsed) {
-    // One-line micro-meter summary — first few signals so the row stays
-    // ~24px regardless of how many the Companion publishes.
-    const shown = signals.slice(0, isPortrait ? 4 : 6);
+    // One-line micro-meter summary — the curated cues only, so the row
+    // stays ~24px regardless of how many the Companion publishes.
     return (
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
-        {shown.map((s) => (
+        {shownSet.map((s) => (
           <CollapsedMeter
             key={s.key}
             label={s.label}
@@ -484,21 +502,16 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
             accent={/kick/i.test(s.key)}
           />
         ))}
-        {signals.length > shown.length ? (
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon }}>+{signals.length - shown.length}</Text>
+        {remainder > 0 ? (
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon }}>+{remainder}</Text>
         ) : null}
       </View>
     );
   }
 
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ alignItems: 'center', gap: isPortrait ? 6 : 10, paddingRight: isPortrait ? 4 : 12 }}
-      style={{ flex: 1 }}
-    >
-      {signals.map((s) => (
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
+      {shownSet.map((s) => (
         <LiveMeterColumn
           key={s.key}
           isPortrait={isPortrait}
@@ -506,7 +519,15 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
           value={valueOf(s.postKey)}
         />
       ))}
-    </ScrollView>
+      {remainder > 0 ? (
+        <Text
+          numberOfLines={2}
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
+        >
+          +{remainder} on AUDIO tab
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -539,12 +560,16 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
   value: number;
 }) {
   const C = usePalette();
-  const cellMinWidth = isPortrait ? 56 : 80;
+  const cellMinWidth = isPortrait ? 52 : 72;
   const fill = normalizeAudio(signal, value);
-  const accent = /kick/i.test(signal.key);
+  // Identity colour — the curated bands read with their Companion accent
+  // (teal LOW, blue MID, red KICK, …) so the deck cue matches the AUDIO
+  // tab trace and the modulation source trail. One shared source of truth
+  // in utils/audioSignals.ts.
+  const accentHex = audioAccentHex(signal);
   return (
     <View style={{
-      minWidth: cellMinWidth,
+      flex: 1, minWidth: cellMinWidth, maxWidth: isPortrait ? 80 : 110,
       paddingVertical: 4, paddingHorizontal: 6,
       borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
       backgroundColor: C.surface,
@@ -562,7 +587,7 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
           width: `${fill * 100}%`,
-          backgroundColor: accent ? C.primaryContainer : C.primary,
+          backgroundColor: accentHex,
         }} />
       </View>
     </View>

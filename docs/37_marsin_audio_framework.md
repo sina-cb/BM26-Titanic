@@ -49,12 +49,18 @@ to pattern/global params (`docs/26`).
 
 ---
 
-## 2. Architecture — a typed-port op graph
+## 2. Architecture — typed signals → type-aware ops → OSC
 
-The framework is a small **directed graph** of nodes connected by **typed
-ports**. This generalizes the per-signal chains of `docs/29` (which were a
-fixed `signal → ops → output` line) into a graph where any source can feed any
-op, ops can branch/merge, and the right-most layer converts to OSC.
+> **Shipped as (2026-06-17):** a **linear, type-aware per-signal designer**, NOT a
+> draggable node graph. Each signal = one raw source → an ordered op chain
+> (filtered to the signal's type) → a terminal `osc_out` op. The "typed-port
+> graph" below is the conceptual model the designer realizes (types still gate
+> which ops are legal); the branching node-canvas editor is descoped/optional (§11).
+
+The model is a small **directed chain** of nodes connected by **typed ports**.
+This generalizes the per-signal chains of `docs/29` (a fixed
+`signal → ops → output` line) by making the ports **typed** so the UI only offers
+legal ops, and the right-most layer (`osc_out`) converts to OSC.
 
 ### 2.1 Port types
 
@@ -231,6 +237,11 @@ post-process; only the time-domain input and the per-signal scalar chains do.)
 
 ### 6.2 Audio Slice lane (external stem/BPM analyzer, OSC-in) — **local-only**
 
+> **Status: TARGET — not yet built.** The direct Audio-Slice-to-engine OSC lane was
+> removed; the plan is for the **Companion** to ingest Audio Slice and re-emit it as
+> raw sources (+ a local HIL test). None of that ships yet. Local-only (the Audio
+> Slice binary lives on the operator's machine).
+
 **Audio Slice** is a separate program (not part of this repo) that does heavier
 analysis than the in-engine DSP can — **stem separation** (bass / drums / vocals)
 and its own **BPM/beat** estimate. It is launched **from the CLI with a config
@@ -275,7 +286,13 @@ either `audioBpm` (in-engine) or `rawSliceBpm` (Audio Slice).
 
 ---
 
-## 7. Output UI → OSC → CPC
+## 7. Output → OSC → CPC
+
+> **Shipped as:** the **`osc_out` op** (a terminal op in a signal's chain), NOT a
+> separate "Output panel". A signal whose chain ends in `osc_out` is an output; the
+> Companion streams its POST value each hop to the engine OSC (`config.companion.osc`
+> host/port). The CPC read-back confirmation below is still a target — today the UI
+> shows "sent".
 
 A dedicated **Output** panel lets the operator:
 1. pick which signals to send (native or post-processed graph outputs);
@@ -310,8 +327,14 @@ listener writes accepted values into CPC.
 
 ## 8. Launch + configuration (managed by the engine)
 
-The Companion's lifecycle is **owned by the marsin engine**, the same way the
-engine already owns its other subprocesses — it spawns and supervises the
+> **Shipped vs target:** the *config* is shipped — engine `audio.enabled:false`
+> (sole-analyzer) + a `companion:` block (OSC target host/port, source, device).
+> The engine **spawning/supervising** the Companion process (below) is **NOT yet
+> built** — the Companion is launched manually today (§11). This is the remaining
+> "engine-managed subprocess" work.
+
+The Companion's lifecycle is **owned by the marsin engine** (target), the same way
+the engine already owns its other subprocesses — it spawns and supervises the
 ffmpeg audio capture (respawn on exit, clean teardown on SIGINT/SIGTERM) and the
 OSC listener (live re-spawn on config change). The Companion is one more
 **supervised child** on that pattern, gated by `audioCompanion.enabled`:
@@ -426,57 +449,56 @@ internet). Design rules:
 
 ---
 
-## 11. Current state vs target
+## 11. Current state vs target (reconciled to the shipped branch, 2026-06-17)
 
-**Built (this PR):** the in-engine analyzer (FFT bands, kick, flux), per-signal
-post-processing chains, the structure detector (Kalman+NIS drop, slow-zone),
-dominant-frequency tracker (centroid + Kalman + cluster windows + dom-dance
-spring), BPM v2 (2-state lock + beat/bar), derived signals (party / note /
-switch-pattern / switch-color), and the standalone **Companion** (test/mic/file
-sources, INPUT stage, hi-res spectrum + waveform + dom-dance visualizers, chain
-editor, calibration, `{type:'diag'}`).
+**SHIPPED (on `claude/audio-corpus-tuning-olcd6i`):**
+- **Sole-analyzer migration.** Engine `audio.enabled: false` — it no longer runs
+  its own in-line DSP. The **Companion** does all capture + analysis and streams
+  the chosen signals to the engine over OSC → CPC (proven end-to-end by a node
+  test across all curated addresses).
+- **Companion = signal DESIGNER.** Sidebar `[+]`/`[×]` add/remove signals; each
+  picks a **raw source** (intensity: `rawLow/Mid/High/Kick/Flux`; frequency:
+  `rawDom1/2`); a **type-aware** op palette (frequency signals get only Hz-valid
+  ops); a **horizontal** op row terminated by an **`osc_out`** op that sends the
+  POST value to the engine OSC (host/port from `config.companion.osc`). The design
+  persists to `companion_config.yaml`. Sane slider ranges; sidebar number glitch
+  fixed.
+- **Ops:** the 13 real `SignalPostProcessor` ops + `osc_out`. Frequency signals
+  run through an unclamped `outputMode:'frequency'` processor so `lpf/clamp/slew`
+  actually shape **Hz** (reusing the same op math — no DSP fork).
+- **Visualizers:** hi-res spectrum, rolling ~93 ms scope, dom-dance; **file mode is
+  browser-as-source** (`<audio>` audio-out + seek + pause, worklet PCM
+  pass-through → analyzed in sync).
+- **Stems removed** (registry + OSC + CaptainPad).
+- **CaptainPad:** audio signals render **dynamically** from the engine schema in
+  deck / mixer / audio tab; the audio page shows **smooth, Companion-quality
+  traces** (`AudioTraceCanvas`, rAF-interpolated at ~60 fps, **congestion-aware** —
+  no new/faster subscriptions); audio-settings rehaul (source / overall gain /
+  device); mic selection unified (CaptainPad → engine `capture.*` → Companion).
+- **Realtime (§13):** low-latency capture (dshow `audio_buffer_size`) + jitter
+  buffer + steady hop clock + diag — measured on a real Windows mic (jitter
+  71→2.7, gap 496→18.5 ms, steady 86 Hz).
+- **Correctness:** note detection unstuck (no longer pinned to C); drop detector
+  default = `windowed` (corpus-green), `kalman` opt-in + retunable; BPM v2;
+  structure detector; dom-freq + Kalman (§12). 40 synthetic op/chain tests.
 
-The Companion **UI today** is a single-screen tool with a *linear* per-signal op
-list (no graph), fixed-axis spectrum/waveform/dom-dance canvases, a device picker,
-calibration, and `{type:'diag'}`. Rendering is correctly decoupled from the
-network (server coalesces to ~60 Hz, client advances on rAF) and it is
-offline-clean (no CDN/web-font). It does **not** yet have: the node-graph editor,
-branching chains, the Output panel / `OscSink`, OSC anything, per-visualizer
-fixed-vs-dynamic axis settings, or a theme system.
-
-**Target (this framework) — explicitly not-yet-built:**
-- **Migrate the existing ops into the framework + remove the old code.** The 13
-  scalar ops (§2.2) already live in `audio/postproc/signal_post_processor.js`
-  (`OP_SCHEMA` + the `apply()` switch + per-op runtime state). Wrap each in the
-  typed-port node interface (`inputs[]`/`outputs[]`, declared port types) so they
-  become graph nodes, keeping behavior identical (snapshot/parity tests over the
-  existing chains guard against drift). **Then clean up the old path**: the
-  hand-rolled `apply()` switch, the parallel `OP_SCHEMA`, and any
-  signal-specific special-casing collapse into the single op registry — no two
-  code paths for the same op. This is a defined cleanup task, not a rewrite: the
-  DSP math is reused verbatim, only its packaging changes.
-- generalize the linear chains into the **typed-port op graph** (§2) and a
-  **node-graph editor UI**. ⚠ The graph editor (draggable nodes, typed-port
-  hit-targets ≥24 px, hover-highlight of compatible ports, red wire on invalid
-  drop, topological layout) is the single hardest UI piece and needs **its own
-  plan slice** — or an explicit descope to "linear chains per signal + an Output
-  list" (which the current code is ~80% of). It is currently unscoped.
-- **Kalman** + **`DanceMaker`** as first-class ops (dom-dance **parity test**).
-- the **OscSink** + **Output UI** (§7), **engine-launch + config** (§8).
-- the **Audio Slice input lane** (§6.2) — launch/supervise the external CLI
-  analyzer, OSC-in listener, `rawStem*` / `rawSliceBpm` / `rawSliceBeat` Sources.
-  ⚠ **local-only**: buildable anywhere, but end-to-end validation needs the
-  operator's local Audio Slice install.
-- the **jitter buffer + steady clock** (§13) — the realtime fix.
-- the **UI theme rehaul**: reuse the Sim's proven token pipeline
-  (`simulation/src/gui/theme.js` + `simulation/style.css`, palettes mirror
-  `CaptainPad/constants/theme.ts`) rather than the Companion's bespoke 9-var
-  palette; move JS-side signal-accent hex into CSS variables; add HiDPI/`dpr`
-  canvas sizing + resize handling; a11y (focus-trap modals, Escape-to-close,
-  `aria-label`s, AA contrast on axis labels); and configurable visualizers.
-
-Build phases are in
-`.agent/02_reports/202606/20260616_2_marsin_audio_framework_plan.md`.
+**TARGET (not yet built / in progress):**
+- **Engine spawns + supervises the Companion (§8).** Config is ready
+  (`audio.enabled:false` + `companion:` block) but the engine does **not** yet
+  launch/supervise the Companion process — it is started manually. This is the
+  remaining piece of "engine-managed like its other subprocesses."
+- **Audio Slice bridge (§6.2)** — the Companion ingesting Audio Slice's OSC and
+  re-emitting it as raw sources, + the local HIL test. **Not built.** Local-only
+  (Audio Slice binary lives on the operator's machine).
+- **Deck/mixer curation + rich modulation popup** — *in progress* (source trail
+  plot + mapping-curve viz).
+- **The original "typed-port node-graph editor" (§2) is DESCOPED.** What shipped is
+  the **linear, type-aware per-signal designer** with `osc_out` — it delivers the
+  same intent (typed sources → typed ops → output) without a draggable node
+  canvas. The graph editor remains optional/future; §2 is kept as the conceptual
+  model the designer realizes.
+- UI theme/a11y polish; configurable visualizer axes; the frequency `kalman` op
+  (not an engine op today).
 
 ---
 

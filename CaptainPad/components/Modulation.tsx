@@ -15,11 +15,14 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Modal, Pressable, Text, TextInput, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
+import Svg, { Path, Line, Circle } from 'react-native-svg';
 import { usePalette } from '@/hooks/use-theme';
-import { useAudioSignals } from '@/hooks/useEngineState';
+import { useAudioSignals, useLiveParams, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
+import { audioAccentHex } from '@/utils/audioSignals';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
@@ -432,6 +435,7 @@ function ModulatedSliderImpl({
         <ModulationPopover
           paramName={niceName}
           targetParameter={exportItem.name}
+          targetBase={base}
           playlistName={playlistName!}
           entryId={entryId!}
           existing={mapping}
@@ -503,6 +507,148 @@ export { GhostMarker, MOD_GREEN, MOD_GREEN_SOFT };
 // disabled" expectation). See useModulationSourceOptions below.
 const CURVE_OPTIONS: ModulationCurve[] = ['linear', 'easeIn', 'easeOut', 'exp'];
 
+// ── engine-mirrored modulation math (for the transfer-function viz) ──
+//
+// These MUST match marsin_engine/lib/modulation_engine.js exactly
+// (applyCurve / applyContinuousModulation) so the curve the operator dials
+// in the popup is the curve the engine fires. Pure, dependency-free, and
+// kept tiny so the mapping plot below is the same transfer function the
+// lights see. If the engine math changes, change this in lockstep.
+function modClamp01(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
+
+function applyCurve(value: number, curve: ModulationCurve): number {
+  if (curve === 'easeIn') return value * value;
+  if (curve === 'easeOut') return 1 - (1 - value) * (1 - value);
+  if (curve === 'exp') return value * value * value;
+  return value;
+}
+
+// The output param value for a given normalised source input, mirroring
+// applyContinuousModulation. `range` is the saved [min,max] (bipolar uses
+// the symmetric [-mag,mag] the popover collapses SWING into).
+function applyContinuousModulation(
+  source: number,
+  base: number,
+  mode: ModulationMode,
+  polarity: ModulationPolarity,
+  range: [number, number],
+  curve: ModulationCurve,
+): number {
+  const baseClamped = modClamp01(base);
+  const sClamped = modClamp01(source);
+  const [minDelta, maxDelta] = range;
+  let delta: number;
+  if (polarity === 'bipolar') {
+    const bipolarS = (sClamped - 0.5) * 2.0;
+    const sign = bipolarS < 0 ? -1 : 1;
+    const curvedMag = applyCurve(Math.abs(bipolarS), curve);
+    delta = sign * curvedMag * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
+  } else {
+    const sCurved = applyCurve(sClamped, curve);
+    delta = minDelta + sCurved * (maxDelta - minDelta);
+  }
+  if (mode === 'scale') return modClamp01(baseClamped * (1.0 + delta));
+  return modClamp01(baseClamped + delta);
+}
+
+// ── normalise a live CPC value to [0,1] for a given source signal ────
+// Mirrors normalizeAudio in CPCControls: intensities are already [0,1];
+// frequency / bpm signals normalise by their schema max. A source we can't
+// describe (not in the live set) is treated as already-normalised.
+function normalizeSourceValue(signal: AudioSignalDescriptor | null, value: number): number {
+  if (!signal) return modClamp01(value);
+  if (signal.kind === 'intensity') return modClamp01(value);
+  if (signal.max > 0) return modClamp01(value / signal.max);
+  return modClamp01(value);
+}
+
+// ── ModulationCurvePlot — the transfer-function visualisation ────────
+//
+// Plots the mapping as an input→output curve: X is the (normalised) SOURCE
+// signal [0,1], Y is the resulting TARGET param value [0,1] under the
+// current depth/range/curve/mode/polarity. A faint diagonal marks the
+// base (no-modulation) level for reference, and a LIVE marker rides the
+// curve at the source's current value so the operator SEES where the audio
+// is landing right now and what value it's driving the param to.
+//
+// SVG (react-native-svg, already a vendored CaptainPad dep — same as
+// AudioTraceCanvas). No animation loop here: it re-renders only when a
+// setting changes or the throttled live source value ticks (the parent
+// already consumes that bus), so it adds zero new high-rate subscriptions.
+const CURVE_VIEW_W = 200;
+const CURVE_VIEW_H = 120;
+
+function ModulationCurvePlot({
+  base, mode, polarity, range, curve, liveSource, accent,
+}: {
+  base: number;
+  mode: ModulationMode;
+  polarity: ModulationPolarity;
+  range: [number, number];
+  curve: ModulationCurve;
+  // Live normalised source value [0,1], or null when no signal is live.
+  liveSource: number | null;
+  accent: string;
+}) {
+  const C = usePalette();
+  // Sample the transfer function across the source domain.
+  const N = 48;
+  const pathD = useMemo(() => {
+    let d = '';
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      const out = applyContinuousModulation(s, base, mode, polarity, range, curve);
+      const x = s * CURVE_VIEW_W;
+      const y = (1 - out) * CURVE_VIEW_H;
+      d += `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)} `;
+    }
+    return d.trim();
+  }, [base, mode, polarity, range, curve]);
+
+  // Base reference line (flat — the value with no modulation applied).
+  const baseY = (1 - modClamp01(base)) * CURVE_VIEW_H;
+
+  // Live marker — where the current source value lands on the curve.
+  const live = liveSource === null ? null : (() => {
+    const s = modClamp01(liveSource);
+    const out = applyContinuousModulation(s, base, mode, polarity, range, curve);
+    return { x: s * CURVE_VIEW_W, y: (1 - out) * CURVE_VIEW_H, out };
+  })();
+
+  return (
+    <View style={{
+      height: 140, borderRadius: 6, overflow: 'hidden',
+      borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest,
+    }}>
+      <Svg width="100%" height="100%" viewBox={`0 0 ${CURVE_VIEW_W} ${CURVE_VIEW_H}`} preserveAspectRatio="none">
+        {/* quarter grid */}
+        {[0.25, 0.5, 0.75].map((g) => (
+          <Line key={`h${g}`} x1={0} y1={g * CURVE_VIEW_H} x2={CURVE_VIEW_W} y2={g * CURVE_VIEW_H} stroke={C.ghostBorder} strokeWidth={0.5} />
+        ))}
+        {[0.25, 0.5, 0.75].map((g) => (
+          <Line key={`v${g}`} x1={g * CURVE_VIEW_W} y1={0} x2={g * CURVE_VIEW_W} y2={CURVE_VIEW_H} stroke={C.ghostBorder} strokeWidth={0.5} />
+        ))}
+        {/* base reference (no-mod level) */}
+        <Line x1={0} y1={baseY} x2={CURVE_VIEW_W} y2={baseY} stroke={C.secondary} strokeWidth={0.75} strokeDasharray="3,3" />
+        {/* transfer function */}
+        <Path d={pathD} fill="none" stroke={MOD_GREEN} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+        {/* live marker */}
+        {live ? (
+          <>
+            <Line x1={live.x} y1={0} x2={live.x} y2={CURVE_VIEW_H} stroke={accent} strokeWidth={0.75} strokeOpacity={0.5} />
+            <Circle cx={live.x} cy={live.y} r={4} fill={accent} stroke={C.surfaceContainerLowest} strokeWidth={1} />
+          </>
+        ) : null}
+      </Svg>
+    </View>
+  );
+}
+
 // Derive the modulation source options from the engine schema. Includes
 // the intensity + frequency audio signals (a frequency source is still a
 // valid modulation input). Falls back to an empty list before the schema
@@ -525,6 +671,10 @@ function useModulationSourceOptions(currentKey: string): { key: string; label: s
 type PopoverProps = {
   paramName: string;
   targetParameter: string;
+  // The target param's current base value [0,1] — drives the TARGET
+  // preview + the transfer-function plot's no-mod reference. Defaults to
+  // 0.5 when the caller (e.g. a future readonly surface) can't supply it.
+  targetBase?: number;
   playlistName: string;
   entryId: string;
   existing: ModulationMapping | null;
@@ -533,12 +683,37 @@ type PopoverProps = {
 };
 
 export function ModulationPopover({
-  paramName, targetParameter, playlistName, entryId, existing, onClose, onChanged,
+  paramName, targetParameter, targetBase = 0.5, playlistName, entryId, existing, onClose, onChanged,
 }: PopoverProps) {
   const C = usePalette();
   const [source, setSource] = useState<ModulationSourceKey>(existing?.source.key ?? 'micLow');
   // Dynamic source options from the live audio CPC keys (Companion-routed).
   const sourceOptions = useModulationSourceOptions(source);
+  // The full live audio-signal descriptors — used to resolve the selected
+  // source's label / kind / max / rawKey for its live trail + accent.
+  const audioSignals = useAudioSignals();
+  const sourceSignal = useMemo(
+    () => audioSignals.find((s) => s.key === source) ?? null,
+    [audioSignals, source],
+  );
+  const sourceAccent = sourceSignal ? audioAccentHex(sourceSignal) : MOD_GREEN;
+  // Live source value off the throttled live bus (whole doc — the source
+  // key is dynamic, so we can't pin it via useLiveParamValues). The trace +
+  // curve marker consume the SAME bus the rest of the app already pulls, so
+  // no new high-rate subscription is added (Codex P0 congestion-aware).
+  const liveDoc = useLiveParams();
+  const liveSourceRaw = useMemo((): number | null => {
+    const slot = source ? liveDoc?.params?.[source] : null;
+    return slot && typeof slot.value === 'number' ? slot.value : null;
+  }, [liveDoc, source]);
+  const liveSourceRawMirror = useMemo((): number | null => {
+    const rk = sourceSignal?.rawKey;
+    const slot = rk ? liveDoc?.params?.[rk] : null;
+    return slot && typeof slot.value === 'number' ? slot.value : null;
+  }, [liveDoc, sourceSignal]);
+  const liveSourceNorm = liveSourceRaw === null
+    ? null
+    : normalizeSourceValue(sourceSignal, liveSourceRaw);
   const [mode, setMode] = useState<ModulationMode>(existing?.mode ?? 'offset');
   const [polarity, setPolarity] = useState<ModulationPolarity>(existing?.polarity ?? 'unipolar');
   const [rangeMin, setRangeMin] = useState<string>(String(existing?.range[0] ?? 0));
@@ -556,6 +731,24 @@ export function ModulationPopover({
   const [enabled, setEnabled] = useState<boolean>(existing?.enabled ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live (pre-save) range resolved the SAME way `save()` does, so the
+  // transfer-function plot + TARGET preview reflect exactly what would be
+  // written. Bipolar collapses SWING into a symmetric [-mag, mag].
+  const previewRange = useMemo<[number, number]>(() => {
+    if (polarity === 'bipolar') {
+      const mag = Math.abs(clamp01Signed(Number(swing) || 0));
+      return [-mag, mag];
+    }
+    return [clamp01Signed(Number(rangeMin) || 0), clamp01Signed(Number(rangeMax) || 0)];
+  }, [polarity, swing, rangeMin, rangeMax]);
+
+  // The value the engine would currently drive the target to, given the
+  // live source value + the operator's in-progress settings. Null when no
+  // source is live (the trail/marker hide and the preview reads "—").
+  const liveModulated = liveSourceNorm === null
+    ? null
+    : applyContinuousModulation(liveSourceNorm, targetBase, mode, polarity, previewRange, curve);
 
   // Stable id strategy:
   //
@@ -675,104 +868,187 @@ export function ModulationPopover({
         <Pressable
           onPress={(e) => e.stopPropagation()}
           style={{
-            width: 360,
-            backgroundColor: C.surfaceContainerLowest, padding: 20,
+            width: 440, maxHeight: '92%',
+            backgroundColor: C.surfaceContainerLowest,
             borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
-            gap: 14,
           }}
         >
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14,
-            textTransform: 'uppercase', letterSpacing: 1,
+          {/* Title bar — stays pinned above the scrolling body. */}
+          <View style={{
+            paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10,
+            borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
           }}>
-            MAP {paramName}
-          </Text>
-
-          <PickerRow label="SOURCE">
-            {sourceOptions.map((opt) => (
-              <Chip key={opt.key} active={source === opt.key} onPress={() => setSource(opt.key)}>
-                {opt.label}
-              </Chip>
-            ))}
-          </PickerRow>
-
-          <PickerRow label="MODE">
-            <Chip active={mode === 'offset'} onPress={() => setMode('offset')}>OFFSET</Chip>
-            <Chip active={mode === 'scale'} onPress={() => setMode('scale')}>SCALE</Chip>
-          </PickerRow>
-
-          <PickerRow label="POLARITY">
-            <Chip
-              active={polarity === 'unipolar'}
-              onPress={() => {
-                if (polarity === 'unipolar') return;
-                // bipolar → unipolar: seed min=0, max from current
-                // swing magnitude so the operator's amplitude
-                // intent carries across.
-                const mag = Math.abs(Number(swing) || 0);
-                setRangeMin('0');
-                setRangeMax(String(mag || 0.35));
-                setPolarity('unipolar');
-              }}
-            >UNIPOLAR</Chip>
-            <Chip
-              active={polarity === 'bipolar'}
-              onPress={() => {
-                if (polarity === 'bipolar') return;
-                // unipolar → bipolar: seed swing from the larger
-                // |min|, |max| so the visible band stays roughly the
-                // same width across the toggle.
-                const mag = Math.max(
-                  Math.abs(Number(rangeMin) || 0),
-                  Math.abs(Number(rangeMax) || 0),
-                );
-                setSwing(String(mag || 0.25));
-                setPolarity('bipolar');
-              }}
-            >BIPOLAR</Chip>
-          </PickerRow>
-
-          {polarity === 'bipolar' ? (
-            // D4a: bipolar collapses to a single SWING ± magnitude.
-            // The engine's bipolar math already does
-            // `max(|min|, |max|)` on the saved range, so showing min
-            // → max separately silently discarded the sign of one
-            // value. One field makes that explicit.
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>SWING ±</Text>
-              <NumberInput value={swing} onChange={setSwing} placeholder="0.25" />
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, flex: 1 }}>
-                ± from base (centred on 0.5 source)
-              </Text>
-            </View>
-          ) : (
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
-              <NumberInput value={rangeMin} onChange={setRangeMin} placeholder="min" />
-              <Text style={{ color: C.secondary }}>→</Text>
-              <NumberInput value={rangeMax} onChange={setRangeMax} placeholder="max" />
-            </View>
-          )}
-
-          <PickerRow label="CURVE">
-            {CURVE_OPTIONS.map((c) => (
-              <Chip key={c} active={curve === c} onPress={() => setCurve(c)}>{c.toUpperCase()}</Chip>
-            ))}
-          </PickerRow>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Chip active={enabled} onPress={() => setEnabled(!enabled)}>
-              {enabled ? 'ENABLED' : 'DISABLED'}
-            </Chip>
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', color: C.primary, fontSize: 14,
+              textTransform: 'uppercase', letterSpacing: 1,
+            }}>
+              MAP {paramName}
+            </Text>
           </View>
 
-          {error ? (
-            <Text style={{ color: '#c44', fontFamily: 'Inter_400Regular', fontSize: 11 }}>
-              {error}
-            </Text>
-          ) : null}
+          <ScrollView
+            style={{ flexGrow: 0 }}
+            contentContainerStyle={{ padding: 20, gap: 16 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* ── SECTION 1 · SOURCE + its live trail ─────────────────── */}
+            <SectionLabel accent={sourceAccent}>SOURCE</SectionLabel>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+            <PickerRow label="SIGNAL">
+              {sourceOptions.map((opt) => (
+                <Chip key={opt.key} active={source === opt.key} onPress={() => setSource(opt.key)}>
+                  {opt.label}
+                </Chip>
+              ))}
+            </PickerRow>
+
+            {/* Live trail of the selected source — what the operator is
+                mapping. Reuses AudioTraceCanvas (self-animating, rAF-
+                interpolated, congestion-aware). RAW ghost shows when the
+                signal has a pre-gain mirror. */}
+            <View style={{ gap: 4 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary }}>
+                  {sourceSignal ? `${sourceSignal.label} · live` : 'source not live'}
+                </Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: sourceAccent }}>
+                  {liveSourceNorm === null ? '—' : `${Math.round(liveSourceNorm * 100)}%`}
+                </Text>
+              </View>
+              {sourceSignal ? (
+                <AudioTraceCanvas
+                  post={liveSourceNorm ?? 0}
+                  raw={liveSourceRawMirror === null ? null : normalizeSourceValue(sourceSignal, liveSourceRawMirror)}
+                  color={sourceAccent}
+                  background={C.surfaceContainerLowest}
+                  gridColor={C.ghostBorder}
+                  height={64}
+                  active
+                />
+              ) : (
+                <View style={{
+                  height: 64, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder,
+                  alignItems: 'center', justifyContent: 'center', backgroundColor: C.surfaceContainerLowest,
+                }}>
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon }}>
+                    This source is not in the live set — it evaluates as 0.
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* ── SECTION 2 · MAPPING · transfer curve + controls ─────── */}
+            <SectionLabel accent={MOD_GREEN}>MAPPING</SectionLabel>
+
+            {/* Transfer function: source [0,1] → param value [0,1] under
+                the current depth/range/curve. The live marker rides the
+                curve at the source's current value so the operator SEES
+                the effect of what they're dialing. */}
+            <ModulationCurvePlot
+              base={targetBase}
+              mode={mode}
+              polarity={polarity}
+              range={previewRange}
+              curve={curve}
+              liveSource={liveSourceNorm}
+              accent={sourceAccent}
+            />
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9, color: C.icon, textAlign: 'center' }}>
+              X = source · Y = {paramName} value · dashed = base ({targetBase.toFixed(2)})
+            </Text>
+
+            <PickerRow label="MODE">
+              <Chip active={mode === 'offset'} onPress={() => setMode('offset')}>OFFSET</Chip>
+              <Chip active={mode === 'scale'} onPress={() => setMode('scale')}>SCALE</Chip>
+            </PickerRow>
+
+            <PickerRow label="POLARITY">
+              <Chip
+                active={polarity === 'unipolar'}
+                onPress={() => {
+                  if (polarity === 'unipolar') return;
+                  // bipolar → unipolar: seed min=0, max from current
+                  // swing magnitude so the operator's amplitude
+                  // intent carries across.
+                  const mag = Math.abs(Number(swing) || 0);
+                  setRangeMin('0');
+                  setRangeMax(String(mag || 0.35));
+                  setPolarity('unipolar');
+                }}
+              >UNIPOLAR</Chip>
+              <Chip
+                active={polarity === 'bipolar'}
+                onPress={() => {
+                  if (polarity === 'bipolar') return;
+                  // unipolar → bipolar: seed swing from the larger
+                  // |min|, |max| so the visible band stays roughly the
+                  // same width across the toggle.
+                  const mag = Math.max(
+                    Math.abs(Number(rangeMin) || 0),
+                    Math.abs(Number(rangeMax) || 0),
+                  );
+                  setSwing(String(mag || 0.25));
+                  setPolarity('bipolar');
+                }}
+              >BIPOLAR</Chip>
+            </PickerRow>
+
+            {polarity === 'bipolar' ? (
+              // D4a: bipolar collapses to a single SWING ± magnitude.
+              // The engine's bipolar math already does
+              // `max(|min|, |max|)` on the saved range, so showing min
+              // → max separately silently discarded the sign of one
+              // value. One field makes that explicit.
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>SWING ±</Text>
+                <NumberInput value={swing} onChange={setSwing} placeholder="0.25" />
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, flex: 1 }}>
+                  ± from base (centred on 0.5 source)
+                </Text>
+              </View>
+            ) : (
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>RANGE</Text>
+                <NumberInput value={rangeMin} onChange={setRangeMin} placeholder="min" />
+                <Text style={{ color: C.secondary }}>→</Text>
+                <NumberInput value={rangeMax} onChange={setRangeMax} placeholder="max" />
+              </View>
+            )}
+
+            <PickerRow label="CURVE">
+              {CURVE_OPTIONS.map((c) => (
+                <Chip key={c} active={curve === c} onPress={() => setCurve(c)}>{c.toUpperCase()}</Chip>
+              ))}
+            </PickerRow>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Chip active={enabled} onPress={() => setEnabled(!enabled)}>
+                {enabled ? 'ENABLED' : 'DISABLED'}
+              </Chip>
+            </View>
+
+            {/* ── SECTION 3 · TARGET preview ──────────────────────────── */}
+            <SectionLabel accent={C.primary}>TARGET</SectionLabel>
+            <TargetPreview
+              paramName={paramName}
+              base={targetBase}
+              modulated={liveModulated}
+            />
+
+            {error ? (
+              <Text style={{ color: '#c44', fontFamily: 'Inter_400Regular', fontSize: 11 }}>
+                {error}
+              </Text>
+            ) : null}
+          </ScrollView>
+
+          {/* Action bar — pinned below the scrolling body. */}
+          <View style={{
+            flexDirection: 'row', justifyContent: 'flex-end', gap: 8,
+            paddingHorizontal: 20, paddingVertical: 14,
+            borderTopWidth: 1, borderTopColor: C.ghostBorder,
+          }}>
             {isExisting ? (
               <TouchableOpacity
                 onPress={remove}
@@ -822,6 +1098,68 @@ function PickerRow({ label, children }: { label: string; children: React.ReactNo
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 70 }}>{label}</Text>
       <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', flex: 1 }}>
         {children}
+      </View>
+    </View>
+  );
+}
+
+// Section header — an accent dot + uppercase title + a hairline rule, so
+// the popup reads as three clear zones (SOURCE / MAPPING / TARGET).
+function SectionLabel({ accent, children }: { accent: string; children: React.ReactNode }) {
+  const C = usePalette();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: accent }} />
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, textTransform: 'uppercase', letterSpacing: 1.2 }}>
+        {children}
+      </Text>
+      <View style={{ flex: 1, height: 1, backgroundColor: C.ghostBorder }} />
+    </View>
+  );
+}
+
+// TARGET preview — base value, live modulated value, and the delta the
+// audio is currently pushing, plus a base→modulated bar so the operator
+// sees the result on the target param at a glance.
+function TargetPreview({ paramName, base, modulated }: {
+  paramName: string;
+  base: number;
+  modulated: number | null;
+}) {
+  const C = usePalette();
+  const b = Math.max(0, Math.min(1, base));
+  const m = modulated === null ? null : Math.max(0, Math.min(1, modulated));
+  const delta = m === null ? null : m - b;
+  const lo = m === null ? b : Math.min(b, m);
+  const hi = m === null ? b : Math.max(b, m);
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 8 }}>
+          {paramName}
+        </Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>
+          {b.toFixed(2)}
+          {m !== null ? (
+            <Text style={{ color: MOD_GREEN }}>{`  →${m.toFixed(2)}`}{delta !== null ? `  ${delta >= 0 ? '+' : ''}${delta.toFixed(2)}` : ''}</Text>
+          ) : (
+            <Text style={{ color: C.icon }}>{'  → —'}</Text>
+          )}
+        </Text>
+      </View>
+      {/* base→modulated bar: base fill in primary, the modulation swing in
+          MOD_GREEN from base to the live modulated value. */}
+      <View style={{ height: 14, borderRadius: 7, backgroundColor: C.surfaceContainerHigh, overflow: 'hidden' }}>
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${b * 100}%`, backgroundColor: C.primary, opacity: 0.55 }} />
+        {m !== null ? (
+          <View style={{
+            position: 'absolute', top: 0, bottom: 0,
+            left: `${lo * 100}%`, width: `${Math.max(0, hi - lo) * 100}%`,
+            backgroundColor: MOD_GREEN, opacity: 0.85,
+          }} />
+        ) : null}
+        {/* base tick */}
+        <View style={{ position: 'absolute', top: 0, bottom: 0, left: `${b * 100}%`, width: 2, backgroundColor: C.text, opacity: 0.5 }} />
       </View>
     </View>
   );
