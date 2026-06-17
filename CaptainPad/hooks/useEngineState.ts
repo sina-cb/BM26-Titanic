@@ -130,6 +130,17 @@ export interface ParamSchemaEntry {
   live: boolean;
   broadcastHz: number;
   portWatch: boolean;
+  /**
+   * True when this key was registered at runtime from the Audio
+   * Companion's signal manifest (param_center.registerDynamicLiveParam).
+   * Engine sets it in getSchema() as `dynamic: !!e._dynamic`. CaptainPad
+   * surfaces dynamic keys in the audio grid + modulation source picker
+   * EXACTLY like the built-in mic / audio / dom family — the flag lets us
+   * include a Companion signal whose custom cpcKey (e.g. `low_test`)
+   * doesn't match the built-in name prefixes. Optional because older
+   * engines / non-audio schema entries don't carry it (treated as false).
+   */
+  dynamic?: boolean;
 }
 
 /**
@@ -450,6 +461,41 @@ function _onMessage(msg: EngineMessage) {
         params: (raw.params as Record<string, SharedParamValue>) || {},
       },
     });
+  } else if (msg.type === 'paramSchema') {
+    // The engine re-broadcasts the FULL CPC schema whenever the registry
+    // changes shape — specifically when the Audio Companion POSTs an
+    // OUTPUT manifest and the engine adds / removes / updates dynamic live
+    // params (api_server.js: `broadcastWs({ type: 'paramSchema', … })`).
+    // Without handling it here, `paramSchema` would be frozen at the
+    // single boot-time GET /param-center/schema seed, and a signal the
+    // operator adds in the Companion mid-session would never appear in the
+    // audio grid or the modulation source picker (and a removed one would
+    // ghost forever). We re-flatten into the same shape the boot seed uses.
+    //
+    // Reference-stability: `useAudioSignals` / `useParamRange` short-circuit
+    // on `s.paramSchema === prevSchema`, so we only ever assign a NEW object
+    // here (a real schema change). A no-op re-broadcast still allocates a
+    // fresh map, but the engine only emits this on an ACTUAL add/remove/
+    // update (it gates on `added/removed/updated`), so derived hooks
+    // re-derive exactly when the signal set really changed — no render storm.
+    const rawSchema = (msg as unknown as { schema?: unknown }).schema;
+    if (Array.isArray(rawSchema)) {
+      const flat: Record<string, ParamSchemaEntry> = {};
+      for (const e of rawSchema as ParamSchemaEntry[]) {
+        if (e && typeof e.key === 'string') flat[e.key] = e;
+      }
+      // Re-seed the live slice off the cached sharedParams now that the
+      // live-key set may have grown/shrunk — keeps meters correct without
+      // waiting for the next WS liveParams tick.
+      _emit({ ..._cached, paramSchema: flat });
+      const shared = _cached.sharedParams;
+      if (shared) {
+        _seedLiveFromSchema(
+          { revision: shared.revision, params: shared.params },
+          flat,
+        );
+      }
+    }
   } else if (msg.type === 'liveParams') {
     // Audio-derived high-rate keys. Routed onto its own micro-bus so
     // only audio meters / BPM badge re-render at the analyser's
@@ -1161,12 +1207,26 @@ function _shortAudioLabel(label: string | undefined, key: string): string {
   return key.toUpperCase();
 }
 
-// An audio-family key is one the Companion/analyzer routes into the CPC:
-// mic bands + dominant-frequency outputs, OSC stems (until retired
-// engine-side), and the audio* detector/derived family. We deliberately
-// match by prefix so a NEW Companion signal (any micX / audioX / domX /
-// stemsX key flagged live) shows up automatically.
-function _isAudioFamilyKey(key: string): boolean {
+// An audio-family key is one the Companion/analyzer routes into the CPC.
+// Two ways to qualify:
+//
+//   1. By the `dynamic` schema flag — the engine sets it on EVERY key it
+//      registered at runtime from the Audio Companion's OUTPUT manifest
+//      (param_center.registerDynamicLiveParam). This is the load-bearing
+//      path: a Companion signal can carry ANY custom cpcKey (`low_test`,
+//      `crowd_roar`, …) that matches NONE of the built-in name prefixes,
+//      so without this flag it would appear in neither the audio grid nor
+//      the modulation source picker.
+//
+//   2. By name prefix — the built-in mic bands + dominant-frequency
+//      outputs, OSC stems (until retired engine-side), and the audio*
+//      detector/derived family. Matching by prefix means a built-in audio
+//      key shows up even on an engine that predates the `dynamic` flag.
+//
+// `entry` may be undefined on the lookup races; we still fall back to the
+// prefix test so the built-ins never depend on the flag being present.
+function _isAudioFamilyKey(key: string, entry?: ParamSchemaEntry): boolean {
+  if (entry?.dynamic === true) return true;
   return /^(mic|audio|stems|dom)/.test(key);
 }
 
@@ -1183,7 +1243,7 @@ export function deriveAudioSignals(
   for (const key of Object.keys(schema)) {
     const entry = schema[key];
     if (!entry || entry.live !== true) continue;
-    if (!_isAudioFamilyKey(key)) continue;
+    if (!_isAudioFamilyKey(key, entry)) continue;
     // Companions of a parent signal — never their own meter column.
     if (key.endsWith('Raw') || key.endsWith('Gain')) continue;
     // tempoBpm has a dedicated tile/card; don't double-render it as a bar.
@@ -1196,9 +1256,18 @@ export function deriveAudioSignals(
     // keys (range up to Nyquist) render as Hz; everything else is a bar
     // meter normalised by its range max (so small-range enums like
     // audioStructure[0,2] / audioNote[0,11] still read as a [0,1] bar).
+    //
+    // Built-in keys carry their kind in the name (`*bpm*` / a Nyquist-scale
+    // range). A DYNAMIC Companion signal's cpcKey is arbitrary, so the name
+    // tells us nothing — we classify it by the schema RANGE the engine
+    // chose from the Companion `type` (audio_signals manifest →
+    // COMPANION_SIGNAL_RANGES in api_server.js: intensity [0,1],
+    // bpm [0,300], frequency [0,8000]). A [0,300]-style range reads as
+    // BPM; a kHz-scale range reads as frequency; everything else is a bar.
     let kind: AudioSignalDescriptor['kind'] = 'intensity';
     if (/bpm/i.test(key)) kind = 'bpm';
     else if (max >= 1000) kind = 'frequency';
+    else if (entry.dynamic === true && max > 100 && max < 1000) kind = 'bpm';
     // A `<key>Raw` companion exists iff the schema has it (mic bands +
     // stems publish one; detectors / dom / derived do not).
     const rawKey = schema[`${key}Raw`] ? `${key}Raw` : null;

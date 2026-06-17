@@ -379,6 +379,18 @@ const PINNED_TRACE_HEIGHT = 64;
 // container is unreliable across cells, so we pad inside each cell).
 const SIGNAL_GRID_COLUMNS = 3;
 
+// Max height of the AUDIO SIGNALS grid before it scrolls internally. The
+// strip is PINNED above the page ScrollView, so an unbounded 3×N grid
+// (dom / energy / note / switch / bar-phase / downbeat … the Companion can
+// route in many signals) would shove the whole strip taller than the iPad
+// viewport and clip the lower rows + the INPUT GAIN slider beneath it.
+// Capping the grid and letting it scroll VERTICALLY keeps every row
+// reachable while the status pills + INPUT GAIN stay pinned around it.
+// ~3 rows of signal columns (each ≈ header + bar + 64 px trace + RAW line)
+// fit in this band; more rows scroll. Kept generous so the common case
+// (≤ 9 signals) never shows a scrollbar.
+const SIGNAL_GRID_MAX_HEIGHT = 320;
+
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
 // low/mid/high/kick above the noise gate for the meters AND the detectors /
@@ -596,7 +608,18 @@ function PinnedAudioMeters({
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
         </Text>
       ) : (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        // Vertically-scrollable grid container. `maxHeight` bounds the
+        // pinned strip so a tall 3×N signal set scrolls WITHIN the viewport
+        // instead of pushing the strip past the iPad screen edge and
+        // clipping the lower rows. `nestedScrollEnabled` lets this scroll
+        // independently of the page ScrollView it's pinned above (Android);
+        // on iOS/web the inner ScrollView already captures the gesture.
+        <ScrollView
+          style={{ maxHeight: SIGNAL_GRID_MAX_HEIGHT }}
+          contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
           {/* BPM tile — biggest single number on the strip — rides as the
               grid's first cell. No trail under it: BPM ticks at the song's
               pace, not the analyser's. */}
@@ -626,7 +649,7 @@ function PinnedAudioMeters({
               />
             </View>
           ))}
-        </View>
+        </ScrollView>
       )}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands

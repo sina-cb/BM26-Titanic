@@ -686,12 +686,23 @@ export function ModulationPopover({
   paramName, targetParameter, targetBase = 0.5, playlistName, entryId, existing, onClose, onChanged,
 }: PopoverProps) {
   const C = usePalette();
-  const [source, setSource] = useState<ModulationSourceKey>(existing?.source.key ?? 'micLow');
+  // The full live audio-signal descriptors — used both to seed a sensible
+  // default source and to resolve the selected source's label / kind / max /
+  // rawKey for its live trail + accent.
+  const audioSignals = useAudioSignals();
+  // Default source for a NEW mapping. Prefer the existing mapping's saved
+  // source; else `micLow` if that built-in is live; else the FIRST live
+  // signal (covers a pure-Companion engine whose only sources are dynamic
+  // keys like `low_test` — Codex P0: never hard-pin a key that may not
+  // exist). Captured once (useState initializer) so later schema shifts
+  // don't yank the operator's in-progress selection out from under them.
+  const [source, setSource] = useState<ModulationSourceKey>(() => {
+    if (existing?.source.key) return existing.source.key;
+    if (audioSignals.some((s) => s.key === 'micLow')) return 'micLow';
+    return audioSignals[0]?.key ?? 'micLow';
+  });
   // Dynamic source options from the live audio CPC keys (Companion-routed).
   const sourceOptions = useModulationSourceOptions(source);
-  // The full live audio-signal descriptors — used to resolve the selected
-  // source's label / kind / max / rawKey for its live trail + accent.
-  const audioSignals = useAudioSignals();
   const sourceSignal = useMemo(
     () => audioSignals.find((s) => s.key === source) ?? null,
     [audioSignals, source],
