@@ -283,16 +283,30 @@ function lockLauncherAlive(lock) {
   return commandlineOf(lock.pid).includes('launcher.js');
 }
 
-function assertSingleInstance() {
+async function assertSingleInstance(force = false) {
   const lock = readLock();
   if (!lock) return;
   if (lockLauncherAlive(lock)) {
-    logError(`A stack is already running: profile '${lock.profile}', launcher pid ${lock.pid}, started ${lock.startedAt}.`);
-    logError('Stop it first (`node launcher.js stop`, or Ctrl+C in its terminal).');
-    process.exit(1);
+    if (!force) {
+      logError(`A stack is already running: profile '${lock.profile}', launcher pid ${lock.pid}, started ${lock.startedAt}.`);
+      logError('Stop it first (`node launcher.js stop`, or Ctrl+C in its terminal), or rerun with -f/--force to take it over.');
+      process.exit(1);
+    }
+    // -f: take over — force-kill the running launcher (and its whole child tree)
+    // and replace the lock so we can restart fast. Wait until its PID is gone.
+    log('launcher', `-f: taking over the running stack (force-killing launcher pid ${lock.pid} + children)…`);
+    try { forceKillTree(lock.pid); } catch (err) { logError(`Could not kill launcher pid ${lock.pid}: ${err.message}`); }
+    const deadline = Date.now() + 10000;
+    while (pidAlive(lock.pid) && Date.now() < deadline) await sleep(200);
+    if (pidAlive(lock.pid)) {
+      logError(`Launcher pid ${lock.pid} still alive after force-kill — kill it manually (taskkill /PID ${lock.pid} /T /F) and rerun.`);
+      process.exit(1);
+    }
+    log('launcher', `Took over: previous stack (pid ${lock.pid}) is gone.`);
+  } else {
+    log('launcher', `Removing stale lock from dead launcher pid ${lock.pid} (${LOCK_PATH}).`);
   }
-  log('launcher', `Removing stale lock from dead launcher pid ${lock.pid} (${LOCK_PATH}).`);
-  fs.unlinkSync(LOCK_PATH);
+  try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
 }
 
 // ── Port inspection / identity-checked cleanup ──────────────────────────
@@ -834,13 +848,23 @@ async function cmdStop() {
   else process.kill(lock.pid, 'SIGTERM');
   const deadline = Date.now() + STOP_GRACE_MS + 7000;
   while (Date.now() < deadline) {
-    if (!pidAlive(lock.pid) && !fs.existsSync(LOCK_PATH)) {
+    // A force-killed launcher (Windows taskkill /T /F) never runs its own
+    // teardown, so it can't remove its lock — once its PID is gone, WE remove
+    // the lock + reap any orphaned children instead of waiting forever.
+    if (!pidAlive(lock.pid)) {
+      for (const [tag, pid] of Object.entries(lock.children || {})) {
+        if (pidAlive(pid) && STACK_PROCESS_SIGNATURES.some((sig) => commandlineOf(pid).includes(sig))) {
+          console.log(`Force-killing orphaned ${tag} (pid ${pid}).`);
+          forceKillTree(pid);
+        }
+      }
+      try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
       console.log('Stack stopped.');
       return;
     }
     await sleep(500);
   }
-  logError(`Launcher pid ${lock.pid} did not stop within ${(STOP_GRACE_MS + 7000) / 1000}s. Inspect it manually.`);
+  logError(`Launcher pid ${lock.pid} did not stop within ${(STOP_GRACE_MS + 7000) / 1000}s. Force it: taskkill /PID ${lock.pid} /T /F (Windows), then delete ${LOCK_PATH}.`);
   process.exit(1);
 }
 
@@ -854,7 +878,7 @@ async function main() {
   const profileDef = PROFILES[opts.command];
   const ports = readPorts();
 
-  assertSingleInstance();
+  await assertSingleInstance(opts.force);
   validate(opts, profileDef);
 
   // Build the sim URL straight from the profile config + the common params,
