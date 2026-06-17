@@ -60,6 +60,11 @@ import { audioAccentHex } from '@/utils/audioSignals';
 // isn't yet picked up by the consuming module's checker.
 const ACCENT_AUTO = '#1b9e77';
 
+// Mirrors the engine's /audio/config blob verbatim so we can read it back and
+// PATCH a subset. NOTE: this tab only reads/writes capture.device* + bands.
+// inputGain + fftSize/hopSize (read-only); the kick/bands-crossover/
+// structureDetector fields are kept for type fidelity with the engine doc but
+// are NOT edited here (the per-signal analyzer tuning moved to the Companion).
 interface AudioConfig {
   enabled: boolean;
   capture: {

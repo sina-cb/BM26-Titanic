@@ -662,7 +662,10 @@ function useModulationSourceOptions(currentKey: string): { key: string; label: s
     // the live set (e.g. a retired stem on an old mapping) so editing the
     // mapping doesn't silently drop its source.
     if (currentKey && !opts.some((o) => o.key === currentKey)) {
-      opts.unshift({ key: currentKey, label: currentKey.toUpperCase() });
+      // Mark it clearly as retired so the operator knows this source is no
+      // longer live (the Companion removed it) — it's kept only so editing the
+      // mapping doesn't silently drop the source.
+      opts.unshift({ key: currentKey, label: `${currentKey.toUpperCase()} · retired` });
     }
     return opts;
   }, [signals, currentKey]);
