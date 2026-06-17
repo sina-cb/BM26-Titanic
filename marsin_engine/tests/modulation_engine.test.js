@@ -164,24 +164,24 @@ test('clamps output to [0, 1]', () => {
   approx(low, 0);
 });
 
-test('resolveModulationSources: OSC stems are first-class alongside mic bands', () => {
-  // When OSC is OFF the stem keys are absent from the snapshot, so
-  // they default to 0 → mapping evaluates as no-op (matches operator
-  // requirement: "default behavior is no change" when source is dark).
-  const offOsc = resolveModulationSources({
+test('resolveModulationSources: curated [0,1] audio keys are first-class alongside mic bands', () => {
+  // When the analysis pipeline is dark these keys are absent from the
+  // snapshot, so they default to 0 → mapping evaluates as no-op (matches the
+  // operator requirement: "default behavior is no change" when source is dark).
+  const dark = resolveModulationSources({
     paramCenterSnapshot: { micLow: 0.5 },
   });
-  approx(offOsc.stemsBass, 0);
-  approx(offOsc.stemsDrums, 0);
-  approx(offOsc.stemsVocals, 0);
+  approx(dark.micDomEnergy1, 0);
+  approx(dark.micFlux, 0);
+  approx(dark.audioParty, 0);
 
-  // When OSC IS feeding stems, they pass through unchanged.
-  const onOsc = resolveModulationSources({
-    paramCenterSnapshot: { stemsBass: 0.6, stemsDrums: 0.3, stemsVocals: 0.9 },
+  // When the pipeline IS feeding them, they pass through unchanged.
+  const live = resolveModulationSources({
+    paramCenterSnapshot: { micDomEnergy1: 0.6, micFlux: 0.3, audioParty: 0.9 },
   });
-  approx(onOsc.stemsBass, 0.6);
-  approx(onOsc.stemsDrums, 0.3);
-  approx(onOsc.stemsVocals, 0.9);
+  approx(live.micDomEnergy1, 0.6);
+  approx(live.micFlux, 0.3);
+  approx(live.audioParty, 0.9);
 });
 
 test('resolveModulationSources: missing keys default to 0', () => {
@@ -311,11 +311,18 @@ test('validateModulationMapping: rejects bad fields with specific messages', () 
   assert.throws(() => validateModulationMapping({ ...base, enabled: 'yes' }), /enabled must be boolean/);
   assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'lfo', key: 'micLow' } }), /source\.scope/);
   assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: 'tempoBpm' } }), /source\.key/);
-  // Stems are valid source keys (added round-4): both validator and
-  // runtime applyModulations must accept them.
-  for (const k of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
+  // The curated [0,1] audio keys are valid sources — including the dom
+  // ENERGIES and flux (regression: these used to be rejected while micLow
+  // worked, because BUILTIN_SOURCE_KEYS had drifted from the registry).
+  for (const k of ['micFlux', 'micDomEnergy1', 'micDomEnergy2', 'audioBuildScore', 'audioParty']) {
     const ok = validateModulationMapping({ ...base, source: { scope: 'cpc', key: k } });
     assert.equal(ok.source.key, k);
+  }
+  // Non-[0,1] audio keys are NOT source-eligible (they would saturate clamp01):
+  // Hz dom-freqs, bpm, note, structure. A freq must be normalized in the
+  // Companion before it can drive a param.
+  for (const k of ['micDomFreq1', 'micDomFreq2', 'audioBpm', 'audioNote', 'audioStructure']) {
+    assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: k } }), /source\.key/, `${k} must be rejected`);
   }
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'global', parameter: 'size' } }), /target\.scope/);
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'pattern', parameter: '' } }), /target\.parameter/);

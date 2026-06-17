@@ -211,10 +211,11 @@ test('emits ONE final empty frame on >0 → 0 mapping transition (ghost clear)',
   assert.equal(broadcasts.length, 2, 'steady-state empty does not keep emitting');
 });
 
-test('OSC stem sources fire modulation just like mic bands', () => {
-  // The popover lets the operator pick stemsBass/Drums/Vocals as the
-  // mod source — verify the controller actually consumes them from
-  // the CPC snapshot (where the OscListener writes them).
+test('dom-energy source fires modulation just like a mic band', () => {
+  // The popover lets the operator pick a curated [0,1] audio key (here the
+  // dom1 ENERGY) as the mod source — verify the controller actually consumes
+  // it from the CPC snapshot. Regression for "micLow assignable but
+  // micDomEnergy1 rejected" (BUILTIN_SOURCE_KEYS drift).
   const mixer = makeFakeMixer({
     exports: [{ id: 101, name: 'noiseScale', kind: SLIDER, v0: 0.2 }],
     baseValues: { noiseScale: 0.2 },
@@ -222,14 +223,14 @@ test('OSC stem sources fire modulation just like mic bands', () => {
   const broadcasts = [];
   const ctrl = new ModulationController({
     mixer,
-    paramCenter: makeFakePc({ stemsBass: 0.75 }),
+    paramCenter: makeFakePc({ micDomEnergy1: 0.75 }),
     broadcast: (m) => broadcasts.push(m),
   });
   ctrl.setActiveEntry({
     playlistName: 'default', entryId: 'e1', pattern: 'p_test',
     mappings: [{
-      id: 'm_stem', type: 'continuous', enabled: true,
-      source: { scope: 'cpc', key: 'stemsBass' },
+      id: 'm_dom', type: 'continuous', enabled: true,
+      source: { scope: 'cpc', key: 'micDomEnergy1' },
       target: { scope: 'pattern', parameter: 'noiseScale' },
       mode: 'offset', polarity: 'unipolar', range: [0, 0.4], curve: 'linear',
     }],
@@ -238,5 +239,5 @@ test('OSC stem sources fire modulation just like mic bands', () => {
   // 0.2 base + 0.75 * 0.4 = 0.5
   assert.equal(mixer._writes.length, 1);
   assert.ok(Math.abs(mixer._writes[0].v0 - 0.5) < 1e-9, `expected 0.5, got ${mixer._writes[0].v0}`);
-  assert.equal(broadcasts[0].parameters.noiseScale.source, 'stemsBass');
+  assert.equal(broadcasts[0].parameters.noiseScale.source, 'micDomEnergy1');
 });

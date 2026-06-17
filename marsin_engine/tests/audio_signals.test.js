@@ -24,6 +24,24 @@ import {
   DEFAULT_CHAINS,
 } from '../audio/postproc/signal_post_processor.js';
 import { GAIN_BY_KEY } from '../lib/osc_listener.js';
+import { MODULATION_VALID_SOURCE_KEYS } from '../lib/modulation_engine.js';
+
+// Drift guard: every curated [0,1] live audio key MUST be a valid modulation
+// source. modulation_engine pins BUILTIN_SOURCE_KEYS as a hand-listed snapshot
+// (it stays dependency-free by design), so this test is what makes a registry
+// addition fail loud if the snapshot wasn't updated. The [0,1] gate is
+// deliberate: non-[0,1] keys (Hz dom-freqs, bpm, note, structure) would
+// saturate the modulation clamp01 and are excluded by design.
+test('every [0,1] live audio key is modulation-source-eligible (no drift)', () => {
+  const sources = new Set(MODULATION_VALID_SOURCE_KEYS);
+  const eligible = audioRegistryEntries().filter(
+    (e) => e.live === true
+      && Array.isArray(e.range) && e.range[0] === 0 && e.range[1] === 1
+      && !e.key.endsWith('Raw') && !e.key.endsWith('Gain'),
+  );
+  const missing = eligible.map((e) => e.key).filter((k) => !sources.has(k));
+  assert.deepEqual(missing, [], `BUILTIN_SOURCE_KEYS is missing [0,1] live audio keys: ${missing.join(', ')}`);
+});
 
 // ── Pre-refactor snapshot ────────────────────────────────────────────────────
 //

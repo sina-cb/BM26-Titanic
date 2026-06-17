@@ -27,8 +27,11 @@
  *
  * @typedef {Object} ModulationSource
  * @property {ModulationSourceScope} scope
- * @property {string} key                One of: micLow, micMid, micHigh, micKick,
- *                                       stemsBass, stemsDrums, stemsVocals.
+ * @property {string} key                A built-in [0,1] audio source key
+ *                                       (mic bands/flux, dom energies, the
+ *                                       [0,1] detector/derived keys — see
+ *                                       BUILTIN_SOURCE_KEYS) or a runtime
+ *                                       Companion key (DYNAMIC_SOURCE_KEYS).
  * @property {string} [label]            UI hint only, never used for routing.
  *
  * @typedef {('pattern')} ModulationTargetScope
@@ -69,22 +72,32 @@
  * @property {Record<string, ModulationStateParam>} parameters
  */
 
-// Mic-band keys are populated by the AudioCapture pipeline (when audio
-// analysis is ENABLED). OSC stems keys are populated by the OscListener
-// from external `/marsin/stems/*` packets (when OSC is ENABLED). When
-// either pipeline is disabled, the corresponding key is simply absent
-// from the ParamCenter snapshot — `resolveModulationSources` defaults
-// the missing key to 0, which makes the modulation a no-op (operator-
+// These audio keys are populated by the analysis pipeline (the Companion,
+// the sole analyzer, over OSC → CPC). When the pipeline is dark, the key is
+// simply absent from the ParamCenter snapshot — `resolveModulationSources`
+// defaults the missing key to 0, which makes the modulation a no-op (operator-
 // requested behavior: "default behavior is no change" with the source
 // pipeline dark, rather than spuriously moving the slider).
-// Built-in modulation source keys. The Audio Companion can ALSO register
-// runtime live keys (see registerModulationSourceKey) so an operator-added
-// Companion signal can drive a modulation. Runtime keys live in
-// DYNAMIC_SOURCE_KEYS so a manifest removal can cleanly drop them without
-// touching the curated set.
+// Built-in modulation source keys: the curated audio-family live CPC keys
+// whose value range is [0,1] — the ones that work as a modulation source
+// WITHOUT saturating the downstream clamp01 (so Hz dom-freqs, bpm[0,300],
+// note[0,11], structure[0,2], beatInBar[0,4] are deliberately NOT here; a
+// frequency that must drive a param should be normalized to [0,1] in the
+// Companion first). This is a VERIFIED SNAPSHOT of the [0,1] live keys in
+// audio/postproc/audio_signals.js (excluding *Raw mirrors + *Gain knobs);
+// the drift-guard in tests/audio_signals.test.js fails loud if the registry
+// grows a [0,1] live audio key that is not listed here. modulation_engine
+// stays dependency-free by design, so we pin rather than import.
+// The Audio Companion can ALSO register runtime live keys (see
+// registerModulationSourceKey) so an operator-added Companion signal can drive
+// a modulation; those live in DYNAMIC_SOURCE_KEYS so a manifest removal drops
+// them cleanly without touching this curated set.
 const BUILTIN_SOURCE_KEYS = new Set([
-  'micLow', 'micMid', 'micHigh', 'micKick',
-  'stemsBass', 'stemsDrums', 'stemsVocals',
+  'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
+  'micDomEnergy1', 'micDomEnergy2',
+  'audioBuildScore', 'audioEnergyRatio', 'audioVocalsHot', 'audioDropPulse', 'audioSlowZone',
+  'audioBeat', 'audioParty', 'audioNoteHue',
+  'audioSwitchPattern', 'audioSwitchColor', 'audioBarPhase', 'audioDownbeat',
 ]);
 /** @type {Set<string>} runtime source keys from the Companion manifest. */
 const DYNAMIC_SOURCE_KEYS = new Set();
