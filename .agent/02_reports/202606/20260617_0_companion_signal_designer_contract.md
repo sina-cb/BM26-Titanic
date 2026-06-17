@@ -75,3 +75,19 @@ file conflicts):
   used by the sidebar [+] with an in-app themed panel (source dropdown + type),
   styled like the rest of the Companion (matches the export/browse modals). No
   native dialogs anywhere in the designer.
+
+## CaptainPad audio-tab strip-down + BPM (2026-06-17)
+CaptainPad-side (running now, disjoint from the engine config-sync agent):
+1. REMOVE the "SIGNALS · CHAINS" card from the audio config tab — chain design is a
+   Companion-only concern now.
+2. REMOVE the "STRUCTURE DETECTOR" section (the under-development THIN/VOCALS preview).
+3. SOURCE selector: test + file can be DISABLED from CaptainPad (keep a clean deck —
+   default/lock to mic; test/file hideable).
+4. BPM → SPEED SYNC reads the COMPANION's BPM (audioBpm CPC key), not /lx/tempo/bpm.
+
+Engine/Companion-side (QUEUED — apply after the config-sync agent to avoid
+companion_server.js conflicts):
+5. Companion EMITS audioBpm over OSC (so the curated /marsin/audio/bpm key is populated
+   in CPC) — BPM as a first-class companion output.
+6. Engine bpmSpeedSync uses audioBpm as its tempo source (instead of tempoBpm /
+   /lx/tempo/bpm), so "BPM → SPEED" syncs to the Companion's analysis.
