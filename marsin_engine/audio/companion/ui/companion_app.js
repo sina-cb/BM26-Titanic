@@ -312,7 +312,7 @@ const filePlayer = {
   // to Int16 and posts them; the main thread forwards them over the WS.
   _workletCode: `
     class PcmTap extends AudioWorkletProcessor {
-      process(inputs) {
+      process(inputs, outputs) {
         const ch = inputs[0] && inputs[0][0];
         if (ch && ch.length) {
           const i16 = new Int16Array(ch.length);
@@ -321,6 +321,12 @@ const filePlayer = {
             i16[i] = s < 0 ? s * 32768 : s * 32767;
           }
           this.port.postMessage(i16, [i16.buffer]);
+          // PASS-THROUGH so the operator actually HEARS the file: copy input
+          // to every output channel. Without this the tap emits silence and
+          // (since createMediaElementSource reroutes the <audio> through the
+          // graph) nothing reaches the speakers.
+          const out = outputs[0];
+          if (out) for (let c = 0; c < out.length; c++) out[c].set(ch);
         }
         return true;
       }
@@ -358,6 +364,7 @@ const filePlayer = {
         const i16 = new Int16Array(ch.length);
         for (let i = 0; i < ch.length; i++) { let s = ch[i]; s = s > 1 ? 1 : s < -1 ? -1 : s; i16[i] = s < 0 ? s * 32768 : s * 32767; }
         sendPcm(i16);
+        ev.outputBuffer.getChannelData(0).set(ch);   // pass-through → audible
       };
       tap = sp;
     }
@@ -397,7 +404,7 @@ function renderTransport() {
   const box = $('transport'); if (!box) return;
   const inFile = S.mode === 'file' && filePlayer.audio;
   box.style.display = inFile ? 'flex' : 'none';
-  if (!inFile) { box.innerHTML = ''; return; }
+  if (!inFile) { box.innerHTML = ''; delete box.dataset.built; return; }
   const a = filePlayer.audio;
   const dur = a.duration || 0, cur = a.currentTime || 0;
   const frac = dur ? cur / dur : 0;
