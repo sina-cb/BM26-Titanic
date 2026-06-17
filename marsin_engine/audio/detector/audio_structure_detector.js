@@ -95,6 +95,11 @@ const SLOW_ZONE_TAU  = 1.5;    // s — slow-zone EMA tau (a sustained zone, not
 const EPS = 1e-9;
 // energyRatio display map: log1p(rawRatio) / log1p(3) → [0,1]-ish.
 const ENERGY_RATIO_DENOM = Math.log1p(3.0);
+// Minimum gap between emitted state-transition log lines. Transitions can
+// legitimately come in quick succession (BUILD→drop→SUSTAIN), but a flapping
+// edge must not print one line per analyser hop; lines closer than this are
+// suppressed and counted, then summarised on the next emitted line.
+const TRANSITION_LOG_MIN_GAP_MS = 1500;
 
 // State enum, float-encoded for the live key (review §2.2 — no int-typed
 // live keys in this codebase).
@@ -209,6 +214,12 @@ export class AudioStructureDetector {
     // Status / diagnostics.
     this._lastTickMs = null;
     this._tickP99Ms = 0;
+    // Transition-log throttle: state transitions are diagnostic, not the
+    // sparse `dropFired` event. A flapping edge (or just a busy mix) must not
+    // spam one line per ~12 ms hop, so we rate-limit identical-rate logging
+    // and fold the suppressed count into the next emitted line.
+    this._lastTransitionLogMs = -Infinity;
+    this._suppressedTransitionLogs = 0;
     this._tickSamples = [];
     this._lastStemsFresh = false;
     this._lastSeenNow = -Infinity;
@@ -425,7 +436,12 @@ export class AudioStructureDetector {
 
     if (!droppedThisTick) switch (this._state) {
       case STATE.THIN: {
-        if (this._buildScore > cfg.buildThreshold && energyRisingFor1s) {
+        // Guard against the degenerate flap: a flat-but-nonzero buildScore
+        // leaves `_energyRisingSinceMs` stale-true (a flat signal never clears
+        // it), so without this the machine would enter BUILD and immediately
+        // collapse on `energyLowFor1s` every hop. An energy ratio that has sat
+        // low for over a second is not a build, whatever the flux score says.
+        if (this._buildScore > cfg.buildThreshold && energyRisingFor1s && !energyLowFor1s) {
           this._enterBuild(now);
         }
         break;
@@ -456,7 +472,7 @@ export class AudioStructureDetector {
         if (energyRatio < 0.5 && (stemsThin || !stemsFresh)) {
           this._state = STATE.THIN;
           this._logTransition(now, 'SUSTAIN→THIN', 0);
-        } else if (this._buildScore > cfg.buildThreshold && energyRisingFor1s) {
+        } else if (this._buildScore > cfg.buildThreshold && energyRisingFor1s && !energyLowFor1s) {
           this._enterBuild(now);
           this._logTransition(now, 'SUSTAIN→BUILD', 0);
         }
@@ -602,7 +618,18 @@ export class AudioStructureDetector {
 
   /** @private one stdout line per state transition (operator wants all). */
   _logTransition(now, label, confidence) {
-    console.log(`[audioStructure] ${new Date(now).toISOString()} ${label} buildScore=${this._buildScore.toFixed(2)} energyRatio=${this._energyRatio.toFixed(2)} conf=${Number(confidence).toFixed(2)}`);
+    // Rate-limit: a transition closer than TRANSITION_LOG_MIN_GAP_MS to the
+    // last emitted line is suppressed and counted (flap guard). The count is
+    // folded into the next line that does emit, so nothing is silently lost.
+    if ((now - this._lastTransitionLogMs) < TRANSITION_LOG_MIN_GAP_MS) {
+      this._suppressedTransitionLogs += 1;
+      return;
+    }
+    const suppressed = this._suppressedTransitionLogs;
+    this._suppressedTransitionLogs = 0;
+    this._lastTransitionLogMs = now;
+    const tail = suppressed > 0 ? ` (+${suppressed} suppressed)` : '';
+    console.log(`[audioStructure] ${new Date(now).toISOString()} ${label} buildScore=${this._buildScore.toFixed(2)} energyRatio=${this._energyRatio.toFixed(2)} conf=${Number(confidence).toFixed(2)}${tail}`);
   }
 
   /** @private rolling p99 of tick() wall time (perf budget, doc §Perf). */
