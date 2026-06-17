@@ -48,6 +48,7 @@ const os = require('os');
 const path = require('path');
 
 const portCleanup = require('./tools/port_cleanup.cjs');
+const browserSplit = require('./tools/browser_split.cjs');
 
 const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
@@ -160,6 +161,10 @@ function usage(stream = process.stdout) {
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
     '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
     '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
+    '    --split            Tile sim + CaptainPad side-by-side in Chrome (default',
+    '                       for dev profiles when Chrome is present; falls back to',
+    '                       the default browser if Chrome is missing)',
+    '    --no-split         Always use the default browser (separate tabs/windows)',
     '    --help             Show this help',
     ''
   );
@@ -168,7 +173,10 @@ function usage(stream = process.stdout) {
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true, open: true, force: false };
+  const opts = {
+    command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN,
+    kill: true, open: true, force: false, split: 'auto',
+  };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
       logError(`${flag} requires a value (got ${value === undefined ? 'nothing' : `'${value}'`}).`);
@@ -184,6 +192,8 @@ function parseArgs(argv) {
       case '--no-kill': opts.kill = false; break;
       case '-f': case '--force': opts.force = true; break;
       case '--no-open': opts.open = false; break;
+      case '--split': opts.split = 'on'; break;
+      case '--no-split': opts.split = 'off'; break;
       case '--help': case '-h': usage(); process.exit(0); break;
       default:
         if (arg.startsWith('-')) {
@@ -604,6 +614,49 @@ function openInBrowser(label, url) {
   }
 }
 
+// Auto-open this profile's UIs in the operator's browser, in the proven order
+// sim → CaptainPad → Companion. Called once, AFTER every relevant process is
+// confirmed up (each waited via waitForHttp), so no tab races the engine.
+//
+// What opens is DERIVED from the profile's `processes` list — a UI is only
+// opened if its process is part of the profile:
+//   - prod (no captainpad process)  → sim → Companion
+//   - dev / dev-lite                → sim → CaptainPad → Companion
+//
+// Split view (best-effort): when enabled, sim + CaptainPad are tiled
+// side-by-side as two positioned Chrome windows; the Companion still opens
+// normally. If Chrome is missing or placement fails, we fall back to the normal
+// per-UI openInBrowser — never crashing the launch over cosmetic placement.
+function openProfileUis(opts, profileDef, urls) {
+  if (!opts.open) return;
+  const has = (name) => profileDef.processes.includes(name);
+
+  // Decide whether to attempt split view: explicit --split forces it on, --no-
+  // split forces it off, and the default ('auto') turns it on for dev profiles
+  // when both the sim and CaptainPad are in play (and Chrome is found below).
+  const wantSplit = opts.split === 'on' ||
+    (opts.split === 'auto' && has('sim') && has('captainpad'));
+
+  let simHandled = false;
+  let captainPadHandled = false;
+  if (wantSplit && has('sim') && has('captainpad')) {
+    const tiled = browserSplit.openSideBySide(urls.sim, urls.captainPad, {
+      log: (msg) => log('launcher', `  ↗ ${msg}`),
+    });
+    if (tiled) {
+      log('launcher', `  ↗ Opening Simulation + CaptainPad side-by-side in Chrome`);
+      simHandled = true;
+      captainPadHandled = true;
+    }
+    // tiled === false → fall through to default-browser opens below.
+  }
+
+  // Strict order: sim → CaptainPad → Companion.
+  if (has('sim') && !simHandled) openInBrowser('Simulation', urls.sim);
+  if (has('captainpad') && !captainPadHandled) openInBrowser('CaptainPad', urls.captainPad);
+  if (has('companion')) openInBrowser('Audio Companion', urls.companion);
+}
+
 function stopChild(tag, child) {
   return new Promise((resolve) => {
     let settled = false;
@@ -988,13 +1041,7 @@ async function main() {
       ENGINE_DIR);
     await waitForHttp('audio companion', companionUrl, 60000);
     log('launcher', '✅ Audio Companion is ready.');
-    if (opts.open) openInBrowser('Audio Companion', companionUrl);
   }
-
-  // Open the sim only now that the engine is up: the sim's boot probes
-  // :6968/status and falls back from sacn_in to the in-browser Pixelblaze
-  // engine if it loads while the engine is still down.
-  if (opts.open) openInBrowser('Simulation', simUrl);
 
   // 3. CaptainPad Expo dev server (dev profiles only).
   if (profileDef.processes.includes('captainpad')) {
@@ -1004,8 +1051,15 @@ async function main() {
       { EXPO_NO_TELEMETRY: '1', CI: '1', BROWSER: 'none' });
     await waitForHttp('captainpad web', captainPadUrl, 300000);
     log('launcher', '✅ CaptainPad is ready.');
-    if (opts.open) openInBrowser('CaptainPad', captainPadUrl);
   }
+
+  // All relevant processes are confirmed up — now auto-open this profile's UIs
+  // in the proven order sim → CaptainPad → Companion (see openProfileUis).
+  openProfileUis(opts, profileDef, {
+    sim: simUrl,
+    captainPad: captainPadUrl,
+    companion: companionUrl,
+  });
 
   log('launcher', '────────────────────────────────────────────────────────');
   log('launcher', `🚀 Stack is up (profile: ${opts.command})`);
