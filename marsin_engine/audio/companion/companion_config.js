@@ -127,8 +127,11 @@ export function validateSignal(sig) {
   // validation context (the op SCHEMA + terminal-osc_out rules are signal-
   // agnostic; only paramKey existence checks are keyed, and designed signals
   // don't use paramKey gains). micLow is always in KNOWN_SIGNALS.
+  // For a FREQUENCY signal we pass `hz: true` so the clamp op's min/max may be
+  // Hz bounds (e.g. 40–4000 Hz) instead of [0,1] — the SAME validator, only
+  // the accepted clamp range widens (companion contract 2026-06-17).
   const ctxKey = KNOWN_SIGNALS[0];
-  const v = validateChain(ctxKey, sig.chain);
+  const v = validateChain(ctxKey, sig.chain, { hz: sig.type === 'frequency' });
   if (!v.ok) return { ok: false, error: `signal "${sig.id}" chain: ${v.error}` };
   const output = sig.chain.some(op => op.type === 'osc_out');
   return {

@@ -43,10 +43,18 @@ export class DerivedSignals {
     this._note = new NoteEstimator(PARAMS.note);
     this._switch = new SwitchSignals(PARAMS.sw);
     this._fatal = false;
+    // Last note actually committed by the estimator. We HOLD this on the
+    // published audioNote/audioNoteHue keys whenever the estimator currently
+    // reports "no note" (pitchClass < 0) — silence/warmup/sub-gate energy must
+    // NOT blink the colour to C. Until a first real note lands we hold pc 0 /
+    // hue 0 (a defined, non-spurious neutral), then track the live note.
+    this._heldPc = 0;
+    this._heldHue = 0;
   }
 
   reset() {
     this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
+    this._heldPc = 0; this._heldHue = 0;
     if (!this._fatal) this._zero();
   }
 
@@ -69,6 +77,15 @@ export class DerivedSignals {
       const b = this._bpm.update(g('micFluxRaw'), g('micKickRaw'), dt);
       const n = this._note.update(g('micDomFreq1'), g('micDomEnergy1'), g('micDomFreq2'), g('micDomEnergy2'));
       const p = this._party.update(g('micLowRaw'), g('micMidRaw'), g('micHighRaw'), dt, now);
+      // NOTE PUBLISH: the estimator returns pitchClass = -1 ("no note") during
+      // silence, warmup, or sub-gate energy. Publishing that as 0 collapses the
+      // colour to a permanent C whenever the live dom-freq energy is below the
+      // gate (the "NOTE always C" bug). HOLD the last committed note instead —
+      // the estimator's own design says colour should freeze, not blink to C.
+      if (n.pitchClass >= 0) {
+        this._heldPc = n.pitchClass;
+        this._heldHue = n.hue;
+      }
       const s = this._switch.update({
         nowMs: now, dt,
         dropPulse: g('audioDropPulse'), energyRatio: g('audioEnergyRatio'),
@@ -80,8 +97,8 @@ export class DerivedSignals {
         { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
         { kind: 'scalar', key: 'audioBeat',          value: b.beat },
         { kind: 'scalar', key: 'audioParty',         value: p.party ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioNote',          value: n.pitchClass < 0 ? 0 : n.pitchClass },
-        { kind: 'scalar', key: 'audioNoteHue',       value: n.hue },
+        { kind: 'scalar', key: 'audioNote',          value: this._heldPc },
+        { kind: 'scalar', key: 'audioNoteHue',       value: this._heldHue },
         { kind: 'scalar', key: 'audioSwitchPattern', value: s.switchPattern ? 1.0 : 0.0 },
         { kind: 'scalar', key: 'audioSwitchColor',   value: s.switchColor ? 1.0 : 0.0 },
         { kind: 'scalar', key: 'audioBeatInBar',     value: b.beatInBar || 0 },

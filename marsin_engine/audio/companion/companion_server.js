@@ -22,8 +22,11 @@
  *   frequency sources: rawDom1 rawDom2                        (value Hz)
  *
  * Intensity signals run through the engine's SignalPostProcessor (the real
- * DSP, [0,1]); frequency signals carry Hz and pass through to their osc_out
- * tap (Hz-domain transforms are not run server-side — see report).
+ * DSP, [0,1]). Frequency signals carry Hz and run through the SAME
+ * SignalPostProcessor in its 'frequency' OUTPUT MODE — the identical lpf/clamp/
+ * slew math, with the final [0,1] output clamp skipped so the Hz value
+ * survives (and clamp bounds may be Hz). One source of truth for the DSP, no
+ * fork (codex P0). See report 202606/20260617 companion contract.
  *
  * Audio source (chosen live from the GUI, default from config):
  *   - 'test' — a tweakable synthetic generator (sub/mid/high/kick/noise),
@@ -93,8 +96,10 @@ const paramCenter = new ParamCenter(null);
 // Loaded from companion_config.yaml on boot. Each designed signal owns a real
 // SignalPostProcessor instance (the engine's DSP, unforked) holding its chain
 // under a borrowed KNOWN_SIGNALS key so process() applies the exact same math.
-// `frequency` signals are NOT run through process() (it clamps to [0,1]); their
-// raw Hz passes through to the osc_out tap.
+// Intensity signals use the default [0,1] processor; FREQUENCY signals use a
+// 'frequency'-mode processor — same lpf/clamp/slew math, no [0,1] output clamp
+// (the Hz value survives) and Hz-valid clamp bounds. Both run through the same
+// SignalPostProcessor.process() (codex P0 — one DSP, no fork).
 const PROXY_KEY = KNOWN_SIGNALS[0];   // micLow — the chain-runner proxy key
 let design = loadCompanionConfig();   // { osc, signals }
 const runners = new Map();            // signalId -> SignalPostProcessor
@@ -102,8 +107,9 @@ const runners = new Map();            // signalId -> SignalPostProcessor
 function buildRunners() {
   runners.clear();
   for (const sig of design.signals) {
-    if (sig.type !== 'intensity') continue;   // freq passes through, no runner
-    const spp = new SignalPostProcessor({ paramCenter });
+    // Intensity → default [0,1] processor; frequency → Hz output mode.
+    const outputMode = sig.type === 'frequency' ? 'frequency' : 'intensity';
+    const spp = new SignalPostProcessor({ paramCenter, outputMode });
     spp.loadChains({ [PROXY_KEY]: sig.chain });
     runners.set(sig.id, spp);
   }
@@ -230,20 +236,18 @@ let clockMs = 0, lastMs = 0;
 /**
  * Run every designed signal's chain for this analyzer hop. Returns a
  * { signalId: { raw, post } } map for the live trace + writes each OUTPUT
- * signal's POST value over OSC to the engine. Intensity signals run the real
- * SignalPostProcessor; frequency signals pass the raw Hz through to osc_out.
+ * signal's POST value over OSC to the engine. BOTH intensity and frequency
+ * signals run the real SignalPostProcessor — frequency runners are in Hz
+ * output mode, so lpf/clamp/slew actually shape the Hz before the osc_out tap.
  */
 function processDesignedSignals(r, dt) {
   const out = {};
   for (const sig of design.signals) {
     const raw = r[ANALYZER_FIELD[sig.source]] ?? 0;
-    let post;
-    if (sig.type === 'intensity') {
-      const spp = runners.get(sig.id);
-      post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
-    } else {
-      post = raw;   // frequency: Hz passes through to the osc_out tap
-    }
+    const spp = runners.get(sig.id);
+    // Every designed signal owns a runner (buildRunners builds one per signal,
+    // intensity or frequency). The `?? raw` is defensive only.
+    const post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
     out[sig.id] = { raw, post };
     const tap = oscOutOf(sig);
     if (tap) sendOsc(tap.params.address, post);

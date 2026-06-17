@@ -95,6 +95,19 @@ export class NoteEstimator {
   update(f1, e1, f2, e2) {
     const p = this.p;
 
+    // Fail loud on non-finite input: NaN/Inf in a frequency or energy would
+    // silently poison the median ring + Kalman for the rest of the session
+    // (NaN compares false everywhere → committedPc frozen forever, which is
+    // exactly the "stuck note" failure we are guarding against). The caller
+    // (DerivedSignals) already finite-guards its CPC reads, so reaching here
+    // with a non-finite value is a real upstream contract violation — surface
+    // it, don't swallow it.
+    if (!Number.isFinite(f1) || !Number.isFinite(e1) ||
+        !Number.isFinite(f2) || !Number.isFinite(e2)) {
+      throw new TypeError(
+        `NoteEstimator.update: non-finite input (f1=${f1}, e1=${e1}, f2=${f2}, e2=${e2})`);
+    }
+
     // 1. Choose the partial. Default: strongest in range. With preferLow we
     //    pick the LOWER in-range partial (the bass root) whenever it carries a
     //    reasonable fraction of the louder partial's energy — the root is the

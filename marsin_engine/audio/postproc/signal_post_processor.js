@@ -165,6 +165,15 @@ const OP_SCHEMA = Object.freeze({
       max: { type: 'number', min: 0, max: 1, default: 1 },
     },
   },
+  // ── FREQUENCY-MODE clamp bounds ──────────────────────────────────────────
+  // The clamp op is range-AGNOSTIC math (lo/hi pass-through). When a chain
+  // runs in frequency (Hz) mode, the operator must be able to bound the dom
+  // value to a musical Hz window (e.g. 40–4000 Hz), which the default [0,1]
+  // bounds would forbid. We DO NOT fork the op or its math — only the
+  // VALIDATION range for clamp's min/max widens to the audible band when the
+  // chain is Hz-typed. See `HZ_CLAMP_BOUND` + the `hz` flag threaded through
+  // validateChain/_validateOp. (2026-06-17 companion contract: "clamp's
+  // min/max must be allowed to be Hz, not [0,1]".)
   lpf: {
     description: 'One-pole IIR low-pass / EMA. cutoffHz controls smoothing.',
     params: {
@@ -275,6 +284,23 @@ const OP_SCHEMA = Object.freeze({
   },
 });
 
+// Upper bound for clamp min/max in Hz mode — the Nyquist of the engine's
+// 44.1 kHz analyzer (22050 Hz), matching `sourceSmoothHz`'s ceiling in the
+// companion. A dom freq can never exceed Nyquist, so this is a true upper
+// bound, not an arbitrary cap. The lower bound stays 0 (a 0 Hz floor is the
+// natural "no low bound").
+const HZ_CLAMP_BOUND = 22050;
+
+// Output modes a SignalPostProcessor can run in.
+//   'intensity' (default): the historical behavior — process() clamps the
+//     final value to [0, 1] and clamp ops are bounded to [0, 1]. Byte-
+//     identical to pre-frequency behavior.
+//   'frequency': the chain carries Hz. The final [0, 1] output clamp is
+//     SKIPPED (a Hz value must survive), and clamp ops may use Hz bounds.
+//     All op MATH is unchanged — lpf/clamp/slew are range-agnostic — so this
+//     reuses the exact same `_applyOp` code path (no DSP fork; codex P0).
+export const OUTPUT_MODES = Object.freeze(['intensity', 'frequency']);
+
 export function opCatalog() {
   // Public-facing snapshot of the op catalog (Phase 5 iPad picker).
   return Object.fromEntries(Object.entries(OP_SCHEMA).map(([k, v]) => ([
@@ -345,7 +371,7 @@ function _paramCenterKeyHint(paramCenter) {
  * 400 instead of throwing on the first audio-hot-path process()
  * call (Codex P0 — fail loudly early).
  */
-function _validateOp(op, indexForMsg, paramCenter = null) {
+function _validateOp(op, indexForMsg, paramCenter = null, hz = false) {
   if (!op || typeof op !== 'object' || Array.isArray(op)) {
     return { ok: false, error: `op[${indexForMsg}] must be an object` };
   }
@@ -411,8 +437,23 @@ function _validateOp(op, indexForMsg, paramCenter = null) {
       if (!isFiniteNumber(pv)) {
         return { ok: false, error: `op "${op.id}".${pk}: must be a finite number` };
       }
-      if (pv < spec.min || pv > spec.max) {
-        return { ok: false, error: `op "${op.id}".${pk}: ${pv} out of range [${spec.min}, ${spec.max}]` };
+      // In frequency (Hz) mode some op params operate in the Hz DOMAIN of the
+      // signal value, not [0,1], so their validated UPPER bound widens to the
+      // Nyquist ceiling. Same op, same math; only the accepted range widens
+      // (codex P0: no fork). The Hz-domain params:
+      //   - clamp.min / clamp.max : Hz bounds on the value (e.g. 40–4000 Hz).
+      //   - slew.maxStepPerSec    : Hz/second rate limit (a dom freq can jump
+      //     thousands of Hz/s; the intensity cap of 1000 is far too slow).
+      // (lpf.cutoffHz is NOT widened: it's the smoothing FILTER cutoff, not the
+      // signal value — its [0.01,1000] Hz range is already appropriate.)
+      let loBound = spec.min;
+      let hiBound = spec.max;
+      if (hz) {
+        if (op.type === 'clamp' && (pk === 'min' || pk === 'max')) hiBound = HZ_CLAMP_BOUND;
+        else if (op.type === 'slew' && pk === 'maxStepPerSec') hiBound = HZ_CLAMP_BOUND;
+      }
+      if (pv < loBound || pv > hiBound) {
+        return { ok: false, error: `op "${op.id}".${pk}: ${pv} out of range [${loBound}, ${hiBound}]` };
       }
       normalizedParams[pk] = pv;
     } else if (spec.type === 'string') {
@@ -497,6 +538,10 @@ function _validateOp(op, indexForMsg, paramCenter = null) {
  */
 export function validateChain(signalKey, chain, opts = {}) {
   const paramCenter = opts && opts.paramCenter ? opts.paramCenter : null;
+  // `hz: true` validates the chain for a FREQUENCY (Hz) signal — relaxes the
+  // clamp op's min/max bounds to the audible/Nyquist range. Default false
+  // keeps intensity validation byte-identical.
+  const hz = !!(opts && opts.hz);
   if (!KNOWN_SIGNALS.includes(signalKey)) {
     return { ok: false, error: `unknown signalKey "${signalKey}" (known: ${KNOWN_SIGNALS.join(', ')})` };
   }
@@ -506,7 +551,7 @@ export function validateChain(signalKey, chain, opts = {}) {
   const seenIds = new Set();
   const normalized = [];
   for (let i = 0; i < chain.length; i++) {
-    const res = _validateOp(chain[i], i, paramCenter);
+    const res = _validateOp(chain[i], i, paramCenter, hz);
     if (!res.ok) return res;
     if (seenIds.has(res.normalized.id)) {
       return { ok: false, error: `duplicate op id "${res.normalized.id}" in signal ${signalKey}` };
@@ -555,14 +600,31 @@ export class SignalPostProcessor {
    *   Codex P0: `.get()` throws on unknown keys — we do NOT swallow.
    * @param {(msg: object) => void} [opts.broadcast] — WS broadcast hook,
    *   used for `audioChainsChanged` after PUT/PATCH/reset.
+   * @param {'intensity'|'frequency'} [opts.outputMode='intensity'] — output
+   *   range mode. 'intensity' (default) clamps the chain's final value to
+   *   [0,1] (the engine's CPC contract) and bounds clamp ops to [0,1].
+   *   'frequency' carries Hz: the final [0,1] clamp is SKIPPED so a Hz value
+   *   survives, and clamp ops may use Hz bounds. The same `_applyOp` math runs
+   *   in BOTH modes (lpf/clamp/slew are range-agnostic) — there is no DSP fork
+   *   (codex P0: one source of truth). The Audio Companion runs its frequency
+   *   signals (dom1/dom2) through a 'frequency'-mode instance so operator ops
+   *   (lpf/clamp/slew) actually apply to the Hz value before the osc_out tap.
    */
-  constructor({ scenePath = null, paramCenter, broadcast = null } = {}) {
+  constructor({ scenePath = null, paramCenter, broadcast = null, outputMode = 'intensity' } = {}) {
     if (!paramCenter || typeof paramCenter.get !== 'function') {
       throw new TypeError('SignalPostProcessor: paramCenter with .get(key) is required');
+    }
+    if (!OUTPUT_MODES.includes(outputMode)) {
+      // Codex P0 — fail loud on misuse, no silent fallback to a default mode.
+      throw new TypeError(`SignalPostProcessor: outputMode must be one of ${OUTPUT_MODES.join(', ')} (got "${outputMode}")`);
     }
     this.scenePath = scenePath;
     this.paramCenter = paramCenter;
     this.broadcast = broadcast;
+    this.outputMode = outputMode;
+    // Hz mode relaxes clamp bounds at validation time (threaded into every
+    // validateChain call this instance makes).
+    this._validateOpts = outputMode === 'frequency' ? { hz: true } : {};
 
     // Per-signal chain config (post-validation, normalized).
     /** @type {Record<string, Array<object>>} */
@@ -621,7 +683,7 @@ export class SignalPostProcessor {
       if (!KNOWN_SIGNALS.includes(signalKey)) {
         throw new Error(`loadChains: unknown signalKey "${signalKey}" (known: ${KNOWN_SIGNALS.join(', ')})`);
       }
-      const v = validateChain(signalKey, chain, { paramCenter: this.paramCenter });
+      const v = validateChain(signalKey, chain, { paramCenter: this.paramCenter, ...this._validateOpts });
       if (!v.ok) throw new Error(`loadChains: invalid chain for ${signalKey}: ${v.error}`);
       validated[signalKey] = v.normalized;
     }
@@ -638,7 +700,7 @@ export class SignalPostProcessor {
    * @returns {{ ok: true, chain }} or { ok: false, error }
    */
   putChain(signalKey, ops) {
-    const v = validateChain(signalKey, ops, { paramCenter: this.paramCenter });
+    const v = validateChain(signalKey, ops, { paramCenter: this.paramCenter, ...this._validateOpts });
     if (!v.ok) return { ok: false, error: v.error };
     this._chains[signalKey] = v.normalized;
     this._resetRuntime(signalKey);
@@ -685,7 +747,7 @@ export class SignalPostProcessor {
     // invariants like Schmitt tHigh > tLow even when only one is sent).
     // Pass paramCenter so a typo'd paramKey is caught here, not in the
     // audio hot path.
-    const res = _validateOp(nextOp, idx, this.paramCenter);
+    const res = _validateOp(nextOp, idx, this.paramCenter, this.outputMode === 'frequency');
     if (!res.ok) return { ok: false, error: res.error };
 
     // Splice in the validated op. CRITICALLY, the runtime state for
@@ -755,10 +817,13 @@ export class SignalPostProcessor {
    * post-processed scalar.
    *
    * @param {string} signalKey — must be in KNOWN_SIGNALS (else throw).
-   * @param {number} rawValue — pre-chain value, typically [0, 1].
+   * @param {number} rawValue — pre-chain value. [0,1] in intensity mode; a Hz
+   *   value in frequency mode.
    * @param {number} dtSeconds — frame delta in seconds (used by
    *   time-domain ops: LPF, Envelope, Hold).
-   * @returns {number} — post-chain value, clamped to [0, 1].
+   * @returns {number} — post-chain value. Clamped to [0, 1] in intensity mode;
+   *   in frequency mode the [0,1] clamp is skipped (the Hz value survives) but
+   *   a non-finite result is still floored to 0 (a NaN must never reach OSC).
    */
   process(signalKey, rawValue, dtSeconds) {
     if (!KNOWN_SIGNALS.includes(signalKey)) {
@@ -788,6 +853,13 @@ export class SignalPostProcessor {
       if (recordPreview) rt.pre = val;
       val = this._applyOp(op, rt, val, dtSeconds);
       if (recordPreview) rt.post = val;
+    }
+    // Intensity mode: clamp to the engine's [0,1] CPC contract (unchanged).
+    // Frequency mode: a Hz value must NOT be clamped to [0,1] — that was the
+    // whole reason frequency signals bypassed this processor. We still guard
+    // against a non-finite result (a NaN/Infinity must never reach OSC).
+    if (this.outputMode === 'frequency') {
+      return isFiniteNumber(val) ? val : 0;
     }
     return clamp01(val);
   }
