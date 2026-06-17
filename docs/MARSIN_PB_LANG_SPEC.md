@@ -1,8 +1,13 @@
 # MarsinScript Language Specification
 
-**Version**: 2.1
-**Last Updated**: 2026-04-15
+**Version**: 2.2
+**Last Updated**: 2026-06-14
 **Status**: Authoritative for the current Marsin compiler, VM, firmware runtime, simulator, and WASM surface. Where implementation caveats still exist, they are called out explicitly.
+
+> **2.2 changes** (probed empirically against the WASM VM at `marsin_engine/lib/marsin_wasm_runtime.js`):
+> - **§6.1 trig corrected to radians** (the old "turns" note was stale — live patterns multiply by `PI2`, and `sin(PI/2) == 1` was confirmed).
+> - **§9.3 `delta`** annotated with the measured per-frame value.
+> - New **§9.4 Frame-to-frame state persistence** and **§9.5 Simulating trails (frame feedback)** — how to carry state between frames to build trails.
 
 MarsinScript has two separate script environments:
 
@@ -402,13 +407,13 @@ if (viewMask & VIEW_LEFT) {
 
 | Function | Args | Notes |
 |---|---:|---|
-| `sin(x)` | 1 | Input is in turns, not radians |
-| `cos(x)` | 1 | Input is in turns, not radians |
-| `tan(x)` | 1 | Input is in turns, not radians |
-| `asin(x)` | 1 | Returns turns |
-| `acos(x)` | 1 | Returns turns |
-| `atan(x)` | 1 | Returns turns |
-| `atan2(y, x)` | 2 | Returns turns |
+| `sin(x)` | 1 | Input is in **radians** |
+| `cos(x)` | 1 | Input is in **radians** |
+| `tan(x)` | 1 | Input is in **radians** |
+| `asin(x)` | 1 | Returns **radians** |
+| `acos(x)` | 1 | Returns **radians** |
+| `atan(x)` | 1 | Returns **radians** |
+| `atan2(y, x)` | 2 | Returns **radians** |
 | `pow(base, exp)` | 2 | |
 | `sqrt(x)` | 1 | |
 | `exp(x)` | 1 | |
@@ -428,9 +433,13 @@ if (viewMask & VIEW_LEFT) {
 
 Trig note:
 
-- MarsinScript follows the Pixelblaze convention of using **turns** for trig.
-- `sin(0.25)` is approximately `1`.
-- `cos(0.5)` is approximately `-1`.
+- The MarsinVM math parser is migrated to **radians** (JavaScript `Math` semantics), *not* the
+  historical Pixelblaze turn convention. Confirmed empirically: `sin(0.25) ≈ 0.247`,
+  `sin(PI/2) == 1`, `PI2 ≈ 6.2832`.
+- To turn a normalized `0..1` phase (a "turn") into an angle, multiply by `PI2`:
+  `sin(x * PI2)`, `atan2(z, x) / PI2` to go back. This is why every production pattern uses `PI2`.
+- The `wave(x)` / `triangle(x)` / `square(x, duty)` helpers are the exception — their input is still
+  a normalized `0..1` phase (see §6.2). See also `docs/MARSIN_ENGINE_PATTERNS.md` §4.
 
 ### 6.2 Time, waveforms, mixing, and randomness
 
@@ -720,10 +729,103 @@ Current implementation notes:
 - simulator populates `delta` through global injection
 - the native checker and current WASM `begin_frame` path do not currently guarantee a real `delta` argument
 
+Measured behavior (current engine + WASM path, June 2026):
+
+- In `marsin_wasm_runtime.js` / `wasm_host.js`, `beforeRender(delta)` receives a **fixed nominal
+  step of ≈ 15.7 per frame** — it does **not** vary with the `elapsed` argument passed to
+  `begin_frame`, and it is not true wall-clock milliseconds.
+- The engine's global **SPEED** fader scales the `elapsed` clock that drives `time()` — **not**
+  `delta`. So motion built on `time()` follows the global SPEED knob; motion built on raw `delta`
+  accumulation follows only your pattern's own `localSpeed` trim.
+- The codebase convention is `dt = delta / 1310.72 * localMult` to get a small per-frame phase
+  increment for accumulators (see `docs/MARSIN_ENGINE_PATTERNS.md` §2.1).
+
 Portable guidance:
 
-- prefer `time(scale)` and persistent state for portable animation timing
+- prefer `time(scale)` and persistent state for portable, SPEED-responsive animation timing
+- use `delta` accumulation for rates you want pinned to a pattern-local trim, independent of global SPEED
 - treat `delta` as runtime-dependent unless you control the execution surface
+
+### 9.4 Frame-to-frame state persistence
+
+A compiled pattern is a **single long-lived VM instance**: it is created once and then driven with
+repeated `begin_frame` + render calls. `begin_frame` does **not** wipe script memory. Therefore:
+
+- **All top-level `var`s and `array()`s retain their values across frames.** Writing `accum += ...`
+  in `beforeRender`, or `buf[i] = buf[i] * decay`, accumulates frame over frame. This is the
+  foundation of every feedback/trail effect (§9.5). Production pattern `47_apex_perimeter_ping`
+  relies on exactly this (decaying `coronaA*` envelopes + accumulating `tPing/tRing` phases).
+- **State is per-VM-instance and resets on (re)compile.** Loading the pattern, a live-edit, a
+  deck/pattern swap, or a transition that instantiates a fresh background buffer all re-run
+  top-level init and clear your accumulators. **Never assume a trail survives a pattern change.**
+- `beforeRender` and the render entrypoint share one flat symbol table (§2.3), so `beforeRender`
+  can prepare state that the per-pixel path reads.
+- During transitions the engine may run a pattern invisibly in a background buffer (§13.1). Drive
+  state from `time()` / `delta`, never from an assumed absolute frame count.
+
+### 9.5 Simulating trails (frame feedback)
+
+"Trail" / "ghost" / "motion-blur" effects all reduce to: **carry brightness from the previous frame
+forward, decayed.** There are three ways to do it; pick by what you need.
+
+**(A) Scalar decay envelope** — *parametric trails*: "an event happened, now fade it out."
+Persist one scalar, set it to `1.0` on the event, multiply/subtract it down every frame. Cheap;
+ideal for pulses, pings, searchlight afterglow, heartbeat.
+
+```javascript
+var env = 0.0, lastPhase = 0.0, clock = 0.0;
+
+export function beforeRender(delta) {
+  clock = clock + (delta / 1310.72) * 0.5;
+  var phase = clock % 1.0;
+  if (phase < lastPhase) env = 1.0;     // re-trigger on each wrap (or on an audio kick)
+  lastPhase = phase;
+  env = env - (delta / 1310.72) * 2.0;  // decay the tail
+  if (env < 0.0) env = 0.0;
+}
+
+export function render3D(index, x, y, z) { hsv(0.0, 1, env); }
+```
+
+**(B) Per-pixel feedback buffer (`array`)** — *true "paint and fade" pixel trails.* Keep your own
+brightness buffer; decay every cell each frame and inject new energy at the source position, then
+read `buf[index]` per pixel.
+
+```javascript
+// pixelCount bakes to a literal (~144) in the current VM, so size to YOUR model with a constant.
+var N = 144;            // <-- set to your model's real pixel count
+var buf = array(N);     // allocated ONCE at top-level init — never allocate in render
+var head = 0.0;
+
+export function beforeRender(delta) {
+  head = (head + (delta / 1310.72) * 0.25) % 1.0;
+  var k = 0;
+  for (k = 0; k < N; k = k + 1) { buf[k] = buf[k] * 0.85; }  // decay the whole buffer
+  buf[floor(head * N) % N] = 1.0;                            // inject the moving head
+}
+
+export function render3D(index, x, y, z) { hsv(0.55, 0.9, buf[index]); }
+```
+
+Rules for (B):
+- Allocate the buffer in **top-level init**, not in `render` (render runs with allocation disabled,
+  §7) and not per-frame in `beforeRender`.
+- **Do not rely on `pixelCount`** for buffer size or head index — it compiles to a literal `144`
+  (§5.1) regardless of the real model. Use an explicit `N` for both `array(N)` and the index math.
+- The decay loop is `O(N)` once per frame (fine); the per-pixel read must stay under the
+  5000-instruction budget (§9.1).
+- Decay closer to `1.0` = longer tail. Expose it as a `slider*` so operators can tune tail length.
+
+**(C) Mixer-level feedback (no pattern code).** The engine's `feedbackTrails` **global effect**
+(`marsin_engine/effects/feedbackTrails.js`) owns an RGBWAU trail buffer of the **composited
+output** and mixes it back each frame (`decay`, `injection`, `mix`, `colorBleed`, `blendMode`). Use
+it to ghost *any* pattern — including ones that manage no state of their own — toggled live by the
+operator.
+
+> **Boundary — what you cannot do:** a pattern **cannot read its own previous rendered pixel
+> output**. There is no `prevPixel` / last-frame color fed into `render`. "Feedback" *inside* a
+> pattern means state **you** maintain (A or B). Output-feedback of the composited frame exists only
+> at the mixer (C).
 
 ---
 
