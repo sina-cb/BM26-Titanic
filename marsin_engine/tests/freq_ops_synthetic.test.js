@@ -123,7 +123,7 @@ test('freq clamp: Hz bounds VALIDATE on a frequency signal (not [0,1])', () => {
     id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
     chain: [
       { id: 'c', type: 'clamp', params: { min: 40, max: 4000 } },
-      { id: 'o', type: 'osc_out', params: { address: '/marsin/dom/freq1' } },
+      { id: 'o', type: 'osc_out', params: { name: 'micDomFreq1' } },
     ],
   };
   const v = validateSignal(sig);
@@ -172,7 +172,7 @@ test('freq chain lpf→clamp→osc_out: smooths then bounds Hz, tap is identity'
   proc.putChain(PROXY, [
     { id: 'l', type: 'lpf', params: { cutoffHz: 8 } },
     { id: 'c', type: 'clamp', params: { min: 40, max: 4000 } },
-    { id: 'o', type: 'osc_out', params: { address: '/marsin/dom/freq1' } },
+    { id: 'o', type: 'osc_out', params: { name: 'micDomFreq1' } },
   ]);
   // Hammer a high Hz that the clamp must cap, then settle.
   let y = 0;
@@ -226,7 +226,7 @@ test('all Hz-valid ops validate on a frequency signal (lpf/clamp/slew/osc_out)',
       id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
       chain: [
         { id: 'op', type: opType, params },
-        { id: 'o', type: 'osc_out', params: { address: '/marsin/dom/freq1' } },
+        { id: 'o', type: 'osc_out', params: { name: 'micDomFreq1' } },
       ],
     };
     const r = validateSignal(sig);

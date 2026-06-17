@@ -157,6 +157,13 @@ function sendOsc(address, value) {
 const MANIFEST_PATH = '/audio/signals/manifest';
 const MANIFEST_TIMEOUT_MS = 2000;
 let _manifestWarned = false;   // warn-once so a down engine doesn't spam the log
+// Set true whenever a manifest POST fails (engine down / timeout) so a lost
+// add/REMOVE is re-sent once the engine is reachable again. Without this, a
+// signal removed while the engine was unreachable would leave a dangling
+// dynamic CPC key + its modulation mapping live on the engine forever (the key
+// freezes at its last value and keeps driving the modulated param). Reconciled
+// on engine-link (re)connect + a slow periodic retry.
+let _manifestDirty = false;
 
 // The osc_out tap of a signal (terminal op), or null. Reused for the manifest.
 function oscOutTap(sig) {
@@ -209,22 +216,36 @@ async function pushManifest() {
       signal: ctrl.signal,
     });
     if (!res.ok) {
+      _manifestDirty = true;   // re-send once the engine recovers
       if (!_manifestWarned) {
         _manifestWarned = true;
-        console.warn(`[companion manifest] POST ${MANIFEST_PATH} → ${res.status} (engine endpoint not ready yet?); will keep trying on future edits`);
+        console.warn(`[companion manifest] POST ${MANIFEST_PATH} → ${res.status} (engine endpoint not ready yet?); will retry on reconnect`);
       }
       return;
     }
     _manifestWarned = false;   // recovered — allow a fresh warn if it drops again
+    _manifestDirty = false;    // engine now holds the current manifest
   } catch (e) {
+    _manifestDirty = true;     // re-send once the engine recovers
     if (!_manifestWarned) {
       _manifestWarned = true;
-      console.warn(`[companion manifest] POST ${MANIFEST_PATH} failed: ${e && e.message} (engine unreachable; analysis unaffected)`);
+      console.warn(`[companion manifest] POST ${MANIFEST_PATH} failed: ${e && e.message} (engine unreachable; analysis unaffected; will retry on reconnect)`);
     }
   } finally {
     clearTimeout(t);
   }
 }
+
+// Periodic reconciliation: if a manifest POST was lost (engine was down at the
+// time — including a REMOVAL, which would otherwise strand a dynamic key +
+// modulation on the engine), re-send it as soon as the engine link is back up.
+// Slow tick — adds/removes are rare and the reconnect re-push (below) covers
+// the common engine-restart case; this catches a transient POST failure that
+// didn't drop the WS link.
+const MANIFEST_RETRY_MS = 5000;
+setInterval(() => {
+  if (_manifestDirty && engineLink && engineLink.connected) pushManifest();
+}, MANIFEST_RETRY_MS).unref?.();
 
 // ── BUILT-IN BPM OUTPUT (always-on) ──────────────────────────────────────────
 // BPM is a DERIVED signal (DerivedSignals/BpmTracker), not a raw-source designed
@@ -1097,8 +1118,16 @@ function startEngineLink() {
     onConfig: (config) => applyEngineSharedTuning(config),
     onStatus: (connected, info) => {
       broadcast({ type: 'engineLink', connected, ...(info || {}) });
-      if (connected) console.log(`  🔗 engine config link UP → ${engineLink.wsUrl} (shared audio tuning synced)`);
-      else console.log(`  🔌 engine config link DOWN → ${engineLink.wsUrl} (analyzing on local tuning; reconnecting…)`);
+      if (connected) {
+        console.log(`  🔗 engine config link UP → ${engineLink.wsUrl} (shared audio tuning synced)`);
+        // Self-heal: re-advertise the OUTPUT manifest on every (re)connect so a
+        // signal added/removed/renamed while the engine was down is reconciled
+        // — otherwise a removal would leave a dangling dynamic key + its
+        // modulation mapping driving a frozen value on the engine forever.
+        pushManifest();
+      } else {
+        console.log(`  🔌 engine config link DOWN → ${engineLink.wsUrl} (analyzing on local tuning; reconnecting…)`);
+      }
     },
   });
   engineLink.start();
