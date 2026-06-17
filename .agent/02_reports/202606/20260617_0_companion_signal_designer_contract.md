@@ -91,3 +91,22 @@ companion_server.js conflicts):
    in CPC) — BPM as a first-class companion output.
 6. Engine bpmSpeedSync uses audioBpm as its tempo source (instead of tempoBpm /
    /lx/tempo/bpm), so "BPM → SPEED" syncs to the Companion's analysis.
+
+## Dom signal = freq + energy (2026-06-17, queued — after the running Companion UI agent)
+- A dom source (rawDom1/rawDom2) produces BOTH a frequency (Hz) and an energy [0,1].
+  The Companion tab for a dom signal must SHOW both, and route both to the engine:
+  freq → micDomFreq1/2 (/marsin/dom/freq1·2), energy → micDomEnergy1/2
+  (/marsin/dom/energy1·2). So picking a dom source yields two outputs (freq + energy),
+  both visualized in its tab and both landing in CPC / CaptainPad.
+
+## DERIVED panel frozen (2026-06-17) — verify/extend after the Companion UI agent
+- BUG: the Companion DERIVED panel is FROZEN — BPM "--", NOTE stuck on C, mood stuck
+  "calm". Root cause = same as the BPM bug: the broadcast frame isn't carrying the
+  LIVE derived data (DerivedSignals.tick writes audioBpm/audioNote/audioParty into the
+  paramCenter each hop, but the frame/UI shows stale defaults; note pitchClass 0 → "C",
+  party 0 → "calm").
+- FIX must cover ALL of BPM + NOTE + PARTY (not just BPM): the frame carries the live
+  derived values (read from paramCenter: audioBpm, audioNote/NoteHue, audioParty), and
+  companion_app.js renders them (note pitchClass -1/no-note → "--" not "C"; party 0 →
+  calm only when truly calm). Engine-side note hold-fix is already committed in
+  derived_signals.js — this is the Companion frame/display half.
