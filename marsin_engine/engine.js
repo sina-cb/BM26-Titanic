@@ -1271,10 +1271,11 @@ async function main() {
 
   loop.start();
 
-  // 7b. BPM → speed sync. Attaches to the CPC subscriber list, so it
-  // works whether BPM arrives via OSC (`/lx/tempo/bpm`), a future
-  // mic-derived detector, or REST. Operator gates the behaviour via
-  // the `bpmSpeedSync` CPC param (default off).
+  // 7b. BPM → speed sync. Attaches to the CPC subscriber list and follows
+  // the Audio Companion's analyzed tempo, which arrives over OSC
+  // `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract).
+  // Operator gates the behaviour via the `bpmSpeedSync` CPC param
+  // (default off); when `audioBpm` is 0/absent the sync doesn't drive.
   const bpmSync = new BpmSpeedSync(paramCenter);
   bpmSync.attach();
 

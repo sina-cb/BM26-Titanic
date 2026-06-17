@@ -64,6 +64,7 @@ import {
   COMPANION_CONFIG_PATH,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
+import { emitDerivedBpm } from './bpm_emit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -140,6 +141,17 @@ function sendOsc(address, value) {
   });
   oscSent++;
 }
+
+// ── BUILT-IN BPM OUTPUT (always-on) ──────────────────────────────────────────
+// BPM is a DERIVED signal (DerivedSignals/BpmTracker), not a raw-source designed
+// signal, so it's emitted as a first-class Companion output rather than via the
+// operator's osc_out chains. The curated CPC contract maps it to the engine
+// address `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract). It
+// drives the engine's bpmSpeedSync, so it's a core cue — always sent, never
+// operator-gated. The guard + address live in bpm_emit.js (one source of
+// truth, unit-testable): only a FINITE, SANE tempo is sent; a 0 / non-finite /
+// absurd BPM is dropped so the engine fails SAFE (no stale fallback) rather
+// than syncing SPEED to a wrong tempo.
 
 // Tweakable test-signal source (the UI edits these in 'test' mode).
 const source = {
@@ -367,6 +379,10 @@ const analyzer = new AudioAnalyzer({
     const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
     detector.tick(clockMs, dt);
     derived.tick(clockMs, dt);
+    // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
+    // Companion emits it as a built-in, always-on output right after the
+    // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
+    emitDerivedBpm(paramCenter, sendOsc);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS
