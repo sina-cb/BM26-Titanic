@@ -725,8 +725,18 @@ for (const mid of ['add-modal', 'export-modal', 'browse-modal']) {
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
-  let limit = 1;
-  if (frameQueue.length > 30) limit = Math.ceil(frameQueue.length / 15);
+  // The ANALYSIS is server-side and always live (independent of this UI). If a
+  // backlog of frames piled up while this tab was backgrounded (rAF pauses but
+  // the WS keeps receiving), DON'T replay it — JUMP TO LIVE by dropping all but
+  // the most recent couple of frames. A small queue (normal jitter) still
+  // smooth-plays one per rAF.
+  const LIVE_BACKLOG = 6;   // ~100 ms — beyond this we're catching up, so skip
+  if (frameQueue.length > LIVE_BACKLOG) {
+    frameQueue.splice(0, frameQueue.length - 2);   // keep only the latest 2
+  }
+  // Drain up to 2/frame so the steady ~86→60 Hz inflow doesn't slowly accumulate;
+  // the splice above bounds any large backlog. Result: always live, never replays.
+  let limit = frameQueue.length > 1 ? 2 : 1;
 
   for (let k = 0; k < limit; k++) {
     if (frameQueue.length === 0) break;

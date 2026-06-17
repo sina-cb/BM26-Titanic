@@ -11,10 +11,11 @@
  *   node launcher.js status                Show what is running
  *   node launcher.js stop                  Stop a running stack
  *
- * Profiles:
- *   prod      sim + engine. Sim in its lightest rendering mode
+ * Profiles (all include the Audio Companion — the sole audio analyzer, which
+ * feeds the engine over OSC; docs/37):
+ *   prod      sim + engine + companion. Sim in its lightest rendering mode
  *             (edit profile, 0 spotlights) — minimal resources, no fancy lighting.
- *   dev       sim + engine + CaptainPad Expo dev server. Sim in full
+ *   dev       sim + engine + companion + CaptainPad Expo dev server. Sim in full
  *             analytic mode with 60 spotlights.
  *   dev-lite  Like dev, but no fancy lighting (emissive, 0 spotlights).
  *
@@ -97,18 +98,18 @@ const STACK_PROCESS_SIGNATURES = [
 //   dev-lite  sim + engine + CaptainPad   · emissive lighting, no spotlights
 const PROFILES = {
   prod: {
-    description: 'Show stack: sim + engine, lightest sim rendering (no fancy lighting)',
-    processes: ['sim', 'engine'],
+    description: 'Show stack: sim + engine + audio companion, lightest sim rendering',
+    processes: ['sim', 'engine', 'companion'],
     simParams: { profile: 'edit', spotlights: 0 },
   },
   dev: {
-    description: 'Full dev stack: sim + engine + CaptainPad Expo, full analytic lighting, 60 spotlights',
-    processes: ['sim', 'engine', 'captainpad'],
+    description: 'Full dev stack: sim + engine + companion + CaptainPad Expo, full analytic lighting, 60 spotlights',
+    processes: ['sim', 'engine', 'companion', 'captainpad'],
     simParams: { profile: 'full', spotlights: 60 },
   },
   'dev-lite': {
-    description: 'Dev stack without fancy lighting: sim + engine + CaptainPad Expo, emissive only',
-    processes: ['sim', 'engine', 'captainpad'],
+    description: 'Dev stack without fancy lighting: sim + engine + companion + CaptainPad Expo, emissive only',
+    processes: ['sim', 'engine', 'companion', 'captainpad'],
     simParams: { profile: 'emissive', spotlights: 0 },
   },
 };
@@ -121,7 +122,7 @@ const SIM_QUERY_COMMON = { lighting_mode: 'sacn_in' };
 
 // ── Logging ─────────────────────────────────────────────────────────────
 const USE_COLOR = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
+const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', companion: '\x1b[34m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
 const RESET = '\x1b[0m';
 
 function log(tag, line, stream = process.stdout) {
@@ -858,6 +859,10 @@ async function main() {
     simQuery.set(key, String(value));
   }
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
+  // Audio Companion (the sole audio analyzer — feeds the engine over OSC). Its
+  // HTTP/WS port is fixed at the companion_server.js default; see docs/37 §9.
+  const COMPANION_PORT = 6973;
+  const companionUrl = `http://localhost:${COMPANION_PORT}`;
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
   log('launcher', `Scene/model: ${opts.scene} · boot pattern: ${opts.pattern}`);
@@ -865,6 +870,7 @@ async function main() {
   const stackPorts = [ports.http_port, ports.save_port, ports.sacn_port, ports.sacn_output_port,
     ports.marsin_engine_port];
   if (profileDef.processes.includes('captainpad')) stackPorts.push(ports.captainpad_web_port);
+  if (profileDef.processes.includes('companion')) stackPorts.push(COMPANION_PORT);
 
   if (opts.kill) killStaleListeners(stackPorts);
   await assertPortsFree(stackPorts);
@@ -937,6 +943,19 @@ async function main() {
   await startEngine(opts.scene);
   log('launcher', '✅ Engine is ready.');
 
+  // 2b. Audio Companion — the sole audio analyzer. Started after the engine so
+  // its OSC output (host/port from config.companion.osc) lands in the engine CPC.
+  // Supervised like the other stack children; UDP send is fire-and-forget, so it
+  // tolerates the engine restarting under it.
+  if (profileDef.processes.includes('companion')) {
+    startChild('companion', 'node',
+      ['audio/companion/companion_server.js', '--port', String(COMPANION_PORT)],
+      ENGINE_DIR);
+    await waitForHttp('audio companion', companionUrl, 60000);
+    log('launcher', '✅ Audio Companion is ready.');
+    if (opts.open) openInBrowser('Audio Companion', companionUrl);
+  }
+
   // Open the sim only now that the engine is up: the sim's boot probes
   // :6968/status and falls back from sacn_in to the in-browser Pixelblaze
   // engine if it loads while the engine is still down.
@@ -961,6 +980,9 @@ async function main() {
   log('launcher', `     Simulation:  ${simUrl}`);
   if (profileDef.processes.includes('captainpad')) {
     log('launcher', `     CaptainPad:  ${captainPadUrl}`);
+  }
+  if (profileDef.processes.includes('companion')) {
+    log('launcher', `     Companion:   ${companionUrl}   (audio analyzer → feeds the engine over OSC)`);
   }
   log('launcher', '');
   log('launcher', `   Engine API:    http://localhost:${ports.marsin_engine_port}/status`);
