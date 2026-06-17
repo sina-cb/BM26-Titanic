@@ -102,6 +102,12 @@ const TOPIC_BY_TYPE = Object.freeze({
 
   // ── /ws/params ─────────────────────────────────────────────────
   sharedParams:                TOPICS.PARAMS,
+  // Full CPC schema snapshot. Broadcast when the registry changes at
+  // runtime — i.e. the Audio Companion's signal manifest added/removed a
+  // dynamic live key (POST /audio/signals/manifest). Lets CaptainPad
+  // re-derive its live-key set without polling GET /param-center/schema.
+  // Rides /ws/params alongside sharedParams (both are "CPC shape/state").
+  paramSchema:                 TOPICS.PARAMS,
   // modulationState: per-frame snapshot of the active modulation
   // mappings + their resolved values (see modulation_controller).
   // Frozen-decision (Phase 0): rides alongside sharedParams on

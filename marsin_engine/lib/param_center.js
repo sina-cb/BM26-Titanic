@@ -548,7 +548,127 @@ export class ParamCenter {
       // CaptainPad can render them with a small "ENGINE" annotation
       // and patterns can stop trying to bind them as pattern vars.
       engineOwned: !!e.engineOwned,
+      // Runtime keys registered from the Audio Companion's signal
+      // manifest (registerDynamicLiveParam). CaptainPad surfaces them
+      // identically to built-in live keys; the flag lets the UI tag
+      // them as Companion-provided if it wants.
+      dynamic: !!e._dynamic,
     }));
+  }
+
+  // ── Dynamic LIVE params (Audio Companion manifest) ──────────────────────
+  //
+  // The Audio Companion is the sole analyzer and may stream signals the
+  // static audio family doesn't know about (operator adds a new OUTPUT
+  // signal in the Companion). Those become RUNTIME live CPC keys here:
+  // non-persistent, live:true, broadcast at ~15 Hz, range chosen by the
+  // signal type. They are NEVER written to disk (persist:false) and NEVER
+  // shadow a built-in key — the caller (api_server) checks
+  // `isRegisteredKey` first and only ever passes keys it created here to
+  // `deregisterDynamicLiveParam`. See docs/24 §7 + the manifest endpoint.
+
+  /** Whether `key` is a currently-registered CPC param (built-in OR dynamic). */
+  isRegisteredKey(key) {
+    return !!this._registryByKey[key];
+  }
+
+  /** Whether `key` was registered at runtime via registerDynamicLiveParam. */
+  isDynamicLiveParam(key) {
+    const e = this._registryByKey[key];
+    return !!(e && e._dynamic === true);
+  }
+
+  /** Snapshot list of dynamic live-param keys (for diffing against a manifest). */
+  getDynamicLiveParamKeys() {
+    return this._registry.filter(e => e._dynamic === true).map(e => e.key);
+  }
+
+  /**
+   * Register a non-persistent LIVE CPC key at runtime from a Companion
+   * manifest entry. Adds the registry entry, lookup maps, and per-param
+   * store slot so getSchema() / get() / set() see it immediately.
+   *
+   * Idempotent on the (key) — re-registering an existing dynamic key
+   * with the same shape is a no-op; re-registering with a DIFFERENT
+   * range/oscAddress updates them in place (the Companion is the source
+   * of truth for its signals). Refuses to touch a built-in key — that
+   * would be a silent override of curated metadata (Codex P0).
+   *
+   * @param {{ key: string, oscAddress: string, label?: string,
+   *           range: [number, number], broadcastHz?: number }} spec
+   * @returns {{ status: 'added' | 'updated' }}
+   * @throws {Error} if `key` collides with a built-in (non-dynamic) entry.
+   */
+  registerDynamicLiveParam(spec) {
+    const { key, oscAddress, label, range, broadcastHz = 15 } = spec;
+    const existing = this._registryByKey[key];
+    if (existing && existing._dynamic !== true) {
+      throw new Error(
+        `registerDynamicLiveParam: "${key}" is a built-in CPC key — refusing to override.`,
+      );
+    }
+    const entry = {
+      key,
+      label: label || key,
+      type: 'float',
+      default: 0.0,
+      range: [range[0], range[1]],
+      clamp: true,
+      persist: false,
+      live: true,
+      broadcastHz,
+      portWatch: false,
+      oscAddress,
+      sharedFnName: key,
+      _dynamic: true,
+    };
+    if (existing) {
+      // Update in place — keep the same store slot / current value.
+      const idx = this._registry.indexOf(existing);
+      this._registry[idx] = entry;
+      this._registryByKey[key] = entry;
+      this._registryByFnName[entry.sharedFnName] = entry;
+      return { status: 'updated' };
+    }
+    this._registry.push(entry);
+    this._registryByKey[key] = entry;
+    this._registryByFnName[entry.sharedFnName] = entry;
+    this._store[key] = {
+      value: deepCopy(entry.default),
+      dirty: false,
+      lastSource: null,
+      lastOrigin: null,
+      lastRevision: 0,
+    };
+    return { status: 'added' };
+  }
+
+  /**
+   * Remove a dynamic live param previously added via
+   * registerDynamicLiveParam. Drops the registry entry, lookup maps, and
+   * store slot so getSchema() no longer surfaces it. Refuses to remove a
+   * built-in key. No-op for an unknown key (already gone).
+   *
+   * @param {string} key
+   * @returns {boolean} true if a dynamic key was removed.
+   * @throws {Error} if `key` is a built-in (non-dynamic) registered key.
+   */
+  deregisterDynamicLiveParam(key) {
+    const entry = this._registryByKey[key];
+    if (!entry) return false;
+    if (entry._dynamic !== true) {
+      throw new Error(
+        `deregisterDynamicLiveParam: "${key}" is a built-in CPC key — refusing to remove.`,
+      );
+    }
+    this._registry = this._registry.filter(e => e.key !== key);
+    delete this._registryByKey[key];
+    if (this._registryByFnName[entry.sharedFnName]
+        && this._registryByFnName[entry.sharedFnName].key === key) {
+      delete this._registryByFnName[entry.sharedFnName];
+    }
+    delete this._store[key];
+    return true;
   }
 
   // ── WASM Integration ──────────────────────────────────────────────────

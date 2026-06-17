@@ -77,10 +77,53 @@
 // the missing key to 0, which makes the modulation a no-op (operator-
 // requested behavior: "default behavior is no change" with the source
 // pipeline dark, rather than spuriously moving the slider).
-const VALID_SOURCE_KEYS = new Set([
+// Built-in modulation source keys. The Audio Companion can ALSO register
+// runtime live keys (see registerModulationSourceKey) so an operator-added
+// Companion signal can drive a modulation. Runtime keys live in
+// DYNAMIC_SOURCE_KEYS so a manifest removal can cleanly drop them without
+// touching the curated set.
+const BUILTIN_SOURCE_KEYS = new Set([
   'micLow', 'micMid', 'micHigh', 'micKick',
   'stemsBass', 'stemsDrums', 'stemsVocals',
 ]);
+/** @type {Set<string>} runtime source keys from the Companion manifest. */
+const DYNAMIC_SOURCE_KEYS = new Set();
+/**
+ * All currently-valid source keys (built-in ∪ dynamic). A getter rather
+ * than a frozen Set so validation + source resolution always see the
+ * live union as the Companion registers / removes signals.
+ */
+const VALID_SOURCE_KEYS = {
+  has: (k) => BUILTIN_SOURCE_KEYS.has(k) || DYNAMIC_SOURCE_KEYS.has(k),
+  [Symbol.iterator]: function* () {
+    yield* BUILTIN_SOURCE_KEYS;
+    yield* DYNAMIC_SOURCE_KEYS;
+  },
+  join: (sep) => [...BUILTIN_SOURCE_KEYS, ...DYNAMIC_SOURCE_KEYS].join(sep),
+};
+
+/**
+ * Register a runtime CPC key as a valid modulation source. Idempotent.
+ * Refuses to shadow a built-in (no-op — built-ins are always valid).
+ * @param {string} key
+ */
+export function registerModulationSourceKey(key) {
+  if (typeof key !== 'string' || key.length === 0) {
+    throw new Error('registerModulationSourceKey: key must be a non-empty string');
+  }
+  if (BUILTIN_SOURCE_KEYS.has(key)) return;
+  DYNAMIC_SOURCE_KEYS.add(key);
+}
+
+/**
+ * Drop a runtime modulation source key (manifest removal). No-op for a
+ * built-in or unknown key. Returns true if a dynamic key was removed.
+ * @param {string} key
+ * @returns {boolean}
+ */
+export function unregisterModulationSourceKey(key) {
+  return DYNAMIC_SOURCE_KEYS.delete(key);
+}
 const VALID_TYPES = new Set(['continuous']);
 const VALID_SOURCE_SCOPES = new Set(['cpc']);
 const VALID_TARGET_SCOPES = new Set(['pattern']);
@@ -160,10 +203,10 @@ export function applyContinuousModulation({
  * @param {{ paramCenterSnapshot: Record<string, number> }} args
  */
 export function resolveModulationSources({ paramCenterSnapshot }) {
-  const sources = {
-    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
-    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
-  };
+  const sources = {};
+  // Seed every valid key (built-in + dynamic) to 0 so a mapping whose
+  // source pipeline is dark evaluates as a no-op rather than crashing.
+  for (const key of VALID_SOURCE_KEYS) sources[key] = 0;
   if (!paramCenterSnapshot) return sources;
   for (const key of VALID_SOURCE_KEYS) {
     const v = paramCenterSnapshot[key];
