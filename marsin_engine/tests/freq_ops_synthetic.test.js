@@ -221,7 +221,8 @@ test('all Hz-valid ops validate on a frequency signal (lpf/clamp/slew/osc_out)',
     const params = opType === 'clamp' ? { min: 40, max: 4000 }
       : opType === 'lpf' ? { cutoffHz: 5 }
         : opType === 'danceMaker' ? { omega: 7 }
-          : { maxStepPerSec: 4 };
+          : opType === 'normalizer' ? { windowSec: 30, strength: 1 }
+            : { maxStepPerSec: 4 };
     const sig = {
       id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
       chain: [

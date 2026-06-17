@@ -292,7 +292,7 @@ const OP_SCHEMA = Object.freeze({
     // buffer (keeping the framework's O(1)-per-op convention; a true
     // percentile over a windowSec history would be O(window) and against
     // the hot-path budget — design doc §Performance note).
-    description: 'Auto-level (AGC) to [0,1] via a sliding floor/peak envelope follower.',
+    description: 'Auto-level (AGC) to [0,1] via a sliding floor/peak envelope follower. On a frequency signal this is the smooth moving-window auto-range that maps Hz to a well-distributed [0,1] for spatial (x/y/z) use.',
     params: {
       windowSec: { type: 'number', min: 1, max: 120, default: 30 },
       strength:  { type: 'number', min: 0, max: 1,   default: 1.0 },
@@ -1271,7 +1271,14 @@ export class SignalPostProcessor {
         if (!(norm > 0)) norm = 0;
         else if (norm > 1) norm = 1;
         const strength = op.params.strength;
-        const out = strength * norm + (1 - strength) * x;
+        // Dry/wet blend. Intensity: blend the adaptive [0,1] `norm` with the raw
+        // (already-[0,1]) input. Frequency: the raw input is Hz — blending it in
+        // would blow the output out of [0,1], so blend toward the neutral CENTRE
+        // (0.5) instead. strength=1 ⇒ full adaptive travel; lower strength ⇒
+        // travel compressed around centre, always in [0,1] (a smooth spatial
+        // coordinate with no hotspots/jumps when fed to a pattern x/y/z).
+        const dry = this.outputMode === 'frequency' ? 0.5 : x;
+        const out = strength * norm + (1 - strength) * dry;
         rt.yPrev = out;
         return out;
       }

@@ -178,7 +178,12 @@ export function captureDeviceString(src) {
 // Ops a FREQUENCY signal may use (Hz-valid only — contract §types). Every
 // other op is intensity-only. osc_out is valid for BOTH (it is a terminal
 // tap, not a transform).
-export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'kalman', 'danceMaker', 'osc_out']);
+// `normalizer` is shared: on a FREQUENCY signal it is the smooth moving-window
+// auto-range — its dual floor/peak envelopes track the Hz operating range and
+// map it to a well-distributed [0,1], so a dom frequency can drive a spatial
+// x/y/z in the visuals without hotspotting or jumps. (In frequency mode its
+// dry/wet `strength` blends toward 0.5 so the output stays in [0,1].)
+export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'kalman', 'normalizer', 'danceMaker', 'osc_out']);
 
 // Ops that are FREQUENCY-ONLY — meaningful only on a Hz value and rejected on an
 // intensity signal. `danceMaker` is the dom-dance spring (a freqWindow→freqWindow

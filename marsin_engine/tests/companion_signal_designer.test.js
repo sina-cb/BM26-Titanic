@@ -142,8 +142,9 @@ test('validateSignal rejects a frequency signal carrying an intensity-only op', 
   const sig = {
     id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
     chain: [
-      { id: 'n', type: 'normalizer', params: { windowSec: 30, strength: 1 } },
-      { id: 'o', type: 'osc_out', params: { address: '/marsin/dom/freq1' } },
+      // compressor is intensity-only (dynamics on a [0,1] value); not in FREQUENCY_OPS.
+      { id: 'c', type: 'compressor', params: { ratio: 4 } },
+      { id: 'o', type: 'osc_out', params: { name: 'micDomFreq1' } },
     ],
   };
   const r = validateSignal(sig);
@@ -156,17 +157,35 @@ test('validateSignal accepts a frequency signal with only Hz-valid ops', () => {
     const params = opType === 'clamp' ? { min: 0, max: 1 }
       : opType === 'lpf' ? { cutoffHz: 5 }
       : opType === 'danceMaker' ? { omega: 7 }
+      : opType === 'normalizer' ? { windowSec: 30, strength: 1 }
       : { maxStepPerSec: 4 };
     const sig = {
       id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
       chain: [
         { id: 'op', type: opType, params },
-        { id: 'o', type: 'osc_out', params: { address: '/marsin/dom/freq1' } },
+        { id: 'o', type: 'osc_out', params: { name: 'micDomFreq1' } },
       ],
     };
     const r = validateSignal(sig);
     assert.equal(r.ok, true, `${opType} on a frequency signal should validate: ${r.error || ''}`);
   }
+});
+
+test('frequency-mode normalizer maps Hz to a [0,1] coordinate (smooth moving window)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: makePc(), outputMode: 'frequency' });
+  proc.putChain('micLow', [
+    { id: 'n', type: 'normalizer', params: { windowSec: 5, strength: 1 } },
+  ]);
+  // Feed a Hz signal that sweeps a range; every output must stay in [0,1]
+  // (never the raw Hz), and it must respond (not pinned at a constant).
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < 600; i++) {
+    const hz = 400 + 300 * Math.sin(i / 20);   // 100..700 Hz
+    const y = proc.process('micLow', hz, 0.02);
+    assert.ok(y >= 0 && y <= 1, `normalizer output ${y} must be in [0,1] (got raw Hz?)`);
+    if (i > 300) { min = Math.min(min, y); max = Math.max(max, y); }
+  }
+  assert.ok(max - min > 0.2, 'normalized coordinate should travel a usable range, not pin');
 });
 
 test('validateSignal rejects a source/type mismatch', () => {
