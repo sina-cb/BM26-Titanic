@@ -1037,11 +1037,14 @@ wss.on('connection', (ws) => {
 });
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-// The companion's audio source + device come from config.yaml's `companion`
-// block when present (the unified device the engine/CaptainPad also set), so
-// the engine-supervised companion honors the same device. Standalone falls
-// back to the test source. The OSC TARGET likewise comes from config (engine
-// osc host/port) so we never hardcode where outputs go.
+// The companion's audio source comes from config.yaml's `companion.source`;
+// its mic device is the engine's selection — `audio.capture.device` (the
+// unified device the engine/CaptainPad persist), with `companion.device` as an
+// explicit override. So the engine-supervised companion boots on the same mic
+// the operator chose, even with engine audio disabled (Companion = sole
+// analyzer). Standalone (no config) falls back to the test source. The OSC
+// TARGET likewise comes from config (engine osc host/port) so we never
+// hardcode where outputs go.
 let configDevice = null;
 // Engine API endpoint for the SHARED-tuning live sync (resolved from
 // config.yaml at boot). Null only if config.yaml can't be read (pure
@@ -1063,7 +1066,18 @@ function applyEngineConfig() {
     // (0.0.0.0) — not a send target — so we send to loopback.
     design.osc = { host: '127.0.0.1', port: cfg.osc.port };
   }
-  if (comp && comp.device !== undefined) configDevice = comp.device;
+  // MIC selection: the engine/CaptainPad persist the operator's chosen input
+  // as `audio.capture.device` (the unified device, via PATCH /audio/config),
+  // so THAT is the engine's microphone selection — pass it to the Companion on
+  // boot. An explicit `companion.device` override still wins if set (non-null).
+  // This static read is the ONLY way to learn the device when the engine runs
+  // as audio.enabled:false (Companion = sole analyzer): then GET /audio/config
+  // returns 503 and the runtime seed delivers nothing, so we'd otherwise boot
+  // with no mic. (When engine audio IS live, the seed/echo reconciles on top.)
+  const engineCaptureDevice = cfg && cfg.audio && cfg.audio.capture
+    ? cfg.audio.capture.device : undefined;
+  if (comp && comp.device !== undefined && comp.device !== null) configDevice = comp.device;
+  else if (engineCaptureDevice !== undefined) configDevice = engineCaptureDevice;
   // Resolve the engine API endpoint we live-sync the SHARED audio TUNING
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
