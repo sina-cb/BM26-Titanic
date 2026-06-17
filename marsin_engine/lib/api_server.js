@@ -9,8 +9,6 @@ import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
 import {
   validateModulationMapping,
-  registerModulationSourceKey,
-  unregisterModulationSourceKey,
 } from './modulation_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
@@ -3132,8 +3130,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               return res.end(JSON.stringify({ error: err.message }));
             }
           }
-          // Make the new key usable as a modulation SOURCE too.
-          registerModulationSourceKey(sig.cpcKey);
+          // No source registration needed — modulation sources are not
+          // allow-listed; any CPC key is assignable the moment it exists.
           if (result.status === 'added') added.push(sig.cpcKey);
           else updated.push(sig.cpcKey);
         }
@@ -3145,10 +3143,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Remember its OSC address before we drop the registry entry.
           const schemaEntry = paramCenter.getSchema().find(e => e.key === key);
           const addr = schemaEntry && schemaEntry.oscAddress;
-          // Purge modulations sourced from this key BEFORE we drop it from
-          // the valid-source set so save()'s re-validation still passes.
+          // Purge modulations sourced from this removed key so a deleted
+          // signal doesn't leave a dangling mapping (the param returns to its
+          // base value rather than freezing).
           purgedModulations += purgeModulationsForSource(key);
-          unregisterModulationSourceKey(key);
           if (listener && addr) listener.removeDynamicBinding(addr);
           paramCenter.deregisterDynamicLiveParam(key);
           removed.push(key);

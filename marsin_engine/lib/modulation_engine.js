@@ -72,71 +72,13 @@
  * @property {Record<string, ModulationStateParam>} parameters
  */
 
-// These audio keys are populated by the analysis pipeline (the Companion,
-// the sole analyzer, over OSC → CPC). When the pipeline is dark, the key is
-// simply absent from the ParamCenter snapshot — `resolveModulationSources`
-// defaults the missing key to 0, which makes the modulation a no-op (operator-
-// requested behavior: "default behavior is no change" with the source
-// pipeline dark, rather than spuriously moving the slider).
-// Built-in modulation source keys: the curated audio-family live CPC keys
-// whose value range is [0,1] — the ones that work as a modulation source
-// WITHOUT saturating the downstream clamp01 (so Hz dom-freqs, bpm[0,300],
-// note[0,11], structure[0,2], beatInBar[0,4] are deliberately NOT here; a
-// frequency that must drive a param should be normalized to [0,1] in the
-// Companion first). This is a VERIFIED SNAPSHOT of the [0,1] live keys in
-// audio/postproc/audio_signals.js (excluding *Raw mirrors + *Gain knobs);
-// the drift-guard in tests/audio_signals.test.js fails loud if the registry
-// grows a [0,1] live audio key that is not listed here. modulation_engine
-// stays dependency-free by design, so we pin rather than import.
-// The Audio Companion can ALSO register runtime live keys (see
-// registerModulationSourceKey) so an operator-added Companion signal can drive
-// a modulation; those live in DYNAMIC_SOURCE_KEYS so a manifest removal drops
-// them cleanly without touching this curated set.
-const BUILTIN_SOURCE_KEYS = new Set([
-  'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
-  'micDomEnergy1', 'micDomEnergy2',
-  'audioBuildScore', 'audioEnergyRatio', 'audioVocalsHot', 'audioDropPulse', 'audioSlowZone',
-  'audioBeat', 'audioParty', 'audioNoteHue',
-  'audioSwitchPattern', 'audioSwitchColor', 'audioBarPhase', 'audioDownbeat',
-]);
-/** @type {Set<string>} runtime source keys from the Companion manifest. */
-const DYNAMIC_SOURCE_KEYS = new Set();
-/**
- * All currently-valid source keys (built-in ∪ dynamic). A getter rather
- * than a frozen Set so validation + source resolution always see the
- * live union as the Companion registers / removes signals.
- */
-const VALID_SOURCE_KEYS = {
-  has: (k) => BUILTIN_SOURCE_KEYS.has(k) || DYNAMIC_SOURCE_KEYS.has(k),
-  [Symbol.iterator]: function* () {
-    yield* BUILTIN_SOURCE_KEYS;
-    yield* DYNAMIC_SOURCE_KEYS;
-  },
-  join: (sep) => [...BUILTIN_SOURCE_KEYS, ...DYNAMIC_SOURCE_KEYS].join(sep),
-};
-
-/**
- * Register a runtime CPC key as a valid modulation source. Idempotent.
- * Refuses to shadow a built-in (no-op — built-ins are always valid).
- * @param {string} key
- */
-export function registerModulationSourceKey(key) {
-  if (typeof key !== 'string' || key.length === 0) {
-    throw new Error('registerModulationSourceKey: key must be a non-empty string');
-  }
-  if (BUILTIN_SOURCE_KEYS.has(key)) return;
-  DYNAMIC_SOURCE_KEYS.add(key);
-}
-
-/**
- * Drop a runtime modulation source key (manifest removal). No-op for a
- * built-in or unknown key. Returns true if a dynamic key was removed.
- * @param {string} key
- * @returns {boolean}
- */
-export function unregisterModulationSourceKey(key) {
-  return DYNAMIC_SOURCE_KEYS.delete(key);
-}
+// Modulation SOURCES are NOT allow-listed. Any CPC key the analysis pipeline
+// (the Companion, the sole analyzer, over OSC → CPC) feeds in is a valid
+// source — `resolveModulationSources` passes the live snapshot straight
+// through, and a mapping whose source key isn't present this frame is simply
+// skipped by `applyModulations` (a no-op, which is the operator-requested
+// "default behavior is no change" when a source is dark). No registration, no
+// gate: a new Companion signal is immediately assignable.
 const VALID_TYPES = new Set(['continuous']);
 const VALID_SOURCE_SCOPES = new Set(['cpc']);
 const VALID_TARGET_SCOPES = new Set(['pattern']);
@@ -217,11 +159,12 @@ export function applyContinuousModulation({
  */
 export function resolveModulationSources({ paramCenterSnapshot }) {
   const sources = {};
-  // Seed every valid key (built-in + dynamic) to 0 so a mapping whose
-  // source pipeline is dark evaluates as a no-op rather than crashing.
-  for (const key of VALID_SOURCE_KEYS) sources[key] = 0;
   if (!paramCenterSnapshot) return sources;
-  for (const key of VALID_SOURCE_KEYS) {
+  // Pass through every finite numeric value the pipeline fed in — no
+  // allow-list. A mapping referencing a key that isn't present this frame is
+  // skipped by applyModulations (no-op), so a dark/absent source never crashes
+  // a render frame and never spuriously moves the slider.
+  for (const key of Object.keys(paramCenterSnapshot)) {
     const v = paramCenterSnapshot[key];
     if (typeof v === 'number' && Number.isFinite(v)) sources[key] = v;
   }
@@ -321,8 +264,10 @@ export function validateModulationMapping(m) {
   if (!VALID_SOURCE_SCOPES.has(src.scope)) {
     throw new Error(`Modulation ${mod.id}: source.scope must be 'cpc'`);
   }
-  if (!VALID_SOURCE_KEYS.has(src.key)) {
-    throw new Error(`Modulation ${mod.id}: source.key must be one of ${[...VALID_SOURCE_KEYS].join(', ')}`);
+  // No source-key allow-list: any non-empty CPC key is a valid source (all
+  // incoming signals are assignable). An absent key just no-ops at apply time.
+  if (typeof src.key !== 'string' || src.key.length === 0) {
+    throw new Error(`Modulation ${mod.id}: source.key must be a non-empty string`);
   }
   const tgt = mod.target;
   if (!tgt || typeof tgt !== 'object') {
@@ -354,5 +299,4 @@ export function validateModulationMapping(m) {
   return /** @type {ModulationMapping} */ (mod);
 }
 
-export const MODULATION_VALID_SOURCE_KEYS = [...VALID_SOURCE_KEYS];
 export const MODULATION_VALID_CURVES = [...VALID_CURVES];

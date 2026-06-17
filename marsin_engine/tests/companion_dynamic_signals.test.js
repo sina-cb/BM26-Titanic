@@ -25,10 +25,6 @@ import { ParamCenter } from '../lib/param_center.js';
 import { OscListener } from '../lib/osc_listener.js';
 import { validateSignalManifest } from '../lib/api_server.js';
 import { PlaylistManager } from '../lib/playlist_manager.js';
-import {
-  registerModulationSourceKey,
-  unregisterModulationSourceKey,
-} from '../lib/modulation_engine.js';
 
 function makePc() {
   return new ParamCenter(null);
@@ -195,47 +191,40 @@ function mapping(id, sourceKey, targetParam) {
 
 test('purge drops only mappings sourced from the removed dynamic key', () => {
   const { pm } = makeTempPlaylistManager();
-  // Make the dynamic key a valid modulation source so save() validates the
-  // playlist that initially CONTAINS a mapping sourced from it.
-  registerModulationSourceKey('companionPunch');
-  try {
-    pm.save({
-      name: 'show', entries: [
-        {
-          id: 'e1', pattern: 'p1',
-          modulations: [
-            mapping('m1', 'companionPunch', 'sliderA'), // sourced from dynamic key
-            mapping('m2', 'micLow', 'sliderB'),         // built-in source — keep
-          ],
-        },
-      ],
-    });
+  // Sources are not allow-listed, so a playlist with a mapping sourced from any
+  // key validates directly — no registration needed.
+  pm.save({
+    name: 'show', entries: [
+      {
+        id: 'e1', pattern: 'p1',
+        modulations: [
+          mapping('m1', 'companionPunch', 'sliderA'), // sourced from the dynamic key
+          mapping('m2', 'micLow', 'sliderB'),         // another source — keep
+        ],
+      },
+    ],
+  });
 
-    // The purge (inlined here, identical to api_server.purgeModulationsForSource).
-    const removedKey = 'companionPunch';
-    let purged = 0;
-    for (const name of pm.list()) {
-      const pl = pm.load(name);
-      let changed = false;
-      for (const entry of pl.entries) {
-        if (!Array.isArray(entry.modulations)) continue;
-        const before = entry.modulations.length;
-        entry.modulations = entry.modulations.filter(
-          m => !(m && m.source && m.source.key === removedKey),
-        );
-        if (entry.modulations.length !== before) { purged += before - entry.modulations.length; changed = true; }
-      }
-      if (changed) pm.save(pl);
+  // The purge (inlined here, identical to api_server.purgeModulationsForSource).
+  const removedKey = 'companionPunch';
+  let purged = 0;
+  for (const name of pm.list()) {
+    const pl = pm.load(name);
+    let changed = false;
+    for (const entry of pl.entries) {
+      if (!Array.isArray(entry.modulations)) continue;
+      const before = entry.modulations.length;
+      entry.modulations = entry.modulations.filter(
+        m => !(m && m.source && m.source.key === removedKey),
+      );
+      if (entry.modulations.length !== before) { purged += before - entry.modulations.length; changed = true; }
     }
-    // Now the key is gone as a valid source — mirror the engine ordering.
-    unregisterModulationSourceKey('companionPunch');
-
-    assert.equal(purged, 1, 'exactly one mapping purged');
-    const after = pm.load('show').entries[0].modulations;
-    assert.equal(after.length, 1);
-    assert.equal(after[0].id, 'm2', 'the built-in-sourced mapping survives');
-    assert.equal(after[0].source.key, 'micLow');
-  } finally {
-    unregisterModulationSourceKey('companionPunch');
+    if (changed) pm.save(pl);
   }
+
+  assert.equal(purged, 1, 'exactly one mapping purged');
+  const after = pm.load('show').entries[0].modulations;
+  assert.equal(after.length, 1);
+  assert.equal(after[0].id, 'm2', 'the other-sourced mapping survives');
+  assert.equal(after[0].source.key, 'micLow');
 });

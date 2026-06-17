@@ -164,38 +164,39 @@ test('clamps output to [0, 1]', () => {
   approx(low, 0);
 });
 
-test('resolveModulationSources: curated [0,1] audio keys are first-class alongside mic bands', () => {
-  // When the analysis pipeline is dark these keys are absent from the
-  // snapshot, so they default to 0 → mapping evaluates as no-op (matches the
-  // operator requirement: "default behavior is no change" when source is dark).
-  const dark = resolveModulationSources({
-    paramCenterSnapshot: { micLow: 0.5 },
+test('resolveModulationSources: passes the whole snapshot through (no allow-list)', () => {
+  // ANY finite numeric key the pipeline feeds in is a usable source — mic
+  // bands, dom energy, detectors, an arbitrary Companion key. No seeding,
+  // no allow-list.
+  const out = resolveModulationSources({
+    paramCenterSnapshot: { micDomEnergy1: 0.6, micFlux: 0.3, audioParty: 0.9, crowd_roar_xyz: 0.4 },
   });
-  approx(dark.micDomEnergy1, 0);
-  approx(dark.micFlux, 0);
-  approx(dark.audioParty, 0);
-
-  // When the pipeline IS feeding them, they pass through unchanged.
-  const live = resolveModulationSources({
-    paramCenterSnapshot: { micDomEnergy1: 0.6, micFlux: 0.3, audioParty: 0.9 },
-  });
-  approx(live.micDomEnergy1, 0.6);
-  approx(live.micFlux, 0.3);
-  approx(live.audioParty, 0.9);
+  approx(out.micDomEnergy1, 0.6);
+  approx(out.micFlux, 0.3);
+  approx(out.audioParty, 0.9);
+  approx(out.crowd_roar_xyz, 0.4);
 });
 
-test('resolveModulationSources: missing keys default to 0', () => {
+test('resolveModulationSources: absent keys are simply not present (apply no-ops them)', () => {
   const out = resolveModulationSources({ paramCenterSnapshot: { micLow: 0.7 } });
   approx(out.micLow, 0.7);
-  approx(out.micMid, 0);
-  approx(out.micHigh, 0);
-  approx(out.micKick, 0);
+  // A key the pipeline didn't feed this frame is absent (undefined), NOT 0 —
+  // applyModulations skips an absent source so the mapping is a no-op.
+  assert.equal(out.micMid, undefined);
+  assert.equal(out.micDomEnergy1, undefined);
+});
+
+test('resolveModulationSources: non-finite values are dropped', () => {
+  const out = resolveModulationSources({ paramCenterSnapshot: { a: NaN, b: Infinity, c: 0.5, d: 'x' } });
+  assert.equal(out.a, undefined);
+  assert.equal(out.b, undefined);
+  assert.equal(out.d, undefined);
+  approx(out.c, 0.5);
 });
 
 test('resolveModulationSources: handles null snapshot', () => {
   const out = resolveModulationSources({ paramCenterSnapshot: null });
-  approx(out.micLow, 0);
-  approx(out.micKick, 0);
+  assert.deepEqual(out, {});
 });
 
 test('applyModulations: disabled mapping is bypassed', () => {
@@ -310,20 +311,16 @@ test('validateModulationMapping: rejects bad fields with specific messages', () 
   assert.throws(() => validateModulationMapping({ ...base, type: 'trigger' }), /type must be 'continuous'/);
   assert.throws(() => validateModulationMapping({ ...base, enabled: 'yes' }), /enabled must be boolean/);
   assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'lfo', key: 'micLow' } }), /source\.scope/);
-  assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: 'tempoBpm' } }), /source\.key/);
-  // The curated [0,1] audio keys are valid sources — including the dom
-  // ENERGIES and flux (regression: these used to be rejected while micLow
-  // worked, because BUILTIN_SOURCE_KEYS had drifted from the registry).
-  for (const k of ['micFlux', 'micDomEnergy1', 'micDomEnergy2', 'audioBuildScore', 'audioParty']) {
+  // Sources are NOT allow-listed — ANY non-empty CPC key is valid (all
+  // incoming signals are assignable: mic bands, dom energy, detectors, an
+  // arbitrary Companion key, even keys like tempoBpm). An absent key just
+  // no-ops at apply time.
+  for (const k of ['micLow', 'micFlux', 'micDomEnergy1', 'micDomFreq1', 'tempoBpm', 'audioParty', 'crowd_roar_xyz']) {
     const ok = validateModulationMapping({ ...base, source: { scope: 'cpc', key: k } });
     assert.equal(ok.source.key, k);
   }
-  // Non-[0,1] audio keys are NOT source-eligible (they would saturate clamp01):
-  // Hz dom-freqs, bpm, note, structure. A freq must be normalized in the
-  // Companion before it can drive a param.
-  for (const k of ['micDomFreq1', 'micDomFreq2', 'audioBpm', 'audioNote', 'audioStructure']) {
-    assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: k } }), /source\.key/, `${k} must be rejected`);
-  }
+  // An empty/non-string source key is still rejected.
+  assert.throws(() => validateModulationMapping({ ...base, source: { scope: 'cpc', key: '' } }), /source\.key/);
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'global', parameter: 'size' } }), /target\.scope/);
   assert.throws(() => validateModulationMapping({ ...base, target: { scope: 'pattern', parameter: '' } }), /target\.parameter/);
   assert.throws(() => validateModulationMapping({ ...base, mode: 'add' }), /mode must be 'offset' or 'scale'/);
