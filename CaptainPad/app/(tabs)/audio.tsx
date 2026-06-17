@@ -51,7 +51,6 @@ import {
   resetAllAudioChains,
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
-import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { audioAccentHex } from '@/utils/audioSignals';
 
@@ -238,8 +237,9 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 // `GainRow` (the per-band / per-stem gain slider that POST'd a single
 // CPC key throttled-live) was retired in Phase 6 along with the MIC —
 // ANALYSIS and STEMS — GAIN cards. The same params remain editable via
-// the chain editor's Gain-op slider and via CPCControls in the
-// deck/mixer chrome — see AudioChainsCard + components/CPCControls.tsx.
+// CPCControls in the deck/mixer chrome (components/CPCControls.tsx); the
+// per-signal chain editor that also exposed them was removed from
+// CaptainPad on 2026-06-17 (chain design moved to the Audio Companion).
 
 // `BandMeter` used to render the per-band level read-out inside the MIC
 // LIVE + STEMS LIVE cards. As of operator brief 2026-05-26 those rows
@@ -422,11 +422,9 @@ function slotValueText(slot: SignalSlot, value: number): string {
   return Math.max(0, Math.min(1, value)).toFixed(2);
 }
 
-// Trace canvas heights. The pinned strip's trace is now the MAIN
-// visualisation of the audio page, so it's given generous, touch-friendly
-// height; the structure-detector preview traces are a touch shorter.
+// Trace canvas height. The pinned strip's trace is the MAIN visualisation
+// of the audio page, so it's given a generous, touch-friendly height.
 const PINNED_TRACE_HEIGHT = 64;
-const STRUCTURE_TRACE_HEIGHT = 48;
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -560,7 +558,9 @@ function PinnedAudioMeters({
     const slot = liveDoc?.params?.[key];
     return slot && typeof slot.value === 'number' ? slot.value : 0;
   }, [liveDoc]);
-  const tempoLive = useLiveParamValues({ tempoBpm: 0 }) as Record<string, number>;
+  // Prefer the Companion's analyzed tempo (audioBpm); fall back to the
+  // legacy tempoBpm (/lx/tempo/bpm) only when audioBpm is absent.
+  const tempoLive = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 }) as Record<string, number>;
   // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
@@ -614,7 +614,8 @@ function PinnedAudioMeters({
     syncOn && oscState !== 'live' ? 'warn' :
     syncOn                        ? 'on'   :
                                     'off';
-  const bpm = tempoLive.tempoBpm > 0 ? Math.round(tempoLive.tempoBpm) : null;
+  const effectiveBpm = tempoLive.audioBpm > 0 ? tempoLive.audioBpm : tempoLive.tempoBpm;
+  const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
 
   return (
     <View style={{
@@ -708,175 +709,14 @@ function PinnedAudioMeters({
   );
 }
 
-// ── Structure-detector live meters (docs/30) ─────────────────────────────
-//
-// The audio structure detector publishes a small family of derived live
-// keys (audioStructure / audioBuildScore / audioEnergyRatio / audioVocalsHot
-// / audioDropPulse) + a sparse `dropFired` event. This card surfaces them in
-// the SAME trail-plot style as <PinnedAudioMeters /> so they read
-// consistently with the MIC/STEMS meters. Self-contained: it owns its live
-// subscription + ring buffers + sample timer, so the AUDIO body around it
-// never re-renders on these high-rate ticks (same discipline as the pinned
-// strip). The detector is disabled by default — flat traces until enabled.
-
-// State enum mirror (lib/audio_structure_detector.js STATE).
-const STRUCTURE_STATE_NAMES = ['THIN', 'BUILD', 'SUSTAIN'] as const;
-function structureStateMeta(stateValue: number, C: Palette): { name: string; color: string } {
-  const idx = Math.max(0, Math.min(2, Math.round(stateValue)));
-  const name = STRUCTURE_STATE_NAMES[idx];
-  // THIN = muted, BUILD = amber (rising), SUSTAIN = the live accent.
-  const color = idx === 0 ? C.secondary : idx === 1 ? '#f0a23b' : ACCENT_AUTO;
-  return { name, color };
-}
-
-// Continuous [0,1] structure signals, each a single-trace plot. `audioDropPulse`
-// is the visible manifestation of the sparse `dropFired` event (it spikes to
-// 1.0 on a fire then decays), so a dedicated dropFired plot is redundant.
-type StructureSlot = { key: string; label: string; accent: SignalAccent; hint: string };
-const STRUCTURE_SIGNALS: readonly StructureSlot[] = [
-  { key: 'audioBuildScore',  label: 'BUILD',  accent: '#f0a23b', hint: 'build-up strength' },
-  { key: 'audioEnergyRatio', label: 'ENERGY', accent: 'auto',    hint: 'short/long energy' },
-  { key: 'audioDropPulse',   label: 'DROP',   accent: 'error',   hint: 'pulse fired on a drop' },
-];
-
-const STRUCTURE_LIVE_DEFAULTS: Record<string, number> = {
-  audioStructure: 0, audioBuildScore: 0, audioEnergyRatio: 0,
-  audioVocalsHot: 0, audioDropPulse: 0,
-};
-
-// Single-trace column — same smooth canvas as <SignalColumn /> but POST-only
-// (these derived signals have no raw mirror), so the structure preview reads
-// flush with the MIC/STEMS meter style.
-function StructureSignalColumn({ label, value, accent, active, valueText, barFill }: {
-  label: string; value: number; accent: string; active: boolean;
-  valueText?: string; barFill?: number;
-}) {
-  const C = usePalette();
-  const v = Math.max(0, Math.min(1, value));
-  const bar = Math.max(0, Math.min(1, barFill ?? v));
-  return (
-    <View style={{ flex: 1, marginHorizontal: 4 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, letterSpacing: 0.6 }}>{label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{valueText ?? v.toFixed(2)}</Text>
-      </View>
-      <View style={{
-        height: 8, borderRadius: 4, backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder, overflow: 'hidden', marginTop: 2, marginBottom: 3,
-      }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${bar * 100}%`, backgroundColor: accent }} />
-      </View>
-      <View style={{ borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, overflow: 'hidden' }}>
-        <AudioTraceCanvas
-          post={v}
-          raw={null}
-          color={accent}
-          background={C.surfaceContainerLowest}
-          gridColor={C.ghostBorder}
-          height={STRUCTURE_TRACE_HEIGHT}
-          active={active}
-        />
-      </View>
-    </View>
-  );
-}
-
-function StructureDetectorCard({ cardStyle, detectorOn }: {
-  cardStyle: any; detectorOn: boolean;
-}) {
-  const C = usePalette();
-  const live = useLiveParamValues(STRUCTURE_LIVE_DEFAULTS) as Record<string, number>;
-
-  // Tab-focus gate for the preview traces' rAF loops (pause on blur).
-  const [active, setActive] = useState(true);
-  useFocusEffect(useCallback(() => {
-    setActive(true);
-    return () => setActive(false);
-  }, []));
-
-  // NB: the trace smoothing + ring buffer live inside <AudioTraceCanvas />
-  // now (client-side rAF interpolation), so the old 15 Hz setInterval ring
-  // buffer + trail-window picker were removed here too. The derived structure
-  // keys still arrive on the same throttled live bus (useLiveParamValues) —
-  // no new subscription, no extra network traffic.
-  const stateMeta = structureStateMeta(live.audioStructure ?? 0, C);
-  const vocalsHot = (live.audioVocalsHot ?? 0) >= 0.5;
-
-  return (
-    <View style={cardStyle}>
-      <SectionHeader
-        icon="waveform"
-        title="STRUCTURE DETECTOR"
-        hint="Build / drop / sustain cues (docs/30). Reads the raw pre-chain signals; observe-only."
-      />
-      {/* LOCKED — drop/build/sustain detection is under active development and
-          is intentionally not enableable yet (it needs accuracy tuning against
-          real labeled audio; see the Notion task). Disabled by default in the
-          engine AND no enable affordance here. The plots below are a preview
-          of the signals it will publish once it's reliable. */}
-      <View style={{
-        borderRadius: 10, borderWidth: 1, borderColor: '#f0a23b',
-        backgroundColor: 'rgba(240,162,59,0.10)',
-        paddingHorizontal: 14, paddingVertical: 12,
-      }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#f0a23b', letterSpacing: 0.8 }}>
-          🚧 UNDER DEVELOPMENT — DISABLED
-        </Text>
-        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.text, marginTop: 3 }}>
-          Drop / build / sustain detection is being tuned against real audio and is
-          turned off for now (no effect on the lights). The traces below are a preview
-          of what it will publish once it is reliable.
-        </Text>
-      </View>
-
-      {/* Current state badge + vocals indicator. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, marginBottom: 6 }}>
-        <View style={{
-          paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8,
-          backgroundColor: detectorOn ? stateMeta.color : C.surfaceContainerLowest,
-          borderWidth: 1, borderColor: detectorOn ? stateMeta.color : C.ghostBorder,
-        }}>
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14,
-            color: detectorOn ? '#001014' : C.icon, letterSpacing: 1.2,
-          }}>{detectorOn ? stateMeta.name : '—'}</Text>
-        </View>
-        <View style={{
-          paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
-          backgroundColor: vocalsHot ? C.primaryContainer : C.surfaceContainerLowest,
-          borderWidth: 1, borderColor: vocalsHot ? C.primary : C.ghostBorder,
-        }}>
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-            color: vocalsHot ? C.primary : C.icon, letterSpacing: 0.8,
-          }}>{vocalsHot ? '♪ VOCALS HOT' : 'VOCALS'}</Text>
-        </View>
-      </View>
-
-      {/* Trace row — STATE (stepped) + the 3 continuous signals, all in the
-          shared smooth-canvas trail style. */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 6 }}>
-        <StructureSignalColumn
-          label="STATE"
-          value={(live.audioStructure ?? 0) / 2}
-          valueText={detectorOn ? stateMeta.name : '—'}
-          barFill={(live.audioStructure ?? 0) / 2}
-          active={active}
-          accent={detectorOn ? stateMeta.color : C.secondary}
-        />
-        {STRUCTURE_SIGNALS.map((slot) => (
-          <StructureSignalColumn
-            key={slot.key}
-            label={slot.label}
-            value={live[slot.key] ?? 0}
-            active={active}
-            accent={resolveAccent(slot.accent, C)}
-          />
-        ))}
-      </View>
-    </View>
-  );
-}
+// STRUCTURE DETECTOR card — RETIRED (2026-06-17). The dedicated
+// build/drop/sustain preview card (StructureDetectorCard +
+// StructureSignalColumn + the STRUCTURE_* state-mirror helpers) was an
+// unused, under-development preview and has been removed. The build /
+// energy / slow signals it previewed still arrive on the live bus and
+// surface in the dynamic AUDIO SIGNALS row at the top of this tab when
+// the Companion routes them in. Restore from git history if a dedicated
+// detector card returns to CaptainPad.
 
 // ── BPM live read-outs ───────────────────────────────────────────────────
 //
@@ -889,9 +729,12 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 }) {
   const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
-  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  // Prefer the Companion's analyzed tempo (audioBpm); fall back to
+  // tempoBpm (legacy /lx/tempo/bpm path) only when audioBpm is absent.
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   if (!bpmSyncOn) return null;
-  const bpmStale = !live.tempoBpm || live.tempoBpm <= 0;
+  const effectiveBpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const bpmStale = !effectiveBpm || effectiveBpm <= 0;
   if (!oscMissing && !bpmStale) return null;
   return (
     <View style={{
@@ -904,8 +747,8 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
       </Text>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
         {oscMissing
-          ? `OSC listener is ${oscState ?? 'unknown'}; nothing is feeding /lx/tempo/bpm. Speed will not move.`
-          : 'OSC is live but no tempoBpm has arrived yet. Confirm LX Studio is sending /lx/tempo/bpm.'}
+          ? `OSC listener is ${oscState ?? 'unknown'}; the Audio Companion isn't streaming a BPM. Speed will not move.`
+          : 'OSC is live but no BPM has arrived yet. Confirm the Audio Companion is analyzing tempo and streaming audioBpm.'}
       </Text>
     </View>
   );
@@ -919,13 +762,14 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 
 // Compact inline live read-out for the BPM card header. Single line,
 // quiet typography — just "126 BPM → 0.43" or "—". Subscribes ONLY to
-// tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
-// re-render on every tempo tick.
+// audioBpm/tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
+// re-render on every tempo tick. Prefers the Companion's analyzed tempo
+// (audioBpm); falls back to tempoBpm only when audioBpm is absent.
 function BpmInlineReadout() {
   const C = usePalette();
-  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
-  const bpm = live.tempoBpm;
+  const bpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
   const mapped = useMemo(() => {
     if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));
@@ -1035,7 +879,7 @@ function CompactBpmCard({
         </View>
       </View>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
-        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from /lx/tempo/bpm.
+        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the Audio Companion&apos;s analyzed BPM (audioBpm).
       </Text>
     </View>
   );
@@ -1210,6 +1054,17 @@ function MicNotFoundBanner({
 
 const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 
+// Operator setting (persisted): whether the SOURCE selector offers the
+// TEST + FILE sources. A production deck can turn this OFF to lock the
+// capture source to MIC so a stray tap can't switch the rig onto a
+// synthetic / file feed mid-show. MIC is ALWAYS available. Default ON
+// (preserves the bench/dev workflow); the engine still owns the source —
+// this is purely a CaptainPad affordance guard. The current source is
+// never silently changed by the toggle; if the deck is already on
+// TEST/FILE when locked, that source still shows (so the operator can
+// see it) but the disabled buttons can't be re-selected.
+const ALLOW_TEST_FILE_SOURCES_KEY = '@CaptainPad:audioAllowTestFileSources';
+
 // ENGINE section (fftSize / hopSize) is render-only — see the read-only
 // display deep in <AudioConfigLoaded /> below. The fields are deliberately
 // non-live-tunable per marsin_engine/lib/audio_config.js §AUDIO_LIVE_FIELDS
@@ -1342,6 +1197,29 @@ function AudioConfigBody({
     });
   }, []);
 
+  // Operator setting — allow the TEST + FILE sources in the SOURCE
+  // selector. Default ON; persisted across rebuilds. When OFF the
+  // selector only offers MIC (a production deck lock-down). MIC is
+  // always available regardless. See ALLOW_TEST_FILE_SOURCES_KEY.
+  const [allowTestFileSources, setAllowTestFileSources] = useState<boolean>(true);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(ALLOW_TEST_FILE_SOURCES_KEY).then((raw) => {
+      if (!alive || raw == null) return;
+      if (raw === 'false') setAllowTestFileSources(false);
+      else if (raw === 'true') setAllowTestFileSources(true);
+    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
+    return () => { alive = false; };
+  }, []);
+  const toggleAllowTestFileSources = useCallback(() => {
+    setAllowTestFileSources((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(ALLOW_TEST_FILE_SOURCES_KEY, String(next))
+        .catch(() => { /* benign — persistence is best-effort */ });
+      return next;
+    });
+  }, []);
+
   // Steady (operator-tuned, persistent) params — sliders, sync
   // toggles, gain knobs. These are quiet by default; only redrawn
   // when the operator turns a knob.
@@ -1368,22 +1246,18 @@ function AudioConfigBody({
     setDevicesLoading(false);
   }, []);
 
-  // Optimistic local-only update while dragging.
-  const updateLocal = useCallback((group: 'bands' | 'kick', field: string, value: number) => {
-    setCfg(prev => prev && ({ ...prev, [group]: { ...prev[group], [field]: value } } as AudioConfig));
-  }, []);
-
-  // PATCH on slider release — one network hit per gesture, not per drag tick.
-  const commitField = useCallback(async (group: 'bands' | 'kick', field: string, value: number) => {
-    const r = await patchAudioConfig({ [group]: { [field]: value } });
-    if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
-    else setPatchError(null);
-  }, [reload]);
+  // The per-band/per-kick `updateLocal` + `commitField` helpers were
+  // retired with the SIGNALS · CHAINS card (2026-06-17) — they fed the
+  // chain editor's embedded analyzer sliders, which now live in the
+  // Audio Companion. The analyzer config still reaches the engine via
+  // patchAudioConfig (source, input gain, mic device, reset) below.
 
   // Reset to defaults — Phase 6, docs/29 §Interactions step 7. Fires
   // BOTH endpoints (analyzer config + every signal's default chain).
-  // Surfaces inline error if either fails; chains broadcast will refresh
-  // the AudioChainsCard on its own via /ws/control `audioChainsChanged`.
+  // Surfaces inline error if either fails. The chains reset is still fired
+  // so a CaptainPad reset restores engine-side signal chains to defaults
+  // even though chain DESIGN now lives in the Audio Companion (the chain
+  // editor card was removed from this tab on 2026-06-17).
   const resetToDefaults = useCallback(async () => {
     setBusy('reset');
     const [cfgRes, chainsRes] = await Promise.all([
@@ -1428,10 +1302,6 @@ function AudioConfigBody({
     else { setPatchError(null); }
   }, [cfg, reload]);
 
-  // NOTE: the structure detector has NO enable affordance for now — it's
-  // under development and intentionally locked off (see StructureDetectorCard
-  // + the Notion task). It stays disabled by default in the engine.
-
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice
   // both have the picker fields the engine wants — accept the union so
@@ -1474,6 +1344,10 @@ function AudioConfigBody({
   );
 
   const commitSource = useCallback(async (next: 'test' | 'mic' | 'file', path?: string) => {
+    // Operator lock-down guard: when TEST/FILE are disallowed, refuse to
+    // switch onto them even if a caller slips through (the buttons are also
+    // disabled in the UI). MIC always passes. Fail closed, no fallback.
+    if ((next === 'test' || next === 'file') && !allowTestFileSources) return;
     // TEST → synthetic source. FILE → file:<path>. MIC → leave the existing
     // device (or prompt the picker if none). The engine restarts capture on
     // a capture.device change and broadcasts a fresh audioStatus.
@@ -1498,7 +1372,7 @@ function AudioConfigBody({
     setBusy(null);
     if (!r.ok) { setPatchError(r.error || 'failed to set source'); reload(); }
     else { setPatchError(null); reload(); }
-  }, [filePath, deviceStr, devices, loadDevices, reload]);
+  }, [filePath, deviceStr, devices, loadDevices, reload, allowTestFileSources]);
 
   // "Open Settings" action on the cross-machine mic banner — expand the
   // SETTINGS disclosure and (if not already loaded) warm the device list
@@ -1525,7 +1399,6 @@ function AudioConfigBody({
 
   // ── Derived ────────────────────────────────────────────────────────
   const enabled  = cfg?.enabled ?? false;
-  const detectorOn = cfg?.structureDetector?.enabled ?? false;
   const phase    = status?.phase ?? (enabled ? 'unknown' : 'off');
   const phaseColor =
     phase === 'running'    ? ACCENT_AUTO :
@@ -1622,16 +1495,12 @@ function AudioConfigBody({
           oscState={oscState}
         />
 
-        {/* ── 2b. STRUCTURE DETECTOR (live build/drop/sustain meters) ────
-            docs/30 — surfaces the detector's derived live keys as
-            trail plots in the same style as the pinned MIC/STEMS meters,
-            plus the enable toggle (the detector is observe-only and
-            disabled by default). Self-contained live subscription so the
-            body around it doesn't re-render on detector ticks. */}
-        <StructureDetectorCard
-          cardStyle={CARD}
-          detectorOn={detectorOn}
-        />
+        {/* STRUCTURE DETECTOR — RETIRED (2026-06-17). The dedicated
+            build/drop/sustain preview card was an unused, under-
+            development preview and has been removed. The build / energy /
+            slow signals the detector previewed still surface in the
+            dynamic AUDIO SIGNALS row at the top of this tab whenever the
+            Companion routes them in over OSC. */}
 
         {/* ── Cross-machine mic-not-found banner ──────────────────────
             Surfaces engine commit 5d830d6 audioStatus coded errors:
@@ -1647,32 +1516,15 @@ function AudioConfigBody({
           onExpandSettings={openSettingsForMic}
         />
 
-        {/* ── 3. SIGNALS · CHAINS ───────────────────────────────────────
-            Per-signal post-processing chain editor (docs/29 Phase 5).
-            One row per signal with [edit] disclosure → drag-reorderable
-            op list with per-op param sliders + the engine's 5 Hz
-            signalChain pre/post preview meters.
-            Operator brief 2026-05-26: the chain editor now embeds an
-            ANALYZER sub-section per signal — crossovers + envelope for
-            mic LOW/MID/HIGH, kick detector for micKick. We pass the
-            same audio config + commit handlers we used to keep in the
-            SETTINGS sub-cards; analyzer state is still global in the
-            engine (single FFT), surfaced per-signal in the UI so it
-            lives with the band the operator is tuning. */}
-        <AudioChainsCard
-          audioConfig={cfg}
-          // patchError is shown in the page-level banner above; the
-          // AnalyzerSection's null-cfg branch is only reachable if the
-          // parent's initial fetch failed (which mounts a different
-          // screen entirely), so we hand down `null` here. Reload is
-          // wired for completeness — if the engine ever ships a
-          // post-mount `audioConfig` invalidation event, the retry
-          // button is already wired.
-          audioConfigError={null}
-          onUpdateAudioConfigLocal={updateLocal}
-          onCommitAudioConfigField={commitField}
-          onRetryAudioConfig={reload}
-        />
+        {/* SIGNALS · CHAINS — RETIRED (2026-06-17). Chain / signal DESIGN
+            now lives in the Marsin Audio Companion; CaptainPad is a lean
+            control/monitor surface. The designed signals arrive in the
+            engine CPC over OSC from the Companion and are shown in the
+            pinned AUDIO SIGNALS row at the top of this tab
+            (useAudioSignals / useLiveParams). The per-signal chain editor
+            (AudioChainsCard) and the analyzer commit handlers it consumed
+            were removed here. Restore from git history if the editor ever
+            comes back to CaptainPad. */}
 
         {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
             Pinned bottom disclosure that holds everything rarely touched
@@ -1715,33 +1567,73 @@ function AudioConfigBody({
                   capture.device; the Companion (engine-supervised) honors
                   the same config. */}
               <View style={SUB_CARD}>
-                <SubHeader title="SOURCE" />
+                <SubHeader
+                  title="SOURCE"
+                  right={
+                    <TouchableOpacity
+                      onPress={toggleAllowTestFileSources}
+                      activeOpacity={0.7}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', gap: 8,
+                        paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+                        backgroundColor: allowTestFileSources ? C.surfaceContainerHigh : C.primaryContainer,
+                        borderWidth: 1,
+                        borderColor: allowTestFileSources ? C.ghostBorder : C.primary,
+                      }}
+                    >
+                      <View style={{
+                        width: 14, height: 14, borderRadius: 4,
+                        backgroundColor: allowTestFileSources ? ACCENT_AUTO : C.surface,
+                        borderWidth: 1, borderColor: allowTestFileSources ? ACCENT_AUTO : C.ghostBorder,
+                      }} />
+                      <Text style={{
+                        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+                        color: allowTestFileSources ? C.secondary : C.primary,
+                        textTransform: 'uppercase', letterSpacing: 0.8,
+                      }}>
+                        {allowTestFileSources ? 'TEST/FILE ON' : 'MIC LOCKED'}
+                      </Text>
+                    </TouchableOpacity>
+                  }
+                />
                 <View style={{ flexDirection: 'row', gap: 8 }}>
-                  {(['test', 'mic', 'file'] as const).map((src) => {
-                    const active = currentSource === src;
-                    const label = src === 'test' ? 'TEST' : src === 'mic' ? 'MIC' : 'FILE';
-                    return (
-                      <TouchableOpacity
-                        key={src}
-                        onPress={() => commitSource(src)}
-                        disabled={busy === 'source'}
-                        style={{
-                          flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
-                          backgroundColor: active ? C.primary : C.surfaceContainerLowest,
-                          borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-                          opacity: busy === 'source' ? 0.6 : 1,
-                        }}
-                      >
-                        <Text style={{
-                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-                          color: active ? '#fff' : C.secondary, letterSpacing: 0.8,
-                        }}>{label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {(['test', 'mic', 'file'] as const)
+                    // MIC is always available. TEST/FILE are hidden when the
+                    // operator has locked the deck to MIC — UNLESS that source
+                    // is the one currently active, in which case it stays
+                    // visible (disabled) so the operator can see what's live.
+                    .filter((src) => src === 'mic' || allowTestFileSources || currentSource === src)
+                    .map((src) => {
+                      const active = currentSource === src;
+                      // A test/file button is locked when the operator turned
+                      // the allowance off (it only renders because it's the
+                      // active source — show it, but don't let it be re-picked).
+                      const locked = src !== 'mic' && !allowTestFileSources;
+                      const label = src === 'test' ? 'TEST' : src === 'mic' ? 'MIC' : 'FILE';
+                      return (
+                        <TouchableOpacity
+                          key={src}
+                          onPress={() => commitSource(src)}
+                          disabled={busy === 'source' || locked}
+                          style={{
+                            flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
+                            backgroundColor: active ? C.primary : C.surfaceContainerLowest,
+                            borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+                            opacity: (busy === 'source' || locked) ? 0.5 : 1,
+                          }}
+                        >
+                          <Text style={{
+                            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
+                            color: active ? '#fff' : C.secondary, letterSpacing: 0.8,
+                          }}>{label}{locked ? ' 🔒' : ''}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                 </View>
                 <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 8 }}>
-                  TEST = synthetic signal (no hardware). MIC = the capture device below. FILE = replay a clip. The Companion uses the same source.
+                  {allowTestFileSources
+                    ? 'TEST = synthetic signal (no hardware). MIC = the capture device below. FILE = replay a clip. The Companion uses the same source.'
+                    : 'Locked to MIC for a production deck — TEST + FILE are hidden so the rig can’t be switched onto a synthetic or file feed. Toggle TEST/FILE back on to design with them. MIC = the capture device below; the Companion uses the same source.'}
                 </Text>
                 {currentSource === 'file' ? (
                   <View style={{ marginTop: 10 }}>
