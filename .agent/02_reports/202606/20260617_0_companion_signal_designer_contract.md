@@ -159,3 +159,15 @@ FIX (companion_server.js):
   signals:[...] }, persisted in companion_config.yaml, shown in the sidebar VISUALIZERS list.
 - Reuse the existing dance renderer (DanceMaker/dom-dance) for the dancing-balls type and
   the AudioTrace renderer for overlays — no new viz engines.
+
+## BUG: freq-domain clamp/slew use intensity defaults/ranges (2026-06-17, queued)
+ROOT CAUSE (debugged): the DSP + validation are correct (frequency mode skips the [0,1]
+clamp, allows Hz up to Nyquist). But clamp/slew get INTENSITY defaults + sliders on a
+FREQUENCY signal:
+- clamp default min:0/max:1 → squashes dom Hz into [0,1] (kills it); UI slider 0–1.
+- slew default maxStepPerSec:4 → 4 Hz/sec → freezes the dom freq; UI slider 0–20.
+FIX (companion_app.js UI_RANGE/sliderRange + the add-op default in companion_server.js/
+companion_app.js): TYPE-AWARE. When clamp/slew (or any Hz-domain op) is added to a
+FREQUENCY signal, default to Hz-sane params (clamp ~20–8000 Hz, slew ~2000 Hz/s) and use
+Hz slider ranges (clamp 0–8000, slew 0–5000/s, step suitable). Typed input stays unbounded.
+Keep intensity-signal defaults/ranges unchanged.
