@@ -50,6 +50,7 @@ import * as osc from 'osc-min';
 import { AudioAnalyzer } from '../analyzer/audio_analyzer.js';
 import {
   SignalPostProcessor, KNOWN_SIGNALS, opCatalog,
+  DANCE_OMEGA, danceSpringStep,
 } from '../postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../detector/audio_structure_detector.js';
 import { DerivedSignals } from '../signals/derived_signals.js';
@@ -58,7 +59,7 @@ import { listAudioDevices } from '../capture/audio_devices.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
 import {
-  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS,
+  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS,
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal,
   COMPANION_CONFIG_PATH,
 } from './companion_config.js';
@@ -206,14 +207,12 @@ function applySmooth(v) {
 }
 
 // "Dom freq DANCE" — a ghostly follower of each dom freq + cluster width.
-const DANCE_OMEGA = 7;
+// The spring math lives in the postproc module (DANCE_OMEGA / danceSpringStep)
+// so this legacy visualizer and the `danceMaker` op call the EXACT same code
+// (one source of truth, no fork — codex P0; docs/37 §2.2). `springStep` is a
+// thin local alias kept so the visualizer reads naturally.
 const dance = { f1: 0, vf1: 0, w1: 0, vw1: 0, f2: 0, vf2: 0, w2: 0, vw2: 0 };
-function springStep(x, v, target, dt) {
-  const k = DANCE_OMEGA * DANCE_OMEGA, c = 2 * DANCE_OMEGA;
-  v += (k * (target - x) - c * v) * dt;
-  x += v * dt;
-  return [x, v];
-}
+const springStep = (x, v, target, dt) => danceSpringStep(x, v, target, dt, DANCE_OMEGA);
 
 // Calibration: record → measure → recommend gain → replay.
 const CAL_TARGET = 0.7;
@@ -240,8 +239,17 @@ let clockMs = 0, lastMs = 0;
  * signals run the real SignalPostProcessor — frequency runners are in Hz
  * output mode, so lpf/clamp/slew actually shape the Hz before the osc_out tap.
  */
+// Operator danceMaker outputs captured this hop — the CANONICAL dance producer
+// (docs/37 §2.2: the dance is now produced by the `danceMaker` op). A frequency
+// signal whose chain carries a danceMaker op feeds its spring-smoothed POST Hz
+// into the dom-dance visualizer, keyed by which dom source it reads. Null when
+// no operator danceMaker signal exists — then the legacy default spring drives
+// the orbs (so the view never goes dark).
+const danceFromOp = { dom1: null, dom2: null };
+const hasDanceMaker = (sig) => sig.chain.some(o => o.type === 'danceMaker' && o.enabled !== false);
 function processDesignedSignals(r, dt) {
   const out = {};
+  danceFromOp.dom1 = null; danceFromOp.dom2 = null;
   for (const sig of design.signals) {
     const raw = r[ANALYZER_FIELD[sig.source]] ?? 0;
     const spp = runners.get(sig.id);
@@ -249,6 +257,11 @@ function processDesignedSignals(r, dt) {
     // intensity or frequency). The `?? raw` is defensive only.
     const post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
     out[sig.id] = { raw, post };
+    // A frequency signal carrying a danceMaker op IS the dance for its dom lane.
+    if (sig.type === 'frequency' && hasDanceMaker(sig)) {
+      if (sig.source === 'rawDom1') danceFromOp.dom1 = post;
+      else if (sig.source === 'rawDom2') danceFromOp.dom2 = post;
+    }
     const tap = oscOutOf(sig);
     if (tap) sendOsc(tap.params.address, post);
   }
@@ -269,18 +282,27 @@ const analyzer = new AudioAnalyzer({
     detector.tick(clockMs, dt);
     derived.tick(clockMs, dt);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
+    // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
+    // an operator frequency signal carries one, its spring-smoothed POST Hz IS
+    // the orb's center frequency for that lane. Absent an operator danceMaker
+    // signal, the legacy default spring drives the orb (the view never blanks).
+    // The window width still tracks the dom cluster width via the default spring
+    // (the op smooths center Hz only, matching the doc's freqWindow center).
     const sdt = dt > 0 ? dt : HOP / SR;
     const w1t = Math.max(0, (r.domHi1 || 0) - (r.domLo1 || 0)), w2t = Math.max(0, (r.domHi2 || 0) - (r.domLo2 || 0));
     [dance.f1, dance.vf1] = springStep(dance.f1, dance.vf1, r.domFreq1 || 0, sdt);
     [dance.w1, dance.vw1] = springStep(dance.w1, dance.vw1, w1t, sdt);
     [dance.f2, dance.vf2] = springStep(dance.f2, dance.vf2, r.domFreq2 || 0, sdt);
     [dance.w2, dance.vw2] = springStep(dance.w2, dance.vw2, w2t, sdt);
+    const danceF1 = danceFromOp.dom1 != null ? danceFromOp.dom1 : dance.f1;
+    const danceF2 = danceFromOp.dom2 != null ? danceFromOp.dom2 : dance.f2;
     pendingFrames.push({
       type: 'frame', t: clockMs, signals,
       dom: {
         f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
         f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2,
-        danceF1: dance.f1, danceW1: dance.w1, danceF2: dance.f2, danceW2: dance.w2,
+        danceF1, danceW1: dance.w1, danceF2, danceW2: dance.w2,
+        danceFromOp1: danceFromOp.dom1 != null, danceFromOp2: danceFromOp.dom2 != null,
       },
       struct: {
         state: paramCenter.get('audioStructure'), build: paramCenter.get('audioBuildScore'),
@@ -535,6 +557,7 @@ function catalog() {
   return {
     ops: opCatalog(),
     frequencyOps: FREQUENCY_OPS,
+    frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES,
     signalTypes: SIGNAL_TYPES,
     signals: design.signals,
@@ -646,7 +669,8 @@ wss.on('connection', (ws) => {
   clients.add(ws);
   ws.send(JSON.stringify({
     type: 'hello',
-    ops: opCatalog(), frequencyOps: FREQUENCY_OPS, rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES,
+    ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
+    rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES,
     signals: design.signals, osc: design.osc,
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,

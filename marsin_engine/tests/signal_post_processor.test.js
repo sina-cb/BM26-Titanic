@@ -809,16 +809,19 @@ test('resetSignal triggers audioChainsChanged broadcast', () => {
 
 // ── opCatalog (public for iPad picker) ──────────────────────────────────────
 
-test('opCatalog lists the 14 op types (7 Phase-2 + 5 Phase-7 + Phase-8 normalizer + osc_out)', () => {
+test('opCatalog lists the 15 op types (7 Phase-2 + 5 Phase-7 + Phase-8 normalizer + osc_out + danceMaker)', () => {
   // osc_out (2026-06-17 companion signal-designer contract) is the terminal
   // OSC output tap — identity in the DSP chain, marks a chain as an OUTPUT.
+  // danceMaker (docs/37 §2.2) is the frequency-domain dom-dance spring op.
   const cat = opCatalog();
   const types = Object.keys(cat).sort();
   assert.deepEqual(types, [
-    'bias', 'biquad', 'clamp', 'compressor', 'curve',
+    'bias', 'biquad', 'clamp', 'compressor', 'curve', 'danceMaker',
     'envelope', 'gain', 'hold', 'lpf', 'normalizer',
     'osc_out', 'schmitt', 'slew', 'slope',
   ]);
+  // danceMaker is a frequency-domain spring with a single omega param.
+  assert.equal(cat.danceMaker.params.omega.default, 7);
   assert.equal(cat.gain.paramKeyOrValue, true);
   assert.equal(cat.bias.paramKeyOrValue, false);
   // osc_out carries the engine address + optional cpcKey label.

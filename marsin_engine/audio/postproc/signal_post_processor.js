@@ -51,6 +51,24 @@ import {
   gainOpIdFor,
 } from './audio_signals.js';
 
+// ── DanceMaker spring (ONE source of truth) ──────────────────────────────────
+// The critically-damped spring that turns a jumpy dom freq into the smooth
+// "dance" (the gliding orbs). Historically lived inline in companion_server.js
+// (`springStep`, `DANCE_OMEGA`). Promoted here so BOTH the legacy dom-dance
+// visualizer AND the `danceMaker` op call the EXACT same math — no fork
+// (codex P0; docs/37 §2.2 "Must reproduce the current dance exactly").
+//
+// Default stiffness ω = 7 rad/s → ~0.4 s settle, no overshoot (critically
+// damped: k = ω², damping c = 2ω). One explicit-Euler integration step:
+//   v += (k·(target − x) − c·v)·dt ;  x += v·dt
+export const DANCE_OMEGA = 7;
+export function danceSpringStep(x, v, target, dt, omega = DANCE_OMEGA) {
+  const k = omega * omega, c = 2 * omega;
+  v += (k * (target - x) - c * v) * dt;
+  x += v * dt;
+  return [x, v];
+}
+
 // ── Signal keys + defaults ──────────────────────────────────────────────────
 
 /**
@@ -215,6 +233,20 @@ const OP_SCHEMA = Object.freeze({
     description: 'Slew-rate limiter: y is clamped within ±(maxStepPerSec·dt) of y_prev.',
     params: {
       maxStepPerSec: { type: 'number', min: 0.001, max: 1000, default: 4.0 },
+    },
+  },
+  danceMaker: {
+    // 2026-06-17 companion contract / docs/37 §2.2 "DanceMaker". A FREQUENCY-
+    // domain op: a critically-damped spring on the input value (Hz). Promotes
+    // the legacy companion_server.js dom-dance spring (springStep/DANCE_OMEGA)
+    // into a selectable op so the operator can place "the dance" anywhere in a
+    // frequency chain. Output is the spring-smoothed Hz (runs in 'frequency'
+    // output mode — no [0,1] clamp). Math is shared with the visualizer via
+    // `danceSpringStep` (one source of truth, no fork — codex P0). A step in
+    // Hz GLIDES to target with no overshoot; lower omega = slower settle.
+    description: 'Critically-damped spring smoother (the "dance"). Glides the input toward its target with no overshoot. Frequency-domain.',
+    params: {
+      omega: { type: 'number', min: 0.1, max: 100, default: DANCE_OMEGA },
     },
   },
   compressor: {
@@ -1048,6 +1080,17 @@ export class SignalPostProcessor {
         rt.yPrev = y;
         return y;
       }
+      case 'danceMaker': {
+        // Source: docs/37 §2.2 "DanceMaker" — the critically-damped spring that
+        // produces the dom-dance glide. Reuses `danceSpringStep` VERBATIM (the
+        // same code the legacy visualizer calls) so promoting it to an op did
+        // not change the dance (parity-tested). `rt.yPrev` is the spring
+        // position x; `rt.danceVel` is its velocity v. Target = the input x.
+        const [pos, vel] = danceSpringStep(rt.yPrev, rt.danceVel, x, dt, op.params.omega);
+        rt.danceVel = vel;
+        rt.yPrev = pos;
+        return pos;
+      }
       case 'compressor': {
         // Source: design doc §Operator catalog row "Compressor" —
         // Bob Katz, *Mastering Audio* (3rd ed. 2014, ch. 7), with
@@ -1255,6 +1298,10 @@ function _initRuntime(op) {
     case 'slope':
       // Discrete derivative needs the previous input sample.
       rt.xPrev = 0;
+      break;
+    case 'danceMaker':
+      // Spring position is yPrev (starts 0); velocity starts at rest.
+      rt.danceVel = 0;
       break;
     case 'normalizer':
       // Dual envelope follower state. floor/peak both start at 0 so the

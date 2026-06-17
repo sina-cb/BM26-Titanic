@@ -45,7 +45,14 @@ export const SIGNAL_TYPES = Object.freeze(['intensity', 'frequency']);
 // Ops a FREQUENCY signal may use (Hz-valid only — contract §types). Every
 // other op is intensity-only. osc_out is valid for BOTH (it is a terminal
 // tap, not a transform).
-export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'kalman', 'osc_out']);
+export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'kalman', 'danceMaker', 'osc_out']);
+
+// Ops that are FREQUENCY-ONLY — meaningful only on a Hz value and rejected on an
+// intensity signal. `danceMaker` is the dom-dance spring (a freqWindow→freqWindow
+// smoother, docs/37 §2.2): it produces the gliding dom orbs and has no place in
+// the [0,1] intensity palette. (lpf/clamp/slew are shared with intensity, so they
+// are NOT here.)
+export const FREQUENCY_ONLY_OPS = Object.freeze(['danceMaker']);
 
 /**
  * Built-in default design — one OUTPUT signal per curated CPC key the
@@ -115,11 +122,18 @@ export function validateSignal(sig) {
   if (!Array.isArray(sig.chain)) {
     return { ok: false, error: `signal "${sig.id}".chain must be an array of ops` };
   }
-  // Type-aware op gate: frequency signals may only carry Hz-valid ops.
+  // Type-aware op gate: frequency signals may only carry Hz-valid ops;
+  // intensity signals may not carry frequency-only ops (e.g. danceMaker).
   if (sig.type === 'frequency') {
     for (const op of sig.chain) {
       if (op && typeof op.type === 'string' && !FREQUENCY_OPS.includes(op.type)) {
         return { ok: false, error: `signal "${sig.id}": op "${op.type}" is intensity-only; frequency signals may only use ${FREQUENCY_OPS.join(', ')}` };
+      }
+    }
+  } else {
+    for (const op of sig.chain) {
+      if (op && typeof op.type === 'string' && FREQUENCY_ONLY_OPS.includes(op.type)) {
+        return { ok: false, error: `signal "${sig.id}": op "${op.type}" is frequency-only; intensity signals may not use ${FREQUENCY_ONLY_OPS.join(', ')}` };
       }
     }
   }

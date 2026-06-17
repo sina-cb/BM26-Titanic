@@ -112,7 +112,10 @@ test('validateSignal rejects a frequency signal carrying an intensity-only op', 
 
 test('validateSignal accepts a frequency signal with only Hz-valid ops', () => {
   for (const opType of FREQUENCY_OPS.filter(t => t !== 'kalman' && t !== 'osc_out')) {
-    const params = opType === 'clamp' ? { min: 0, max: 1 } : opType === 'lpf' ? { cutoffHz: 5 } : { maxStepPerSec: 4 };
+    const params = opType === 'clamp' ? { min: 0, max: 1 }
+      : opType === 'lpf' ? { cutoffHz: 5 }
+      : opType === 'danceMaker' ? { omega: 7 }
+      : { maxStepPerSec: 4 };
     const sig = {
       id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
       chain: [

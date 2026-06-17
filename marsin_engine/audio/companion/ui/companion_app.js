@@ -20,7 +20,7 @@ const VIEWS = [{ id: 'dance', label: '✦ DOM DANCE' }];
 const TRAIL = 360;
 
 const S = {
-  ops: {}, frequencyOps: [], rawSources: {}, signalTypes: [],
+  ops: {}, frequencyOps: [], frequencyOnlyOps: [], rawSources: {}, signalTypes: [],
   signals: [],         // [{ id, label, source, type, chain, output }]
   osc: { host: '127.0.0.1', port: 10000 },
   selected: 'input',
@@ -81,7 +81,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'hello') {
-      S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.rawSources = m.rawSources || {};
+      S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.frequencyOnlyOps = m.frequencyOnlyOps || []; S.rawSources = m.rawSources || {};
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
@@ -146,6 +146,15 @@ const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls)
 const clamp01 = (x) => (x > 1 ? 1 : x > 0 ? x : 0);
 const signalById = (id) => S.signals.find(s => s.id === id);
 const accent = (id) => { const s = signalById(id); return s ? (SOURCE_ACCENT[s.source] || '#9aa') : '#9aa'; };
+// A signal's DISPLAY NAME is its osc_out cpcKey (the CPC key it feeds the
+// engine), falling back to the source-based label when there's no osc_out /
+// no cpcKey yet (contract 2026-06-17). The internal id is never the name.
+function signalName(sig) {
+  if (!sig) return '';
+  const tap = sig.chain && sig.chain.find(o => o.type === 'osc_out');
+  const cpcKey = tap && tap.params && tap.params.cpcKey;
+  return (typeof cpcKey === 'string' && cpcKey.trim()) ? cpcKey.trim() : sig.label;
+}
 function setStatus(t, c) { const e = $('status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 let flashT = 0;
 function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color = bad ? '#ff5d6c' : '#34d3b5'; clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800); }
@@ -161,7 +170,10 @@ function seedTraces() {
 function paletteFor(type) {
   const all = Object.keys(S.ops);
   if (type === 'frequency') return all.filter(t => S.frequencyOps.includes(t));
-  return all;   // intensity: full palette
+  // intensity: full palette MINUS frequency-only ops (e.g. danceMaker — the
+  // dom-dance spring is meaningless on a [0,1] band; validator rejects it too).
+  const freqOnly = S.frequencyOnlyOps || [];
+  return all.filter(t => !freqOnly.includes(t));
 }
 
 // ── sidebar (signal list) ──────────────────────────────────────────────────
@@ -184,7 +196,7 @@ function buildSidebar() {
   for (const s of S.signals) {
     const row = el('button', 'sig-row' + (s.id === S.selected ? ' active' : ''));
     row.style.setProperty('--acc', SOURCE_ACCENT[s.source] || '#9aa');
-    row.innerHTML = `<span class="sig-name">${s.label}<span class="sig-type">${s.type}${s.output ? ' · out' : ''}</span></span>
+    row.innerHTML = `<span class="sig-name">${signalName(s)}<span class="sig-type">${s.type}${s.output ? ' · out' : ''}</span></span>
       <span class="sig-mini"><canvas id="mini-${s.id}" width="110" height="26"></canvas></span>
       <span class="sig-val" id="sv-${s.id}">0.00</span>`;
     row.onclick = (e) => { if (e.target.classList.contains('sig-x')) return; S.selected = s.id; buildSidebar(); renderChain(); };
@@ -193,10 +205,15 @@ function buildSidebar() {
     row.appendChild(x);
     box.appendChild(row);
   }
-  // view tabs (dedicated visualizers)
-  box.appendChild(el('div', 'panel-label views-label', 'VIEWS'));
+  // view tabs (dedicated VISUALIZERS — read-only plots, not ops). The DOM DANCE
+  // plot / spectrum histogram / tracer just DISPLAY; the dance itself is now
+  // produced by the `danceMaker` OP on a frequency signal (above).
+  const vlabel = el('div', 'panel-label views-label', 'VISUALIZERS');
+  vlabel.title = 'Read-only plots (DOM DANCE / spectrum / tracer). DanceMaker is an OP — add it to a dom signal\'s chain.';
+  box.appendChild(vlabel);
   for (const v of VIEWS) {
     const row = el('button', 'sig-row view-row' + (v.id === S.selected ? ' active' : ''));
+    row.title = 'visualizer (read-only) — the dance is produced by the danceMaker OP on a dom signal';
     row.innerHTML = `<span class="sig-name">${v.label}</span>`;
     row.onclick = () => { S.selected = v.id; buildSidebar(); renderChain(); };
     box.appendChild(row);
@@ -248,15 +265,15 @@ function renderChain() {
     return;
   }
   if (sel === 'dance') {
-    $('chain-title').textContent = 'DOM DANCE · read-only view';
+    $('chain-title').textContent = 'DOM DANCE · VISUALIZER (read-only)';
     $('chain-title').style.color = '#f0a23b';
-    box.appendChild(el('div', 'chain-note', 'dedicated dom-freq visualizer — no editable chain'));
+    box.appendChild(el('div', 'chain-note', 'A VISUALIZER — read-only dom-freq plot, no editable chain. The dance is produced by the <b>danceMaker</b> OP: add it to a dom (frequency) signal\'s chain to drive these orbs.'));
     return;
   }
   const sig = signalById(sel);
   if (!sig) { box.appendChild(el('div', 'chain-note', 'select a signal')); return; }
   const acc = SOURCE_ACCENT[sig.source] || '#9aa';
-  $('chain-title').textContent = `${sig.label} · ${sig.type} signal${sig.output ? ' · OUTPUT' : ''}`;
+  $('chain-title').textContent = `${signalName(sig)} · ${sig.type} signal${sig.output ? ' · OUTPUT' : ''}`;
   $('chain-title').style.color = acc;
 
   // SOURCE HEAD — the raw input that enters the row.
@@ -266,12 +283,20 @@ function renderChain() {
   box.appendChild(srcCard);
   box.appendChild(el('div', 'op-arrow', '→'));
 
-  sig.chain.forEach((op, i) => {
+  // The terminal osc_out tap (if any) is ALWAYS the LAST element of the row,
+  // and the "+ add op" control sits JUST BEFORE it — so adding an op inserts it
+  // into the chain ahead of the tap (contract 2026-06-17). Render order:
+  //   source → [ops…] → [+ add op] → osc_out
+  const hasOut = sig.chain.length > 0 && sig.chain[sig.chain.length - 1].type === 'osc_out';
+  const opCount = hasOut ? sig.chain.length - 1 : sig.chain.length;
+
+  const renderOpCard = (op, i) => {
     const isOut = op.type === 'osc_out';
     const card = el('div', 'op' + (isOut ? ' osc-out' : ''));
     if (!isOut) card.style.setProperty('--acc', acc);
     const opLabel = op.type === 'lpf' ? 'lpf <span class="op-tag">(smooth)</span>'
-      : op.type === 'osc_out' ? 'osc_out <span class="op-tag">(→ engine)</span>' : op.type;
+      : op.type === 'osc_out' ? 'osc_out <span class="op-tag">(→ engine)</span>'
+      : op.type === 'danceMaker' ? 'danceMaker <span class="op-tag">(spring OP)</span>' : op.type;
     const head = el('div', 'op-head', `<span class="op-type">${opLabel}</span>`);
     const tools = el('div', 'op-tools');
     const mk = (txt, fn, title) => { const b = el('button', 'op-btn', txt); b.title = title; b.onclick = fn; return b; };
@@ -285,14 +310,19 @@ function renderChain() {
     head.appendChild(tools); card.appendChild(head);
     card.appendChild(opParams(sig, op, i));
     box.appendChild(card);
-    if (i < sig.chain.length - 1) box.appendChild(el('div', 'op-arrow', '→'));
-  });
+  };
 
-  // add-op palette — TYPE-AWARE (filtered by the signal's type).
-  box.appendChild(el('div', 'op-arrow', '＋'));
+  // Non-terminal ops first (everything before any osc_out tap).
+  for (let i = 0; i < opCount; i++) {
+    renderOpCard(sig.chain[i], i);
+    box.appendChild(el('div', 'op-arrow', '→'));
+  }
+
+  // add-op palette — TYPE-AWARE (filtered by the signal's type). It sits BEFORE
+  // the terminal osc_out so a new op lands ahead of the tap. (When the chain has
+  // no tap yet, this is the last element, as before.)
   const add = el('div', 'op op-add');
   const palette = paletteFor(sig.type);
-  const hasOut = sig.chain.some(o => o.type === 'osc_out');
   const sel2 = el('select', 'add-sel');
   sel2.appendChild(el('option', null, `+ add op (${sig.type})`));
   for (const t of palette) {
@@ -303,6 +333,12 @@ function renderChain() {
   sel2.onchange = () => { if (sel2.value && !sel2.value.startsWith('+ add')) { addOp(sig, sel2.value); sel2.selectedIndex = 0; } };
   add.appendChild(sel2);
   box.appendChild(add);
+
+  // The terminal tap LAST (after the add control).
+  if (hasOut) {
+    box.appendChild(el('div', 'op-arrow', '→'));
+    renderOpCard(sig.chain[sig.chain.length - 1], sig.chain.length - 1);
+  }
 }
 
 function opParams(sig, op, i) {
@@ -337,6 +373,9 @@ function opParams(sig, op, i) {
           if (v === '' && pdef.optional) delete op.params[pname];
           else op.params[pname] = v;
           pushChain(sig.id);
+          // The osc_out cpcKey IS the signal's display name — live-update the
+          // sidebar label + chain header the moment it's edited.
+          if (op.type === 'osc_out' && pname === 'cpcKey') { buildSidebar(); renderChain(); }
         };
         row.appendChild(inp);
       }

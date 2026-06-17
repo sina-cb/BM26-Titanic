@@ -220,7 +220,8 @@ test('all Hz-valid ops validate on a frequency signal (lpf/clamp/slew/osc_out)',
   for (const opType of FREQUENCY_OPS.filter(t => t !== 'kalman' && t !== 'osc_out')) {
     const params = opType === 'clamp' ? { min: 40, max: 4000 }
       : opType === 'lpf' ? { cutoffHz: 5 }
-        : { maxStepPerSec: 4 };
+        : opType === 'danceMaker' ? { omega: 7 }
+          : { maxStepPerSec: 4 };
     const sig = {
       id: 'd', label: 'D', source: 'rawDom1', type: 'frequency',
       chain: [
