@@ -18,15 +18,16 @@
       chevron_speed_hz = CHEVRON_BASE_HZ + chevronSpeedup * CHEVRON_AUDIO_HZ
 
   `chevronSpeedup` is an exported slider (default low, 0.0) that an operator
-  can leave manual OR bind to an audio signal in the playlist. The intended
-  audio source is the LOW band:
+  can leave manual OR drive via a MODULATION mapping in the playlist. The
+  intended audio source is the LOW band:
 
-      ATTACH  chevronSpeedup  ->  micLow
+      MODULATE  sliderChevronSpeedup (chevronSpeedup)  <-  micLow
 
   so the chevron accelerates with the bass/kick of the music. Any [0,1]
-  audio signal works (micKick for a punchier feel, micFlux for onset drive),
-  but micLow is the documented default. The chevron is drawn from the cp1<->
-  cp2 palette so it always honours the operator's colour pickers.
+  audio signal works as a modulation source (micKick for a punchier feel,
+  micFlux for onset drive), but micLow is the documented default. The
+  chevron is drawn from the cp1<->cp2 palette so it always honours the
+  operator's colour pickers.
 
   ─────────────────────────────────────────────────────────────────────────
   LAYER 1 — FOREGROUND: per-fixture dom1 dancers (composited ON TOP)
@@ -42,34 +43,48 @@
   That IS the fixture view: the dancer lives in each fixture's local space.
 
   Inside EACH fixture we render a bright "dancing ball": a soft orb at
-  `ballPos` (0..1 in the fixture's local axis). The ball position is driven
-  by dom1 = the dominant frequency signal #1 (`micDomFreq1`, Hz). We map the
-  raw Hz to a 0..1 target (log scale across the audible band) and run it
+  `ballPos` (0..1 in the fixture's local axis). The ball position TARGET is
+  the `sliderDomPos` control (0..1, default 0.5 = fixture-centre) and the
+  orb's brightness/size is driven by `sliderDomEnergy` (0..1, default 0.6).
+  Both are exported SLIDER params — an operator can leave them manual OR, for
+  audio reactivity, drive them via MODULATION mappings (modulators-only audio
+  policy, operator decision 2026-06-17 — patterns never read CPC audio
+  globals natively). The documented audio coupling is:
+
+      MODULATE  sliderDomPos    (domPos)    <-  micDomEnergy1
+      MODULATE  sliderDomEnergy (domEnergy) <-  micDomEnergy1
+
+  (use micDomFreq1, normalized, on sliderDomPos if you want pitch to steer
+  the ball's HEIGHT rather than energy.) The 0..1 position TARGET is run
   through a CRITICALLY-DAMPED SPRING — the exact "dance" math the Audio
   Companion's dancing-balls visualizer / the `danceMaker` op use
   (signal_post_processor.js: `danceSpringStep`, DANCE_OMEGA = 7):
 
       v += (k*(target - x) - c*v) * dt ;  x += v * dt    with k = w^2, c = 2w
 
-  This makes the orb GLIDE to the dominant pitch with no overshoot — the
-  "dancing ball" gesture. `micDomEnergy1` (0..1, the natural intensity of
-  dom1) drives the orb's brightness and a little of its size, so a strong,
-  clear dominant tone makes the dancer pop; a quiet/ambiguous spectrum makes
-  it small and gentle. At zero audio the orb idles at fixture-centre with a
-  soft minimum glow (no black-out — P0).
+  This makes the orb GLIDE to its target with no overshoot — the "dancing
+  ball" gesture. `domEnergy` drives the orb's brightness and a little of its
+  size, so a strong drive makes the dancer pop; a quiet drive makes it small
+  and gentle. At rest (sliders at default) the orb idles near fixture-centre
+  with a soft glow (no black-out — P0).
 
   COMPOSITING: background chevron is computed first, then the dancer is
   screen-blended on top (1-(1-bg)(1-fg)) so the orb never harshly clips the
   chevron and there is no popping — luminous, additive-but-bounded.
 
   ─────────────────────────────────────────────────────────────────────────
-  AUDIO INPUTS (all default 0.0; pattern is complete & beautiful w/o audio):
-    micDomFreq1   (Hz)   dominant frequency #1  -> dancer position
-    micDomEnergy1 (0..1) dominant energy #1     -> dancer brightness/size
-    chevronSpeedup(0..1) ATTACH -> micLow       -> chevron travel speed-up
-  These exported var names match the engine's shared-signal registry
-  (audio_signals.js sharedFnName), so the ParamCenter feeds the live values
-  straight into these globals each tick.
+  AUDIO REACTIVITY (modulators-only — patterns never read CPC audio globals):
+  The pattern exposes SLIDER params; audio reactivity is added by attaching
+  a MODULATION mapping (source = any live audio key) to each slider in the
+  playlist. At rest the defaults look good (the pattern is complete &
+  beautiful without audio):
+    domPos        (0..1) dancer position target  default 0.5  (fixture-centre)
+    domEnergy     (0..1) dancer brightness/size  default 0.6  (lively at rest)
+    chevronSpeedup(0..1) chevron travel speed-up default 0.0
+  Default modulation mappings (sim test_bench default playlist):
+    sliderDomPos    <- micDomEnergy1
+    sliderDomEnergy <- micDomEnergy1
+    sliderChevronSpeedup <- micLow
 */
 
 // ── Per-fixture layout (test_bench.js fixtureId -> start index + length) ─────
@@ -88,16 +103,18 @@ export var localSpeed = 0.5;          // standard first local slider
 export var chevronWidth = 0.22;       // half-width of the V arm falloff (X units)
 export var chevronGlow = 0.85;        // peak chevron brightness
 export var chevronFloor = 0.10;       // background floor so the rig never goes dark
-export var chevronSpeedup = 0.0;      // ATTACH -> micLow. base-slow + this*audio
+export var chevronSpeedup = 0.0;      // MODULATE <- micLow. base-slow + this*audio
 
 // Dancer (foreground) controls
 export var ballSize = 0.30;           // base orb half-width in fixture-local units
 export var ballGlow = 1.0;            // peak orb brightness
-export var ballFloor = 0.08;          // idle orb glow at zero audio energy
+export var ballFloor = 0.08;          // idle orb glow at low energy
 
-// Audio signals (shared-fn names — fed by the engine ParamCenter)
-export var micDomFreq1 = 0.0;         // Hz, dominant frequency #1
-export var micDomEnergy1 = 0.0;       // 0..1, dominant energy #1
+// Dancer drive (modulator-driven sliders — NOT native audio reads). An
+// operator can leave these manual OR attach a MODULATION mapping in the
+// playlist (e.g. sliderDomPos <- micDomEnergy1). Defaults look good at rest.
+export var domPos = 0.5;              // 0..1 dancer position target (centre at rest)
+export var domEnergy = 0.6;           // 0..1 dancer brightness/size drive
 
 // Palette pickers (strict cp1<->cp2 RGB-space blending)
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // chevron / dancer core (cyan)
@@ -113,6 +130,8 @@ export function sliderChevronSpeedup(v) { chevronSpeedup = v; }
 export function sliderBallSize(v) { ballSize = 0.12 + v * 0.45; }
 export function sliderBallGlow(v) { ballGlow = v; }
 export function sliderBallFloor(v) { ballFloor = v * 0.25; }
+export function sliderDomPos(v) { domPos = v; }      // 0..1 dancer position target
+export function sliderDomEnergy(v) { domEnergy = v; } // 0..1 dancer brightness/size
 
 // ── Chevron motion constants ─────────────────────────────────────────────────
 var CHEVRON_BASE_HZ = 0.035;  // constant slow drift (full sweep ~28 s)
@@ -123,9 +142,6 @@ var CHEVRON_AUDIO_HZ = 0.45;  // extra Hz at chevronSpeedup = 1.0
 // overshoot. ONE explicit-Euler step per frame. Same math as the Companion
 // dancing-balls visualizer / danceMaker op (one behaviour, no fork — P0).
 var DANCE_OMEGA = 7.0;
-// dom1 maps log-frequency across [DOM_HZ_MIN, DOM_HZ_MAX] -> [0,1] target.
-var DOM_HZ_MIN = 60.0;
-var DOM_HZ_MAX = 8000.0;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; see PATTERNS.md §7) ────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -206,17 +222,13 @@ export function beforeRender(delta) {
   chevronPhase = (chevronPhase + dt * chevronHz) % 1.0;
   if (chevronPhase < 0.0) chevronPhase += 1.0;
 
-  // ── Dom1 dance target: map dominant Hz -> 0..1 (log scale), then spring ──
+  // ── Dance target: the domPos slider IS the 0..1 target, then spring ──────
   // Done ONCE per frame in beforeRender (not per pixel): the dancer shares
   // the same local target/position across every fixture, so all fixtures
-  // dance in unison to dom1 while each renders it in ITS OWN local space.
-  var hz = micDomFreq1;
-  if (hz < DOM_HZ_MIN) hz = DOM_HZ_MIN;
-  if (hz > DOM_HZ_MAX) hz = DOM_HZ_MAX;
-  // log map: position rises with pitch. At/below DOM_HZ_MIN -> 0, at
-  // DOM_HZ_MAX -> 1. (Guarded above so log args are always positive.)
-  ballTarget = log(hz / DOM_HZ_MIN) / log(DOM_HZ_MAX / DOM_HZ_MIN);
-  ballTarget = clamp01(ballTarget);
+  // dance in unison while each renders it in ITS OWN local space. domPos is
+  // a modulator-driven slider (e.g. micDomEnergy1 via a playlist modulation),
+  // already normalized to 0..1 — no native audio read here.
+  ballTarget = clamp01(domPos);
 
   // Critically-damped spring step (danceSpringStep parity).
   var k = DANCE_OMEGA * DANCE_OMEGA;
@@ -271,8 +283,8 @@ export function render3D(index, x, y, z) {
   // using localPos = 0.5, so it still shows but makes no false claim about
   // per-fixture geometry (P0: no fabricated fallback coordinate space).
 
-  // Orb intensity & size grow with dom1 energy; idle glow keeps it alive.
-  var energy = clamp01(micDomEnergy1);
+  // Orb intensity & size grow with the energy drive; idle glow keeps it alive.
+  var energy = clamp01(domEnergy);
   var halfW = ballSize * (0.6 + 0.4 * energy);
   if (halfW < 0.02) halfW = 0.02;
   var orbD = abs(localPos - ballPos);

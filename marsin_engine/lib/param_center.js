@@ -11,7 +11,7 @@
 import fs from 'fs';
 import yaml from 'js-yaml';
 
-import { audioRegistryEntries } from '../audio/postproc/audio_signals.js';
+import { audioRegistryEntries, isLiveAudioSharedFnName } from '../audio/postproc/audio_signals.js';
 
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 //
@@ -683,7 +683,19 @@ export class ParamCenter {
     // `speed`, `size`). The engine reads those CPC values directly
     // each tick; injecting them as pattern variables would let a
     // pattern shadow the engine's authoritative value.
+    //
+    // MODULATORS-ONLY AUDIO POLICY (operator decision 2026-06-17): the
+    // LIVE audio-family signals (mic bands/flux, dom freq+energy, tempoBpm,
+    // structure detector + derived outputs) are NEVER bound into pattern
+    // globals here, even when a pattern declares a matching `export var`
+    // (e.g. `export var micDomEnergy1`). Audio reactivity must flow through
+    // the MODULATION engine driving SLIDER params — patterns do not read
+    // CPC audio signals natively. Persistent `*Gain` knobs are NOT in this
+    // set (they're operator levels, not signals), so they still bind. All
+    // non-audio slider/param exports keep their normal control-write path —
+    // the ModulationController depends on it (see modulation_controller.js).
     for (const exp of exports) {
+      if (isLiveAudioSharedFnName(exp.name)) continue;
       const entry = this._registryByFnName[exp.name];
       if (entry && !entry.engineOwned) {
         controlMap[entry.key] = { id: exp.id, fnName: exp.name };

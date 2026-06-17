@@ -32,6 +32,7 @@ entries:
       sliderBeamWidth: 0.18
       sliderBackgroundGlow: 0.54
       sliderDirection: 0.53
+      sliderAudioBrightness: 0
     modulations:
       - id: mod_sliderDirection_micLow
         type: continuous
@@ -47,6 +48,21 @@ entries:
         range:
           - 0
           - 0.3
+        curve: easeOut
+      - id: mod_sliderAudioBrightness_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderAudioBrightness
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 1
         curve: easeOut
     notes: null
   - id: e_default_2_02_phase_cathedral
@@ -320,6 +336,67 @@ entries:
       sliderDormantGlow: 0.04
       sliderRippleSweep: 0
     modulations: []
+    notes: null
+  - id: e_default_26_26_dom_dancers_chevron
+    pattern: 26_dom_dancers_chevron
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderChevronWidth: 0.3
+      sliderChevronGlow: 0.85
+      sliderChevronFloor: 0.33
+      sliderChevronSpeedup: 0
+      sliderBallSize: 0.4
+      sliderBallGlow: 1
+      sliderBallFloor: 0.32
+      sliderDomPos: 0.5
+      sliderDomEnergy: 0.6
+    modulations:
+      - id: mod_sliderChevronSpeedup_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderChevronSpeedup
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: easeOut
+      - id: mod_sliderDomPos_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderDomPos
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: linear
+      - id: mod_sliderDomEnergy_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderDomEnergy
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeOut
     notes: null
   - id: e_default_58_rainbow
     pattern: rainbow

@@ -279,6 +279,28 @@ function audioRegistryEntries() {
 }
 
 /**
+ * Set of LIVE audio-family `sharedFnName`s (mic bands/flux, dom freq+energy,
+ * tempoBpm, detector + derived outputs — every descriptor with `live:true`).
+ *
+ * MODULATORS-ONLY POLICY (operator decision 2026-06-17): patterns must NOT
+ * read these live CPC audio signals natively via a matching `export var`.
+ * All audio reactivity goes through the MODULATION engine, which writes
+ * pattern SLIDER params. `ParamCenter.registerChannel` uses this set to
+ * refuse binding these keys into pattern globals — see param_center.js.
+ *
+ * The persistent `*Gain` params are intentionally EXCLUDED (they are
+ * `live:false` operator knobs, not signals a pattern would ever name).
+ */
+const LIVE_AUDIO_SHARED_FN_NAMES = Object.freeze(
+  new Set(DESCRIPTORS.filter(d => d.live).map(d => d.sharedFnName)),
+);
+
+/** Whether `name` is a LIVE audio-family shared-fn name (modulators-only). */
+function isLiveAudioSharedFnName(name) {
+  return LIVE_AUDIO_SHARED_FN_NAMES.has(name);
+}
+
+/**
  * Signal keys that flow through SignalPostProcessor.process() — i.e.
  * KNOWN_SIGNALS. Mic bands + kick + flux + stems, in their family order
  * (mic first, then stems) to match the pre-refactor KNOWN_SIGNALS array.
@@ -352,6 +374,7 @@ export {
   audioSignalDescriptors,
   descriptorByKey,
   audioRegistryEntries,
+  isLiveAudioSharedFnName,
   processedSignalKeys,
   defaultGainChainFor,
   gainOpIdFor,

@@ -348,3 +348,56 @@ test('hasPersistentDirty false for unknown keys', () => {
   assert.equal(pc.hasPersistentDirty([]), false);
   assert.equal(pc.hasPersistentDirty(null), false);
 });
+
+// ── Modulators-only audio policy (operator decision 2026-06-17) ─────────────
+// Patterns must NOT read live audio signals natively. registerChannel must
+// refuse to bind a live audio-family `export var` into pattern globals, while
+// still binding normal slider/param/color exports (modulators depend on that
+// general control-write path). See lib/param_center.js step 1 +
+// audio/postproc/audio_signals.js isLiveAudioSharedFnName.
+
+// Probe the control map a channel built. registerChannel stores it on
+// pc._channels[channelId].controlMap (key → { id, fnName }).
+function controlMapFor(pc, channelId) {
+  return pc._channels?.[channelId]?.controlMap || {};
+}
+
+test('registerChannel does NOT bind live audio exports into pattern globals', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 1, name: 'micLow' },
+    { id: 2, name: 'micDomEnergy1' },
+    { id: 3, name: 'micDomFreq1' },
+    { id: 4, name: 'audioBuildScore' },
+    { id: 5, name: 'tempoBpm' },
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  for (const k of ['micLow', 'micDomEnergy1', 'micDomFreq1', 'audioBuildScore', 'tempoBpm']) {
+    assert.equal(cm[k], undefined, `${k} must not bind (modulators-only audio policy)`);
+    assert.equal(pc.isSharedExport('deck', k), false, `${k} not a bound shared export`);
+  }
+});
+
+test('registerChannel STILL binds non-audio shared exports (color/rotate)', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 10, name: 'colorPalette1' },
+    { id: 11, name: 'rotate' },
+    { id: 12, name: 'micDomEnergy1' }, // audio — excluded
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  assert.deepEqual(cm.colorPalette1, { id: 10, fnName: 'colorPalette1' });
+  assert.deepEqual(cm.rotate, { id: 11, fnName: 'rotate' });
+  assert.equal(cm.micDomEnergy1, undefined, 'audio still excluded alongside non-audio binds');
+});
+
+test('engine-owned globals (speed/size) remain unbound — unchanged by audio policy', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 20, name: 'speed' },
+    { id: 21, name: 'size' },
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  assert.equal(cm.speed, undefined, 'speed is engine-owned, never injected');
+  assert.equal(cm.size, undefined, 'size is engine-owned, never injected');
+});
