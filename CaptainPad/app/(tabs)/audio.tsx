@@ -38,7 +38,7 @@
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
@@ -991,17 +991,6 @@ function MicNotFoundBanner({
 
 const SETTINGS_COLLAPSED_KEY = '@CaptainPad:audioSettingsCollapsed';
 
-// Operator setting (persisted): whether the SOURCE selector offers the
-// TEST + FILE sources. A production deck can turn this OFF to lock the
-// capture source to MIC so a stray tap can't switch the rig onto a
-// synthetic / file feed mid-show. MIC is ALWAYS available. Default ON
-// (preserves the bench/dev workflow); the engine still owns the source —
-// this is purely a CaptainPad affordance guard. The current source is
-// never silently changed by the toggle; if the deck is already on
-// TEST/FILE when locked, that source still shows (so the operator can
-// see it) but the disabled buttons can't be re-selected.
-const ALLOW_TEST_FILE_SOURCES_KEY = '@CaptainPad:audioAllowTestFileSources';
-
 // ENGINE section (fftSize / hopSize) is render-only — see the read-only
 // display deep in <AudioConfigLoaded /> below. The fields are deliberately
 // non-live-tunable per marsin_engine/lib/audio_config.js §AUDIO_LIVE_FIELDS
@@ -1134,29 +1123,6 @@ function AudioConfigBody({
     });
   }, []);
 
-  // Operator setting — allow the TEST + FILE sources in the SOURCE
-  // selector. Default ON; persisted across rebuilds. When OFF the
-  // selector only offers MIC (a production deck lock-down). MIC is
-  // always available regardless. See ALLOW_TEST_FILE_SOURCES_KEY.
-  const [allowTestFileSources, setAllowTestFileSources] = useState<boolean>(true);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(ALLOW_TEST_FILE_SOURCES_KEY).then((raw) => {
-      if (!alive || raw == null) return;
-      if (raw === 'false') setAllowTestFileSources(false);
-      else if (raw === 'true') setAllowTestFileSources(true);
-    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
-    return () => { alive = false; };
-  }, []);
-  const toggleAllowTestFileSources = useCallback(() => {
-    setAllowTestFileSources((prev) => {
-      const next = !prev;
-      AsyncStorage.setItem(ALLOW_TEST_FILE_SOURCES_KEY, String(next))
-        .catch(() => { /* benign — persistence is best-effort */ });
-      return next;
-    });
-  }, []);
-
   // Steady (operator-tuned, persistent) params — sliders, sync
   // toggles, gain knobs. These are quiet by default; only redrawn
   // when the operator turns a knob.
@@ -1251,53 +1217,11 @@ function AudioConfigBody({
     else { setPatchError(null); setPickerOpen(false); reload(); }
   }, [reload]);
 
-  // ── Audio SOURCE (test / mic / file) ────────────────────────────────
-  // The engine owns the capture source via `capture.device`: a real device
-  // id/ffmpeg string (MIC), a `file:<path>` string (FILE), or the synthetic
-  // `test` source (TEST). One device config — the Companion (engine-
-  // supervised) honors the same `capture.*`. We DERIVE the current source
-  // from the device string and PATCH `capture.device` to switch — reusing
-  // the proven capture round-trip, no silent fallback (a source the engine
-  // rejects surfaces its 400 in the patchError banner).
-  const deviceStr = cfg?.capture?.device ?? null;
-  const currentSource: 'test' | 'mic' | 'file' =
-    deviceStr === 'test' ? 'test' :
-    (typeof deviceStr === 'string' && deviceStr.startsWith('file:')) ? 'file' :
-    'mic';
-  const [filePath, setFilePath] = useState<string>(
-    typeof deviceStr === 'string' && deviceStr.startsWith('file:') ? deviceStr.slice(5) : '',
-  );
-
-  const commitSource = useCallback(async (next: 'test' | 'mic' | 'file', path?: string) => {
-    // Operator lock-down guard: when TEST/FILE are disallowed, refuse to
-    // switch onto them even if a caller slips through (the buttons are also
-    // disabled in the UI). MIC always passes. Fail closed, no fallback.
-    if ((next === 'test' || next === 'file') && !allowTestFileSources) return;
-    // TEST → synthetic source. FILE → file:<path>. MIC → leave the existing
-    // device (or prompt the picker if none). The engine restarts capture on
-    // a capture.device change and broadcasts a fresh audioStatus.
-    let deviceValue: string | null = null;
-    if (next === 'test') deviceValue = 'test';
-    else if (next === 'file') {
-      const p = (path ?? filePath).trim();
-      if (!p) { setPickerOpen(false); return; } // wait for a path; no-op until entered
-      deviceValue = `file:${p}`;
-    } else {
-      // MIC: if no real device is selected yet, open the picker instead of
-      // PATCHing a placeholder. Otherwise keep the existing device.
-      if (!deviceStr || deviceStr === 'test' || deviceStr.startsWith('file:')) {
-        setPickerOpen(true);
-        if (!devices) loadDevices();
-        return;
-      }
-      deviceValue = deviceStr;
-    }
-    setBusy('source');
-    const r = await patchAudioConfig({ capture: { device: deviceValue } });
-    setBusy(null);
-    if (!r.ok) { setPatchError(r.error || 'failed to set source'); reload(); }
-    else { setPatchError(null); reload(); }
-  }, [filePath, deviceStr, devices, loadDevices, reload, allowTestFileSources]);
+  // Audio SOURCE is always the MIC / capture device (operator brief
+  // 2026-06-17). The TEST (synthetic) and FILE (clip replay) sources were
+  // removed from this tab — the deck runs off the live mic. The CAPTURE
+  // DEVICE picker below sets `capture.device` (which the Companion honors);
+  // there is no source-mode switch anymore.
 
   // "Open Settings" action on the cross-machine mic banner — expand the
   // SETTINGS disclosure and (if not already loaded) warm the device list
@@ -1467,116 +1391,6 @@ function AudioConfigBody({
 
           {!settingsCollapsed ? (
             <View style={{ marginTop: 16 }}>
-              {/* ── SOURCE (test / mic / file) ───────────────────────────
-                  Live-changeable. The engine owns the capture source via
-                  capture.device; the Companion (engine-supervised) honors
-                  the same config. */}
-              <View style={SUB_CARD}>
-                <SubHeader
-                  title="SOURCE"
-                  right={
-                    <TouchableOpacity
-                      onPress={toggleAllowTestFileSources}
-                      activeOpacity={0.7}
-                      style={{
-                        flexDirection: 'row', alignItems: 'center', gap: 8,
-                        paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
-                        backgroundColor: allowTestFileSources ? C.surfaceContainerHigh : C.primaryContainer,
-                        borderWidth: 1,
-                        borderColor: allowTestFileSources ? C.ghostBorder : C.primary,
-                      }}
-                    >
-                      <View style={{
-                        width: 14, height: 14, borderRadius: 4,
-                        backgroundColor: allowTestFileSources ? ACCENT_AUTO : C.surface,
-                        borderWidth: 1, borderColor: allowTestFileSources ? ACCENT_AUTO : C.ghostBorder,
-                      }} />
-                      <Text style={{
-                        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-                        color: allowTestFileSources ? C.secondary : C.primary,
-                        textTransform: 'uppercase', letterSpacing: 0.8,
-                      }}>
-                        {allowTestFileSources ? 'TEST/FILE ON' : 'MIC LOCKED'}
-                      </Text>
-                    </TouchableOpacity>
-                  }
-                />
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  {(['test', 'mic', 'file'] as const)
-                    // MIC is always available. TEST/FILE are hidden when the
-                    // operator has locked the deck to MIC — UNLESS that source
-                    // is the one currently active, in which case it stays
-                    // visible (disabled) so the operator can see what's live.
-                    .filter((src) => src === 'mic' || allowTestFileSources || currentSource === src)
-                    .map((src) => {
-                      const active = currentSource === src;
-                      // A test/file button is locked when the operator turned
-                      // the allowance off (it only renders because it's the
-                      // active source — show it, but don't let it be re-picked).
-                      const locked = src !== 'mic' && !allowTestFileSources;
-                      const label = src === 'test' ? 'TEST' : src === 'mic' ? 'MIC' : 'FILE';
-                      return (
-                        <TouchableOpacity
-                          key={src}
-                          onPress={() => commitSource(src)}
-                          disabled={busy === 'source' || locked}
-                          style={{
-                            flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
-                            backgroundColor: active ? C.primary : C.surfaceContainerLowest,
-                            borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-                            opacity: (busy === 'source' || locked) ? 0.5 : 1,
-                          }}
-                        >
-                          <Text style={{
-                            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-                            color: active ? '#fff' : C.secondary, letterSpacing: 0.8,
-                          }}>{label}{locked ? ' 🔒' : ''}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                </View>
-                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 8 }}>
-                  {allowTestFileSources
-                    ? 'TEST = synthetic signal (no hardware). MIC = the capture device below. FILE = replay a clip. The Companion uses the same source.'
-                    : 'Locked to MIC for a production deck — TEST + FILE are hidden so the rig can’t be switched onto a synthetic or file feed. Toggle TEST/FILE back on to design with them. MIC = the capture device below; the Companion uses the same source.'}
-                </Text>
-                {currentSource === 'file' ? (
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>
-                      FILE PATH
-                    </Text>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <TextInput
-                        value={filePath}
-                        onChangeText={setFilePath}
-                        placeholder="/clips/track.wav"
-                        placeholderTextColor={C.icon}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        style={{
-                          flex: 1, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8,
-                          backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.ghostBorder,
-                          color: C.text, fontFamily: 'Inter_400Regular', fontSize: 12,
-                        }}
-                      />
-                      <TouchableOpacity
-                        onPress={() => commitSource('file', filePath)}
-                        disabled={busy === 'source' || filePath.trim().length === 0}
-                        style={{
-                          paddingHorizontal: 14, justifyContent: 'center', borderRadius: 8,
-                          backgroundColor: filePath.trim().length === 0 ? C.surfaceContainerHigh : C.primary,
-                          opacity: busy === 'source' ? 0.6 : 1,
-                        }}
-                      >
-                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: filePath.trim().length === 0 ? C.secondary : '#fff', letterSpacing: 0.6 }}>
-                          LOAD
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-
               {/* ── OVERALL GAIN ─────────────────────────────────────────
                   The single software preamp the whole PCM lane sees (bands /
                   kick / dom / FFT). Live-tunable (audio.bands.inputGain). Same
