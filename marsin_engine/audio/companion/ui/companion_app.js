@@ -557,7 +557,14 @@ function renderTransport() {
 // ── source selector (Test / Mic / File) ─────────────────────────────────────
 function syncSourcePanel() {
   const panel = $('source-panel'); if (!panel) return;
-  panel.style.display = S.mode === 'test' ? '' : 'none';
+  const showSource = S.mode === 'test';
+  panel.style.display = showSource ? '' : 'none';
+  // When the TEST SOURCE panel is hidden it drops out of the `.lower` grid;
+  // flag the grid so the chain-panel keeps (and reclaims) the full width
+  // instead of collapsing into the 230px column (which wrapped the op row
+  // vertically). See `.lower.no-source` in the CSS.
+  const lower = panel.closest('.lower');
+  if (lower) lower.classList.toggle('no-source', !showSource);
 }
 function buildSourceBar() {
   syncSourcePanel();

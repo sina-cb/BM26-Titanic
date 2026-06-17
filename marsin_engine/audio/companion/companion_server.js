@@ -142,6 +142,86 @@ function sendOsc(address, value) {
   oscSent++;
 }
 
+// ── SIGNAL MANIFEST → engine (auto-route new signals to CaptainPad) ──────────
+// Every OUTPUT signal (one whose chain ends in an osc_out tap) is advertised to
+// the engine so the engine can register its CPC key and CaptainPad shows it
+// automatically — and, on REMOVE, deregister it + purge modulators (engine-side).
+// We POST the full current manifest on boot and on every add/remove/chain-change/
+// export. Fire-and-forget + graceful: analysis NEVER blocks on this, and an
+// unreachable engine (or a not-yet-built 404 endpoint) only warns ONCE rather
+// than crashing — the parallel engine agent builds the receiving endpoint.
+const MANIFEST_PATH = '/audio/signals/manifest';
+const MANIFEST_TIMEOUT_MS = 2000;
+let _manifestWarned = false;   // warn-once so a down engine doesn't spam the log
+
+// The osc_out tap of a signal (terminal op), or null. Reused for the manifest.
+function oscOutTap(sig) {
+  const last = sig.chain[sig.chain.length - 1];
+  return last && last.type === 'osc_out' ? last : null;
+}
+
+// Build the manifest: one entry per OUTPUT signal that maps to a DYNAMIC key.
+// cpcKey falls back to the signal id when the operator hasn't named the tap yet
+// (so the engine always gets a stable key); address falls back to the curated
+// /marsin/audio/<key>.
+//
+// The engine's POST /audio/signals/manifest is for DYNAMIC keys only — a cpcKey
+// that collides with a BUILT-IN curated key (micLow, micDomFreq1, audioBpm, …)
+// is REFUSED with 400 (it must not shadow a curated key; api_server.js manifest
+// route). The default design ships signals on exactly those built-in keys, and
+// BPM rides its own always-on emit (bpm_emit.js) — none of those belong in the
+// manifest. So we EXCLUDE any signal whose cpcKey is already a registered CPC
+// param. The companion's paramCenter is a fresh baseline (no dynamic keys), so
+// `isRegisteredKey` is true iff the key is a built-in — the exact engine gate,
+// no fork.
+function buildManifest() {
+  const signals = [];
+  for (const sig of design.signals) {
+    const tap = oscOutTap(sig);
+    if (!tap) continue;   // not an OUTPUT — nothing to route to the engine
+    const cpcKey = (tap.params && typeof tap.params.cpcKey === 'string' && tap.params.cpcKey.trim())
+      ? tap.params.cpcKey.trim() : sig.id;
+    if (paramCenter.isRegisteredKey(cpcKey)) continue;   // built-in → engine already has it
+    const address = (tap.params && typeof tap.params.address === 'string' && tap.params.address.trim())
+      ? tap.params.address.trim() : `/marsin/audio/${cpcKey}`;
+    signals.push({ cpcKey, address, label: sig.label, type: sig.type });
+  }
+  return { signals };
+}
+
+// POST the current manifest to the engine. Fire-and-forget: never awaited by the
+// analysis path; a failure warns ONCE and is otherwise swallowed (graceful).
+async function pushManifest() {
+  if (!engineEndpoint) return;   // pure standalone — no engine to notify
+  const url = `http://${engineEndpoint.host}:${engineEndpoint.port}${MANIFEST_PATH}`;
+  const body = JSON.stringify(buildManifest());
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), MANIFEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      if (!_manifestWarned) {
+        _manifestWarned = true;
+        console.warn(`[companion manifest] POST ${MANIFEST_PATH} → ${res.status} (engine endpoint not ready yet?); will keep trying on future edits`);
+      }
+      return;
+    }
+    _manifestWarned = false;   // recovered — allow a fresh warn if it drops again
+  } catch (e) {
+    if (!_manifestWarned) {
+      _manifestWarned = true;
+      console.warn(`[companion manifest] POST ${MANIFEST_PATH} failed: ${e && e.message} (engine unreachable; analysis unaffected)`);
+    }
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ── BUILT-IN BPM OUTPUT (always-on) ──────────────────────────────────────────
 // BPM is a DERIVED signal (DerivedSignals/BpmTracker), not a raw-source designed
 // signal, so it's emitted as a first-class Companion output rather than via the
@@ -345,6 +425,30 @@ let clockMs = 0, lastMs = 0;
 // the orbs (so the view never goes dark).
 const danceFromOp = { dom1: null, dom2: null };
 const hasDanceMaker = (sig) => sig.chain.some(o => o.type === 'danceMaker' && o.enabled !== false);
+
+// Mirror the analyzer hop's RAW outputs into the ParamCenter under the engine's
+// canonical raw-mirror keys (audio/postproc/audio_signals.js §"Raw mirrors").
+// The AudioStructureDetector AND DerivedSignals (BpmTracker / NoteEstimator /
+// PartyMode) OBSERVE these CPC keys each hop — they read them back from the
+// ParamCenter, they are NOT handed the analyzer result directly. The Companion
+// is the SOLE analyzer, so it must publish these mirrors itself or the detector
+// + derived signals run on all-zeros (no onsets → audioBpm stays 0 forever →
+// the DERIVED panel BPM reads "--" and nothing is emitted over OSC). One source
+// of truth: the key↔analyzer-field mapping is the same RAW_SOURCES.analyzer map
+// the designed signals read (ANALYZER_FIELD), no fork.
+function publishRawMirrors(r) {
+  paramCenter.setMany([
+    { kind: 'scalar', key: 'micLowRaw',     value: r.low ?? 0 },
+    { kind: 'scalar', key: 'micMidRaw',     value: r.mid ?? 0 },
+    { kind: 'scalar', key: 'micHighRaw',    value: r.high ?? 0 },
+    { kind: 'scalar', key: 'micKickRaw',    value: r.kick ?? 0 },
+    { kind: 'scalar', key: 'micFluxRaw',    value: r.flux ?? 0 },
+    { kind: 'scalar', key: 'micDomFreq1',   value: r.domFreq1 ?? 0 },
+    { kind: 'scalar', key: 'micDomEnergy1', value: r.domEnergy1 ?? 0 },
+    { kind: 'scalar', key: 'micDomFreq2',   value: r.domFreq2 ?? 0 },
+    { kind: 'scalar', key: 'micDomEnergy2', value: r.domEnergy2 ?? 0 },
+  ], 'companion');
+}
 function processDesignedSignals(r, dt) {
   const out = {};
   danceFromOp.dom1 = null; danceFromOp.dom2 = null;
@@ -377,6 +481,9 @@ const analyzer = new AudioAnalyzer({
     recordAnalysis(r.low ?? 0);
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
     const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
+    // Publish the raw-mirror CPC keys BEFORE the observers tick — the detector
+    // + derived signals read them back from the ParamCenter (not from `r`).
+    publishRawMirrors(r);
     detector.tick(clockMs, dt);
     derived.tick(clockMs, dt);
     // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
@@ -608,17 +715,25 @@ function setMode(next, opts = {}) {
 // ── signal management + chain edit + export ─────────────────────────────────
 function uid(prefix) { return `${prefix}_${Math.random().toString(36).slice(2, 7)}`; }
 
-// Add a signal from a raw source. The signal starts as source → osc_out tap
-// (an OUTPUT). Returns { ok, signal } or { ok:false, error }.
+// Add a signal from a raw source. A new signal is IMMEDIATELY an OUTPUT: it is
+// born with a terminal `osc_out` tap already attached, routed to the engine at
+// `/marsin/audio/<cpcKey>` where cpcKey defaults to the source label lowercased
+// plus a short uid (the operator can rename via the cpcKey field). This means
+// the moment a signal is added it shows up in CaptainPad (the manifest POST in
+// `pushManifest` notifies the engine). Returns { ok, signal } | { ok:false, error }.
 function addSignal(sourceId) {
   const src = RAW_SOURCES[sourceId];
   if (!src) return { ok: false, error: `unknown raw source "${sourceId}"` };
-  const id = uid(sourceId.replace(/^raw/, '').toLowerCase());
+  const slug = sourceId.replace(/^raw/, '').toLowerCase();
+  const id = uid(slug);
   const label = src.label;
-  const address = src.type === 'frequency' ? '/marsin/dom/custom' : '/marsin/audio/custom';
+  // cpcKey: source-derived + a short uid so two signals from the same source
+  // never collide. The operator can rename it; address tracks /marsin/audio/<key>.
+  const cpcKey = `${slug}_${Math.random().toString(36).slice(2, 6)}`;
+  const address = `/marsin/audio/${cpcKey}`;
   const sig = {
     id, label, source: sourceId, type: src.type, output: true,
-    chain: [{ id: `${id}_out`, type: 'osc_out', enabled: true, params: { address } }],
+    chain: [{ id: `${id}_out`, type: 'osc_out', enabled: true, params: { address, cpcKey } }],
   };
   const v = validateSignal(sig);
   if (!v.ok) return { ok: false, error: v.error };
@@ -705,19 +820,20 @@ function handleMessage(ws, raw) {
   }
   else if (m.type === 'addSignal') {
     const res = addSignal(m.source);
-    if (res.ok) broadcast({ type: 'signals', signals: design.signals });
+    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); pushManifest(); }
     ws.send(JSON.stringify({ type: 'addResult', ...res }));
   } else if (m.type === 'removeSignal') {
     const res = removeSignal(m.id);
-    if (res.ok) broadcast({ type: 'signals', signals: design.signals });
+    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); pushManifest(); }
     ws.send(JSON.stringify({ type: 'removeResult', id: m.id, ...res }));
   } else if (m.type === 'setChain') {
     const res = setSignalChain(m.id, m.chain);
+    if (res.ok) pushManifest();   // cpcKey / address / output may have changed
     ws.send(JSON.stringify({ type: 'chainResult', id: m.id, ...res }));
   } else if (m.type === 'export') {
     ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));
   } else if (m.type === 'exportSave') {
-    try { const res = exportToDisk(); ws.send(JSON.stringify({ type: 'exportSaved', ...res })); }
+    try { const res = exportToDisk(); pushManifest(); ws.send(JSON.stringify({ type: 'exportSaved', ...res })); }
     catch (e) { ws.send(JSON.stringify({ type: 'exportSaved', ok: false, error: String(e && e.message) })); }
   } else if (m.type === 'listDevices') {
     listAudioDevices({ ffmpegPath }).then(d => ws.send(JSON.stringify({ type: 'devices', ...d })))
@@ -898,5 +1014,8 @@ resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch((
     if (engineEndpoint) {
       console.log(`     ↔ engine tuning sync: ${engineEndpoint.host}:${engineEndpoint.port} (single source of truth; degrades gracefully)`);
     }
+    // Advertise the loaded design's OUTPUT signals to the engine so CaptainPad
+    // shows them on boot. Fire-and-forget — warns once if the engine is down.
+    pushManifest();
   });
 });

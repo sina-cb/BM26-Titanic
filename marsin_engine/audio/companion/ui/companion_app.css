@@ -119,18 +119,26 @@ body{background:var(--bg);color:var(--text);
 /* 5-col grid: name · mini-scope · value · remove(×). The value column is
    widened to 48px and right-padded so the "0.00" never clips the edge
    (sidebar number glitch fix, 2026-06-17). */
-.sig-row{display:grid;grid-template-columns:40px 1fr 48px 18px;align-items:center;gap:6px;
+.sig-row{display:grid;grid-template-columns:40px 1fr 48px 24px;align-items:center;gap:6px;
   background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--acc);
   border-radius:8px;padding:7px 6px 7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
 .sig-row.active{background:var(--raised);box-shadow:0 0 0 1px var(--acc) inset}
 .sig-name{font-weight:700;color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sig-mini canvas{display:block}
+/* The mini-trace cell must be allowed to SHRINK below the canvas's intrinsic
+   110px width (grid items default to min-width:auto, which would let the canvas
+   push the row wider and shove the remove [×] button past the sidebar edge).
+   min-width:0 + a fluid canvas keeps every column inside the row. */
+.sig-mini{min-width:0;overflow:hidden}
+.sig-mini canvas{display:block;width:100%;height:auto}
 .sig-val{text-align:right;color:var(--muted);padding-right:4px;font-variant-numeric:tabular-nums;
   font-size:11px;white-space:nowrap}
 .sig-type{display:block;color:var(--muted);font-size:8px;letter-spacing:.5px;margin-top:1px}
-.sig-x{background:none;border:none;color:var(--muted);cursor:pointer;font:inherit;font-size:12px;
-  padding:0;line-height:1;border-radius:4px}
-.sig-x:hover{color:#ff5d6c;background:rgba(255,93,108,0.12)}
+/* Remove control — a clearly themed framed button, the destructive twin of the
+   `[+]` add button (.sig-add). Red-tinted so the operator can't miss it. */
+.sig-x{background:rgba(255,93,108,0.10);border:1px solid rgba(255,93,108,0.35);
+  color:#ff5d6c;cursor:pointer;font:inherit;font-weight:700;font-size:13px;
+  width:22px;height:22px;padding:0;line-height:1;border-radius:6px}
+.sig-x:hover{color:#fff;background:#ff5d6c;border-color:#ff5d6c}
 .sigs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .sig-add{background:var(--raised);border:1px solid var(--border);color:var(--accent);cursor:pointer;
   font:inherit;font-weight:700;font-size:13px;width:24px;height:24px;border-radius:6px;line-height:1}
@@ -163,6 +171,15 @@ body{background:var(--bg);color:var(--text);
 .dot.ghost{background:#888;opacity:.5}.dot.solid{background:var(--accent)}
 
 .lower{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
+/* The TEST SOURCE panel only shows in test mode (syncSourcePanel hides it via
+   display:none otherwise). A display:none grid item is dropped from the grid,
+   which would collapse the chain-panel into the 230px first column and force
+   the op row to wrap VERTICALLY. Pin the chain-panel to column 2 so it always
+   keeps the wide track, and when the source panel is hidden collapse the grid
+   to a single full-width column (reclaim the empty 230px). */
+.chain-panel{grid-column:2}
+.lower.no-source{grid-template-columns:1fr}
+.lower.no-source .chain-panel{grid-column:1}
 .source-panel,.chain-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px}
 .source{display:flex;flex-direction:column;gap:10px}
 .knob-head{display:flex;justify-content:space-between;color:var(--muted);font-size:10.5px;margin-bottom:3px}
