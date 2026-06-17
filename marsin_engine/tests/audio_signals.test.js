@@ -40,16 +40,11 @@ const GAIN = (key, label) => ({
   persist: true, oscAddress: `/marsin/param/${key}`, sharedFnName: key,
 });
 
+// NOTE: the `stems*` family was REMOVED on 2026-06-17 (operator brief — stems
+// retired entirely; the Audio Companion is the sole analyzer). The contract's
+// curated inbound OSC set added oscAddresses to micDomFreq1/2 + audioBpm/
+// audioBuildScore/audioEnergyRatio/audioSlowZone/audioParty.
 const EXPECTED_AUDIO_ENTRIES = [
-  GAIN('stemsVocalsGain', 'Vocals Gain'),
-  GAIN('stemsBassGain', 'Bass Gain'),
-  GAIN('stemsDrumsGain', 'Drums Gain'),
-  { key: 'stemsVocals', label: 'Stems · Vocals', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/stems/vocals', sharedFnName: 'stemsVocals' }) },
-  { key: 'stemsBass', label: 'Stems · Bass', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/stems/bass', sharedFnName: 'stemsBass' }) },
-  { key: 'stemsDrums', label: 'Stems · Drums', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/stems/drums', sharedFnName: 'stemsDrums' }) },
-  { key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'stemsVocalsRaw' }) },
-  { key: 'stemsBassRaw', label: 'Stems · Bass (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'stemsBassRaw' }) },
-  { key: 'stemsDrumsRaw', label: 'Stems · Drums (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'stemsDrumsRaw' }) },
   { key: 'tempoBpm', label: 'Tempo · BPM', ...LIVE({ default: 0.0, range: [0, 300], broadcastHz: 5, oscAddress: '/lx/tempo/bpm', sharedFnName: 'tempoBpm' }) },
   { key: 'micLow', label: 'Mic · Low', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/mic/low', sharedFnName: 'micLow' }) },
   { key: 'micMid', label: 'Mic · Mid', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/mic/mid', sharedFnName: 'micMid' }) },
@@ -67,18 +62,18 @@ const EXPECTED_AUDIO_ENTRIES = [
   GAIN('micKickGain', 'Mic Kick Gain'),
   GAIN('micFluxGain', 'Mic Flux Gain'),
   { key: 'audioStructure', label: 'Audio · Structure', ...LIVE({ default: 0.0, range: [0, 2], broadcastHz: 10, sharedFnName: 'audioStructure' }) },
-  { key: 'audioBuildScore', label: 'Audio · Build Score', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioBuildScore' }) },
-  { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioEnergyRatio' }) },
+  { key: 'audioBuildScore', label: 'Audio · Build Score', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/build', sharedFnName: 'audioBuildScore' }) },
+  { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/energy', sharedFnName: 'audioEnergyRatio' }) },
   { key: 'audioVocalsHot', label: 'Audio · Vocals Hot', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioVocalsHot' }) },
   { key: 'audioDropPulse', label: 'Audio · Drop Pulse', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioDropPulse' }) },
-  { key: 'audioSlowZone', label: 'Audio · Slow Zone', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioSlowZone' }) },
-  { key: 'micDomFreq1', label: 'Mic · Dom Freq 1', ...LIVE({ range: [0, 22050], broadcastHz: 15, sharedFnName: 'micDomFreq1' }) },
+  { key: 'audioSlowZone', label: 'Audio · Slow Zone', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/slow', sharedFnName: 'audioSlowZone' }) },
+  { key: 'micDomFreq1', label: 'Mic · Dom Freq 1', ...LIVE({ range: [0, 22050], broadcastHz: 15, oscAddress: '/marsin/dom/freq1', sharedFnName: 'micDomFreq1' }) },
   { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy1' }) },
-  { key: 'micDomFreq2', label: 'Mic · Dom Freq 2', ...LIVE({ range: [0, 22050], broadcastHz: 15, sharedFnName: 'micDomFreq2' }) },
+  { key: 'micDomFreq2', label: 'Mic · Dom Freq 2', ...LIVE({ range: [0, 22050], broadcastHz: 15, oscAddress: '/marsin/dom/freq2', sharedFnName: 'micDomFreq2' }) },
   { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', ...LIVE({ broadcastHz: 15, sharedFnName: 'micDomEnergy2' }) },
-  { key: 'audioBpm', label: 'Audio · BPM', ...LIVE({ range: [0, 300], broadcastHz: 5, sharedFnName: 'audioBpm' }) },
+  { key: 'audioBpm', label: 'Audio · BPM', ...LIVE({ range: [0, 300], broadcastHz: 5, oscAddress: '/marsin/audio/bpm', sharedFnName: 'audioBpm' }) },
   { key: 'audioBeat', label: 'Audio · Beat', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioBeat' }) },
-  { key: 'audioParty', label: 'Audio · Party', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioParty' }) },
+  { key: 'audioParty', label: 'Audio · Party', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/party', sharedFnName: 'audioParty' }) },
   { key: 'audioNote', label: 'Audio · Note', ...LIVE({ range: [0, 11], broadcastHz: 10, sharedFnName: 'audioNote' }) },
   { key: 'audioNoteHue', label: 'Audio · Note Hue', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioNoteHue' }) },
   { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioSwitchPattern' }) },
@@ -140,7 +135,6 @@ test('ParamCenter schema contains the derived audio family with identical fields
 test('KNOWN_SIGNALS is unchanged as a set (and as the pre-refactor ordered list)', () => {
   const expected = [
     'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
-    'stemsBass', 'stemsDrums', 'stemsVocals',
   ];
   assert.deepEqual([...KNOWN_SIGNALS], expected, 'KNOWN_SIGNALS ordered list');
   assert.deepEqual(
@@ -169,21 +163,12 @@ test('DEFAULT_CHAINS = Gain + tuned smoothing LPF per signal, sudden micKick tri
     ],
     micFlux: [{ id: 'flux_gain', type: 'gain', enabled: true, params: { paramKey: 'micFluxGain' } },
               { id: 'flux_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 4.5 } }],
-    stemsBass: [{ id: 'stems_bass_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsBassGain' } },
-                { id: 'stems_bass_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 3.5 } }],
-    stemsDrums: [{ id: 'stems_drums_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsDrumsGain' } },
-                 { id: 'stems_drums_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 12.0 } }],
-    stemsVocals: [{ id: 'stems_vocals_gain', type: 'gain', enabled: true, params: { paramKey: 'stemsVocalsGain' } },
-                  { id: 'stems_vocals_lpf', type: 'lpf', enabled: true, params: { cutoffHz: 5.0 } }],
   };
   assert.deepEqual(DEFAULT_CHAINS, expected);
 });
 
 test('GAIN_BY_KEY matches the pre-refactor osc_listener map (byte-identical, ordered)', () => {
   const expected = {
-    stemsBass: 'stemsBassGain',
-    stemsDrums: 'stemsDrumsGain',
-    stemsVocals: 'stemsVocalsGain',
     micLow: 'micLowGain',
     micMid: 'micMidGain',
     micHigh: 'micHighGain',

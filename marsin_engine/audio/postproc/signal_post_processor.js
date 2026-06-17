@@ -96,7 +96,6 @@ export const KNOWN_SIGNALS = Object.freeze(processedSignalKeys());
 // build-up glow. (report 202606 audio tuning.)
 const SMOOTHING_HZ = Object.freeze({
   micLow: 5.5, micMid: 8.0, micHigh: 14.0, micFlux: 4.5,
-  stemsBass: 3.5, stemsDrums: 12.0, stemsVocals: 5.0,
 });
 
 export const DEFAULT_CHAINS = Object.freeze(buildDefaultChains());
@@ -256,6 +255,22 @@ const OP_SCHEMA = Object.freeze({
     params: {
       windowSec: { type: 'number', min: 1, max: 120, default: 30 },
       strength:  { type: 'number', min: 0, max: 1,   default: 1.0 },
+    },
+  },
+  osc_out: {
+    // 2026-06-17 companion signal-designer contract §"The osc_out op".
+    // A TERMINAL TAP: it does NOT modify the signal value (identity in
+    // process()) — it MARKS the chain as an OUTPUT and carries the engine
+    // OSC `address` the Audio Companion sends this signal's POST value to,
+    // plus an optional `cpcKey` label (the engine CPC key the address
+    // binds to, for operator readability). The Companion reads osc_out ops
+    // off the chain to know what to emit each analyzer hop; the engine's
+    // own process() treats it as a no-op so a chain with osc_out behaves
+    // identically whether or not OSC sending is wired.
+    description: 'Terminal OSC output tap: send this signal\'s POST value to the engine OSC address. Identity in the DSP chain.',
+    params: {
+      address: { type: 'string', default: '/marsin/audio/out' },
+      cpcKey:  { type: 'string', optional: true },
     },
   },
 });
@@ -449,6 +464,14 @@ function _validateOp(op, indexForMsg, paramCenter = null) {
       return { ok: false, error: `op "${op.id}": clamp requires max >= min (got min=${min}, max=${max})` };
     }
   }
+  if (op.type === 'osc_out') {
+    // The address must be a well-formed OSC path (leading slash, no spaces) —
+    // a typo'd address would silently route nothing (Codex P0: fail loud).
+    const addr = normalizedParams.address;
+    if (typeof addr !== 'string' || addr[0] !== '/' || /\s/.test(addr)) {
+      return { ok: false, error: `op "${op.id}": osc_out address must be an OSC path starting with "/" and contain no whitespace (got "${addr}")` };
+    }
+  }
 
   return {
     ok: true,
@@ -490,6 +513,15 @@ export function validateChain(signalKey, chain, opts = {}) {
     }
     seenIds.add(res.normalized.id);
     normalized.push(res.normalized);
+  }
+  // osc_out is a TERMINAL tap: at most one, and only as the LAST op in the
+  // chain (it marks the chain as an output; nothing may run after the tap).
+  const oscOutIdxs = normalized.map((o, i) => (o.type === 'osc_out' ? i : -1)).filter(i => i >= 0);
+  if (oscOutIdxs.length > 1) {
+    return { ok: false, error: `signal ${signalKey}: at most one osc_out op per chain (found ${oscOutIdxs.length})` };
+  }
+  if (oscOutIdxs.length === 1 && oscOutIdxs[0] !== normalized.length - 1) {
+    return { ok: false, error: `signal ${signalKey}: osc_out must be the LAST op in the chain (it is a terminal output tap)` };
   }
   return { ok: true, normalized };
 }
@@ -1098,6 +1130,14 @@ export class SignalPostProcessor {
         const out = strength * norm + (1 - strength) * x;
         rt.yPrev = out;
         return out;
+      }
+      case 'osc_out': {
+        // Terminal OSC output tap — IDENTITY in the DSP chain. The op only
+        // carries the engine OSC `address`/`cpcKey` metadata; the Audio
+        // Companion reads it off the chain to send this signal's POST value
+        // over UDP OSC. process() must not alter the value (so a chain reads
+        // the same with or without OSC wired) — return x unchanged.
+        return x;
       }
       default:
         // Unreachable — validateChain rejects unknown types at config

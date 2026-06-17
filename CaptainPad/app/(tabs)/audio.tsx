@@ -37,7 +37,7 @@
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 // react-native-svg is declared in package.json at 15.10.0 (Expo SDK 54
 // compat). Until the operator runs `npm install` + `npx expo prebuild
@@ -57,7 +57,7 @@ import {
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
   resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type AudioStatusDevice, type OscPillState } from '@/hooks/useEngineState';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
@@ -369,28 +369,20 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
 // supported for any future fixed-colour slot.
 type SignalAccent = 'auto' | 'primary' | 'error' | string;
 
+// A signal slot for the meter strip. Derived at runtime from the engine
+// schema (useAudioSignals) — the strip is DYNAMIC: it renders whatever
+// audio CPC keys the Companion routes in (low/mid/high/kick, dom1/dom2,
+// energy/slow/build, party, …). `accent` is chosen per-signal so KICK /
+// frequency signals read apart from the [0,1] intensities.
 type SignalSlot = {
+  key: string;
   label: string;
-  rawKey: string;
+  rawKey: string | null;
   postKey: string;
   accent: SignalAccent;
+  kind: 'intensity' | 'frequency' | 'bpm';
+  max: number;
 };
-
-const MIC_SIGNALS: readonly SignalSlot[] = [
-  { label: 'LOW',  rawKey: 'micLowRaw',  postKey: 'micLow',  accent: 'auto' },
-  { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: 'auto' },
-  { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: 'auto' },
-  { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: 'error' },
-  // micFlux (spectral flux — the build-up "glow"; docs/30). Distinct violet
-  // accent so it reads apart from the LOW/MID/HIGH bands + the red KICK.
-  { label: 'FLUX', rawKey: 'micFluxRaw', postKey: 'micFlux', accent: '#c084fc' },
-];
-
-const STEMS_SIGNALS: readonly SignalSlot[] = [
-  { label: 'VOC', rawKey: 'stemsVocalsRaw', postKey: 'stemsVocals', accent: 'primary' },
-  { label: 'BAS', rawKey: 'stemsBassRaw',   postKey: 'stemsBass',   accent: 'primary' },
-  { label: 'DRM', rawKey: 'stemsDrumsRaw',  postKey: 'stemsDrums',  accent: 'primary' },
-];
 
 function resolveAccent(accent: SignalAccent, palette: Palette): string {
   if (accent === 'auto') return ACCENT_AUTO;
@@ -399,18 +391,39 @@ function resolveAccent(accent: SignalAccent, palette: Palette): string {
   return accent;
 }
 
-const ALL_SIGNALS: readonly SignalSlot[] = [...MIC_SIGNALS, ...STEMS_SIGNALS];
+// Pick an accent token for a dynamic signal: KICK red, frequency violet,
+// everything else the live-green auto accent.
+function accentFor(sig: AudioSignalDescriptor): SignalAccent {
+  if (/kick/i.test(sig.key)) return 'error';
+  if (sig.kind === 'frequency') return '#c084fc';
+  return 'auto';
+}
 
-// Build the defaults snapshot once at module scope — useLiveParamValues
-// pins keys from the FIRST call's defaults so any per-render literal
-// would be wasted work and a hazard for the pinned-key set.
-const PINNED_LIVE_DEFAULTS: Record<string, number> = (() => {
-  const acc: Record<string, number> = {
-    tempoBpm: 0,
+function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {
+  return {
+    key: sig.key,
+    label: sig.label,
+    rawKey: sig.rawKey,
+    postKey: sig.postKey,
+    accent: accentFor(sig),
+    kind: sig.kind,
+    max: sig.max,
   };
-  for (const s of ALL_SIGNALS) { acc[s.rawKey] = 0; acc[s.postKey] = 0; }
-  return acc;
-})();
+}
+
+// Normalise a raw CPC value to a [0,1] bar/trail fill given the slot kind.
+function normalizeSlot(slot: SignalSlot, value: number): number {
+  if (slot.kind === 'intensity') return Math.max(0, Math.min(1, value));
+  if (slot.max > 0) return Math.max(0, Math.min(1, value / slot.max));
+  return Math.max(0, Math.min(1, value));
+}
+
+// Human-readable value for a slot's header readout.
+function slotValueText(slot: SignalSlot, value: number): string {
+  if (slot.kind === 'frequency') return `${Math.round(value)}Hz`;
+  if (slot.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
+  return Math.max(0, Math.min(1, value)).toFixed(2);
+}
 
 // Trail buffer + window-picker constants. Same AsyncStorage key as
 // before (operator preference roams across rebuilds).
@@ -427,6 +440,10 @@ const TRAIL_SAMPLE_HZ = 15;            // 15 Hz visual cadence — enough resolu
 const TRAIL_SAMPLE_MS = 1000 / TRAIL_SAMPLE_HZ;
 const MAX_TRAIL_S = WINDOW_OPTIONS_S[WINDOW_OPTIONS_S.length - 1];
 const MAX_BUFFER_LEN = MAX_TRAIL_S * TRAIL_SAMPLE_HZ;
+
+// Stable empty trail handed to a freshly-added signal column for the one
+// frame before its ring buffer is allocated (avoids a transient undefined).
+const EMPTY_TRAIL: readonly number[] = Object.freeze([]);
 
 const TRAIL_HEIGHT = 28;               // SVG plot height per signal column
 const SVG_VIEW_W   = 100;              // viewBox width — strokes scale to the actual rendered width
@@ -464,22 +481,28 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
 }) {
   const C = usePalette();
   const accentColor = resolveAccent(slot.accent, C);
-  // Meters show the TRUE engine values (boost the actual signal with the
-  // INPUT GAIN slider, which patches audio.bands.inputGain on the engine).
-  const rv = Math.max(0, Math.min(1, raw));
-  const pv = Math.max(0, Math.min(1, post));
+  // Bars are normalised to [0,1] by the slot's range (intensity is already
+  // [0,1]; frequency/bpm are scaled by their schema max). The header text
+  // shows the TRUE engine value (Hz / bpm / 0..1). Some signals (dom /
+  // detectors / derived) have NO raw mirror — we hide the RAW sub-row for
+  // them and show only the live POST value.
+  const hasRaw = slot.rawKey !== null;
+  const rv = normalizeSlot(slot, raw);
+  const pv = normalizeSlot(slot, post);
   const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
   const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
   return (
     <View style={{ flex: 1, marginHorizontal: 4 }}>
       {/* header — slot label */}
-      <Text style={{
+      <Text numberOfLines={1} style={{
         fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
         color: C.secondary, textTransform: 'uppercase',
         letterSpacing: 0.6, marginBottom: 4,
       }}>{slot.label}</Text>
 
-      {/* RAW sub-row — tag+value, bar, trace */}
+      {/* RAW sub-row — tag+value, bar, trace (only when a raw mirror exists) */}
+      {hasRaw ? (
+      <>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
@@ -488,7 +511,7 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
           color: C.text, opacity: 0.7,
-        }}>{rv.toFixed(2)}</Text>
+        }}>{slotValueText(slot, raw)}</Text>
       </View>
       <View style={{
         height: 14, borderRadius: 7,
@@ -527,17 +550,19 @@ function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
           ) : null}
         </Svg>
       </View>
+      </>
+      ) : null}
 
       {/* POST sub-row — tag+value, bar, trace */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: hasRaw ? 8 : 0 }}>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
           color: accentColor, letterSpacing: 0.6,
-        }}>POST</Text>
+        }}>{hasRaw ? 'POST' : 'LIVE'}</Text>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
           color: C.text,
-        }}>{pv.toFixed(2)}</Text>
+        }}>{slotValueText(slot, post)}</Text>
       </View>
       <View style={{
         height: 18, borderRadius: 9,
@@ -637,12 +662,23 @@ function PinnedAudioMeters({
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
-  // Per-key live subscription. The 7 raw + 7 post audio keys + tempoBpm
-  // participate in the equality check, so this strip re-renders only
-  // when one of THESE values actually ticks. The body below never
-  // re-renders on liveParams. PINNED_LIVE_DEFAULTS is built at module
-  // scope so the key set stays pinned across renders.
-  const live = useLiveParamValues(PINNED_LIVE_DEFAULTS) as Record<string, number>;
+  // DYNAMIC signal set — derived from the engine schema (the audio CPC
+  // keys the Companion routes in). The strip renders whatever is live;
+  // adding/removing a signal in the Companion adds/removes a column with
+  // no code change. Slots carry the post key + (optional) raw mirror key.
+  const signals = useAudioSignals();
+  const slots = useMemo<SignalSlot[]>(() => signals.map(toSignalSlot), [signals]);
+  // Whole live doc — the key set is dynamic, so we read it directly rather
+  // than via useLiveParamValues (whose pinned-key-set contract assumes a
+  // fixed list). The strip re-renders at the analyser cadence; the body
+  // below is a sibling of the ScrollView and never reads this.
+  const liveDoc = useLiveParams();
+  const valueOf = useCallback((key: string | null): number => {
+    if (!key) return 0;
+    const slot = liveDoc?.params?.[key];
+    return slot && typeof slot.value === 'number' ? slot.value : 0;
+  }, [liveDoc]);
+  const tempoLive = useLiveParamValues({ tempoBpm: 0 }) as Record<string, number>;
   // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
@@ -666,37 +702,56 @@ function PinnedAudioMeters({
       .catch(() => { /* benign — persistence is best-effort */ });
   }, []);
 
-  // ── Ring buffer — one number[] per (signal, raw|post) pair. Identity
-  // changes on each tick so SignalColumn's useMemo recomputes the
-  // polyline points string. Bounded at MAX_BUFFER_LEN; window picker
-  // controls how many tail samples we hand to the SVG.
+  // ── Ring buffer — one number[] per (slot, raw|post). Trails hold
+  // NORMALISED [0,1] samples (buildPoints expects [0,1]) so the SVG works
+  // for frequency/bpm signals too. Identity changes on each tick so
+  // SignalColumn's useMemo recomputes the polyline. Bounded at
+  // MAX_BUFFER_LEN; window picker controls the tail length.
   const [trails, setTrails] = useState<{ raw: number[][]; post: number[][] }>(() => ({
-    raw:  ALL_SIGNALS.map(() => []),
-    post: ALL_SIGNALS.map(() => []),
+    raw:  slots.map(() => []),
+    post: slots.map(() => []),
   }));
+  // Re-shape the ring buffers when the dynamic signal set changes (the
+  // Companion added/removed a signal). We start the new slots' trails
+  // empty rather than trying to re-map old buffers by key — a momentary
+  // flat trace on a freshly-added signal is fine and avoids index drift.
+  const slotCountRef = useRef(slots.length);
+  useEffect(() => {
+    if (slotCountRef.current !== slots.length) {
+      slotCountRef.current = slots.length;
+      setTrails({ raw: slots.map(() => []), post: slots.map(() => []) });
+    }
+  }, [slots]);
 
-  // Always read the latest live values from a ref so the sample timer
-  // callback (started once per focus) doesn't need `live` in its deps.
-  // The strip re-renders on every live tick, which updates the ref;
-  // the timer pulls from the ref at TRAIL_SAMPLE_HZ.
-  const liveRef = useRef(live);
-  liveRef.current = live;
+  // Always read the latest slots + live doc from refs so the sample timer
+  // callback (started once per focus) doesn't need them in its deps.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const valueOfRef = useRef(valueOf);
+  valueOfRef.current = valueOf;
 
-  // Sample timer — runs ONLY while the audio tab is focused. Pushes
-  // one frame into every ring buffer at TRAIL_SAMPLE_HZ. Tab blur
+  // Sample timer — runs ONLY while the audio tab is focused. Pushes one
+  // NORMALISED frame into every ring buffer at TRAIL_SAMPLE_HZ. Tab blur
   // clears the timer so we don't burn cycles on background tabs.
   useFocusEffect(useCallback(() => {
     const interval = setInterval(() => {
-      const snap = liveRef.current;
+      const curSlots = slotsRef.current;
+      const read = valueOfRef.current;
       setTrails(prev => {
+        // Guard against a slot/buffer length mismatch during a set change.
+        if (prev.raw.length !== curSlots.length) {
+          return { raw: curSlots.map(() => []), post: curSlots.map(() => []) };
+        }
         const nextRaw  = prev.raw.map((buf, i) => {
-          const v = snap[ALL_SIGNALS[i].rawKey] ?? 0;
+          const s = curSlots[i];
+          const v = s.rawKey ? normalizeSlot(s, read(s.rawKey)) : 0;
           const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
           out.push(v);
           return out;
         });
         const nextPost = prev.post.map((buf, i) => {
-          const v = snap[ALL_SIGNALS[i].postKey] ?? 0;
+          const s = curSlots[i];
+          const v = normalizeSlot(s, read(s.postKey));
           const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
           out.push(v);
           return out;
@@ -738,7 +793,7 @@ function PinnedAudioMeters({
     syncOn && oscState !== 'live' ? 'warn' :
     syncOn                        ? 'on'   :
                                     'off';
-  const bpm = live.tempoBpm > 0 ? Math.round(live.tempoBpm) : null;
+  const bpm = tempoLive.tempoBpm > 0 ? Math.round(tempoLive.tempoBpm) : null;
 
   return (
     <View style={{
@@ -763,36 +818,43 @@ function PinnedAudioMeters({
         }}>TRAIL</Text>
         <WindowPicker value={windowS} onChange={setWindow} />
       </View>
-      {/* Meters row — two halves split by a vertical divider. Each
-          half contains N signal columns, each stacking
-          [label+value]→[bar]→[trail]. The BPM pill rides at the right
-          end of the STEMS half (no trail — BPM has its own pace). */}
-      <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
-        {/* LEFT half: MIC bands (now incl. FLUX) + the INPUT GAIN slider. */}
-        <View style={{ flex: 5, paddingRight: 16 }}>
+      {/* Meters row — DYNAMIC: one SignalColumn per live audio signal the
+          Companion routes in (low/mid/high/kick, dom1/dom2, energy, slow,
+          build, party, …). The set isn't fixed, so the columns scroll
+          horizontally and the BPM tile rides the right end. INPUT GAIN
+          sits under the meters. */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        <View style={{ flex: 1, paddingRight: 12 }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
             color: C.secondary, textTransform: 'uppercase',
             letterSpacing: 1, marginBottom: 8,
-          }}>MIC</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-            {MIC_SIGNALS.map((slot, i) => (
-              <SignalColumn
-                key={slot.postKey}
-                slot={slot}
-                raw={live[slot.rawKey] ?? 0}
-                post={live[slot.postKey] ?? 0}
-                rawSamples={trails.raw[i]}
-                postSamples={trails.post[i]}
-                bufferLen={bufferLen}
-              />
-            ))}
-          </View>
-          {/* INPUT GAIN — software mic-preamp, UNDER the MIC meters (operator
-              request). A REAL engine gain (patches audio.bands.inputGain): it
-              lifts low/mid/high/kick above the noise gate so a quiet mic/feed
-              drives the meters AND the detectors/patterns. */}
-          <View style={{ marginTop: 10, marginHorizontal: 4 }}>
+          }}>AUDIO SIGNALS</Text>
+          {slots.length === 0 ? (
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
+              No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
+            </Text>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'flex-start', paddingRight: 8 }}>
+              {slots.map((slot, i) => (
+                <View key={slot.key} style={{ width: 96 }}>
+                  <SignalColumn
+                    slot={slot}
+                    raw={valueOf(slot.rawKey)}
+                    post={valueOf(slot.postKey)}
+                    rawSamples={trails.raw[i] ?? EMPTY_TRAIL}
+                    postSamples={trails.post[i] ?? EMPTY_TRAIL}
+                    bufferLen={bufferLen}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+          )}
+          {/* INPUT GAIN — software mic-preamp, UNDER the meters. A REAL
+              engine gain (patches audio.bands.inputGain): it lifts the mic
+              bands above the noise gate so a quiet mic/feed drives the
+              meters AND the detectors/patterns. */}
+          <View style={{ marginTop: 10, marginHorizontal: 4, maxWidth: 360 }}>
             <FaderRow
               label="INPUT GAIN"
               suffix="×"
@@ -800,53 +862,27 @@ function PinnedAudioMeters({
               max={INPUT_GAIN_MAX}
               step={0.1}
               value={inputGain}
-              hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so LOW/MID/HIGH/KICK lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
+              hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so the mic bands lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
               onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
               onCommit={onCommitInputGain}
             />
           </View>
         </View>
-        {/* Vertical divider */}
-        <View style={{ width: 1, backgroundColor: C.ghostBorder, marginHorizontal: 0 }} />
-        {/* RIGHT half: stems + BPM. Stems get the same SignalColumn
-            treatment as mic; BPM stays as a pill (no trail). */}
-        <View style={{ flex: 4, paddingLeft: 16 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-              color: C.secondary, textTransform: 'uppercase',
-              letterSpacing: 1,
-            }}>STEMS</Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-            {STEMS_SIGNALS.map((slot, i) => (
-              <SignalColumn
-                key={slot.postKey}
-                slot={slot}
-                raw={live[slot.rawKey] ?? 0}
-                post={live[slot.postKey] ?? 0}
-                rawSamples={trails.raw[MIC_SIGNALS.length + i]}
-                postSamples={trails.post[MIC_SIGNALS.length + i]}
-                bufferLen={bufferLen}
-              />
-            ))}
-            {/* BPM pill — biggest single number on the strip. No trail
-                under it: BPM ticks at the song's pace, not the analyser's. */}
-            <View style={{
-              marginLeft: 12, paddingHorizontal: 12, paddingVertical: 4,
-              borderRadius: 10,
-              backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
-              minWidth: 72, alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
-                BPM
-              </Text>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
-                {bpm ?? '—'}
-              </Text>
-            </View>
-          </View>
+        {/* BPM tile — biggest single number on the strip. No trail under it:
+            BPM ticks at the song's pace, not the analyser's. */}
+        <View style={{
+          marginLeft: 8, paddingHorizontal: 12, paddingVertical: 4,
+          borderRadius: 10,
+          backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
+          borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
+          minWidth: 72, alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
+            BPM
+          </Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
+            {bpm ?? '—'}
+          </Text>
         </View>
       </View>
     </View>
@@ -1630,6 +1666,50 @@ function AudioConfigBody({
     else { setPatchError(null); setPickerOpen(false); reload(); }
   }, [reload]);
 
+  // ── Audio SOURCE (test / mic / file) ────────────────────────────────
+  // The engine owns the capture source via `capture.device`: a real device
+  // id/ffmpeg string (MIC), a `file:<path>` string (FILE), or the synthetic
+  // `test` source (TEST). One device config — the Companion (engine-
+  // supervised) honors the same `capture.*`. We DERIVE the current source
+  // from the device string and PATCH `capture.device` to switch — reusing
+  // the proven capture round-trip, no silent fallback (a source the engine
+  // rejects surfaces its 400 in the patchError banner).
+  const deviceStr = cfg?.capture?.device ?? null;
+  const currentSource: 'test' | 'mic' | 'file' =
+    deviceStr === 'test' ? 'test' :
+    (typeof deviceStr === 'string' && deviceStr.startsWith('file:')) ? 'file' :
+    'mic';
+  const [filePath, setFilePath] = useState<string>(
+    typeof deviceStr === 'string' && deviceStr.startsWith('file:') ? deviceStr.slice(5) : '',
+  );
+
+  const commitSource = useCallback(async (next: 'test' | 'mic' | 'file', path?: string) => {
+    // TEST → synthetic source. FILE → file:<path>. MIC → leave the existing
+    // device (or prompt the picker if none). The engine restarts capture on
+    // a capture.device change and broadcasts a fresh audioStatus.
+    let deviceValue: string | null = null;
+    if (next === 'test') deviceValue = 'test';
+    else if (next === 'file') {
+      const p = (path ?? filePath).trim();
+      if (!p) { setPickerOpen(false); return; } // wait for a path; no-op until entered
+      deviceValue = `file:${p}`;
+    } else {
+      // MIC: if no real device is selected yet, open the picker instead of
+      // PATCHing a placeholder. Otherwise keep the existing device.
+      if (!deviceStr || deviceStr === 'test' || deviceStr.startsWith('file:')) {
+        setPickerOpen(true);
+        if (!devices) loadDevices();
+        return;
+      }
+      deviceValue = deviceStr;
+    }
+    setBusy('source');
+    const r = await patchAudioConfig({ capture: { device: deviceValue } });
+    setBusy(null);
+    if (!r.ok) { setPatchError(r.error || 'failed to set source'); reload(); }
+    else { setPatchError(null); reload(); }
+  }, [filePath, deviceStr, devices, loadDevices, reload]);
+
   // "Open Settings" action on the cross-machine mic banner — expand the
   // SETTINGS disclosure and (if not already loaded) warm the device list
   // so the operator who wants the full rig context lands on a ready picker.
@@ -1735,8 +1815,8 @@ function AudioConfigBody({
             accent={enabled ? phaseColor : ACCENT_AUTO}
           />
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 12 }}>
-            This toggle only affects the mic listener. Stems (Vocals/Bass/Drums) are streamed
-            independently over OSC and stay active when this is off.
+            This toggle only affects the in-engine mic listener. Signals the Audio Companion
+            designs and routes in over OSC arrive independently and stay live when this is off.
           </Text>
         </View>
 
@@ -1830,7 +1910,7 @@ function AudioConfigBody({
                 SETTINGS
               </Text>
               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-                Microphone · Engine · Reset
+                Source · Overall gain · Device · Engine · Reset
               </Text>
             </View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary }}>
@@ -1840,10 +1920,99 @@ function AudioConfigBody({
 
           {!settingsCollapsed ? (
             <View style={{ marginTop: 16 }}>
-              {/* ── MICROPHONE ───────────────────────────────────────── */}
+              {/* ── SOURCE (test / mic / file) ───────────────────────────
+                  Live-changeable. The engine owns the capture source via
+                  capture.device; the Companion (engine-supervised) honors
+                  the same config. */}
+              <View style={SUB_CARD}>
+                <SubHeader title="SOURCE" />
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {(['test', 'mic', 'file'] as const).map((src) => {
+                    const active = currentSource === src;
+                    const label = src === 'test' ? 'TEST' : src === 'mic' ? 'MIC' : 'FILE';
+                    return (
+                      <TouchableOpacity
+                        key={src}
+                        onPress={() => commitSource(src)}
+                        disabled={busy === 'source'}
+                        style={{
+                          flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
+                          backgroundColor: active ? C.primary : C.surfaceContainerLowest,
+                          borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+                          opacity: busy === 'source' ? 0.6 : 1,
+                        }}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
+                          color: active ? '#fff' : C.secondary, letterSpacing: 0.8,
+                        }}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: 8 }}>
+                  TEST = synthetic signal (no hardware). MIC = the capture device below. FILE = replay a clip. The Companion uses the same source.
+                </Text>
+                {currentSource === 'file' ? (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>
+                      FILE PATH
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TextInput
+                        value={filePath}
+                        onChangeText={setFilePath}
+                        placeholder="/clips/track.wav"
+                        placeholderTextColor={C.icon}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        style={{
+                          flex: 1, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8,
+                          backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.ghostBorder,
+                          color: C.text, fontFamily: 'Inter_400Regular', fontSize: 12,
+                        }}
+                      />
+                      <TouchableOpacity
+                        onPress={() => commitSource('file', filePath)}
+                        disabled={busy === 'source' || filePath.trim().length === 0}
+                        style={{
+                          paddingHorizontal: 14, justifyContent: 'center', borderRadius: 8,
+                          backgroundColor: filePath.trim().length === 0 ? C.surfaceContainerHigh : C.primary,
+                          opacity: busy === 'source' ? 0.6 : 1,
+                        }}
+                      >
+                        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: filePath.trim().length === 0 ? C.secondary : '#fff', letterSpacing: 0.6 }}>
+                          LOAD
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+
+              {/* ── OVERALL GAIN ─────────────────────────────────────────
+                  The single software preamp the whole PCM lane sees (bands /
+                  kick / dom / FFT). Live-tunable (audio.bands.inputGain). Same
+                  control as the strip's INPUT GAIN — one source of truth. */}
+              <View style={SUB_CARD}>
+                <SubHeader title="OVERALL GAIN" />
+                <FaderRow
+                  label="INPUT GAIN"
+                  suffix="×"
+                  min={INPUT_GAIN_MIN}
+                  max={INPUT_GAIN_MAX}
+                  step={0.1}
+                  value={cfg?.bands?.inputGain ?? 1}
+                  hint="Software preamp on the audio input (0–10×). Boosts a quiet feed so every signal lifts above the noise gate — affects the engine, not just the display."
+                  onDrag={() => { /* commit on release */ }}
+                  onCommit={commitInputGain}
+                />
+              </View>
+
+              {/* ── MICROPHONE / CAPTURE DEVICE ───────────────────────── */}
               <View style={SUB_CARD}>
                 <SubHeader
-                  title="MICROPHONE"
+                  title="CAPTURE DEVICE"
                   right={
                     <TouchableOpacity
                       onPress={() => { setPickerOpen(o => !o); if (!devices && !pickerOpen) loadDevices(); }}

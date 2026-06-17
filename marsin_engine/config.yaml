@@ -29,7 +29,7 @@ osc:
   allowedSenders: []
   bindings: {}
 audio:
-  enabled: true
+  enabled: false
   capture:
     backend: ffmpeg
     ffmpegPath: ffmpeg
@@ -64,6 +64,12 @@ audio:
   structureDetector:
     enabled: true
     dropEdgeMode: windowed
+companion:
+  osc:
+    host: 127.0.0.1
+    port: 10000
+  source: mic
+  device: null
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★

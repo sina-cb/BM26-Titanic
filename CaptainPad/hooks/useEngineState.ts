@@ -1111,3 +1111,127 @@ export function useAudioStatus(): AudioStatus | null {
   return useEngineSlice<AudioStatus | null>((s) => s.audioStatus);
 }
 
+// ── Dynamic audio-signal family (the Companion → CPC contract) ─────────────
+//
+// The Audio Companion designs signals and routes them into the engine's
+// CPC over OSC; the engine binds them to live CPC keys (micLow/Mid/High/
+// Kick, micDomFreq1/2, audioBpm, audioEnergyRatio, audioSlowZone,
+// audioBuildScore, audioParty, …). The set is NOT fixed — the operator
+// can add/remove signals in the Companion — so CaptainPad must render
+// WHATEVER audio CPC keys are live, not a hardcoded list.
+//
+// Source of truth: the engine's `GET /param-center/schema` (mirrored into
+// `paramSchema`). Each entry carries `key`, `label`, `range`, and the
+// `live` flag (generated, in turn, from marsin_engine/audio/postproc/
+// audio_signals.js). We derive the meter list from the live-flagged audio
+// keys, classify each by its range, and split off the internal companions
+// (`*Raw` mirrors, `*Gain` knobs) + tempoBpm (it has its own BPM tile).
+//
+// Codex P0 — NO hardcoded fallback: before the schema fetch lands this
+// returns an empty list. The deck/mixer/audio meters degrade to "no audio
+// signals yet" rather than inventing a list that could drift.
+
+/**
+ * One audio signal as surfaced to the UI. `postKey` is the live (post-gain
+ * / post-chain) CPC key the meter reads; `rawKey` is the engine-published
+ * `<key>Raw` pre-gain mirror when one exists (null otherwise). `bpm`
+ * signals carry a tempo (rendered as an integer count); `frequency`
+ * signals carry Hz (rendered with their Hz value); `intensity` signals are
+ * [0,1] bar meters. `max` is the schema range max (used to normalise the
+ * bar fill for non-[0,1] signals).
+ */
+export interface AudioSignalDescriptor {
+  key: string;
+  postKey: string;
+  rawKey: string | null;
+  label: string;
+  kind: 'intensity' | 'frequency' | 'bpm';
+  max: number;
+}
+
+// Friendlier short label for a meter column. The schema labels read like
+// "Mic · Low" / "Audio · Energy Ratio"; the meters want the trailing token
+// in caps ("LOW", "ENERGY RATIO"). Falls back to the upper-cased key.
+function _shortAudioLabel(label: string | undefined, key: string): string {
+  if (label && label.includes('·')) {
+    const tail = label.split('·').pop();
+    if (tail) return tail.trim().toUpperCase();
+  }
+  if (label) return label.toUpperCase();
+  return key.toUpperCase();
+}
+
+// An audio-family key is one the Companion/analyzer routes into the CPC:
+// mic bands + dominant-frequency outputs, OSC stems (until retired
+// engine-side), and the audio* detector/derived family. We deliberately
+// match by prefix so a NEW Companion signal (any micX / audioX / domX /
+// stemsX key flagged live) shows up automatically.
+function _isAudioFamilyKey(key: string): boolean {
+  return /^(mic|audio|stems|dom)/.test(key);
+}
+
+/**
+ * Derive the live audio-signal descriptors from the engine schema, in
+ * schema order. Excludes the internal `*Raw` mirrors and `*Gain` knobs
+ * (they pair onto their parent signal) and `tempoBpm` (its own BPM tile).
+ * Pure function of the schema map so callers can memoise on it.
+ */
+export function deriveAudioSignals(
+  schema: Record<string, ParamSchemaEntry>,
+): AudioSignalDescriptor[] {
+  const out: AudioSignalDescriptor[] = [];
+  for (const key of Object.keys(schema)) {
+    const entry = schema[key];
+    if (!entry || entry.live !== true) continue;
+    if (!_isAudioFamilyKey(key)) continue;
+    // Companions of a parent signal — never their own meter column.
+    if (key.endsWith('Raw') || key.endsWith('Gain')) continue;
+    // tempoBpm has a dedicated tile/card; don't double-render it as a bar.
+    if (key === 'tempoBpm') continue;
+    const range = Array.isArray(entry.range) && entry.range.length === 2
+      ? entry.range
+      : [0, 1];
+    const max = typeof range[1] === 'number' && range[1] > 0 ? range[1] : 1;
+    // Classify: BPM keys render as a tempo count; the dominant-frequency Hz
+    // keys (range up to Nyquist) render as Hz; everything else is a bar
+    // meter normalised by its range max (so small-range enums like
+    // audioStructure[0,2] / audioNote[0,11] still read as a [0,1] bar).
+    let kind: AudioSignalDescriptor['kind'] = 'intensity';
+    if (/bpm/i.test(key)) kind = 'bpm';
+    else if (max >= 1000) kind = 'frequency';
+    // A `<key>Raw` companion exists iff the schema has it (mic bands +
+    // stems publish one; detectors / dom / derived do not).
+    const rawKey = schema[`${key}Raw`] ? `${key}Raw` : null;
+    out.push({
+      key,
+      postKey: key,
+      rawKey,
+      label: _shortAudioLabel(entry.label, key),
+      kind,
+      max,
+    });
+  }
+  return out;
+}
+
+/**
+ * Reference-stable hook returning the dynamic audio-signal list. Re-renders
+ * only when the schema map reference changes (loaded once at boot, then
+ * static for the engine process lifetime), so meter components subscribing
+ * to this never re-render at the analyser's tick rate.
+ */
+export function useAudioSignals(): AudioSignalDescriptor[] {
+  const EMPTY: AudioSignalDescriptor[] = useMemo(() => [], []);
+  return useEngineSlice<AudioSignalDescriptor[]>(useMemo(() => {
+    let prevSchema: Record<string, ParamSchemaEntry> | null = null;
+    let prevResult: AudioSignalDescriptor[] = EMPTY;
+    return (s: EngineLiveState): AudioSignalDescriptor[] => {
+      if (s.paramSchema === prevSchema) return prevResult;
+      prevSchema = s.paramSchema;
+      const next = deriveAudioSignals(s.paramSchema);
+      prevResult = next.length === 0 ? EMPTY : next;
+      return prevResult;
+    };
+  }, [EMPTY]));
+}
+

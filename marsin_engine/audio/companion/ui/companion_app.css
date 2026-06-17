@@ -116,13 +116,25 @@ body{background:var(--bg);color:var(--text);
 .panel-label{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:10px}
 
 .signals{display:flex;flex-direction:column;gap:7px}
-.sig-row{display:grid;grid-template-columns:42px 1fr 34px;align-items:center;gap:8px;
+/* 5-col grid: name · mini-scope · value · remove(×). The value column is
+   widened to 48px and right-padded so the "0.00" never clips the edge
+   (sidebar number glitch fix, 2026-06-17). */
+.sig-row{display:grid;grid-template-columns:40px 1fr 48px 18px;align-items:center;gap:6px;
   background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--acc);
-  border-radius:8px;padding:7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
+  border-radius:8px;padding:7px 6px 7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
 .sig-row.active{background:var(--raised);box-shadow:0 0 0 1px var(--acc) inset}
-.sig-name{font-weight:700;color:var(--acc)}
+.sig-name{font-weight:700;color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sig-mini canvas{display:block}
-.sig-val{text-align:right;color:var(--muted)}
+.sig-val{text-align:right;color:var(--muted);padding-right:4px;font-variant-numeric:tabular-nums;
+  font-size:11px;white-space:nowrap}
+.sig-type{display:block;color:var(--muted);font-size:8px;letter-spacing:.5px;margin-top:1px}
+.sig-x{background:none;border:none;color:var(--muted);cursor:pointer;font:inherit;font-size:12px;
+  padding:0;line-height:1;border-radius:4px}
+.sig-x:hover{color:#ff5d6c;background:rgba(255,93,108,0.12)}
+.sigs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sig-add{background:var(--raised);border:1px solid var(--border);color:var(--accent);cursor:pointer;
+  font:inherit;font-weight:700;font-size:13px;width:24px;height:24px;border-radius:6px;line-height:1}
+.sig-add:hover{filter:brightness(1.2)}
 .input-row{--acc:#34d3b5;grid-template-columns:1fr;margin-bottom:8px}
 .input-row .sig-name{color:#34d3b5}
 .sig-sub{display:block;color:var(--muted);font-size:9px;margin-top:2px}
@@ -161,9 +173,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
   background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
 
-.chain{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+/* Ops render LEFT-TO-RIGHT as a horizontal row (source → op → … → osc_out),
+   wrapping only when the row overflows. Each op card is compact. */
+.chain{display:flex;flex-direction:row;align-items:flex-start;gap:8px;flex-wrap:wrap}
 .op{background:var(--panel2);border:1px solid var(--border);border-top:3px solid var(--acc);
-  border-radius:8px;padding:9px;min-width:150px}
+  border-radius:8px;padding:9px;min-width:128px;max-width:200px}
+/* The source head (where a designed signal's raw input enters the row). */
+.op.op-source{border-top-color:#34d3b5;min-width:96px}
+.op.op-source .op-type{color:#34d3b5}
+.op-src-sub{color:var(--muted);font-size:9px;margin-top:4px}
+/* The terminal OSC output tap reads visually distinct (the output). */
+.op.osc-out{border-top-color:#34d3b5;background:rgba(52,211,181,0.06)}
+.op.osc-out .op-type{color:#34d3b5}
 .op-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
 .op-type{font-weight:700;letter-spacing:.5px;color:var(--acc)}
 .op-tag{color:var(--muted);font-weight:400;font-size:9.5px;letter-spacing:0}

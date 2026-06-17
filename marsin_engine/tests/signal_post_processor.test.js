@@ -43,7 +43,6 @@ function fullGainPC() {
   return makeParamCenter({
     micLowGain: 1.0, micMidGain: 1.0, micHighGain: 1.0, micKickGain: 1.0,
     micFluxGain: 1.0,
-    stemsBassGain: 1.0, stemsDrumsGain: 1.0, stemsVocalsGain: 1.0,
   });
 }
 
@@ -66,9 +65,10 @@ test('KNOWN_SIGNALS covers the docs/29 signals + micFlux (docs/30)', () => {
   // micFlux added 2026-06-13 (docs/30): the spectral-flux primitive the
   // audio structure detector consumes. Default chain is a single Gain
   // tied to micFluxGain, mirroring the mic bands.
+  // (stems removed 2026-06-17 — the mic bands are the only processed signals.)
   assert.deepEqual(
     [...KNOWN_SIGNALS].sort(),
-    ['micFlux', 'micHigh', 'micKick', 'micLow', 'micMid', 'stemsBass', 'stemsDrums', 'stemsVocals'],
+    ['micFlux', 'micHigh', 'micKick', 'micLow', 'micMid'],
   );
 });
 
@@ -104,19 +104,16 @@ test('micKick default chain has Envelope → Schmitt → Hold per design doc Wir
   assert.ok(types.includes('hold'));
 });
 
-test('stems default chains are Gain(→*Gain paramKey) + tuned smoothing LPF (Hold NOT in default)', () => {
-  // Per-character smoothing (§Task C): bass smooth (3.5 Hz), drums snappy
-  // (12 Hz), vocals smooth (5 Hz). Still NO Hold in the default.
-  const cutoff = { stemsBass: 3.5, stemsDrums: 12.0, stemsVocals: 5.0 };
-  for (const sig of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
-    const chain = DEFAULT_CHAINS[sig];
-    assert.equal(chain.length, 2, `stems default for ${sig} should be gain + lpf`);
-    assert.equal(chain[0].type, 'gain', `stems ${sig} default op should be gain`);
-    assert.equal(chain[0].params.paramKey, `${sig}Gain`);
-    assert.equal(chain[1].type, 'lpf');
-    assert.equal(chain[1].params.cutoffHz, cutoff[sig]);
-    assert.ok(!chain.some(op => op.type === 'hold'), `${sig} default must NOT include Hold (loopback OSC)`);
-  }
+test('micFlux default chain is Gain(→micFluxGain) + tuned smoothing LPF (Hold NOT in default)', () => {
+  // (stems removed 2026-06-17 — micFlux is the remaining non-kick band that
+  // ships gain + a gentle build-up smoothing LPF, NO Hold in the default.)
+  const chain = DEFAULT_CHAINS.micFlux;
+  assert.equal(chain.length, 2, 'micFlux default should be gain + lpf');
+  assert.equal(chain[0].type, 'gain', 'micFlux default op should be gain');
+  assert.equal(chain[0].params.paramKey, 'micFluxGain');
+  assert.equal(chain[1].type, 'lpf');
+  assert.equal(chain[1].params.cutoffHz, 4.5);
+  assert.ok(!chain.some(op => op.type === 'hold'), 'micFlux default must NOT include Hold');
 });
 
 // ── validateChain — happy path + every rejection branch ─────────────────────
@@ -812,16 +809,21 @@ test('resetSignal triggers audioChainsChanged broadcast', () => {
 
 // ── opCatalog (public for iPad picker) ──────────────────────────────────────
 
-test('opCatalog lists the 13 op types (7 Phase-2 + 5 Phase-7 + 1 Phase-8)', () => {
+test('opCatalog lists the 14 op types (7 Phase-2 + 5 Phase-7 + Phase-8 normalizer + osc_out)', () => {
+  // osc_out (2026-06-17 companion signal-designer contract) is the terminal
+  // OSC output tap — identity in the DSP chain, marks a chain as an OUTPUT.
   const cat = opCatalog();
   const types = Object.keys(cat).sort();
   assert.deepEqual(types, [
     'bias', 'biquad', 'clamp', 'compressor', 'curve',
     'envelope', 'gain', 'hold', 'lpf', 'normalizer',
-    'schmitt', 'slew', 'slope',
+    'osc_out', 'schmitt', 'slew', 'slope',
   ]);
   assert.equal(cat.gain.paramKeyOrValue, true);
   assert.equal(cat.bias.paramKeyOrValue, false);
+  // osc_out carries the engine address + optional cpcKey label.
+  assert.equal(cat.osc_out.params.address.default, '/marsin/audio/out');
+  assert.equal(cat.osc_out.params.cpcKey.optional, true);
   // Phase 7 schema spot-checks (the iPad picker / chain editor reads these).
   assert.equal(cat.curve.params.shape.default, 'linear');
   assert.deepEqual(cat.curve.params.shape.oneOf, ['linear', 'easeIn', 'easeOut', 'exp']);

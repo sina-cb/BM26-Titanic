@@ -18,6 +18,7 @@ import {
   Modal, Pressable, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { useAudioSignals } from '@/hooks/useEngineState';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
@@ -494,22 +495,32 @@ export { GhostMarker, MOD_GREEN, MOD_GREEN_SOFT };
 
 // ── ModulationPopover — editor ──────────────────────────────────────
 
-// Two source groups so the picker reads as `MIC <band>` and
-// `STEM <track>`. The OSC stem keys are zero when the OSC pipeline
-// is OFF (resolveModulationSources defaults missing keys to 0) —
-// so picking a stem with OSC disabled simply leaves the parameter
-// at base, which matches the operator's "default behavior is no
-// change" requirement.
-const SOURCE_OPTIONS: { key: ModulationSourceKey; label: string }[] = [
-  { key: 'micLow', label: 'MIC LOW' },
-  { key: 'micMid', label: 'MIC MID' },
-  { key: 'micHigh', label: 'MIC HIGH' },
-  { key: 'micKick', label: 'MIC KICK' },
-  { key: 'stemsBass', label: 'STEM BASS' },
-  { key: 'stemsDrums', label: 'STEM DRUMS' },
-  { key: 'stemsVocals', label: 'STEM VOCALS' },
-];
+// The modulation SOURCE list is DYNAMIC — built from the live audio CPC
+// keys the Audio Companion routes in (useAudioSignals). The legacy
+// hand-listed `stems*` sources were removed engine-side, so they no
+// longer appear here. A source whose pipeline is OFF reads 0 and the
+// mapping evaluates as a no-op (operator's "no change when source
+// disabled" expectation). See useModulationSourceOptions below.
 const CURVE_OPTIONS: ModulationCurve[] = ['linear', 'easeIn', 'easeOut', 'exp'];
+
+// Derive the modulation source options from the engine schema. Includes
+// the intensity + frequency audio signals (a frequency source is still a
+// valid modulation input). Falls back to an empty list before the schema
+// lands — the popover guards against an empty source (keeps the operator's
+// current value selectable).
+function useModulationSourceOptions(currentKey: string): { key: string; label: string }[] {
+  const signals = useAudioSignals();
+  return useMemo(() => {
+    const opts = signals.map((s) => ({ key: s.key, label: s.label }));
+    // Keep a previously-saved source selectable even if it's no longer in
+    // the live set (e.g. a retired stem on an old mapping) so editing the
+    // mapping doesn't silently drop its source.
+    if (currentKey && !opts.some((o) => o.key === currentKey)) {
+      opts.unshift({ key: currentKey, label: currentKey.toUpperCase() });
+    }
+    return opts;
+  }, [signals, currentKey]);
+}
 
 type PopoverProps = {
   paramName: string;
@@ -526,6 +537,8 @@ export function ModulationPopover({
 }: PopoverProps) {
   const C = usePalette();
   const [source, setSource] = useState<ModulationSourceKey>(existing?.source.key ?? 'micLow');
+  // Dynamic source options from the live audio CPC keys (Companion-routed).
+  const sourceOptions = useModulationSourceOptions(source);
   const [mode, setMode] = useState<ModulationMode>(existing?.mode ?? 'offset');
   const [polarity, setPolarity] = useState<ModulationPolarity>(existing?.polarity ?? 'unipolar');
   const [rangeMin, setRangeMin] = useState<string>(String(existing?.range[0] ?? 0));
@@ -676,7 +689,7 @@ export function ModulationPopover({
           </Text>
 
           <PickerRow label="SOURCE">
-            {SOURCE_OPTIONS.map((opt) => (
+            {sourceOptions.map((opt) => (
               <Chip key={opt.key} active={source === opt.key} onPress={() => setSource(opt.key)}>
                 {opt.label}
               </Chip>

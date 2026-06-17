@@ -55,17 +55,17 @@ type EditTarget = {
   mapping: ModulationMapping;
 };
 
+// Pretty label for a modulation source key. The audio source family is
+// dynamic (the Companion routes its own set into the CPC), so we derive a
+// readable label from the key shape rather than a hand-listed switch (which
+// drifted — it still named the retired stems). `micLow` → `MIC LOW`,
+// `audioEnergyRatio` → `AUDIO ENERGY RATIO`, etc.
 function shortSource(key: string): string {
-  switch (key) {
-    case 'micLow': return 'MIC LOW';
-    case 'micMid': return 'MIC MID';
-    case 'micHigh': return 'MIC HIGH';
-    case 'micKick': return 'MIC KICK';
-    case 'stemsBass': return 'STEM BASS';
-    case 'stemsDrums': return 'STEM DRUMS';
-    case 'stemsVocals': return 'STEM VOCALS';
-    default: return key.toUpperCase();
-  }
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
 }
 
 function shortTarget(name: string): string {

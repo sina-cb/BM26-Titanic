@@ -1,24 +1,34 @@
 /*
- * companion_server.js — backend for the Audio Companion app.
+ * companion_server.js — backend for the Audio Companion SIGNAL DESIGNER.
  *
  * ░░ HARD, UNBREAKABLE RULE ░░
  * The Audio Companion runs the engine's REAL audio DSP. It imports
  * AudioAnalyzer, SignalPostProcessor, AudioStructureDetector and the
  * DominantFreqTracker (inside the analyzer) straight from `audio/…` and runs
  * the WHOLE pipeline itself. It must NEVER reimplement, fork, or shadow any
- * audio-processing logic, and it does NOT depend on a running marsin engine —
- * it reads audio and analyses it INDEPENDENTLY. Whatever the engine computes,
- * the Companion computes, because it is the same code. (See audio/README.md.)
+ * audio-processing logic, and it does NOT depend on a running marsin engine
+ * for ANALYSIS — it reads audio and analyses it INDEPENDENTLY. (audio/README.md.)
  *
- * Audio source (chosen live from the GUI):
+ * ░░ SIGNAL DESIGNER (2026-06-17 contract) ░░
+ * The Companion is the SOLE analyzer. The operator DESIGNS signals here: each
+ * signal picks a RAW source (an intensity band or a dom frequency) → a chain
+ * of type-aware ops → a terminal `osc_out` tap. A signal whose chain contains
+ * `osc_out` is an OUTPUT: every analyzer hop the Companion sends that signal's
+ * POST value to the ENGINE over UDP OSC (at the config's osc.host:osc.port),
+ * the engine writes it into the CPC, and CaptainPad renders it. The design
+ * persists to `companion_config.yaml` (loaded on boot, written by Export).
+ *
+ *   intensity sources: rawLow rawMid rawHigh rawKick rawFlux  (value [0,1])
+ *   frequency sources: rawDom1 rawDom2                        (value Hz)
+ *
+ * Intensity signals run through the engine's SignalPostProcessor (the real
+ * DSP, [0,1]); frequency signals carry Hz and pass through to their osc_out
+ * tap (Hz-domain transforms are not run server-side — see report).
+ *
+ * Audio source (chosen live from the GUI, default from config):
  *   - 'test' — a tweakable synthetic generator (sub/mid/high/kick/noise),
- *   - 'mic'  — the default system input (line/mic) via the engine's AudioCapture,
- *   - 'file' — replay an audio file via AudioCapture (file: device).
- * Whatever the source, samples flow through the SAME analyzer → per-signal
- * chains → structure detector, and the Companion streams every signal to the
- * browser: bands (raw+post), the dom-freq pair (freq+energy), and the
- * structure outputs (state / build / energy / drop-pulse / slow-zone), plus a
- * sparse dropFired event.
+ *   - 'mic'  — the default/system input via the engine's AudioCapture,
+ *   - 'file' — replay an audio file via the BROWSER (<audio> + worklet PCM tap).
  *
  * Standalone: `node audio/companion/companion_server.js [--port 6973]`.
  */
@@ -26,15 +36,17 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import dgram from 'node:dgram';
 import { fileURLToPath } from 'node:url';
 
 import { WebSocketServer } from 'ws';
 import yaml from 'js-yaml';
+import * as osc from 'osc-min';
 
 // ── THE ENGINE'S REAL AUDIO CODE (native — never reimplemented) ───────────
 import { AudioAnalyzer } from '../analyzer/audio_analyzer.js';
 import {
-  SignalPostProcessor, KNOWN_SIGNALS, DEFAULT_CHAINS, opCatalog, validateChain,
+  SignalPostProcessor, KNOWN_SIGNALS, opCatalog,
 } from '../postproc/signal_post_processor.js';
 import { AudioStructureDetector } from '../detector/audio_structure_detector.js';
 import { DerivedSignals } from '../signals/derived_signals.js';
@@ -42,6 +54,11 @@ import { AudioCapture } from '../capture/audio_capture.js';
 import { listAudioDevices } from '../capture/audio_devices.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
+import {
+  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS,
+  loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal,
+  COMPANION_CONFIG_PATH,
+} from './companion_config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -62,12 +79,59 @@ function resolveDatasetsDir() {
   return os.homedir();
 }
 const DATASETS_DIR = resolveDatasetsDir();
-const MIC_SIGNALS = ['micLow', 'micMid', 'micHigh', 'micKick', 'micFlux'];
-const RAW_OF = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
+
+// The analyzer field each raw source reads (intensity bands + dom freqs).
+const ANALYZER_FIELD = Object.fromEntries(
+  Object.entries(RAW_SOURCES).map(([id, s]) => [id, s.analyzer]),
+);
 
 // Real engine ParamCenter (in-memory) — the single source of truth the chains'
-// Gain ops read and the detector reads/writes. Gains live here (micLowGain…).
+// Gain ops read and the detector reads/writes.
 const paramCenter = new ParamCenter(null);
+
+// ── Designed signals (the operator's output design) ──────────────────────────
+// Loaded from companion_config.yaml on boot. Each designed signal owns a real
+// SignalPostProcessor instance (the engine's DSP, unforked) holding its chain
+// under a borrowed KNOWN_SIGNALS key so process() applies the exact same math.
+// `frequency` signals are NOT run through process() (it clamps to [0,1]); their
+// raw Hz passes through to the osc_out tap.
+const PROXY_KEY = KNOWN_SIGNALS[0];   // micLow — the chain-runner proxy key
+let design = loadCompanionConfig();   // { osc, signals }
+const runners = new Map();            // signalId -> SignalPostProcessor
+
+function buildRunners() {
+  runners.clear();
+  for (const sig of design.signals) {
+    if (sig.type !== 'intensity') continue;   // freq passes through, no runner
+    const spp = new SignalPostProcessor({ paramCenter });
+    spp.loadChains({ [PROXY_KEY]: sig.chain });
+    runners.set(sig.id, spp);
+  }
+}
+buildRunners();
+
+// The terminal osc_out op of a signal (the output tap), or null.
+function oscOutOf(sig) {
+  const op = sig.chain[sig.chain.length - 1];
+  return op && op.type === 'osc_out' && op.enabled !== false ? op : null;
+}
+
+// ── OSC OUT (UDP → engine) ──────────────────────────────────────────────────
+// A tiny UDP sender wrapping osc-min (an existing dep — offline-safe). Each
+// analyzer hop, every OUTPUT signal's POST value is sent as a single float arg
+// to its osc_out address at design.osc.host:design.osc.port. Events map to
+// 1.0/0.0 scalars (NOT bang) — the engine OscListener requires a scalar arg.
+const oscSock = dgram.createSocket('udp4');
+oscSock.on('error', (e) => console.warn(`[companion OSC] socket error: ${e && e.message}`));
+let oscSent = 0;
+function sendOsc(address, value) {
+  const v = Number.isFinite(value) ? value : 0;
+  const buf = osc.toBuffer({ address, args: [{ type: 'float', value: v }] });
+  oscSock.send(buf, design.osc.port, design.osc.host, (err) => {
+    if (err) console.warn(`[companion OSC] send ${address} failed: ${err.message}`);
+  });
+  oscSent++;
+}
 
 // Tweakable test-signal source (the UI edits these in 'test' mode).
 const source = {
@@ -77,12 +141,9 @@ const source = {
 // Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
 // source (test/mic/file). This is the "microphone gain" the operator tunes.
 let inputGain = 1.0;
-// Source-stage smoothing (gentle one-pole LP on the PCM before the FFT) — a
-// small default removes mic noise; 0 = off. Part of the INPUT post-proc.
+// Source-stage smoothing (gentle one-pole LP on the PCM before the FFT).
 let sourceSmoothHz = 12000;
-// Realtime/smoothness diagnostic: measures how evenly the capture delivers
-// audio frames (the "discretized packets" symptom = bursty arrival / gaps) and
-// whether analysis keeps up with realtime. Reset on source switch.
+// Realtime/smoothness diagnostic.
 const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
 function recordFrame(n) {
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -90,13 +151,6 @@ function recordFrame(n) {
   else diag.startWall = now;
   diag.lastWall = now; diag.frames++; diag.samples += n;
 }
-// Second diagnostic stage (docs/37 §13): the metric that actually proves
-// smoothness is NOT capture arrival (always bursty for a pipe — expected) but
-// (a) the ANALYZER hop cadence (wall-clock spacing of onAnalysis calls — bursty
-// today, steady once a jitter buffer lands) and (b) signal CHUNKINESS
-// (micLowStepP95 = p95 of |micLow[n]-micLow[n-1]| across hops, timing-independent).
-// Compare mic mode vs file mode (perfectly clocked) on the same clip: if they
-// match, the discretization is gone.
 const adiag = { last: 0, deltas: [], prevLow: null, steps: [] };
 function recordAnalysis(micLow) {
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -114,7 +168,6 @@ function diagReport() {
   const std = Math.sqrt(d.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (d.length || 1));
   const expected = (HOP / SR) * 1000;
   const elapsed = Math.max(0.001, (diag.lastWall - diag.startWall) / 1000);
-  // Analyzer-cadence percentiles (the post-capture stage the §13 test gates on).
   const ad = adiag.deltas.slice().sort((a, b) => a - b);
   const aq = (p) => (ad.length ? ad[Math.min(ad.length - 1, Math.floor(ad.length * p))] : 0);
   const aMean = ad.reduce((a, b) => a + b, 0) / (ad.length || 1);
@@ -125,13 +178,13 @@ function diagReport() {
     type: 'diag', mode, frames: diag.frames, elapsedSec: +elapsed.toFixed(1), expectedFrameMs: +expected.toFixed(2),
     interArrivalMs: { median: +q(0.5).toFixed(2), p95: +q(0.95).toFixed(2), p99: +q(0.99).toFixed(2), max: +(d[d.length - 1] || 0).toFixed(2), jitterStd: +std.toFixed(2) },
     gapsOver2x: d.filter((x) => x > expected * 2).length,
-    // §13 gate metrics — analyzer hop cadence + signal chunkiness:
     analyzerHopMs: { median: +aq(0.5).toFixed(2), p95: +aq(0.95).toFixed(2), jitterStd: +aStd.toFixed(2) },
     analyzerGapsOver2x: ad.filter((x) => x > expected * 2).length,
     micLowStepP95: +stepP95.toFixed(4),
     jitter: (typeof capture !== 'undefined' && capture && capture.jitterStats) ? capture.jitterStats() : null,
     effectiveFps: +(diag.frames / elapsed).toFixed(1),
-    realtimeRatio: +((diag.samples / SR) / elapsed).toFixed(3),   // ~1.0 = realtime; <1 = falling behind
+    realtimeRatio: +((diag.samples / SR) / elapsed).toFixed(3),
+    oscSentTotal: oscSent,
   };
 }
 
@@ -147,65 +200,70 @@ function applySmooth(v) {
 }
 
 // "Dom freq DANCE" — a ghostly follower of each dom freq + cluster width.
-// When the dom jumps (50→90 Hz) the dance GLIDES there smoothly via a
-// critically-damped spring (position+velocity), designed for fluid visual
-// generation. Width glides too. Spatial: it's a frequency the visuals can
-// chase smoothly instead of snapping.
-const DANCE_OMEGA = 7;   // rad/s — ~0.4 s ghostly settle, no overshoot
+const DANCE_OMEGA = 7;
 const dance = { f1: 0, vf1: 0, w1: 0, vw1: 0, f2: 0, vf2: 0, w2: 0, vw2: 0 };
 function springStep(x, v, target, dt) {
-  const k = DANCE_OMEGA * DANCE_OMEGA, c = 2 * DANCE_OMEGA;   // critically damped
+  const k = DANCE_OMEGA * DANCE_OMEGA, c = 2 * DANCE_OMEGA;
   v += (k * (target - x) - c * v) * dt;
   x += v * dt;
   return [x, v];
 }
 
-// Calibration: record a section of the live input, measure its peak meter
-// level, recommend a gain to reach a healthy target, then REPLAY the recorded
-// section through the analyzer so the operator can confirm before/after.
-const CAL_TARGET = 0.7;          // target peak band level
-const CAL_MAX_MS = 5000;         // record length
+// Calibration: record → measure → recommend gain → replay.
+const CAL_TARGET = 0.7;
+const CAL_MAX_MS = 5000;
 const cal = { recording: false, replaying: false, chunks: [], startClock: 0, peakBand: 0, replayTimer: null };
-
-// Candidate chains the UI designs (start from the engine defaults).
-const chains = JSON.parse(JSON.stringify(DEFAULT_CHAINS));
 
 // ── DSP wiring (real engine objects) ──────────────────────────────────────
 const clients = new Set();
 function broadcast(obj) { const m = JSON.stringify(obj); for (const c of clients) if (c.readyState === 1) c.send(m); }
 
-const spp = new SignalPostProcessor({ paramCenter });
-spp.loadChains(chains);
 const detector = new AudioStructureDetector({
   paramCenter,
   broadcast: (msg) => { if (msg && msg.type === 'dropFired') broadcast({ type: 'dropFired', ts: msg.ts, confidence: msg.confidence }); },
-  getConfig: () => ({ enabled: true }),   // edge mode = DETECTOR_DEFAULTS ('windowed')
+  getConfig: () => ({ enabled: true }),
 });
-const derived = new DerivedSignals({ paramCenter });   // BPM/party/note/switch cues
+const derived = new DerivedSignals({ paramCenter });
 
 let clockMs = 0, lastMs = 0;
+
+/**
+ * Run every designed signal's chain for this analyzer hop. Returns a
+ * { signalId: { raw, post } } map for the live trace + writes each OUTPUT
+ * signal's POST value over OSC to the engine. Intensity signals run the real
+ * SignalPostProcessor; frequency signals pass the raw Hz through to osc_out.
+ */
+function processDesignedSignals(r, dt) {
+  const out = {};
+  for (const sig of design.signals) {
+    const raw = r[ANALYZER_FIELD[sig.source]] ?? 0;
+    let post;
+    if (sig.type === 'intensity') {
+      const spp = runners.get(sig.id);
+      post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
+    } else {
+      post = raw;   // frequency: Hz passes through to the osc_out tap
+    }
+    out[sig.id] = { raw, post };
+    const tap = oscOutOf(sig);
+    if (tap) sendOsc(tap.params.address, post);
+  }
+  return out;
+}
+
 const analyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: FFT, hopSize: HOP,
   bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
-  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },   // EDM corpus-tuned (clean pulse)
+  kick: { minHz: 50, maxHz: 110, threshold: 2.4, refractoryMs: 220, decayMs: 70 },
   nowFn: () => clockMs,
-  // Feed the oscilloscope the SAME source-conditioned PCM (gain + smoothing)
-  // that feeds the FFT — so SMOOTH visibly affects the waveform, not just gain.
   onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
-    recordAnalysis(r.low ?? 0);   // §13: analyzer-cadence + chunkiness diagnostic
+    recordAnalysis(r.low ?? 0);
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
-    const signals = {}; const writes = [];
-    for (const sig of MIC_SIGNALS) {
-      const raw = r[RAW_OF[sig]] ?? 0;
-      const post = spp.process(sig, raw, dt);       // REAL per-signal chain
-      signals[sig] = { raw, post };
-      writes.push({ kind: 'scalar', key: sig, value: post }, { kind: 'scalar', key: `${sig}Raw`, value: raw });
-    }
-    paramCenter.setMany(writes, 'audio', 'audio:mic');
-    detector.tick(clockMs, dt);                      // REAL structure detector
-    derived.tick(clockMs, dt);                       // BPM / party / note / switch cues
+    const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
+    detector.tick(clockMs, dt);
+    derived.tick(clockMs, dt);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     const sdt = dt > 0 ? dt : HOP / SR;
     const w1t = Math.max(0, (r.domHi1 || 0) - (r.domLo1 || 0)), w2t = Math.max(0, (r.domHi2 || 0) - (r.domLo2 || 0));
@@ -213,10 +271,6 @@ const analyzer = new AudioAnalyzer({
     [dance.w1, dance.vw1] = springStep(dance.w1, dance.vw1, w1t, sdt);
     [dance.f2, dance.vf2] = springStep(dance.f2, dance.vf2, r.domFreq2 || 0, sdt);
     [dance.w2, dance.vw2] = springStep(dance.w2, dance.vw2, w2t, sdt);
-    // Store the latest frame; a steady timer coalesces the broadcast to ~45 Hz
-    // (mirrors the engine's LIVE_BUCKET_MIN_INTERVAL_MS). Mic capture delivers
-    // analysis frames in BURSTS, so broadcasting every one made the UI jerky —
-    // exactly the latency/jitter CaptainPad avoids by coalescing.
     pendingFrames.push({
       type: 'frame', t: clockMs, signals,
       dom: {
@@ -229,8 +283,8 @@ const analyzer = new AudioAnalyzer({
         energy: paramCenter.get('audioEnergyRatio'), pulse: paramCenter.get('audioDropPulse'),
         slow: paramCenter.get('audioSlowZone'),
       },
-      spectrum: Array.from(specAnalyzer.getSpectrum(SPECTRUM_BINS)),   // hi-res freq visualizer
-      wave: downWave(),                                            // audio signal (rolling scope)
+      spectrum: Array.from(specAnalyzer.getSpectrum(SPECTRUM_BINS)),
+      wave: downWave(),
       derived: {
         bpm: paramCenter.get('audioBpm'), beat: paramCenter.get('audioBeat'),
         party: paramCenter.get('audioParty'), note: paramCenter.get('audioNote'),
@@ -241,13 +295,7 @@ const analyzer = new AudioAnalyzer({
   },
 });
 
-// Coalesced broadcast: emit the freshest frame at a steady ~45 Hz, decoupled
-// from the bursty analysis cadence (the engine/CaptainPad smoothing pattern).
-// Higher-resolution FFT used ONLY for the spectrum visualizer — 4096-pt
-// (~10.7 Hz/bin vs the main analyzer's 43 Hz) for finer, less-stair-stepped
-// frequency granularity. Kept SEPARATE so the main analyzer stays 1024-pt and
-// the bands/kick/dom/BPM remain low-latency + as-tuned. Same hop (fed the same
-// frames); its onAnalysis is a no-op — we only read getSpectrum().
+// Higher-resolution FFT used ONLY for the spectrum visualizer.
 const specAnalyzer = new AudioAnalyzer({
   sampleRate: SR, fftSize: 4096, hopSize: HOP,
   bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 6, releaseMs: 180, noiseGate: 0.04, inputGain: 1.0, sourceSmoothHz: 12000 },
@@ -256,14 +304,11 @@ const specAnalyzer = new AudioAnalyzer({
 });
 
 let pendingFrames = [];
-const BROADCAST_MS = 16;   // ~60 Hz, matches the UI render cadence → no stepping
+const BROADCAST_MS = 16;
 setInterval(() => {
   if (pendingFrames.length > 0) {
-    if (pendingFrames.length === 1) {
-      broadcast(pendingFrames[0]);
-    } else {
-      broadcast({ type: 'frames', frames: pendingFrames });
-    }
+    if (pendingFrames.length === 1) broadcast(pendingFrames[0]);
+    else broadcast({ type: 'frames', frames: pendingFrames });
     pendingFrames = [];
   }
 }, BROADCAST_MS);
@@ -274,22 +319,12 @@ let testTimer = null;
 let capture = null;
 let ffmpegPath = 'ffmpeg';
 
-// File mode is BROWSER-SOURCED: the browser plays the file in an <audio>
-// element (native audio-out + seek + pause) and taps the WebAudio graph,
-// streaming hop-sized Int16 mono PCM @ 44.1 kHz to us over a BINARY WS frame.
-// We feed THAT straight into the same analyzer, so the analysis is exactly the
-// audio the operator hears — perfectly synced, scrub-and-pause aware (when the
-// browser pauses it simply stops sending PCM). No ffmpeg, no server-side seek.
-// `currentFile` is the path the browser is playing (for the /file byte server).
+// File mode is BROWSER-SOURCED (see ui/companion_app.js filePlayer).
 let browserSource = false;
 let currentFile = '';
-// Re-frame the browser's PCM chunks (arbitrary length) into exact HOP frames so
-// the analyzer sees the same cadence as every other source.
 let browserResid = new Int16Array(0);
 function feedBrowserPcm(int16) {
-  if (!browserSource) return;   // ignore stale PCM after a mode switch
-  // Concatenate any residual + the new chunk, then emit as many full HOP
-  // frames as we can; keep the remainder for next time.
+  if (!browserSource) return;
   let buf = int16;
   if (browserResid.length) {
     buf = new Int16Array(browserResid.length + int16.length);
@@ -307,32 +342,22 @@ let sampleCursor = 0, seed = 0x2f6e2b1;
 const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
 const frameBuf = new Int16Array(HOP);
 
-// Spectrum + waveform visualizer data (full freq band + audio signal).
-const SPECTRUM_BINS = 256, WAVE_POINTS = 256;   // finer freq + scope granularity
+const SPECTRUM_BINS = 256, WAVE_POINTS = 256;
 let lastPcm = new Int16Array(HOP);
-// Rolling oscilloscope window: the waveform shows the last SCOPE_SAMPLES of audio
-// (~93 ms), not just the most recent 11.6 ms hop — a readable scrolling scope
-// instead of a tiny jittery slice. Fed the analyzer's SOURCE-CONDITIONED PCM
-// (gain + smoothing already applied — the exact signal feeding the FFT) via the
-// analyzer's onConditioned hook, so the scope reflects BOTH gain AND smoothing.
 const SCOPE_SAMPLES = 4096;
 const scope = new Float32Array(SCOPE_SAMPLES);
 function pushScope(cond) {
-  // `cond` is already-conditioned PCM (gain + smoothing applied, [-,+] floats).
   const n = cond.length;
   if (n >= SCOPE_SAMPLES) {
     for (let i = 0; i < SCOPE_SAMPLES; i++) scope[i] = cond[n - SCOPE_SAMPLES + i];
     return;
   }
-  scope.copyWithin(0, n);                       // shift older samples left …
+  scope.copyWithin(0, n);
   const base = SCOPE_SAMPLES - n;
-  for (let i = 0; i < n; i++) scope[base + i] = cond[i];   // … append newest hop
+  for (let i = 0; i < n; i++) scope[base + i] = cond[i];
 }
 const waveBuf = new Float32Array(WAVE_POINTS);
 function downWave() {
-  // Average each segment of the rolling scope (not decimate) → anti-aliased,
-  // smooth scope line over the full ~93 ms window. The scope already carries
-  // gain + smoothing (conditioned PCM), so NO gain multiply here.
   const len = SCOPE_SAMPLES, seg = len / WAVE_POINTS;
   for (let i = 0; i < WAVE_POINTS; i++) {
     const s = Math.floor(i * seg), e = Math.max(s + 1, Math.min(len, Math.floor((i + 1) * seg)));
@@ -359,15 +384,15 @@ function genFrame(buf) {
   sampleCursor += buf.length;
 }
 function pushFrame(int16) {
-  if (cal.replaying) return;                     // ignore live input while replaying
+  if (cal.replaying) return;
   if (cal.recording) {
-    cal.chunks.push(int16.slice());              // copy — the capture buffer is reused
+    cal.chunks.push(int16.slice());
     if (clockMs - cal.startClock >= CAL_MAX_MS) { finishCalibration(); return; }
   }
   lastPcm = int16; recordFrame(int16.length);
   clockMs += (int16.length / SR) * 1000;
-  specAnalyzer.pushSamples(int16);   // fill the hi-res spectrum first …
-  analyzer.pushSamples(int16);       // … then the main analyzer (onConditioned feeds the scope, onAnalysis reads getSpectrum)
+  specAnalyzer.pushSamples(int16);
+  analyzer.pushSamples(int16);
 }
 
 // ── calibration: record → measure → recommend gain → replay ─────────────────
@@ -400,7 +425,7 @@ function startReplay() {
       return;
     }
     const chunk = cal.chunks[i++];
-    lastPcm = chunk;   // scope is fed by the analyzer's onConditioned hook below
+    lastPcm = chunk;
     clockMs += (chunk.length / SR) * 1000;
     specAnalyzer.pushSamples(chunk); analyzer.pushSamples(chunk);
   }, Math.round((HOP / SR) * 1000));
@@ -417,16 +442,12 @@ function startTest() {
   testTimer = setInterval(() => { genFrame(frameBuf); pushFrame(frameBuf); }, Math.round((HOP / SR) * 1000));
 }
 function startCapture(device) {
-  // AudioCapture can throw SYNCHRONOUSLY before ffmpeg spawns — e.g. on
-  // Windows with no pinned device (`device_not_configured`). Catch it so the
-  // server never dies; surface the error and push the device list so the UI
-  // can prompt for a pick (like the engine's --choose_mic).
   try {
     capture = new AudioCapture({
       backend: 'ffmpeg', ffmpegPath, platform: 'auto', device: device || null,
       sampleRate: SR, channels: 1, frameSamples: HOP, loop: true,
-      captureBufferMs: 50,       // low-latency dshow/pulse bound (docs/37 §13)
-      jitterBufferHops: 4,       // steady-clock smoothing of the residual jitter
+      captureBufferMs: 50,
+      jitterBufferHops: 4,
       onFrame: (i16) => pushFrame(i16),
       onStatus: (st) => broadcast({ type: 'sourceStatus', mode, status: st }),
     });
@@ -442,16 +463,13 @@ function setMode(next, opts = {}) {
   stopSource();
   pendingFrames = [];
   analyzer.reset(); specAnalyzer.reset(); detector.reset(); lastMs = 0;
-  scope.fill(0);   // clear the rolling oscilloscope window between sources
+  scope.fill(0);
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
   adiag.last = 0; adiag.prevLow = null; adiag.deltas.length = 0; adiag.steps.length = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
-  else if (mode === 'mic') startCapture(opts.device || null);
+  else if (mode === 'mic') startCapture(opts.device != null ? opts.device : configDevice);
   else if (mode === 'file') {
-    // Browser-sourced: the <audio> element plays + taps the file and streams
-    // PCM to us. We don't spawn ffmpeg; we just remember the path so the /file
-    // endpoint can serve its bytes to the browser, and wait for PCM frames.
     if (!opts.file) { broadcast({ type: 'sourceStatus', mode, status: { enabled: false, error: 'no file selected' } }); return; }
     currentFile = opts.file;
     browserSource = true;
@@ -459,31 +477,92 @@ function setMode(next, opts = {}) {
   }
 }
 
-// ── chain edit + export ─────────────────────────────────────────────────────
-function applyChain(signal, chain) {
-  const v = validateChain(signal, chain, { paramCenter });
+// ── signal management + chain edit + export ─────────────────────────────────
+function uid(prefix) { return `${prefix}_${Math.random().toString(36).slice(2, 7)}`; }
+
+// Add a signal from a raw source. The signal starts as source → osc_out tap
+// (an OUTPUT). Returns { ok, signal } or { ok:false, error }.
+function addSignal(sourceId) {
+  const src = RAW_SOURCES[sourceId];
+  if (!src) return { ok: false, error: `unknown raw source "${sourceId}"` };
+  const id = uid(sourceId.replace(/^raw/, '').toLowerCase());
+  const label = src.label;
+  const address = src.type === 'frequency' ? '/marsin/dom/custom' : '/marsin/audio/custom';
+  const sig = {
+    id, label, source: sourceId, type: src.type, output: true,
+    chain: [{ id: `${id}_out`, type: 'osc_out', enabled: true, params: { address } }],
+  };
+  const v = validateSignal(sig);
   if (!v.ok) return { ok: false, error: v.error };
-  chains[signal] = v.normalized; spp.loadChains({ [signal]: v.normalized });
-  return { ok: true, chain: v.normalized };
+  design.signals.push(v.normalized);
+  buildRunners();
+  return { ok: true, signal: v.normalized };
 }
-const exportYaml = () => yaml.dump({ chains }, { lineWidth: 100 });
-const gainsSnapshot = () => Object.fromEntries(MIC_SIGNALS.map(s => [`${s}Gain`, paramCenter.get(`${s}Gain`)]));
+
+function removeSignal(id) {
+  const i = design.signals.findIndex(s => s.id === id);
+  if (i === -1) return { ok: false, error: `unknown signal "${id}"` };
+  design.signals.splice(i, 1);
+  buildRunners();
+  return { ok: true };
+}
+
+function setSignalChain(id, chain) {
+  const sig = design.signals.find(s => s.id === id);
+  if (!sig) return { ok: false, error: `unknown signal "${id}"` };
+  const candidate = { ...sig, chain };
+  const v = validateSignal(candidate);
+  if (!v.ok) return { ok: false, error: v.error };
+  sig.chain = v.normalized.chain;
+  sig.output = v.normalized.output;
+  buildRunners();
+  return { ok: true, signal: v.normalized };
+}
+
+const exportYaml = () => dumpCompanionConfig(design);
+function exportToDisk() {
+  saveCompanionConfig(design, COMPANION_CONFIG_PATH);
+  return { ok: true, path: COMPANION_CONFIG_PATH };
+}
+
+// Catalog the UI needs: ops (with per-type filtering data), raw sources, the
+// designed signal list, and the engine OSC target.
+function catalog() {
+  return {
+    ops: opCatalog(),
+    frequencyOps: FREQUENCY_OPS,
+    rawSources: RAW_SOURCES,
+    signalTypes: SIGNAL_TYPES,
+    signals: design.signals,
+    osc: design.osc,
+    source, gains: {}, inputGain, sourceSmoothHz,
+  };
+}
 
 function handleMessage(ws, raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
   if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
-  else if (m.type === 'setGain' && /Gain$/.test(m.key || '')) paramCenter.set(m.key, +m.value);
   else if (m.type === 'setInputGain') { applyInputGain(m.value); broadcast({ type: 'inputGain', value: inputGain }); }
   else if (m.type === 'setSmooth') { applySmooth(m.value); broadcast({ type: 'smooth', value: sourceSmoothHz }); }
   else if (m.type === 'calibrate') startCalibration();
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') setMode(m.mode, { file: m.file, device: m.device });
-  else if (m.type === 'setChain') ws.send(JSON.stringify({ type: 'chainResult', signal: m.signal, ...applyChain(m.signal, m.chain) }));
-  else if (m.type === 'export') ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));
-  else if (m.type === 'reset') {
-    const def = JSON.parse(JSON.stringify(DEFAULT_CHAINS[m.signal] || []));
-    applyChain(m.signal, def);
-    ws.send(JSON.stringify({ type: 'chainResult', signal: m.signal, ok: true, chain: def }));
+  else if (m.type === 'addSignal') {
+    const res = addSignal(m.source);
+    if (res.ok) broadcast({ type: 'signals', signals: design.signals });
+    ws.send(JSON.stringify({ type: 'addResult', ...res }));
+  } else if (m.type === 'removeSignal') {
+    const res = removeSignal(m.id);
+    if (res.ok) broadcast({ type: 'signals', signals: design.signals });
+    ws.send(JSON.stringify({ type: 'removeResult', id: m.id, ...res }));
+  } else if (m.type === 'setChain') {
+    const res = setSignalChain(m.id, m.chain);
+    ws.send(JSON.stringify({ type: 'chainResult', id: m.id, ...res }));
+  } else if (m.type === 'export') {
+    ws.send(JSON.stringify({ type: 'export', yaml: exportYaml() }));
+  } else if (m.type === 'exportSave') {
+    try { const res = exportToDisk(); ws.send(JSON.stringify({ type: 'exportSaved', ...res })); }
+    catch (e) { ws.send(JSON.stringify({ type: 'exportSaved', ok: false, error: String(e && e.message) })); }
   } else if (m.type === 'listDevices') {
     listAudioDevices({ ffmpegPath }).then(d => ws.send(JSON.stringify({ type: 'devices', ...d })))
       .catch(e => ws.send(JSON.stringify({ type: 'devices', devices: [], error: String(e && e.message) })));
@@ -492,7 +571,6 @@ function handleMessage(ws, raw) {
 
 // ── HTTP (serve the UI) + WS ────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
-// Audio MIME types for the /file byte server (browser <audio> playback).
 const MIME_AUDIO = {
   '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.m4a': 'audio/mp4',
   '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.aiff': 'audio/aiff',
@@ -503,13 +581,10 @@ const server = http.createServer((req, res) => {
   if (p === '/') p = '/index.html';
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ signals: MIC_SIGNALS, knownSignals: KNOWN_SIGNALS, ops: opCatalog(), defaults: DEFAULT_CHAINS, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz }));
+    res.end(JSON.stringify(catalog()));
     return;
   }
   if (p === '/file') {
-    // Serve the bytes of an audio file to the browser's <audio> element, with
-    // HTTP Range support so the operator can seek/scrub. Only audio extensions
-    // are served (no arbitrary file read).
     const fp = new URL(req.url, 'http://x').searchParams.get('path') || '';
     if (!fp || !AUDIO_EXT.has(path.extname(fp).toLowerCase())) { res.writeHead(400); res.end('bad file'); return; }
     fs.stat(fp, (err, st) => {
@@ -536,7 +611,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (p === '/browse') {  // server-side directory listing (folders + audio files)
+  if (p === '/browse') {
     const dir = new URL(req.url, 'http://x').searchParams.get('dir') || DATASETS_DIR;
     fs.readdir(dir, { withFileTypes: true }, (err, ents) => {
       res.writeHead(err ? 400 : 200, { 'content-type': 'application/json' });
@@ -565,14 +640,17 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   clients.add(ws);
-  ws.send(JSON.stringify({ type: 'hello', signals: MIC_SIGNALS, ops: opCatalog(), chains, source, gains: gainsSnapshot(), inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR }));
+  ws.send(JSON.stringify({
+    type: 'hello',
+    ops: opCatalog(), frequencyOps: FREQUENCY_OPS, rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES,
+    signals: design.signals, osc: design.osc,
+    source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
+    device: configDevice,
+  }));
   ws.on('message', (d, isBinary) => {
-    // Binary frames carry the browser file-source PCM (Int16 mono @ 44.1 kHz).
-    // Route them straight to the analyzer; never JSON-parse them.
     if (isBinary) {
       try {
         const buf = Buffer.isBuffer(d) ? d : Buffer.from(d);
-        // s16le little-endian view over the received bytes (even length only).
         const n = buf.length >> 1;
         const i16 = new Int16Array(n);
         for (let i = 0; i < n; i++) i16[i] = buf.readInt16LE(i * 2);
@@ -586,10 +664,39 @@ wss.on('connection', (ws) => {
   ws.on('close', () => clients.delete(ws));
 });
 
+// ── Boot ─────────────────────────────────────────────────────────────────────
+// The companion's audio source + device come from config.yaml's `companion`
+// block when present (the unified device the engine/CaptainPad also set), so
+// the engine-supervised companion honors the same device. Standalone falls
+// back to the test source. The OSC TARGET likewise comes from config (engine
+// osc host/port) so we never hardcode where outputs go.
+let configDevice = null;
+function applyEngineConfig() {
+  const cfgPath = path.join(__dirname, '..', '..', 'config.yaml');
+  let cfg;
+  try { cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8')); }
+  catch { return 'test'; }   // standalone (no engine config) → boot in test
+  const comp = cfg && cfg.companion;
+  if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
+    design.osc = { host: comp.osc.host, port: comp.osc.port };
+  } else if (cfg && cfg.osc && Number.isInteger(cfg.osc.port)) {
+    // Fall back to the engine's own OSC port; loopback host (the companion and
+    // engine run on the same Pi). osc.host in config is the engine BIND addr
+    // (0.0.0.0) — not a send target — so we send to loopback.
+    design.osc = { host: '127.0.0.1', port: cfg.osc.port };
+  }
+  if (comp && comp.device !== undefined) configDevice = comp.device;
+  if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
+  return 'test';
+}
+
 const PORT = (() => { const i = process.argv.indexOf('--port'); return i > 0 ? parseInt(process.argv[i + 1], 10) : 6973; })();
 resolveFfmpegPath('ffmpeg').then((p) => { ffmpegPath = p || 'ffmpeg'; }).catch(() => { ffmpegPath = 'ffmpeg'; }).finally(() => {
-  setMode('test');   // boot in test mode (no device needed)
+  const bootMode = applyEngineConfig();
+  // Mic boot can fail with no device (e.g. headless); test is always safe and
+  // the operator can switch sources live. Honor config but never crash boot.
+  setMode(bootMode === 'mic' ? 'mic' : 'test', { device: configDevice });
   server.listen(PORT, () => {
-    console.log(`Audio Companion → http://localhost:${PORT}  (standalone: reads audio + runs the engine's real analyzer/chains/detector/dom-freq)`);
+    console.log(`Audio Companion (signal designer) → http://localhost:${PORT}  → OSC ${design.osc.host}:${design.osc.port}`);
   });
 });

@@ -51,18 +51,41 @@ import {
 } from '@/utils/api';
 import { useSharedParamValues, useParamRange } from '@/hooks/useEngineState';
 
-// docs/29 §Chain config — engine ships these 7 signal keys; iPad mirrors
-// the order so the operator's mental model (mic first, then stems)
-// matches Wireframe A.
-const SIGNAL_ORDER: readonly { key: string; label: string }[] = [
-  { key: 'micLow',      label: 'MIC LOW' },
-  { key: 'micMid',      label: 'MIC MID' },
-  { key: 'micHigh',     label: 'MIC HIGH' },
-  { key: 'micKick',     label: 'MIC KICK' },
-  { key: 'stemsBass',   label: 'STEMS BASS' },
-  { key: 'stemsDrums',  label: 'STEMS DRUMS' },
-  { key: 'stemsVocals', label: 'STEMS VOCALS' },
+// The chain-editable signals are DYNAMIC — derived from the engine's
+// `/audio/chains` map keys (signalOrderFromChains below), so the editor
+// shows exactly the signals the engine post-processes and nothing it
+// doesn't (the retired stems vanish on their own once the engine drops
+// them). A readable label is derived from the key shape (`micLow` →
+// `MIC LOW`). A preferred ordering keeps the familiar mic-first reading.
+const SIGNAL_LABEL_ORDER: readonly string[] = [
+  'micLow', 'micMid', 'micHigh', 'micKick', 'micFlux',
 ];
+
+function chainSignalLabel(key: string): string {
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function signalOrderFromChains(chains: AudioChainsMap | null): { key: string; label: string }[] {
+  if (!chains) return [];
+  const keys = Object.keys(chains);
+  // Stable, familiar order: the known mic family first (in band order),
+  // then anything else the engine reports, alphabetically.
+  keys.sort((a, b) => {
+    const ia = SIGNAL_LABEL_ORDER.indexOf(a);
+    const ib = SIGNAL_LABEL_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) {
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    }
+    return a.localeCompare(b);
+  });
+  return keys.map((key) => ({ key, label: chainSignalLabel(key) }));
+}
 
 // Op order in the picker matches docs/29 §Operator catalog reading
 // order (Math → Curve/Shape → Filter → Dynamics → Derivative → Trigger
@@ -2255,6 +2278,10 @@ export function AudioChainsCard({
     onCommitField: onCommitAudioConfigField,
   }), [onUpdateAudioConfigLocal, onCommitAudioConfigField]);
 
+  // Dynamic signal list from the engine's chain map — renders exactly the
+  // signals the engine post-processes (retired stems drop out on their own).
+  const signalOrder = useMemo(() => signalOrderFromChains(chains), [chains]);
+
   // Render
   return (
     <View style={CARD}>
@@ -2315,8 +2342,14 @@ export function AudioChainsCard({
         onRetryCfg={onRetryAudioConfig}
       />
 
-      {SIGNAL_ORDER.map(({ key, label }) => {
-        const others = SIGNAL_ORDER
+      {signalOrder.length === 0 ? (
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon }}>
+          {chains ? 'No chain-editable signals reported by the engine.' : 'Loading signals…'}
+        </Text>
+      ) : null}
+
+      {signalOrder.map(({ key, label }) => {
+        const others = signalOrder
           .filter(s => s.key !== key)
           .map(s => ({ key: s.key, label: s.label, chain: chains?.[s.key] ?? [] }));
         return (

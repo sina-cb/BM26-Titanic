@@ -1701,13 +1701,17 @@ export async function stopScheduledTask(id: string): Promise<ApiResult<{ task: S
 // `{ ok: false, error }`.
 
 // Mic-band sources are populated by the engine's audio analysis
-// pipeline; stems* are populated by the OSC listener from
-// `/marsin/stems/*` packets. When the matching pipeline is OFF the
-// value defaults to 0 and the mapping evaluates as a no-op (so the
-// operator's "no change when source disabled" expectation holds).
-export type ModulationSourceKey =
-  | 'micLow' | 'micMid' | 'micHigh' | 'micKick'
-  | 'stemsBass' | 'stemsDrums' | 'stemsVocals';
+// pipeline (the Audio Companion routes them into the CPC over OSC).
+// When the pipeline is OFF the value defaults to 0 and the mapping
+// evaluates as a no-op (so the operator's "no change when source
+// disabled" expectation holds). The legacy `stems*` sources were
+// removed engine-side (the Audio Companion is the sole analyzer); a
+// modulation referencing one would never receive a value.
+//
+// The mod-source picker is rendered DYNAMICALLY from the live audio CPC
+// keys (the contract's curated set), so this type is the open `string`
+// the engine accepts rather than a hand-listed enum that could drift.
+export type ModulationSourceKey = string;
 export type ModulationMode = 'offset' | 'scale';
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';

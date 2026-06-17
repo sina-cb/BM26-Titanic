@@ -1,58 +1,51 @@
 /*
- * companion_app.js — Audio Companion frontend.
+ * companion_app.js — Audio Companion SIGNAL DESIGNER frontend.
  *
- * A TouchDesigner-flavoured editor for the engine's audio signal chains:
- * pick a signal, build its op pipeline (the REAL engine ops), tweak params and
- * the test source, watch the RAW→POST trace update live, and export the chain
- * config the engine loads. All DSP is server-side (the engine's real code);
- * this file only renders + sends edits. Vanilla JS, no deps.
+ * A TouchDesigner-flavoured designer for the engine's audio signals: ADD a
+ * signal from a raw source (intensity band or dom frequency), build its op
+ * pipeline (the REAL engine ops, TYPE-AWARE), terminate it with an `osc_out`
+ * tap to send it to the engine over OSC, watch the RAW→POST trace live, and
+ * export the design to companion_config.yaml. All DSP is server-side (the
+ * engine's real code); this file only renders + sends edits. Vanilla JS, no
+ * deps, offline (no CDNs/fonts).
  */
 'use strict';
 
-const SIGNAL_META = {
-  micLow:  { label: 'LOW',  accent: '#34d3b5' },
-  micMid:  { label: 'MID',  accent: '#4ea1ff' },
-  micHigh: { label: 'HIGH', accent: '#8b9bff' },
-  micKick: { label: 'KICK', accent: '#ff5d6c' },
-  micFlux: { label: 'FLUX', accent: '#c084fc' },
-  dom1:    { label: 'DOM1', accent: '#f0a23b' },
-  dom2:    { label: 'DOM2', accent: '#c084fc' },
+// Per-source accent colors for the sidebar / traces.
+const SOURCE_ACCENT = {
+  rawLow: '#34d3b5', rawMid: '#4ea1ff', rawHigh: '#8b9bff',
+  rawKick: '#ff5d6c', rawFlux: '#c084fc', rawDom1: '#f0a23b', rawDom2: '#c084fc',
 };
-const DOM_SIGNALS = ['dom1', 'dom2'];          // derived from the frame's dom{}
-const VIEWS = [{ id: 'dance', label: '✦ DOM DANCE' }];   // dedicated dom-freq dance view
+const VIEWS = [{ id: 'dance', label: '✦ DOM DANCE' }];
 const TRAIL = 360;
 
 const S = {
-  signals: [], ops: {}, chains: {}, source: {}, gains: {},
-  selected: 'micLow',
-  trace: {},          // signal -> {raw:Float32Array, post:Float32Array}
+  ops: {}, frequencyOps: [], rawSources: {}, signalTypes: [],
+  signals: [],         // [{ id, label, source, type, chain, output }]
+  osc: { host: '127.0.0.1', port: 10000 },
+  selected: 'input',
+  trace: {},           // signalId -> {raw:Float32Array, post:Float32Array}
   head: 0,
-  live: {},           // signal -> {raw, post}
+  live: {},            // signalId -> {raw, post}
   connected: false,
-  mode: 'test',       // 'test' | 'mic' | 'file'
+  mode: 'test',
   filePath: '',
-  datasetsDir: '',    // server default browse dir
-  browseDir: '',      // current browser dir
-  devices: [],        // [{ id, label, ffmpegDevice, inputFormat }]
-  device: '',         // selected ffmpegDevice ('' = platform default)
-  inputGain: 1.0,     // global software preamp (analyzer bands.inputGain)
-  sourceSmoothHz: 12000,   // source-stage PCM smoothing cutoff (0 = off)
+  datasetsDir: '',
+  browseDir: '',
+  devices: [],
+  device: '',
+  inputGain: 1.0,
+  sourceSmoothHz: 12000,
   cal: { phase: 'idle', result: null },
   dom: { f1: 0, e1: 0, f2: 0, e2: 0 },
   struct: { state: 0, build: 0, energy: 0, pulse: 0, slow: 0 },
   dropFlash: 0,
-  spectrum: [],       // full freq-band visualizer (log-spaced magnitudes)
-  wave: [],           // audio-signal visualizer (oscilloscope)
+  spectrum: [],
+  wave: [],
   derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0 },
   spFlash: 0, scFlash: 0,
 };
-// Per-op-param SANE slider ranges (a UI concern — lives here, client-side).
-// The op-schema min/max (signal_post_processor.js OP_SCHEMA) are validation
-// bounds and are huge (e.g. envelope attack/release 0.1–10000), so the raw
-// slider end is unusable for fine adjustment. These uiRange entries give each
-// param a musically-sensible {min,max,step} for the SLIDER only — the typed
-// number input stays unbounded and still pushes the real value (validateChain
-// on the server is the true bound).
+// Per-op-param SANE slider ranges (a UI concern — client-side).
 const UI_RANGE = {
   gain:       { value: { min: 0, max: 4, step: 0.05 } },
   bias:       { value: { min: -1, max: 1, step: 0.01 } },
@@ -68,8 +61,6 @@ const UI_RANGE = {
   slope:      { scale: { min: 0, max: 20, step: 0.1 } },
   normalizer: { windowSec: { min: 1, max: 60, step: 1 }, strength: { min: 0, max: 1, step: 0.01 } },
 };
-// Slider {min,max,step} for an op param: the sane uiRange if one exists, else
-// the op-schema bounds (so any new/unlisted param still gets a working slider).
 function sliderRange(opType, pname, pdef) {
   const ui = UI_RANGE[opType]?.[pname];
   if (ui) return ui;
@@ -77,7 +68,6 @@ function sliderRange(opType, pname, pdef) {
   return { min, max, step: stepFor(min, max) };
 }
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-const STATE_NAME = { 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' };
 let ws = null;
 const frameQueue = [];
 
@@ -91,13 +81,15 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'hello') {
-      S.signals = [...m.signals, ...DOM_SIGNALS]; S.chainable = m.signals;
-      S.ops = m.ops; S.chains = m.chains; S.source = m.source; S.gains = m.gains;
+      S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.rawSources = m.rawSources || {};
+      S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
+      S.source = m.source;
       if (m.mode) S.mode = m.mode;
+      if (m.device != null) S.device = m.device;
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
-      for (const s of S.signals) S.trace[s] = { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
+      seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
     } else if (m.type === 'frame') {
@@ -122,42 +114,83 @@ function connect() {
       S.devices = m.devices || [];
       if (m.error) flash('devices: ' + m.error, true);
       buildSourceBar();
+    } else if (m.type === 'signals') {
+      S.signals = m.signals || []; seedTraces();
+      if (!signalById(S.selected) && S.selected !== 'input' && S.selected !== 'dance') S.selected = 'input';
+      buildSidebar(); renderChain();
+    } else if (m.type === 'addResult') {
+      if (m.ok) { S.selected = m.signal.id; buildSidebar(); renderChain(); flash('added ' + m.signal.label); }
+      else flash('add failed: ' + m.error, true);
+    } else if (m.type === 'removeResult') {
+      if (!m.ok) flash('remove failed: ' + m.error, true);
     } else if (m.type === 'chainResult') {
-      if (m.ok) { S.chains[m.signal] = m.chain; if (m.signal === S.selected) renderChain(); flash('saved'); }
-      else { flash('invalid: ' + m.error, true); }
+      if (m.ok) {
+        const sig = signalById(m.id); if (sig) { sig.chain = m.signal.chain; sig.output = m.signal.output; }
+        if (m.id === S.selected) renderChain();
+        flash('saved');
+      } else flash('invalid: ' + m.error, true);
     } else if (m.type === 'export') {
       showExport(m.yaml);
+    } else if (m.type === 'exportSaved') {
+      if (m.ok) flash('written → ' + (m.path || 'companion_config.yaml'));
+      else flash('write failed: ' + m.error, true);
     }
   };
 }
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
-const pushChain = (sig) => send({ type: 'setChain', signal: sig, chain: S.chains[sig] });
+const pushChain = (id) => { const sig = signalById(id); if (sig) send({ type: 'setChain', id, chain: sig.chain }); };
 
 // ── helpers ──────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const clamp01 = (x) => (x > 1 ? 1 : x > 0 ? x : 0);
-const accent = (s) => (SIGNAL_META[s]?.accent || '#9aa');
+const signalById = (id) => S.signals.find(s => s.id === id);
+const accent = (id) => { const s = signalById(id); return s ? (SOURCE_ACCENT[s.source] || '#9aa') : '#9aa'; };
 function setStatus(t, c) { const e = $('status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 let flashT = 0;
 function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color = bad ? '#ff5d6c' : '#34d3b5'; clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800); }
+function seedTraces() {
+  const next = {};
+  for (const s of S.signals) next[s.id] = S.trace[s.id] || { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
+  S.trace = next;
+}
+
+// Which op types a signal of the given TYPE may use (contract §type-aware ops).
+// Frequency signals only offer Hz-valid ops; intensity signals offer the full
+// intensity palette. osc_out is offered to both (terminal tap).
+function paletteFor(type) {
+  const all = Object.keys(S.ops);
+  if (type === 'frequency') return all.filter(t => S.frequencyOps.includes(t));
+  return all;   // intensity: full palette
+}
 
 // ── sidebar (signal list) ──────────────────────────────────────────────────
 function buildSidebar() {
   const box = $('signals'); box.innerHTML = '';
-  // INPUT — the source post-proc stage (gain + smoothing) that feeds the whole
-  // pipeline. Sits at the top: Audio source → [INPUT post-proc] → FFT → signals.
+  // header with the ADD [+] button
+  const head = el('div', 'sigs-head');
+  head.appendChild(el('span', 'panel-label', 'SIGNALS'));
+  const add = el('button', 'sig-add', '+'); add.title = 'add a signal';
+  add.onclick = promptAddSignal;
+  head.appendChild(add);
+  box.appendChild(head);
+
+  // INPUT — the source post-proc stage (gain + smoothing) feeding the pipeline.
   const inRow = el('button', 'sig-row input-row' + ('input' === S.selected ? ' active' : ''));
   inRow.innerHTML = '<span class="sig-name">◤ INPUT</span><span class="sig-sub">source · pre-FFT</span>';
   inRow.onclick = () => { S.selected = 'input'; buildSidebar(); renderChain(); };
   box.appendChild(inRow);
+
   for (const s of S.signals) {
-    const row = el('button', 'sig-row' + (s === S.selected ? ' active' : ''));
-    row.style.setProperty('--acc', accent(s));
-    row.innerHTML = `<span class="sig-name">${SIGNAL_META[s]?.label || s}</span>
-      <span class="sig-mini"><canvas id="mini-${s}" width="120" height="26"></canvas></span>
-      <span class="sig-val" id="sv-${s}">0.00</span>`;
-    row.onclick = () => { S.selected = s; buildSidebar(); renderChain(); };
+    const row = el('button', 'sig-row' + (s.id === S.selected ? ' active' : ''));
+    row.style.setProperty('--acc', SOURCE_ACCENT[s.source] || '#9aa');
+    row.innerHTML = `<span class="sig-name">${s.label}<span class="sig-type">${s.type}${s.output ? ' · out' : ''}</span></span>
+      <span class="sig-mini"><canvas id="mini-${s.id}" width="110" height="26"></canvas></span>
+      <span class="sig-val" id="sv-${s.id}">0.00</span>`;
+    row.onclick = (e) => { if (e.target.classList.contains('sig-x')) return; S.selected = s.id; buildSidebar(); renderChain(); };
+    const x = el('button', 'sig-x', '×'); x.title = 'remove signal';
+    x.onclick = (e) => { e.stopPropagation(); removeSignal(s.id); };
+    row.appendChild(x);
     box.appendChild(row);
   }
   // view tabs (dedicated visualizers)
@@ -170,6 +203,23 @@ function buildSidebar() {
   }
 }
 
+// Adding a signal prompts for a RAW source (contract: intensity/frequency).
+function promptAddSignal() {
+  const ids = Object.keys(S.rawSources);
+  const lines = ids.map((id, i) => `${i + 1}) ${S.rawSources[id].label} (${S.rawSources[id].type})`);
+  const pick = window.prompt('Add a signal — pick a raw source:\n' + lines.join('\n') + '\n\nEnter a number:', '1');
+  if (pick == null) return;
+  const idx = parseInt(pick, 10) - 1;
+  if (!(idx >= 0 && idx < ids.length)) { flash('no such source', true); return; }
+  send({ type: 'addSignal', source: ids[idx] });
+}
+function removeSignal(id) {
+  const sig = signalById(id);
+  if (sig && !window.confirm(`Remove signal "${sig.label}"?`)) return;
+  if (S.selected === id) S.selected = 'input';
+  send({ type: 'removeSignal', id });
+}
+
 // ── source panel ────────────────────────────────────────────────────────────
 function buildSource() {
   const box = $('source'); box.innerHTML = '';
@@ -179,7 +229,7 @@ function buildSource() {
   ];
   for (const [key, label, min, max] of knobs) {
     const row = el('div', 'knob');
-    const val = S.source[key] ?? 0;
+    const val = (S.source && S.source[key]) ?? 0;
     row.innerHTML = `<div class="knob-head"><span>${label}</span><span id="src-${key}">${(+val).toFixed(2)}</span></div>`;
     const r = el('input'); r.type = 'range'; r.min = min; r.max = max; r.step = (max - min) / 200; r.value = val;
     r.oninput = () => { S.source[key] = +r.value; $('src-' + key).textContent = (+r.value).toFixed(2); send({ type: 'setSource', source: { [key]: +r.value } }); };
@@ -187,60 +237,84 @@ function buildSource() {
   }
 }
 
-// ── chain pipeline (the op nodes) ───────────────────────────────────────────
+// ── chain pipeline (the op nodes — HORIZONTAL row) ──────────────────────────
 function renderChain() {
   const box = $('chain'); box.innerHTML = '';
-  const sig = S.selected;
-  if (sig === 'input') {
+  const sel = S.selected;
+  if (sel === 'input') {
     $('chain-title').textContent = 'INPUT · source post-proc → FFT';
     $('chain-title').style.color = '#34d3b5';
     box.appendChild(inputControls());
     return;
   }
-  $('chain-title').textContent = (SIGNAL_META[sig]?.label || sig) + ' · chain';
-  $('chain-title').style.color = accent(sig);
-  // dom1/dom2 + the visualizer views are read-only — no editable chain.
-  if (!S.chainable || !S.chainable.includes(sig)) {
-    box.appendChild(el('div', 'chain-note', 'read-only signal — no post-processing chain'));
+  if (sel === 'dance') {
+    $('chain-title').textContent = 'DOM DANCE · read-only view';
+    $('chain-title').style.color = '#f0a23b';
+    box.appendChild(el('div', 'chain-note', 'dedicated dom-freq visualizer — no editable chain'));
     return;
   }
-  const chain = S.chains[sig] || [];
-  chain.forEach((op, i) => {
-    const card = el('div', 'op');
-    card.style.setProperty('--acc', accent(sig));
-    const opLabel = op.type === 'lpf' ? 'lpf <span class="op-tag">(smooth)</span>' : op.type;
+  const sig = signalById(sel);
+  if (!sig) { box.appendChild(el('div', 'chain-note', 'select a signal')); return; }
+  const acc = SOURCE_ACCENT[sig.source] || '#9aa';
+  $('chain-title').textContent = `${sig.label} · ${sig.type} signal${sig.output ? ' · OUTPUT' : ''}`;
+  $('chain-title').style.color = acc;
+
+  // SOURCE HEAD — the raw input that enters the row.
+  const srcCard = el('div', 'op op-source');
+  srcCard.innerHTML = `<div class="op-head"><span class="op-type">${S.rawSources[sig.source]?.label || sig.source}</span></div>
+    <div class="op-src-sub">${sig.source} · ${sig.type}</div>`;
+  box.appendChild(srcCard);
+  box.appendChild(el('div', 'op-arrow', '→'));
+
+  sig.chain.forEach((op, i) => {
+    const isOut = op.type === 'osc_out';
+    const card = el('div', 'op' + (isOut ? ' osc-out' : ''));
+    if (!isOut) card.style.setProperty('--acc', acc);
+    const opLabel = op.type === 'lpf' ? 'lpf <span class="op-tag">(smooth)</span>'
+      : op.type === 'osc_out' ? 'osc_out <span class="op-tag">(→ engine)</span>' : op.type;
     const head = el('div', 'op-head', `<span class="op-type">${opLabel}</span>`);
     const tools = el('div', 'op-tools');
     const mk = (txt, fn, title) => { const b = el('button', 'op-btn', txt); b.title = title; b.onclick = fn; return b; };
-    tools.appendChild(mk('◀', () => moveOp(i, -1), 'move left'));
-    tools.appendChild(mk('▶', () => moveOp(i, 1), 'move right'));
+    // osc_out is terminal — it can't move right past itself; allow left moves
+    // for non-terminal ops only (osc_out always last).
+    if (!isOut) {
+      tools.appendChild(mk('◀', () => moveOp(i, -1), 'move left'));
+      tools.appendChild(mk('▶', () => moveOp(i, 1), 'move right'));
+    }
     tools.appendChild(mk('✕', () => removeOp(i), 'remove'));
     head.appendChild(tools); card.appendChild(head);
     card.appendChild(opParams(sig, op, i));
     box.appendChild(card);
-    if (i < chain.length - 1) box.appendChild(el('div', 'op-arrow', '→'));
+    if (i < sig.chain.length - 1) box.appendChild(el('div', 'op-arrow', '→'));
   });
-  // add-op button + palette
+
+  // add-op palette — TYPE-AWARE (filtered by the signal's type).
+  box.appendChild(el('div', 'op-arrow', '＋'));
   const add = el('div', 'op op-add');
-  const sel = el('select', 'add-sel');
-  sel.appendChild(el('option', null, '+ add op'));
-  for (const t of Object.keys(S.ops)) sel.appendChild(el('option', null, t));
-  sel.onchange = () => { if (sel.value && sel.value !== '+ add op') { addOp(sig, sel.value); sel.value = '+ add op'; } };
-  add.appendChild(sel);
-  const resetBtn = el('button', 'reset-btn', 'reset to default');
-  resetBtn.onclick = () => send({ type: 'reset', signal: sig });
-  add.appendChild(resetBtn);
+  const palette = paletteFor(sig.type);
+  const hasOut = sig.chain.some(o => o.type === 'osc_out');
+  const sel2 = el('select', 'add-sel');
+  sel2.appendChild(el('option', null, `+ add op (${sig.type})`));
+  for (const t of palette) {
+    // osc_out is terminal: only offer it if the chain has no tap yet.
+    if (t === 'osc_out' && hasOut) continue;
+    sel2.appendChild(el('option', null, t));
+  }
+  sel2.onchange = () => { if (sel2.value && !sel2.value.startsWith('+ add')) { addOp(sig, sel2.value); sel2.selectedIndex = 0; } };
+  add.appendChild(sel2);
   box.appendChild(add);
 }
 
 function opParams(sig, op, i) {
   const wrap = el('div', 'op-params');
   const schema = S.ops[op.type]?.params || {};
-  // gain's paramKey case → show the live gain knob value (read-only label)
   for (const [pname, pdef] of Object.entries(schema)) {
-    if (op.params[pname] === undefined && pdef.optional) continue;
+    if (op.params[pname] === undefined && pdef.optional) {
+      // osc_out.cpcKey is an optional label — always show an editable box.
+      if (!(op.type === 'osc_out' && pname === 'cpcKey')) continue;
+    }
     if (op.type === 'gain' && pname === 'paramKey') {
-      if (op.params.paramKey) { wrap.appendChild(el('div', 'param-static', `gain ← <b>${op.params.paramKey}</b>`)); }
+      if (op.params.paramKey) wrap.appendChild(el('div', 'param-static', `gain ← <b>${op.params.paramKey}</b>`));
       continue;
     }
     if (op.type === 'gain' && pname === 'value' && op.params.paramKey) continue;
@@ -248,33 +322,40 @@ function opParams(sig, op, i) {
     const cur = op.params[pname] ?? pdef.default;
     if (pdef.type === 'string') {
       row.innerHTML = `<span class="pn">${pname}</span>`;
-      const sel = el('select');
-      for (const o of (pdef.oneOf || [cur])) { const opt = el('option', null, o); if (o === cur) opt.selected = true; sel.appendChild(opt); }
-      sel.onchange = () => { op.params[pname] = sel.value; pushChain(sig); };
-      row.appendChild(sel);
+      if (Array.isArray(pdef.oneOf)) {
+        const sel = el('select');
+        for (const o of pdef.oneOf) { const opt = el('option', null, o); if (o === cur) opt.selected = true; sel.appendChild(opt); }
+        sel.onchange = () => { op.params[pname] = sel.value; pushChain(sig.id); };
+        row.appendChild(sel);
+      } else {
+        // free text (osc_out address / cpcKey).
+        const inp = el('input', 'pv-input'); inp.type = 'text'; inp.style.width = '120px'; inp.style.textAlign = 'left';
+        inp.value = cur != null ? cur : '';
+        inp.placeholder = pname === 'address' ? '/marsin/…' : '(cpc key)';
+        inp.onchange = () => {
+          const v = inp.value.trim();
+          if (v === '' && pdef.optional) delete op.params[pname];
+          else op.params[pname] = v;
+          pushChain(sig.id);
+        };
+        row.appendChild(inp);
+      }
     } else {
-      // SLIDER uses a sane musical range (uiRange) for easy adjustment; the
-      // typed NUMBER input is unbounded and still pushes the real value (the
-      // server's validateChain is the true bound). The slider value is clamped
-      // into [min,max] only so the thumb stays on-track — the param keeps the
-      // typed value.
       const { min, max, step } = sliderRange(op.type, pname, pdef);
       const head = el('div', 'param-head');
       head.appendChild(el('span', 'pn', pname));
-      // Editable number box — type an exact value (server validateChain still
-      // bounds it; an invalid entry flashes via chainResult).
       const num = el('input', 'pv-input'); num.type = 'number'; num.step = step; num.value = fmt(cur);
       head.appendChild(num);
       row.appendChild(head);
       const r = el('input', 'param-range'); r.type = 'range'; r.min = min; r.max = max; r.step = step;
-      r.value = Math.max(min, Math.min(max, cur));   // keep the thumb on-track even if the saved value is out of slider range
+      r.value = Math.max(min, Math.min(max, cur));
       r.oninput = () => { op.params[pname] = +r.value; num.value = fmt(+r.value); };
-      r.onchange = () => pushChain(sig);
+      r.onchange = () => pushChain(sig.id);
       num.onchange = () => {
         let v = parseFloat(num.value); if (Number.isNaN(v)) { num.value = fmt(op.params[pname] ?? cur); return; }
         op.params[pname] = v;
-        r.value = Math.max(min, Math.min(max, v));   // clamp the SLIDER only; param keeps the typed value
-        pushChain(sig);
+        r.value = Math.max(min, Math.min(max, v));
+        pushChain(sig.id);
       };
       row.appendChild(r);
     }
@@ -291,25 +372,26 @@ function addOp(sig, type) {
   const params = {};
   for (const [pn, pd] of Object.entries(schema)) if (!pd.optional) params[pn] = pd.default;
   if (type === 'gain' && !('value' in params)) params.value = 1.0;
-  S.chains[sig] = [...(S.chains[sig] || []), { id: uid(type), type, enabled: true, params }];
-  renderChain(); pushChain(sig);
+  const newOp = { id: uid(type), type, enabled: true, params };
+  // Keep osc_out terminal: insert new ops BEFORE any existing tap.
+  const tapIdx = sig.chain.findIndex(o => o.type === 'osc_out');
+  if (type !== 'osc_out' && tapIdx >= 0) sig.chain.splice(tapIdx, 0, newOp);
+  else sig.chain.push(newOp);
+  renderChain(); pushChain(sig.id);
 }
-function removeOp(i) { S.chains[S.selected].splice(i, 1); renderChain(); pushChain(S.selected); }
-function moveOp(i, d) { const c = S.chains[S.selected]; const j = i + d; if (j < 0 || j >= c.length) return; [c[i], c[j]] = [c[j], c[i]]; renderChain(); pushChain(S.selected); }
+function removeOp(i) { const sig = signalById(S.selected); if (!sig) return; sig.chain.splice(i, 1); renderChain(); pushChain(sig.id); }
+function moveOp(i, d) {
+  const sig = signalById(S.selected); if (!sig) return;
+  const c = sig.chain; const j = i + d;
+  if (j < 0 || j >= c.length) return;
+  if (c[j].type === 'osc_out') return;   // can't move past the terminal tap
+  [c[i], c[j]] = [c[j], c[i]]; renderChain(); pushChain(sig.id);
+}
 
 // ── file player (BROWSER-SOURCED file mode) ─────────────────────────────────
-// In file mode the BROWSER is the player + the source: an <audio> element does
-// native audio-out + seek + pause, and a WebAudio tap streams hop-sized Int16
-// mono PCM @ 44.1 kHz to the server over a BINARY WS frame. The server feeds
-// THAT into the same analyzer, so what's analysed is exactly what's heard —
-// perfectly synced, and pausing/seeking the <audio> pauses/seeks the analysis.
-// Offline: no libs; the WebAudio tap uses an AudioWorklet (Blob module URL, so
-// no extra served file) with a ScriptProcessor fallback.
 const PCM_SR = 44100;
 const filePlayer = {
   audio: null, ctx: null, node: null, srcNode: null, path: '', ready: false,
-  // PCM tap (worklet) processor source — captures mono float frames, converts
-  // to Int16 and posts them; the main thread forwards them over the WS.
   _workletCode: `
     class PcmTap extends AudioWorkletProcessor {
       process(inputs, outputs) {
@@ -321,10 +403,6 @@ const filePlayer = {
             i16[i] = s < 0 ? s * 32768 : s * 32767;
           }
           this.port.postMessage(i16, [i16.buffer]);
-          // PASS-THROUGH so the operator actually HEARS the file: copy input
-          // to every output channel. Without this the tap emits silence and
-          // (since createMediaElementSource reroutes the <audio> through the
-          // graph) nothing reaches the speakers.
           const out = outputs[0];
           if (out) for (let c = 0; c < out.length; c++) out[c].set(ch);
         }
@@ -336,14 +414,10 @@ const filePlayer = {
   async load(path) {
     this.stop();
     this.path = path;
-    // <audio> for native playback (audio-out + seek + pause).
     const a = new Audio();
     a.src = '/file?path=' + encodeURIComponent(path);
     a.preload = 'auto'; a.crossOrigin = 'anonymous';
     this.audio = a;
-    // WebAudio graph: <audio> → tap (→ server PCM) AND → destination (so the
-    // operator hears it). Force the context to 44.1 kHz so the PCM matches the
-    // analyzer's rate with no resampling.
     const Ctx = window.AudioContext || window.webkitAudioContext;
     const ctx = new Ctx({ sampleRate: PCM_SR });
     this.ctx = ctx;
@@ -357,19 +431,17 @@ const filePlayer = {
       tap = new AudioWorkletNode(ctx, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       tap.port.onmessage = (ev) => sendPcm(ev.data);
     } catch (e) {
-      // Fallback: ScriptProcessorNode (deprecated but universal, single-file).
       const sp = ctx.createScriptProcessor(1024, 1, 1);
       sp.onaudioprocess = (ev) => {
         const ch = ev.inputBuffer.getChannelData(0);
         const i16 = new Int16Array(ch.length);
         for (let i = 0; i < ch.length; i++) { let s = ch[i]; s = s > 1 ? 1 : s < -1 ? -1 : s; i16[i] = s < 0 ? s * 32768 : s * 32767; }
         sendPcm(i16);
-        ev.outputBuffer.getChannelData(0).set(ch);   // pass-through → audible
+        ev.outputBuffer.getChannelData(0).set(ch);
       };
       tap = sp;
     }
     this.node = tap;
-    // <audio> → tap → destination, and also tap output → destination for sound.
     srcNode.connect(tap);
     tap.connect(ctx.destination);
     this.ready = true;
@@ -378,9 +450,8 @@ const filePlayer = {
     a.onpause = () => renderTransport();
     a.onended = () => renderTransport();
     a.onloadedmetadata = () => renderTransport();
-    // Tell the server we're the (browser) file source for this path.
     send({ type: 'setMode', mode: 'file', file: path });
-    try { await a.play(); } catch { /* autoplay may need a user gesture; play btn covers it */ }
+    try { await a.play(); } catch { /* autoplay may need a gesture; play btn covers it */ }
     renderTransport();
   },
   play() { if (this.audio) { this.ctx?.resume(); this.audio.play().catch(() => {}); } },
@@ -396,7 +467,6 @@ const filePlayer = {
   },
 };
 function sendPcm(i16) {
-  // Binary WS frame: the server reads it as s16le mono and feeds the analyzer.
   if (ws && ws.readyState === 1 && S.mode === 'file') ws.send(i16.buffer);
 }
 const fmtTime = (s) => { if (!Number.isFinite(s)) return '0:00'; const m = Math.floor(s / 60), x = Math.floor(s % 60); return m + ':' + (x < 10 ? '0' : '') + x; };
@@ -408,7 +478,6 @@ function renderTransport() {
   const a = filePlayer.audio;
   const dur = a.duration || 0, cur = a.currentTime || 0;
   const frac = dur ? cur / dur : 0;
-  // Build the controls once; thereafter just update the live bits.
   if (!box.dataset.built) {
     box.innerHTML = '';
     const playBtn = el('button', 'tp-btn', '▶'); playBtn.id = 'tp-play';
@@ -425,8 +494,6 @@ function renderTransport() {
 }
 
 // ── source selector (Test / Mic / File) ─────────────────────────────────────
-// The TEST SOURCE panel (the synthetic SUB/MID/HIGH/KICK knobs) is only
-// meaningful for the test generator — hide it in mic / file mode.
 function syncSourcePanel() {
   const panel = $('source-panel'); if (!panel) return;
   panel.style.display = S.mode === 'test' ? '' : 'none';
@@ -439,14 +506,14 @@ function buildSourceBar() {
     const b = el('button', 'seg-btn' + (S.mode === m ? ' active' : ''), label);
     b.onclick = () => {
       if (m === 'file') {
-        S.mode = 'file'; buildSourceBar();           // reveal inline input + transport
-        openBrowse(S.browseDir || S.datasetsDir);    // and open the file browser
+        S.mode = 'file'; buildSourceBar();
+        openBrowse(S.browseDir || S.datasetsDir);
         return;
       }
-      filePlayer.stop();                             // leaving file mode → release the browser player
+      filePlayer.stop();
       if (m === 'mic') {
-        S.mode = 'mic'; buildSourceBar();            // reveal the device picker
-        send({ type: 'listDevices' });               // populate it (like CaptainPad)
+        S.mode = 'mic'; buildSourceBar();
+        send({ type: 'listDevices' });
         send({ type: 'setMode', mode: 'mic', device: S.device || null });
         return;
       }
@@ -456,18 +523,16 @@ function buildSourceBar() {
   }
   box.appendChild(seg);
 
-  // File input (shown in file mode).
   const fwrap = el('span', 'file-wrap' + (S.mode === 'file' ? ' show' : ''));
   const inp = el('input', 'file-input'); inp.id = 'file-path'; inp.placeholder = '/path/to/track.mp3'; inp.value = S.filePath || '';
   inp.oninput = () => { S.filePath = inp.value; };
   const go = el('button', 'file-go', 'Load'); go.onclick = () => { const f = inp.value.trim(); if (f) { S.filePath = f; filePlayer.load(f); const bm = $('browse-modal'); if (bm) bm.style.display = 'none'; flash('loaded ' + f.split(/[/\\]/).pop()); } };
   fwrap.appendChild(inp); fwrap.appendChild(go); box.appendChild(fwrap);
 
-  // File-mode transport (audio-out + play/pause + seek) — shown only in file mode.
   const tp = el('div', 'transport'); tp.id = 'transport'; box.appendChild(tp);
   renderTransport();
 
-  // Device picker (shown in mic mode) — CaptainPad-style: list inputs, pick one.
+  // Device picker (shown in mic mode) — honors the config device.
   const mwrap = el('span', 'mic-wrap' + (S.mode === 'mic' ? ' show' : ''));
   const sel = el('select', 'device-select'); sel.id = 'device-select';
   const def = el('option', null, 'Default input'); def.value = ''; if (!S.device) def.selected = true; sel.appendChild(def);
@@ -488,6 +553,8 @@ function buildSourceBar() {
 // ── INPUT source post-proc controls (gain + pre-FFT smoothing) ──────────────
 function inputControls() {
   const wrap = el('div', 'input-ctrls');
+  const oscNote = el('div', 'chain-note', `OUTPUTS → engine OSC at <b>${S.osc.host}:${S.osc.port}</b> · ${S.signals.filter(s => s.output).length} output signal(s)`);
+  wrap.appendChild(oscNote);
   const gain = el('div', 'param');
   gain.innerHTML = `<div class="param-head"><span class="pn">INPUT GAIN</span><span class="pv" id="ic-gain">×${S.inputGain.toFixed(1)}</span></div>`;
   const gr = el('input', 'param-range'); gr.type = 'range'; gr.min = 0; gr.max = 16; gr.step = 0.1; gr.value = S.inputGain;
@@ -499,7 +566,7 @@ function inputControls() {
   const sr = el('input', 'param-range'); sr.type = 'range'; sr.min = 0; sr.max = 22050; sr.step = 250; sr.value = S.sourceSmoothHz;
   sr.oninput = () => { S.sourceSmoothHz = +sr.value; $('ic-sm').textContent = fmtHz(+sr.value); send({ type: 'setSmooth', value: +sr.value }); };
   sm.appendChild(sr); wrap.appendChild(sm);
-  wrap.appendChild(el('div', 'chain-note', 'Audio source → [gain + smoothing] → FFT → every signal. Lower SMOOTH cutoff = more denoise (0 = off).'));
+  wrap.appendChild(el('div', 'chain-note', 'Audio source → [gain + smoothing] → FFT → every designed signal. Lower SMOOTH cutoff = more denoise (0 = off).'));
   return wrap;
 }
 
@@ -560,7 +627,7 @@ function openBrowse(dir) {
 }
 function pickFile(p) {
   S.filePath = p; S.mode = 'file';
-  filePlayer.load(p);                                  // browser plays + taps + streams PCM
+  filePlayer.load(p);
   $('browse-modal').style.display = 'none';
   buildSourceBar(); flash('loaded ' + p.split(/[/\\]/).pop());
 }
@@ -581,11 +648,9 @@ function renderLive() {
   $('build-bar').style.width = (clamp01(st.build) * 100).toFixed(0) + '%';
   $('energy-bar').style.width = (clamp01(st.energy) * 100).toFixed(0) + '%';
   $('slow-bar').style.width = (clamp01(st.slow) * 100).toFixed(0) + '%';
-  // drop pulse / fired flash
   S.dropFlash *= 0.9; if (S.dropFlash < 0.02) S.dropFlash = 0;
   const glow = Math.max(clamp01(st.pulse), S.dropFlash);
   $('drop-flash').style.opacity = glow.toFixed(2);
-  // derived signals
   const dv = S.derived;
   if ($('bpm-val')) {
     $('bpm-val').textContent = dv.bpm > 0 ? dv.bpm.toFixed(0) : '—';
@@ -607,26 +672,18 @@ function showExport(text) {
 $('export-btn').onclick = () => send({ type: 'export' });
 $('export-close').onclick = () => $('export-modal').style.display = 'none';
 $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text').value); flash('copied'); };
+const saveBtn = $('export-save'); if (saveBtn) saveBtn.onclick = () => send({ type: 'exportSave' });
 
 // ── render loop (canvases) ──────────────────────────────────────────────────
 function draw() {
-  // Process queued frames. If the queue is growing, speed up consumption.
   let limit = 1;
-  if (frameQueue.length > 30) {
-    limit = Math.ceil(frameQueue.length / 15);
-  }
-  
+  if (frameQueue.length > 30) limit = Math.ceil(frameQueue.length / 15);
+
   for (let k = 0; k < limit; k++) {
     if (frameQueue.length === 0) break;
     const m = frameQueue.shift();
-    
-    // Update live state with this frame
-    for (const s in m.signals) { const v = m.signals[s]; if (v) S.live[s] = v; }
-    if (m.dom) {
-      S.dom = m.dom;
-      S.live.dom1 = { raw: m.dom.e1, post: m.dom.e1 };
-      S.live.dom2 = { raw: m.dom.e2, post: m.dom.e2 };
-    }
+    for (const id in m.signals) { const v = m.signals[id]; if (v) S.live[id] = v; }
+    if (m.dom) S.dom = m.dom;
     if (m.struct) S.struct = m.struct;
     if (m.spectrum) S.spectrum = m.spectrum;
     if (m.wave) S.wave = m.wave;
@@ -635,47 +692,53 @@ function draw() {
       if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
       S.derived = m.derived;
     }
-
-    // Advance the scrolling trace for EVERY frame processed (smooth scroll)
-    if (S.signals.length) {
-      for (const s of S.signals) {
-        const tr = S.trace[s]; if (!tr) continue;
-        const lv = S.live[s] || { raw: 0, post: 0 };
-        tr.raw[S.head] = clamp01(lv.raw); tr.post[S.head] = clamp01(lv.post);
-      }
-      S.head = (S.head + 1) % TRAIL;
+    // Advance the scrolling trace for EVERY designed signal.
+    for (const s of S.signals) {
+      const tr = S.trace[s.id]; if (!tr) continue;
+      const lv = S.live[s.id] || { raw: 0, post: 0 };
+      // Frequency signals carry Hz — normalize to [0,1] for the trace display.
+      const norm = s.type === 'frequency' ? clamp01((lv.post || 0) / 4000) : clamp01(lv.post);
+      const rawN = s.type === 'frequency' ? clamp01((lv.raw || 0) / 4000) : clamp01(lv.raw);
+      tr.raw[S.head] = rawN; tr.post[S.head] = norm;
     }
+    S.head = (S.head + 1) % TRAIL;
   }
 
-  // main panel: the DOM DANCE view, or the selected signal's trace
-  const sig = S.selected;
+  const sel = S.selected;
   const ctx = $('trace').getContext('2d');
-  if (sig === 'dance') {
+  if (sel === 'dance') {
     drawDance(ctx);
     $('big-raw').textContent = (S.dom.danceF1 || 0).toFixed(0) + 'Hz';
     $('big-post').textContent = (S.dom.danceF2 || 0).toFixed(0) + 'Hz';
     $('big-post').style.color = '#c084fc';
-  } else if (sig === 'input') {
-    drawWave(ctx, S.wave);   // the source (gained + smoothed) audio feeding the FFT
+  } else if (sel === 'input') {
+    drawWave(ctx, S.wave);
     $('big-raw').textContent = 'source';
     $('big-post').textContent = '×' + S.inputGain.toFixed(1);
     $('big-post').style.color = '#34d3b5';
   } else {
-    const tr = S.trace[sig];
-    if (tr) drawTrace(ctx, tr, accent(sig), 2);
-    const lv = S.live[sig] || { raw: 0, post: 0 };
-    if (sig === 'dom1' || sig === 'dom2') $('big-raw').textContent = (sig === 'dom1' ? S.dom.f1 : S.dom.f2).toFixed(0) + ' Hz';
-    else $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
-    $('big-post').textContent = clamp01(lv.post).toFixed(2);
-    $('big-post').style.color = accent(sig);
+    const sig = signalById(sel);
+    const tr = S.trace[sel];
+    if (tr) drawTrace(ctx, tr, accent(sel), 2);
+    const lv = S.live[sel] || { raw: 0, post: 0 };
+    if (sig && sig.type === 'frequency') {
+      $('big-raw').textContent = (lv.raw || 0).toFixed(0) + ' Hz';
+      $('big-post').textContent = (lv.post || 0).toFixed(0) + ' Hz';
+    } else {
+      $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
+      $('big-post').textContent = clamp01(lv.post).toFixed(2);
+    }
+    $('big-post').style.color = accent(sel);
   }
-  // GLOBAL visualizers (always on, for every signal view)
   drawSpectrum($('spectrum').getContext('2d'), S.spectrum, S.dom);
   drawWave($('wave').getContext('2d'), S.wave);
-  // sidebar minis + values
   for (const s of S.signals) {
-    const c = document.getElementById('mini-' + s); if (c && S.trace[s]) drawMini(c.getContext('2d'), S.trace[s], accent(s));
-    const v = document.getElementById('sv-' + s); if (v) v.textContent = clamp01((S.live[s] || {}).post || 0).toFixed(2);
+    const c = document.getElementById('mini-' + s.id); if (c && S.trace[s.id]) drawMini(c.getContext('2d'), S.trace[s.id], SOURCE_ACCENT[s.source] || '#9aa');
+    const v = document.getElementById('sv-' + s.id);
+    if (v) {
+      const lv = S.live[s.id] || {};
+      v.textContent = s.type === 'frequency' ? (lv.post || 0).toFixed(0) : clamp01(lv.post || 0).toFixed(2);
+    }
   }
   renderLive();
   requestAnimationFrame(draw);
@@ -700,24 +763,19 @@ function drawMini(ctx, tr, color) {
 // ── spectrum + waveform (global visualizers) ────────────────────────────────
 const SPEC_MIN_HZ = 20, SPEC_MAX_HZ = 22050;
 const freqToX = (f, W) => (f <= SPEC_MIN_HZ ? 0 : Math.log(f / SPEC_MIN_HZ) / Math.log(SPEC_MAX_HZ / SPEC_MIN_HZ) * W);
-let specSmooth = null;   // temporal EMA of the spectrum bins (smooth bars)
+let specSmooth = null;
 function drawSpectrum(ctx, spec, dom) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
-  // log-frequency grid + labels
   ctx.font = '9px monospace';
   for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
     const x = freqToX(f, W);
     ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     ctx.fillStyle = '#556'; ctx.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 2, H - 3);
   }
-  // dom cluster windows (shaded) behind the bars
   if (dom) {
     drawWindow(ctx, dom.lo1, dom.hi1, '240,162,59', W, H);
     drawWindow(ctx, dom.lo2, dom.hi2, '192,132,252', W, H);
   }
-  // spectrum as a SMOOTH FILLED CURVE (not bars): temporal EMA (no flicker) +
-  // light 3-tap spatial smoothing (no stair-steps) + quadratic curve through
-  // the bin tops with a gradient fill.
   if (spec && spec.length) {
     const n = spec.length;
     if (!specSmooth || specSmooth.length !== n) specSmooth = new Float32Array(n);
@@ -735,13 +793,9 @@ function drawSpectrum(ctx, spec, dom) {
     ctx.fillStyle = grad; ctx.fill();
     ctx.strokeStyle = '#6db0ff'; ctx.lineWidth = 1.5; ctx.beginPath(); curve(); ctx.stroke();
   }
-  // dom-freq DANCE — a ghostly glowing band that GLIDES to the dom freq/width
   if (dom) {
     drawGhost(ctx, dom.danceF1, dom.danceW1, '240,162,59', W, H);
     drawGhost(ctx, dom.danceF2, dom.danceW2, '192,132,252', W, H);
-  }
-  // dom1/dom2 location markers (sharp, on top of the ghost)
-  if (dom) {
     drawMarker(ctx, dom.f1, '#f0a23b', 'dom1', W, H);
     drawMarker(ctx, dom.f2, '#c084fc', 'dom2', W, H);
   }
@@ -763,7 +817,6 @@ function drawMarker(ctx, f, color, label, W, H) {
   ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.fillText(`${label} ${f.toFixed(0)}Hz`, x + 3, 11);
 }
-// ── DOM DANCE view: gliding glowing orbs (spring-smoothed) along a freq axis ─
 const DANCE_MIN_HZ = 30, DANCE_MAX_HZ = 8000;
 const danceX = (f, W) => (f <= DANCE_MIN_HZ ? 0 : Math.log(f / DANCE_MIN_HZ) / Math.log(DANCE_MAX_HZ / DANCE_MIN_HZ) * W);
 const danceTrail = { a: [], b: [] };
@@ -780,7 +833,7 @@ function drawDance(ctx) {
   drawOrb(ctx, danceTrail.b, danceX(d.danceF2 || 0, W), H * 0.64, d.danceW2 || 0, clamp01(d.e2), '192,132,252', d.danceF2, 'dom2');
 }
 function drawOrb(ctx, trail, x, y, widthHz, energy, rgb, freq, label) {
-  const r = 7 + energy * 30 + Math.min(38, widthHz / 9);   // size ← energy + cluster width
+  const r = 7 + energy * 30 + Math.min(38, widthHz / 9);
   trail.push({ x, y, r }); if (trail.length > 36) trail.shift();
   for (let i = 0; i < trail.length; i++) { const t = trail[i]; ctx.fillStyle = `rgba(${rgb},${(i / trail.length) * 0.3})`; ctx.beginPath(); ctx.arc(t.x, t.y, t.r * 0.65, 0, Math.PI * 2); ctx.fill(); }
   const g = ctx.createRadialGradient(x, y, 1, x, y, r);
@@ -794,7 +847,6 @@ function drawWave(ctx, wave) {
   if (!wave || !wave.length) return;
   ctx.strokeStyle = '#34d3b5'; ctx.lineWidth = 1.3; ctx.beginPath();
   const n = wave.length, step = W / (n - 1), yOf = (v) => H / 2 - v * (H / 2 * 0.92);
-  // quadratic-smoothed polyline through the samples → a continuous wave, not steps
   ctx.moveTo(0, yOf(wave[0]));
   for (let i = 0; i < n - 1; i++) {
     const x1 = i * step, y1 = yOf(wave[i]), mx = (x1 + (i + 1) * step) / 2, my = (y1 + yOf(wave[i + 1])) / 2;

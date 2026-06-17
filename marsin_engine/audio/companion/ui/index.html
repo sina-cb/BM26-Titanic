@@ -96,10 +96,13 @@
 
   <div id="export-modal" class="modal">
     <div class="modal-box">
-      <div class="modal-head"><span>chains config — paste under <code>chains:</code> in a scene's audio_state.yaml</span>
+      <div class="modal-head"><span>signal design — <code>audio/companion/companion_config.yaml</code> (the output design)</span>
         <button id="export-close" class="op-btn">✕</button></div>
       <textarea id="export-text" spellcheck="false"></textarea>
-      <div class="modal-foot"><button id="export-copy" class="primary">Copy</button></div>
+      <div class="modal-foot">
+        <button id="export-save" class="primary">Write to disk</button>
+        <button id="export-copy" class="primary">Copy</button>
+      </div>
     </div>
   </div>
 

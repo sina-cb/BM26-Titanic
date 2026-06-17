@@ -1,0 +1,99 @@
+# companion_config.yaml — Audio Companion signal-designer output design.
+# Persisted by the UI "Export config" action; loaded on boot.
+# Schema + loader: audio/companion/companion_config.js. (2026-06-17 contract.)
+osc:
+  host: 127.0.0.1
+  port: 10000
+signals:
+  - id: low
+    label: LOW
+    source: rawLow
+    type: intensity
+    chain:
+      - id: low_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 5.5
+      - id: low_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/mic/low
+          cpcKey: micLow
+    output: true
+  - id: mid
+    label: MID
+    source: rawMid
+    type: intensity
+    chain:
+      - id: mid_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 8
+      - id: mid_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/mic/mid
+          cpcKey: micMid
+    output: true
+  - id: high
+    label: HIGH
+    source: rawHigh
+    type: intensity
+    chain:
+      - id: high_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 14
+      - id: high_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/mic/high
+          cpcKey: micHigh
+    output: true
+  - id: kick
+    label: KICK
+    source: rawKick
+    type: intensity
+    chain:
+      - id: kick_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 18
+      - id: kick_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/mic/kick
+          cpcKey: micKick
+    output: true
+  - id: dom1
+    label: DOM1
+    source: rawDom1
+    type: frequency
+    chain:
+      - id: dom1_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/dom/freq1
+          cpcKey: micDomFreq1
+    output: true
+  - id: dom2
+    label: DOM2
+    source: rawDom2
+    type: frequency
+    chain:
+      - id: dom2_out
+        type: osc_out
+        enabled: true
+        params:
+          address: /marsin/dom/freq2
+          cpcKey: micDomFreq2
+    output: true
