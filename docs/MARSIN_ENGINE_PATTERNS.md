@@ -282,3 +282,145 @@ export var volume = 0.0; // overall gain (0..1)
 export var bass = 0.0;   // low-frequency energy (0..1)
 export var treble = 0.0; // high-frequency energy (0..1)
 ```
+
+> **How audio actually reaches patterns today:** the engine does *not* auto-inject `bpm/volume/...`.
+> The implemented path is the **modulation system**: the audio analyzer publishes CPC signals
+> `micLow` / `micMid` / `micHigh` / `micKick` (plus optional OSC stems `stemsBass/Drums/Vocals`), and
+> a per-playlist-entry modulation mapping binds one of those sources onto a pattern's exported
+> `slider*` parameter (`mode: offset|scale`, a `curve`, and a `range`). So to make a pattern
+> audio-reactive you just expose ordinary `slider*` params (e.g. `sliderAudioKick`) and let the
+> operator/playlist map `micKick → audioKick`. `micKick` is pre-shaped (envelope + Schmitt + hold)
+> into a clean transient, which makes it the natural **trigger** for the feedback effects in §9.
+
+---
+
+## 9. Frame Feedback & Trails — Worked Examples
+
+This section shows how to use the language's **frame-to-frame state persistence** (see
+`MARSIN_PB_LANG_SPEC.md` §9.4–§9.5) to generate motion-trail effects. A compiled pattern is one
+long-lived VM instance, so top-level `var`s and `array()`s keep their values between frames — that
+single fact is what lets you build comets, pulses, ripples and ghosting.
+
+All examples below were **compile- and run-validated** against the WASM VM. Three reminders that
+make them correct:
+1. Trig is **radians** — phases are turned into angles with `* PI2` (§4).
+2. Reserved single-letter names (`i`, `t`, `h`, `f`, `p`, `q`, `r`, `g`, `b`, `x`, `y`, `z`,
+   `index`, `pixelCount`) cannot be declared — loop with `k`, store brightness in `bri`, etc.
+   (spec §2.4 / §7.3).
+3. `pixelCount` bakes to a literal `~144`; size feedback buffers to your real model with an explicit
+   constant `N`, not `pixelCount`.
+
+### 9.1 Scalar decay-envelope trail (a pulse that fades)
+
+The cheapest trail: one persistent scalar, snapped to `1.0` on an event and decayed each frame.
+This is the engine behind heartbeats, pings, and searchlight afterglow.
+
+```javascript
+// pulse.js — a synchronized flash that leaves a fading afterglow.
+var localSpeed = 0.5;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+var fade = 0.5;                              // longer tail as this rises
+export function sliderFade(v) { fade = v; }
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+
+var clock = 0.0, env = 0.0, lastPhase = 0.0;
+
+export function beforeRender(delta) {
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var dt = (delta / 1310.72) * localMult;
+  clock = clock + dt * 0.5;
+  var phase = clock % 1.0;
+  if (phase < lastPhase) env = 1.0;          // fire on each wrap (swap for an audio kick — §9.3)
+  lastPhase = phase;
+  env = env - dt * (1.5 + fade * 4.0);       // decay the envelope toward 0
+  if (env < 0.0) env = 0.0;
+}
+
+export function render3D(index, x, y, z) {
+  hsv(cp1H, cp1S, env * cp1V);               // whole rig flashes + fades together
+}
+```
+
+To make it travel instead of flashing globally, gate it by position: multiply `env` by
+`smoothstep(headX + 0.1, headX, x)` where `headX = clock % 1.0`.
+
+### 9.2 Per-pixel feedback buffer (a comet with a real tail)
+
+For a head that **paints a fading tail into the pixels themselves**, keep your own brightness buffer.
+Decay the whole buffer each frame, inject at the head, read `buf[index]` per pixel. This is the
+negative-space "Single Comet" idea — maximally readable from far away.
+
+```javascript
+// comet.js — one bright head leaves a decaying trail across the rig.
+var localSpeed = 0.5;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+var tailLen = 0.6;                           // 0 = stub, 1 = long banner
+export function sliderTailLen(v) { tailLen = 0.15 + v * 0.8; }
+export var cp1H = 0.55, cp1S = 0.9, cp1V = 1.0;
+export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
+
+var N = 144;                                 // <-- set to your model's real pixel count
+var buf = array(N);                          // persistent feedback buffer, allocated once at init
+var head = 0.0;
+
+export function beforeRender(delta) {
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+  head = (head + (delta / 1310.72) * localMult * 0.25) % 1.0;
+  var decay = 1.0 - (1.0 - tailLen) * 0.25;  // closer to 1.0 => longer tail
+  var k = 0;
+  for (k = 0; k < N; k = k + 1) { buf[k] = buf[k] * decay; }   // fade every cell
+  buf[floor(head * N) % N] = 1.0;            // paint the head into this frame
+}
+
+export function render3D(index, x, y, z) {
+  hsv(cp1H, cp1S, buf[index] * cp1V);        // each pixel shows its own decaying memory
+}
+```
+
+Variations from the same skeleton:
+- **Ripple from one drop:** inject at a fixed center cell on a trigger, and in `render3D` read
+  `buf[abs(index - center)]` so the stored envelope radiates outward.
+- **Bassline snake:** drive `head` speed and `tailLen` from an audio param (§9.3) so the snake
+  lengthens and accelerates with the bass.
+- **Ink-in-water (near-field):** seed several cells with `random(1)` and use a gentler `decay` for a
+  slow organic bloom.
+
+### 9.3 Making a trail sound-reactive
+
+Expose ordinary `slider*` params and let the modulation system feed audio into them (§8). The
+cleanest trigger is `micKick → audioKick`:
+
+```javascript
+var audioKick = 0.0;
+export function sliderAudioKick(v) { audioKick = v; }   // operator maps micKick onto this
+
+export function beforeRender(delta) {
+  // ... existing timing ...
+  if (audioKick > 0.5) env = 1.0;            // re-fire the envelope on the beat instead of on a wrap
+  // ... existing decay ...
+}
+```
+
+For continuous "breathe with the music," map `micLow → sliderTailLen` (longer tails on the drops) or
+`micHigh → a brightness slider` (sparkle on the hats). No render-math change needed — the modulation
+controller writes the slider for you each frame.
+
+### 9.4 Mixer-level trails (ghost any pattern, no code)
+
+When you want trails on a pattern that manages no state of its own, skip the buffer entirely and turn
+on the **`feedbackTrails` global effect** (`marsin_engine/effects/feedbackTrails.js`). It keeps an
+RGBWAU trail buffer of the composited output and mixes it back with operator-tunable `decay`,
+`injection`, `mix`, `colorBleed`, and `blendMode` (add / max / replace). This is the "ghost
+everything" knob; §9.1–§9.2 are for trails baked into a specific pattern's design.
+
+### 9.5 Gotchas (all verified)
+
+| Gotcha | Why | Fix |
+|---|---|---|
+| Trail "teleports" off-screen | `pixelCount` is a literal `~144`, not your model size | use an explicit `var N = <model pixels>` for buffer size **and** head index |
+| Trail vanishes on pattern change | state lives in the VM instance; a swap re-runs init | expected — never assume a trail survives a deck/pattern swap (spec §9.4) |
+| `Cannot declare reserved name 'i'` | single letters are reserved slots | loop with `k`; name brightness `bri`, angle `ang`, etc. (spec §2.4) |
+| Buffer alloc error / black pixels | allocating `array()` inside `render` | allocate once in **top-level init** (spec §7) |
+| Motion ignores the global SPEED fader | SPEED scales `time()`, not raw `delta` | drive motion from `time()`, or accept that `delta` trails follow only `localSpeed` (spec §9.3) |
+| Solid red pixels | exceeded 5000 instructions/pixel | keep the per-pixel path light; do the `O(N)` decay loop in `beforeRender`, not `render` |
