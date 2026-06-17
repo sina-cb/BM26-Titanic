@@ -124,3 +124,9 @@ FIX (companion_server.js):
 2. The Companion writes-through ALL its own mode switches (test/mic/file) to the engine as
    capture.device (today only mic+device write-through), so switching source in the Companion
    also reflects in CaptainPad. Net: source is fully two-way configurable from CaptainPad.
+
+## CaptainPad audio tab — scrollable signal grid (2026-06-17, queued/after audit agent)
+- The 3-column audio-signals grid runs tall (3×N) and can overflow the screen — make
+  the signals area SCROLLABLE (vertical scroll) so the operator can see all of them
+  (esp. the lower rows: dom/energy/note/switch/bar-phase/downbeat). Keep the 3-col grid;
+  just ensure it lives in a scroll container that fits the iPad viewport.
