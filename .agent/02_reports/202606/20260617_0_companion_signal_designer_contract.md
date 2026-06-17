@@ -130,3 +130,32 @@ FIX (companion_server.js):
   the signals area SCROLLABLE (vertical scroll) so the operator can see all of them
   (esp. the lower rows: dom/energy/note/switch/bar-phase/downbeat). Keep the 3-col grid;
   just ensure it lives in a scroll container that fits the iPad viewport.
+
+## Companion custom VIEWS — mix/share signals (2026-06-17, queued — after current Companion agent)
+- Today the VISUALIZERS section is fixed (DOM DANCE + per-signal traces). Add the ability
+  to CREATE new VIEWS that combine/overlay a chosen SUBSET of the signals list:
+  - "+ add view" in the VISUALIZERS section → name it → pick which signals to include
+    (multi-select from the signals list) → renders a single MIXED plot overlaying those
+    signals' traces (color-per-signal, shared axis; sensible for same-type signals,
+    and handle mixed intensity/frequency gracefully — e.g. normalized overlay or
+    grouped).
+  - A view is a saved object { id, label, signals:[signalId...], (opts) }; persists to
+    companion_config.yaml alongside signals; add/remove like signals; selecting a view
+    in the sidebar shows its mixed plot in the main stage.
+  - "share certain signals": the view is the share/compare surface (see several signals
+    together); include it in Export so the view set travels with the design.
+  - Keep it clean + themed (matches the designer). No native dialogs (use the themed
+    modal pattern). Reuse the existing trace renderer.
+
+### Refinement: views have a VISUALIZER TYPE (dancing-balls is one)
+- A view picks a viz TYPE + the signals fed into it:
+  - **dancing-balls** (the current DOM DANCE orbs / DanceMaker spring): fed freq-type
+    signals (e.g. dom1 + dom2) → gliding orbs. The existing DOM DANCE becomes an
+    instance of this type fed both dom signals — not a hardcoded one-off.
+  - **trace-overlay**: fed any signals → overlaid color-per-signal traces (the mix/compare view).
+  - (extensible: spectrum, etc.)
+- So "+ add view" → choose type → multi-select signals (filtered to the type's accepted
+  signal type, e.g. dancing-balls wants frequency signals). view = { id, label, type,
+  signals:[...] }, persisted in companion_config.yaml, shown in the sidebar VISUALIZERS list.
+- Reuse the existing dance renderer (DanceMaker/dom-dance) for the dancing-balls type and
+  the AudioTrace renderer for overlays — no new viz engines.
