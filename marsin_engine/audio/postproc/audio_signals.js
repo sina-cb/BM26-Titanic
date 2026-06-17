@@ -157,9 +157,9 @@ function detectorDescriptor(d) {
 const DOM_NYQUIST_MAX = 22050;
 const DOM_FREQS = [
   { key: 'micDomFreq1',   label: 'Mic · Dom Freq 1',   range: [0, DOM_NYQUIST_MAX], osc: '/marsin/dom/freq1' },
-  { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', range: [0, 1] },
+  { key: 'micDomEnergy1', label: 'Mic · Dom Energy 1', range: [0, 1], osc: '/marsin/dom/energy1' },
   { key: 'micDomFreq2',   label: 'Mic · Dom Freq 2',   range: [0, DOM_NYQUIST_MAX], osc: '/marsin/dom/freq2' },
-  { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', range: [0, 1] },
+  { key: 'micDomEnergy2', label: 'Mic · Dom Energy 2', range: [0, 1], osc: '/marsin/dom/energy2' },
 ];
 
 function domDescriptor(d) {

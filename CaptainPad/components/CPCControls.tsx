@@ -57,14 +57,20 @@ export const CPCControls = () => {
   // keeps this component's re-render scope tight (the BpmTile child
   // is the only thing that visibly changes when BPM nudges).
   const steadyParams = useSharedParamValues(defaultParams) as typeof defaultParams;
-  // tempoBpm rides /ws/signals at the analyser's broadcastHz (5 Hz).
+  // The tempo rides /ws/signals at the analyser's broadcastHz (5 Hz).
   // Reading it via useLiveParamValues — instead of via
   // useSharedParamValues like the rest of CPC — keeps the BPM tile
   // ticking at the engine's actual rate. The per-signal audio meters
   // read the whole live doc (useLiveParams) inside <DynamicAudioRow />
   // so the live key set stays dynamic (the Companion can add/remove
   // signals at runtime) without the hook's pinned-key-set hazard.
-  const live = useLiveParamValues({ tempoBpm: 0 });
+  //
+  // Tempo SOURCE (2026-06-17 contract): the Audio Companion is the sole
+  // analyzer and streams its analyzed tempo over OSC → CPC key `audioBpm`.
+  // Prefer that; fall back to the legacy `tempoBpm` only when `audioBpm`
+  // is absent. Mirrors the engine's BpmSpeedSync + the AUDIO tab.
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 });
+  const liveBpm = (live.audioBpm ?? 0) > 0 ? live.audioBpm : live.tempoBpm;
   const params = useMemo(
     () => ({ ...steadyParams, ...live }),
     [steadyParams, live],
@@ -146,7 +152,7 @@ export const CPCControls = () => {
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
   const bpmMax     = params.bpmSpeedMax ?? 180;
-  const bpm        = params.tempoBpm ?? 0;
+  const bpm        = liveBpm ?? 0;
   const bpmMapped  =
     bpmSyncOn && bpm > 0 && bpmMin !== bpmMax
       ? Math.max(0, Math.min(1, (bpm - bpmMin) / (bpmMax - bpmMin)))
@@ -178,7 +184,7 @@ export const CPCControls = () => {
         }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO OSC TEMPO</Text>
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11, flex: 1 }}>
-            Speed will not move until /lx/tempo/bpm starts arriving. Disable sync on the Audio tab, or fix the OSC source.
+            Speed will not move until the Audio Companion streams a tempo (audioBpm). Disable sync on the Audio tab, or fix the OSC source.
           </Text>
         </View>
       ) : null}
@@ -213,7 +219,7 @@ export const CPCControls = () => {
             size={params.size ?? 0.5}
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
-            bpm={params.tempoBpm ?? 0}
+            bpm={bpm}
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
@@ -255,7 +261,7 @@ export const CPCControls = () => {
 
             {/* BPM tile sits just before the OSC pill — a "tempo + source
                 health" cluster at the end of the row. */}
-            <BpmTile bpm={params.tempoBpm ?? 0} isPortrait={isPortrait} synced={bpmSyncOn} />
+            <BpmTile bpm={bpm} isPortrait={isPortrait} synced={bpmSyncOn} />
 
             <OscStatusPill compact={isPortrait} />
           </View>

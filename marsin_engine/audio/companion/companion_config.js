@@ -42,6 +42,61 @@ export const RAW_SOURCES = Object.freeze({
 
 export const SIGNAL_TYPES = Object.freeze(['intensity', 'frequency']);
 
+// ── Dom signal = freq + energy (2026-06-17 contract §"Dom signal = freq + energy") ──
+// A dom SOURCE produces BOTH a frequency (Hz) and an energy [0,1] every hop. A
+// frequency signal designed from a dom source is therefore a freq+energy PAIR:
+// the chain shapes the Hz (the value that flows through the SignalPostProcessor),
+// and the paired ENERGY rides alongside it — read from the analyzer's raw dom
+// energy field. When the signal is an OUTPUT, the osc_out tap emits the freq to
+// its own address AND the paired energy to the dom-energy address below.
+//
+// This is a Companion-side pairing (no op-schema fork): the osc_out op stays
+// `{ address, cpcKey }`; the energy address/key/field are DERIVED from the dom
+// source via this frozen map. The energy keys (micDomEnergy1/2) are the engine's
+// canonical raw-mirror CPC keys (audio/postproc/audio_signals.js) and the engine
+// must bind /marsin/dom/energy1·2 → micDomEnergy1/2 for the emit to land in CPC.
+export const DOM_ENERGY = Object.freeze({
+  rawDom1: { field: 'domEnergy1', address: '/marsin/dom/energy1', cpcKey: 'micDomEnergy1' },
+  rawDom2: { field: 'domEnergy2', address: '/marsin/dom/energy2', cpcKey: 'micDomEnergy2' },
+});
+
+/** The dom-energy pairing for a frequency signal's source, or null. */
+export function domEnergyFor(source) {
+  return DOM_ENERGY[source] || null;
+}
+
+// ── Source-mode ↔ capture.device mapping (2026-06-17 contract §"Source-mode
+// sync CaptainPad↔Companion") ────────────────────────────────────────────────
+// CaptainPad/engine carry the SOURCE as a single `capture.device` string:
+//   'test'          → the synthetic test generator,
+//   'file:<path>'   → file replay of <path>,
+//   <device-id>/''  → live mic on that ffmpeg device ('' / null = default input).
+// These two pure functions are the single source of truth for that mapping so
+// the Companion can read it (engine → Companion mode) and write it (Companion
+// mode → engine) symmetrically, and so the round-trip is unit-testable without
+// booting the server.
+
+/** Parse a `capture.device` value → a Companion source target. */
+export function parseCaptureDevice(device) {
+  if (device === 'test') return { mode: 'test' };
+  if (typeof device === 'string' && device.startsWith('file:')) {
+    return { mode: 'file', file: device.slice('file:'.length) };
+  }
+  // mic: '' / null / undefined all mean "default input" (device: null).
+  return { mode: 'mic', device: (device == null || device === '') ? null : device };
+}
+
+/**
+ * The inverse: a Companion source state → its `capture.device` string. mic
+ * with no device → '' (CaptainPad's "default input" convention).
+ * @param {{ mode: string, file?: string, device?: (string|null) }} src
+ */
+export function captureDeviceString(src) {
+  if (!src || src.mode === 'test') return 'test';
+  if (src.mode === 'file') return `file:${src.file || ''}`;
+  return src.device == null ? '' : src.device;
+}
+
 // Ops a FREQUENCY signal may use (Hz-valid only — contract §types). Every
 // other op is intensity-only. osc_out is valid for BOTH (it is a terminal
 // tap, not a transform).

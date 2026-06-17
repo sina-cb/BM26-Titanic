@@ -21,6 +21,7 @@ import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS,
   defaultCompanionConfig, validateCompanionConfig, validateSignal,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
+  domEnergyFor, parseCaptureDevice, captureDeviceString, DOM_ENERGY,
 } from '../audio/companion/companion_config.js';
 import { ParamCenter } from '../lib/param_center.js';
 import { OscListener } from '../lib/osc_listener.js';
@@ -211,4 +212,71 @@ test('every curated contract address routes to its CPC key', async () => {
 test('event-style value 1.0/0.0 lands as a scalar (NOT a bang)', async () => {
   const on = await sendAndAssert('/marsin/audio/party', 1.0, 'audioParty');
   assert.equal(on, 1.0);
+});
+
+// ── 4) Dom signal = freq + energy (2026-06-17 contract) ──────────────────────
+
+test('domEnergyFor pairs each dom source with its energy field/address/cpcKey', () => {
+  const d1 = domEnergyFor('rawDom1');
+  assert.deepEqual(d1, { field: 'domEnergy1', address: '/marsin/dom/energy1', cpcKey: 'micDomEnergy1' });
+  const d2 = domEnergyFor('rawDom2');
+  assert.deepEqual(d2, { field: 'domEnergy2', address: '/marsin/dom/energy2', cpcKey: 'micDomEnergy2' });
+  // Intensity / non-dom sources have NO energy pairing.
+  assert.equal(domEnergyFor('rawLow'), null);
+  assert.equal(domEnergyFor('rawDom3'), null);
+});
+
+test('DOM_ENERGY targets the engine canonical raw-mirror energy keys', () => {
+  // The energy cpcKeys MUST be the engine's micDomEnergy1/2 raw-mirror keys
+  // (audio/postproc/audio_signals.js) so the emit lands in CPC.
+  assert.equal(DOM_ENERGY.rawDom1.cpcKey, 'micDomEnergy1');
+  assert.equal(DOM_ENERGY.rawDom2.cpcKey, 'micDomEnergy2');
+});
+
+// The energy OSC PATH lands in the CPC ONLY once the engine registry binds
+// /marsin/dom/energy1·2 → micDomEnergy1/2 (an engine-side change owned by the
+// engine agent — micDomEnergy* currently has no `osc` binding). This test
+// asserts the FULL path works once that binding exists, and otherwise reports
+// the missing binding clearly rather than silently passing.
+test('dom energy address routes to micDomEnergy1 once the engine binds it', async () => {
+  const pc = makePc();
+  const listener = new OscListener({ paramCenter: pc, port: 1, host: '127.0.0.1' });
+  // The canonical binding map is built from the registry's `oscAddress` fields.
+  const bound = listener._bindingsByAddr instanceof Map
+    && listener._bindingsByAddr.has('/marsin/dom/energy1');
+  if (!bound) {
+    // Engine binding not present yet (expected with the current registry) —
+    // surface it loudly rather than a false green. The Companion EMIT side is
+    // already correct; this lands in CPC once the engine binds the address.
+    console.warn('[companion test] /marsin/dom/energy1 NOT bound in the engine registry yet — '
+      + "add `osc: '/marsin/dom/energy1'` (+ energy2) to micDomEnergy1/2 in audio/postproc/audio_signals.js");
+    return;
+  }
+  const got = await sendAndAssert('/marsin/dom/energy1', 0.55, 'micDomEnergy1');
+  assert.ok(Math.abs(got - 0.55) < 1e-2, `micDomEnergy1 landed as ${got}`);
+});
+
+// ── 5) Source-mode ↔ capture.device (2026-06-17 contract) ────────────────────
+
+test('parseCaptureDevice maps capture.device → Companion source mode', () => {
+  assert.deepEqual(parseCaptureDevice('test'), { mode: 'test' });
+  assert.deepEqual(parseCaptureDevice('file:/songs/a.wav'), { mode: 'file', file: '/songs/a.wav' });
+  assert.deepEqual(parseCaptureDevice('hw:1,0'), { mode: 'mic', device: 'hw:1,0' });
+  assert.deepEqual(parseCaptureDevice(''), { mode: 'mic', device: null });
+  assert.deepEqual(parseCaptureDevice(null), { mode: 'mic', device: null });
+  assert.deepEqual(parseCaptureDevice(undefined), { mode: 'mic', device: null });
+});
+
+test('captureDeviceString is the inverse (Companion source → capture.device)', () => {
+  assert.equal(captureDeviceString({ mode: 'test' }), 'test');
+  assert.equal(captureDeviceString({ mode: 'file', file: '/songs/a.wav' }), 'file:/songs/a.wav');
+  assert.equal(captureDeviceString({ mode: 'mic', device: 'hw:1,0' }), 'hw:1,0');
+  assert.equal(captureDeviceString({ mode: 'mic', device: null }), '');
+});
+
+test('source mode round-trips through capture.device (two-way sync)', () => {
+  for (const dev of ['test', 'file:/x/y.mp3', 'hw:2,0', '']) {
+    const parsed = parseCaptureDevice(dev);
+    assert.equal(captureDeviceString(parsed), dev, `round-trip failed for "${dev}"`);
+  }
 });

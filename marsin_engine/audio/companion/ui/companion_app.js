@@ -177,9 +177,14 @@ let flashT = 0;
 function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color = bad ? '#ff5d6c' : '#34d3b5'; clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800); }
 function seedTraces() {
   const next = {};
-  for (const s of S.signals) next[s.id] = S.trace[s.id] || { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL) };
+  // A dom (frequency) signal is a freq+energy PAIR (contract): it also carries an
+  // `energy` trace [0,1] alongside raw/post Hz. Non-dom signals leave it unused.
+  for (const s of S.signals) next[s.id] = S.trace[s.id]
+    || { raw: new Float32Array(TRAIL), post: new Float32Array(TRAIL), energy: new Float32Array(TRAIL) };
   S.trace = next;
 }
+// A frequency signal designed from a dom source carries a paired energy [0,1].
+const isDomSignal = (sig) => !!(sig && sig.type === 'frequency' && (sig.source === 'rawDom1' || sig.source === 'rawDom2'));
 
 // Which op types a signal of the given TYPE may use (contract §type-aware ops).
 // Frequency signals only offer Hz-valid ops; intensity signals offer the full
@@ -295,7 +300,10 @@ function renderChain() {
   const sig = signalById(sel);
   if (!sig) { box.appendChild(el('div', 'chain-note', 'select a signal')); return; }
   const acc = SOURCE_ACCENT[sig.source] || '#9aa';
-  $('chain-title').textContent = `${signalName(sig)} · ${sig.type} signal${sig.output ? ' · OUTPUT' : ''}`;
+  const dom = isDomSignal(sig);
+  // A dom signal is a freq+energy PAIR: the tab routes the shaped freq to the
+  // osc_out address AND the paired energy to /marsin/dom/energy1·2 (contract).
+  $('chain-title').textContent = `${signalName(sig)} · ${sig.type} signal${sig.output ? ' · OUTPUT' : ''}${dom ? ' · freq + energy' : ''}`;
   $('chain-title').style.color = acc;
 
   // SOURCE HEAD — the raw input that enters the row.
@@ -783,6 +791,9 @@ function draw() {
       const norm = s.type === 'frequency' ? clamp01((lv.post || 0) / 4000) : clamp01(lv.post);
       const rawN = s.type === 'frequency' ? clamp01((lv.raw || 0) / 4000) : clamp01(lv.raw);
       tr.raw[S.head] = rawN; tr.post[S.head] = norm;
+      // Dom freq+energy pair: the energy is already [0,1] — trace it directly so
+      // the dom signal's tab shows BOTH freq (Hz, normalized) and energy live.
+      if (tr.energy) tr.energy[S.head] = isDomSignal(s) ? clamp01(lv.energy || 0) : 0;
     }
     S.head = (S.head + 1) % TRAIL;
   }
@@ -802,16 +813,29 @@ function draw() {
   } else {
     const sig = signalById(sel);
     const tr = S.trace[sel];
-    if (tr) drawTrace(ctx, tr, accent(sel), 2);
+    const dom = isDomSignal(sig);
+    // Dom signals overlay a SECOND trace (energy [0,1], dashed) on top of the
+    // freq trace so both values are visible at once (freq+energy pair contract).
+    if (tr) drawTrace(ctx, tr, accent(sel), 2, dom ? tr.energy : null);
     const lv = S.live[sel] || { raw: 0, post: 0 };
     if (sig && sig.type === 'frequency') {
       $('big-raw').textContent = (lv.raw || 0).toFixed(0) + ' Hz';
-      $('big-post').textContent = (lv.post || 0).toFixed(0) + ' Hz';
+      // For a dom signal the POST readout shows BOTH the shaped freq and the
+      // paired energy; freq-only signals show just the Hz.
+      $('big-post').textContent = dom
+        ? `${(lv.post || 0).toFixed(0)} Hz · e ${clamp01(lv.energy || 0).toFixed(2)}`
+        : (lv.post || 0).toFixed(0) + ' Hz';
     } else {
       $('big-raw').textContent = clamp01(lv.raw).toFixed(2);
       $('big-post').textContent = clamp01(lv.post).toFixed(2);
     }
     $('big-post').style.color = accent(sel);
+    // Legend: dom signals add an "energy" entry (dashed white) so the second
+    // trace is self-explanatory; everything else shows the raw/post legend.
+    const leg = document.querySelector('.ro-legend');
+    if (leg) leg.innerHTML = dom
+      ? '<span class="dot ghost"></span>raw &nbsp; <span class="dot solid"></span>freq &nbsp; <span class="dot energy"></span>energy'
+      : '<span class="dot ghost"></span>raw &nbsp; <span class="dot solid"></span>post';
   }
   drawSpectrum($('spectrum').getContext('2d'), S.spectrum, S.dom);
   drawWave($('wave').getContext('2d'), S.wave);
@@ -820,7 +844,10 @@ function draw() {
     const v = document.getElementById('sv-' + s.id);
     if (v) {
       const lv = S.live[s.id] || {};
-      v.textContent = s.type === 'frequency' ? (lv.post || 0).toFixed(0) : clamp01(lv.post || 0).toFixed(2);
+      // Dom signals show freq + energy in the compact sidebar value too.
+      v.textContent = isDomSignal(s)
+        ? `${(lv.post || 0).toFixed(0)}·${clamp01(lv.energy || 0).toFixed(2)}`
+        : (s.type === 'frequency' ? (lv.post || 0).toFixed(0) : clamp01(lv.post || 0).toFixed(2));
     }
   }
   renderLive();
@@ -832,11 +859,19 @@ function trLine(ctx, buf, W, H, lw, alpha) {
   for (let i = 0; i < TRAIL; i++) { const idx = (S.head + i) % TRAIL; const x = i * step, y = H * (1 - buf[idx]); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
   ctx.stroke(); ctx.globalAlpha = 1;
 }
-function drawTrace(ctx, tr, color, lw) {
+function drawTrace(ctx, tr, color, lw, energyBuf) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
   ctx.strokeStyle = 'rgba(255,255,255,0.05)';
   for (let g = 1; g < 4; g++) { const y = H * g / 4; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
   ctx.strokeStyle = color; trLine(ctx, tr.raw, W, H, 1, 0.30); trLine(ctx, tr.post, W, H, lw, 1);
+  // Dom freq+energy pair: overlay the paired energy [0,1] as a dashed white
+  // line so the dom signal's tab shows BOTH live (freq solid colour + energy).
+  if (energyBuf) {
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    trLine(ctx, energyBuf, W, H, 1.4, 0.9);
+    ctx.restore();
+  }
 }
 function drawMini(ctx, tr, color) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);

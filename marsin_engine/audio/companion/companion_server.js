@@ -61,7 +61,7 @@ import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
 import {
   RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS,
   loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal,
-  COMPANION_CONFIG_PATH,
+  domEnergyFor, parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { emitDerivedBpm } from './bpm_emit.js';
@@ -339,18 +339,37 @@ function applyEngineSharedTuning(config) {
     }
   }
   const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
-  if (cap && cap.device !== undefined) {
-    const nextDevice = cap.device;
-    if (nextDevice !== configDevice) {
-      configDevice = nextDevice;
-      // If we're live on a mic, restart capture on the new device so the
-      // Companion analyzes the SAME input the engine/CaptainPad selected.
-      // In test/file mode the device is just remembered for the next mic
-      // switch (no disruptive restart). broadcast the device so the UI's
-      // picker reflects the shared selection.
-      if (mode === 'mic') setMode('mic', { device: configDevice });
-      broadcast({ type: 'engineDevice', device: configDevice });
+  if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
+}
+
+/**
+ * Map the engine's `capture.device` → the Companion's SOURCE MODE (two-way
+ * source sync, 2026-06-17 contract §"Source-mode sync"). CaptainPad/engine
+ * switch source by PATCHing capture.device:
+ *   - 'test'          → the synthetic generator   → setMode('test')
+ *   - 'file:<path>'   → file replay of <path>      → setMode('file', { file })
+ *   - <device-id>/''  → live mic on that device    → setMode('mic', { device })
+ *     ('' / null = the default input).
+ *
+ * Only switch when the EFFECTIVE mode/device actually CHANGED — an unchanged
+ * config echo (the engine rebroadcasts every PATCH, including our own write-
+ * through) must NOT restart the source, or every echo would churn the capture
+ * stream. We compare against the current { mode, configDevice, currentFile }.
+ * The selection is also broadcast so the UI's source bar reflects it.
+ */
+function applyEngineCaptureDevice(device) {
+  const target = parseCaptureDevice(device);
+  if (target.mode === 'test') {
+    if (mode !== 'test') { setMode('test'); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
+  } else if (target.mode === 'file') {
+    if (mode !== 'file' || currentFile !== target.file) {
+      setMode('file', { file: target.file });
     }
+  } else { // mic
+    const changed = mode !== 'mic' || configDevice !== target.device;
+    configDevice = target.device;
+    if (changed) setMode('mic', { device: configDevice });
+    broadcast({ type: 'engineDevice', device: configDevice });
   }
 }
 
@@ -381,6 +400,27 @@ function writeThroughShared(localApply, partial) {
   }
   engineLink.patch(partial).catch((e) => {
     broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: `PATCH failed: ${e && e.message}` });
+  });
+}
+
+/**
+ * WRITE THROUGH the Companion's CURRENT source to the engine as
+ * `capture.device` (2026-06-17 contract §"Source-mode sync" step 2). Called
+ * after an operator-initiated source switch so choosing test/mic/file (and the
+ * mic device) IN the Companion reflects in CaptainPad/engine. Graceful: if the
+ * engine link is down we skip the PATCH (the local switch already happened —
+ * analysis never blocks) and tell the operator it's local-only so a divergence
+ * can't hide silently (codex: fail loud, no silent fallback). NEVER called from
+ * the engine-echo path (applyEngineCaptureDevice), so the echo can't ping-pong.
+ */
+function writeThroughCaptureDevice() {
+  if (!engineLink || !engineLink.connected) {
+    broadcast({ type: 'engineLink', connected: false, note: 'engine offline — source applied locally only' });
+    return;
+  }
+  const device = captureDeviceString({ mode, file: currentFile, device: configDevice });
+  engineLink.patch({ capture: { device } }).catch((e) => {
+    broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: `source PATCH failed: ${e && e.message}` });
   });
 }
 
@@ -458,14 +498,28 @@ function processDesignedSignals(r, dt) {
     // Every designed signal owns a runner (buildRunners builds one per signal,
     // intensity or frequency). The `?? raw` is defensive only.
     const post = spp ? spp.process(PROXY_KEY, raw, dt) : raw;
-    out[sig.id] = { raw, post };
+    // Dom signal = freq + energy (contract): a frequency signal designed from a
+    // dom source carries a paired ENERGY [0,1], read straight from the analyzer's
+    // raw dom-energy field (the micDomEnergy1/2 mirror). It rides ALONGSIDE the
+    // shaped Hz — the chain shapes the freq; the energy is the unshaped analyzer
+    // value. Null for non-dom signals so the UI knows it's freq-only.
+    const dom = domEnergyFor(sig.source);
+    const energy = dom ? (r[dom.field] ?? 0) : null;
+    out[sig.id] = (energy != null) ? { raw, post, energy } : { raw, post };
     // A frequency signal carrying a danceMaker op IS the dance for its dom lane.
     if (sig.type === 'frequency' && hasDanceMaker(sig)) {
       if (sig.source === 'rawDom1') danceFromOp.dom1 = post;
       else if (sig.source === 'rawDom2') danceFromOp.dom2 = post;
     }
     const tap = oscOutOf(sig);
-    if (tap) sendOsc(tap.params.address, post);
+    if (tap) {
+      // Freq → the operator's osc_out address. A DOM output is a freq+energy
+      // pair, so we ALSO emit the paired energy to its canonical dom-energy
+      // address (/marsin/dom/energy1·2 → micDomEnergy1/2). One tap, two emits —
+      // a dom signal is inherently a pair (no op-schema fork; see companion_config).
+      sendOsc(tap.params.address, post);
+      if (dom) sendOsc(dom.address, energy);
+    }
   }
   return out;
 }
@@ -806,17 +860,14 @@ function handleMessage(ws, raw) {
   else if (m.type === 'calibrate') startCalibration();
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') {
-    // Mode (test/mic/file) is Companion-LOCAL, but the mic DEVICE is SHARED.
-    // When the operator picks a mic device here, write it through to the
-    // engine so the selection is the single source of truth everywhere; the
-    // local setMode still runs immediately so the Companion's own capture
-    // switches without waiting on the engine.
+    // SOURCE is now fully two-way (2026-06-17 contract §"Source-mode sync"):
+    // the operator's switch here runs LOCALLY right away (capture switches
+    // without waiting on the engine — analysis never blocks) AND writes through
+    // to the engine as `capture.device` so the choice reflects in CaptainPad/
+    // engine. test → 'test'; file → 'file:<path>'; mic → the device id.
+    if (m.device !== undefined) configDevice = m.device;   // remember the mic device
     setMode(m.mode, { file: m.file, device: m.device });
-    if (m.mode === 'mic' && m.device !== undefined && engineLink && engineLink.connected) {
-      engineLink.patch({ capture: { device: m.device } }).catch((e) => {
-        broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: String(e && e.message) });
-      });
-    }
+    writeThroughCaptureDevice();
   }
   else if (m.type === 'addSignal') {
     const res = addSignal(m.source);
