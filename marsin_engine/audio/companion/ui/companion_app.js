@@ -16,12 +16,15 @@ const SOURCE_ACCENT = {
   rawLow: '#34d3b5', rawMid: '#4ea1ff', rawHigh: '#8b9bff',
   rawKick: '#ff5d6c', rawFlux: '#c084fc', rawDom1: '#f0a23b', rawDom2: '#c084fc',
 };
-const VIEWS = [{ id: 'dance', label: '✦ DOM DANCE' }];
+// Per-view-signal overlay palette (trace-overlay colours, cycled per signal).
+const OVERLAY_COLORS = ['#34d3b5', '#4ea1ff', '#f0a23b', '#ff5d6c', '#c084fc', '#8b9bff', '#7CFC00'];
 const TRAIL = 360;
 
 const S = {
   ops: {}, frequencyOps: [], frequencyOnlyOps: [], rawSources: {}, signalTypes: [],
   signals: [],         // [{ id, label, source, type, chain, output }]
+  views: [],           // [{ id, label, type, signals:[signalId...] }] — VISUALIZERS
+  viewTypes: {},       // { typeId: { label, accepts } } — viz type registry
   osc: { host: '127.0.0.1', port: 10000 },
   selected: 'input',
   trace: {},           // signalId -> {raw:Float32Array, post:Float32Array}
@@ -62,7 +65,22 @@ const UI_RANGE = {
   slope:      { scale: { min: 0, max: 20, step: 0.1 } },
   normalizer: { windowSec: { min: 1, max: 60, step: 1 }, strength: { min: 0, max: 1, step: 0.01 } },
 };
-function sliderRange(opType, pname, pdef) {
+// Hz-domain slider ranges for clamp/slew when they sit on a FREQUENCY signal.
+// On an intensity signal clamp's min/max live in [0,1] and slew's rate in
+// [0,20] Hz/s — but on a frequency signal the value is Hz (up to Nyquist), so
+// those intensity ranges squash/freeze the dom freq. The typed number input is
+// still unbounded (the validator allows Hz up to Nyquist); this only widens the
+// SLIDER so the operator can actually reach Hz-sane values. Intensity ranges
+// (UI_RANGE) are untouched. (2026-06-17 contract §"freq-domain clamp/slew".)
+const UI_RANGE_HZ = {
+  clamp: { min: { min: 0, max: 8000, step: 10 }, max: { min: 0, max: 8000, step: 10 } },
+  slew:  { maxStepPerSec: { min: 0, max: 5000, step: 10 } },
+};
+function sliderRange(opType, pname, pdef, signalType) {
+  if (signalType === 'frequency') {
+    const hzUi = UI_RANGE_HZ[opType]?.[pname];
+    if (hzUi) return hzUi;
+  }
   const ui = UI_RANGE[opType]?.[pname];
   if (ui) return ui;
   const min = pdef.min ?? 0, max = pdef.max ?? 1;
@@ -84,6 +102,7 @@ function connect() {
     if (m.type === 'hello') {
       S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.frequencyOnlyOps = m.frequencyOnlyOps || []; S.rawSources = m.rawSources || {};
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
+      S.views = m.views || []; S.viewTypes = m.viewTypes || {};
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
       if (m.device != null) S.device = m.device;
@@ -133,8 +152,19 @@ function connect() {
       buildSourceBar();
     } else if (m.type === 'signals') {
       S.signals = m.signals || []; seedTraces();
-      if (!signalById(S.selected) && S.selected !== 'input' && S.selected !== 'dance') S.selected = 'input';
+      if (!signalById(S.selected) && S.selected !== 'input' && !viewById(S.selected)) S.selected = 'input';
       buildSidebar(); renderChain();
+    } else if (m.type === 'views') {
+      S.views = m.views || [];
+      // The selected view may have been removed (or never existed) — fall back
+      // to INPUT so the stage never points at a dead view.
+      if (!signalById(S.selected) && S.selected !== 'input' && !viewById(S.selected)) S.selected = 'input';
+      buildSidebar(); renderChain();
+    } else if (m.type === 'addViewResult') {
+      if (m.ok) { S.selected = m.view.id; buildSidebar(); renderChain(); flash('added view ' + m.view.label); }
+      else flash('add view failed: ' + m.error, true);
+    } else if (m.type === 'removeViewResult') {
+      if (!m.ok) flash('remove view failed: ' + m.error, true);
     } else if (m.type === 'addResult') {
       if (m.ok) { S.selected = m.signal.id; buildSidebar(); renderChain(); flash('added ' + m.signal.label); }
       else flash('add failed: ' + m.error, true);
@@ -162,6 +192,7 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const clamp01 = (x) => (x > 1 ? 1 : x > 0 ? x : 0);
 const signalById = (id) => S.signals.find(s => s.id === id);
+const viewById = (id) => S.views.find(v => v.id === id);
 const accent = (id) => { const s = signalById(id); return s ? (SOURCE_ACCENT[s.source] || '#9aa') : '#9aa'; };
 // A signal's DISPLAY NAME is its osc_out cpcKey (the CPC key it feeds the
 // engine), falling back to the source-based label when there's no osc_out /
@@ -227,19 +258,85 @@ function buildSidebar() {
     row.appendChild(x);
     box.appendChild(row);
   }
-  // view tabs (dedicated VISUALIZERS — read-only plots, not ops). The DOM DANCE
-  // plot / spectrum histogram / tracer just DISPLAY; the dance itself is now
-  // produced by the `danceMaker` OP on a frequency signal (above).
-  const vlabel = el('div', 'panel-label views-label', 'VISUALIZERS');
-  vlabel.title = 'Read-only plots (DOM DANCE / spectrum / tracer). DanceMaker is an OP — add it to a dom signal\'s chain.';
-  box.appendChild(vlabel);
-  for (const v of VIEWS) {
+  // VISUALIZERS — custom VIEWS that MIX/overlay a chosen subset of signals
+  // (contract §"Companion custom VIEWS"). Each view is a saved object
+  // { id, label, type, signals:[...] }: add via the themed "+ add view" modal,
+  // remove via [×], select to show its mixed plot in the main stage. The DOM
+  // DANCE is now a dancing-balls view instance (fed dom1+dom2), not a one-off.
+  const vhead = el('div', 'sigs-head views-label');
+  vhead.appendChild(el('span', 'panel-label', 'VISUALIZERS'));
+  const vadd = el('button', 'sig-add', '+'); vadd.title = 'add a view';
+  vadd.onclick = promptAddView;
+  vhead.appendChild(vadd);
+  box.appendChild(vhead);
+  for (const v of S.views) {
+    const spec = S.viewTypes[v.type];
     const row = el('button', 'sig-row view-row' + (v.id === S.selected ? ' active' : ''));
-    row.title = 'visualizer (read-only) — the dance is produced by the danceMaker OP on a dom signal';
-    row.innerHTML = `<span class="sig-name">${v.label}</span>`;
-    row.onclick = () => { S.selected = v.id; buildSidebar(); renderChain(); };
+    row.title = `${spec ? spec.label : v.type} · ${v.signals.length} signal(s)`;
+    row.innerHTML = `<span class="sig-name">${v.label}<span class="sig-type">${spec ? spec.label : v.type}</span></span>`;
+    row.onclick = (e) => { if (e.target.classList.contains('sig-x')) return; S.selected = v.id; buildSidebar(); renderChain(); };
+    const x = el('button', 'sig-x', '×'); x.title = 'remove view';
+    x.onclick = (e) => { e.stopPropagation(); removeView(v.id); };
+    row.appendChild(x);
     box.appendChild(row);
   }
+}
+
+// Adding a VIEW opens a themed modal (no native prompt): a viz-TYPE selector, a
+// name field, and a signal MULTI-SELECT filtered to the type's accepted signal
+// type (dancing-balls → frequency signals only; trace-overlay → any). Reuses
+// the modal/add-card theme. (contract §"Companion custom VIEWS".)
+let _addViewType = '';
+let _addViewPicked = new Set();
+function promptAddView() {
+  const types = Object.keys(S.viewTypes);
+  _addViewType = types[0] || '';
+  _addViewPicked = new Set();
+  // Pre-fill a sensible default name from the type label.
+  const nameInp = $('view-name');
+  if (nameInp) nameInp.value = S.viewTypes[_addViewType]?.label || 'view';
+  renderAddViewTypes();
+  renderAddViewSignals();
+  $('view-modal').style.display = 'flex';
+}
+function renderAddViewTypes() {
+  const wrap = $('view-types'); if (!wrap) return; wrap.innerHTML = '';
+  for (const t of Object.keys(S.viewTypes)) {
+    const spec = S.viewTypes[t];
+    const b = el('button', 'view-type-btn' + (t === _addViewType ? ' active' : ''));
+    b.innerHTML = `<span class="vt-label">${spec.label}</span><span class="vt-sub">${spec.accepts ? spec.accepts + ' signals' : 'any signals'}</span>`;
+    b.onclick = () => {
+      _addViewType = t;
+      // Dropping to a type with a stricter accepted type prunes now-invalid picks.
+      const acc = S.viewTypes[t].accepts;
+      if (acc) for (const id of [..._addViewPicked]) { const s = signalById(id); if (!s || s.type !== acc) _addViewPicked.delete(id); }
+      const nameInp = $('view-name');
+      if (nameInp && !nameInp.dataset.touched) nameInp.value = spec.label;
+      renderAddViewTypes(); renderAddViewSignals();
+    };
+    wrap.appendChild(b);
+  }
+}
+function renderAddViewSignals() {
+  const wrap = $('view-signals'); if (!wrap) return; wrap.innerHTML = '';
+  const accepts = S.viewTypes[_addViewType]?.accepts || null;
+  const eligible = S.signals.filter(s => !accepts || s.type === accepts);
+  if (!eligible.length) {
+    wrap.appendChild(el('div', 'browse-empty', accepts ? `no ${accepts} signals to add` : 'no signals to add'));
+    return;
+  }
+  for (const s of eligible) {
+    const on = _addViewPicked.has(s.id);
+    const card = el('button', 'view-sig-card' + (on ? ' on' : ''));
+    card.style.setProperty('--src-accent', SOURCE_ACCENT[s.source] || '#9aa');
+    card.innerHTML = `<span class="add-card-label">${signalName(s)}</span><span class="add-card-type">${s.type}</span>`;
+    card.onclick = () => { if (_addViewPicked.has(s.id)) _addViewPicked.delete(s.id); else _addViewPicked.add(s.id); renderAddViewSignals(); };
+    wrap.appendChild(card);
+  }
+}
+function removeView(id) {
+  if (S.selected === id) S.selected = 'input';
+  send({ type: 'removeView', id });
 }
 
 // Adding a signal opens a themed picker (no native prompt) — a grid of the raw
@@ -291,10 +388,15 @@ function renderChain() {
     box.appendChild(inputControls());
     return;
   }
-  if (sel === 'dance') {
-    $('chain-title').textContent = 'DOM DANCE · VISUALIZER (read-only)';
+  const selView = viewById(sel);
+  if (selView) {
+    const spec = S.viewTypes[selView.type];
+    $('chain-title').textContent = `${selView.label} · ${spec ? spec.label : selView.type} VIEW (read-only)`;
     $('chain-title').style.color = '#f0a23b';
-    box.appendChild(el('div', 'chain-note', 'A VISUALIZER — read-only dom-freq plot, no editable chain. The dance is produced by the <b>danceMaker</b> OP: add it to a dom (frequency) signal\'s chain to drive these orbs.'));
+    const names = selView.signals.map(id => { const s = signalById(id); return s ? signalName(s) : id; });
+    box.appendChild(el('div', 'chain-note',
+      `A VISUALIZER mixing <b>${names.length}</b> signal(s): ${names.length ? names.join(', ') : '<i>none — edit the view</i>'}. `
+      + 'Read-only — no editable chain. Remove via [×] in the sidebar.'));
     return;
   }
   const sig = signalById(sel);
@@ -410,7 +512,7 @@ function opParams(sig, op, i) {
         row.appendChild(inp);
       }
     } else {
-      const { min, max, step } = sliderRange(op.type, pname, pdef);
+      const { min, max, step } = sliderRange(op.type, pname, pdef, sig.type);
       const head = el('div', 'param-head');
       head.appendChild(el('span', 'pn', pname));
       const num = el('input', 'pv-input'); num.type = 'number'; num.step = step; num.value = fmt(cur);
@@ -436,11 +538,24 @@ const fmt = (v) => (Number.isInteger(v) ? String(v) : (+v).toFixed(2));
 const stepFor = (min, max) => { const span = max - min; return span > 100 ? 1 : span > 5 ? 0.1 : span / 200; };
 
 function uid(t) { return t + '_' + Math.random().toString(36).slice(2, 7); }
+// Hz-sane defaults for the Hz-domain ops (clamp/slew) when they're added to a
+// FREQUENCY signal. The op-catalog defaults are tuned for [0,1] intensity:
+// clamp {min:0,max:1} squashes a dom Hz into [0,1] (kills it) and slew
+// {maxStepPerSec:4} freezes the dom freq at 4 Hz/s. On a frequency signal we
+// instead default to an audible-band clamp + a rate fast enough to track a dom
+// freq. (2026-06-17 contract §"freq-domain clamp/slew".)
+const HZ_OP_DEFAULTS = {
+  clamp: { min: 20, max: 8000 },
+  slew:  { maxStepPerSec: 2000 },
+};
 function addOp(sig, type) {
   const schema = S.ops[type]?.params || {};
   const params = {};
   for (const [pn, pd] of Object.entries(schema)) if (!pd.optional) params[pn] = pd.default;
   if (type === 'gain' && !('value' in params)) params.value = 1.0;
+  // Frequency signal → override the Hz-domain ops' intensity defaults so the
+  // dom freq survives (clamp) and isn't frozen (slew).
+  if (sig.type === 'frequency' && HZ_OP_DEFAULTS[type]) Object.assign(params, HZ_OP_DEFAULTS[type]);
   const newOp = { id: uid(type), type, enabled: true, params };
   // Keep osc_out terminal: insert new ops BEFORE any existing tap.
   const tapIdx = sig.chain.findIndex(o => o.type === 'osc_out');
@@ -750,8 +865,18 @@ $('export-close').onclick = () => $('export-modal').style.display = 'none';
 $('export-copy').onclick = () => { navigator.clipboard?.writeText($('export-text').value); flash('copied'); };
 const saveBtn = $('export-save'); if (saveBtn) saveBtn.onclick = () => send({ type: 'exportSave' });
 $('add-close').onclick = () => $('add-modal').style.display = 'none';
+$('view-close').onclick = () => $('view-modal').style.display = 'none';
+const viewName = $('view-name');
+if (viewName) viewName.oninput = () => { viewName.dataset.touched = viewName.value.trim() ? '1' : ''; };
+$('view-create').onclick = () => {
+  const label = ($('view-name').value || '').trim();
+  if (!label) { flash('name the view', true); return; }
+  if (!_addViewType) { flash('pick a view type', true); return; }
+  send({ type: 'addView', label, viewType: _addViewType, signals: [..._addViewPicked] });
+  $('view-modal').style.display = 'none';
+};
 // Click the dark backdrop (outside the box) to dismiss any modal.
-for (const mid of ['add-modal', 'export-modal', 'browse-modal']) {
+for (const mid of ['add-modal', 'export-modal', 'browse-modal', 'view-modal']) {
   const m = $(mid); if (m) m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
 }
 
@@ -800,11 +925,9 @@ function draw() {
 
   const sel = S.selected;
   const ctx = $('trace').getContext('2d');
-  if (sel === 'dance') {
-    drawDance(ctx);
-    $('big-raw').textContent = (S.dom.danceF1 || 0).toFixed(0) + 'Hz';
-    $('big-post').textContent = (S.dom.danceF2 || 0).toFixed(0) + 'Hz';
-    $('big-post').style.color = '#c084fc';
+  const selView = viewById(sel);
+  if (selView) {
+    drawView(ctx, selView);
   } else if (sel === 'input') {
     drawWave(ctx, S.wave);
     $('big-raw').textContent = 'source';
@@ -937,19 +1060,6 @@ function drawMarker(ctx, f, color, label, W, H) {
 }
 const DANCE_MIN_HZ = 30, DANCE_MAX_HZ = 8000;
 const danceX = (f, W) => (f <= DANCE_MIN_HZ ? 0 : Math.log(f / DANCE_MIN_HZ) / Math.log(DANCE_MAX_HZ / DANCE_MIN_HZ) * W);
-const danceTrail = { a: [], b: [] };
-function drawDance(ctx) {
-  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
-  ctx.font = '9px monospace';
-  for (const f of [50, 100, 200, 500, 1000, 2000, 5000]) {
-    const x = danceX(f, W);
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    ctx.fillStyle = '#556'; ctx.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 2, H - 4);
-  }
-  const d = S.dom;
-  drawOrb(ctx, danceTrail.a, danceX(d.danceF1 || 0, W), H * 0.36, d.danceW1 || 0, clamp01(d.e1), '240,162,59', d.danceF1, 'dom1');
-  drawOrb(ctx, danceTrail.b, danceX(d.danceF2 || 0, W), H * 0.64, d.danceW2 || 0, clamp01(d.e2), '192,132,252', d.danceF2, 'dom2');
-}
 function drawOrb(ctx, trail, x, y, widthHz, energy, rgb, freq, label) {
   const r = 7 + energy * 30 + Math.min(38, widthHz / 9);
   trail.push({ x, y, r }); if (trail.length > 36) trail.shift();
@@ -958,6 +1068,76 @@ function drawOrb(ctx, trail, x, y, widthHz, energy, rgb, freq, label) {
   g.addColorStop(0, `rgba(${rgb},0.95)`); g.addColorStop(0.5, `rgba(${rgb},0.4)`); g.addColorStop(1, `rgba(${rgb},0)`);
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = `rgb(${rgb})`; ctx.font = '11px monospace'; ctx.fillText(`${label} ${(freq || 0).toFixed(0)}Hz`, x + r + 5, y + 3);
+}
+
+// ── custom VIEWS rendering (reuse the dance + trace renderers) ───────────────
+// "#rrggbb" → "r,g,b" for the orb gradients (which take an rgb triple string).
+function hexToRgb(hex) {
+  const h = (hex || '#9aa9b8').replace('#', '');
+  const f = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(f, 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+// Per-view-signal orb trails (id → trail array), so each orb keeps its glide.
+const viewOrbTrails = {};
+// A dancing-balls view: one gliding orb per fed FREQUENCY signal. Reuses the
+// dom-dance orb renderer (drawOrb). Dom signals use their spring-smoothed dance
+// freq + cluster width (S.dom) so the legacy DOM DANCE looks identical; non-dom
+// frequency signals glide on their live post Hz (width 0).
+function drawDancingBalls(ctx, view) {
+  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
+  ctx.font = '9px monospace';
+  for (const f of [50, 100, 200, 500, 1000, 2000, 5000]) {
+    const x = danceX(f, W);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    ctx.fillStyle = '#556'; ctx.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 2, H - 4);
+  }
+  const fed = view.signals.map(id => signalById(id)).filter(s => s && s.type === 'frequency');
+  if (!fed.length) { ctx.fillStyle = '#667'; ctx.font = '12px monospace'; ctx.fillText('no frequency signals fed to this view', 12, H / 2); return; }
+  fed.forEach((s, i) => {
+    const lv = S.live[s.id] || {};
+    // Dom signals carry a spring-smoothed dance freq + cluster width (S.dom);
+    // fall back to the live post Hz for any other frequency signal.
+    let freq = lv.post || 0, widthHz = 0, energy = clamp01(lv.energy || 0);
+    if (s.source === 'rawDom1') { freq = S.dom.danceF1 || freq; widthHz = S.dom.danceW1 || 0; energy = clamp01(S.dom.e1); }
+    else if (s.source === 'rawDom2') { freq = S.dom.danceF2 || freq; widthHz = S.dom.danceW2 || 0; energy = clamp01(S.dom.e2); }
+    const trail = viewOrbTrails[s.id] || (viewOrbTrails[s.id] = []);
+    const y = H * (fed.length === 1 ? 0.5 : (0.28 + 0.44 * (i / (fed.length - 1))));
+    const rgb = hexToRgb(SOURCE_ACCENT[s.source] || '#9aa');
+    drawOrb(ctx, trail, danceX(freq, W), y, widthHz, energy, rgb, freq, signalName(s));
+  });
+}
+// A trace-overlay view: overlaid colour-per-signal POST traces on one shared
+// axis. Reuses the per-signal trace buffers + trLine. Frequency traces are
+// already normalized to [0,1] in the frame drain (Hz/4000), intensity in [0,1].
+function drawOverlay(ctx, view) {
+  const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  for (let g = 1; g < 4; g++) { const y = H * g / 4; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  const fed = view.signals.map(id => signalById(id)).filter(Boolean);
+  if (!fed.length) { ctx.fillStyle = '#667'; ctx.font = '12px monospace'; ctx.fillText('no signals fed to this view', 12, H / 2); return; }
+  ctx.font = '10px monospace';
+  fed.forEach((s, i) => {
+    const tr = S.trace[s.id]; if (!tr) return;
+    const color = OVERLAY_COLORS[i % OVERLAY_COLORS.length];
+    ctx.strokeStyle = color; trLine(ctx, tr.post, W, H, 1.6, 1);
+    // Inline legend entry.
+    ctx.fillStyle = color; ctx.fillText('— ' + signalName(s), 10, 14 + i * 14);
+  });
+}
+function drawView(ctx, view) {
+  if (view.type === 'dancing-balls') drawDancingBalls(ctx, view);
+  else drawOverlay(ctx, view);
+  // Compact stage readout: first fed signal's live value.
+  const first = view.signals.map(id => signalById(id)).find(Boolean);
+  const lv = first ? (S.live[first.id] || {}) : {};
+  $('big-raw').textContent = view.signals.length + ' sig';
+  $('big-post').textContent = first
+    ? (first.type === 'frequency' ? (lv.post || 0).toFixed(0) + ' Hz' : clamp01(lv.post || 0).toFixed(2))
+    : '—';
+  $('big-post').style.color = '#f0a23b';
+  const leg = document.querySelector('.ro-legend');
+  if (leg) leg.innerHTML = `<span class="dot solid" style="background:#f0a23b"></span>${S.viewTypes[view.type]?.label || view.type}`;
 }
 function drawWave(ctx, wave) {
   const W = ctx.canvas.width, H = ctx.canvas.height; ctx.clearRect(0, 0, W, H);

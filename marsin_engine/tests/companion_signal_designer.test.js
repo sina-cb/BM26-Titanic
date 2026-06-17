@@ -18,8 +18,8 @@ import {
   opCatalog, validateChain, SignalPostProcessor,
 } from '../audio/postproc/signal_post_processor.js';
 import {
-  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS,
-  defaultCompanionConfig, validateCompanionConfig, validateSignal,
+  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, VIEW_TYPES,
+  defaultCompanionConfig, validateCompanionConfig, validateSignal, validateView,
   dumpCompanionConfig, loadCompanionConfig, saveCompanionConfig,
   domEnergyFor, parseCaptureDevice, captureDeviceString, DOM_ENERGY,
 } from '../audio/companion/companion_config.js';
@@ -158,6 +158,84 @@ test('saveCompanionConfig refuses to persist an INVALID design', () => {
   const tmp = path.join(os.tmpdir(), `bad_${process.pid}_${Date.now()}.yaml`);
   assert.throws(() => saveCompanionConfig({ osc: { host: '127.0.0.1', port: 99999 }, signals: [] }, tmp), /osc.port/);
   assert.equal(fs.existsSync(tmp), false, 'no file written on invalid config');
+});
+
+// ── 2b) custom VIEWS (2026-06-17 contract §"Companion custom VIEWS") ──────────
+
+function viewSigMap() {
+  // dom1/dom2 are frequency; low is intensity.
+  return new Map([['dom1', 'frequency'], ['dom2', 'frequency'], ['low', 'intensity']]);
+}
+
+test('VIEW_TYPES declares dancing-balls (frequency) + trace-overlay (any)', () => {
+  assert.ok(VIEW_TYPES['dancing-balls'], 'dancing-balls present');
+  assert.equal(VIEW_TYPES['dancing-balls'].accepts, 'frequency');
+  assert.ok(VIEW_TYPES['trace-overlay'], 'trace-overlay present');
+  assert.equal(VIEW_TYPES['trace-overlay'].accepts, null, 'trace-overlay accepts any type');
+});
+
+test('validateView accepts a dancing-balls view fed two frequency signals', () => {
+  const r = validateView({ id: 'v', label: 'Dance', type: 'dancing-balls', signals: ['dom1', 'dom2'] }, viewSigMap());
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(r.normalized.signals, ['dom1', 'dom2']);
+});
+
+test('validateView rejects an intensity signal fed to dancing-balls (type filter)', () => {
+  const r = validateView({ id: 'v', label: 'Bad', type: 'dancing-balls', signals: ['low'] }, viewSigMap());
+  assert.equal(r.ok, false);
+  assert.match(r.error, /accepts frequency/);
+});
+
+test('validateView trace-overlay mixes ANY signal types', () => {
+  const r = validateView({ id: 'v', label: 'Mix', type: 'trace-overlay', signals: ['low', 'dom1'] }, viewSigMap());
+  assert.equal(r.ok, true, r.error);
+});
+
+test('validateView rejects unknown type + unknown signal reference', () => {
+  assert.equal(validateView({ id: 'v', label: 'X', type: 'spectrum', signals: [] }, viewSigMap()).ok, false);
+  const r = validateView({ id: 'v', label: 'X', type: 'trace-overlay', signals: ['ghost'] }, viewSigMap());
+  assert.equal(r.ok, false);
+  assert.match(r.error, /unknown signal/);
+});
+
+test('default config carries the DOM DANCE dancing-balls view fed both doms', () => {
+  const cfg = validateCompanionConfig(defaultCompanionConfig());
+  assert.ok(Array.isArray(cfg.views));
+  const dance = cfg.views.find(v => v.type === 'dancing-balls');
+  assert.ok(dance, 'a dancing-balls view exists');
+  assert.deepEqual(dance.signals, ['dom1', 'dom2']);
+});
+
+test('validateCompanionConfig rejects a view referencing a missing signal', () => {
+  const cfg = defaultCompanionConfig();
+  cfg.views = [{ id: 'v', label: 'X', type: 'trace-overlay', signals: ['no_such_signal'] }];
+  assert.throws(() => validateCompanionConfig(cfg), /unknown signal/);
+});
+
+test('views round-trip through YAML and travel in Export', () => {
+  const cfg = defaultCompanionConfig();
+  cfg.views = [
+    { id: 'mix', label: 'My Mix', type: 'trace-overlay', signals: ['low', 'dom1'] },
+    { id: 'orbs', label: 'Orbs', type: 'dancing-balls', signals: ['dom1', 'dom2'] },
+  ];
+  const text = dumpCompanionConfig(cfg);
+  assert.match(text, /views:/);
+  const tmp = path.join(os.tmpdir(), `views_${process.pid}_${Date.now()}.yaml`);
+  fs.writeFileSync(tmp, text, 'utf8');
+  try {
+    const loaded = loadCompanionConfig(tmp);
+    assert.equal(loaded.views.length, 2);
+    assert.deepEqual(loaded.views[0], { id: 'mix', label: 'My Mix', type: 'trace-overlay', signals: ['low', 'dom1'] });
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+});
+
+test('a config without a views key is valid (optional) and normalizes to []', () => {
+  const cfg = defaultCompanionConfig();
+  delete cfg.views;
+  const norm = validateCompanionConfig(cfg);
+  assert.deepEqual(norm.views, []);
 });
 
 // ── 3) THE OSC PATH: companion packet → OscListener → CPC key ────────────────

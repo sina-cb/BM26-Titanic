@@ -125,6 +125,22 @@
     </div>
   </div>
 
+  <div id="view-modal" class="modal">
+    <div class="modal-box view-box">
+      <div class="modal-head"><span>add a <code>view</code> — mix / overlay a subset of signals</span>
+        <button id="view-close" class="op-btn">✕</button></div>
+      <div class="view-form">
+        <div class="view-field"><span class="view-flabel">TYPE</span><div id="view-types" class="view-types"></div></div>
+        <div class="view-field"><span class="view-flabel">NAME</span>
+          <input id="view-name" class="file-input" placeholder="view name" /></div>
+        <div class="view-field"><span class="view-flabel">SIGNALS</span><div id="view-signals" class="view-signals"></div></div>
+      </div>
+      <div class="modal-foot">
+        <button id="view-create" class="primary">Create view</button>
+      </div>
+    </div>
+  </div>
+
   <script src="companion_app.js"></script>
 </body>
 </html>

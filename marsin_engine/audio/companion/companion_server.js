@@ -59,8 +59,8 @@ import { listAudioDevices } from '../capture/audio_devices.js';
 import { ParamCenter } from '../../lib/param_center.js';
 import { resolveFfmpegPath } from '../../lib/ffmpeg_resolver.js';
 import {
-  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS,
-  loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal,
+  RAW_SOURCES, SIGNAL_TYPES, FREQUENCY_OPS, FREQUENCY_ONLY_OPS, VIEW_TYPES,
+  loadCompanionConfig, saveCompanionConfig, dumpCompanionConfig, validateSignal, validateView,
   domEnergyFor, parseCaptureDevice, captureDeviceString, COMPANION_CONFIG_PATH,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
@@ -801,6 +801,13 @@ function removeSignal(id) {
   if (i === -1) return { ok: false, error: `unknown signal "${id}"` };
   design.signals.splice(i, 1);
   buildRunners();
+  // Prune the removed signal from every view's signal list so no view holds a
+  // dangling reference (which would otherwise make the config fail to export).
+  // A view left with no signals is kept (empty) — the operator can re-populate
+  // or remove it; we never silently delete the operator's view.
+  for (const v of design.views) {
+    v.signals = v.signals.filter(sid => sid !== id);
+  }
   return { ok: true };
 }
 
@@ -814,6 +821,32 @@ function setSignalChain(id, chain) {
   sig.output = v.normalized.output;
   buildRunners();
   return { ok: true, signal: v.normalized };
+}
+
+// ── custom VIEWS (mix/share signals; viz types) ──────────────────────────────
+// A view = { id, label, type, signals:[signalId...] } — a VISUALIZER instance
+// that mixes a chosen subset of signals (contract §"Companion custom VIEWS").
+// Views live in design.views, persist in companion_config.yaml, and travel in
+// Export. validateView (the shared validator) enforces the type + that every
+// referenced signal exists and matches the type's accepted signal type.
+function signalTypeMap() {
+  return new Map(design.signals.map(s => [s.id, s.type]));
+}
+
+function addView(label, type, signalIds) {
+  const id = uid('view');
+  const candidate = { id, label, type, signals: Array.isArray(signalIds) ? signalIds : [] };
+  const v = validateView(candidate, signalTypeMap());
+  if (!v.ok) return { ok: false, error: v.error };
+  design.views.push(v.normalized);
+  return { ok: true, view: v.normalized };
+}
+
+function removeView(id) {
+  const i = design.views.findIndex(v => v.id === id);
+  if (i === -1) return { ok: false, error: `unknown view "${id}"` };
+  design.views.splice(i, 1);
+  return { ok: true };
 }
 
 const exportYaml = () => dumpCompanionConfig(design);
@@ -831,7 +864,9 @@ function catalog() {
     frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES,
     signalTypes: SIGNAL_TYPES,
+    viewTypes: VIEW_TYPES,
     signals: design.signals,
+    views: design.views,
     osc: design.osc,
     source, gains: {}, inputGain, sourceSmoothHz,
   };
@@ -875,8 +910,17 @@ function handleMessage(ws, raw) {
     ws.send(JSON.stringify({ type: 'addResult', ...res }));
   } else if (m.type === 'removeSignal') {
     const res = removeSignal(m.id);
-    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); pushManifest(); }
+    // Removing a signal can prune it from views, so re-broadcast views too.
+    if (res.ok) { broadcast({ type: 'signals', signals: design.signals }); broadcast({ type: 'views', views: design.views }); pushManifest(); }
     ws.send(JSON.stringify({ type: 'removeResult', id: m.id, ...res }));
+  } else if (m.type === 'addView') {
+    const res = addView(m.label, m.viewType, m.signals);
+    if (res.ok) broadcast({ type: 'views', views: design.views });
+    ws.send(JSON.stringify({ type: 'addViewResult', ...res }));
+  } else if (m.type === 'removeView') {
+    const res = removeView(m.id);
+    if (res.ok) broadcast({ type: 'views', views: design.views });
+    ws.send(JSON.stringify({ type: 'removeViewResult', id: m.id, ...res }));
   } else if (m.type === 'setChain') {
     const res = setSignalChain(m.id, m.chain);
     if (res.ok) pushManifest();   // cpcKey / address / output may have changed
@@ -966,8 +1010,8 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'hello',
     ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
-    rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES,
-    signals: design.signals, osc: design.osc,
+    rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES, viewTypes: VIEW_TYPES,
+    signals: design.signals, views: design.views, osc: design.osc,
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
     // Engine SHARED-tuning link state so the UI can show whether gain /

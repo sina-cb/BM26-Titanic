@@ -241,3 +241,24 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .add-card:hover{background:var(--raised);border-color:var(--src-accent,#9aa)}
 .add-card-label{font-weight:700;color:var(--src-accent,#cdd6e0);letter-spacing:.3px}
 .add-card-type{font-size:10px;color:var(--muted)}
+
+/* add-VIEW modal — viz-type picker + signal multi-select (themed; no native
+   dialogs). Matches the add-signal / export modal theme. */
+.view-box{width:min(520px,92vw)}
+.view-form{display:flex;flex-direction:column;gap:12px}
+.view-field{display:flex;flex-direction:column;gap:6px}
+.view-flabel{color:var(--muted);letter-spacing:1.2px;font-size:10px}
+.view-types{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.view-type-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+  padding:9px 11px;cursor:pointer;font:inherit}
+.view-type-btn:hover{background:var(--raised)}
+.view-type-btn.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.vt-label{font-weight:700;color:var(--accent);letter-spacing:.3px}
+.vt-sub{font-size:10px;color:var(--muted)}
+.view-signals{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;max-height:200px;overflow-y:auto}
+.view-sig-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);border-left:3px solid var(--src-accent,#9aa);
+  border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;opacity:.55}
+.view-sig-card:hover{background:var(--raised)}
+.view-sig-card.on{opacity:1;box-shadow:0 0 0 1px var(--src-accent,#9aa) inset}

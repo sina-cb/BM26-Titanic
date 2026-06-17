@@ -42,6 +42,22 @@ export const RAW_SOURCES = Object.freeze({
 
 export const SIGNAL_TYPES = Object.freeze(['intensity', 'frequency']);
 
+// ── Custom VIEWS (2026-06-17 contract §"Companion custom VIEWS") ──────────────
+// A VIEW mixes/overlays a chosen subset of the signals into one plot in the
+// VISUALIZERS sidebar. A view = { id, label, type, signals:[signalId...] }.
+// Two viz TYPES ship:
+//   - 'dancing-balls': the dom-dance orbs (DanceMaker spring); fed FREQUENCY
+//     signals (the legacy DOM DANCE is now an instance fed dom1+dom2).
+//   - 'trace-overlay': fed ANY signals → overlaid colour-per-signal traces.
+// Each type declares the SIGNAL TYPE it accepts so the UI can filter the
+// multi-select; null = any type. Reuses the existing dance + trace renderers
+// (no new viz engines). Views persist alongside signals in companion_config.yaml
+// and travel in Export.
+export const VIEW_TYPES = Object.freeze({
+  'dancing-balls': { label: 'dancing balls', accepts: 'frequency' },
+  'trace-overlay': { label: 'trace overlay', accepts: null },
+});
+
 // ── Dom signal = freq + energy (2026-06-17 contract §"Dom signal = freq + energy") ──
 // A dom SOURCE produces BOTH a frequency (Hz) and an energy [0,1] every hop. A
 // frequency signal designed from a dom source is therefore a freq+energy PAIR:
@@ -140,6 +156,11 @@ export function defaultCompanionConfig() {
       frequency('dom1', 'DOM1', 'rawDom1', '/marsin/dom/freq1', 'micDomFreq1'),
       frequency('dom2', 'DOM2', 'rawDom2', '/marsin/dom/freq2', 'micDomFreq2'),
     ],
+    // The legacy DOM DANCE is now a dancing-balls VIEW instance fed BOTH dom
+    // signals (not a hardcoded one-off) — contract §"dancing-balls".
+    views: [
+      { id: 'dance', label: '✦ DOM DANCE', type: 'dancing-balls', signals: ['dom1', 'dom2'] },
+    ],
   };
 }
 
@@ -213,6 +234,41 @@ export function validateSignal(sig) {
 }
 
 /**
+ * Validate one VIEW against the design's signals. Returns { ok, error,
+ * normalized }. A view = { id, label, type, signals:[signalId...] }. The type
+ * must be a known VIEW_TYPE; each referenced signal must exist; and when the
+ * type declares an accepted signal TYPE (e.g. dancing-balls wants frequency),
+ * every referenced signal must match it. `signalsById` maps id → signal type.
+ */
+export function validateView(view, signalsById) {
+  if (!isPlainObject(view)) return { ok: false, error: 'view must be an object' };
+  if (typeof view.id !== 'string' || !view.id.trim()) {
+    return { ok: false, error: 'view.id must be a non-empty string' };
+  }
+  if (typeof view.label !== 'string' || !view.label.trim()) {
+    return { ok: false, error: `view "${view.id}".label must be a non-empty string` };
+  }
+  const spec = VIEW_TYPES[view.type];
+  if (!spec) {
+    return { ok: false, error: `view "${view.id}".type must be one of ${Object.keys(VIEW_TYPES).join(', ')}` };
+  }
+  if (!Array.isArray(view.signals)) {
+    return { ok: false, error: `view "${view.id}".signals must be an array of signal ids` };
+  }
+  const ids = [];
+  for (const sid of view.signals) {
+    if (typeof sid !== 'string' || !signalsById.has(sid)) {
+      return { ok: false, error: `view "${view.id}": references unknown signal "${sid}"` };
+    }
+    if (spec.accepts && signalsById.get(sid) !== spec.accepts) {
+      return { ok: false, error: `view "${view.id}": ${view.type} accepts ${spec.accepts} signals, but "${sid}" is ${signalsById.get(sid)}` };
+    }
+    ids.push(sid);
+  }
+  return { ok: true, normalized: { id: view.id, label: view.label, type: view.type, signals: ids } };
+}
+
+/**
  * Validate a full companion config object. Throws on any error (Codex P0).
  * Returns the normalized config.
  */
@@ -228,14 +284,31 @@ export function validateCompanionConfig(cfg) {
   if (!Array.isArray(cfg.signals)) throw new Error('companion config.signals must be an array');
   const seen = new Set();
   const signals = [];
+  const signalsById = new Map();
   for (const sig of cfg.signals) {
     const v = validateSignal(sig);
     if (!v.ok) throw new Error(`companion config: ${v.error}`);
     if (seen.has(v.normalized.id)) throw new Error(`companion config: duplicate signal id "${v.normalized.id}"`);
     seen.add(v.normalized.id);
+    signalsById.set(v.normalized.id, v.normalized.type);
     signals.push(v.normalized);
   }
-  return { osc: { host: cfg.osc.host, port: cfg.osc.port }, signals };
+  // Views are OPTIONAL (a legacy config without a `views:` key is fine — the
+  // designer just has no custom views). When present they must be an array of
+  // valid view objects referencing existing signals.
+  const views = [];
+  if (cfg.views !== undefined) {
+    if (!Array.isArray(cfg.views)) throw new Error('companion config.views must be an array');
+    const seenViews = new Set();
+    for (const view of cfg.views) {
+      const v = validateView(view, signalsById);
+      if (!v.ok) throw new Error(`companion config: ${v.error}`);
+      if (seenViews.has(v.normalized.id)) throw new Error(`companion config: duplicate view id "${v.normalized.id}"`);
+      seenViews.add(v.normalized.id);
+      views.push(v.normalized);
+    }
+  }
+  return { osc: { host: cfg.osc.host, port: cfg.osc.port }, signals, views };
 }
 
 // ── IO ────────────────────────────────────────────────────────────────────

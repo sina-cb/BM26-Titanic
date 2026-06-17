@@ -97,3 +97,12 @@ signals:
           address: /marsin/dom/freq2
           cpcKey: micDomFreq2
     output: true
+# Custom VIEWS (VISUALIZERS). The legacy DOM DANCE is now a dancing-balls view
+# instance fed both dom signals (contract §"Companion custom VIEWS").
+views:
+  - id: dance
+    label: ✦ DOM DANCE
+    type: dancing-balls
+    signals:
+      - dom1
+      - dom2
