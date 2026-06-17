@@ -572,18 +572,26 @@ function LiveAudioMeters({
           color: C.secondary, letterSpacing: 0.8,
         }}>LIVE · 60 FPS</Text>
       </View>
-      {/* Meters GRID — DYNAMIC: one SignalColumn per live audio signal the
-          Companion routes in (low/mid/high/kick, dom1/dom2, energy, slow,
-          build, party, …). Laid out as a 3-column × N-row grid that wraps
-          to new rows (operator brief 2026-06-17) — cleaner than the old
-          single horizontally-scrolling row and closer to the Audio
-          Companion's desktop layout. The BPM tile is the grid's first
-          cell. INPUT GAIN sits under the grid. */}
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-        color: C.secondary, textTransform: 'uppercase',
-        letterSpacing: 1, marginBottom: 8,
-      }}>AUDIO SIGNALS</Text>
+      {/* Section header — "AUDIO SIGNALS" on the left, the live BPM read-out
+          on the right. BPM is the song tempo, NOT an analyser signal, so it
+          sits OUTSIDE the signal grid (its own headline chip) rather than
+          riding as a grid cell styled like the meters. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          color: C.secondary, textTransform: 'uppercase', letterSpacing: 1,
+        }}>AUDIO SIGNALS</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: C.secondary, letterSpacing: 0.8, textTransform: 'uppercase',
+          }}>BPM</Text>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22,
+            color: bpm ? C.primary : C.icon,
+          }}>{bpm ?? '—'}</Text>
+        </View>
+      </View>
       {slots.length === 0 ? (
         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
@@ -594,24 +602,6 @@ function LiveAudioMeters({
         // grid simply lays out at full height and scrolls with everything
         // else (no pinned strip, no nested scroller to fight the page).
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-          {/* BPM tile — biggest single number — rides as the grid's first
-              cell. No trail under it: BPM ticks at the song's pace, not the
-              analyser's. */}
-          <View style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
-            <View style={{
-              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
-              backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
-              alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
-                BPM
-              </Text>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 26, color: bpm ? '#003a44' : C.icon, marginTop: 1 }}>
-                {bpm ?? '—'}
-              </Text>
-            </View>
-          </View>
           {slots.map((slot) => (
             <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
