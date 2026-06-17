@@ -110,3 +110,17 @@ companion_server.js conflicts):
   companion_app.js renders them (note pitchClass -1/no-note → "--" not "C"; party 0 →
   calm only when truly calm). Engine-side note hold-fix is already committed in
   derived_signals.js — this is the Companion frame/display half.
+
+## Source-mode sync CaptainPad↔Companion (2026-06-17, queued — after Companion UI agent)
+GAP found: gain/smooth/mic-device(in mic mode) sync works, but SOURCE MODE doesn't.
+- CaptainPad switches source by PATCHing capture.device = 'test' | 'file:<path>' | device-id.
+- Companion applyEngineSharedTuning only does `if (mode==='mic') setMode('mic',{device})` —
+  it does NOT interpret 'test'/'file:' to switch the Companion's mode. So TEST/FILE/mic-switch
+  from CaptainPad don't change what the Companion analyzes.
+FIX (companion_server.js):
+1. applyEngineSharedTuning maps capture.device → mode: 'test'→setMode('test');
+   'file:<path>'→setMode('file',{file:path}); a real device → setMode('mic',{device}).
+   Only switch when it actually changed (avoid disruptive restarts).
+2. The Companion writes-through ALL its own mode switches (test/mic/file) to the engine as
+   capture.device (today only mic+device write-through), so switching source in the Companion
+   also reflects in CaptainPad. Net: source is fully two-way configurable from CaptainPad.
