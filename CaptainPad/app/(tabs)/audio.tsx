@@ -396,7 +396,7 @@ const INPUT_GAIN_MAX = 10;
 // network traffic. Overlaying RAW behind POST (vs the old stacked plots)
 // matches the Companion's CHOP-overlay convention and is denser — letting
 // the trace be the MAIN visualisation of the page.
-function SignalColumn({ slot, raw, post, active, traceHeight }: {
+const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active, traceHeight }: {
   slot: SignalSlot;
   raw: number;
   post: number;
@@ -464,7 +464,7 @@ function SignalColumn({ slot, raw, post, active, traceHeight }: {
       ) : null}
     </View>
   );
-}
+});
 
 function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn' }) {
   const C = usePalette();
@@ -1181,7 +1181,7 @@ function AudioConfigBody({
     const r = await patchAudioConfig({ bands: { inputGain: clamped } });
     if (!r.ok) { setPatchError(r.error || 'failed to set input gain'); reload(); }
     else { setPatchError(null); }
-  }, [cfg, reload]);
+  }, [cfg, reload, setCfg]);
 
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice

@@ -317,9 +317,11 @@ function promptAddView() {
   const types = Object.keys(S.viewTypes);
   _addViewType = types[0] || '';
   _addViewPicked = new Set();
-  // Pre-fill a sensible default name from the type label.
+  // Pre-fill a sensible default name from the type label. Clear `touched` so
+  // re-opening the modal (after a prior create set it) lets the name keep
+  // auto-tracking the selected TYPE again until the operator edits it.
   const nameInp = $('view-name');
-  if (nameInp) nameInp.value = S.viewTypes[_addViewType]?.label || 'view';
+  if (nameInp) { delete nameInp.dataset.touched; nameInp.value = S.viewTypes[_addViewType]?.label || 'view'; }
   renderAddViewTypes();
   renderAddViewSignals();
   $('view-modal').style.display = 'flex';
@@ -360,6 +362,10 @@ function renderAddViewSignals() {
   }
 }
 function removeView(id) {
+  // Confirm before destroying a view (parity with removeSignal — an accidental
+  // [×] tap is otherwise unrecoverable).
+  const v = viewById(id);
+  if (v && !window.confirm(`Remove view "${v.label}"?`)) return;
   if (S.selected === id) S.selected = 'input';
   send({ type: 'removeView', id });
 }
@@ -381,7 +387,7 @@ function promptAddSignal() {
 }
 function removeSignal(id) {
   const sig = signalById(id);
-  if (sig && !window.confirm(`Remove signal "${sig.label}"?`)) return;
+  if (sig && !window.confirm(`Remove signal "${signalName(sig)}"?`)) return;
   if (S.selected === id) S.selected = 'input';
   send({ type: 'removeSignal', id });
 }
