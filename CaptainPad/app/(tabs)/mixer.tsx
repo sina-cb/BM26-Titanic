@@ -153,7 +153,7 @@ function MixerLocalParams({ channel, onControlChange }: {
                   top: 14, height: 16,
                   pointerEvents: 'none',
                 }}>
-                  <GhostMarker ghost={ghost} borderRadius={8} />
+                  <GhostMarker ghost={ghost} base={base} borderRadius={8} />
                 </View>
               ) : null}
             </View>

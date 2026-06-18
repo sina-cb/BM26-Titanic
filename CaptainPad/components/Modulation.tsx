@@ -265,39 +265,42 @@ function ModulationBadges({
   );
 }
 
-// ── shared ghost-overlay fill bar on a slider track ──────────────────
+// ── shared ghost-overlay marker on a slider track ────────────────────
 //
-// History:
-//   - Original: 3 px vertical line (May 2026 → unreadable on the green wash)
-//   - Then: hollow square handle (May 2026, ugly + sat at left=0% any
-//     time the engine reported modulated=0)
-//   - Now: a slider-style green fill running from 0 to ghost-position,
-//     mimicking the primary fader fill underneath but in MOD_GREEN.
-//     Reads as "the engine is currently driving the parameter to HERE."
-//     A 2 px solid green right edge anchors the endpoint so it stays
-//     visible even when ghost ≈ 0.
+// Shows where the engine is CURRENTLY driving the parameter, drawn as a
+// deviation bar from the parameter's BASE value to the live modulated value
+// (`ghost`). The solid 2 px edge sits at the live end, so you read the push
+// direction at a glance: a bar to the RIGHT of base = the signal is pushing
+// the param up, to the LEFT = down (the natural read for a bipolar swing or a
+// unipolar offset). It rides inside the translucent range-envelope band.
 //
-// Renders inside a `position: relative` container that's sized to the
-// slider track (height + width). The translucent fill composites over
-// the operator-set base fill so both values stay visible.
+// (It used to fill 0→ghost like a fader level, which made the green start from
+// 0 instead of the parameter's value and read wrong for bipolar.)
 function GhostMarker({
   ghost,
+  base,
   borderRadius = 12,
-}: { ghost: number | null; borderRadius?: number }) {
+}: { ghost: number | null; base: number; borderRadius?: number }) {
   if (ghost === null) return null;
-  const pct = Math.min(100, Math.max(0, ghost * 100));
+  const g = Math.min(1, Math.max(0, ghost));
+  const b = Math.min(1, Math.max(0, base));
+  const lo = Math.min(g, b);
+  const width = Math.abs(g - b);
+  const pushUp = g >= b;   // live value above the base → pushing up
   return (
     <View
       style={{
         pointerEvents: 'none',
         position: 'absolute',
-        left: 0,
+        left: `${lo * 100}%`,
         top: 0,
         bottom: 0,
-        width: `${pct}%`,
+        width: `${width * 100}%`,
         backgroundColor: 'rgba(0,168,107,0.45)',
-        borderRightWidth: 2,
-        borderRightColor: MOD_GREEN,
+        // Anchor the solid edge at the LIVE end (the side away from base).
+        ...(pushUp
+          ? { borderRightWidth: 2, borderRightColor: MOD_GREEN }
+          : { borderLeftWidth: 2, borderLeftColor: MOD_GREEN }),
         borderRadius,
       }}
     />
@@ -475,7 +478,7 @@ function ModulatedSliderImpl({
             curve={mapping.curve}
           />
         ) : null}
-        <GhostMarker ghost={ghost} />
+        <GhostMarker ghost={ghost} base={base} />
       </View>
       {popoverOpen && enabled ? (
         <ModulationPopover
