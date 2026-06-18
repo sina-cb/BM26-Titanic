@@ -387,3 +387,56 @@ test('Path-traversal name is rejected', async () => {
   // The route regex blocks `/` so this returns 404; that is also acceptable.
   assert.ok(r.status === 400 || r.status === 404);
 });
+
+// ── "Load directory" support (patterns/ sub-folders) ───────────────────
+test('GET /pattern-dirs lists default + the patterns/ sub-directories', async () => {
+  const r = await api('GET', '/pattern-dirs');
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data));
+  // `default` (the synthetic top-level folder) leads the list.
+  assert.equal(r.data[0], 'default', `expected default first in ${JSON.stringify(r.data)}`);
+  // `transitions` is a known sub-folder shipped in patterns/.
+  assert.ok(r.data.includes('transitions'), `expected transitions in ${JSON.stringify(r.data)}`);
+  // No top-level pattern files leak into the directory list.
+  assert.ok(!r.data.includes('13_sparkle'));
+});
+
+test('GET /pattern-dirs/default lists bare top-level pattern slugs', async () => {
+  const r = await api('GET', '/pattern-dirs/default');
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data) && r.data.length > 5);
+  // Bare slugs (no dir prefix) and no test*/_ helpers.
+  assert.ok(r.data.includes('13_sparkle'), `expected 13_sparkle in ${JSON.stringify(r.data.slice(0, 5))}…`);
+  assert.ok(r.data.every(p => !p.includes('/')), 'top-level slugs must not be dir-prefixed');
+  assert.ok(r.data.every(p => !p.startsWith('test')), 'test* patterns excluded from default');
+});
+
+test('GET /pattern-dirs/:dir lists prefixed pattern slugs', async () => {
+  const r = await api('GET', '/pattern-dirs/transitions');
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data) && r.data.length > 0);
+  for (const p of r.data) {
+    assert.ok(p.startsWith('transitions/'), `slug should be dir-prefixed: ${p}`);
+  }
+});
+
+test('Loading a directory bulk-adds its patterns as valid playlist entries', async () => {
+  const dir = (await api('GET', '/pattern-dirs/transitions')).data;
+  assert.ok(dir.length > 0);
+  const entries = dir.map((pattern, i) => ({ id: `e_dir_${i}`, pattern, label: null, defaults: {} }));
+  let r = await api('POST', '/playlists', { name: 'dir_show', entries });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  // The saved playlist round-trips with the dir-prefixed patterns intact.
+  r = await api('GET', '/playlists/dir_show');
+  assert.equal(r.status, 200);
+  assert.equal(r.data.entries.length, dir.length);
+  assert.ok(r.data.entries.every(e => e.pattern.startsWith('transitions/')));
+  // None should be flagged _missing — the patterns really exist on disk.
+  assert.ok(r.data.entries.every(e => !e._missing));
+  await api('DELETE', '/playlists/dir_show');
+});
+
+test('GET /pattern-dirs/:dir rejects a traversal directory name', async () => {
+  const r = await api('GET', '/pattern-dirs/' + encodeURIComponent('..'));
+  assert.ok(r.status === 400 || r.status === 404);
+});

@@ -1,0 +1,435 @@
+schemaVersion: 1
+name: default
+entries:
+  - id: e_default_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_1_01_cylon_sweep
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_2_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_3_03_dual_axis_crush
+    pattern: 03_dual_axis_crush
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_4_04_beat_folded_helix
+    pattern: 04_beat_folded_helix
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_5_05_orbital_attractor_field
+    pattern: 05_orbital_attractor_field
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_6_06_neon_elevator
+    pattern: 06_neon_elevator
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_7_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_8_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_9_09_cyclone
+    pattern: 09_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_10_100_logsville_root_to_canopy_pulse
+    pattern: 100_logsville_root_to_canopy_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_11_10_chasers
+    pattern: 10_chasers
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_12_110_logsville_giant_pixel_chase
+    pattern: 110_logsville_giant_pixel_chase
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_13_111_logsville_giant_pixel_heartbeat
+    pattern: 111_logsville_giant_pixel_heartbeat
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_14_112_logsville_giant_call_response
+    pattern: 112_logsville_giant_call_response
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_15_113_tower_column_breath
+    pattern: 113_tower_column_breath
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_16_114_tower_ring_chase
+    pattern: 114_tower_ring_chase
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_17_115_tower_lighthouse_sweep
+    pattern: 115_tower_lighthouse_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_18_116_tower_cathedral_organ
+    pattern: 116_tower_cathedral_organ
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_19_117_tower_molten_elevator
+    pattern: 117_tower_molten_elevator
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_20_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_21_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_22_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_23_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_24_15_silk_prism_ribbons
+    pattern: 15_silk_prism_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_25_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_26_17_rolling_color_dunes
+    pattern: 17_rolling_color_dunes
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_27_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_28_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_29_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_30_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_31_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_32_23_prismatic_strange_attractors
+    pattern: 23_prismatic_strange_attractors
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_33_24_chromatic_murmuration
+    pattern: 24_chromatic_murmuration
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_34_25_heartbeat
+    pattern: 25_heartbeat
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_35_40_ghost_ship_reveal
+    pattern: 40_ghost_ship_reveal
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_36_41_ghost_aurora
+    pattern: 41_ghost_aurora
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_37_42_boiler_glow
+    pattern: 42_boiler_glow
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_38_43_sea_floor_shadow
+    pattern: 43_sea_floor_shadow
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_39_44_apex_gyro_vortex
+    pattern: 44_apex_gyro_vortex
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_40_45_engine_room_clockwork
+    pattern: 45_engine_room_clockwork
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_41_46_dome_lockdown
+    pattern: 46_dome_lockdown
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_42_47_apex_perimeter_ping
+    pattern: 47_apex_perimeter_ping
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_43_48_titanic_sos_beacon
+    pattern: 48_titanic_sos_beacon
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_44_49_boiler_pressure_release
+    pattern: 49_boiler_pressure_release
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_45_50_iceberg_fracture
+    pattern: 50_iceberg_fracture
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_46_51_abyssal_searchlight
+    pattern: 51_abyssal_searchlight
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_47_52_iceberg_shear_line
+    pattern: 52_iceberg_shear_line
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_48_53_shadow_eclipse
+    pattern: 53_shadow_eclipse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_49_54_boiler_fire_overdrive
+    pattern: 54_boiler_fire_overdrive
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_50_55_stardust_dome
+    pattern: 55_stardust_dome
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_51_56_stage_mirror_axis
+    pattern: 56_stage_mirror_axis
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_52_63_dome_phyllotaxis_bloom
+    pattern: 63_dome_phyllotaxis_bloom
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_53_65_dome_kick_shockwave
+    pattern: 65_dome_kick_shockwave
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_54_70_forest_canopy_reveal
+    pattern: 70_forest_canopy_reveal
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_55_71_tree_aurora
+    pattern: 71_tree_aurora
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_56_72_outpost_campfire
+    pattern: 72_outpost_campfire
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_57_73_tree_shadow_breath
+    pattern: 73_tree_shadow_breath
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_58_74_lookout_gyro_vortex
+    pattern: 74_lookout_gyro_vortex
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_59_75_timber_mill_clockwork
+    pattern: 75_timber_mill_clockwork
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_60_76_outpost_lockdown
+    pattern: 76_outpost_lockdown
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_61_77_tree_canopy_ping
+    pattern: 77_tree_canopy_ping
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_62_78_woodland_trident_sweep
+    pattern: 78_woodland_trident_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_63_79_mill_pressure_release
+    pattern: 79_mill_pressure_release
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_64_80_tree_canopy_fracture
+    pattern: 80_tree_canopy_fracture
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_65_81_outpost_distress_beacon
+    pattern: 81_outpost_distress_beacon
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_66_82_redwood_timber_fall
+    pattern: 82_redwood_timber_fall
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_67_83_shadow_canopy_eclipse
+    pattern: 83_shadow_canopy_eclipse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_68_84_outpost_ember_overdrive
+    pattern: 84_outpost_ember_overdrive
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_69_85_redwood_starry_canopy
+    pattern: 85_redwood_starry_canopy
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_70_96_logsville_ember_storm
+    pattern: 96_logsville_ember_storm
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_71_rainbow
+    pattern: rainbow
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null

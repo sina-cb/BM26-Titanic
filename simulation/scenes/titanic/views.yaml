@@ -1,29 +1,31 @@
 views:
   groupBits:
-    Right Front Wall Generator: 0x00000001
-    Right Top Chimney Generator: 0x00000002
-    Right Front Deck Generator: 0x00000004
-    Right Center Auditorium Generator: 0x00000008
-    Left Back Wall: 0x00000010
-    Right Back Wall Generator: 0x00000020
-    Left Front Wall Generator: 0x00000040
-    Left Top Chimney Generator: 0x00000080
-    Left Front Deck Generator: 0x00000100
-    Left Center Auditorium: 0x00000200
-    Left_Front_Left: 0x00000400
-    Left_Back_Left: 0x00000800
-    Left_Back_Right: 0x00001000
-    Left_Front_Right: 0x00002000
-    Right_Back_Left: 0x00004000
-    Right_Back_Right: 0x00008000
-    Right_Front_Right: 0x00010000
-    Right_Front_Left: 0x00020000
-    Small_Left_4: 0x00040000
-    Small_Left_3: 0x00080000
-    Small_Left_2: 0x00100000
-    Small_Left_1: 0x00200000
-    Small_Right_4: 0x00400000
-    Small_Right_3: 0x00800000
-    Small_Right_2: 0x01000000
-    Small_Right_1: 0x02000000
+    Right Front Wall Generator: 1
+    Right Top Chimney Generator: 2
+    Right Front Deck Generator: 4
+    Right Center Auditorium Generator: 8
+    Left Back Wall: 16
+    Right Back Wall Generator: 32
+    Left Front Wall Generator: 64
+    Left Top Chimney Generator: 128
+    Left Front Deck Generator: 256
+    Left Center Auditorium: 512
+    Left_Front_Left: 1024
+    Left_Back_Left: 2048
+    Left_Back_Right: 4096
+    Left_Front_Right: 8192
+    Right_Back_Left: 16384
+    Right_Back_Right: 32768
+    Right_Front_Right: 65536
+    Right_Front_Left: 131072
+    Small_Left_4: 262144
+    Small_Left_3: 524288
+    Small_Left_2: 1048576
+    Small_Left_1: 2097152
+    Small_Right_4: 4194304
+    Small_Right_3: 8388608
+    Small_Right_2: 16777216
+    Small_Right_1: 33554432
+    Right Back Deck Generator: 67108864
+    Left Back Deck Generator: 134217728
   custom: []
