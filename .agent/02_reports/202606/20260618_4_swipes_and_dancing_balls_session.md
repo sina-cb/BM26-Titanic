@@ -46,5 +46,21 @@ Reports: `.agent/02_reports/202606/20260618_1_bar_swipe_validation.md`, `..._2_d
 The engine (`:6968`) and sim (`:6969`) are left running. During HIL I changed runtime knobs (saved to `states/*`): deck pattern (last = `27_par_dancers`), `viewFader`→deck, section brightnesses (Pars/Bars→1.0), and some dancer sliders (ball2 energy 0, ball1 energy 1). These are runtime residue, reported not reverted. The engine runs locally with audio analysis ENABLED on the Amazon mic (local dev config; prod intent is Companion-as-sole-analyzer). See memory `hil-vis-gating` for the "vis reads all-zero" gotcha (viewFader + section dimmers).
 
 ## Notes / follow-ups
-- bar_swipe's `BAR_BASE = 16` assumes pars(4)+vintage(12) precede the bars (true for `test_bench`). If the model's fixture order changes, revisit.
-- To make any swipe audio-reactive, add a modulation mapping (`source: cpc <audio key>` → `target: sliderSwipeX` or `sliderSwipeWidth`) on the playlist entry.
+- To make any swipe audio-reactive, add a modulation mapping (`source: cpc <audio key>` → `target: sliderSwipeX`/`sliderSwipeY`/`sliderSwipeWidth`) on the playlist entry.
+
+## Addendum (same day) — coordinate-based swipes, axis per group
+
+Operator: the LED-index order was wrong (wiring ≠ physical), and the swipe set should be **axis per fixture group**. Reworked to PHYSICAL coordinates (commit `7946dce`):
+
+| Pattern | Axis | Param | Direction (swipeDir <0.5 / ≥0.5) |
+|---|---|---|---|
+| `30_par_swipe` | x (left↔right) | `swipeX` | L→R / R→L — unchanged; `(4-fId)/3` row already = physical x order |
+| `31_bar_swipe` | x (left↔right) | `swipeX` | L→R / R→L — reverted index→physical x (`pos = nx`, bars span nx 0..1) |
+| `32_vintage_swipe` (NEW) | y (up↔down) | `swipeY` | DOWN→UP / UP→DOWN — `pos = ny / VINT_Y_MAX` (0.273); both strips together |
+
+Verified (per-pixel WASM harness + live HIL through sACN):
+- bar_swipe: lit band avg-nx 0.041→0.959 (offline) / 0.028→0.629 (live) L→R, reverses; only fId 7,8.
+- vintage_swipe: lit band avg-ny 0.000→0.273 (offline) / 0.027→0.191 (live) bottom→top, reverses; only fId 5,6.
+- par_swipe: unchanged, still L→R.
+
+The earlier index-based single-pixel bar_swipe (commit `8446008`) is superseded by `7946dce`.
