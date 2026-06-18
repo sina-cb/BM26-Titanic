@@ -3,6 +3,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 
 import { validateModulationMapping } from './modulation_engine.js';
+import { validateMidiMapping } from './midi_mapping_engine.js';
 
 const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const VALID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
@@ -143,6 +144,7 @@ export class PlaylistManager {
         label: typeof entry.label === 'string' ? entry.label : null,
         defaults: (entry.defaults && typeof entry.defaults === 'object') ? entry.defaults : {},
         modulations: this._coerceModulations(name, entry),
+        midiMappings: this._coerceMidiMappings(name, entry),
         notes: typeof entry.notes === 'string' ? entry.notes : null,
       };
       if (!this.patternExists(coerced.pattern)) coerced._missing = true;
@@ -184,12 +186,28 @@ export class PlaylistManager {
           seenTargets.add(v.target.parameter);
           validatedMods.push(v);
         }
+        // MIDI mappings: same strict-on-save policy as modulations, and the
+        // same one-per-target rule (a local param is driven by ONE fader).
+        const midi = Array.isArray(e.midiMappings) ? e.midiMappings : [];
+        const validatedMidi = [];
+        const seenMidiTargets = new Set();
+        for (const m of midi) {
+          const v = validateMidiMapping(m);
+          if (seenMidiTargets.has(v.target.parameter)) {
+            throw new Error(
+              `Entry ${e.id}: multiple MIDI mappings target '${v.target.parameter}' (one per target)`,
+            );
+          }
+          seenMidiTargets.add(v.target.parameter);
+          validatedMidi.push(v);
+        }
         return {
           id: e.id,
           pattern: e.pattern,
           label: e.label || null,
           defaults: e.defaults && typeof e.defaults === 'object' ? e.defaults : {},
           modulations: validatedMods,
+          midiMappings: validatedMidi,
           notes: e.notes || null,
         };
       }),
@@ -244,6 +262,34 @@ export class PlaylistManager {
       } catch (err) {
         console.warn(
           `[Playlist] "${playlistName}" entry ${entry.id}: dropping invalid modulation — ${err.message}`,
+        );
+      }
+    }
+    return out;
+  }
+
+  // Lenient load-side coercion for MIDI mappings — mirrors _coerceModulations.
+  // Invalid mappings are dropped with a warning so one bad binding can't take
+  // out a playlist load; one-per-target (param) is enforced.
+  _coerceMidiMappings(playlistName, entry) {
+    const raw = Array.isArray(entry.midiMappings) ? entry.midiMappings : [];
+    if (raw.length === 0) return [];
+    const out = [];
+    const seenTargets = new Set();
+    for (const m of raw) {
+      try {
+        const v = validateMidiMapping(m);
+        if (seenTargets.has(v.target.parameter)) {
+          console.warn(
+            `[Playlist] "${playlistName}" entry ${entry.id}: duplicate MIDI mapping for '${v.target.parameter}' dropped (one-per-target)`,
+          );
+          continue;
+        }
+        seenTargets.add(v.target.parameter);
+        out.push(v);
+      } catch (err) {
+        console.warn(
+          `[Playlist] "${playlistName}" entry ${entry.id}: dropping invalid MIDI mapping — ${err.message}`,
         );
       }
     }

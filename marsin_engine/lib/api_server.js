@@ -10,6 +10,7 @@ import { PlaylistManager } from './playlist_manager.js';
 import {
   validateModulationMapping,
 } from './modulation_engine.js';
+import { validateMidiMapping } from './midi_mapping_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
 import {
@@ -3420,6 +3421,104 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const before = (entry.modulations || []).length;
           entry.modulations = (entry.modulations || []).filter(m => m.id !== mappingId);
           if (entry.modulations.length === before) {
+            res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' }));
+          }
+          const saved = playlistManager.save(playlist);
+          const savedEntry = saved.entries.find(e => e.id === itemId);
+          finishOk(savedEntry);
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+      }
+      res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+    }
+    // ── PLAYLIST MIDI MAPPINGS (docs/34) ─────────────────────────────────
+    //
+    // Mirror of the modulation routes above. CRUD by mapping id, scoped to a
+    // playlist item; one mapping per target parameter (enforced by save). These
+    // are PURE METADATA — the render loop never applies them; CaptainPad reads
+    // the active entry's midiMappings and writes the param's static value when
+    // the bound MIDI control moves. No ModulationController push needed.
+    //
+    //   PUT    /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    //   PATCH  /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    //   DELETE /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/midi-mappings\/[^\/]+$/)) {
+      const parts = req.url.split('/');
+      let playlistName, itemId, mappingId;
+      try {
+        playlistName = decodeURIComponent(parts[3]);
+        itemId = decodeURIComponent(parts[5]);
+        mappingId = decodeURIComponent(parts[7]);
+      } catch (e) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: 'invalid URI encoding' }));
+      }
+
+      const finishOk = (savedEntry) => {
+        broadcastWs({ type: 'playlistSaved', name: playlistName });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', entry: savedEntry }));
+      };
+
+      if (req.method === 'PUT') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const incoming = { ...data, id: mappingId };
+            try { validateMidiMapping(incoming); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            entry.midiMappings = (entry.midiMappings || []).filter(m => m.id !== mappingId);
+            entry.midiMappings.push(incoming);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'PATCH') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const existing = (entry.midiMappings || []).find(m => m.id === mappingId);
+            if (!existing) { res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' })); }
+            const merged = { ...existing, ...data, id: mappingId };
+            try { validateMidiMapping(merged); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            entry.midiMappings = (entry.midiMappings || []).map(m => m.id === mappingId ? merged : m);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        try {
+          const playlist = playlistManager.load(playlistName);
+          if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+          const entry = playlist.entries.find(e => e.id === itemId);
+          if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+          const before = (entry.midiMappings || []).length;
+          entry.midiMappings = (entry.midiMappings || []).filter(m => m.id !== mappingId);
+          if (entry.midiMappings.length === before) {
             res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' }));
           }
           const saved = playlistManager.save(playlist);
