@@ -22,17 +22,31 @@
   Coordinate-driven (nx,ny over x,y) so it ports from test_bench to the
   real rig: Pars (X), Vintage (Y), Bars (X) all sample the same field.
 
+  TWO COLOURS: cp1 deep TEAL veins <-> cp2 warm GOLD crests (distinct hues,
+  ~0.42 apart). The cp1<->cp2 blend is driven by a SMOOTH caustic-tilt field
+  that genuinely spans 0..1 across the rig (low-frequency interference +
+  caustic strength), so both hues are always present somewhere — teal in the
+  troughs, gold riding the bright veins. This guarantees a real hue spread.
+
+  NON-REPEATING MATH: the caustic field layers sines whose time terms drift on
+  incommensurate periods (golden-angle 0.0234, sqrt2 0.0202, phi 0.0144 turns/s)
+  and whose spatial frequencies use irrational ratios (sqrt2, sqrt3, phi), so
+  the interference never tiles back to a loop.
+    field = w(nx*D + ny*0.7 - tA) + w(ny*D*sqrt2*0.5 - nx*0.5 + tB)
+          + w((nx+ny)*D*phi*0.3 + tA*phi)
+  where w() is the 0..1 wave() turn and D = CAUSTIC_DENSITY.
+
   CONTROLS (declaration order = UI order)
     - localSpeed : caustic flow rate.
-    - shimmer    : glint density + brightness (highs).
+    - shimmer    : glint density + brightness AND overall body gain (highs).
     - ripple     : kick brightness-pulse amount.
     - depth      : caustic contrast (vein sharpness).
     - base       : minimum floor brightness.
-    - colorPalette1/2 : cp1 deep teal (veins) <-> cp2 pale cyan/white (crests).
+    - colorPalette1/2 : cp1 deep teal (troughs) <-> cp2 warm gold (crests).
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderShimmer (shimmer) <- micHigh
-      MODULATE sliderRipple  (ripple)  <- micKick
+      MODULATE sliderShimmer (shimmer) <- micHigh   (primary: body gain + glints)
+      MODULATE sliderRipple  (ripple)  <- micKick   (kick brightness swell)
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -42,8 +56,8 @@ export var ripple = 0.0;       // kick brightness-pulse amount
 export var depth = 0.6;        // caustic contrast (vein sharpness)
 export var base = 0.12;        // minimum floor brightness
 
-export var cp1H = 0.50, cp1S = 1.00, cp1V = 1.0; // deep teal (veins)
-export var cp2H = 0.52, cp2S = 0.25, cp2V = 1.0; // pale cyan / near-white (crests)
+export var cp1H = 0.52, cp1S = 1.00, cp1V = 1.0; // deep teal / cyan (troughs)
+export var cp2H = 0.10, cp2S = 0.90, cp2V = 1.0; // warm gold / amber (crests)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -57,6 +71,12 @@ export function sliderBase(v) { base = v; }
 var CAUSTIC_DENSITY = 3.2;   // spatial frequency of the interference field
 var GLINT_DENSITY = 34.0;    // spatial frequency of the shimmer glints
 var RIPPLE_DECAY = 2.6;      // how fast the kick swell fades (per second)
+
+// Irrational constants — incommensurate spatial/temporal ratios so the caustic
+// interference never tiles back into a repeating loop (production bar 3).
+var SQRT2 = 1.41421;
+var SQRT3 = 1.73205;
+var PHI = 1.61803;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -97,9 +117,10 @@ function clamp01(v) {
 }
 
 // ── Persistent state ─────────────────────────────────────────────────────────
-var flowA = 0.0;       // caustic drift phase A
-var flowB = 0.0;       // caustic drift phase B
-var glintT = 0.0;      // glint scintillation phase
+var flowA = 0.0;       // caustic drift phase A  (golden-angle period)
+var flowB = 0.0;       // caustic drift phase B  (sqrt2 period)
+var glintT = 0.0;      // glint scintillation phase (phi period)
+var tiltT = 0.0;       // slow colour-tilt drift  (sqrt3 period)
 var rippleEnv = 0.0;   // decaying envelope of the kick pulse
 
 export function beforeRender(delta) {
@@ -107,10 +128,13 @@ export function beforeRender(delta) {
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
+  // Incommensurate drift periods (turns/sec) — golden-angle/sqrt2/phi/sqrt3
+  // scaled by 0.01 so the interference + colour tilt never re-loop.
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  flowA = time(0.030 / localMultiplier);
-  flowB = time(0.017 / localMultiplier);
-  glintT = time(0.011 / localMultiplier);
+  flowA = time((0.0234 / 2.39996) / localMultiplier);
+  flowB = time((0.0202 / SQRT2)   / localMultiplier);
+  glintT = time((0.0144 / PHI)    / localMultiplier);
+  tiltT = time((0.0090 / SQRT3)   / localMultiplier);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -130,9 +154,11 @@ export function render3D(index, x, y, z) {
   ny = max(0.0, min(1.0, ny));
 
   // ── Caustic field: layered sine interference (smooth flowing veins) ──────
+  // Spatial frequencies use irrational ratios (sqrt2, sqrt3, phi); time terms
+  // drift on incommensurate periods — the field never tiles back to a loop.
   var w1 = wave((nx * CAUSTIC_DENSITY) + (ny * 0.7) - flowA);
-  var w2 = wave((ny * CAUSTIC_DENSITY * 0.8) - (nx * 0.5) + flowB);
-  var w3 = wave((nx * CAUSTIC_DENSITY * 0.45) + (ny * CAUSTIC_DENSITY * 0.45) + flowA * 0.5);
+  var w2 = wave((ny * CAUSTIC_DENSITY * SQRT2 * 0.5) - (nx * 0.5) + flowB);
+  var w3 = wave(((nx + ny) * CAUSTIC_DENSITY * PHI * 0.3) + flowA * PHI);
   var field = (w1 * 0.4) + (w2 * 0.35) + (w3 * 0.25);
 
   // Sharpen into crisp veins. `depth` raises the exponent for tighter cores.
@@ -145,16 +171,27 @@ export function render3D(index, x, y, z) {
   // ── Ripple swell on kick: lifts the whole caustic field ──────────────────
   var swell = 1.0 + rippleEnv * 1.4 * (0.5 + 0.5 * caustic);
 
-  var bri = clamp01(floorPulse + caustic * swell);
+  // Body of light from the caustic field + base floor. Kept modest (peak ~0.7)
+  // so the shimmer gain below multiplies it without saturating everywhere —
+  // saturation would flatten the brightness->micHigh correlation.
+  var body = clamp01((floorPulse + caustic * swell) * 0.7);
 
-  // Continuous shimmer GAIN: highs scale the whole caustic body up smoothly
-  // across the entire rig, so total brightness tracks micHigh measurably.
-  // (The sparse W glints below are the crisp visual hook on top of this.)
-  var gain = 0.42 + shimmer * 1.05;
-  bri = clamp01(bri * gain);
+  // Continuous shimmer GAIN dominates total brightness so micHigh tracks
+  // brightness strongly (primary reactivity). The shimmer-independent term is
+  // kept SMALL so most of every pixel's output rides on `shimmer`.
+  var gain = 0.10 + shimmer * 1.55;
+  // A small shimmer-INDEPENDENT visibility floor (added after the gain) keeps
+  // the rig readable in silence (mission-critical) without injecting much
+  // uncorrelated variance — it is a slow, low-amplitude caustic minimum.
+  var visFloor = (0.06 + base * 0.20) * (0.4 + 0.6 * caustic);
+  var bri = clamp01(body * gain + visFloor);
 
-  // Colour: cp1 (teal vein body) -> cp2 (pale crest) along caustic strength.
-  var tcol = clamp01(caustic);
+  // ── TWO COLOURS: smooth tilt field spans 0..1 across the whole rig ───────
+  // A low-frequency interference field (irrational ratios) gives every pixel a
+  // smoothly varying blend position, so teal (cp1) fills the troughs and gold
+  // (cp2) rides the bright veins — both hues are always present somewhere.
+  var tiltLF = 0.5 + 0.5 * wave(nx * SQRT3 * 0.55 + ny * 0.45 + tiltT);
+  var tcol = clamp01(tiltLF * 0.55 + caustic * 0.65);
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;

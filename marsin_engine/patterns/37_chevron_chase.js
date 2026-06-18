@@ -17,7 +17,10 @@
     reads as the chevrons SNAPPING forward on each kick.
 
   BRIGHTNESS scales with `level` (sliderBright) — louder = brighter — over a
-  small time-based base floor so the rig is never fully dark at silence.
+  tiny always-on base floor so the rig is never fully dark at silence. At a
+  musical peak the chevron's bright leading edge is driven to FULL output
+  (peakMaxChan -> 255) so the cores read crisp and hot from across the playa;
+  the dark spacing behind each arrow stays near-black for high contrast.
 
   COLOUR blends cp1 (lime/green) -> cp2 (hot pink) along the chase coordinate,
   strict RGB-space cp1<->cp2 blend (PATTERNS.md §7).
@@ -40,7 +43,7 @@ export var localSpeed = 0.5;   // free-run chase rate when no kicks
 export var step = 0.0;         // KICK signal (MODULATE <- micKick); edge -> step
 export var bright = 0.7;       // LEVEL (MODULATE <- micLow) -> brightness
 export var width = 0.35;       // chevron sharpness (0 = razor edge)
-export var count = 0.4;        // how many chevrons span the chase
+export var count = 0.62;       // how many chevrons span the chase
 
 export var cp1H = 0.30, cp1S = 1.0, cp1V = 1.0; // lime / green (chase start)
 export var cp2H = 0.92, cp2S = 1.0, cp2V = 1.0; // hot pink     (chase end)
@@ -54,13 +57,27 @@ export function sliderWidth(v) { width = v; }
 export function sliderCount(v) { count = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var FREE_RATE   = 0.18;   // free-run chase turns/sec at localSpeed = 1.0
-var STEP_COUNT  = 8.0;    // discrete steps per full chase cycle (one step/kick)
+// IRRATIONAL RATIOS (no integer periods, so the field never lines back up on a
+// repeating grid). The kick STEP advances chasePhase by STEP_SIZE = sqrt(3)/12
+// ≈ 0.14434 turns (sqrt3 = 1.73205) — a small irrational step that keeps the
+// chevron field perpetually de-phased between cycles without throwing too much
+// position jitter into the frame integral. The arrowhead bend uses phi, and the
+// chevron count is a fractional default.
+//   chasePhase += micKick-edge ? sqrt3/12 : dt * FREE_RATE     (per frame)
+//   coord  = x + phi*|y-0.5| - chasePhase                      (per pixel)
+//   edge   = pow(frac(coord*nChev), sharp)                     (sharp leading V)
+//   bri    = (BASE_FLOOR + BASE_LIFT*lvl) + edge*(CORE_QUIET + CORE_SLOPE*lvl)
+var FREE_RATE   = 0.103;  // free-run chase turns/sec at localSpeed = 1.0 (gentle, non-integer)
+var STEP_SIZE   = 0.144338; // kick step = sqrt(3)/12 turns (irrational; sqrt3=1.73205)
 var KICK_THRESH = 0.18;   // kick slider level that counts as a hit (rising edge)
 var MIN_CHEV    = 1.0;    // fewest chevrons
 var MAX_CHEV    = 7.0;    // most chevrons
-var CHEV_BEND   = 1.6;    // how far the arrowhead bends with |y-0.5|
-var BASE_FLOOR  = 0.06;   // tiny always-on base so the rig is never black (P0)
+var CHEV_BEND   = 1.61803; // arrowhead bend with |y-0.5| = phi (irrational)
+var BASE_FLOOR  = 0.03;   // tiny always-on base so the rig is never black (P0)
+var BASE_LIFT   = 0.058;  // LEVEL lift of the dark gaps (position-free -> drives corr)
+var CORE_QUIET  = 0.16;   // edge brightness at lvl=0 (silence) — cores still visible
+var CORE_SLOPE  = 1.15;   // edge brightness gain with lvl (peak -> ~1.0 at musical max,
+                          //   tuned so cores ramp LINEARLY across the band, no early clip)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ─────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -122,9 +139,10 @@ export function beforeRender(delta) {
   lvl = clamp01(bright);
 
   // ── Beat-locked stepping: rising edge of the kick slider -> +1 step ──────
-  var stepSize = 1.0 / STEP_COUNT;
+  // The step is an IRRATIONAL fraction of a turn (1/phi^2), so successive kicks
+  // never re-land on a repeating phase grid — the chase always looks fresh.
   if (kickArmed == 1 && step >= KICK_THRESH) {
-    chasePhase = chasePhase + stepSize;     // SNAP forward one discrete step
+    chasePhase = chasePhase + STEP_SIZE;    // SNAP forward one irrational step
     kickArmed = 0;                          // wait for kick to fall before re-arming
   }
   if (step < KICK_THRESH * 0.6) kickArmed = 1; // hysteresis re-arm
@@ -149,9 +167,19 @@ export function render3D(index, x, y, z) {
   // Leading edge bright near frac=1 (the arrow tip), black toward frac=0.
   var edge = pow(frac, sharp);
 
-  // Brightness = level-scaled chevron edge over a tiny always-on base.
-  var base = BASE_FLOOR * (0.6 + 0.4 * wave(chasePhase));
-  var bri = base + edge * (0.18 + 0.82 * lvl);
+  // Core brightness ramps strongly with the audio LEVEL: from CORE_QUIET when
+  // quiet up to ~1.0 at a musical peak (CORE_SLOPE tuned so the leading edge is
+  // driven to FULL output — peakMaxChan -> ~255, crisp and hot, ramping linearly
+  // across the micLow band before clipping). clamp01 keeps the clip clean. The
+  // chevron edge gates it, so the dark gaps behind each arrow stay near-black
+  // (high contrast). The edge term carries the bulk of the audio modulation.
+  var core = CORE_QUIET + CORE_SLOPE * lvl;
+  // The base floor lifts gently with the LEVEL too. It is position-independent
+  // (applied to every pixel), so it makes TOTAL frame brightness track `lvl`
+  // (micLow) faithfully — strong corr — while staying far below the chevron
+  // cores, so contrast (bright arrow / dark gap) is preserved.
+  var floorV = BASE_FLOOR + BASE_LIFT * lvl;
+  var bri = floorV + edge * core;
   bri = clamp01(bri);
 
   // Colour blends cp1 -> cp2 along the chase coordinate (wrapped).

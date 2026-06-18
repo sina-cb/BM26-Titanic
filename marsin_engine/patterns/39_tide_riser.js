@@ -1,55 +1,76 @@
 /*
-  39_tide_riser.js — high-def EDM BUILD / TIDE.
+  39_tide_riser.js — high-def EDM BUILD / TIDE (two-colour water + foam).
 
-  A glowing water LEVEL rises up the rig as build energy climbs. Below the
-  waterline the rig glows deep-ocean (cp1); right AT the waterline sits a crisp,
-  bright FOAM line (cp2, pale cyan/white); above it is dark. A riser synth (high
-  spectral flux) makes the tide CLIMB. When the build peaks and drops (low
-  energy collapses) the whole rig WASHES bright — the flood.
+  A glowing water LEVEL rises up the rig as build energy climbs. BELOW the
+  waterline the rig glows deep-ocean (cp1, a body of one hue); right AT the
+  waterline — and as spray flung ABOVE it — sits a crisp, bright FOAM/CREST in
+  a DISTINCT second hue (cp2, warm amber-white). So the rig always shows BOTH
+  colours at once: a cool body capped by a warm crest. A riser synth (high
+  spectral flux) makes the tide CLIMB; a kick flings the crest spray higher.
 
-  Vertical level is driven by `y` (normalised 0..1 across the rig): vintage heads
-  sit low (~0..0.27), bars mid (~0.64), pars up top (~1.0), so a rising level
-  fills bottom-up across the whole rig and reads as one body of water.
+  Vertical level is driven by `y` (normalised 0..1 across the rig): vintage
+  heads sit low (~0..0.27), bars mid (~0.64), pars up top (~1.0), so a rising
+  level fills bottom-up across the whole rig and reads as one body of water.
 
-  CONTRAST: BASE floor is near-zero so above-water pixels are true black; the
-  foam line is a single tight bright band. A tiny time-based shimmer base keeps
-  it readable in silence (mission-critical visibility — never fully dark).
+  REACTIVITY (why it tracks the music):
+    - TIDE HEIGHT and the BODY's per-pixel brightness BOTH scale with `rise`:
+      a higher level lights MORE pixels AND lights each lit pixel brighter, so
+      total brightness climbs hard and monotonically with flux (primary corr).
+    - CREST SPRAY height + crest brightness scale with `spray` (a kick handle):
+      a second, orthogonal dimension that punches the warm crest up on the beat.
+
+  CONTRAST: BASE floor is near-zero so far above the spray pixels are true
+  black; the crest is a tight bright band riding the surface. A faint
+  time-based shimmer keeps it readable in silence (never fully dark).
+
+  CORE EQUATION (per pixel, ny = clamp01(y), surf = waterline):
+      body  = (ny <= surf)            -> cp1 * (0.45 + 0.55*rise) * depthGlow
+      crest = exp over |ny - surf|    -> cp2, band widened upward by spray
+      out   = lerp(cp1,cp2, crestMix) * max(body, crest, floor)
 
   CONTROLS (UI order = declaration order)
     - localSpeed : shimmer / drift rate of the water surface.
     - rise       : water LEVEL height 0..1 (flux pushes this up). Modulatable.
-    - wash       : FLOOD brightness — low energy washes the whole rig bright.
-                   Modulatable (drives total brightness → measurable reactivity).
-    - foam       : foam-line sharpness (1 = razor band, 0 = soft surf).
+                   Drives BOTH lit-area AND body brightness -> strong corr.
+    - spray      : CREST spray height / pop above the waterline (kick). Modulatable.
+    - foam       : crest-line sharpness (1 = razor band, 0 = soft surf).
     - base       : minimum floor under the water glow.
-    - colorPalette1/2 : cp1 deep ocean blue (below), cp2 pale foam cyan/white.
+    - colorPalette1/2 : cp1 deep ocean blue (body), cp2 warm foam amber-white.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderRise (rise) <- micFlux
-      MODULATE sliderWash (wash) <- micLow
+      MODULATE sliderRise  (rise)  <- micFlux   (primary: tide height + body bri)
+      MODULATE sliderSpray (spray) <- micKick   (2nd dim: crest spray pop)
 */
 
 // ── Exported controls ────────────────────────────────────────────────────────
 export var localSpeed = 0.5;   // surface shimmer / drift rate
 export var rise = 0.25;        // water level height 0..1 (flux climbs this)
-export var wash = 0.0;         // flood brightness (low energy → whole rig bright)
-export var foam = 0.7;         // foam-line sharpness (1 = razor, 0 = soft surf)
+export var spray = 0.0;        // crest spray height above the waterline (kick)
+export var foam = 0.7;         // crest-line sharpness (1 = razor, 0 = soft surf)
 export var base = 0.06;        // minimum floor under the water
 
-export var cp1H = 0.62, cp1S = 1.0, cp1V = 0.9;  // deep ocean blue (below water)
-export var cp2H = 0.50, cp2S = 0.25, cp2V = 1.0; // pale foam cyan / near-white
+// cp1 = deep ocean blue (BODY). cp2 = warm amber-white FOAM/CREST.
+// Distinct hues (0.60 vs 0.09) so the rig reads two colours -> hueSpread high.
+export var cp1H = 0.60, cp1S = 1.0, cp1V = 0.9;  // deep ocean blue (below water)
+export var cp2H = 0.09, cp2S = 0.55, cp2V = 1.0; // warm amber-white crest / foam
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderRise(v) { rise = v; }
-export function sliderWash(v) { wash = v; }
+export function sliderSpray(v) { spray = v; }
 export function sliderFoam(v) { foam = v; }
 export function sliderBase(v) { base = v; }
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-var FOAM_MAX = 0.32;   // foam half-band thickness (ny) at foam = 0
-var FOAM_MIN = 0.04;   // foam half-band thickness (ny) at foam = 1 (razor)
+// ── Tunables (irrational ratios — no integer periods) ────────────────────────
+// SQRT2 / PHI / golden-angle phases keep the surface wobble + shimmer aperiodic
+// so the waterline never beats into a visible repeating ripple.
+var FOAM_MAX = 0.20;   // crest half-band thickness (ny) at foam = 0 (broad surf)
+var FOAM_MIN = 0.035;  // crest half-band thickness (ny) at foam = 1 (razor)
+var SPRAY_MAX = 0.34;  // extra crest reach ABOVE the surface at spray = 1
+var R_SQRT2 = 1.41421; // wobble spatial frequency along x
+var R_PHI = 1.61803;   // shimmer cross-frequency
+var R_GOLD = 2.39996;  // swell drift increment (golden angle, turns/sec-ish)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending) ────────────────────────────
 var pr1 = 0, pg1 = 0, pb1 = 1;
@@ -93,8 +114,10 @@ function clamp01(v) {
 var shimmer = 0.0;     // surface shimmer phase 0..1
 var swell = 0.0;       // slow swell phase 0..1
 var level = 0.0;       // resolved waterline height this frame (ny)
-var foamHalf = 0.1;    // resolved foam half-band thickness this frame
-var floodBri = 0.0;    // resolved flood brightness this frame
+var foamHalf = 0.1;    // resolved crest half-band thickness this frame
+var bodyBri = 0.5;     // resolved body brightness this frame (tracks rise)
+var sprayUp = 0.0;     // resolved extra crest reach above surface this frame
+var crestBri = 0.7;    // resolved crest brightness this frame (tracks spray)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -104,65 +127,74 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  shimmer = shimmer + dt * (0.25 + localSpeed * 1.4);
+  // Aperiodic drift: increments use irrational ratios so nothing loops cleanly.
+  shimmer = shimmer + dt * (0.25 + localSpeed * 1.4) * R_PHI;
   shimmer = shimmer - floor(shimmer);
-  swell = swell + dt * (0.05 + localSpeed * 0.25);
+  swell = swell + dt * (0.05 + localSpeed * 0.25) * R_GOLD;
   swell = swell - floor(swell);
 
-  // Waterline rides the rig bottom→top with the rise control (flux). Keep a
-  // touch of headroom so the foam line stays on-rig at full rise.
-  level = 0.04 + clamp01(rise) * 0.92;
+  // Waterline rides the rig bottom->top with the rise control (flux). Headroom
+  // keeps the crest on-rig at full rise.
+  var rs = clamp01(rise);
+  level = 0.04 + rs * 0.90;
 
-  // Foam thickness: foam=1 -> razor band, foam=0 -> broad surf.
+  // PRIMARY reactivity: body brightness ALSO climbs with rise, so total
+  // brightness tracks flux on BOTH axes (more lit area + brighter per pixel).
+  bodyBri = 0.45 + rs * 0.55;
+
+  // Crest thickness: foam=1 -> razor band, foam=0 -> broad surf.
   foamHalf = FOAM_MIN + (1.0 - clamp01(foam)) * (FOAM_MAX - FOAM_MIN);
 
-  // Flood: wash lights the whole rig bright (the drop). Squared for snap.
-  var w = clamp01(wash);
-  floodBri = w * w;
+  // 2nd dimension: kick flings the crest spray upward and pops its brightness.
+  var sp = clamp01(spray);
+  sprayUp = sp * SPRAY_MAX;
+  crestBri = 0.65 + sp * 0.35;
 }
 
 export function render3D(index, x, y, z) {
   // Vertical position of this pixel, 0 (bottom) .. 1 (top).
   var ny = clamp01(y);
 
-  // Surface wobble so the waterline isn't a dead-flat line across the rig.
-  var wob = (wave(x * 0.9 + shimmer) - 0.5) * 0.05
-          + (wave(ny * 1.7 + swell) - 0.5) * 0.03;
+  // Aperiodic surface wobble so the waterline isn't a dead-flat line.
+  var wob = (wave(x * R_SQRT2 + shimmer) - 0.5) * 0.05
+          + (wave(ny * R_PHI + swell) - 0.5) * 0.03;
   var surf = level + wob;
 
-  // ── Below the waterline: deep ocean glow that brightens with depth ──────────
   var bri = 0.0;
-  var tcol = 0.0;
+  var tcol = 0.0;   // 0 -> cp1 body (blue), 1 -> cp2 crest (warm)
+
+  // ── BODY (cp1): deep-ocean glow below the waterline ─────────────────────────
+  // Uniform-ish body so total brightness tracks lit AREA (level); brightness
+  // ALSO scales with bodyBri (rise) -> strong flux correlation.
   if (ny <= surf) {
-    var depth = (surf - ny);                 // how far under the surface
-    // Mostly-uniform body glow so total brightness tracks the lit AREA (level),
-    // with a gentle depth gradient + shimmer for life.
-    var glow = 0.6 + 0.18 * clamp01(depth * 1.2);
-    glow = glow * (0.9 + 0.1 * wave(x * 0.7 + ny * 1.1 + shimmer));
+    var depth = surf - ny;
+    var glow = bodyBri * (0.78 + 0.22 * clamp01(depth * 1.3));
+    glow = glow * (0.9 + 0.1 * wave(x * 0.7 + ny * R_PHI + shimmer));
     bri = glow;
-    tcol = 0.0;                              // ocean colour (cp1) below
+    tcol = 0.0;   // body is pure cp1
   }
 
-  // ── Foam line: crisp bright band exactly at the waterline (cp2) ─────────────
-  var dband = abs(ny - surf);
-  if (dband < foamHalf) {
-    var fedge = 1.0 - dband / foamHalf;
-    fedge = pow(fedge, 2.0 + clamp01(foam) * 3.0);
-    var fcol = fedge;                        // foam pushes colour toward cp2
-    if (fedge > bri) bri = fedge;
-    if (fcol > tcol) tcol = fcol;
+  // ── CREST / FOAM (cp2): bright warm band riding the surface, spray ABOVE ─────
+  // Below the surface the crest half-band is foamHalf; ABOVE the surface it is
+  // extended by sprayUp (kick), so spray throws cp2 colour up the dark rig.
+  var dband;
+  if (ny >= surf) {
+    var halfUp = foamHalf + sprayUp;
+    dband = (ny - surf) / (halfUp + 0.0001);   // 0 at surface, 1 at top of spray
+  } else {
+    dband = (surf - ny) / (foamHalf + 0.0001); // 0 at surface, 1 at band bottom
+  }
+  if (dband < 1.0) {
+    var fedge = 1.0 - dband;
+    fedge = pow(fedge, 1.6 + clamp01(foam) * 3.0);
+    var fb = fedge * crestBri;
+    if (fb > bri) bri = fb;
+    if (fedge > tcol) tcol = fedge;   // crest pushes colour toward cp2
   }
 
   // ── Minimal time-based base so it always reads (never fully dark) ───────────
   var floorv = base * (0.5 + 0.5 * wave(ny * 0.6 + swell));
   if (floorv > bri) bri = floorv;
-
-  // ── Flood / wash: the drop washes the whole rig bright (toward foam) ────────
-  if (floodBri > 0.0) {
-    var flo = floodBri * (0.8 + 0.2 * wave(x * 0.5 + shimmer));
-    if (flo > bri) bri = flo;
-    if (floodBri > tcol) tcol = floodBri;   // wash whitens toward foam
-  }
 
   bri = clamp01(bri);
   tcol = clamp01(tcol);
@@ -171,13 +203,12 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  // Foam crisp on the W channel near the waterline / in the flood.
+  // Crisp white core on the W channel at the very crest (only the bright tip).
   var white = 0.0;
-  if (dband < foamHalf) {
-    var we = 1.0 - dband / foamHalf;
-    white = pow(we, 3.0) * 0.8;
+  if (dband < 1.0) {
+    var we = 1.0 - dband;
+    white = pow(we, 3.0) * 0.7 * crestBri;
   }
-  if (floodBri * 0.6 > white) white = floodBri * 0.6;
 
   rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(white), 0.0, 0.0);
 }

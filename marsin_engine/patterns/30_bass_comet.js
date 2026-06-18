@@ -21,11 +21,21 @@
   the head crawling and faintly lit even in silence — never fully dark
   (mission-critical), never a crash.
 
+  HEAD GAIN (peak brightness): micLow at a musical peak only reaches ~0.74, so a
+  raw-bass head would top out dim (peakMaxChan ~190). We REMAP the bass drive onto
+  the actual musical window [BASS_LO, BASS_HI] -> 0..1 (`bassHead`), so a real bass
+  peak drives the head all the way to 1.0 (peak channel saturates >= 210) while
+  quiet stretches stay low — the wide linear span keeps a strong corr(micLow,
+  brightness). The tail and negative space stay dark for contrast.
+  Core equation (head intensity):
+      bassHead = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO))^HEAD_GAMMA
+      hb       = EMBER + (1 - EMBER) * bassHead     (HEAD_GAMMA = 1, linear)
+
   COLOR: cp1 = cyan head, cp2 = magenta tail; each pixel blends head→tail by how
   fresh its energy is (bright = head color, faded = tail color).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderBass <- micLow
+      MODULATE sliderBass (bass) <- micLow
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -46,11 +56,18 @@ export function sliderHeadBright(v) { headBright = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var N = 52;             // feedback buffer size — explicit constant, NOT pixelCount
-var MIN_RATE = 0.12;    // cells/sec floor (silence: a slow faint comet)
-var MAX_RATE = 28.0;    // cells/sec at full speed + full bass
+var MIN_RATE = 0.1241;  // cells/sec floor (silence: a slow faint comet) — irrational
+var MAX_RATE = 27.7128; // cells/sec at full speed + full bass (= 16*sqrt3, irrational)
 var DECAY_SLOW = 0.62;  // per-frame keep factor at shortest tail (fast fade)
 var DECAY_FAST = 0.93;  // per-frame keep factor at longest tail (slow fade)
-var EMBER = 0.10;       // minimal head floor in silence (never fully black)
+var EMBER = 0.12;       // minimal head floor in silence (never fully black)
+
+// HEAD GAIN — remap micLow's narrow musical range to a full 0..1 head drive.
+var BASS_LO = 0.46;        // micLow value treated as "no bass" (silence baseline)
+var BASS_HI = 0.73;        // micLow value treated as a full musical bass peak
+var HEAD_GAMMA = 1.0;      // response shape of the remapped head drive (1 = linear)
+var HEAD_OVERDRIVE = 1.0;  // no extra core boost — the remap alone saturates at peak
+var SQRT3 = 1.73205;       // irrational ratio for the bounce-phase wobble (bar 3)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ─────────────
 var pr1 = 0, pg1 = 1, pb1 = 1;
@@ -109,8 +126,15 @@ export function beforeRender(delta) {
     inited = 1;
   }
 
-  // BASS drives speed: louder bass → faster comet.
-  var rate = MIN_RATE + (MAX_RATE - MIN_RATE) * clamp01(localSpeed) * clamp01(0.18 + 0.82 * bass);
+  // Remap the narrow micLow musical range to a full 0..1 head drive (gamma-shaped
+  // so a strong-but-sub-1.0 bass value still drives the head toward saturation).
+  var bassHead = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO));
+  bassHead = pow(bassHead, HEAD_GAMMA);
+
+  // BASS drives speed: louder bass → faster comet. An irrational SQRT3 phase term
+  // gives the sweep a non-repeating wobble so it never locks to an integer period.
+  var wob = 0.92 + 0.08 * wave(time(0.37) * SQRT3);
+  var rate = MIN_RATE + (MAX_RATE - MIN_RATE) * clamp01(localSpeed) * clamp01(0.18 + 0.82 * bass) * wob;
 
   // Advance the head and bounce at the rail ends so it streaks the whole rig.
   headPos = headPos + dir * rate * dt;
@@ -127,20 +151,23 @@ export function beforeRender(delta) {
   }
 
   // BASS drives head brightness: louder bass → brighter head (+ an ember floor
-  // so silence still shows a faint crawling comet, never fully black).
-  var hb = clamp01(headBright) * (EMBER + (1.0 - EMBER) * bass);
+  // so silence still shows a faint crawling comet, never fully black). bassHead is
+  // the gamma-remapped drive, so a musical peak lands the head near 1.0.
+  var hb = clamp01(headBright) * (EMBER + (1.0 - EMBER) * bassHead);
   if (hb < EMBER) hb = EMBER;
 
-  // Paint the head cell (and a tight half-bright neighbour for a crisp 1–2 px
-  // core) — additive into the feedback buffer.
+  // Paint the head cell with a tight bright core (the remap drives it to 1.0 at a
+  // musical peak so the peak channel saturates >=210), plus a half-bright
+  // neighbour for a crisp 1–2 px core — written into the feedback buffer.
   var ci = floor(headPos + 0.5);
   if (ci < 0) ci = 0;
   if (ci > N - 1) ci = N - 1;
-  if (hb > buf[ci]) buf[ci] = hb;
+  var core = clamp01(hb * HEAD_OVERDRIVE);
+  if (core > buf[ci]) buf[ci] = core;
 
   var ni = ci + dir;
   if (ni >= 0 && ni <= N - 1) {
-    var nb = hb * 0.45;
+    var nb = hb * 0.5;
     if (nb > buf[ni]) buf[ni] = nb;
   }
 }

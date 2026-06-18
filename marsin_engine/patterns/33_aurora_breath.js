@@ -4,46 +4,68 @@
   Soft vertical glowing ribbons of light drift and undulate across the rig:
   layered sines in x over time give curtains of luminance; a soft falloff
   (sliderSoft) keeps the ribbons luminous but crisp-edged. Colour blends
-  cp1<->cp2 along the ribbon/position (classic aurora: deep magenta/violet at
-  one end, green/teal at the other).
+  cp1<->cp2 ACROSS HEIGHT (real aurora gradient: green near the horizon
+  rising into magenta/violet at the crown), so the curtain spans two distinct
+  hues top-to-bottom — hueSpread is structural, not incidental.
 
-  The whole aurora BREATHES: overall brightness AND ribbon extent swell with
-  the level slider (sliderSwell), so on a bass swell the aurora blooms brighter
-  and wider. A gentle time-based base (sliderBase + a slow shimmer) keeps a calm
-  glow alive in silence — never fully black (mission-critical visibility).
+  TWO AUDIO DIMENSIONS:
+    PRIMARY  — the BREATH. A low-band level (sliderSwell <- micLow) drives both
+               overall brightness AND ribbon extent, so on a bass swell the
+               aurora blooms brighter and wider (corr ~0.9+).
+    DETAIL   — the SHIMMER. A high-band level (sliderShimmer <- micHigh) adds a
+               fast, fine, crisp sparkle riding on the crests (a different
+               spatial dimension: high-frequency detail, not bulk brightness),
+               so hats/cymbals make the curtain glitter without dominating the
+               breath. This keeps the two signals driving distinct dimensions.
+
+  A gentle time-based base (sliderBase + a slow shimmer) keeps a calm glow alive
+  in silence — never fully black (mission-critical visibility).
 
   Amalgamates:
     00_golden_hour_wash  — wave() coordinate wash + cp1<->cp2 RGB blend
     11_bioluminescence   — slow ambient swell that breathes
     15_silk_prism_ribbons— layered ribbon sines drifting through the rig
+    13_sparkle           — crisp deterministic high-band glint detail
+
+  Core equation (per pixel, incommensurate ribbon frequencies):
+    curtain = 0.72*wave(nx*rib*SQRT2 - drift + ny*0.22)
+            + 0.28*wave(nx*rib*PHI*0.5 + drift*0.6 - ny*0.35 + undulate)
+    lum     = curtain^(5 - soft*3.7);  bri = shaped(lum,extent)*gain + shimmerGlint
+    hue t   = 0.12 + 0.76*ny + small drift  (green ny=0 -> violet ny=1)
+  with SQRT2=1.41421, PHI=1.61803, golden-angle GA=2.39996 (radians) for the
+  shimmer hash — irrational, non-integer periods, never repeats.
 
   CONTROLS (UI order = declaration order)
     - localSpeed : drift/undulation rate (0 = nearly frozen).
-    - swell      : level -> brightness + ribbon extent (the breath). Modulatable.
+    - swell      : low level -> brightness + ribbon extent (the breath). Modulatable.
+    - shimmer    : high level -> fine crisp sparkle on the crests. Modulatable.
     - ribbons    : ribbon count / density across x.
     - soft       : edge softness (low = crisp curtains, high = wide soft glow).
     - base       : calm time-based floor so silence still reads.
-    - colorPalette1/2 : cp1 (deep magenta/violet) <-> cp2 (green/teal), blended
-                        along the ribbon/position.
+    - colorPalette1/2 : cp1 (green, horizon) <-> cp2 (magenta/violet, crown),
+                        blended across height.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderSwell (swell) <- micLow
+      MODULATE sliderSwell   (swell)   <- micLow
+      MODULATE sliderShimmer (shimmer) <- micHigh
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // drift / undulation rate
-export var swell = 0.0;        // level -> brightness + extent (the breath)
+export var swell = 0.0;        // LOW level -> brightness + extent (the breath)
+export var shimmer = 0.0;      // HIGH level -> fine crisp sparkle (detail)
 export var ribbons = 0.45;     // ribbon count / density
 export var soft = 0.5;         // edge softness (0 = crisp, 1 = wide soft glow)
 export var base = 0.18;        // calm time-based floor (silence still reads)
 
-export var cp1H = 0.85, cp1S = 1.0, cp1V = 1.0; // deep magenta / violet
-export var cp2H = 0.40, cp2S = 1.0, cp2V = 1.0; // green / teal
+export var cp1H = 0.34, cp1S = 1.0, cp1V = 1.0; // green (horizon, low ny)
+export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // magenta / violet (crown, high ny)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderSwell(v) { swell = v; }
+export function sliderSwell(v) { swell = v; }       // micLow maps here (PRIMARY)
+export function sliderShimmer(v) { shimmer = v; }   // micHigh maps here (DETAIL)
 export function sliderRibbons(v) { ribbons = v; }
 export function sliderSoft(v) { soft = v; }
 export function sliderBase(v) { base = v; }
@@ -51,6 +73,9 @@ export function sliderBase(v) { base = v; }
 // ── Tunables ────────────────────────────────────────────────────────────────
 var MIN_RIBBONS = 1.5;   // ribbon count at sliderRibbons = 0
 var MAX_RIBBONS = 7.0;   // ribbon count at sliderRibbons = 1
+var SQRT2 = 1.41421;     // incommensurate ribbon frequency A
+var PHI   = 1.61803;     // incommensurate ribbon frequency B (golden ratio)
+var GA    = 2.39996;     // golden angle (radians) — shimmer hash, never repeats
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -93,10 +118,13 @@ function clamp01(v) {
 // ── Persistent / per-frame state ──────────────────────────────────────────────
 var drift = 0.0;       // primary ribbon drift phase, 0..1
 var undulate = 0.0;    // slow secondary undulation phase, 0..1
-var shimmer = 0.0;     // very slow base-shimmer phase, 0..1
+var shimT = 0.0;       // fast shimmer churn phase (re-rolls the sparkle field)
+var slowShim = 0.0;    // very slow base-shimmer phase, 0..1
 var ribCount = 3.0;    // resolved ribbon count this frame
 var extent = 0.4;      // resolved breath extent this frame (0..~1)
 var floorV = 0.18;     // resolved calm floor this frame
+var shimGain = 0.0;    // resolved shimmer (high-band) gain this frame
+var shimThresh = 1.0;  // resolved sparkle threshold this frame (high -> lower)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -111,7 +139,9 @@ export function beforeRender(delta) {
 
   drift    = drift    + dt * 0.060 * localMult; drift    = drift    - floor(drift);
   undulate = undulate + dt * 0.023 * localMult; undulate = undulate - floor(undulate);
-  shimmer  = shimmer  + dt * 0.011 * localMult; shimmer  = shimmer  - floor(shimmer);
+  slowShim = slowShim + dt * 0.011 * localMult; slowShim = slowShim - floor(slowShim);
+  // Shimmer churn runs fast so the high-band glints twinkle crisply.
+  shimT    = shimT    + dt * 0.900 * localMult; shimT    = shimT    - floor(shimT);
 
   ribCount = MIN_RIBBONS + ribbons * (MAX_RIBBONS - MIN_RIBBONS);
 
@@ -119,9 +149,13 @@ export function beforeRender(delta) {
   // constant keeps the curtains visible at zero swell.
   extent = 0.30 + swell * 0.70;
 
+  // High-band detail dimension: more highs => brighter, denser crisp sparkle.
+  shimGain   = shimmer * 0.85;
+  shimThresh = 0.94 - shimmer * 0.50;
+
   // Calm base floor — gentle, breathes a touch with the slow shimmer so even
   // in silence the rig is alive (never fully black).
-  floorV = base * (0.55 + 0.45 * wave(shimmer));
+  floorV = base * (0.55 + 0.45 * wave(slowShim));
 }
 
 export function render3D(index, x, y, z) {
@@ -130,9 +164,11 @@ export function render3D(index, x, y, z) {
   var ny = clamp01(y);
 
   // Layered sines in x give the curtain structure; the y term makes ribbons
-  // undulate so they read as flowing sheets rather than static bars.
-  var ribbon = wave(nx * ribCount - drift + ny * 0.22);
-  var weave  = wave(nx * ribCount * 0.5 + drift * 0.6 - ny * 0.35 + undulate);
+  // undulate so they read as flowing sheets rather than static bars. The two
+  // ribbon frequencies are incommensurate (SQRT2 vs PHI) so the curtain never
+  // exactly repeats.
+  var ribbon = wave(nx * ribCount * SQRT2 - drift + ny * 0.22);
+  var weave  = wave(nx * ribCount * PHI * 0.5 + drift * 0.6 - ny * 0.35 + undulate);
   var curtain = ribbon * 0.72 + weave * 0.28;
 
   // Soft falloff: low `soft` => sharp luminous cores; high `soft` => wide glow.
@@ -146,18 +182,41 @@ export function render3D(index, x, y, z) {
   var shaped = (lum - thresh) / (1.0 - thresh + 0.0001);
   shaped = clamp01(shaped);
 
-  // Brightness: shaped curtains gained by the breath, over the calm floor.
-  var gain = 0.45 + swell * 0.55;     // breath also lifts overall brightness
+  // Brightness: shaped curtains gained hard by the breath, over the calm floor.
+  // Gain pushes the musical peak past 200 on the dominant channel.
+  var gain = 0.85 + swell * 0.75;     // breath also lifts overall brightness
   var bri = shaped * gain;
+
+  // ── High-band SHIMMER (a SECOND dimension: fine crisp detail) ──────────────
+  // Deterministic per-pixel sparkle that rides ONLY on the lit crests, churned
+  // fast by shimT and seeded by the golden angle so it never tiles. It adds
+  // glitter on top of the breath without inflating the bulk brightness floor.
+  var glint = 0.0;
+  if (shaped > 0.04 && shimGain > 0.0) {
+    var seed = index * 12.9898 + floor(shimT * 240.0) * GA + z * 7.31;
+    var spk = sin(seed) * sin(seed * 1.7 + 1.3) * sin(seed * 3.3 + 2.1);
+    spk = spk * spk; spk = spk * spk;     // sharpen -> crisp glints
+    if (spk > shimThresh) {
+      var amt = (spk - shimThresh) / (1.0 - shimThresh + 0.0001);
+      glint = clamp01(amt) * (0.45 + 0.85 * shimGain) * (0.4 + 0.6 * shaped);
+    }
+  }
+  bri = bri + glint;
+
   if (bri < floorV) bri = floorV;     // calm time-based base so it always reads
   bri = clamp01(bri);
 
-  // Colour blends cp1<->cp2 along the ribbon position + a slow undulation so the
-  // curtain shifts through the aurora palette as it flows.
-  var tcol = clamp01(0.5 + 0.5 * wave(nx * 0.6 + ny * 0.25 + undulate * 0.5 - 0.25));
+  // Colour spans cp1<->cp2 ACROSS HEIGHT: green near the horizon (ny=0) rising
+  // into magenta/violet at the crown (ny=1), with a small drifting wobble so the
+  // gradient breathes. This makes the two distinct hues structural (hueSpread).
+  var tcol = clamp01(0.12 + 0.76 * ny + 0.10 * wave(nx * 0.6 + undulate * 0.5 - 0.25));
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  rgb(clamp01(r), clamp01(g), clamp01(b));
+  // Crisp white lift on the W channel for the sparkle only — keeps glints punchy
+  // and helps the musical peak read past 200 without washing the colour.
+  var ww = glint * 0.85;
+
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(ww), 0.0, 0.0);
 }

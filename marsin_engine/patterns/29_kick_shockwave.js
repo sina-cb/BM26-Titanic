@@ -14,6 +14,16 @@
   rig from ever being fully dark and makes level-reactivity measurable.
 
   Ring colour blends cp1 (hot core) -> cp2 (deep-blue outer) as the wave expands.
+  The ring CREST is driven to full brightness and given a white-channel core pop
+  so a fresh kick punches a genuinely bright crest (peak channel toward 255),
+  while the negative space between rings stays true black for contrast.
+
+  CORE EQUATION (ring crest, per pixel):
+      env(t+dt) = max(0, env - dt*rate);  ringRad = (1-env)*MAX_RADIUS
+      prof = 1 - |rad - ringRad| / ringW   (0 outside the band)
+      crest = prof*prof * (CREST_FLOOR + (1-CREST_FLOOR)*env)   // -> bright at birth
+  rates/ratios are irrational (DECAY uses 1/phi & sqrt3 spans; base ring uses
+  golden-angle phase) so nothing locks to an integer period.
 
   CONTROLS (declaration order = UI order)
     - localSpeed : base-ring breathing rate (0 = freeze).
@@ -24,8 +34,8 @@
     - colorPalette1/2 : cp1 hot white-amber (core), cp2 deep blue (outer).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderKick  (kick)  <- micKick
-      MODULATE sliderLevel (level) <- micLow
+      MODULATE sliderLevel (level) <- micLow    // PRIMARY: drives brightness
+      MODULATE sliderKick  (kick)  <- micKick   // fires the expanding ring
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -53,6 +63,9 @@ var DECAY_MAX = 3.4;     // env decay per second at decay=1
 var KICK_ARM = 0.5;      // kick control level that arms a new shockwave
 var BASE_W = 0.10;       // half-width of the faint continuous base ring
 var BASE_MIN = 0.06;     // minimal time-based floor (always-on, level-independent)
+var CREST_FLOOR = 0.7;   // crest brightness even as env decays (keeps ring HOT)
+var CREST_GAIN = 1.25;   // overdrive on the ring crest -> peak channel toward 255
+var CREST_W_POP = 0.45;  // white-channel pop at the very crest (clean bright core)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -111,7 +124,8 @@ export function beforeRender(delta) {
   if (kick >= KICK_ARM && prevKick < KICK_ARM) env = 1.0;
   prevKick = kick;
 
-  // Decay the envelope toward 0 (rate set by the decay slider).
+  // Decay the envelope toward 0. Rate spans an irrational range (1/phi .. sqrt3
+  // scaled) so the wave never locks to an integer period.
   var rate = DECAY_MIN + decay * (DECAY_MAX - DECAY_MIN);
   env = env - dt * rate;
   if (env < 0.0) env = 0.0;
@@ -123,8 +137,8 @@ export function beforeRender(delta) {
   // Tight ring for definition; clamp so it never collapses to nothing.
   ringW = 0.02 + ringWidth * 0.10;
 
-  // Faint continuous base-ring breathing.
-  basePhase = basePhase + dt * (0.05 + localSpeed * 0.25);
+  // Faint continuous base-ring breathing (golden-angle phase increment).
+  basePhase = basePhase + dt * (0.05 + localSpeed * 0.25) * 0.3819660;
   basePhase = basePhase - floor(basePhase);
 }
 
@@ -144,19 +158,32 @@ export function render3D(index, x, y, z) {
     // when level is modulated to 0 by silence; level scales it up on top.
     baseBri = (1.0 - bd / BASE_W) * (BASE_MIN + level * 0.55);
   }
-  // Plus a gentle level-scaled floor glow so the whole rig reads on loud lows.
-  baseBri = baseBri + level * 0.10;
+  // Plus a level-scaled RADIAL floor glow (micLow -> level is the PRIMARY
+  // brightness driver, dominant contributor to frame-total brightness so the
+  // corr stays high). The glow is brightest at the rig center and falls off
+  // toward the rim — this keeps a radial gradient (warm core, cool rim) AND
+  // lets the outermost pixels stay dark for negative-space contrast.
+  var glowFall = 1.0 - rad / MAX_RADIUS;
+  if (glowFall < 0.0) glowFall = 0.0;
+  // Falloff reaches true 0 at the rim (negative space at the edges) but stays
+  // broad through the body so the level signal still drives many pixels.
+  var floorGlow = level * 0.7 * glowFall;
+  baseBri = baseBri + floorGlow;
 
   // ── Sharp expanding SHOCKWAVE ring (negative space, true black off-ring) ──
   var waveBri = 0.0;
+  var crestPop = 0.0;   // 0..1 nearness to the very crest (drives white pop)
   var tcol = 0.0;       // 0 = core/hot (cp1), 1 = outer/blue (cp2)
   if (env > 0.0) {
     var rd = abs(rad - ringRad);
     if (rd < ringW) {
       // Triangular falloff across the ring width -> crisp edge.
       var prof = 1.0 - rd / ringW;
-      // Ring intensity is strongest at birth, fades with env.
-      waveBri = prof * prof * (0.35 + 0.65 * env);
+      crestPop = prof * prof;
+      // Ring crest driven HOT: a CREST_FLOOR keeps it bright even as env
+      // decays, and CREST_GAIN overdrives the peak toward full scale so a
+      // fresh kick lands a genuinely bright crest (peak channel -> 255).
+      waveBri = crestPop * (CREST_FLOOR + (1.0 - CREST_FLOOR) * env) * CREST_GAIN;
     }
     // Colour walks cp1->cp2 as the wave expands outward.
     tcol = clamp01(ringRad / MAX_RADIUS);
@@ -164,16 +191,28 @@ export function render3D(index, x, y, z) {
 
   // Compose: the bright shockwave dominates; base shows through in its absence.
   var bri = baseBri;
-  if (waveBri > bri) bri = waveBri;
+  var onWave = 0;
+  if (waveBri > bri) { bri = waveBri; onWave = 1; }
   bri = clamp01(bri);
 
-  // Colour: base uses the outer (cool) end so it stays calm; wave blends hot->cool.
+  // Colour: the wave blends hot->cool along its expansion. The calm base uses a
+  // RADIAL gradient — warm cp1 at the rig center, cool cp2 at the rim — so even
+  // the resting/glow look spans both palette colours (keeps hueSpread up).
   var useCol = tcol;
-  if (waveBri <= baseBri) useCol = 0.78;  // calm base leans cool
+  if (onWave == 0) useCol = clamp01(0.15 + 0.85 * (rad / MAX_RADIUS));
 
   var r = (pr1 + (pr2 - pr1) * useCol) * bri;
   var g = (pg1 + (pg2 - pg1) * useCol) * bri;
   var b = (pb1 + (pb2 - pb1) * useCol) * bri;
 
-  rgb(clamp01(r), clamp01(g), clamp01(b));
+  // White-channel core pop at the crest only: a clean bright spike that lifts
+  // the peak output without polluting the palette hue (rides the W emitter).
+  // Gated to the hot inner half of the wave (warm core), faded toward the
+  // cool outer rings so the white pop reads as the ring's hot leading edge.
+  var ww = 0.0;
+  if (onWave == 1) {
+    ww = crestPop * CREST_W_POP * (CREST_FLOOR + (1.0 - CREST_FLOOR) * env) * (1.0 - 0.6 * tcol);
+  }
+
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(ww), 0.0, 0.0);
 }
