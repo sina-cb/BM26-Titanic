@@ -61,7 +61,7 @@ export async function createWasmRuntime(pixelCount) {
   const coordBufSize  = pixelCount * 3 * 4;  // 3 floats per pixel
   const outBufSize    = pixelCount * 3;       // 3 bytes per pixel (RGB)
   const outBuf6chSize = pixelCount * 6;       // 6 bytes per pixel (RGBWAU)
-  const metaBufSize   = pixelCount * 4 * 4;   // 4 ints per pixel
+  const metaBufSize   = pixelCount * 6 * 4;   // 6 ints per pixel (ABI: ctrl,sec,fix,view,fixtureTypeId,localIndex)
 
   const coordPtr  = Module._malloc(coordBufSize);
   const outPtr    = Module._malloc(outBufSize);
@@ -129,7 +129,7 @@ export async function createWasmRuntime(pixelCount) {
 
   /**
    * Set per-pixel metadata for v2 model rendering.
-   * @param {Array<{controllerId?: number, sectionId?: number, fixtureId?: number, viewMask?: number}>} metaArray
+   * @param {Array<{controllerId?: number, sectionId?: number, fixtureId?: number, viewMask?: number, fixtureTypeId?: number, pixelLocalIndex?: number}>} metaArray
    */
   function setPixelMeta(metaArray) {
     if (!metaArray) {
@@ -141,13 +141,18 @@ export async function createWasmRuntime(pixelCount) {
       metaPtr = Module._malloc(metaBufSize);
     }
 
-    const metaView = new Int32Array(Module.HEAP32.buffer, metaPtr, pixelCount * 4);
+    // Stride is 6 int32/pixel (ABI: [ctrl, sec, fix, view, fixtureTypeId,
+    // localIndex]) — see views_rehaul_abi_contract §2. Must match the WASM's
+    // 6-int stride; metaBufSize above is sized for 6.
+    const metaView = new Int32Array(Module.HEAP32.buffer, metaPtr, pixelCount * 6);
     for (let i = 0; i < pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      metaView[i * 4]     = m.controllerId || 0;
-      metaView[i * 4 + 1] = m.sectionId || 0;
-      metaView[i * 4 + 2] = m.fixtureId || 0;
-      metaView[i * 4 + 3] = m.viewMask || 0;
+      metaView[i * 6]     = m.controllerId || 0;
+      metaView[i * 6 + 1] = m.sectionId || 0;
+      metaView[i * 6 + 2] = m.fixtureId || 0;
+      metaView[i * 6 + 3] = m.viewMask || 0;
+      metaView[i * 6 + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
+      metaView[i * 6 + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
     }
   }
 

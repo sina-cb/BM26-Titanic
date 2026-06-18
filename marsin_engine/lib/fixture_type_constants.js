@@ -114,6 +114,31 @@ export function presentTypeIds(pixels) {
   return present;
 }
 
+/**
+ * Tier-B fixture-type constant table: maps each PRESENT fixture role to its
+ * canonical fixtureTypeId (NOT a viewMask bit). Post-Tier-B the host fills a
+ * real per-pixel `fixtureType` builtin from this same id table, so a pattern
+ * writes `fixtureType == FIX_PAR` as an integer equality against the builtin.
+ *
+ * Unlike the Tier-A bit allocator this never runs out of budget (ids are
+ * dense small integers, not bits), so it works on every model including
+ * titanic. Only PRESENT types are emitted, so a FIX_* reference to a type the
+ * model does not carry still fails loudly at compile (codex P0) rather than
+ * silently matching nothing.
+ *
+ * @param {Array} pixels model pixels
+ * @returns {Object<string, number>} { FIX_PAR: 2, FIX_VINTAGE_6: 3, ... }
+ */
+export function buildFixtureTypeIds(pixels) {
+  const present = [...presentTypeIds(pixels)].sort((a, b) => a - b);
+  const entries = present.map((id) => ({
+    name: roleForId(id).slice(FIX_PREFIX.length + 1),
+    value: id,
+    origin: 'fixtureType',
+  }));
+  return buildConstantTable(FIX_PREFIX, entries);
+}
+
 const MAX_VIEW_BIT = 0x40000000; // bit 30 — highest safe signed-Int32 bit
 
 /**

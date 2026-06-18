@@ -46,8 +46,8 @@ import { DerivedSignals } from './audio/signals/derived_signals.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
-import { buildFixtureTypeBits, fixtureTypeId, roleForId } from './lib/fixture_type_constants.js';
-import { pixelsUsedMask } from './lib/model_loader.js';
+import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
+import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
@@ -435,43 +435,22 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
-  // ── Tier-A fixture-type targeting (no WASM rebuild) ───────────────
-  // Encode each PRESENT fixture type as a fixed reserved viewMask bit
-  // placed ABOVE every bit the model already uses, so a pattern can say
-  // `(viewMask & FIX_PAR) != 0` model-independently on the CURRENT
-  // vendored WASM (report 20260618_1 §2.5). buildFixtureTypeBits returns
-  // null when the present types don't fit the free bit budget — titanic
-  // burns bits 0..25, so it MAY not fit; in that case fixture-typing
-  // there is delivered by Tier B (the real `fixtureType` builtin) at
-  // integration, with the SAME FIX_* authoring surface. The FIX_*
-  // constant TABLE is what patterns compile against; it is empty when
-  // Tier A doesn't fit, so a FIX_* reference fails loudly on that model
-  // (codex P0) rather than silently matching nothing.
-  const usedMask = pixelsUsedMask(mod.pixels);
-  const fixtureBits = buildFixtureTypeBits(mod.pixels, usedMask);
-  let fixtureConstants = {};
-  if (fixtureBits) {
-    for (const px of mod.pixels) {
-      if (!px) continue;
-      const bit = fixtureBits.bitOf(px.fixtureType);
-      if (bit) {
-        px.vMask = (px.vMask ?? 0) | bit;
-        px.viewMask = px.vMask;
-      }
-    }
-    fixtureConstants = fixtureBits.table;
-    console.log(`[Model] Tier-A fixture-type bits (viewMask):`);
-    for (const [id, bit] of fixtureBits.idToBit) {
-      console.log(`[Model]   0x${bit.toString(16).padStart(8, '0')}  ${roleForId(id)}`);
-    }
-  } else {
-    const presentRoles = [...new Set(mod.pixels
-      .map(px => px && roleForId(fixtureTypeId(px.fixtureType)))
-      .filter(Boolean))];
-    if (presentRoles.length > 0) {
-      console.log(`[Model] Tier-A fixture-type bits DO NOT FIT this model's viewMask budget ` +
-        `(${presentRoles.join(', ')}) — FIX_* targeting here is delivered by Tier B at integration.`);
-    }
+  // ── Tier-B fixture-type targeting (real `fixtureType` builtin) ────
+  // The rebuilt WASM exposes a per-pixel `fixtureType` integer builtin,
+  // fed from the canonical fixtureTypeId lane the host packs into the
+  // 6-int meta stride. So FIX_* constants are injected as the canonical
+  // IDS (FIX_PAR == 2, …) and a pattern targets a type with an integer
+  // equality `fixtureType == FIX_PAR` — model-independent, with no
+  // viewMask-bit pressure (the Tier-A reserved-bit merge is removed and
+  // those high bits are freed). Only PRESENT types are emitted, so a
+  // FIX_* reference to a type a model does not carry still fails loudly
+  // at compile (codex P0) rather than silently matching nothing. Works
+  // on every model including titanic (ids never exhaust a bit budget).
+  const fixtureConstants = buildFixtureTypeIds(mod.pixels);
+  const fixtureRoles = Object.keys(fixtureConstants);
+  if (fixtureRoles.length > 0) {
+    console.log(`[Model] Tier-B fixture-type ids: ` +
+      fixtureRoles.map(name => `${name}=${fixtureConstants[name]}`).join(', '));
   }
 
   // {MASK_NAME: bit} table WasmHost injects into pattern source at
@@ -1015,12 +994,18 @@ async function main() {
   // Set pixel coordinates for batch rendering
   wasmHost.setCoords(model.pixels);
 
-  // Set V2 metadata for batch rendering, mapping abbreviation keys
-  const metaArray = model.pixels.map(px => ({
+  // Set V2 metadata for batch rendering, mapping abbreviation keys.
+  // Tier-B adds two lanes: fixtureTypeId (canonical FIX_* id from the
+  // string fixtureType) and pixelLocalIndex (0-based per-fixture ordinal,
+  // derived here because the sim exporter does not emit it).
+  const bootLocalIndices = derivePixelLocalIndices(model.pixels);
+  const metaArray = model.pixels.map((px, i) => ({
     controllerId: px.cId || 0,
     sectionId: px.sId || 0,
     fixtureId: px.fId || 0,
-    viewMask: px.vMask || 0
+    viewMask: px.vMask || 0,
+    fixtureTypeId: fixtureTypeId(px.fixtureType),
+    pixelLocalIndex: bootLocalIndices[i]
   }));
   wasmHost.setPixelMeta(metaArray);
 
@@ -1239,11 +1224,14 @@ async function main() {
           wasmHost.setFixtureConstants(model.fixtureConstants);
 
           wasmHost.setCoords(model.pixels);
-          wasmHost.setPixelMeta(model.pixels.map(px => ({
+          const reloadLocalIndices = derivePixelLocalIndices(model.pixels);
+          wasmHost.setPixelMeta(model.pixels.map((px, i) => ({
             controllerId: px.cId || 0,
             sectionId: px.sId || 0,
             fixtureId: px.fId || 0,
-            viewMask: px.vMask || 0
+            viewMask: px.vMask || 0,
+            fixtureTypeId: fixtureTypeId(px.fixtureType),
+            pixelLocalIndex: reloadLocalIndices[i]
           })));
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);

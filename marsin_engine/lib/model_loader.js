@@ -19,7 +19,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
 
-import { buildFixtureTypeBits } from './fixture_type_constants.js';
+import { buildFixtureTypeIds, fixtureTypeId } from './fixture_type_constants.js';
+import { derivePixelLocalIndices } from './pixel_local_index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,31 +191,25 @@ export async function loadModelForGauge(modelName, transform = null) {
   mergeGroupBits(mod, groupBits);
   const viewMasks = resolvePresets(mod, declaredViewMasks, groupBits);
 
-  // Tier-A fixture-type bits merged into vMask, mirroring engine.js
-  // loadModel so the gauge/tests see the same viewMask the runtime
-  // produces. Null (titanic) → no merge; FIX_* there is Tier B.
-  const fixtureBits = buildFixtureTypeBits(mod.pixels, pixelsUsedMask(mod.pixels));
-  if (fixtureBits) {
-    for (const px of mod.pixels) {
-      if (!px) continue;
-      const bit = fixtureBits.bitOf(px.fixtureType);
-      if (bit) {
-        px.vMask = (px.vMask ?? 0) | bit;
-        px.viewMask = px.vMask;
-      }
-    }
-  }
-  const fixtureConstants = fixtureBits ? fixtureBits.table : {};
+  // Tier-B fixture-type ids, mirroring engine.js loadModel: the canonical
+  // FIX_* id table is injected as integers (no viewMask-bit merge), and
+  // the per-pixel fixtureTypeId + pixelLocalIndex lanes are packed into
+  // the meta stride for the real `fixtureType` builtin. So the gauge/tests
+  // see exactly the vMask + meta the live runtime produces.
+  const fixtureConstants = buildFixtureTypeIds(mod.pixels);
 
   if (typeof transform === 'function') {
     transform({ mod, groupBits, viewMasks, fixtureConstants });
   }
 
-  const metaArray = mod.pixels.map((px) => ({
+  const localIndices = derivePixelLocalIndices(mod.pixels);
+  const metaArray = mod.pixels.map((px, i) => ({
     controllerId: px.cId || 0,
     sectionId: px.sId || 0,
     fixtureId: px.fId || 0,
     viewMask: px.vMask || 0,
+    fixtureTypeId: fixtureTypeId(px.fixtureType),
+    pixelLocalIndex: localIndices[i],
   }));
 
   return {
