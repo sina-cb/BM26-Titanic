@@ -32,6 +32,15 @@ import {
   isPinnedEntry,
   entryFixtureName,
   computeProjection,
+  CONTROLLER_TYPE_DMX,
+  CONTROLLER_TYPE_LED,
+  isLedController,
+  setControllerType,
+  normalizeLedConfig,
+  LED_CHANNEL_ORDERS,
+  LED_WHITE_MODES,
+  ledStrideForOrder,
+  computeLedProjection,
 } from '../dmx/controller_registry.js';
 import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
@@ -66,6 +75,20 @@ function pins() {
 /** Selection indexing basis — same rule as the Views panel. */
 function fixtureList() {
   return (params.dmxFixtures && params.dmxFixtures.length > 0) ? params.dmxFixtures : params.parLights;
+}
+
+/** LED strands (the tray source for LED-type controllers). */
+function strandList() {
+  return Array.isArray(params.ledStrands) ? params.ledStrands : [];
+}
+
+/** Map<strandName, ledCount> for the LED projection (addresses preview). */
+function strandLedCounts() {
+  const m = new Map();
+  for (const s of strandList()) {
+    if (s && typeof s.name === 'string' && s.name.length > 0) m.set(s.name, s.ledCount || 10);
+  }
+  return m;
 }
 
 function allConfigs() {
@@ -269,6 +292,14 @@ function unmappedNames() {
   return allConfigs().map(c => c.name).filter(name => !mapped.has(name));
 }
 
+/** Unmapped LED-strand names (the tray source when picking onto LED). */
+function unmappedStrandNames() {
+  const mapped = mappedFixtures(registry());
+  return strandList()
+    .map(s => s && s.name)
+    .filter(name => typeof name === 'string' && name.length > 0 && !mapped.has(name));
+}
+
 function violationsFor(violations, controller, port) {
   return violations.filter(v =>
     v.controllerId === controller.id && (port === null ? v.port === 0 : v.port === port.port));
@@ -417,6 +448,27 @@ function renderController(controller, proj) {
     mutate(null, () => { controller.ip = ipInp.value.trim(); });
   };
 
+  // ── DMX / LED type toggle ──────────────────────────────────────────
+  // ONE controller menu, two types (operator requirement; report
+  // 20260618_6 §D.1). A DMX controller patches DMX fixtures; an LED
+  // controller patches LED strands (sequential pixel addressing, RGBW
+  // stride, native white). Toggling installs/drops the LED config and
+  // re-renders the tray. Chain entries are kept (the projection flags any
+  // that no longer resolve to the new tray) — never silently discarded.
+  const typeBtn = document.createElement('button');
+  const isLed = isLedController(controller);
+  typeBtn.className = 'cm-btn cm-type-toggle' + (isLed ? ' cm-type-led' : ' cm-type-dmx');
+  typeBtn.textContent = isLed ? 'LED' : 'DMX';
+  typeBtn.title = isLed
+    ? 'LED controller (patches LED strands). Click to switch to DMX.'
+    : 'DMX controller (patches DMX fixtures). Click to switch to LED.';
+  typeBtn.onclick = () => {
+    const next = isLed ? CONTROLLER_TYPE_DMX : CONTROLLER_TYPE_LED;
+    mutate(`Set '${controller.name}' to ${next}`, () => {
+      setControllerType(controller, next);
+    });
+  };
+
   const addPortBtn = document.createElement('button');
   addPortBtn.className = 'cm-btn';
   addPortBtn.textContent = '+port';
@@ -454,6 +506,7 @@ function renderController(controller, proj) {
 
   head.appendChild(nameInp);
   head.appendChild(ipInp);
+  head.appendChild(typeBtn);
   head.appendChild(addPortBtn);
   head.appendChild(delBtn);
   card.appendChild(head);
@@ -463,6 +516,84 @@ function renderController(controller, proj) {
     chip.className = 'cm-error-chip';
     chip.textContent = v.message;
     card.appendChild(chip);
+  }
+
+  // ── LED config sub-panel (LED controllers only) ────────────────────
+  // Channel order (→ stride), start universe/address, and white mode.
+  // These feed computeLedProjection at export so every bound strand gets
+  // its sequential per-pixel patch.
+  if (isLed) {
+    const led = controller.led || normalizeLedConfig(null, controller.name);
+    controller.led = led;
+    const cfg = document.createElement('div');
+    cfg.className = 'cm-led-config';
+
+    const orderSel = document.createElement('select');
+    orderSel.className = 'cm-input cm-led-order';
+    orderSel.title = 'LED channel order (sets stride: 3 for RGB-class, 4 for RGBW-class)';
+    for (const name of Object.keys(LED_CHANNEL_ORDERS)) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      if (name === led.order) opt.selected = true;
+      orderSel.appendChild(opt);
+    }
+    orderSel.onchange = () => {
+      mutate(null, () => {
+        led.order = orderSel.value;
+        led.stride = ledStrideForOrder(led.order);
+      });
+    };
+
+    const uniInp = document.createElement('input');
+    uniInp.className = 'cm-input cm-num';
+    uniInp.type = 'number'; uniInp.min = '0';
+    uniInp.value = led.baseUniverse || 0;
+    uniInp.title = 'Base universe (0 = auto-allocate from the port universe)';
+    uniInp.onchange = () => {
+      const v = parseInt(uniInp.value, 10);
+      mutate(null, () => { led.baseUniverse = Number.isInteger(v) && v >= 0 ? v : 0; });
+    };
+
+    const addrInp = document.createElement('input');
+    addrInp.className = 'cm-input cm-num';
+    addrInp.type = 'number'; addrInp.min = '1'; addrInp.max = '512';
+    addrInp.value = led.startAddr || 1;
+    addrInp.title = 'Start channel within the base universe (1–512)';
+    addrInp.onchange = () => {
+      const v = parseInt(addrInp.value, 10);
+      mutate(null, () => { led.startAddr = Number.isInteger(v) && v >= 1 && v <= 512 ? v : 1; });
+    };
+
+    const whiteSel = document.createElement('select');
+    whiteSel.className = 'cm-input cm-led-white';
+    whiteSel.title = 'White mode: native = pass the rendered W lane raw ' +
+      '(hardware derives white); synth = host-synthesize W = min(R,G,B)';
+    for (const mode of LED_WHITE_MODES) {
+      const opt = document.createElement('option');
+      opt.value = mode; opt.textContent = `W:${mode}`;
+      if (mode === led.whiteMode) opt.selected = true;
+      whiteSel.appendChild(opt);
+    }
+    whiteSel.onchange = () => {
+      mutate(null, () => { led.whiteMode = whiteSel.value; });
+    };
+
+    const lbl = (text) => {
+      const s = document.createElement('span');
+      s.className = 'cm-led-lbl';
+      s.textContent = text;
+      return s;
+    };
+    cfg.appendChild(lbl('order')); cfg.appendChild(orderSel);
+    cfg.appendChild(lbl('stride'));
+    const strideOut = document.createElement('span');
+    strideOut.className = 'cm-led-stride';
+    strideOut.textContent = String(led.stride);
+    cfg.appendChild(strideOut);
+    cfg.appendChild(lbl('U')); cfg.appendChild(uniInp);
+    cfg.appendChild(lbl('@')); cfg.appendChild(addrInp);
+    cfg.appendChild(whiteSel);
+    card.appendChild(cfg);
   }
 
   if (isCollapsed) {
@@ -477,9 +608,113 @@ function renderController(controller, proj) {
   }
 
   for (const port of controller.ports) {
-    card.appendChild(renderPort(controller, port, proj));
+    card.appendChild(isLedController(controller)
+      ? renderLedPort(controller, port, proj)
+      : renderPort(controller, port, proj));
   }
   return card;
+}
+
+// ── LED port row (strand chains, sequential pixel addressing) ───────────
+
+function renderLedPort(controller, port, proj) {
+  const row = document.createElement('div');
+  row.className = 'cm-port cm-port-led';
+  const isPicking = pickTarget &&
+    pickTarget.controllerId === controller.id && pickTarget.portNum === port.port;
+  if (isPicking) row.classList.add('cm-port-picking');
+
+  const head = document.createElement('div');
+  head.className = 'cm-port-head';
+
+  const portKey = `${controller.id}:${port.port}`;
+  const portCollapsed = collapsedPorts.has(portKey);
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'cm-toggle';
+  toggleBtn.textContent = portCollapsed ? '▸' : '▾';
+  toggleBtn.onclick = () => {
+    if (portCollapsed) collapsedPorts.delete(portKey);
+    else collapsedPorts.add(portKey);
+    renderIfOpen();
+  };
+  head.appendChild(toggleBtn);
+
+  const led = controller.led || normalizeLedConfig(null, controller.name);
+  const baseU = (led.baseUniverse && led.baseUniverse > 0) ? led.baseUniverse : port.universe;
+  const strandCount = port.chain.filter(e => entryFixtureName(e) !== null).length;
+  const label = document.createElement('span');
+  label.className = 'cm-port-label';
+  label.textContent = `P${port.port} · U${baseU} · ${strandCount} strand(s)`;
+  head.appendChild(label);
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'cm-btn cm-danger';
+  delBtn.textContent = '🗑';
+  delBtn.title = 'Delete port';
+  delBtn.onclick = () => {
+    const doDelete = () => mutate(`Deleted ${controller.name} · Port ${port.port}`, () => {
+      removePort(registry(), controller, port);
+    });
+    if (strandCount > 0) {
+      showCustomConfirm({
+        title: 'Delete Port',
+        text: `Delete ${controller.name} · Port ${port.port}? ` +
+          `${strandCount} strand(s) return to Unmapped.`,
+        onConfirm: doDelete,
+      });
+    } else {
+      doDelete();
+    }
+  };
+  head.appendChild(delBtn);
+  row.appendChild(head);
+
+  for (const v of violationsFor(proj.violations, controller, port)) {
+    const chip = document.createElement('span');
+    chip.className = 'cm-error-chip';
+    chip.textContent = v.message;
+    row.appendChild(chip);
+  }
+
+  if (!portCollapsed) {
+    // Per-strand address preview from the live LED projection.
+    const ledProj = computeLedProjection(registry(), strandLedCounts()).fields;
+    const chain = document.createElement('div');
+    chain.className = 'cm-chain';
+    for (const entry of port.chain) {
+      const name = entryFixtureName(entry);
+      if (name === null) continue;
+      const chip = document.createElement('span');
+      chip.className = 'cm-chip cm-chip-strand';
+      const p = ledProj.get(name);
+      const addr = p ? ` U${p.universe}:${p.addr} ×${p.ledCount}px ${p.order}` : ' (unresolved)';
+      chip.textContent = `💡 ${name}${addr}`;
+      const unbind = document.createElement('button');
+      unbind.className = 'cm-chip-x';
+      unbind.textContent = '×';
+      unbind.title = `Unbind '${name}'`;
+      unbind.onclick = () => mutate(null, () => { unmapFixture(registry(), name); });
+      chip.appendChild(unbind);
+      chain.appendChild(chip);
+    }
+    if (strandCount === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'cm-chain-empty';
+      empty.textContent = '(no strands)';
+      chain.appendChild(empty);
+    }
+    row.appendChild(chain);
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'cm-btn cm-add-strand';
+    addBtn.textContent = isPicking ? '✓ picking strands…' : '+ add strands';
+    addBtn.onclick = () => {
+      pickTarget = isPicking ? null : { controllerId: controller.id, portNum: port.port };
+      renderIfOpen();
+    };
+    row.appendChild(addBtn);
+  }
+  return row;
 }
 
 // ── Port row ────────────────────────────────────────────────────────────
@@ -908,6 +1143,38 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
 
 function addNamesToPort(controller, port, names) {
   const snapshot = snapshotRegistry();
+
+  // ── LED controllers: bind strands (no DMX address allocation) ───────
+  // LED strands are addressed sequentially by the LED projection at
+  // export time (computeLedProjection), so the chain only records WHICH
+  // strands hang off this port and in what order. A strand already mapped
+  // anywhere is rejected loudly, never silently moved (codex P0).
+  if (isLedController(controller)) {
+    const mappedLed = mappedFixtures(registry());
+    const addedLed = [];
+    const rejectedLed = [];
+    for (const name of names) {
+      const hit = mappedLed.get(name);
+      if (hit) {
+        rejectedLed.push({ name, where: `${hit.controller.name} · Port ${hit.port.port}` });
+        continue;
+      }
+      port.chain.push(name);
+      mappedLed.set(name, { controller, port });
+      addedLed.push(name);
+    }
+    recomputeAndMark();
+    renderIfOpen();
+    if (rejectedLed.length > 0) {
+      showToast(`Rejected (already mapped): ${rejectedLed.map(r => `${r.name} → ${r.where}`).join(', ')}`,
+        { error: true, undoSnapshot: addedLed.length > 0 ? snapshot : null });
+    } else if (addedLed.length > 0) {
+      showToast(`Bound ${addedLed.length} strand(s) to ${controller.name} · Port ${port.port}`,
+        { undoSnapshot: snapshot });
+    }
+    return;
+  }
+
   const byName = configsByName();
   const pinTable = pins();
   const mapped = mappedFixtures(registry());
@@ -979,7 +1246,12 @@ function renderTray(unmapped, proj) {
   head.className = 'cm-tray-head';
   const title = document.createElement('span');
   title.className = 'cm-tray-title';
-  if (pickPort) {
+  const pickingLed = pickController && isLedController(pickController);
+  if (pickPort && pickingLed) {
+    // LED controllers patch strands via sequential pixel addressing; the
+    // tray shows unmapped STRANDS, not DMX fixtures.
+    title.textContent = `adding strands to ${pickController.name} · Port ${pickPort.port}`;
+  } else if (pickPort) {
     // Live allocator preview: the next add lands one past the end of
     // the universe's occupancy (all ports, all controllers).
     const nextCh = (proj.universeEnds.get(pickPort.universe) || 0) + 1;
@@ -1025,7 +1297,26 @@ function renderTray(unmapped, proj) {
     chips.replaceChildren();
     const needle = trayFilter.trim().toLowerCase();
     let shown = 0;
-    for (const name of unmappedNames()) {
+
+    // When picking onto an LED controller the tray lists STRANDS; the
+    // default (and DMX picking) lists fixtures. The chain-entry namespace
+    // is shared, so a strand and fixture can each be mapped at most once.
+    const ledTray = pickPort && pickingLed;
+    const names = ledTray ? unmappedStrandNames() : unmappedNames();
+
+    for (const name of names) {
+      if (ledTray) {
+        if (needle && !name.toLowerCase().includes(needle)) continue;
+        const chip = document.createElement('span');
+        chip.className = 'cm-tray-chip cm-tray-strand';
+        chip.textContent = '💡 ' + name;
+        chip.title = `Click to bind strand '${name}' to ${pickController.name} · Port ${pickPort.port}`;
+        chip.onclick = () => addNamesToPort(pickController, pickPort, [name]);
+        chips.appendChild(chip);
+        shown++;
+        continue;
+      }
+
       const config = byName.get(name);
       const isEffect = isGlobalEffect((config && (config.fixtureType || config.type)) || '');
       // Effects are assignable to ANY port (they record the physical
@@ -1061,9 +1352,9 @@ function renderTray(unmapped, proj) {
     if (shown === 0) {
       const done = document.createElement('div');
       done.className = 'cm-fully-patched';
-      done.textContent = unmapped.length === 0
-        ? '✓ every fixture is mapped'
-        : '(no matches)';
+      done.textContent = (pickPort && pickingLed)
+        ? (unmappedStrandNames().length === 0 ? '✓ every strand is mapped' : '(no matches)')
+        : (unmapped.length === 0 ? '✓ every fixture is mapped' : '(no matches)');
       chips.appendChild(done);
     }
   }
@@ -1095,6 +1386,17 @@ function showAddControllerModal() {
   ipInput.placeholder = 'IP — e.g. 10.1.1.10';
   card.appendChild(ipInput);
 
+  // Controller type — same menu, two types (operator requirement). New
+  // LED controllers default their config to RGBW/native.
+  const typeSel = document.createElement('select');
+  typeSel.className = 'vm-modal-input';
+  for (const [val, lbl] of [[CONTROLLER_TYPE_DMX, 'DMX (fixtures)'], [CONTROLLER_TYPE_LED, 'LED (strands)']]) {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = lbl;
+    typeSel.appendChild(opt);
+  }
+  card.appendChild(typeSel);
+
   const actions = document.createElement('div');
   actions.className = 'vm-modal-actions';
   const cancelBtn = document.createElement('button');
@@ -1112,7 +1414,7 @@ function showAddControllerModal() {
     }
     overlay.remove();
     mutate(null, () => {
-      addController(registry(), { name, ip: ipInput.value.trim() });
+      addController(registry(), { name, ip: ipInput.value.trim(), type: typeSel.value });
     });
   };
   actions.appendChild(cancelBtn);

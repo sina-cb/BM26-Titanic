@@ -47,6 +47,7 @@ import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
+import { deriveStrandViews } from './lib/strand_views.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
@@ -433,6 +434,48 @@ async function loadModel(modelName, bustCache = false) {
       const origin = vm.groups ? `groups: ${vm.groups.join(' | ')}` : `${vm.pixelIndices.length} pixel(s)`;
       console.log(`[Model]   0x${vm.bit.toString(16).padStart(8, '0')}  ${vm.name} (${origin})`);
     }
+  }
+
+  // ── Strand views (Tier-A, ZERO bit cost) — LED parity §D.5 ──────────
+  // Auto-register one host-side mask per LED-strand `group` plus LEFT /
+  // RIGHT composites derived from the strand group-name prefixes. These
+  // ride the SAME viewMasks array the mixer's MaskRegistry consumes, but
+  // with bit:0 — pure per-pixel membership, no viewMask bit consumed, so
+  // they never pressure titanic's already-heavy 28/31 group-bit budget.
+  // Names already owned by a base group / declared preset are skipped (the
+  // base group already provides that view).
+  const existingMaskNames = new Set([
+    ...Object.keys(groupBits),
+    ...viewMasks.map(vm => vm.name),
+  ]);
+  const strandViews = deriveStrandViews(mod.pixels, existingMaskNames);
+  for (const w of strandViews.warnings) console.warn(`[Model] strand-view: ${w}`);
+  if (strandViews.entries.length > 0) {
+    for (const e of strandViews.entries) viewMasks.push(e);
+    console.log(`[Model] Strand views (Tier-A, no bit cost): ` +
+      `${strandViews.perStrand.length} per-strand` +
+      `${strandViews.left.length ? ', LEFT' : ''}${strandViews.right.length ? ', RIGHT' : ''} ` +
+      `(${strandViews.entries.map(e => e.name).join(', ')})`);
+  }
+
+  // ── Unpatched LED strands: LOUD, never silent (codex P0) ────────────
+  // A strand pixel exported without an LED-controller binding carries
+  // `unpatched:true` (patch:null). It renders in the VM but emits no sACN.
+  // Surface the count + the distinct strand groups so the operator knows
+  // exactly which strands are dark on hardware — never a silent skip.
+  const unpatchedStrandGroups = new Set();
+  let unpatchedStrandPixels = 0;
+  for (const px of mod.pixels) {
+    if (px && px.type === 'led' && (px.unpatched || !px.patch)) {
+      unpatchedStrandPixels++;
+      if (typeof px.group === 'string' && px.group.length > 0) unpatchedStrandGroups.add(px.group);
+    }
+  }
+  if (unpatchedStrandPixels > 0) {
+    console.warn(`[Model] ✋ ${unpatchedStrandPixels} LED-strand pixel(s) across ` +
+      `${unpatchedStrandGroups.size} strand(s) are UNPATCHED (no LED controller binding) — ` +
+      `they render but emit NO sACN: [${[...unpatchedStrandGroups].join(', ')}]. ` +
+      `Bind them to an LED-type controller in the sim's Controller Mapping panel and re-export.`);
   }
 
   // ── Tier-B fixture-type targeting (real `fixtureType` builtin) ────

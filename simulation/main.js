@@ -356,6 +356,16 @@ Promise.all([
   // must still get the real registry, or the Controllers panel would
   // operate on per-call throwaway objects and silently lose mutations
   // (cold review m1, 2026-06-12).
+  // Loud, one-time schema-migration log: controllers that loaded with no
+  // explicit `type` defaulted to DMX. NOT a silent runtime fallback —
+  // the next save writes `type: DMX` and this set goes empty (codex P0).
+  if (_controllerRegistry._untypedControllers &&
+      _controllerRegistry._untypedControllers.size > 0) {
+    const ids = [..._controllerRegistry._untypedControllers].join(', ');
+    console.warn(`[Controllers] ${_controllerRegistry._untypedControllers.size} controller(s) ` +
+      `had no explicit type — defaulted to DMX (schema migration, id(s): ${ids}). ` +
+      `Re-save the scene to persist 'type: DMX'.`);
+  }
   window.__controllerRegistry = _controllerRegistry;
   window.projectControllerMappings = function (configs) {
     const registry = window.__controllerRegistry;

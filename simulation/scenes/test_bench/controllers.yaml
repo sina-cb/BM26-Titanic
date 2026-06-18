@@ -4,6 +4,7 @@ controllers:
   - id: 1
     name: Test Bench 1
     ip: 10.1.1.10
+    type: DMX
     ports:
       - port: 1
         universe: 2
