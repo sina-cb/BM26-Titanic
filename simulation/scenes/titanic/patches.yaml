@@ -487,3 +487,67 @@ patches:
     sectionId: 0
     fixtureId: 0
     viewMask: 0
+  Right Back Deck Generator 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Deck Generator 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Deck Generator 3:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Back Deck Generator 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Deck Generator 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Deck Generator 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Deck Generator 3:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Back Deck Generator 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
