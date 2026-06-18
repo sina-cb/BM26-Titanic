@@ -9,7 +9,7 @@
   without hardcoding any per-model layout.
 
   Usage (run from marsin_engine/):
-    node tools/capture_vis.mjs --pattern 30_swipe --frames 48 --buffer master \
+    node tools/capture_vis.mjs --pattern 27_swipe --frames 48 --buffer master \
         --out ~/tmp/vis.json [--host 127.0.0.1:6968] [--model test_bench] \
         [--sections 1,2,3] [--set sliderBlur=0,sliderTrail=0.5] [--view deck]
 
