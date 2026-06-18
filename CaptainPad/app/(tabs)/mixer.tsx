@@ -102,7 +102,12 @@ function MixerLocalParams({ channel, onControlChange }: {
         const niceLabel = prettySliderName(exp.name);
         const hasMapping = !matched && !!mappingByTarget[exp.name];
         const live = !matched ? modulationLive[exp.name] : null;
-        const base = exp.v0 !== undefined ? exp.v0 : 0.5;
+        // When a modulation is live the engine writes the MODULATED value back
+        // into exp.v0, so the true anchor is the modulationState frame's base
+        // (operator's set value), not exp.v0 — else the live bar slides.
+        const base = (live && typeof live.base === 'number')
+          ? live.base
+          : (exp.v0 !== undefined ? exp.v0 : 0.5);
         // Engine must report BOTH a defined base AND modulated, with
         // both diverging from the operator-set base, before we paint
         // a ghost. Prevents the "green box at left:0% on silence"

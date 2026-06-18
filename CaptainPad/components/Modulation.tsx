@@ -394,7 +394,13 @@ function ModulatedSliderImpl({
   const C = usePalette();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const niceName = prettySliderName(exportItem.name);
-  const base = exportItem.v0 ?? 0.5;
+  // The ANCHOR (operator's set value). When a modulation is live the engine
+  // writes the MODULATED value back into the export every frame, so
+  // exportItem.v0 is the moving modulated value, NOT the base — using it would
+  // slide the range band + live bar around. The modulationState frame carries
+  // the engine's true base (captured from localControls, not the WASM export),
+  // so prefer it; fall back to the export value only when nothing is live.
+  const base = (live && typeof live.base === 'number') ? live.base : (exportItem.v0 ?? 0.5);
   // Ghost only when the engine ACTUALLY reports modulated ≠ base.
   // Operator report 2026-05-28: pre-fix the gate compared engine
   // `modulated` against the local UI `base`. With a silent audio
