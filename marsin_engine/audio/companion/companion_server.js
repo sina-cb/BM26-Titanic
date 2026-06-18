@@ -66,6 +66,7 @@ import {
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { emitDerivedBpm } from './bpm_emit.js';
+import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -260,6 +261,9 @@ setInterval(() => {
 
 // Tweakable test-signal source (the UI edits these in 'test' mode).
 const source = {
+  // Which test SYNTHESIZER drives the 'test' source (see audio/synth/
+  // test_synths.js). Default 'tone' is byte-identical to the legacy generator.
+  synth: 'tone',
   subLevel: 0.5, midLevel: 0.3, highLevel: 0.25,
   kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02,
 };
@@ -646,8 +650,7 @@ function feedBrowserPcm(int16) {
   browserResid = off < buf.length ? buf.slice(off) : new Int16Array(0);
 }
 
-let sampleCursor = 0, seed = 0x2f6e2b1;
-const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+let sampleCursor = 0;
 const frameBuf = new Int16Array(HOP);
 
 const SPECTRUM_BINS = 256, WAVE_POINTS = 256;
@@ -677,18 +680,10 @@ function downWave() {
 }
 
 function genFrame(buf) {
-  for (let i = 0; i < buf.length; i++) {
-    const t = (sampleCursor + i) / SR;
-    let s = Math.sin(2 * Math.PI * 55 * t) * source.subLevel
-          + Math.sin(2 * Math.PI * 1000 * t) * source.midLevel
-          + Math.sin(2 * Math.PI * 9000 * t) * source.highLevel
-          + rnd() * source.noiseLevel;
-    if (source.kickHz > 0) {
-      const period = SR / source.kickHz, phase = (sampleCursor + i) % period;
-      if (phase < period * 0.12) s += Math.sin(2 * Math.PI * 80 * t) * source.kickLevel * Math.exp(-phase / (period * 0.03));
-    }
-    buf[i] = Math.max(-1, Math.min(1, s)) * 32767;
-  }
+  // Delegate to the test-synth bank (audio/synth/test_synths.js). The 'tone'
+  // synth reproduces the legacy generator exactly, so the default test look is
+  // byte-identical; `source` carries both the synth name and its params.
+  fillFrame(buf, source.synth, sampleCursor, SR, source);
   sampleCursor += buf.length;
 }
 function pushFrame(int16) {
@@ -886,12 +881,23 @@ function catalog() {
     views: design.views,
     osc: design.osc,
     source, gains: {}, inputGain, sourceSmoothHz,
+    synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
   };
 }
 
 function handleMessage(ws, raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
-  if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
+  if (m.type === 'setSource' && m.source) {
+    const incoming = m.source;
+    // The synth selection must be a known synth name; an unknown value is
+    // ignored (no fallback churn) rather than silently switching to 'tone'.
+    if (incoming.synth !== undefined && !SYNTH_NAMES.includes(incoming.synth)) {
+      const { synth, ...rest } = incoming;   // drop the bad synth, keep param edits
+      Object.assign(source, rest);
+    } else {
+      Object.assign(source, incoming);
+    }
+  }
   else if (m.type === 'setInputGain') {
     // SHARED tuning → write through to the engine (single source of truth),
     // then apply + echo locally. The engine echo reconciles via applyEngine-
@@ -1029,6 +1035,7 @@ wss.on('connection', (ws) => {
     ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES, viewTypes: VIEW_TYPES,
     signals: design.signals, views: design.views, osc: design.osc,
+    synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
     // Engine SHARED-tuning link state so the UI can show whether gain /
