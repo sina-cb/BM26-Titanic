@@ -389,14 +389,26 @@ test('Path-traversal name is rejected', async () => {
 });
 
 // ── "Load directory" support (patterns/ sub-folders) ───────────────────
-test('GET /pattern-dirs lists the patterns/ sub-directories', async () => {
+test('GET /pattern-dirs lists default + the patterns/ sub-directories', async () => {
   const r = await api('GET', '/pattern-dirs');
   assert.equal(r.status, 200);
   assert.ok(Array.isArray(r.data));
+  // `default` (the synthetic top-level folder) leads the list.
+  assert.equal(r.data[0], 'default', `expected default first in ${JSON.stringify(r.data)}`);
   // `transitions` is a known sub-folder shipped in patterns/.
   assert.ok(r.data.includes('transitions'), `expected transitions in ${JSON.stringify(r.data)}`);
   // No top-level pattern files leak into the directory list.
   assert.ok(!r.data.includes('13_sparkle'));
+});
+
+test('GET /pattern-dirs/default lists bare top-level pattern slugs', async () => {
+  const r = await api('GET', '/pattern-dirs/default');
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data) && r.data.length > 5);
+  // Bare slugs (no dir prefix) and no test*/_ helpers.
+  assert.ok(r.data.includes('13_sparkle'), `expected 13_sparkle in ${JSON.stringify(r.data.slice(0, 5))}…`);
+  assert.ok(r.data.every(p => !p.includes('/')), 'top-level slugs must not be dir-prefixed');
+  assert.ok(r.data.every(p => !p.startsWith('test')), 'test* patterns excluded from default');
 });
 
 test('GET /pattern-dirs/:dir lists prefixed pattern slugs', async () => {

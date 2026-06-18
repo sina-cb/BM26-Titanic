@@ -162,23 +162,40 @@ function listPatterns(patternsDir) {
 // playlist VALID_PATTERN regex already accepts.
 const VALID_PATTERN_DIR = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-// Enumerate the immediate sub-directories of patternsDir. These are the
-// "load directory" targets — an operator can bulk-add every pattern in
-// one of these folders into a playlist in a single action.
+// Synthetic directory name for the top-level patterns/ folder. The "load
+// directory" picker surfaces it as `default` so an operator can pull every
+// root pattern (not just one sub-folder) into a playlist.
+const ROOT_PATTERN_DIR = 'default';
+
+// Enumerate the "load directory" targets — the synthetic `default` (the
+// top-level patterns/ folder) followed by every immediate sub-directory.
+// An operator can bulk-add a whole folder's patterns into a playlist in
+// one action.
 function listPatternDirs(patternsDir) {
-  if (!fs.existsSync(patternsDir)) return [];
-  return fs.readdirSync(patternsDir, { withFileTypes: true })
+  if (!fs.existsSync(patternsDir)) return [ROOT_PATTERN_DIR];
+  const subs = fs.readdirSync(patternsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name)
     .filter(name => VALID_PATTERN_DIR.test(name))
     .sort();
+  return [ROOT_PATTERN_DIR, ...subs];
 }
 
-// List the patterns inside one sub-directory as fully-qualified
-// `<dir>/<name>` slugs ready to drop straight into playlist entries.
-// `_`-prefixed files are internal helpers and are skipped, matching
-// PlaylistManager.generateDefault's top-level filter.
+// List the patterns inside one directory as slugs ready to drop straight
+// into playlist entries. `_`-prefixed files are internal helpers and are
+// skipped; `default` returns the top-level patterns/ folder (bare slugs,
+// filtered the same way PlaylistManager.generateDefault picks them — no
+// `test*`), while a sub-directory returns fully-qualified `<dir>/<name>`.
 function listPatternsInDir(patternsDir, dir) {
+  if (dir === ROOT_PATTERN_DIR) {
+    if (!fs.existsSync(patternsDir)) return [];
+    return fs.readdirSync(patternsDir)
+      .filter(f => f.endsWith('.js'))
+      .filter(f => !f.startsWith('test'))
+      .filter(f => !f.startsWith('_'))
+      .map(f => f.replace(/\.js$/, ''))
+      .sort();
+  }
   if (!VALID_PATTERN_DIR.test(dir)) {
     throw new Error(`Invalid pattern directory: "${dir}"`);
   }
