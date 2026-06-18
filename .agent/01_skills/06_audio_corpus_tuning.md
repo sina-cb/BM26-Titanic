@@ -17,6 +17,26 @@ pass (report `.agent/02_reports/202606/20260613_5_audio_corpus_tuning.md`).
 
 ---
 
+## Datasets we can use
+
+Two open-license datasets feed the harness (decode → virtual-mic → analyzer →
+metrics), plus a synthetic set. Full download/use/license detail lives in
+`marsin_engine/datasets/README.md`; the download commands are in §2 below.
+
+| Dataset | What it gives us | License | Best for | Caveat |
+|---|---|---|---|---|
+| **MUSDB18** (Zenodo `record/1117372`) | 150 full tracks with isolated **stems** (mixture + drums + bass + other + vocals) | CC BY-NC-SA 4.0 | the stems-fed detector path + full structural arcs | rock / pop / singer-songwriter, **not EDM** → near-constant energy, few real drops |
+| **FMA small — Electronic** (`github.com/mdeff/fma`) | ~476 CC **Electronic** tracks (30 s excerpts) | per-track CC (recorded in the corpus manifest) | real EDM spectral character for chain-feel + a few in-window drops | 30 s excerpts → a full breakdown→drop arc is often outside the window |
+| **Synthetic** (`synth_dataset.mjs`, no download) | labeled clips with **known ground truth** | n/a (generated) | rigorous drop **P/R/latency** (the real sets can't — sparse/heuristic labels) | not real audio — always cross-check feel on the real sets |
+
+**Division of use:** real datasets → false-positive robustness + chain *feel*
+on real miced audio; synthetic → rigorous drop accuracy. **Open follow-up:**
+neither real set is a human-labeled EDM drop corpus — true drop accuracy still
+needs one (see the report + the detector Notion task). Audio stays in
+`~/tmp/corpus/` (gitignored); usage is non-commercial.
+
+---
+
 ## 0. The two tuning tracks (keep them separate)
 
 | Track | What it controls | Where it lives | How to measure |
