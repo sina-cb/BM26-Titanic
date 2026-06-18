@@ -1,0 +1,20 @@
+channel:
+  id: ch_base
+  name: Base
+  pattern: 00_golden_hour_wash
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  locked: false
+  faderLocked: false
+  localControls: {}
+  playlist: null
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+transitionConfig:
+  enabled: false
+  mode: trans_crossfade
+  durationMs: 1000
+  shuffle: false
