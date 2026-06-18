@@ -183,7 +183,11 @@ export function captureDeviceString(src) {
 // map it to a well-distributed [0,1], so a dom frequency can drive a spatial
 // x/y/z in the visuals without hotspotting or jumps. (In frequency mode its
 // dry/wet `strength` blends toward 0.5 so the output stays in [0,1].)
-export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'kalman', 'normalizer', 'danceMaker', 'osc_out']);
+// NOTE: no `kalman` op exists in OP_SCHEMA — it was advertised here but always
+// 400'd on validateChain ("unknown op type"). Removed until implemented
+// (review 20260618_8 P2). The dominant-freq tracker's Kalman and the structure
+// detector's opt-in kalman drop mode are SEPARATE, real, and unaffected.
+export const FREQUENCY_OPS = Object.freeze(['lpf', 'clamp', 'slew', 'normalizer', 'danceMaker', 'osc_out']);
 
 // Ops that are FREQUENCY-ONLY — meaningful only on a Hz value and rejected on an
 // intensity signal. `danceMaker` is the dom-dance spring (a freqWindow→freqWindow

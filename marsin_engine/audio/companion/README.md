@@ -96,7 +96,7 @@ production-accurate (`../README.md`, `../detector/`).
 The op catalog (shared with the engine): `gain`, `bias`, `clamp`, `lpf`,
 `envelope`, `schmitt`, `hold`, `curve`, `slew`, `danceMaker`, `compressor`,
 `biquad`, `slope`, `normalizer`, `osc_out`. Frequency signals may use only the
-Hz-valid subset (`lpf`, `clamp`, `slew`, `kalman`, `normalizer`, `danceMaker`,
+Hz-valid subset (`lpf`, `clamp`, `slew`, `normalizer`, `danceMaker`,
 `osc_out`); `danceMaker` is frequency-only.
 
 For the full model, see `../../../docs/37_marsin_audio_framework.md` and the

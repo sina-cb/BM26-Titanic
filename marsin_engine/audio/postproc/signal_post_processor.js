@@ -62,7 +62,15 @@ import {
 // damped: k = ω², damping c = 2ω). One explicit-Euler integration step:
 //   v += (k·(target − x) − c·v)·dt ;  x += v·dt
 export const DANCE_OMEGA = 7;
+// Forward (explicit) Euler is only stable while ω is small vs the hop rate; at
+// the analyzer hop (and worse on a frame hiccup) a high ω makes the spring
+// DIVERGE to huge finite values that slip past the non-finite guard and get
+// emitted over OSC. Cap ω at 40 — both here (defence-in-depth for any caller)
+// and in the danceMaker op validator. See review 20260618_8 (P1).
+export const DANCE_OMEGA_MAX = 40;
 export function danceSpringStep(x, v, target, dt, omega = DANCE_OMEGA) {
+  if (!(omega >= 0)) omega = DANCE_OMEGA;     // NaN/negative → default
+  if (omega > DANCE_OMEGA_MAX) omega = DANCE_OMEGA_MAX;
   const k = omega * omega, c = 2 * omega;
   v += (k * (target - x) - c * v) * dt;
   x += v * dt;
@@ -246,7 +254,7 @@ const OP_SCHEMA = Object.freeze({
     // Hz GLIDES to target with no overshoot; lower omega = slower settle.
     description: 'Critically-damped spring smoother (the "dance"). Glides the input toward its target with no overshoot. Frequency-domain.',
     params: {
-      omega: { type: 'number', min: 0.1, max: 100, default: DANCE_OMEGA },
+      omega: { type: 'number', min: 0.1, max: DANCE_OMEGA_MAX, default: DANCE_OMEGA },
     },
   },
   compressor: {
