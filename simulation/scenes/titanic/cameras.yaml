@@ -49,3 +49,23 @@ presets:
       x: -1.748
       'y': 2.414
       z: 1.38
+  - name: Top Right Half
+    key: topright
+    position:
+      x: 22
+      'y': 55
+      z: -8
+    target:
+      x: 22
+      'y': 6
+      z: -8
+  - name: Top Left Half
+    key: topleft
+    position:
+      x: -22
+      'y': 55
+      z: 8
+    target:
+      x: -22
+      'y': 6
+      z: 8

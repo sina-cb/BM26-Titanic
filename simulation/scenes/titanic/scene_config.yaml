@@ -934,6 +934,118 @@ parLights:
       rotY: -90.08364538458109
       rotZ: 0
       traceGenerated: true
+    - group: Right Back Deck Generator
+      name: Right Back Deck Generator 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 15.723522095343714
+      'y': 12.149306170345238
+      z: -9.284367840727036
+      rotX: -49.94238763153934
+      rotY: 81.48994966745651
+      rotZ: 38.579871141962016
+      traceGenerated: true
+    - group: Right Back Deck Generator
+      name: Right Back Deck Generator 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 19.02969990914644
+      'y': 9.717683080018599
+      z: -11.837308991874096
+      rotX: -49.94238763153934
+      rotY: 81.48994966745651
+      rotZ: 38.579871141962016
+      traceGenerated: true
+    - group: Right Back Deck Generator
+      name: Right Back Deck Generator 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 22.33587772294917
+      'y': 7.28605998969196
+      z: -14.390250143021156
+      rotX: -49.94238763153934
+      rotY: 81.48994966745651
+      rotZ: 38.579871141962016
+      traceGenerated: true
+    - group: Right Back Deck Generator
+      name: Right Back Deck Generator 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 25.642055536751897
+      'y': 4.8544368993653215
+      z: -16.943191294168216
+      rotX: -49.94238763153934
+      rotY: 81.48994966745651
+      rotZ: 38.579871141962016
+      traceGenerated: true
+    - group: Left Back Deck Generator
+      name: Left Back Deck Generator 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -15.65834717824749
+      'y': 12.477105077650945
+      z: 4.388860013179478
+      rotX: -48.47448718400937
+      rotY: -47.54871150859013
+      rotZ: -51.74416400261495
+      traceGenerated: true
+    - group: Left Back Deck Generator
+      name: Left Back Deck Generator 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -20.10970988391469
+      'y': 9.92143255387776
+      z: 3.798646104269796
+      rotX: -48.47448718400937
+      rotY: -47.54871150859013
+      rotZ: -51.74416400261495
+      traceGenerated: true
+    - group: Left Back Deck Generator
+      name: Left Back Deck Generator 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -24.56107258958189
+      'y': 7.365760030104578
+      z: 3.208432195360114
+      rotX: -48.47448718400937
+      rotY: -47.54871150859013
+      rotZ: -51.74416400261495
+      traceGenerated: true
+    - group: Left Back Deck Generator
+      name: Left Back Deck Generator 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -29.012435295249094
+      'y': 4.810087506331395
+      z: 2.618218286450432
+      rotX: -48.47448718400937
+      rotY: -47.54871150859013
+      rotZ: -51.74416400261495
+      traceGenerated: true
   traces: &ref_0
     - name: Right Front Wall Generator
       shape: line
@@ -1172,6 +1284,54 @@ parLights:
       lightIntensity: 22
       lightAngle: 50
       groupName: Left Front Deck Generator
+      generated: true
+      fixtureType: VintageLed
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 80
+      locked: false
+      controllerIp: ''
+    - name: Right Back Deck Generator
+      shape: line
+      startX: 15.723522095343714
+      startY: 12.149306170345238
+      startZ: -9.284367840727036
+      endX: 25.642055536751897
+      endY: 4.8544368993653215
+      endZ: -16.943191294168216
+      spacing: 4
+      aimMode: direction
+      aimX: 14.00846704944471
+      aimY: 9.86575345633895
+      aimZ: -9.64615088776654
+      lightColor: '#f07100'
+      lightIntensity: 22
+      lightAngle: 50
+      groupName: Right Back Deck Generator
+      generated: true
+      fixtureType: VintageLed
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 90
+      locked: false
+      controllerIp: ''
+    - name: Left Back Deck Generator
+      shape: line
+      startX: -15.65834717824749
+      startY: 12.477105077650945
+      startZ: 4.388860013179478
+      endX: -29.012435295249094
+      endY: 4.810087506331395
+      endZ: 2.618218286450432
+      spacing: 4
+      aimMode: direction
+      aimX: -13.42325054074848
+      aimY: 11.235863669880043
+      aimZ: 3.428917916915566
+      lightColor: '#f07100'
+      lightIntensity: 22
+      lightAngle: 50
+      groupName: Left Back Deck Generator
       generated: true
       fixtureType: VintageLed
       fixtureRotOffX: 0
