@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "written": "2026-06-18T09:33:28.444Z",
+  "node": "v22.22.2",
+  "config": {
+    "FIXED_DT": 0.025,
+    "WARMUP_FRAMES": 100,
+    "TIMED_FRAMES": 2000,
+    "GOLDEN_FRAMES": 200,
+    "COMPILE_SAMPLES": 7,
+    "BEST_OF": 5
+  },
+  "pairs": {
+    "test_bench/27_swipe": {
+      "pixelCount": 52,
+      "compileMs": 0.4539300000001276,
+      "bytecodeProxy": 9375,
+      "timing": {
+        "mean": 0.15191384149999954,
+        "p50": 0.14969699999983277,
+        "p95": 0.17621199999985038,
+        "p99": 0.20216000000004897,
+        "max": 0.6608539999999721
+      },
+      "golden": "8d6292647eaf4b672b47b5f05e11bb465fb2874ef72d0cfce260135fd4325f2f"
+    },
+    "test_bench/26_dom_dancers_chevron": {
+      "pixelCount": 52,
+      "compileMs": 0.8293679999997039,
+      "bytecodeProxy": 17697,
+      "timing": {
+        "mean": 0.4530069364999963,
+        "p50": 0.448896999999306,
+        "p95": 0.48740899999938847,
+        "p99": 0.5545389999997496,
+        "max": 1.9621329999999944
+      },
+      "golden": "e11d9a4b0e061332cac464598de5363655642adc9edd3a9308b621de1ec52597"
+    },
+    "test_bench/11_bioluminescence": {
+      "pixelCount": 52,
+      "compileMs": 0.22244900000077905,
+      "bytecodeProxy": 4489,
+      "timing": {
+        "mean": 0.019191660500004672,
+        "p50": 0.018245999999635387,
+        "p95": 0.022002999999131134,
+        "p99": 0.03583600000001752,
+        "max": 0.522740999999769
+      },
+      "golden": "c7ced579f58b557e750339f03931ac799ffca273dc985d2ab6de3b2aa5407673"
+    },
+    "test_bench/01_cylon_sweep": {
+      "pixelCount": 52,
+      "compileMs": 0.22348000000056345,
+      "bytecodeProxy": 5563,
+      "timing": {
+        "mean": 0.014761511000016526,
+        "p50": 0.01383200000054785,
+        "p95": 0.017738000000463217,
+        "p99": 0.02899000000070373,
+        "max": 0.5302520000004733
+      },
+      "golden": "0507dd2cea4ff2ec87675bd3514d75a03cce4400878a087a0b9c391e4eac2c7a"
+    },
+    "titanic/27_swipe": {
+      "pixelCount": 972,
+      "compileMs": 0.39434500000061234,
+      "bytecodeProxy": 9375,
+      "timing": {
+        "mean": 0.08725124999999843,
+        "p50": 0.08184299999993527,
+        "p95": 0.11057999999866297,
+        "p99": 0.12365199999840115,
+        "max": 0.5721340000000055
+      },
+      "golden": "a7c0d2966553344a88cd00b271ab8b21d8d248fe94c097c0bae3a515600ba8cb"
+    },
+    "titanic/01_cylon_sweep": {
+      "pixelCount": 972,
+      "compileMs": 0.22803000000021711,
+      "bytecodeProxy": 5563,
+      "timing": {
+        "mean": 0.25332178549997936,
+        "p50": 0.24949500000002445,
+        "p95": 0.2837889999991603,
+        "p99": 0.32414500000049884,
+        "max": 0.7663039999988541
+      },
+      "golden": "c079515aad49bb66f7390d7bc15cf78c2824f496269310975558c2210a212a04"
+    }
+  }
+}
