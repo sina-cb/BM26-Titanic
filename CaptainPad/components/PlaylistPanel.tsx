@@ -117,6 +117,15 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
+// Display name for an entry's pattern: strip the directory prefix so a
+// folder-loaded pattern reads as "trans_crossfade", not
+// "transitions/trans_crossfade". The stored `pattern` keeps the full
+// `<dir>/<name>` slug — the engine needs it to locate the .js file.
+function patternDisplayName(pattern: string): string {
+  const i = pattern.lastIndexOf('/');
+  return i >= 0 ? pattern.slice(i + 1) : pattern;
+}
+
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
   const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
@@ -1240,7 +1249,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       }}
                       numberOfLines={1}
                     >
-                      {e.label || e.pattern}
+                      {e.label || patternDisplayName(e.pattern)}
                       {missing ? '  ⚠' : ''}
                     </Text>
                     {(e.label || paramCount > 0) && (
@@ -1252,7 +1261,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         }}
                         numberOfLines={1}
                       >
-                        {e.label ? e.pattern : ''}
+                        {e.label ? patternDisplayName(e.pattern) : ''}
                         {e.label && paramCount > 0 ? '  · ' : ''}
                         {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
                       </Text>
