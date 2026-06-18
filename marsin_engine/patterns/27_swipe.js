@@ -1,18 +1,27 @@
 /*
-  27_swipe.js — ONE unified swipe for the whole rig.
+  27_swipe.js — ONE unified swipe for the whole rig (Tier-B, model-independent).
 
-  A single sharp, high-contrast pixel sweeps every fixture group along the axis
-  that fits it, all driven by one position. Per pixel we pick the fixture's own
-  PHYSICAL-ordinal lane:
-    - Pars   (fId 1..4) : X axis, ordinal 0..3   (ord = 4 - fId; fId4 left … fId1 right)
-    - Vintage(fId 5..6) : Y axis, ordinal 0..5   (ord = (fId5?9:15) - index; bottom→top, strips mirror)
-    - Bars   (fId 7..8) : X axis, ordinal 0..35  (ord = (fId7?33:69) - index; both bars, left→right)
-  Any other fixtureId renders black (P0 self-filter).
+  A single sharp, high-contrast band sweeps every fixture along the axis that
+  fits its type, all driven by one position. Per pixel:
+    - TYPE is selected by the Tier-B `fixtureType` builtin (canonical FIX_* id),
+      so `fixtureType == FIX_PAR` replaces the old test_bench-only
+      `fixtureId 1..4` AND the Tier-A `(viewMask & FIX_PAR)` bit form.
+    - The swipe ORDINAL comes from the pixel's PHYSICAL position along its lane
+      axis (the normalized x/y/z coord render3D already receives), quantized to
+      a 0..31 integer lane:
+        - Pars    (FIX_PAR)       : X axis (left→right)
+        - Vintage (FIX_VINTAGE_6) : Y axis (bottom→top)
+        - Bars    (FIX_BAR_18)    : X axis (left→right)
+  Any other fixtureType renders black (P0 self-filter).
 
-  Ordinals are the PHYSICAL rank (sorted by nx for X, ny for Y — verified
-  monotonic against the model), NOT the LED wiring index. `swipePos` 0..1 maps
-  onto each group's own 0..(n-1) range so the swipe stays coherent across the
-  rig (left pars + left bar LEDs + bottom vintage heads all light at pos 0).
+  Why position-from-coordinate, not fId/index or pixelLocalIndex: par fixtures
+  are single-pixel on test_bench (4 separate fixtures) yet packed into multi-
+  pixel generator strands on titanic, so neither `fixtureId` (0 on titanic) nor
+  the per-fixture `pixelLocalIndex` (always 0 for a single-pixel par) can sweep
+  ACROSS the pars. The normalized coordinate is present on every pixel of every
+  model and gives a true, model-independent left→right / bottom→top rank, so the
+  swipe renders correctly on BOTH models. `swipePos` 0..1 maps onto the 0..31
+  lane; the integer ordinal keeps the discrete-lane trail/blur intact.
 
   CONTRAST: BASE_FLOOR = 0 — un-swept LEDs are TRUE BLACK. Only the swept core
   (+ optional blur / trail) lights, so the rig is high-contrast / high-def. The
@@ -157,29 +166,33 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // ── Pick this fixture's physical-ordinal lane (axis + length) ───────────
-  // TYPE selection is now model-independent via the Tier-A FIX_* bits in
-  // viewMask (engine merges a fixed reserved bit per fixture type), so
-  // `(viewMask & FIX_PAR) != 0` replaces the old test_bench-only
-  // `fixtureId >= 1 && fixtureId <= 4`. The per-type ORDINAL GEOMETRY
-  // (lane length + ord-from-fixtureId/index) is still test_bench-specific
-  // numerology — fixture type alone does not carry per-type pixel order
-  // (report 20260618_1 Q3); a model-independent geometry source is a
-  // separate follow-up. On test_bench the same fId/index the geometry
-  // needs is present, so the swipe renders identically; on a model
-  // without that geometry the type targeting is correct but the lane
-  // layout would need its own descriptor.
+  // ── Pick this fixture's lane (type via builtin) + axis (geometry) ───────
+  // TYPE selection is the Tier-B `fixtureType` builtin (canonical FIX_* id),
+  // proven model-independent. The swipe ordinal is the pixel's physical
+  // position along the lane axis — see the header for why coordinate, not
+  // fId/index/pixelLocalIndex, is the only thing that sweeps par fixtures on
+  // BOTH the test_bench (single-pixel pars) and titanic (par strands).
   var nPix = 0;
-  var ord = 0;
-  if ((viewMask & FIX_PAR) != 0) {
-    nPix = 4;  ord = 4 - fixtureId;                       // pars — X
-  } else if ((viewMask & FIX_VINTAGE_6) != 0) {
-    nPix = 6;  ord = (fixtureId == 5 ? 9 : 15) - index;   // vintage — Y
-  } else if ((viewMask & FIX_BAR_18) != 0) {
-    nPix = 36; ord = (fixtureId == 7 ? 33 : 69) - index;  // bars — X
+  var axisFrac = 0.0;
+  if (fixtureType == FIX_PAR) {
+    nPix = 32; axisFrac = x;                              // pars — X (left→right)
+  } else if (fixtureType == FIX_VINTAGE_6) {
+    nPix = 32; axisFrac = y;                              // vintage — Y (bottom→top)
+  } else if (fixtureType == FIX_BAR_18) {
+    nPix = 32; axisFrac = x;                              // bars — X (left→right)
   } else {
     rgb(0, 0, 0); return;                                 // P0 self-filter
   }
+
+  // Quantize the pixel's PHYSICAL position along its lane axis into an
+  // integer ordinal. Position-from-geometry (not fId/index) is what makes
+  // the swipe model-independent: the normalized coordinate x/y/z is present
+  // on every pixel of every model, so single-pixel par fixtures (test_bench)
+  // and long generator strands (titanic) both sweep correctly. The integer
+  // ordinal keeps the discrete-lane trail/blur machinery below intact.
+  if (axisFrac < 0.0) axisFrac = 0.0;
+  if (axisFrac > 1.0) axisFrac = 1.0;
+  var ord = floor(axisFrac * (nPix - 1.0) + 0.5);
 
   var centerOrd = shifted(swipeBase) * (nPix - 1.0);
   var coreOrd = floor(centerOrd + 0.5);

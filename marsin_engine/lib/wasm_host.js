@@ -247,17 +247,21 @@ export class WasmHost {
     }
 
     if (!this.metaPtr) {
-      const metaBufSize = this.pixelCount * 4 * 4;
+      // Stride is 6 int32/pixel (ABI: [ctrl, sec, fix, view, fixtureTypeId,
+      // localIndex]) — see views_rehaul_abi_contract §2.
+      const metaBufSize = this.pixelCount * 6 * 4;
       this.metaPtr = this.Module._malloc(metaBufSize);
-      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * 4);
+      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * 6);
     }
 
     for (let i = 0; i < this.pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      this.metaView[i * 4] = m.controllerId || 0;
-      this.metaView[i * 4 + 1] = m.sectionId || 0;
-      this.metaView[i * 4 + 2] = m.fixtureId || 0;
-      this.metaView[i * 4 + 3] = m.viewMask || 0;
+      this.metaView[i * 6] = m.controllerId || 0;
+      this.metaView[i * 6 + 1] = m.sectionId || 0;
+      this.metaView[i * 6 + 2] = m.fixtureId || 0;
+      this.metaView[i * 6 + 3] = m.viewMask || 0;
+      this.metaView[i * 6 + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
+      this.metaView[i * 6 + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
     }
   }
 
