@@ -61,6 +61,21 @@ if (!r.ok) { console.log('COMPILE_FAIL: ' + r.error); process.exit(2); }
 console.log('COMPILE_OK');
 const exps = rt.getExports();
 const idOf = name => { const e = exps.find(e => e.name === name); return e ? e.id : null; };
+
+// Apply the pattern's DECLARED export-var defaults (the standalone VM inits all
+// control slots to 0 — the engine applies these on load, so we must too or the
+// palette reads black/red and sliders sit at 0). Parse `export var X = NUM`,
+// then: hsvPicker (colorPalette1/2) gets cp{1,2}{H,S,V}; each sliderFoo gets the
+// default of its `foo` var (identity-slider convention). --set and --mod override.
+const src = fs.readFileSync(patternPath, 'utf8');
+const defs = {}; const re = /export\s+var\s+([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?)/g; let mm;
+while ((mm = re.exec(src))) defs[mm[1]] = parseFloat(mm[2]);
+function applyPalette(fn, h, s, v) { const id = idOf(fn); if (id == null) return; rt.setControl(id, h, s, v); }
+if (idOf('colorPalette1') != null) applyPalette('colorPalette1', defs.cp1H ?? 0, defs.cp1S ?? 1, defs.cp1V ?? 1);
+if (idOf('colorPalette2') != null) applyPalette('colorPalette2', defs.cp2H ?? 0, defs.cp2S ?? 1, defs.cp2V ?? 1);
+for (const e of exps) { if (e.name.startsWith('slider')) { const varName = e.name.slice(6, 7).toLowerCase() + e.name.slice(7);
+  if (defs[varName] != null) rt.setControl(e.id, defs[varName]); } }
+
 for (const m of mods) if (idOf(m.target) == null) console.log('WARN: --mod target export not found: ' + m.target);
 if (A.set) for (const kv of A.set.split(',')) { const [k, v] = kv.split('='); const id = idOf(k);
   if (id == null) { console.log('WARN: no export ' + k); continue; } rt.setControl(id, parseFloat(v)); }
@@ -108,6 +123,17 @@ const bySec = {}; px.forEach((p, i) => { if (everLit[i]) bySec[p.sId] = (bySec[p
 console.log(`SYNTH=${synth} FRAMES=${frames} PIX=${N} LIT=${litCount}/${N} maxChan=${maxChan}`);
 console.log(`TOTAL_BRI min/avg/max=${Math.round(minT)}/${Math.round(avgT)}/${Math.round(maxT)} (${maxT - minT > avgT * 0.15 ? 'ANIMATING' : 'LOW-VARIATION'})`);
 console.log(`LIT_BY_SECTION pars=${bySec[1] || 0} vintage=${bySec[2] || 0} bars=${bySec[3] || 0}`);
+// ── QUALITY: two-color use (hue spread), contrast (dark/bright split), peak ────
+function rgb2hue(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (d < 1) return -1; let h; if (mx === r) h = ((g - b) / d) % 6; else if (mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+  h /= 6; if (h < 0) h += 1; return h; }
+let sumS = 0, sumC = 0, hueCnt = 0, darkPF = 0, brightPF = 0, totPF = 0;
+for (const fr of frameData) for (const c of fr) { totPF++; const sum = c[0] + c[1] + c[2];
+  if (sum < 24) darkPF++; if (Math.max(c[0], c[1], c[2]) > 128) brightPF++;
+  const h = rgb2hue(c[0], c[1], c[2]); if (h >= 0 && sum > 24) { sumS += Math.sin(h * 2 * Math.PI); sumC += Math.cos(h * 2 * Math.PI); hueCnt++; } }
+const Rlen = hueCnt ? Math.hypot(sumS, sumC) / hueCnt : 1; const hueSpread = 1 - Rlen;
+const meanHue = hueCnt ? ((Math.atan2(sumS, sumC) / (2 * Math.PI)) + 1) % 1 : -1;
+console.log(`QUALITY hueSpread=${hueSpread.toFixed(2)} (2-color if >0.06) meanHue=${meanHue.toFixed(2)} darkFrac=${(darkPF / totPF).toFixed(2)} brightFrac=${(brightPF / totPF).toFixed(2)} peakMaxChan=${maxChan} ${maxChan >= 200 ? '' : '(DIM: lift peak toward 255)'}`);
 // correlation of each modulated signal with total brightness
 function corr(xs, ys) { const mx = xs.reduce((a, b) => a + b, 0) / xs.length, my = ys.reduce((a, b) => a + b, 0) / ys.length;
   let nu = 0, dx = 0, dy = 0; for (let i = 0; i < xs.length; i++) { nu += (xs[i] - mx) * (ys[i] - my); dx += (xs[i] - mx) ** 2; dy += (ys[i] - my) ** 2; }
