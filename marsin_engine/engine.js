@@ -990,6 +990,9 @@ async function main() {
     // bitmask-by-name lookups just won't resolve and the picker UI
     // hides the section. See loadModel() above.
     viewMasks: model.viewMasks || [],
+    // Group → bit table so the mixer can build its Tier-A MaskRegistry
+    // (per-pixel members for unbounded host-side named-mask selection).
+    groupBits: model.groupBits || {},
   });
   mixer.patternsDir = path.join(__dirname, 'patterns');
   mixer.onChannelRemoved = (channelId) => paramCenter.unregisterChannel(channelId);
@@ -1251,7 +1254,7 @@ async function main() {
           // in the sim after engine start can never be selected.
           // (mixer.pixels === model.pixels — updated in place above —
           // so the recompile sees the fresh vMask values.)
-          mixer.setModelViewMasks(model.viewMasks);
+          mixer.setModelViewMasks(model.viewMasks, model.groupBits);
 
           const registerUniverse = (patch) => {
             if (patch && patch.universe) {
