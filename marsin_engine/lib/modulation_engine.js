@@ -3,7 +3,10 @@
 // Pure-math + schema-validation surface for the Dynamic Audio Parameter
 // Mapping feature (docs/26_[todo]_audio_params_playlist.md).
 //
-// This module intentionally has ZERO engine dependencies. It exports:
+// This module has ZERO engine RUNTIME dependencies (no param_center, wasm, or
+// I/O). Its ONE import is the STATIC audio descriptor registry — used purely to
+// read a builtin source key's curated range so resolveModulationSources can
+// normalize a wide-range Hz/bpm source into [0,1]. It still exports:
 //
 //   - applyCurve / applyContinuousModulation : per-mapping math (§4.3)
 //   - resolveModulationSources               : snapshot → source values
@@ -20,6 +23,8 @@
 // 15–30 Hz fanout; control must stay UI-priority. Slot 0 (render loop)
 // owns the broadcast call site; do not re-route without re-freezing
 // the contract.
+
+import { descriptorByKey } from '../audio/postproc/audio_signals.js';
 
 /**
  * @typedef {('cpc')} ModulationSourceScope
@@ -183,13 +188,29 @@ export function applyContinuousModulation({
 export function resolveModulationSources({ paramCenterSnapshot }) {
   const sources = {};
   if (!paramCenterSnapshot) return sources;
-  // Pass through every finite numeric value the pipeline fed in — no
+  // Every finite numeric value the pipeline fed in is a usable source — no
   // allow-list. A mapping referencing a key that isn't present this frame is
   // skipped by applyModulations (no-op), so a dark/absent source never crashes
   // a render frame and never spuriously moves the slider.
+  //
+  // NORMALIZE a BUILTIN source whose curated range is wider than [0,1] into
+  // [0,1] so it drives the modulation across its FULL range instead of pinning
+  // the target at 1.0: a Hz dom-freq ([0, 22050]), a bpm ([0, 300]), note
+  // ([0,11]), structure ([0,2]), beat-in-bar ([0,4]). A [0,1] descriptor is an
+  // identity. DYNAMIC Companion keys are NOT in the descriptor registry, so
+  // they pass through RAW — a frequency the operator wants as a source should
+  // be normalized in the Companion (the normalizer op), which is exactly why
+  // we key off the BUILTIN registry here and never double-normalize a
+  // source-normalized dynamic signal.
   for (const key of Object.keys(paramCenterSnapshot)) {
     const v = paramCenterSnapshot[key];
-    if (typeof v === 'number' && Number.isFinite(v)) sources[key] = v;
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const d = descriptorByKey(key);
+    if (d && Array.isArray(d.range) && d.range.length === 2 && d.range[1] > d.range[0]) {
+      sources[key] = clamp01((v - d.range[0]) / (d.range[1] - d.range[0]));
+    } else {
+      sources[key] = v;
+    }
   }
   return sources;
 }

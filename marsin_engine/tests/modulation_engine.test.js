@@ -181,6 +181,28 @@ test('resolveModulationSources: passes the whole snapshot through (no allow-list
   approx(out.crowd_roar_xyz, 0.4);
 });
 
+test('resolveModulationSources: normalizes builtin wide-range keys (Hz/bpm) into [0,1]', () => {
+  // A raw Hz dom-freq / a bpm would otherwise pin the modulation at 1.0. They
+  // get normalized by their curated descriptor range; [0,1] keys are identity;
+  // dynamic/unknown keys pass through raw (source-normalized in the Companion).
+  const out = resolveModulationSources({
+    paramCenterSnapshot: {
+      micDomFreq1: 11025,   // half of [0, 22050]
+      micDomFreq2: 22050,   // top of range
+      audioBpm: 150,        // half of [0, 300]
+      tempoBpm: 75,         // quarter of [0, 300]
+      micLow: 0.4,          // [0,1] -> identity
+      crowd_xyz: 0.7,       // dynamic/unknown -> raw passthrough
+    },
+  });
+  approx(out.micDomFreq1, 0.5);
+  approx(out.micDomFreq2, 1.0);
+  approx(out.audioBpm, 0.5);
+  approx(out.tempoBpm, 0.25);
+  approx(out.micLow, 0.4);
+  approx(out.crowd_xyz, 0.7);
+});
+
 test('resolveModulationSources: absent keys are simply not present (apply no-ops them)', () => {
   const out = resolveModulationSources({ paramCenterSnapshot: { micLow: 0.7 } });
   approx(out.micLow, 0.7);
