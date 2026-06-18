@@ -1,5 +1,5 @@
 /*
-  30_swipe.js — ONE unified swipe for the whole rig.
+  27_swipe.js — ONE unified swipe for the whole rig.
 
   A single sharp, high-contrast pixel sweeps every fixture group along the axis
   that fits it, all driven by one position. Per pixel we pick the fixture's own
