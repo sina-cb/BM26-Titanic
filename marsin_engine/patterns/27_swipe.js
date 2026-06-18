@@ -158,13 +158,24 @@ export function beforeRender(delta) {
 
 export function render3D(index, x, y, z) {
   // ── Pick this fixture's physical-ordinal lane (axis + length) ───────────
+  // TYPE selection is now model-independent via the Tier-A FIX_* bits in
+  // viewMask (engine merges a fixed reserved bit per fixture type), so
+  // `(viewMask & FIX_PAR) != 0` replaces the old test_bench-only
+  // `fixtureId >= 1 && fixtureId <= 4`. The per-type ORDINAL GEOMETRY
+  // (lane length + ord-from-fixtureId/index) is still test_bench-specific
+  // numerology — fixture type alone does not carry per-type pixel order
+  // (report 20260618_1 Q3); a model-independent geometry source is a
+  // separate follow-up. On test_bench the same fId/index the geometry
+  // needs is present, so the swipe renders identically; on a model
+  // without that geometry the type targeting is correct but the lane
+  // layout would need its own descriptor.
   var nPix = 0;
   var ord = 0;
-  if (fixtureId >= 1 && fixtureId <= 4) {
+  if ((viewMask & FIX_PAR) != 0) {
     nPix = 4;  ord = 4 - fixtureId;                       // pars — X
-  } else if (fixtureId >= 5 && fixtureId <= 6) {
+  } else if ((viewMask & FIX_VINTAGE_6) != 0) {
     nPix = 6;  ord = (fixtureId == 5 ? 9 : 15) - index;   // vintage — Y
-  } else if (fixtureId >= 7 && fixtureId <= 8) {
+  } else if ((viewMask & FIX_BAR_18) != 0) {
     nPix = 36; ord = (fixtureId == 7 ? 33 : 69) - index;  // bars — X
   } else {
     rgb(0, 0, 0); return;                                 // P0 self-filter

@@ -34,6 +34,7 @@ import path from 'path';
 
 import { WasmHost } from '../lib/wasm_host.js';
 import { buildMaskConstants, injectMaskConstants } from '../lib/view_mask_constants.js';
+import { injectFixtureConstants } from '../lib/fixture_type_constants.js';
 import { loadModelForGauge } from '../lib/model_loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -145,6 +146,7 @@ async function measurePair({ model, pattern }) {
   await host.init(loaded.pixelCount);
   try {
     host.setMaskConstants(maskConstants);
+    host.setFixtureConstants(loaded.fixtureConstants);
     host.setCoords(loaded.pixels);
     host.setPixelMeta(loaded.metaArray);
 
@@ -168,7 +170,8 @@ async function measurePair({ model, pattern }) {
     // injectMaskConstants only prepends referenced constants, so the
     // injected length is exactly what the C++ compiler saw — no VM
     // bytecode accessor exists today (report §3 blocker #1).
-    const injectedSource = injectMaskConstants(source, maskConstants);
+    const injectedSource = injectFixtureConstants(
+      injectMaskConstants(source, maskConstants), loaded.fixtureConstants);
     const bytecodeProxy = Buffer.byteLength(injectedSource, 'utf8') +
       Buffer.byteLength(exportsJson, 'utf8');
 
