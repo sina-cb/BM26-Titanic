@@ -17,7 +17,12 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderCount(v) { swipeLength = 0.2 + v * 1.5; }
 export function sliderBeamWidth(v) { beamWidth = 0.1 + v * 0.8; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+// Direction is a clean sign flip (split at 0.5), NOT a continuous scale:
+// reverse below 0.5, forward at/above. Using ±1 (never 0, never fractional)
+// keeps the sweep speed identical when swiping left vs right — the old
+// (v*2-1) mapping froze the swipe at the midpoint and slowed it either
+// side, which broke the visual's integrity. Matches 114_tower_ring_chase.
+export function sliderDirection(v) { globalDir = (v >= 0.5) ? 1.0 : -1.0; }
 
 var attackPos = 0.0;
 var flashIntensity = 0;

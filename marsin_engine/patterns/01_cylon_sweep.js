@@ -27,7 +27,13 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 // so the eye-width control is renamed to be its own local slider.
 export function sliderBeamWidth(v) { eyeWidth = 0.05 + v * 0.3; }
 export function sliderBackgroundGlow(v) { bgBrightness = v * 0.3; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+// Direction is a clean sign flip (split at 0.5), NOT a continuous scale:
+// reverse below 0.5, forward at/above. Using ±1 (never 0, never fractional)
+// keeps the sweep speed identical when swiping left vs right — the old
+// (v*2-1) mapping froze the scan at the midpoint and slowed it either side,
+// which broke the visual's integrity. Matches the 114_tower_ring_chase
+// convention.
+export function sliderDirection(v) { globalDir = (v >= 0.5) ? 1.0 : -1.0; }
 export function sliderAudioBrightness(v) { audioBrightness = v; }
 
 var scanT = 0.0;

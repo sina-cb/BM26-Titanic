@@ -20,7 +20,12 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 // globals; size is engine-owned and sharpness is a per-pattern tunable).
 export function sliderCount(v) { radialDensity = 2 + v * 20; }
 export function sliderSharpness(v) { sharpness = 1 + v * 9; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+// Direction is a clean sign flip (split at 0.5), NOT a continuous scale:
+// reverse below 0.5, forward at/above. Using ±1 (never 0, never fractional)
+// keeps the phase speed identical when swiping left vs right — the old
+// (v*2-1) mapping froze the motion at the midpoint and slowed it either
+// side, which broke the visual's integrity. Matches 114_tower_ring_chase.
+export function sliderDirection(v) { globalDir = (v >= 0.5) ? 1.0 : -1.0; }
 
 var beatPhase = 0.0;
 
