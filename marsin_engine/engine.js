@@ -1150,6 +1150,30 @@ async function main() {
   };
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
+  // View defaults to the composed MIXER buffer (PatternMixer constructor:
+  // viewFader = targetViewFader = 1.0, per docs/27 §2). That is correct
+  // once CaptainPad has populated the mixer overlay stack with a live
+  // (enabled, fader > 0) layer — but the `--pattern` CLI flag installs
+  // its pattern on the DECK channel only (setDeckChannel), and
+  // startApiServer restores no view state at boot. If the mixer overlay
+  // stack has no live contribution (empty, or every overlay disabled /
+  // at fader 0 — e.g. the restored test_bench state ships a single
+  // `15_silk_prism_ribbons` overlay at fader 0), the mixer-exclusive
+  // view renders an all-zero buffer. The only thing then reaching sACN
+  // is the per-fixture dimmer skeleton mapPixelsToSacn writes
+  // unconditionally, so the rig shows DARK with no error. Pin the live
+  // view to the deck so the boot `--pattern` actually renders (the
+  // documented behaviour of the flag and of the full-stack smoke skill).
+  // Once the operator adds a live overlay and selects the mixer view
+  // from CaptainPad (a `view` POST), that explicit choice takes over.
+  const hasLiveOverlay = mixer.getMixerChannels()
+    .some(c => c.enabled && c.fader > 0.001);
+  if (!hasLiveOverlay && mixer.getDeckChannel()) {
+    mixer.viewFader = 0.0;
+    mixer.targetViewFader = 0.0;
+    console.log('  ▶ No live mixer overlay at boot — live view pinned to DECK so --pattern renders.');
+  }
+
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {

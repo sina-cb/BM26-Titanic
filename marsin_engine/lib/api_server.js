@@ -1211,6 +1211,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       mixer.setMaster(mixerState.master);
     }
 
+    // If the saved deck channel failed to restore (e.g. its pattern was
+    // renamed/deleted on disk — `Failed to restore channel <x>: Pattern
+    // not found`), the boot deck we tore down above is gone and nothing
+    // replaced it. A deckless engine renders an all-zero deck buffer; in
+    // the default mixer view (and whenever the mixer overlays are dark)
+    // that means the rig goes BLACK with no error — exactly the
+    // "engine streams but sim is dark" failure. The operator gave an
+    // explicit `--pattern` on the CLI; honour it as the deck fallback so
+    // a stale/broken saved deck can never silently kill output.
+    if (!mixer.getDeckChannel() && opts.pattern) {
+      console.warn(`  ⚠️  Saved deck channel did not restore — falling back to boot pattern '${opts.pattern}' on the deck.`);
+      restoreChannel({
+        id: 'ch_base',
+        name: 'Base',
+        pattern: opts.pattern,
+        mode: 'blend_screen',
+        fader: 1.0,
+        enabled: true
+      }, 'deck');
+    }
+
     const base = mixer.getDeckChannel();
     if (base) opts.pattern = base.pattern;
   } else {
