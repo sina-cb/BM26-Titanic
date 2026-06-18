@@ -23,10 +23,13 @@ import path from 'path';
 // When viewSelection.type === 'viewMask' and target is a string, we
 // resolve the bit by name lookup. If target is a positive integer the
 // legacy bitmask path is used (also handy when no named dictionary is
-// available, e.g. in unit tests). An unresolvable name produces a
-// fully-zero mask (no pixels selected) rather than falling back to ALL
-// — masking nothing would be the silent black-out that §3.1 calls out
-// against. The API validator should have caught the name typo upstream.
+// available, e.g. in unit tests). An unresolvable name THROWS (codex P0,
+// no fallbacks — report 20260618_2 §6 Q1): the old behaviour silently
+// resolved an unknown name to bit 0, producing an all-zero mask (a
+// silent black-out) and only console.warn'ing. Callers that must keep
+// rendering through a transient name miss (the mixer's hot-reload path)
+// catch this and keep the previous compiled mask; every other path lets
+// it propagate so a typo fails loudly at config time.
 export function compileViewSelectionMask({ pixels, pixelCount, viewSelection, viewMasks = [] }) {
   if (!viewSelection || viewSelection.type === 'all') return null;
   if (!Array.isArray(pixels) || pixels.length === 0) return null;
@@ -37,9 +40,8 @@ export function compileViewSelectionMask({ pixels, pixelCount, viewSelection, vi
 
   // Resolve a viewMask string target (e.g. 'MainShow') to its bit value
   // BEFORE entering the per-pixel loop so the hot path stays integer-only.
-  // A missing name resolves to 0 — the mask will be all-zero for the
-  // selected region (or all-one inverted), which is visibly wrong and
-  // therefore catches typos at smoke-check time instead of hiding them.
+  // An unknown name / wrong-typed target THROWS — masking nothing would
+  // be a silent black-out (codex P0, no fallbacks).
   let resolvedViewMaskBit = null;
   if (viewSelection.type === 'viewMask') {
     if (typeof target === 'number' && Number.isInteger(target)) {
@@ -48,14 +50,14 @@ export function compileViewSelectionMask({ pixels, pixelCount, viewSelection, vi
       const entry = Array.isArray(viewMasks)
         ? viewMasks.find(vm => vm && vm.name === target)
         : null;
-      if (!entry) {
-        console.warn(`[PatternMixer] Unknown viewMask name '${target}' — no pixels will match. ` +
-          `Known viewMasks: [${(viewMasks || []).map(v => v && v.name).filter(Boolean).join(', ')}]`);
+      if (!entry || !Number.isInteger(entry.bit)) {
+        const known = (viewMasks || []).map(v => v && v.name).filter(Boolean).join(', ');
+        throw new Error(`Unknown viewMask name '${target}' — no such named view in this model. ` +
+          `Known viewMasks: [${known}]`);
       }
-      resolvedViewMaskBit = entry && Number.isInteger(entry.bit) ? entry.bit : 0;
+      resolvedViewMaskBit = entry.bit;
     } else {
-      console.warn(`[PatternMixer] viewMask target must be string or integer, got ${typeof target}`);
-      resolvedViewMaskBit = 0;
+      throw new Error(`viewMask target must be a string name or integer bit, got ${typeof target}`);
     }
   }
 
