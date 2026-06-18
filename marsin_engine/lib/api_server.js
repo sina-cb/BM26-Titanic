@@ -2694,7 +2694,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: v.error }));
           }
-          mixer.setChannelViewSelection(id, v.value);
+          // validateViewSelection only checks SHAPE. An unknown view-mask
+          // NAME is caught later, when the mixer compiles the mask against
+          // the model's MaskRegistry (codex P0 hard error, report
+          // 20260618_2 §6). Wrap it so the operator sees the real
+          // "Unknown viewMask name ... Known viewMasks: [...]" message
+          // instead of readBody's generic "Invalid JSON" — same reasoning
+          // as the addMixerChannel wrap above.
+          try {
+            mixer.setChannelViewSelection(id, v.value);
+          } catch (vsErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
+          }
         }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
@@ -3502,7 +3514,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: v.error }));
           }
-          mixer.setChannelViewSelection(channel.id, v.value);
+          // Unknown view-mask NAME (vs shape) hard-errors at mask compile —
+          // surface the real message rather than readBody's "Invalid JSON".
+          try {
+            mixer.setChannelViewSelection(channel.id, v.value);
+          } catch (vsErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
+          }
         }
         saveAllState();
         broadcastMixerState();

@@ -494,12 +494,36 @@ export class PatternMixer {
    * shape MUST be pre-validated by the API layer (validateViewSelection
    * in api_server.js) before reaching this method. Works for both the
    * deck channel and any mixer overlay.
+   *
+   * ATOMIC on the unknown-mask hard error (codex P0, report 20260618_2
+   * §6 Q1): the candidate selection is COMPILED FIRST, and the channel's
+   * `viewSelection` + `compiledPixelMask` are only committed once the
+   * compile succeeds. If `compileViewSelectionMask` throws (e.g. a name
+   * that isn't in this model's MaskRegistry), the channel keeps its
+   * previous selection AND its previous compiled mask — no half-applied
+   * state, no bogus selection serialized to disk — and the error
+   * propagates so the API layer can surface it to the operator. The old
+   * code assigned `channel.viewSelection` BEFORE recompiling, so a bad
+   * name left the channel storing an unresolvable selection while its
+   * compiled mask silently kept the prior value (inconsistent state that
+   * then round-trips through saveAllState).
    */
   setChannelViewSelection(channelId, viewSelection) {
     const channel = this.getChannel(channelId);
     if (!channel) return false;
-    channel.viewSelection = viewSelection || { type: 'all', target: null, invert: false };
-    this.recompileChannelMask(channel);
+    const candidate = viewSelection || { type: 'all', target: null, invert: false };
+    // Compile against the candidate WITHOUT mutating the channel first.
+    // Throws on an unknown mask name — propagates, channel untouched.
+    const compiled = compileViewSelectionMask({
+      pixels: this.pixels,
+      pixelCount: this.pixelCount,
+      viewSelection: candidate,
+      viewMasks: this.viewMasks,
+      maskRegistry: this.maskRegistry,
+    });
+    // Commit only after a clean compile.
+    channel.viewSelection = candidate;
+    channel.compiledPixelMask = compiled;
     return true;
   }
 
