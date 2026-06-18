@@ -28,6 +28,7 @@ import {
   setSectionBrightness,
   setGroupFixedColor,
   updateMixerChannel,
+  updateDeckChannel,
   dispatchGlobalEffectSlotAction,
   setGlobalEffectBlackout,
   getAutopilot,
@@ -88,6 +89,8 @@ let _snapshot: MidiEngineSnapshot = {
   patterns: [],
   globalEffects: {},
   layers: [],
+  deckLayer: null,
+  activeContext: 'deck',
   globalEffectSlots: [],
   colorPalettes: [],
 };
@@ -164,9 +167,12 @@ let _nudge: (() => void) | null = null;
 let _activeContext = 'deck';
 let _applyContext: ((name: string) => void) | null = null;
 
-/** Called by a tab on focus to switch the controller's mapping context. */
+/** Called by a tab on focus to switch the controller's mapping context. The
+ *  layout is unified; the context only decides whether the channel controls
+ *  target the deck channel (deck) or the overlay layers (mixer). */
 export function setMidiActiveContext(name: string): void {
   _activeContext = name;
+  _snapshot = { ..._snapshot, activeContext: name };
   _applyContext?.(name);
 }
 
@@ -224,25 +230,36 @@ export function useMidiControl(): MidiControlState {
   useEffect(() => {
     let cancelled = false;
     const channels = engine.mixerChannels;
+    const deck = engine.deckChannel as
+      { id?: string; fader?: number; pattern?: string; playlist?: PlaylistAssignment | null } | null;
+    // Fetch a channel's playlist entries (cached) for the pad window browser.
+    const playlistFor = async (pl?: PlaylistAssignment | null) => {
+      if (!pl?.name) return undefined;
+      const r = await fetchPlaylist(pl.name);
+      if (!r.ok || !r.data) return undefined;
+      return { entries: r.data.entries.map((e) => ({ id: e.id })), activeEntryId: pl.activeEntryId ?? null };
+    };
     void (async () => {
       const layers = await Promise.all(channels.map(async (c) => {
         const ch = c as { id: string; fader?: number; solo?: boolean; playlist?: PlaylistAssignment | null };
-        let playlist: { entries: { id: string }[]; activeEntryId: string | null } | undefined;
-        const name = ch.playlist?.name;
-        if (name) {
-          const r = await fetchPlaylist(name);
-          if (r.ok && r.data) {
-            playlist = { entries: r.data.entries.map((e) => ({ id: e.id })), activeEntryId: ch.playlist?.activeEntryId ?? null };
-          }
-        }
-        return { id: ch.id, fader: typeof ch.fader === 'number' ? ch.fader : 1, solo: ch.solo === true, playlist };
+        return {
+          id: ch.id,
+          fader: typeof ch.fader === 'number' ? ch.fader : 1,
+          solo: ch.solo === true,
+          playlist: await playlistFor(ch.playlist),
+        };
       }));
+      const deckLayer = deck?.id
+        ? { id: deck.id, fader: typeof deck.fader === 'number' ? deck.fader : 1, playlist: await playlistFor(deck.playlist) }
+        : null;
       if (cancelled) return;
       _snapshot = {
         ..._snapshot,
         blackout: engine.blackout,
-        activePattern: (engine.deckChannel?.pattern as string | undefined) ?? null,
+        activePattern: (deck?.pattern as string | undefined) ?? null,
         layers,
+        deckLayer,
+        activeContext: _activeContext,
       };
       _nudge?.();
     })();
@@ -285,6 +302,7 @@ export function useMidiControl(): MidiControlState {
         setSectionBrightness,
         setGroupFixedColor,
         updateMixerChannel,
+        updateDeckChannel,
         dispatchGlobalEffectSlotAction,
         setGlobalEffectBlackout,
         setChannelPlaylistEntry,

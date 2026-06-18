@@ -60,7 +60,7 @@ function makeApi(): MidiDispatchApi {
   return {
     updateParamCenter: vi.fn(ok), updateMixerMaster: vi.fn(ok), setActivePattern: vi.fn(ok),
     setGlobalBlackout: vi.fn(ok), setGlobalEffect: vi.fn(ok), setSectionBrightness: vi.fn(ok),
-    setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok),
+    setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
   };
@@ -80,7 +80,7 @@ function setup(snapshot: MidiEngineSnapshot, endpoints = fullEndpoints) {
 
 const baseSnap: MidiEngineSnapshot = {
   blackout: false, activePattern: null, patterns: ['p0', 'p1', 'p2'], globalEffects: {},
-  layers: [], globalEffectSlots: [], colorPalettes: [],
+  layers: [], deckLayer: null, activeContext: 'mixer', globalEffectSlots: [], colorPalettes: [],
 };
 
 describe('MidiManager (integration, fake transport)', () => {
