@@ -66,7 +66,10 @@ if (pattern) {
   if (sets.length) {
     const id = await ids();
     for (const [name, val] of sets) {
-      if (id[name] === undefined) { console.warn('  (no control', name + ')'); continue; }
+      if (id[name] === undefined) {
+        console.error('❌ unknown control in --set: ' + name + ' (not in /exports)');
+        process.exit(1);
+      }
       await post('/control', { id: id[name], v0: +val });
     }
   }
@@ -86,6 +89,16 @@ const frameData = await new Promise(res => {
   });
   setTimeout(() => { try { ws.close(); } catch {} res(acc); }, frames * 250 + 4000);
 });
+
+// Fail loudly (codex P0: no silent fallback) — if we captured nothing, the
+// engine is down / not broadcasting; don't write an empty JSON and exit 0.
+if (frameData.length === 0) {
+  console.error('❌ captured 0 frames from ws://' + host + '/ws/viz — is the engine running and broadcasting vis?');
+  process.exit(1);
+}
+if (frameData.length < frames) {
+  console.warn('⚠️  captured only ' + frameData.length + '/' + frames + ' frames before timeout.');
+}
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, JSON.stringify({ pattern, buffer, model: modelName, meta, frames: frameData }));
