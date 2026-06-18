@@ -12,6 +12,7 @@ function makeApi(): MidiDispatchApi {
     setSectionBrightness: vi.fn(ok),
     setGroupFixedColor: vi.fn(ok),
     updateMixerChannel: vi.fn(ok),
+    updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok),
     setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
@@ -22,8 +23,7 @@ const baseCtx: MidiDispatchContext = {
   getBlackout: () => false,
   getGlobalEffectState: () => false,
   resolvePatternForBank: () => null,
-  getLayerChannelId: () => null,
-  getLayerSolo: () => false,
+  getLayer: () => null,
   getColorPalette: () => null,
 };
 
@@ -49,20 +49,32 @@ describe('createDispatcher', () => {
     expect(api2.setGlobalEffectBlackout).toHaveBeenCalledWith(false);
   });
 
-  it('mixerLayerFader writes the Nth channel fader (inert if absent)', async () => {
+  it('mixerLayerFader writes the Nth mixer channel fader (inert if absent)', async () => {
     const api = makeApi();
-    const ctx = { ...baseCtx, getLayerChannelId: (l: number) => (l === 0 ? 'ch_a' : null) };
+    const ctx = { ...baseCtx, getLayer: (l: number) => (l === 0 ? { id: 'ch_a', role: 'mixer' as const, solo: false } : null) };
     await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 0, value: 0.5 });
     expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { fader: 0.5 });
     await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 2, value: 0.9 });
     expect(api.updateMixerChannel).toHaveBeenCalledTimes(1); // layer 2 absent → no-op
   });
 
-  it('mixerLayerSolo flips solo on the Nth channel', async () => {
+  it('mixerLayerFader on the deck channel uses the deck API', async () => {
     const api = makeApi();
-    const ctx = { ...baseCtx, getLayerChannelId: () => 'ch_a', getLayerSolo: () => false };
+    const ctx = { ...baseCtx, getLayer: () => ({ id: 'deck', role: 'deck' as const, solo: false }) };
+    await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 0, value: 0.4 });
+    expect(api.updateDeckChannel).toHaveBeenCalledWith({ fader: 0.4 });
+    expect(api.updateMixerChannel).not.toHaveBeenCalled();
+  });
+
+  it('mixerLayerSolo flips solo on the Nth mixer channel (no-op on deck)', async () => {
+    const api = makeApi();
+    const ctx = { ...baseCtx, getLayer: () => ({ id: 'ch_a', role: 'mixer' as const, solo: false }) };
     await createDispatcher(api, ctx)({ kind: 'mixerLayerSolo', layer: 0 });
     expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { solo: true });
+    const api2 = makeApi();
+    const deckCtx = { ...baseCtx, getLayer: () => ({ id: 'deck', role: 'deck' as const, solo: false }) };
+    await createDispatcher(api2, deckCtx)({ kind: 'mixerLayerSolo', layer: 0 });
+    expect(api2.updateMixerChannel).not.toHaveBeenCalled();
   });
 
   it('globalEffectSlot toggles the slot', async () => {

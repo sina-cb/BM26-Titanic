@@ -19,10 +19,16 @@ export interface MidiDispatchApi {
   setSectionBrightness(sectionId: number, brightness: number): Promise<MidiApiResult>;
   setGroupFixedColor(group: string, color: number[], brightness: number): Promise<MidiApiResult>;
   updateMixerChannel(channelId: string, updates: Record<string, unknown>): Promise<MidiApiResult>;
+  updateDeckChannel(updates: Record<string, unknown>): Promise<MidiApiResult>;
   dispatchGlobalEffectSlotAction(slotId: number, action: string): Promise<MidiApiResult>;
   setGlobalEffectBlackout(enabled: boolean): Promise<MidiApiResult>;
   setChannelPlaylistEntry(role: 'deck' | 'mixer', channelId: string, entryId: string): Promise<MidiApiResult>;
 }
+
+/** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
+ *  the deck channel (role 'deck', its own API); on the Mixer tab layers are the
+ *  overlay channels (role 'mixer'). null when that layer doesn't exist. */
+export interface MidiLayerRef { id: string; role: 'deck' | 'mixer'; solo: boolean }
 
 /** Live engine state the dispatcher needs to resolve toggles + banks. */
 export interface MidiDispatchContext {
@@ -33,10 +39,9 @@ export interface MidiDispatchContext {
   /** Map a pattern-bank pad (bank, padIndex) to a pattern name, or null when
    *  no pattern sits behind that pad — an unlit pad dispatches nothing. */
   resolvePatternForBank(bank: number, index: number): string | null;
-  /** Nth mixer channel id (0-based "layer"), or null when it doesn't exist. */
-  getLayerChannelId(layer: number): string | null;
-  /** Current solo state of the Nth mixer layer. */
-  getLayerSolo(layer: number): boolean;
+  /** The Nth "layer" for the active tab (deck channel on Deck, overlay on
+   *  Mixer), or null when it doesn't exist. */
+  getLayer(layer: number): MidiLayerRef | null;
   /** Curated palette pair (hues 0..1) at index, or null when out of range. */
   getColorPalette(index: number): { c1: number; c2: number } | null;
 }
@@ -76,15 +81,18 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         await api.setGroupFixedColor(resolved.group, resolved.color, resolved.brightness);
         return;
       case 'mixerLayerFader': {
-        const id = ctx.getLayerChannelId(resolved.layer);
-        if (id === null) return; // layer doesn't exist — inert
-        await api.updateMixerChannel(id, { fader: resolved.value });
+        const L = ctx.getLayer(resolved.layer);
+        if (!L) return; // layer doesn't exist — inert
+        if (L.role === 'deck') await api.updateDeckChannel({ fader: resolved.value });
+        else await api.updateMixerChannel(L.id, { fader: resolved.value });
         return;
       }
       case 'mixerLayerSolo': {
-        const id = ctx.getLayerChannelId(resolved.layer);
-        if (id === null) return;
-        await api.updateMixerChannel(id, { solo: !ctx.getLayerSolo(resolved.layer) });
+        const L = ctx.getLayer(resolved.layer);
+        if (!L) return;
+        // The deck channel has no solo concept (single channel) — no-op there.
+        if (L.role === 'deck') return;
+        await api.updateMixerChannel(L.id, { solo: !L.solo });
         return;
       }
       case 'globalEffectSlot':

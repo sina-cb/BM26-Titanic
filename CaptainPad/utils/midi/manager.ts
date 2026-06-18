@@ -57,6 +57,13 @@ export interface MidiEngineSnapshot {
     /** The layer's playlist (entries + active), for the pad window browser. */
     playlist?: { entries: { id: string }[]; activeEntryId: string | null };
   }[];
+  /** The deck channel, surfaced as "layer 0" on the Deck tab (single channel,
+   *  its own API). null when there's no deck channel. */
+  deckLayer: { id: string; fader: number; playlist?: { entries: { id: string }[]; activeEntryId: string | null } } | null;
+  /** Active CaptainPad tab — selects whether layers target the deck channel
+   *  (Deck) or the overlay channels (Mixer). The layout is unified; only the
+   *  channel TARGETS differ per tab. */
+  activeContext: string;
   /** Global-effect slots (1-based slot number + active state). */
   globalEffectSlots: { slot: number; active: boolean }[];
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
@@ -92,6 +99,27 @@ export interface MidiManagerOptions {
 export const WINDOW_SIZE = 6;
 
 const DEFAULT_COALESCE_MS = 33; // ~30 Hz
+
+interface ResolvedLayer {
+  id: string;
+  role: 'deck' | 'mixer';
+  solo: boolean;
+  playlist?: { entries: { id: string }[]; activeEntryId: string | null };
+}
+
+/** Resolve the Nth "layer" for the active tab — the single unified layout
+ *  targets the deck channel on the Deck tab (layer 0 only) and the overlay
+ *  channels on the Mixer tab. null when that layer doesn't exist. */
+function layerInfo(snap: MidiEngineSnapshot, layer: number): ResolvedLayer | null {
+  if (snap.activeContext === 'deck') {
+    if (layer === 0 && snap.deckLayer) {
+      return { id: snap.deckLayer.id, role: 'deck', solo: false, playlist: snap.deckLayer.playlist };
+    }
+    return null;
+  }
+  const l = snap.layers[layer];
+  return l ? { id: l.id, role: 'mixer', solo: l.solo, playlist: l.playlist } : null;
+}
 
 function describeEvent(ev: DecodedMidi, controlId: string | null): string {
   const tail = controlId ? ` → ${controlId}` : ' (unmapped)';
@@ -238,32 +266,27 @@ class ControllerRuntime {
     }
   }
 
-  private layerPlaylistLength(layer: number): number {
-    return this.opts.getSnapshot().layers[layer]?.playlist?.entries.length ?? 0;
-  }
-
   private handleScroll(layer: number, dir: 'up' | 'down'): void {
     const snap = this.opts.getSnapshot();
-    if (!snap.layers[layer]) return; // layer absent → column is dark, no-op
-    const len = this.layerPlaylistLength(layer);
+    const L = layerInfo(snap, layer);
+    if (!L) return; // layer absent → column is dark, no-op
+    const len = L.playlist?.entries.length ?? 0;
     const max = Math.max(0, len - WINDOW_SIZE);
     const cur = this.windowCursor.get(layer) ?? 0;
     const next = dir === 'up' ? Math.max(0, cur - 1) : Math.min(max, cur + 1);
     if (next === cur) return;
     this.windowCursor.set(layer, next);
-    const channelId = snap.layers[layer]?.id;
-    if (channelId) this.opts.onWindowChange?.(channelId, next, WINDOW_SIZE);
+    this.opts.onWindowChange?.(L.id, next, WINDOW_SIZE);
     this.projectAndSend(); // repaint the window
   }
 
   private handleWindowSelect(layer: number, slot: number): void {
     const snap = this.opts.getSnapshot();
-    const channelId = snap.layers[layer]?.id;
-    const entries = snap.layers[layer]?.playlist?.entries;
-    if (!channelId || !entries) return;
-    const entry = entries[(this.windowCursor.get(layer) ?? 0) + slot];
+    const L = layerInfo(snap, layer);
+    if (!L?.playlist) return;
+    const entry = L.playlist.entries[(this.windowCursor.get(layer) ?? 0) + slot];
     if (!entry) return; // pad past the end of the playlist — no-op
-    void this.opts.api.setChannelPlaylistEntry('mixer', channelId, entry.id);
+    void this.opts.api.setChannelPlaylistEntry(L.role, L.id, entry.id);
   }
 
   /** Recompute LED diffs against the current snapshot and send them. */
@@ -276,13 +299,13 @@ class ControllerRuntime {
       activePattern: snap.activePattern,
       getGlobalEffectState: (effect) => !!snap.globalEffects[effect],
       resolvePatternForBank: (bank, index) => snap.patterns[bank * pageSize + index] ?? null,
-      layerExists: (layer) => !!snap.layers[layer],
-      getLayerSolo: (layer) => snap.layers[layer]?.solo ?? false,
+      layerExists: (layer) => !!layerInfo(snap, layer),
+      getLayerSolo: (layer) => layerInfo(snap, layer)?.solo ?? false,
       getGlobalEffectSlotActive: (slot) => snap.globalEffectSlots.find((s) => s.slot === slot)?.active ?? false,
       globalEffectSlotCount: snap.globalEffectSlots.length,
-      getLayerPlaylistLength: (layer) => snap.layers[layer]?.playlist?.entries.length ?? 0,
+      getLayerPlaylistLength: (layer) => layerInfo(snap, layer)?.playlist?.entries.length ?? 0,
       getLayerActiveEntryIndex: (layer) => {
-        const pl = snap.layers[layer]?.playlist;
+        const pl = layerInfo(snap, layer)?.playlist;
         if (!pl) return -1;
         return pl.entries.findIndex((e) => e.id === pl.activeEntryId);
       },
@@ -324,8 +347,10 @@ export class MidiManager {
       getBlackout: () => opts.getSnapshot().blackout,
       getGlobalEffectState: (effect) => !!opts.getSnapshot().globalEffects[effect],
       resolvePatternForBank: (bank, index) => opts.getSnapshot().patterns[bank * pageSize + index] ?? null,
-      getLayerChannelId: (layer) => opts.getSnapshot().layers[layer]?.id ?? null,
-      getLayerSolo: (layer) => opts.getSnapshot().layers[layer]?.solo ?? false,
+      getLayer: (layer) => {
+        const L = layerInfo(opts.getSnapshot(), layer);
+        return L ? { id: L.id, role: L.role, solo: L.solo } : null;
+      },
       getColorPalette: (index) => opts.getSnapshot().colorPalettes[index] ?? null,
     });
     for (const profile of opts.profiles) {
