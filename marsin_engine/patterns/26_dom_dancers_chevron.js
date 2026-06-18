@@ -102,6 +102,16 @@ var SPIRAL_SHARP  = 6.0;     // power -> thin bright filaments (high contrast)
 // Critically damped: k = w^2, c = 2w. w = 7 rad/s -> ~0.4 s settle, no overshoot.
 var DANCE_OMEGA = 7.0;
 
+// ── Comet trail (mirrors the Audio Companion dancing-balls visualizer) ───────
+// drawOrb (companion_app.js) keeps a fading history of each orb's PAST
+// positions and draws them as shrinking, fading circles behind the head. We
+// reproduce that with a per-dancer ring buffer of past spring positions.
+var TRAIL_N = 14;
+var trail1 = array(14);
+var trail2 = array(14);
+var trailHead = 0;   // next write slot
+var trailInit = 0;   // 0 until the buffers are seeded
+
 // ── Palette RGB cache (strict cp1<->cp2 blending; see PATTERNS.md §7) ────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
@@ -194,6 +204,17 @@ export function beforeRender(delta) {
   d2x = d2x + d2v * dt;
   if (d2x < 0.0) { d2x = 0.0; d2v = 0.0; }
   if (d2x > 1.0) { d2x = 1.0; d2v = 0.0; }
+
+  // Seed the trail buffers on the first frame, then push this frame's
+  // positions so the comet trails follow the dancers' actual paths.
+  if (trailInit == 0) {
+    for (var kk = 0; kk < TRAIL_N; kk++) { trail1[kk] = d1x; trail2[kk] = d2x; }
+    trailInit = 1;
+  }
+  trail1[trailHead] = d1x;
+  trail2[trailHead] = d2x;
+  trailHead = trailHead + 1;
+  if (trailHead >= TRAIL_N) trailHead = 0;
 }
 
 // Soft orb profile: raised-cosine halo + bright white-ish core.
@@ -201,6 +222,22 @@ export function beforeRender(delta) {
 function orbProfile(d, halfW) {
   if (d >= halfW) return 0.0;
   return 0.5 + 0.5 * cos(d / halfW * PI); // smooth, peaks 1 at centre
+}
+
+// Comet trail glow at position `posn` from a dancer's position history.
+// Older samples fade quadratically and shrink slightly, mirroring drawOrb.
+function trailGlow(posn, trailArr, halfW) {
+  var acc = 0.0;
+  for (var kk = 1; kk < TRAIL_N; kk++) {
+    var idx = trailHead - 1 - kk;
+    if (idx < 0) idx = idx + TRAIL_N;
+    var age = kk / TRAIL_N;
+    var fade = 1.0 - age; fade = fade * fade;
+    var hw = halfW * (0.55 + 0.45 * (1.0 - age));
+    var contrib = orbProfile(abs(posn - trailArr[idx]), hw) * fade;
+    if (contrib > acc) acc = contrib;
+  }
+  return acc * 0.6;   // trail dimmer than the head
 }
 
 // Engine convention: x, y, z are normalized pixel coords in [0,1].
@@ -247,6 +284,14 @@ export function render3D(index, x, y, z) {
   var bgR = baseGlow * (pr1 + pr2) * 0.5;
   var bgG = baseGlow * (pg1 + pg2) * 0.5;
   var bgB = baseGlow * (pb1 + pb2) * 0.5;
+
+  // Comet trails (each dancer's fading position history), painted UNDER the
+  // halos/cores so the bright head still reads on top.
+  var tr1 = trailGlow(px, trail1, halfW1) * (0.35 + 0.65 * e1) * dancerGlow;
+  var tr2 = trailGlow(px, trail2, halfW2) * (0.35 + 0.65 * e2) * dancerGlow;
+  bgR = screen1(bgR, tr1 * pr1); bgR = screen1(bgR, tr2 * pr2);
+  bgG = screen1(bgG, tr1 * pg1); bgG = screen1(bgG, tr2 * pg2);
+  bgB = screen1(bgB, tr1 * pb1); bgB = screen1(bgB, tr2 * pb2);
 
   bgR = screen1(bgR, lvl1 * pr1); bgR = screen1(bgR, lvl2 * pr2);
   bgG = screen1(bgG, lvl1 * pg1); bgG = screen1(bgG, lvl2 * pg2);

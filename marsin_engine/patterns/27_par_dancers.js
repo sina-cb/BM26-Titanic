@@ -58,6 +58,17 @@ export function sliderBall2Energy(v) { ball2_energy = v; }
 // ── Dance spring (danceSpringStep parity) ────────────────────────────────────
 var DANCE_OMEGA = 7.0;
 
+// ── Comet trail (mirrors the Audio Companion dancing-balls visualizer) ───────
+// drawOrb (companion_app.js) keeps a fading history of each orb's PAST
+// positions and draws them as shrinking, fading circles behind the head. We
+// reproduce that with a per-dancer ring buffer of past spring positions; the
+// per-pixel trailGlow() lights a pixel near any recent position, faded by age.
+var TRAIL_N = 14;
+var trail1 = array(14);
+var trail2 = array(14);
+var trailHead = 0;   // next write slot
+var trailInit = 0;   // 0 until the buffers are seeded with the start position
+
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
@@ -103,6 +114,24 @@ function orbProfile(d, halfW) {
   return 0.5 + 0.5 * cos(d / halfW * PI);
 }
 
+// Comet trail glow at row position `posn` from a dancer's position history.
+// kk = 1 is the most-recent past sample (the head itself is rendered by the
+// halo/core below). Older samples fade quadratically and shrink slightly, the
+// same shape the companion's drawOrb uses for its trailing circles.
+function trailGlow(posn, trailArr, halfW) {
+  var acc = 0.0;
+  for (var kk = 1; kk < TRAIL_N; kk++) {
+    var idx = trailHead - 1 - kk;
+    if (idx < 0) idx = idx + TRAIL_N;
+    var age = kk / TRAIL_N;
+    var fade = 1.0 - age; fade = fade * fade;
+    var hw = halfW * (0.55 + 0.45 * (1.0 - age));
+    var contrib = orbProfile(abs(posn - trailArr[idx]), hw) * fade;
+    if (contrib > acc) acc = contrib;
+  }
+  return acc * 0.6;   // trail dimmer than the head (drawOrb: ~0.3 alpha)
+}
+
 // ── Persistent state ─────────────────────────────────────────────────────────
 var d1x = 0.30, d1v = 0.0;
 var d2x = 0.70, d2v = 0.0;
@@ -129,6 +158,17 @@ export function beforeRender(delta) {
   d2x = d2x + d2v * dt;
   if (d2x < 0.0) { d2x = 0.0; d2v = 0.0; }
   if (d2x > 1.0) { d2x = 1.0; d2v = 0.0; }
+
+  // Seed the trail buffers on the first frame, then push this frame's
+  // positions so the comet trails follow the dancers' actual paths.
+  if (trailInit == 0) {
+    for (var kk = 0; kk < TRAIL_N; kk++) { trail1[kk] = d1x; trail2[kk] = d2x; }
+    trailInit = 1;
+  }
+  trail1[trailHead] = d1x;
+  trail2[trailHead] = d2x;
+  trailHead = trailHead + 1;
+  if (trailHead >= TRAIL_N) trailHead = 0;
 }
 
 // Map a par fixtureId (1..4) to its left->right ROW position 0..1.
@@ -179,6 +219,14 @@ export function render3D(index, x, y, z) {
   var r = baseGlow * midR;
   var g = baseGlow * midG;
   var b = baseGlow * midB;
+
+  // Comet trails (each dancer's fading position history), painted UNDER the
+  // halos/cores so the bright head still reads on top.
+  var tr1 = trailGlow(pos, trail1, halfW1) * (0.35 + 0.65 * e1) * dancerGlow;
+  var tr2 = trailGlow(pos, trail2, halfW2) * (0.35 + 0.65 * e2) * dancerGlow;
+  r = screen1(r, tr1 * pr1); r = screen1(r, tr2 * pr2);
+  g = screen1(g, tr1 * pg1); g = screen1(g, tr2 * pg2);
+  b = screen1(b, tr1 * pb1); b = screen1(b, tr2 * pb2);
 
   r = screen1(r, lvl1 * pr1); r = screen1(r, lvl2 * pr2);
   g = screen1(g, lvl1 * pg1); g = screen1(g, lvl2 * pg2);

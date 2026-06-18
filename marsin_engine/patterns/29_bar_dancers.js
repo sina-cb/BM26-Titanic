@@ -69,6 +69,17 @@ export function sliderBall2Energy(v) { ball2_energy = v; }
 var DANCE_OMEGA = 7.0;
 var PULSE_HZ = 0.8;     // shared approach-pulse base frequency
 
+// ── Comet trail (mirrors the Audio Companion dancing-balls visualizer) ───────
+// On top of each dancer's velocity-aligned comet (cometProfile), we keep a
+// fading history of its PAST head positions and paint them behind it, exactly
+// as drawOrb (companion_app.js) does with its trailing circles. This makes the
+// trail trace the dancer's actual path over time, not just its current heading.
+var TRAIL_N = 14;
+var trail1 = array(14);
+var trail2 = array(14);
+var trailHead = 0;
+var trailInit = 0;
+
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
@@ -132,6 +143,28 @@ function cometProfile(localPos, head, dir, halfLen) {
   return bright;
 }
 
+// Soft raised-cosine orb (for the temporal position-history trail).
+function orbProfile(d, halfW) {
+  if (d >= halfW) return 0.0;
+  return 0.5 + 0.5 * cos(d / halfW * PI);
+}
+
+// Comet trail glow at lane position `posn` from a dancer's position history.
+// Older samples fade quadratically and shrink slightly, mirroring drawOrb.
+function trailGlow(posn, trailArr, halfW) {
+  var acc = 0.0;
+  for (var kk = 1; kk < TRAIL_N; kk++) {
+    var idx = trailHead - 1 - kk;
+    if (idx < 0) idx = idx + TRAIL_N;
+    var age = kk / TRAIL_N;
+    var fade = 1.0 - age; fade = fade * fade;
+    var hw = halfW * (0.55 + 0.45 * (1.0 - age));
+    var contrib = orbProfile(abs(posn - trailArr[idx]), hw) * fade;
+    if (contrib > acc) acc = contrib;
+  }
+  return acc * 0.6;
+}
+
 // ── Persistent state ─────────────────────────────────────────────────────────
 var d1x = 0.30, d1v = 0.0;
 var d2x = 0.70, d2v = 0.0;
@@ -175,6 +208,15 @@ export function beforeRender(delta) {
   var pulseHz = PULSE_HZ * (0.5 + clamp01(chevronSpeedup)) * localMult;
   pulsePhase = (pulsePhase + dt * pulseHz) % 1.0;
   if (pulsePhase < 0.0) pulsePhase += 1.0;
+
+  if (trailInit == 0) {
+    for (var kk = 0; kk < TRAIL_N; kk++) { trail1[kk] = d1x; trail2[kk] = d2x; }
+    trailInit = 1;
+  }
+  trail1[trailHead] = d1x;
+  trail2[trailHead] = d2x;
+  trailHead = trailHead + 1;
+  if (trailHead >= TRAIL_N) trailHead = 0;
 }
 
 export function render3D(index, x, y, z) {
@@ -196,6 +238,13 @@ export function render3D(index, x, y, z) {
 
   var c1 = cometProfile(localPos, d1x, dir1, halfLen1) * (0.35 + 0.65 * e1) * dancerGlow;
   var c2 = cometProfile(localPos, d2x, dir2, halfLen2) * (0.35 + 0.65 * e2) * dancerGlow;
+
+  // Temporal position-history trail (drawOrb style). Merge into the comet
+  // envelope by max so a moving dancer trails its actual recent path.
+  var tr1 = trailGlow(localPos, trail1, halfLen1) * (0.35 + 0.65 * e1) * dancerGlow;
+  var tr2 = trailGlow(localPos, trail2, halfLen2) * (0.35 + 0.65 * e2) * dancerGlow;
+  if (tr1 > c1) c1 = tr1;
+  if (tr2 > c2) c2 = tr2;
 
   // Shared approach pulse: brightens everything when the dancers are close.
   var pulse = approach * (0.5 + 0.5 * cos(pulsePhase * PI2));
