@@ -1,146 +1,105 @@
 /*
   26_dom_dancers_chevron.js
 
-  TWO COMPOSITED LAYERS — a slow cross-fixture chevron background with a
-  per-fixture "dancing ball" foreground driven by the dominant-frequency
-  audio signal. Built for the Titanic exterior: bright, smooth, beautiful,
-  and reactive without ever going dark when audio is silent (codex P0 —
-  no fallbacks, the pattern is fully alive at zero audio).
+  TWO DANCERS IN THE BACKGROUND + INTRICATE SPIRAL FILIGREE ON TOP.
+  Built for the Titanic exterior: luminous, high-contrast, beautiful, and
+  reactive without ever going dark when audio is silent (codex P0 — no
+  fallbacks, the pattern is fully alive at zero audio).
 
   ─────────────────────────────────────────────────────────────────────────
-  LAYER 2 — BACKGROUND: cross-fixture chevron (rendered FIRST)
+  LAYER A — BACKGROUND: two soft dancing orbs (rendered FIRST)
   ─────────────────────────────────────────────────────────────────────────
-  A single V / arrow shape spanning ALL fixtures along the global X axis.
-  The chevron apex travels left<->right across the whole rig. Its base
-  motion is a CONSTANT SLOW drift (CHEVRON_BASE_HZ). On top of that, the
-  `chevronSpeedup` control adds extra travel speed:
+  Two glowing balls dance across the WHOLE rig along the global X axis:
+    - Dancer 1 lives near `ball1_x`, painted mostly from palette 1 (cp1).
+    - Dancer 2 lives near `ball2_x`, painted mostly from palette 2 (cp2).
+  Each dancer is a soft HALO (wide raised-cosine falloff) with a bright
+  WHITE-ISH CORE at its centre, so the orbs read as luminous gas, not flat
+  discs. A faint BRIDGE/duet line stretches between the two dancers — when
+  they drift apart it dims, when they pass close it glows, so the pair
+  always feels coupled. `baseGlow` keeps a soft palette wash under
+  everything so the rig is never dark at rest (P0).
 
-      chevron_speed_hz = CHEVRON_BASE_HZ + chevronSpeedup * CHEVRON_AUDIO_HZ
-
-  `chevronSpeedup` is an exported slider (default low, 0.0) that an operator
-  can leave manual OR drive via a MODULATION mapping in the playlist. The
-  intended audio source is the LOW band:
-
-      MODULATE  sliderChevronSpeedup (chevronSpeedup)  <-  micLow
-
-  so the chevron accelerates with the bass/kick of the music. Any [0,1]
-  audio signal works as a modulation source (micKick for a punchier feel,
-  micFlux for onset drive), but micLow is the documented default. The
-  chevron is drawn from the cp1<->cp2 palette so it always honours the
-  operator's colour pickers.
-
-  ─────────────────────────────────────────────────────────────────────────
-  LAYER 1 — FOREGROUND: per-fixture dom1 dancers (composited ON TOP)
-  ─────────────────────────────────────────────────────────────────────────
-  FIXTURE VIEWS / per-fixture coordinate space:
-  MarsinScript exposes `fixtureId` (and `index`) per pixel. There is no
-  separate per-fixture local-coordinate built-in, so — exactly as the
-  production tower patterns do (see summer_camp/113_tower_column_breath.js,
-  `barT = (index % 18)/17`) — we reconstruct each fixture's OWN 0..1 axis
-  from `index` and the test_bench fixture layout (FIX_START / FIX_LEN
-  tables below, keyed by fixtureId). `localPos` is the pixel's position
-  WITHIN its own fixture, independent of where the fixture sits in the rig.
-  That IS the fixture view: the dancer lives in each fixture's local space.
-
-  Inside EACH fixture we render a bright "dancing ball": a soft orb at
-  `ballPos` (0..1 in the fixture's local axis). The ball position TARGET is
-  the `sliderDomPos` control (0..1, default 0.5 = fixture-centre) and the
-  orb's brightness/size is driven by `sliderDomEnergy` (0..1, default 0.6).
-  Both are exported SLIDER params — an operator can leave them manual OR, for
-  audio reactivity, drive them via MODULATION mappings (modulators-only audio
-  policy, operator decision 2026-06-17 — patterns never read CPC audio
-  globals natively). The documented audio coupling is:
-
-      MODULATE  sliderDomPos    (domPos)    <-  micDomEnergy1
-      MODULATE  sliderDomEnergy (domEnergy) <-  micDomEnergy1
-
-  (use micDomFreq1, normalized, on sliderDomPos if you want pitch to steer
-  the ball's HEIGHT rather than energy.) The 0..1 position TARGET is run
-  through a CRITICALLY-DAMPED SPRING — the exact "dance" math the Audio
-  Companion's dancing-balls visualizer / the `danceMaker` op use
-  (signal_post_processor.js: `danceSpringStep`, DANCE_OMEGA = 7):
+  Each dancer's X position TARGET (`ball1_x` / `ball2_x`, 0..1) runs through
+  its OWN CRITICALLY-DAMPED SPRING — the exact "dance" math the Audio
+  Companion's dancing-balls visualizer uses (signal_post_processor.js
+  `danceSpringStep`, DANCE_OMEGA = 7):
 
       v += (k*(target - x) - c*v) * dt ;  x += v * dt    with k = w^2, c = 2w
 
-  This makes the orb GLIDE to its target with no overshoot — the "dancing
-  ball" gesture. `domEnergy` drives the orb's brightness and a little of its
-  size, so a strong drive makes the dancer pop; a quiet drive makes it small
-  and gentle. At rest (sliders at default) the orb idles near fixture-centre
-  with a soft glow (no black-out — P0).
-
-  COMPOSITING: background chevron is computed first, then the dancer is
-  screen-blended on top (1-(1-bg)(1-fg)) so the orb never harshly clips the
-  chevron and there is no popping — luminous, additive-but-bounded.
+  so each ball GLIDES to its target with no overshoot. The two springs are
+  INDEPENDENT (separate x / v state) so the dancers move on their own. Each
+  dancer's `*_energy` slider drives its brightness, halo size, and core pop.
 
   ─────────────────────────────────────────────────────────────────────────
-  AUDIO REACTIVITY (modulators-only — patterns never read CPC audio globals):
-  The pattern exposes SLIDER params; audio reactivity is added by attaching
-  a MODULATION mapping (source = any live audio key) to each slider in the
-  playlist. At rest the defaults look good (the pattern is complete &
-  beautiful without audio):
-    domPos        (0..1) dancer position target  default 0.5  (fixture-centre)
-    domEnergy     (0..1) dancer brightness/size  default 0.6  (lively at rest)
-    chevronSpeedup(0..1) chevron travel speed-up default 0.0
-  Default modulation mappings (sim test_bench default playlist):
-    sliderDomPos    <- micDomEnergy1
-    sliderDomEnergy <- micDomEnergy1
-    sliderChevronSpeedup <- micLow
+  LAYER B — FOREGROUND: intricate spiral filigree (composited ON TOP)
+  ─────────────────────────────────────────────────────────────────────────
+  Over the soft balls we render fine, HIGH-CONTRAST spiral arms in a
+  near-white / accent colour (the bright complement of the soft background).
+  The spiral is built from the pixel's polar angle about rig-centre plus a
+  rotating phase: `spiralArm = wave(ARMS*angle/PI2 + RADIAL*radius - spin)`,
+  raised to a high power so only thin bright filaments survive. The arms
+  ROTATE over time (`spin`) and `chevronSpeedup` / `localSpeed` speed the
+  whole motion up. The filigree is SCREEN-BLENDED over the balls so it adds
+  crisp, luminous detail without harsh clipping.
+
+  ─────────────────────────────────────────────────────────────────────────
+  AUDIO REACTIVITY (modulators-only — patterns never read CPC audio globals,
+  operator decision 2026-06-17). The pattern exposes SLIDER params with
+  resting defaults that already look great; audio reactivity is added by
+  attaching MODULATION mappings (source = any live audio key) in the
+  playlist. Documented default couplings:
+      MODULATE  sliderBall1X         (ball1_x)        <-  micDomEnergy1
+      MODULATE  sliderBall2X         (ball2_x)        <-  micDomEnergy2
+      MODULATE  sliderBall1Energy    (ball1_energy)   <-  micDomEnergy1
+      MODULATE  sliderBall2Energy    (ball2_energy)   <-  micDomEnergy2
+      MODULATE  sliderChevronSpeedup (chevronSpeedup) <-  micLow
+  At slider defaults (no audio) the dancers idle apart, the bridge breathes,
+  and the spirals turn slowly — fully alive, no black-out (P0).
 */
 
-// ── Per-fixture layout (test_bench.js fixtureId -> start index + length) ─────
-// fId 1..4 = single-pixel Pars; fId 5,6 = 6-pixel Vintage strips;
-// fId 7,8 = 18-pixel Bars. A length of 1 collapses localPos to 0.5 (the
-// orb sits centred in a single-pixel fixture). This is the documented
-// fixture-view reconstruction — index + known fixture geometry.
-var FIX_COUNT = 8;
-var fixStart = array(9); // 1-based by fixtureId; slot 0 unused
-var fixLen   = array(9);
-
 // ── Exported controls ───────────────────────────────────────────────────────
-export var localSpeed = 0.5;          // standard first local slider
+export var localSpeed = 0.5;          // standard first local slider (global motion trim)
 
-// Chevron (background) controls
-export var chevronWidth = 0.22;       // half-width of the V arm falloff (X units)
-export var chevronGlow = 0.85;        // peak chevron brightness
-export var chevronFloor = 0.10;       // background floor so the rig never goes dark
-export var chevronSpeedup = 0.0;      // MODULATE <- micLow. base-slow + this*audio
+// Background dancers
+export var ball1_x = 0.34;            // 0..1 dancer-1 X target  (MODULATE <- micDomEnergy1)
+export var ball1_energy = 0.6;        // 0..1 dancer-1 brightness/size
+export var ball2_x = 0.66;            // 0..1 dancer-2 X target  (MODULATE <- micDomEnergy2)
+export var ball2_energy = 0.6;        // 0..1 dancer-2 brightness/size
 
-// Dancer (foreground) controls
-export var ballSize = 0.30;           // base orb half-width in fixture-local units
-export var ballGlow = 1.0;            // peak orb brightness
-export var ballFloor = 0.08;          // idle orb glow at low energy
+export var baseGlow = 0.12;           // soft palette wash floor (never dark — P0)
+export var dancerSize = 0.30;         // base halo half-width (X units)
+export var dancerGlow = 1.0;          // peak halo brightness
 
-// Dancer drive (modulator-driven sliders — NOT native audio reads). An
-// operator can leave these manual OR attach a MODULATION mapping in the
-// playlist (e.g. sliderDomPos <- micDomEnergy1). Defaults look good at rest.
-export var domPos = 0.5;              // 0..1 dancer position target (centre at rest)
-export var domEnergy = 0.6;           // 0..1 dancer brightness/size drive
+// Spiral filigree (foreground) speed-up. chevronSpeedup keeps its historical
+// name and acts as the global motion/speed drive (MODULATE <- micLow).
+export var chevronSpeedup = 0.0;
 
-// Palette pickers (strict cp1<->cp2 RGB-space blending)
-export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // chevron / dancer core (cyan)
-export var cp2H = 0.92, cp2S = 1.0, cp2V = 1.0; // accent (magenta)
+// Palette pickers (strict cp1<->cp2 RGB-space blending; spirals use the bright
+// complement of the cp midpoint so they always read high-contrast).
+export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // dancer 1 (cyan default)
+export var cp2H = 0.92, cp2S = 1.0, cp2V = 1.0; // dancer 2 (magenta default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderChevronWidth(v) { chevronWidth = 0.08 + v * 0.40; }
-export function sliderChevronGlow(v) { chevronGlow = v; }
-export function sliderChevronFloor(v) { chevronFloor = v * 0.30; }
+export function sliderBaseGlow(v) { baseGlow = v * 0.30; }
+export function sliderDancerSize(v) { dancerSize = 0.14 + v * 0.40; }
+export function sliderDancerGlow(v) { dancerGlow = v; }
 export function sliderChevronSpeedup(v) { chevronSpeedup = v; }
-export function sliderBallSize(v) { ballSize = 0.12 + v * 0.45; }
-export function sliderBallGlow(v) { ballGlow = v; }
-export function sliderBallFloor(v) { ballFloor = v * 0.25; }
-export function sliderDomPos(v) { domPos = v; }      // 0..1 dancer position target
-export function sliderDomEnergy(v) { domEnergy = v; } // 0..1 dancer brightness/size
+export function sliderBall1X(v) { ball1_x = v; }
+export function sliderBall1Energy(v) { ball1_energy = v; }
+export function sliderBall2X(v) { ball2_x = v; }
+export function sliderBall2Energy(v) { ball2_energy = v; }
 
-// ── Chevron motion constants ─────────────────────────────────────────────────
-var CHEVRON_BASE_HZ = 0.035;  // constant slow drift (full sweep ~28 s)
-var CHEVRON_AUDIO_HZ = 0.45;  // extra Hz at chevronSpeedup = 1.0
+// ── Motion constants ─────────────────────────────────────────────────────────
+var SPIN_BASE_HZ  = 0.040;   // constant slow spiral spin
+var SPIN_AUDIO_HZ = 0.55;    // extra spin Hz at chevronSpeedup = 1.0
+var SPIRAL_ARMS   = 5.0;     // number of spiral arms
+var SPIRAL_RADIAL = 6.0;     // radial twist tightness
+var SPIRAL_SHARP  = 6.0;     // power -> thin bright filaments (high contrast)
 
 // ── Dance spring (mirrors signal_post_processor.danceSpringStep) ─────────────
-// Critically damped: k = w^2, c = 2w. w = 7 rad/s -> ~0.4 s settle, no
-// overshoot. ONE explicit-Euler step per frame. Same math as the Companion
-// dancing-balls visualizer / danceMaker op (one behaviour, no fork — P0).
+// Critically damped: k = w^2, c = 2w. w = 7 rad/s -> ~0.4 s settle, no overshoot.
 var DANCE_OMEGA = 7.0;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; see PATTERNS.md §7) ────────
@@ -187,124 +146,142 @@ function screen1(a, b) {
 }
 
 // ── Persistent state ─────────────────────────────────────────────────────────
-var chevronPhase = 0.0; // 0..1 apex position sweep (triangle of this)
-var ballTarget = 0.5;   // dom1 -> 0..1 fixture-local target (shared per frame)
-var ballPos = 0.5;      // spring position x (the dancing ball local coord)
-var ballVel = 0.0;      // spring velocity v
-
-// ── Top-level init: build the per-fixture layout table ───────────────────────
-// test_bench.js: fId1..4 -> single pixels at index 0..3; fId5 -> 4..9;
-// fId6 -> 10..15; fId7 -> 16..33; fId8 -> 34..51. Encoded once here so the
-// per-pixel path just looks up start/len by fixtureId (the "fixture view").
-fixStart[1] = 0;  fixLen[1] = 1;
-fixStart[2] = 1;  fixLen[2] = 1;
-fixStart[3] = 2;  fixLen[3] = 1;
-fixStart[4] = 3;  fixLen[4] = 1;
-fixStart[5] = 4;  fixLen[5] = 6;
-fixStart[6] = 10; fixLen[6] = 6;
-fixStart[7] = 16; fixLen[7] = 18;
-fixStart[8] = 34; fixLen[8] = 18;
+var spin = 0.0;     // spiral rotation phase (turns 0..1)
+var d1x = 0.34;     // dancer 1 spring position
+var d1v = 0.0;      // dancer 1 spring velocity
+var d2x = 0.66;     // dancer 2 spring position
+var d2v = 0.0;      // dancer 2 spring velocity
+var spiralR = 0.0;  // cached spiral accent colour (near-white complement)
+var spiralG = 0.0;
+var spiralB = 0.0;
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
-  if (dt > 0.1) dt = 0.1; // clamp huge first-frame deltas so the spring is sane
+  if (dt > 0.1) dt = 0.1; // clamp huge first-frame deltas so the springs are sane
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
 
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // ── Chevron travel: constant slow base + audio-driven speed-up ──────────
-  // speedup is [0,1] (manual or bound to micLow). Result is an Hz that the
-  // localSpeed trim also scales so the operator can globally retime it.
+  // Spiral accent = bright near-white tinted away from the palette midpoint so
+  // it reads as high-contrast filigree over the soft palette balls.
+  var midR = (pr1 + pr2) * 0.5;
+  var midG = (pg1 + pg2) * 0.5;
+  var midB = (pb1 + pb2) * 0.5;
+  spiralR = clamp01(0.85 + (1.0 - midR) * 0.15);
+  spiralG = clamp01(0.85 + (1.0 - midG) * 0.15);
+  spiralB = clamp01(0.85 + (1.0 - midB) * 0.15);
+
+  // ── Spiral spin: constant slow base + speed-up drive ────────────────────
   var spd = clamp01(chevronSpeedup);
-  var chevronHz = (CHEVRON_BASE_HZ + spd * CHEVRON_AUDIO_HZ) * localMult;
-  chevronPhase = (chevronPhase + dt * chevronHz) % 1.0;
-  if (chevronPhase < 0.0) chevronPhase += 1.0;
+  var spinHz = (SPIN_BASE_HZ + spd * SPIN_AUDIO_HZ) * localMult;
+  spin = (spin + dt * spinHz) % 1.0;
+  if (spin < 0.0) spin += 1.0;
 
-  // ── Dance target: the domPos slider IS the 0..1 target, then spring ──────
-  // Done ONCE per frame in beforeRender (not per pixel): the dancer shares
-  // the same local target/position across every fixture, so all fixtures
-  // dance in unison while each renders it in ITS OWN local space. domPos is
-  // a modulator-driven slider (e.g. micDomEnergy1 via a playlist modulation),
-  // already normalized to 0..1 — no native audio read here.
-  ballTarget = clamp01(domPos);
-
-  // Critically-damped spring step (danceSpringStep parity).
+  // ── Two INDEPENDENT critically-damped dance springs (one per dancer) ────
   var k = DANCE_OMEGA * DANCE_OMEGA;
   var c = 2.0 * DANCE_OMEGA;
-  ballVel = ballVel + (k * (ballTarget - ballPos) - c * ballVel) * dt;
-  ballPos = ballPos + ballVel * dt;
-  if (ballPos < 0.0) { ballPos = 0.0; ballVel = 0.0; }
-  if (ballPos > 1.0) { ballPos = 1.0; ballVel = 0.0; }
+
+  var t1 = clamp01(ball1_x);
+  d1v = d1v + (k * (t1 - d1x) - c * d1v) * dt;
+  d1x = d1x + d1v * dt;
+  if (d1x < 0.0) { d1x = 0.0; d1v = 0.0; }
+  if (d1x > 1.0) { d1x = 1.0; d1v = 0.0; }
+
+  var t2 = clamp01(ball2_x);
+  d2v = d2v + (k * (t2 - d2x) - c * d2v) * dt;
+  d2x = d2x + d2v * dt;
+  if (d2x < 0.0) { d2x = 0.0; d2v = 0.0; }
+  if (d2x > 1.0) { d2x = 1.0; d2v = 0.0; }
+}
+
+// Soft orb profile: raised-cosine halo + bright white-ish core.
+// Returns a 0..1 intensity for distance `d` from the dancer centre.
+function orbProfile(d, halfW) {
+  if (d >= halfW) return 0.0;
+  return 0.5 + 0.5 * cos(d / halfW * PI); // smooth, peaks 1 at centre
 }
 
 // Engine convention: x, y, z are normalized pixel coords in [0,1].
 export function render3D(index, x, y, z) {
-  // ── LAYER 2 — BACKGROUND chevron (computed first) ───────────────────────
-  // Apex sweeps across X via a triangle wave so it bounces edge-to-edge.
-  var apex = triangle(chevronPhase); // 0..1 apex X position
-  // Chevron shape: V/arrow. Distance from the apex along X, with a slight
-  // upward (y) tilt on the arms so it reads as a chevron, not a vertical bar.
-  var armX = abs(x - apex);
-  var tilt = (1.0 - clamp01(y)) * 0.10; // arms ride a touch with height
-  var d = armX - tilt;
-  if (d < 0.0) d = -d;
-  var chev = 0.0;
-  if (d < chevronWidth) {
-    // soft raised-cosine arm so there is no harsh edge / popping
-    chev = 0.5 + 0.5 * cos(d / chevronWidth * PI);
-    chev = chev * chevronGlow;
-  }
-  // Background = floor + chevron front. Colour walks cp1->cp2 along X so the
-  // sweep paints a moving palette gradient (stays strictly on the picker line).
-  var bgLevel = chevronFloor + chev;
-  if (bgLevel > 1.0) bgLevel = 1.0;
-  var bgMix = clamp01(x);
-  var bgR = (pr1 + (pr2 - pr1) * bgMix) * bgLevel;
-  var bgG = (pg1 + (pg2 - pg1) * bgMix) * bgLevel;
-  var bgB = (pb1 + (pb2 - pb1) * bgMix) * bgLevel;
+  var px = clamp01(x);
 
-  // ── LAYER 1 — FOREGROUND per-fixture dom1 dancer (composited on top) ─────
-  // Reconstruct THIS pixel's position inside its own fixture (fixture view).
-  var localPos = 0.5;
-  if (fixtureId >= 1 && fixtureId <= FIX_COUNT) {
-    var lenF = fixLen[fixtureId];
-    if (lenF > 1) {
-      var rel = index - fixStart[fixtureId];
-      if (rel < 0) rel = 0;
-      if (rel > (lenF - 1)) rel = lenF - 1;
-      localPos = rel / (lenF - 1);
-    }
-    // lenF == 1 -> single-pixel fixture: localPos stays 0.5 (orb centred).
-  }
-  // If there is no fixture metadata (fixtureId == 0, v1 model) we do NOT
-  // silently fake a fixture — the dancer simply renders at fixture-centre
-  // using localPos = 0.5, so it still shows but makes no false claim about
-  // per-fixture geometry (P0: no fabricated fallback coordinate space).
+  // ── LAYER A — two background dancers (soft halo + white core + bridge) ──
+  var e1 = clamp01(ball1_energy);
+  var e2 = clamp01(ball2_energy);
+  var halfW1 = dancerSize * (0.6 + 0.4 * e1);
+  var halfW2 = dancerSize * (0.6 + 0.4 * e2);
+  if (halfW1 < 0.04) halfW1 = 0.04;
+  if (halfW2 < 0.04) halfW2 = 0.04;
 
-  // Orb intensity & size grow with the energy drive; idle glow keeps it alive.
-  var energy = clamp01(domEnergy);
-  var halfW = ballSize * (0.6 + 0.4 * energy);
-  if (halfW < 0.02) halfW = 0.02;
-  var orbD = abs(localPos - ballPos);
-  var orb = 0.0;
-  if (orbD < halfW) {
-    orb = 0.5 + 0.5 * cos(orbD / halfW * PI); // soft raised-cosine orb
-  }
-  var orbLevel = (ballFloor + (ballGlow - ballFloor) * energy) * orb;
-  if (orbLevel < 0.0) orbLevel = 0.0;
-  if (orbLevel > 1.0) orbLevel = 1.0;
-  // Dancer colour = cp1 core warmed toward cp2 by energy (a hot dancer
-  // leans to the accent picker). Strictly on the cp1<->cp2 line.
-  var fgMix = clamp01(energy);
-  var fgR = (pr1 + (pr2 - pr1) * fgMix) * orbLevel;
-  var fgG = (pg1 + (pg2 - pg1) * fgMix) * orbLevel;
-  var fgB = (pb1 + (pb2 - pb1) * fgMix) * orbLevel;
+  var h1 = orbProfile(abs(px - d1x), halfW1);  // dancer 1 halo
+  var h2 = orbProfile(abs(px - d2x), halfW2);  // dancer 2 halo
 
-  // ── COMPOSITE: screen-blend dancer over chevron (smooth, no clipping) ───
-  var r = screen1(clamp01(bgR), clamp01(fgR));
-  var g = screen1(clamp01(bgG), clamp01(fgG));
-  var b = screen1(clamp01(bgB), clamp01(fgB));
-  rgb(r, g, b);
+  // Bright white-ish cores (tight, high-energy centres).
+  var coreW1 = 0.30 * halfW1;
+  var coreW2 = 0.30 * halfW2;
+  var core1 = orbProfile(abs(px - d1x), coreW1) * (0.4 + 0.6 * e1);
+  var core2 = orbProfile(abs(px - d2x), coreW2) * (0.4 + 0.6 * e2);
+
+  // Halo levels driven by glow + energy.
+  var lvl1 = dancerGlow * (0.35 + 0.65 * e1) * h1;
+  var lvl2 = dancerGlow * (0.35 + 0.65 * e2) * h2;
+
+  // Bridge / duet line: a soft band spanning between the two dancers; glows
+  // brighter when they are close together (coupling gesture).
+  var lo = d1x; var hi = d2x;
+  if (hi < lo) { var sw = lo; lo = hi; hi = sw; }
+  var gap = hi - lo;
+  var bridge = 0.0;
+  if (px > lo && px < hi && gap > 0.001) {
+    var bspan = (px - lo) / gap;            // 0..1 along the bridge
+    var bShape = 0.5 + 0.5 * cos((bspan - 0.5) * PI2); // soft 0..1 hump
+    var closeness = clamp01(1.0 - gap);     // closer -> brighter bridge
+    bridge = bShape * (0.18 + 0.42 * closeness) * (0.5 * (e1 + e2));
+  }
+
+  // Compose the soft background in RGB. Dancer 1 leans cp1, dancer 2 leans
+  // cp2; the bridge is the palette midpoint; cores add white. baseGlow keeps
+  // a palette wash everywhere so the rig is never dark (P0).
+  var bgR = baseGlow * (pr1 + pr2) * 0.5;
+  var bgG = baseGlow * (pg1 + pg2) * 0.5;
+  var bgB = baseGlow * (pb1 + pb2) * 0.5;
+
+  bgR = screen1(bgR, lvl1 * pr1); bgR = screen1(bgR, lvl2 * pr2);
+  bgG = screen1(bgG, lvl1 * pg1); bgG = screen1(bgG, lvl2 * pg2);
+  bgB = screen1(bgB, lvl1 * pb1); bgB = screen1(bgB, lvl2 * pb2);
+
+  // White-ish cores.
+  bgR = screen1(bgR, core1); bgR = screen1(bgR, core2);
+  bgG = screen1(bgG, core1); bgG = screen1(bgG, core2);
+  bgB = screen1(bgB, core1); bgB = screen1(bgB, core2);
+
+  // Bridge (palette midpoint).
+  var midR = (pr1 + pr2) * 0.5;
+  var midG = (pg1 + pg2) * 0.5;
+  var midB = (pb1 + pb2) * 0.5;
+  bgR = screen1(bgR, bridge * midR);
+  bgG = screen1(bgG, bridge * midG);
+  bgB = screen1(bgB, bridge * midB);
+
+  // ── LAYER B — intricate spiral filigree (high-contrast, on top) ─────────
+  // Polar coords about rig-centre. y is normalized height; use (x,y) plane.
+  var cx = px - 0.5;
+  var cy = clamp01(y) - 0.5;
+  var radius = hypot(cx, cy);
+  var angle = atan2(cy, cx);              // radians, -PI..PI
+  // Spiral coordinate: arms wind with radius and rotate with spin.
+  var sCoord = (SPIRAL_ARMS * angle / PI2) + (SPIRAL_RADIAL * radius) - spin;
+  var arm = wave(sCoord);                 // 0..1, turn-based input -> ok
+  arm = pow(arm, SPIRAL_SHARP);           // sharpen into thin filaments
+  // Fade the filigree toward the very centre so it doesn't smear into a blob.
+  var rFade = clamp01(radius * 2.2);
+  var spiralLvl = arm * rFade * (0.55 + 0.45 * clamp01(chevronSpeedup));
+
+  // ── COMPOSITE: screen-blend spiral accent over the soft balls ───────────
+  var r = screen1(clamp01(bgR), spiralLvl * spiralR);
+  var g = screen1(clamp01(bgG), spiralLvl * spiralG);
+  var b = screen1(clamp01(bgB), spiralLvl * spiralB);
+  rgb(clamp01(r), clamp01(g), clamp01(b));
 }
