@@ -368,6 +368,102 @@ entries:
           - 0.4
         curve: easeOut
     notes: null
+  - id: e_1781749070342_441
+    pattern: 27_par_dancers
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_1781749058691_2059
+    pattern: 28_vintage_dancers
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderBaseGlow: 0
+      sliderDancerSize: 0
+      sliderDancerGlow: 0
+      sliderChevronSpeedup: 0
+      sliderBall1X: 0
+      sliderBall1Energy: 0
+      sliderBall2X: 0.26
+      sliderBall2Energy: 0.34
+    modulations:
+      - id: mod_sliderBall2X_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy2
+        target:
+          scope: pattern
+          parameter: sliderBall2X
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_sliderBall2Energy_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderBall2Energy
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781748878700_5868
+    pattern: 29_bar_dancers
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderBaseGlow: 0
+      sliderDancerSize: 0
+      sliderDancerGlow: 0.66
+      sliderChevronSpeedup: 0
+      sliderBall1X: 0.56
+      sliderBall1Energy: 0.21
+      sliderBall2X: 0.25
+      sliderBall2Energy: 0.32
+    modulations:
+      - id: mod_sliderBall2X_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderBall2X
+        mode: override
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.8
+        curve: linear
+      - id: mod_sliderBall2Energy_micDomEnergy2
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy2
+        target:
+          scope: pattern
+          parameter: sliderBall2Energy
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
   - id: e_default_58_rainbow
     pattern: rainbow
     label: null
