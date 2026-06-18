@@ -339,3 +339,59 @@ read them.
 
 > The persistent `*Gain` knobs (`micLowGain`, …) are operator levels, not
 > signals; they are not part of the live set and are not modulation sources.
+
+---
+
+## 9. Signal-to-Visual Patterns (audio-reactive-ready)
+
+The modulators-only contract (§8) is the foundation of a whole *family* of
+patterns we call **signal-to-visual**: the pattern renders a look built from a
+few well-chosen, **named visual characteristics**, and every one of those
+characteristics is a plain `slider*` that a modulation can drive. The pattern
+never reads audio — it just exposes the *handles*; the show wires a signal (an
+audio key, a hand fader, an LFO) onto each handle. The same pattern is a calm
+idle at rest and a tightly audio-locked instrument once mapped, with **no code
+change**.
+
+### 9.1 Factor the look into modulatable characteristics
+
+The design move is to decompose a visual into independent, individually
+modulatable parameters — then expose each as a slider with a resting default
+that already looks good (codex P0: alive at zero audio). Typical handles:
+
+| Characteristic | What it controls | Example coupling |
+|---|---|---|
+| **position** | where the effect sits — x along a row, y up a column, an angle around a ring | `micLow → position` (signal literally moves the visual) |
+| **movement radius / orbit** | how far it travels around an anchor | modulate this and a static point becomes a **circulating** pattern |
+| **width / size** | how many pixels the effect covers | `micKick → width` (punch widens it) |
+| **energy / intensity** | how hot it burns (brightness, core pop, halo) | `micDomEnergy1 → energy` |
+| **speed** | how fast it animates | `audioBpm → speed` (beat-locked) |
+| **trail / persistence**, **blur**, **hue / palette position**, **count** | the supporting texture | `audioBuildScore → trail`, `audioNoteHue → palette` |
+
+Pick a small, orthogonal set, name them plainly, and let modulations (§8) do
+the rest. A position-style signal (`micLow`, `micDomEnergy1`) on **position**
+gives a wave that tracks the music; the same signal on **radius** gives an
+orbit that breathes; on **energy** gives a pulse. One pattern, many shows.
+
+### 9.2 `27_swipe` — the simplest high-definition, audio-reactive-ready pattern
+
+`27_swipe` is the canonical starting point of this family — **the simplest
+member, but a real start for beautiful things.** It does one thing — a single
+sharp pixel sweeping a fixture — but it does it as a clean signal-to-visual
+surface:
+
+- **`swipePos`** is the modulatable **position**: drive it with any audio key
+  and the lit pixel tracks the signal — a literal *signal → position* visual.
+- **`swipeWidth` / `blur`** are size/softness, **`trail`** is persistence,
+  **`swipeDir`** flips travel, **`shift`** calibrates the zero-point to the rig.
+- A **sharp single-pixel core on true black** (`BASE_FLOOR = 0`) is what makes
+  it **high definition**: every modulation of `swipePos` reads as a crisp,
+  exact move, not a mushy glow. High contrast + high definition is what lets the
+  audio signal show through faithfully.
+
+It is deliberately one moving point, but the recipe scales straight up: add a
+`radius` + `angle` for an orbiting effect; run several emitters each with its
+own `position`/`energy`; layer `width`/`hue` modulations. The dancer patterns
+(e.g. `26_dom_dancers_chevron`) are richer members of the same family — gliding
+orbs whose position and energy are the modulation handles. Start at the swipe;
+build toward the beautiful things.
