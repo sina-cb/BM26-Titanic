@@ -1,54 +1,55 @@
 /*
-  31_bar_swipe.js
+  32_vintage_swipe.js
 
-  HIGH-CONTRAST HORIZONTAL SWIPE ACROSS THE TWO BARS — self-filtered to fId 7..8.
+  HIGH-CONTRAST VERTICAL SWIPE ON THE VINTAGE STRIPS — self-filtered to fId 5..6.
 
   SELF-FILTER (P0): render3D returns black immediately for any pixel whose
-  fixtureId is < 7 or > 8. Only the two 18-pixel ShehdsBar strips light up; the
-  pars (1..4) and vintage strips (5,6) stay dark under this pattern.
+  fixtureId is < 5 or > 6. Only the two 6-head Vintage strips light up; the
+  pars (1..4) and bars (7,8) stay dark under this pattern.
 
-  AXIS = PHYSICAL X (left<->right). The bars span the model's normalized x from
-  0.0 (leftmost LED) to 1.0 (rightmost LED) as one continuous horizontal row
-  (test_bench.js), so the swipe travels in x-space directly — by PHYSICAL
-  position, not LED wiring index. `swipeX` is the swipe position along x.
+  AXIS = PHYSICAL Y (up<->down). The vintage heads are stacked vertically: from
+  test_bench.js the strips span normalized y from 0.0 (bottom head) to ~0.273
+  (top head), with both strips at the same heights. We normalize y to the strip
+  extent (`VINT_Y_MAX`) so the swipe spans the full column 0..1, then sweep that
+  — by PHYSICAL height, not LED index. Both strips swipe together (mirrored).
 
-  THE SWIPE: a narrow bright band (`swipeWidth`, in normalized x units) whose
-  centre is the swipe position. Pixels under the band are FULL brightness on the
-  strict cp1<->cp2 palette; everything else sits at a tiny floor (`BASE_FLOOR`)
-  — hard on/off, maximum contrast. Distance is LINEAR in x (a straight row, not
-  a loop); when the auto-animation phase wraps 1->0 the band restarts at the
-  left (sawtooth).
+  THE SWIPE: a narrow bright band (`swipeWidth`, in normalized column units)
+  whose centre is the swipe position. Heads under the band are FULL brightness
+  on the strict cp1<->cp2 palette; everything else sits at a tiny floor
+  (`BASE_FLOOR`) — hard on/off, maximum contrast. Linear distance; the band
+  restarts at the bottom when the auto-animation phase wraps (sawtooth).
 
   POSITION / DIRECTION:
     - `localSpeed` auto-animates the band 0->1 (set 0 to freeze and position by
-      `swipeX`).
-    - `swipeX` (0..1) is the modulation-drivable swipe position along x.
-    - `swipeDir` flips travel: <0.5 = LEFT->RIGHT, >=0.5 = RIGHT->LEFT.
+      `swipeY`).
+    - `swipeY` (0..1) is the modulation-drivable swipe position along the column.
+    - `swipeDir` flips travel: <0.5 = DOWN->UP (bottom->top), >=0.5 = UP->DOWN.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderSwipeX     (swipeX)     <- micLow
+      MODULATE sliderSwipeY     (swipeY)     <- micLow
       MODULATE sliderSwipeWidth (swipeWidth) <- micDomEnergy1
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
-export var localSpeed = 0.5;   // auto-animate rate (0 = freeze, drive by swipeX)
-export var swipeX = 0.0;       // 0..1 swipe position along x (modulatable)
-export var swipeWidth = 0.12;  // band width in normalized x units
-export var swipeDir = 0.0;     // <0.5 = L->R, >=0.5 = R->L
+export var localSpeed = 0.5;   // auto-animate rate (0 = freeze, drive by swipeY)
+export var swipeY = 0.0;       // 0..1 swipe position along the vertical column
+export var swipeWidth = 0.26;  // band width in normalized column units (~1.5 heads)
+export var swipeDir = 0.0;     // <0.5 = DOWN->UP, >=0.5 = UP->DOWN
 
-export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 (left edge / cyan)
-export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // palette 2 (right edge / amber)
+export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 (bottom / cyan)
+export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // palette 2 (top / amber)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderSwipeX(v) { swipeX = v; }
-export function sliderSwipeWidth(v) { swipeWidth = 0.04 + v * 0.5; }
+export function sliderSwipeY(v) { swipeY = v; }
+export function sliderSwipeWidth(v) { swipeWidth = 0.10 + v * 0.6; }
 export function sliderSwipeDir(v) { swipeDir = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
+var VINT_Y_MAX = 0.273; // top of the vintage column in normalized y (test_bench)
 var MAX_RATE = 0.5;     // sweeps per second at localSpeed = 1.0 (slow-ish)
-var BASE_FLOOR = 0.04;  // tiny resting glow on un-swept pixels (P0: not a blackout)
+var BASE_FLOOR = 0.04;  // tiny resting glow on un-swept heads (P0: not a blackout)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -104,21 +105,21 @@ export function beforeRender(delta) {
   phase = phase - floor(phase);
 
   // Auto phase + the modulatable position, then flip for direction. Wrap ONLY
-  // past 1.0 so swipeX = 1.0 stays the right edge (a plain mod folds 1->0).
-  var pp = phase + swipeX;
+  // past 1.0 so swipeY = 1.0 stays the top edge (a plain mod folds 1->0).
+  var pp = phase + swipeY;
   if (pp > 1.0) pp = pp - floor(pp);
   if (swipeDir >= 0.5) pp = 1.0 - pp;
   swipeCenter = pp;
 }
 
 export function render3D(index, x, y, z) {
-  // ── SELF-FILTER: only the two bars (fId 7..8) ───────────────────────────
-  if (fixtureId < 7 || fixtureId > 8) { rgb(0, 0, 0); return; }
+  // ── SELF-FILTER: only the two vintage strips (fId 5..6) ─────────────────
+  if (fixtureId < 5 || fixtureId > 6) { rgb(0, 0, 0); return; }
 
-  // PHYSICAL X position 0..1: bars span normalized x 0..1 left->right.
-  var pos = clamp01(x);
+  // PHYSICAL Y position 0..1 along the column: y=0 (bottom) .. VINT_Y_MAX (top).
+  var pos = clamp01(y / VINT_Y_MAX);
 
-  // Linear distance from the swipe centre along the horizontal row.
+  // Linear distance from the swipe centre along the vertical column.
   var dist = abs(pos - swipeCenter);
 
   // Hard on/off band for maximum contrast.
