@@ -96,10 +96,19 @@ const EXPECTED_TOPIC_BY_TYPE = {
   audioStatus:                 'control',
   oscStats:                    'control',
   stats:                       'control',
+  groupFixedColors:            'control',
+  scheduledTasks:              'control',
+  // docs/29: chain-editor reconcile rebroadcast after PUT/PATCH/reset.
+  audioChainsChanged:          'control',
+  // docs/30: sparse drop-instant event from the audio structure detector.
+  dropFired:                   'control',
   // /ws/params — steady CPC
   sharedParams:                'params',
+  modulationState:             'params',
   // /ws/signals — audio meters
   liveParams:                  'signals',
+  // docs/29: 5 Hz per-op chain preview (gated by subscribeChains).
+  signalChain:                 'signals',
   // /ws/viz — frames
   vis:                         'viz',
 };

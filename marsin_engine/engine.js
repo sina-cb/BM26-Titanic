@@ -10,6 +10,14 @@
  *   node engine.js --list
  *   node engine.js --pattern fire --dry-run
  *   node engine.js --pattern fire --force-osc-port
+ *
+ * ░░ HARD, UNBREAKABLE RULE — audio is single-source-of-truth ░░
+ *   All audio DSP lives in `audio/` (analyzer, postproc chains, detector,
+ *   capture, config). The Audio Companion app (audio/companion/) MUST run the
+ *   engine's REAL audio code by importing it from `audio/…` — it must NEVER
+ *   reimplement, fork, or shadow any audio-processing logic in its own code
+ *   path. Whatever the engine does, the Companion does, because it is the same
+ *   code. New audio behaviour goes in `audio/…` first. (See audio/README.md.)
  */
 
 import fs from 'fs';
@@ -24,17 +32,19 @@ import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
-import { AudioCapture } from './lib/audio_capture.js';
-import { AudioAnalyzer } from './lib/audio_analyzer.js';
+import { AudioCapture } from './audio/capture/audio_capture.js';
+import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
-import { mergeAudioConfig, pickLiveFields } from './lib/audio_config.js';
+import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
-} from './lib/audio_config_store.js';
-import { listAudioDevices, findConfiguredDevice } from './lib/audio_devices.js';
-import { SignalPostProcessor, KNOWN_SIGNALS } from './lib/signal_post_processor.js';
+} from './audio/config/audio_config_store.js';
+import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
+import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
+import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
+import { DerivedSignals } from './audio/signals/derived_signals.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
-import { handleAudioCliFlags } from './lib/audio_mic_chooser.js';
+import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
@@ -791,6 +801,24 @@ async function main() {
     process.exit(audioCliResult.exitCode || 0);
   }
 
+  // --audio_file <path>: stream a local audio FILE through the EXACT same
+  // capture→analyzer→CPC path as a mic (deterministic e2e tests, desk
+  // tuning with no speakers, docs/30 dataset validation). Force audio on
+  // and pin the capture device to the `file:` URI here, in the boot-config
+  // region, BEFORE AudioCapture is constructed — audio_capture.js detects
+  // the `file:` prefix and builds file-input ffmpeg argv. Codex P0: this is
+  // an explicit operator request, so it overrides config.yaml's audio
+  // defaults loudly rather than silently falling back to a mic.
+  if (audioFlags.audioFile) {
+    engineConfig.audio = engineConfig.audio || {};
+    engineConfig.audio.enabled = true;
+    engineConfig.audio.capture = {
+      ...(engineConfig.audio.capture || {}),
+      device: `file:${audioFlags.audioFile}`,
+    };
+    console.log(`  🎵 audio file replay: ${audioFlags.audioFile} (forces audio.enabled)`);
+  }
+
   console.log(`
   ╔══════════════════════════════════════════╗
   ║       🔥 MarsinEngine v2.0 (WASM VM)    ║
@@ -1243,10 +1271,11 @@ async function main() {
 
   loop.start();
 
-  // 7b. BPM → speed sync. Attaches to the CPC subscriber list, so it
-  // works whether BPM arrives via OSC (`/lx/tempo/bpm`), a future
-  // mic-derived detector, or REST. Operator gates the behaviour via
-  // the `bpmSpeedSync` CPC param (default off).
+  // 7b. BPM → speed sync. Attaches to the CPC subscriber list and follows
+  // the Audio Companion's analyzed tempo, which arrives over OSC
+  // `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract).
+  // Operator gates the behaviour via the `bpmSpeedSync` CPC param
+  // (default off); when `audioBpm` is 0/absent the sync doesn't drive.
   const bpmSync = new BpmSpeedSync(paramCenter);
   bpmSync.attach();
 
@@ -1287,6 +1316,25 @@ async function main() {
       console.error(`  ⚠️  signal chains: ignoring malformed chains block (${e.message}) — using defaults`);
     }
   }
+
+  // docs/30: audio structure detector (build / drop / sustain cues).
+  // ALWAYS constructed so its surface exists even when disabled — tick()
+  // no-ops until audio.structureDetector.enabled flips true via PATCH
+  // /audio/config. Reads the live config fresh each tick via getConfig so
+  // a hot enable/disable + threshold tweak takes effect immediately.
+  // Broadcast hook is the same audioStatus publisher used below; the
+  // detector emits the sparse `dropFired` event through it.
+  const audioStructureDetector = new AudioStructureDetector({
+    paramCenter,
+    broadcast: (msg) => broadcastStatsRef.publish(msg),
+    getConfig: () => (audioState.config && audioState.config.structureDetector) || {},
+  });
+  audioState.structureDetector = audioStructureDetector;
+
+  // Derived signals (BPM / beat / party / note / switch cues) — observe-and-
+  // publish, runs right after the detector each hop off the live CPC keys.
+  const derivedSignals = new DerivedSignals({ paramCenter });
+  audioState.derivedSignals = derivedSignals;
 
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
@@ -1388,7 +1436,7 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick }) => {
+        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2 }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1396,21 +1444,37 @@ async function main() {
           const midPost  = signalPostProcessor.process('micMid',  mid,  dt);
           const highPost = signalPostProcessor.process('micHigh', high, dt);
           const kickPost = signalPostProcessor.process('micKick', kick, dt);
+          const fluxPost = signalPostProcessor.process('micFlux', flux, dt);
           if (kickPost > 0.95) audioState.lastKickAt = nowMs;
           // Single setMany so the downstream onChange fan-out fires
-          // ONCE per hop for the full 8-key bundle (post + raw), not
-          // twice. CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys
-          // to render the raw row of the diagnostics strip.
+          // ONCE per hop for the full bundle (post + raw), not twice.
+          // CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys to render
+          // the raw row of the diagnostics strip. micFlux (docs/30) is
+          // the spectral-flux primitive the structure detector reads.
           paramCenter.setMany([
             { kind: 'scalar', key: 'micLow',     value: lowPost  },
             { kind: 'scalar', key: 'micMid',     value: midPost  },
             { kind: 'scalar', key: 'micHigh',    value: highPost },
             { kind: 'scalar', key: 'micKick',    value: kickPost },
+            { kind: 'scalar', key: 'micFlux',    value: fluxPost },
             { kind: 'scalar', key: 'micLowRaw',  value: low      },
             { kind: 'scalar', key: 'micMidRaw',  value: mid      },
             { kind: 'scalar', key: 'micHighRaw', value: high     },
             { kind: 'scalar', key: 'micKickRaw', value: kick     },
+            { kind: 'scalar', key: 'micFluxRaw', value: flux     },
+            // Dominant-frequency analyzer outputs (dom1/dom2 + energy).
+            { kind: 'scalar', key: 'micDomFreq1',   value: domFreq1   },
+            { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
+            { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
+            { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
           ], 'audio', 'audio:mic');
+          // docs/30: run the structure detector at the analyzer hop rate
+          // (lowest latency, auto-pauses when the analyzer is off). It
+          // reads the live keys just written above and publishes its own
+          // five keys + the sparse dropFired event. No-ops when disabled.
+          audioStructureDetector.tick(nowMs, dt);
+          // Derived signals read the keys the analyzer + detector just wrote.
+          derivedSignals.tick(nowMs, dt);
         },
       });
       audioState.capture = new AudioCapture({
@@ -1423,7 +1487,12 @@ async function main() {
         sampleRate:   cfg.capture.sampleRate,
         channels:     cfg.capture.channels,
         inputFormat:  cfg.capture.inputFormat || undefined,
+        // `loop` only applies to file: capture sources (default true so a
+        // short show clip doesn't stop the meters); ignored for live mics.
+        loop:         cfg.capture.loop,
         frameSamples: cfg.hopSize,
+        captureBufferMs:      cfg.capture.captureBufferMs,
+        jitterBufferHops:     cfg.capture.jitterBufferHops,
         stopTimeoutMs:        cfg.capture.stopTimeoutMs,
         stderrWarnIntervalMs: cfg.capture.stderrWarnIntervalMs,
         onFrame:  (i16) => audioState.analyzer.pushSamples(i16),
@@ -1495,6 +1564,12 @@ async function main() {
       saveSceneAudio(audioState.sceneDir, { ...onDisk, ...pickLiveFields(audioState.config) });
     } catch (e) { console.warn(`[audio] failed to persist scene audio state: ${e.message}`); }
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    // Rebroadcast the new config to EVERY /ws/control subscriber so the
+    // engine stays the single source of truth: CaptainPad mirrors its
+    // sliders and the Audio Companion drives its live analyzer gain /
+    // smooth / device off this frame (two-way sync). Low volume,
+    // operator-driven — see ws_topic_routing `audioConfig`.
+    broadcastStatsRef.publish({ type: 'audioConfig', config: audioState.config });
     return audioState.config;
   };
 
@@ -1538,6 +1613,10 @@ async function main() {
       saveSceneAudio(audioState.sceneDir, stripped);
     } catch (e) { console.warn(`[audio] failed to reset scene audio state: ${e.message}`); }
     broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+    // Same single-source-of-truth rebroadcast as applyLiveUpdate so a
+    // "Reset to defaults" snaps the Companion's live gain / smooth back
+    // in lockstep with CaptainPad.
+    broadcastStatsRef.publish({ type: 'audioConfig', config: audioState.config });
     return next;
   };
 

@@ -1,0 +1,265 @@
+/* companion_app.css — TouchDesigner-flavoured dark UI. No web fonts (offline). */
+:root{
+  --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
+  --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
+  --ok:#34d3b5; --err:#ff5d6c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+  overflow:hidden;display:flex;flex-direction:column;height:100vh}
+
+/* source sub-bar */
+.subbar{display:flex;align-items:center;gap:14px;padding:7px 18px;background:var(--panel2);
+  border-bottom:1px solid var(--border)}
+.subbar-label{color:var(--muted);letter-spacing:1.5px;font-size:10.5px}
+.sourcebar{display:flex;align-items:center;gap:12px}
+.seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg-btn{background:var(--panel);color:var(--muted);border:none;border-right:1px solid var(--border);
+  padding:5px 14px;font:inherit;cursor:pointer}
+.seg-btn:last-child{border-right:none}
+.seg-btn.active{background:var(--accent);color:#1a1205;font-weight:700}
+.file-wrap{display:none;align-items:center;gap:6px}
+.file-wrap.show{display:flex}
+.file-input{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:5px 8px;font:inherit;width:300px}
+.file-go{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:5px 12px;font:inherit;cursor:pointer}
+.src-tag{color:var(--muted);font-size:10.5px}
+
+/* file-mode transport (audio-out + play/pause + seek) — shown only in file mode */
+.transport{display:none;align-items:center;gap:8px}
+.tp-btn{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:4px 11px;font:inherit;cursor:pointer;min-width:34px}
+.tp-btn:hover{border-color:var(--accent)}
+.tp-seek{width:220px}
+.tp-time{color:var(--muted);font-size:10.5px;min-width:78px}
+
+/* input gain + calibration (right side of the source bar) */
+.gainbar{display:flex;align-items:center;gap:12px;margin-left:auto}
+.gain-wrap{display:flex;align-items:center;gap:8px}
+.gain-lab{color:var(--muted);letter-spacing:1px;font-size:10px}
+.gain-range{width:140px}
+.gain-val{color:var(--text);min-width:38px;font-weight:700}
+.cal-btn{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;
+  padding:5px 12px;font:inherit;cursor:pointer}
+.cal-btn:hover{border-color:var(--accent)}
+.cal-btn.rec{color:var(--err);border-color:var(--err);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.5}}
+.cal-res{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:8px}
+.cal-res b{color:var(--text)}
+.cal-apply{background:var(--accent);color:#1a1205;border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
+.mic-wrap{display:none;align-items:center;gap:6px}
+.mic-wrap.show{display:flex}
+.device-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
+  padding:5px 8px;font:inherit;min-width:240px;max-width:380px}
+
+/* file browser modal */
+.browse-box{width:min(620px,92vw)}
+.browse-path{flex:1;color:var(--accent);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0 10px}
+.browse-list{max-height:420px;overflow:auto;display:flex;flex-direction:column;gap:2px;margin-top:8px}
+.browse-row{display:flex;align-items:center;gap:9px;background:var(--panel2);border:1px solid transparent;
+  border-radius:6px;padding:8px 10px;color:var(--text);font:inherit;cursor:pointer;text-align:left;width:100%}
+.browse-row:hover{border-color:var(--border);background:var(--raised)}
+.browse-row.dir .bn{color:var(--text)}
+.browse-row.file .bn{color:var(--accent)}
+.browse-row .bi{width:18px;text-align:center;opacity:.85}
+.browse-empty{color:var(--muted);padding:14px;text-align:center}
+
+/* live readouts: dom-freq + structure */
+.live-readouts{display:grid;grid-template-columns:1fr 1fr 0.9fr;gap:14px}
+.derived-row{display:flex;align-items:center;gap:18px}
+.d-item{display:flex;align-items:baseline;gap:7px}
+.d-lab{color:var(--muted);font-size:10px}
+.d-big{font-weight:700;font-size:20px}
+.beat-dot{color:var(--ok);opacity:0;font-size:12px}
+.party-pill{font-weight:700;letter-spacing:1px;padding:4px 11px;border-radius:7px;background:#22303a;color:#8aa;font-size:11px}
+.party-pill.on{background:rgba(240,162,59,.18);color:var(--accent)}
+.cue-flash{float:right;margin-left:8px;color:var(--accent);font-weight:700;font-size:10px;opacity:0;transition:opacity .1s}
+.lr-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.lr-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:8px}
+.dom-row{display:grid;grid-template-columns:42px 78px 1fr 40px;align-items:center;gap:8px;margin:5px 0}
+.dom-lab{font-weight:700}
+.dom-f{color:var(--text)}
+.dom-meter{height:8px;background:var(--raised);border-radius:4px;overflow:hidden}
+.dom-meter i{display:block;height:100%;width:0;border-radius:4px;transition:width .08s linear}
+.dom-e{text-align:right;color:var(--muted)}
+.struct-row{display:flex;align-items:center;gap:14px}
+.state-pill{font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:7px;min-width:78px;text-align:center}
+.s-thin{background:#22303a;color:#8aa}
+.s-build{background:#3a3320;color:var(--accent)}
+.s-sustain{background:#1f3a33;color:var(--ok)}
+.sbars{flex:1;display:flex;flex-direction:column;gap:5px}
+.sbar{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:8px}
+.sbar span{color:var(--muted);font-size:10px}
+.sbar i{display:block;height:8px;width:0;background:var(--accent);border-radius:4px;transition:width .08s linear}
+.drop-flash{float:right;color:var(--err);font-weight:700;opacity:0;transition:opacity .1s}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:baseline;gap:11px}
+.logo{color:var(--accent);font-size:16px}
+.title{font-weight:700;letter-spacing:2px}
+.sub{color:var(--muted);font-size:11px}
+.top-right{display:flex;align-items:center;gap:12px}
+.flash{font-size:11px;min-width:60px;text-align:right}
+.status{padding:3px 10px;border-radius:6px;border:1px solid var(--border);color:var(--muted)}
+.status.ok{color:var(--ok);border-color:var(--ok);background:rgba(52,211,181,.08)}
+.status.err{color:var(--err);border-color:var(--err);background:rgba(255,93,108,.08)}
+.primary{background:var(--accent);color:#1a1205;border:none;border-radius:6px;
+  padding:6px 14px;font:inherit;font-weight:700;cursor:pointer}
+.primary:hover{filter:brightness(1.08)}
+
+.layout{display:grid;grid-template-columns:230px 1fr;flex:1;min-height:0}
+.sidebar{background:var(--panel);border-right:1px solid var(--border);padding:12px;overflow:auto}
+.panel-label{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:10px}
+
+.signals{display:flex;flex-direction:column;gap:7px}
+/* 5-col grid: name · mini-scope · value · remove(×). The value column is
+   widened to 48px and right-padded so the "0.00" never clips the edge
+   (sidebar number glitch fix, 2026-06-17). */
+.sig-row{display:grid;grid-template-columns:40px 1fr 48px 24px;align-items:center;gap:6px;
+  background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--acc);
+  border-radius:8px;padding:7px 6px 7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
+.sig-row.active{background:var(--raised);box-shadow:0 0 0 1px var(--acc) inset}
+.sig-name{font-weight:700;color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The mini-trace cell must be allowed to SHRINK below the canvas's intrinsic
+   110px width (grid items default to min-width:auto, which would let the canvas
+   push the row wider and shove the remove [×] button past the sidebar edge).
+   min-width:0 + a fluid canvas keeps every column inside the row. */
+.sig-mini{min-width:0;overflow:hidden}
+.sig-mini canvas{display:block;width:100%;height:auto}
+.sig-val{text-align:right;color:var(--muted);padding-right:4px;font-variant-numeric:tabular-nums;
+  font-size:11px;white-space:nowrap}
+.sig-type{display:block;color:var(--muted);font-size:8px;letter-spacing:.5px;margin-top:1px}
+/* Remove control — a clearly themed framed button, the destructive twin of the
+   `[+]` add button (.sig-add). Red-tinted so the operator can't miss it. */
+.sig-x{background:rgba(255,93,108,0.10);border:1px solid rgba(255,93,108,0.35);
+  color:#ff5d6c;cursor:pointer;font:inherit;font-weight:700;font-size:13px;
+  width:22px;height:22px;padding:0;line-height:1;border-radius:6px}
+.sig-x:hover{color:#fff;background:#ff5d6c;border-color:#ff5d6c}
+.sigs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sig-add{background:var(--raised);border:1px solid var(--border);color:var(--accent);cursor:pointer;
+  font:inherit;font-weight:700;font-size:13px;width:24px;height:24px;border-radius:6px;line-height:1}
+.sig-add:hover{filter:brightness(1.2)}
+.input-row{--acc:#34d3b5;grid-template-columns:1fr;margin-bottom:8px}
+.input-row .sig-name{color:#34d3b5}
+.sig-sub{display:block;color:var(--muted);font-size:9px;margin-top:2px}
+.input-ctrls{display:flex;flex-direction:column;gap:16px;max-width:440px}
+.views-label{margin-top:14px}
+.view-row{--acc:#f0a23b;grid-template-columns:1fr}
+.view-row .sig-name{color:#cdd6e0}
+.view-row.active .sig-name{color:var(--accent)}
+
+.stage{display:flex;flex-direction:column;min-width:0;padding:14px;gap:14px;overflow:auto}
+.viz-row{display:flex;flex-direction:column;gap:10px}
+.viz-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
+.viz-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:7px}
+.viz-sub{color:#566;letter-spacing:0;font-size:10px;margin-left:6px}
+#spectrum{display:block;width:100%;height:150px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
+#wave{display:block;width:100%;height:84px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
+.trace-panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
+#trace{display:block;width:100%;height:260px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
+.readouts{position:absolute;top:20px;right:24px;text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.ro{display:flex;gap:8px;align-items:baseline}
+.ro-l{color:var(--muted);font-size:10px}
+.ro-v{font-weight:700}
+.ro-v.big{font-size:28px}
+.ro-legend{color:var(--muted);font-size:10px;margin-top:6px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle}
+.dot.ghost{background:#888;opacity:.5}.dot.solid{background:var(--accent)}
+/* Dom freq+energy pair: the energy overlay legend swatch (dashed white). */
+.dot.energy{width:14px;height:0;border-radius:0;border-top:2px dashed rgba(255,255,255,.85)}
+
+.lower{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
+/* The TEST SOURCE panel only shows in test mode (syncSourcePanel hides it via
+   display:none otherwise). A display:none grid item is dropped from the grid,
+   which would collapse the chain-panel into the 230px first column and force
+   the op row to wrap VERTICALLY. Pin the chain-panel to column 2 so it always
+   keeps the wide track, and when the source panel is hidden collapse the grid
+   to a single full-width column (reclaim the empty 230px). */
+.chain-panel{grid-column:2}
+.lower.no-source{grid-template-columns:1fr}
+.lower.no-source .chain-panel{grid-column:1}
+.source-panel,.chain-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px}
+.source{display:flex;flex-direction:column;gap:10px}
+.knob-head{display:flex;justify-content:space-between;color:var(--muted);font-size:10.5px;margin-bottom:3px}
+.knob-head span:last-child{color:var(--text)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:3px;
+  background:var(--raised);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
+
+/* Ops render LEFT-TO-RIGHT as a horizontal row (source → op → … → osc_out),
+   wrapping only when the row overflows. Each op card is compact. */
+.chain{display:flex;flex-direction:row;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.op{background:var(--panel2);border:1px solid var(--border);border-top:3px solid var(--acc);
+  border-radius:8px;padding:9px;min-width:128px;max-width:200px}
+/* The source head (where a designed signal's raw input enters the row). */
+.op.op-source{border-top-color:#34d3b5;min-width:96px}
+.op.op-source .op-type{color:#34d3b5}
+.op-src-sub{color:var(--muted);font-size:9px;margin-top:4px}
+/* The terminal OSC output tap reads visually distinct (the output). */
+.op.osc-out{border-top-color:#34d3b5;background:rgba(52,211,181,0.06)}
+.op.osc-out .op-type{color:#34d3b5}
+.op-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.op-type{font-weight:700;letter-spacing:.5px;color:var(--acc)}
+.op-tag{color:var(--muted);font-weight:400;font-size:9.5px;letter-spacing:0}
+.op-tools{display:flex;gap:3px}
+.op-btn{background:var(--raised);border:1px solid var(--border);color:var(--muted);border-radius:5px;
+  width:22px;height:22px;font:inherit;cursor:pointer;line-height:1}
+.op-btn:hover{color:var(--text)}
+.op-arrow{color:var(--muted);align-self:center;font-size:15px}
+.op-params{display:flex;flex-direction:column;gap:8px}
+.param .pn{color:var(--muted);font-size:10.5px}
+.param-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:3px}
+.pv-input{width:62px;background:var(--raised);color:var(--text);border:1px solid var(--border);
+  border-radius:4px;padding:2px 5px;font:inherit;font-size:10.5px;text-align:right}
+.param-range{width:100%}
+.chain-note{color:var(--muted);font-size:11px;padding:8px 2px}
+.param select,.add-sel{width:100%;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:4px;font:inherit}
+.param-static{color:var(--muted);font-size:10.5px}
+.param-static b{color:var(--text)}
+.param-derived{color:var(--muted);font-size:10px;font-family:ui-monospace,Menlo,monospace;opacity:.8;margin-top:2px}
+.op-add{display:flex;flex-direction:column;gap:8px;border-top-color:var(--border);justify-content:center}
+.reset-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:5px;font:inherit;cursor:pointer}
+.reset-btn:hover{color:var(--text)}
+
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);align-items:center;justify-content:center;z-index:50}
+.modal-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;width:min(680px,90vw);padding:14px}
+.modal-head{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:11px;margin-bottom:10px}
+.modal-head code{color:var(--accent)}
+#export-text{width:100%;height:340px;background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:8px;padding:10px;font:inherit;resize:vertical}
+.modal-foot{margin-top:10px;text-align:right}
+.add-box{width:min(440px,92vw)}
+.add-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.add-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);border-left:3px solid var(--src-accent,#9aa);
+  border-radius:8px;padding:9px 11px;cursor:pointer;font:inherit;transition:none}
+.add-card:hover{background:var(--raised);border-color:var(--src-accent,#9aa)}
+.add-card-label{font-weight:700;color:var(--src-accent,#cdd6e0);letter-spacing:.3px}
+.add-card-type{font-size:10px;color:var(--muted)}
+
+/* add-VIEW modal — viz-type picker + signal multi-select (themed; no native
+   dialogs). Matches the add-signal / export modal theme. */
+.view-box{width:min(520px,92vw)}
+.view-form{display:flex;flex-direction:column;gap:12px}
+.view-field{display:flex;flex-direction:column;gap:6px}
+.view-flabel{color:var(--muted);letter-spacing:1.2px;font-size:10px}
+.view-types{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.view-type-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+  padding:9px 11px;cursor:pointer;font:inherit}
+.view-type-btn:hover{background:var(--raised)}
+.view-type-btn.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.vt-label{font-weight:700;color:var(--accent);letter-spacing:.3px}
+.vt-sub{font-size:10px;color:var(--muted)}
+.view-signals{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;max-height:200px;overflow-y:auto}
+.view-sig-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);border-left:3px solid var(--src-accent,#9aa);
+  border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;opacity:.55}
+.view-sig-card:hover{background:var(--raised)}
+.view-sig-card.on{opacity:1;box-shadow:0 0 0 1px var(--src-accent,#9aa) inset}

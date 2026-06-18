@@ -36,6 +36,71 @@ interface OscConfig {
   status?: any;
 }
 
+// ── Audio Companion identity ─────────────────────────────────────────────
+//
+// The Marsin Audio Companion runs alongside the engine on the operator's
+// machine and streams the curated /marsin/* audio signals into the engine's
+// CPC over loopback OSC. The raw socket sender the engine reports is
+// `osc:<name>` (when the packet origin is an allow-listed sender) or
+// `osc:<ip>:<port>` (raw). We surface the human-friendly "Audio Companion"
+// identity ONLY when the evidence supports it — a loopback sender AND active
+// mapped throughput on the curated addresses — so we never mislabel a real
+// remote sender (e.g. LX Studio on another box). Otherwise we lead with the
+// raw socket details unchanged.
+//
+// `lastSender` shapes (see marsin_engine/lib/osc_listener.js):
+//   osc:127.0.0.1:60583   raw loopback origin
+//   osc:Companion         allow-listed origin named "Companion"
+// Loopback is normalized engine-side to 127.0.0.1 (::1 / ::ffff:127.0.0.1
+// all collapse to it), so a host check on 127.0.0.1 / localhost is enough.
+
+interface CompanionIdentity {
+  /** True when the evidence supports labelling the stream as the Companion. */
+  isCompanion: boolean;
+  /** The loopback host to show (e.g. "127.0.0.1"), when known. */
+  host: string | null;
+}
+
+function senderHost(lastSender: string | null): string | null {
+  if (!lastSender) return null;
+  // Strip the leading "osc:" tag, then take the host portion. A named
+  // allow-list origin ("osc:Companion") has no host — return the name so
+  // the caller can still match a literal "companion" name if present.
+  const body = lastSender.startsWith('osc:') ? lastSender.slice(4) : lastSender;
+  // host:port → host (only split on the LAST colon to keep IPv6 intact;
+  // loopback is normalized to IPv4 127.0.0.1 upstream so this is simple).
+  const lastColon = body.lastIndexOf(':');
+  if (lastColon > 0) {
+    const maybePort = body.slice(lastColon + 1);
+    if (/^\d+$/.test(maybePort)) return body.slice(0, lastColon);
+  }
+  return body;
+}
+
+function isLoopbackHost(host: string | null): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+
+// Decide whether the live stream is the Audio Companion. Evidence required:
+// a loopback sender (or an allow-list origin literally named for the
+// companion) AND active MAPPED throughput on the curated /marsin/* bindings.
+// No mapped traffic → we don't claim it, even on loopback (could be stray
+// unmapped packets from a local debug tool).
+function companionIdentity(stats: {
+  lastSender: string | null;
+  mappedMessagesPerSec: number;
+} | null): CompanionIdentity {
+  if (!stats) return { isCompanion: false, host: null };
+  const host = senderHost(stats.lastSender);
+  const loopback = isLoopbackHost(host);
+  const namedCompanion = typeof host === 'string' && /companion/i.test(host);
+  const mappedActive = (stats.mappedMessagesPerSec ?? 0) > 0;
+  const isCompanion = mappedActive && (loopback || namedCompanion);
+  return { isCompanion, host: loopback ? host : null };
+}
+
 function makeCard(C: Palette, globalStyles: GlobalStyles) {
   return {
     ...globalStyles.card,
@@ -249,6 +314,10 @@ export default function OscConfigScreen() {
   // traffic. Operator bug May 26 2026.
   const pillState = liveStatus?.state ?? null;
   const oscStats = liveStatus?.stats ?? null;
+  // Human-friendly sender identity — only labelled as the Audio Companion
+  // when the evidence supports it (loopback sender + active mapped
+  // throughput). Otherwise we lead with the raw socket details unchanged.
+  const companion = useMemo(() => companionIdentity(oscStats), [oscStats]);
   const pillColor =
     pillState === 'live'      ? ACCENT_AUTO :
     pillState === 'unmapped'  ? C.error :
@@ -322,7 +391,22 @@ export default function OscConfigScreen() {
               {cfg.running ? `${cfg.host}:${cfg.port}` : '—'}
             </Text>
           </View>
-          {oscStats?.lastSender ? (
+          {companion.isCompanion ? (
+            <View style={{ marginBottom: 4 }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>
+                Source: 🎛 <Text style={{ color: ACCENT_AUTO }}>Audio Companion</Text>
+                {companion.host ? <Text style={{ color: C.secondary }}> ({companion.host})</Text> : null}
+              </Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 2 }}>
+                Audio Companion is streaming {oscStats?.mappedMessagesPerSec ?? 0} signals/sec into CPC.
+              </Text>
+              {oscStats?.lastSender ? (
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon, marginTop: 2 }}>
+                  Socket: <Text style={{ color: C.secondary }}>{oscStats.lastSender}</Text>
+                </Text>
+              ) : null}
+            </View>
+          ) : oscStats?.lastSender ? (
             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon }}>
               Last sender: <Text style={{ color: C.text }}>{oscStats.lastSender}</Text>
             </Text>

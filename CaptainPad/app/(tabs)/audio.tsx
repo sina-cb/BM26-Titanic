@@ -5,8 +5,9 @@
 // Structure (top-down) — matches the operator's mental flow, post
 // operator brief 2026-05-26 (BPM out of SETTINGS, analyzer config
 // embedded per-signal in chain editor):
-//   1. PINNED meter strip (mic + stems + BPM, live, sticks at top)
-//   2. Page title
+//   1. Page title
+//   2. Live meters section (AUDIO SIGNALS grid + BPM, in-flow — the
+//      whole tab is one scrollable area, no pinned strip)
 //   3. patchError banner (only when something just failed)
 //   4. MIC ANALYSIS — the master enable/disable toggle. Stays at the
 //      top of the scroll body so operators can flip it without
@@ -39,13 +40,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-// react-native-svg is declared in package.json at 15.10.0 (Expo SDK 54
-// compat). Until the operator runs `npm install` + `npx expo prebuild
-// --platform ios --clean` + rebuild, this import resolves at type-check
-// time but the native module is absent — runtime will throw
-// "RNSVGSvgView not found". This is the intentional cost of adding a
-// native dep mid-cycle. See the rework brief, 2026-05-26.
-import Svg, { Polyline } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -57,14 +51,20 @@ import {
   fetchAudioDevices, getApiBaseAsync, updateParamCenter,
   resetAllAudioChains,
 } from '@/utils/api';
-import { useAudioStatus, useSharedParamValues, useLiveParamValues, useOscStatus, type AudioStatus, type AudioStatusDevice, type OscPillState } from '@/hooks/useEngineState';
-import { AudioChainsCard } from '@/components/audio/AudioChainsCard';
+import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
+import { audioAccentHex } from '@/utils/audioSignals';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
 // isn't yet picked up by the consuming module's checker.
 const ACCENT_AUTO = '#1b9e77';
 
+// Mirrors the engine's /audio/config blob verbatim so we can read it back and
+// PATCH a subset. NOTE: this tab only reads/writes capture.device* + bands.
+// inputGain + fftSize/hopSize (read-only); the kick/bands-crossover/
+// structureDetector fields are kept for type fidelity with the engine doc but
+// are NOT edited here (the per-signal analyzer tuning moved to the Companion).
 interface AudioConfig {
   enabled: boolean;
   capture: {
@@ -78,8 +78,19 @@ interface AudioConfig {
   bands: {
     lowMaxHz: number; midMaxHz: number;
     attackMs: number; releaseMs: number; noiseGate: number;
+    inputGain?: number; // software mic-preamp (audio.bands.inputGain)
   };
   kick:  { minHz: number; maxHz: number; threshold: number; refractoryMs: number; decayMs: number };
+  // Audio structure detector (build/drop/sustain cues, docs/30). Optional:
+  // absent until the engine has it in its merged audio config. Only the
+  // fields the UI reads/patches are typed here.
+  structureDetector?: {
+    enabled?: boolean;
+    dropEdgeMode?: 'level' | 'windowed';
+    dropDeltaWindowMs?: number;
+    buildThreshold?: number; dropEnergyJump?: number;
+    eventRefractoryMs?: number; stemsTimeoutMs?: number;
+  };
 }
 
 // BPM-sync absolute bounds. Operator picks min/max inside this band;
@@ -130,32 +141,10 @@ function makeSubCard(C: Palette) {
   } as const;
 }
 
-function SectionHeader({ icon, title, hint, right }: {
-  icon: string; title: string; hint?: string; right?: React.ReactNode;
-}) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
-      <View style={{
-        width: 36, height: 36, borderRadius: 8,
-        backgroundColor: C.primaryContainer, alignItems: 'center', justifyContent: 'center',
-      }}>
-        <IconSymbol name={icon as any} size={20} color={C.primary} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 0.8 }}>
-          {title}
-        </Text>
-        {hint ? (
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-            {hint}
-          </Text>
-        ) : null}
-      </View>
-      {right ? <View>{right}</View> : null}
-    </View>
-  );
-}
+// `SectionHeader` (icon tile + title + hint, used by the retired MIC
+// ANALYSIS card) was removed on 2026-06-17 with that card — it had no
+// other consumer. The SETTINGS disclosure renders its own inline header.
+// Restore from git history if a future card needs the icon-tile header.
 
 function SubHeader({ title, right }: { title: string; right?: React.ReactNode }) {
   const C = usePalette();
@@ -232,57 +221,24 @@ function FaderRow({ label, suffix, min, max, value, step, hint, onDrag, onCommit
 // `GainRow` (the per-band / per-stem gain slider that POST'd a single
 // CPC key throttled-live) was retired in Phase 6 along with the MIC —
 // ANALYSIS and STEMS — GAIN cards. The same params remain editable via
-// the chain editor's Gain-op slider and via CPCControls in the
-// deck/mixer chrome — see AudioChainsCard + components/CPCControls.tsx.
+// CPCControls in the deck/mixer chrome (components/CPCControls.tsx); the
+// per-signal chain editor that also exposed them was removed from
+// CaptainPad on 2026-06-17 (chain design moved to the Audio Companion).
 
 // `BandMeter` used to render the per-band level read-out inside the MIC
 // LIVE + STEMS LIVE cards. As of operator brief 2026-05-26 those rows
-// were deleted — they duplicate the bars in the pinned
-// <PinnedAudioMeters /> strip at the top of the AUDIO tab. The component
+// were deleted — they duplicate the bars in the
+// <LiveAudioMeters /> section at the top of the AUDIO tab. The component
 // was removed wholesale; if a future card needs a 12-px band meter, lift
 // the bar+label block out of <SignalColumn /> (it shares the same
 // clamp-to-[0,1] + percent label pattern).
 
-// ── Master toggle (large pill, used at top of the page) ─────────────────
-
-function MasterToggle({ on, busy, onPress, label, subtitle, accent = ACCENT_AUTO }: {
-  on: boolean; busy?: boolean; onPress: () => void; label: string; subtitle?: string; accent?: string;
-}) {
-  const C = usePalette();
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={busy}
-      style={{
-        flexDirection: 'row', alignItems: 'center', gap: 14,
-        paddingVertical: 14, paddingHorizontal: 18, borderRadius: 12,
-        backgroundColor: on ? accent : C.surfaceContainerHigh,
-        borderWidth: 1, borderColor: on ? accent : C.ghostBorder,
-        opacity: busy ? 0.7 : 1,
-      }}
-    >
-      <View style={{
-        width: 22, height: 22, borderRadius: 11,
-        backgroundColor: on ? '#000' : C.surface,
-        borderWidth: 2, borderColor: on ? '#000' : C.ghostBorder,
-        alignItems: 'center', justifyContent: 'center',
-      }}>
-        {on ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: accent }} /> : null}
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: on ? '#000' : C.text, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-          {label}
-        </Text>
-        {subtitle ? (
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: on ? '#000' : C.secondary, marginTop: 2 }}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      {busy ? <ActivityIndicator size="small" color={on ? '#000' : C.primary} /> : null}
-    </TouchableOpacity>
-  );
-}
+// ── Master toggle (large pill) — RETIRED (2026-06-17) ───────────────────
+// `MasterToggle` drove the MIC ANALYSIS enable/disable card. That card was
+// removed when the Audio Companion became the sole analyzer (the in-engine
+// listener is obsolete and fought the Companion for the device). The
+// component was its only consumer, so it was deleted. Restore from git
+// history if a large enable/disable pill is needed again.
 
 // ── Mic picker ──────────────────────────────────────────────────────────
 
@@ -326,12 +282,12 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
   );
 }
 
-// ── Pinned live meters strip ─────────────────────────────────────────────
+// ── Live meters section ──────────────────────────────────────────────────
 //
-// Compact horizontal strip rendered as a SIBLING of the AUDIO tab's
-// ScrollView, so it stays anchored at the top regardless of scroll
-// position (the load-bearing UX win: operator can keep eyes on the
-// meters while tuning sliders further down).
+// The live AUDIO SIGNALS grid + status pills + INPUT GAIN, rendered as a
+// normal in-flow section near the top of the AUDIO tab's single page
+// ScrollView (it used to be a pinned strip; the whole tab now scrolls as
+// one area).
 //
 // Subscribes to ONLY the live audio keys + status hooks — never reads
 // steady params or the AudioConfig blob — so the surrounding body's
@@ -358,25 +314,20 @@ function MicPickerRow({ device, isCurrent, onPress, busy }: {
 // supported for any future fixed-colour slot.
 type SignalAccent = 'auto' | 'primary' | 'error' | string;
 
+// A signal slot for the meter strip. Derived at runtime from the engine
+// schema (useAudioSignals) — the strip is DYNAMIC: it renders whatever
+// audio CPC keys the Companion routes in (low/mid/high/kick, dom1/dom2,
+// energy/slow/build, party, …). `accent` is chosen per-signal so KICK /
+// frequency signals read apart from the [0,1] intensities.
 type SignalSlot = {
+  key: string;
   label: string;
-  rawKey: string;
+  rawKey: string | null;
   postKey: string;
   accent: SignalAccent;
+  kind: 'intensity' | 'frequency' | 'bpm';
+  max: number;
 };
-
-const MIC_SIGNALS: readonly SignalSlot[] = [
-  { label: 'LOW',  rawKey: 'micLowRaw',  postKey: 'micLow',  accent: 'auto' },
-  { label: 'MID',  rawKey: 'micMidRaw',  postKey: 'micMid',  accent: 'auto' },
-  { label: 'HIGH', rawKey: 'micHighRaw', postKey: 'micHigh', accent: 'auto' },
-  { label: 'KICK', rawKey: 'micKickRaw', postKey: 'micKick', accent: 'error' },
-];
-
-const STEMS_SIGNALS: readonly SignalSlot[] = [
-  { label: 'VOC', rawKey: 'stemsVocalsRaw', postKey: 'stemsVocals', accent: 'primary' },
-  { label: 'BAS', rawKey: 'stemsBassRaw',   postKey: 'stemsBass',   accent: 'primary' },
-  { label: 'DRM', rawKey: 'stemsDrumsRaw',  postKey: 'stemsDrums',  accent: 'primary' },
-];
 
 function resolveAccent(accent: SignalAccent, palette: Palette): string {
   if (accent === 'auto') return ACCENT_AUTO;
@@ -385,205 +336,140 @@ function resolveAccent(accent: SignalAccent, palette: Palette): string {
   return accent;
 }
 
-const ALL_SIGNALS: readonly SignalSlot[] = [...MIC_SIGNALS, ...STEMS_SIGNALS];
-
-// Build the defaults snapshot once at module scope — useLiveParamValues
-// pins keys from the FIRST call's defaults so any per-render literal
-// would be wasted work and a hazard for the pinned-key set.
-const PINNED_LIVE_DEFAULTS: Record<string, number> = (() => {
-  const acc: Record<string, number> = {
-    tempoBpm: 0,
-  };
-  for (const s of ALL_SIGNALS) { acc[s.rawKey] = 0; acc[s.postKey] = 0; }
-  return acc;
-})();
-
-// Trail buffer + window-picker constants. Same AsyncStorage key as
-// before (operator preference roams across rebuilds).
-const SIGNAL_WINDOW_KEY = '@CaptainPad:audioTrailWindowS';
-const WINDOW_OPTIONS_S = [5, 10, 15, 30] as const;
-const DEFAULT_WINDOW_S = 10;
-const TRAIL_SAMPLE_HZ = 15;            // 15 Hz visual cadence — enough resolution for a smooth polyline
-const TRAIL_SAMPLE_MS = 1000 / TRAIL_SAMPLE_HZ;
-const MAX_TRAIL_S = WINDOW_OPTIONS_S[WINDOW_OPTIONS_S.length - 1];
-const MAX_BUFFER_LEN = MAX_TRAIL_S * TRAIL_SAMPLE_HZ;
-
-const TRAIL_HEIGHT = 28;               // SVG plot height per signal column
-const SVG_VIEW_W   = 100;              // viewBox width — strokes scale to the actual rendered width
-const SVG_VIEW_H   = 100;              // viewBox height — y inverted because SVG grows downward
-
-// Build a polyline "x,y x,y …" point string from a sample buffer. Older
-// samples LEFT, newest RIGHT. Empty leading slots are skipped (line
-// just starts later) — keeps the "now" anchored to the right edge.
-function buildPoints(samples: readonly number[], bufferLen: number): string {
-  if (!samples.length || bufferLen <= 1) return '';
-  const take = Math.min(samples.length, bufferLen);
-  const startIdx = bufferLen - take;       // x slot where the line starts
-  const stepX = SVG_VIEW_W / (bufferLen - 1);
-  const parts: string[] = [];
-  for (let i = 0; i < take; i++) {
-    const v = Math.max(0, Math.min(1, samples[samples.length - take + i] ?? 0));
-    const x = (startIdx + i) * stepX;
-    const y = SVG_VIEW_H * (1 - v);        // invert: 0 at bottom, 1 at top
-    parts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
-  }
-  return parts.join(' ');
+// Pick an accent for a dynamic signal. The per-signal identity-colour map
+// (Companion SOURCE_ACCENT mirror) now lives in utils/audioSignals.ts as a
+// single source of truth shared with the deck meters + the modulation
+// source trail — `audioAccentHex` resolves the fixed hex. Kept as a thin
+// wrapper returning a `SignalAccent` so the existing resolveAccent path /
+// literal-hex slots are unchanged.
+function accentFor(sig: AudioSignalDescriptor): SignalAccent {
+  return audioAccentHex(sig);
 }
 
-// One signal column: header label, then two stacked sub-rows — RAW
-// (ghost-toned bar + trace) and POST (solid bar + trace). Stacking
-// them (vs overlaying) means the operator can read each separately
-// and verify gain divergence at a glance.
-function SignalColumn({ slot, raw, post, rawSamples, postSamples, bufferLen }: {
+function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {
+  return {
+    key: sig.key,
+    label: sig.label,
+    rawKey: sig.rawKey,
+    postKey: sig.postKey,
+    accent: accentFor(sig),
+    kind: sig.kind,
+    max: sig.max,
+  };
+}
+
+// Normalise a raw CPC value to a [0,1] bar/trail fill given the slot kind.
+function normalizeSlot(slot: SignalSlot, value: number): number {
+  if (slot.kind === 'intensity') return Math.max(0, Math.min(1, value));
+  if (slot.max > 0) return Math.max(0, Math.min(1, value / slot.max));
+  return Math.max(0, Math.min(1, value));
+}
+
+// Human-readable value for a slot's header readout.
+function slotValueText(slot: SignalSlot, value: number): string {
+  if (slot.kind === 'frequency') return `${Math.round(value)}Hz`;
+  if (slot.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
+  return Math.max(0, Math.min(1, value)).toFixed(2);
+}
+
+// Trace canvas height. The pinned strip's trace is the MAIN visualisation
+// of the audio page, so it's given a generous, touch-friendly height.
+const PINNED_TRACE_HEIGHT = 40;
+
+// AUDIO SIGNALS grid — the signals lay out as a 3-column × N-row grid
+// (operator brief 2026-06-17) rather than one horizontally-scrolling
+// row, to read cleaner on the iPad and mirror the Audio Companion's
+// desktop layout. 3 cells across, wrapping to new rows; the BPM tile
+// rides along as its own cell. `flexWrap` + percentage-width cells give
+// the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
+// container is unreliable across cells, so we pad inside each cell).
+const SIGNAL_GRID_COLUMNS = 3;
+
+// Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
+// is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
+// low/mid/high/kick above the noise gate for the meters AND the detectors /
+// patterns. Range kept generous for a quiet playa mic / line feed.
+const INPUT_GAIN_MIN = 0;
+const INPUT_GAIN_MAX = 10;
+
+// One signal column — Companion-quality. Header (label + live POST value),
+// a compact POST bar meter, then a single tall SMOOTH trace canvas that
+// overlays a bold POST line (with a translucent area fill) over a thin RAW
+// ghost line in the signal's colour. The trace interpolates client-side at
+// ~60 fps from the throttled live values handed in here (see
+// <AudioTraceCanvas />), so it glides between WS updates without any extra
+// network traffic. Overlaying RAW behind POST (vs the old stacked plots)
+// matches the Companion's CHOP-overlay convention and is denser — letting
+// the trace be the MAIN visualisation of the page.
+const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active, traceHeight }: {
   slot: SignalSlot;
   raw: number;
   post: number;
-  rawSamples: readonly number[];
-  postSamples: readonly number[];
-  bufferLen: number;
+  active: boolean;
+  traceHeight: number;
 }) {
   const C = usePalette();
   const accentColor = resolveAccent(slot.accent, C);
-  const rv = Math.max(0, Math.min(1, raw));
-  const pv = Math.max(0, Math.min(1, post));
-  const rawPoints  = useMemo(() => buildPoints(rawSamples,  bufferLen), [rawSamples,  bufferLen]);
-  const postPoints = useMemo(() => buildPoints(postSamples, bufferLen), [postSamples, bufferLen]);
+  // Bars/traces are normalised to [0,1] by the slot's range (intensity is
+  // already [0,1]; frequency/bpm are scaled by their schema max). The header
+  // text shows the TRUE engine value (Hz / bpm / 0..1). Some signals (dom /
+  // detectors / derived) have NO raw mirror — pass null so the RAW ghost is
+  // hidden and only the POST line draws.
+  const hasRaw = slot.rawKey !== null;
+  const pv = normalizeSlot(slot, post);
+  const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
   return (
-    <View style={{ flex: 1, marginHorizontal: 4 }}>
-      {/* header — slot label */}
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-        color: C.secondary, textTransform: 'uppercase',
-        letterSpacing: 0.6, marginBottom: 4,
-      }}>{slot.label}</Text>
-
-      {/* RAW sub-row — tag+value, bar, trace */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+    <View style={{ flex: 1 }}>
+      {/* header — slot label + live POST value */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+        <Text numberOfLines={1} style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+          color: accentColor, textTransform: 'uppercase',
+          letterSpacing: 0.5, flexShrink: 1,
+        }}>{slot.label}</Text>
         <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.6, opacity: 0.7,
-        }}>RAW</Text>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: C.text, opacity: 0.7,
-        }}>{rv.toFixed(2)}</Text>
-      </View>
-      <View style={{
-        height: 14, borderRadius: 7,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden', marginTop: 2,
-      }}>
-        <View style={{
-          position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${rv * 100}%`, backgroundColor: accentColor,
-          opacity: 0.5,
-        }} />
-      </View>
-      <View style={{
-        marginTop: 2,
-        height: TRAIL_HEIGHT,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        borderRadius: 3,
-        overflow: 'hidden',
-      }}>
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
-          preserveAspectRatio="none"
-        >
-          {rawPoints ? (
-            <Polyline
-              points={rawPoints}
-              fill="none"
-              stroke={accentColor}
-              strokeOpacity={0.55}
-              strokeWidth={1}
-            />
-          ) : null}
-        </Svg>
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text,
+        }}>{slotValueText(slot, post)}</Text>
       </View>
 
-      {/* POST sub-row — tag+value, bar, trace */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 8 }}>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: accentColor, letterSpacing: 0.6,
-        }}>POST</Text>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-          color: C.text,
-        }}>{pv.toFixed(2)}</Text>
-      </View>
+      {/* POST bar meter — compact, full intensity. */}
       <View style={{
-        height: 18, borderRadius: 9,
+        height: 6, borderRadius: 3,
         backgroundColor: C.surfaceContainerLowest,
         borderWidth: 1, borderColor: C.ghostBorder,
-        overflow: 'hidden', marginTop: 2,
+        overflow: 'hidden', marginBottom: 2,
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
           width: `${pv * 100}%`, backgroundColor: accentColor,
         }} />
       </View>
-      <View style={{
-        marginTop: 2,
-        height: TRAIL_HEIGHT,
-        backgroundColor: C.surfaceContainerLowest,
-        borderWidth: 1, borderColor: C.ghostBorder,
-        borderRadius: 3,
-        overflow: 'hidden',
-      }}>
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${SVG_VIEW_W} ${SVG_VIEW_H}`}
-          preserveAspectRatio="none"
-        >
-          {postPoints ? (
-            <Polyline
-              points={postPoints}
-              fill="none"
-              stroke={accentColor}
-              strokeWidth={1.5}
-            />
-          ) : null}
-        </Svg>
-      </View>
-    </View>
-  );
-}
 
-function WindowPicker({ value, onChange }: {
-  value: number; onChange: (s: number) => void;
-}) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      {WINDOW_OPTIONS_S.map(s => {
-        const active = s === value;
-        return (
-          <TouchableOpacity
-            key={s}
-            onPress={() => onChange(s)}
-            style={{
-              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
-              backgroundColor: active ? C.primary : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-            }}
-          >
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-              color: active ? '#fff' : C.secondary, letterSpacing: 0.6,
-            }}>{s}s</Text>
-          </TouchableOpacity>
-        );
-      })}
+      {/* The MAIN visual — smooth 60 fps scrolling RAW(thin)+POST(bold) trace. */}
+      <View style={{ borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 4, overflow: 'hidden' }}>
+        <AudioTraceCanvas
+          post={pv}
+          raw={rawNorm}
+          color={accentColor}
+          background={C.surfaceContainerLowest}
+          gridColor={C.ghostBorder}
+          height={traceHeight}
+          active={active}
+        />
+      </View>
+
+      {/* RAW value footnote (only when a raw mirror exists) — keeps the
+          gain-divergence read-out the previous stacked layout offered,
+          without a second trace. */}
+      {hasRaw ? (
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+          color: C.secondary, letterSpacing: 0.6, opacity: 0.7, marginTop: 2,
+        }}>RAW {slotValueText(slot, raw)}</Text>
+      ) : null}
     </View>
   );
-}
+});
 
 function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn' }) {
   const C = usePalette();
@@ -605,104 +491,64 @@ function StatusPill({ label, tone }: { label: string; tone: 'on' | 'off' | 'warn
   );
 }
 
-function PinnedAudioMeters({
-  audioStatus, oscStatus,
+function LiveAudioMeters({
+  oscStatus, inputGain, onCommitInputGain,
 }: {
-  audioStatus: AudioStatus | null;
   oscStatus: OscPillState | null;
+  inputGain: number;
+  onCommitInputGain: (g: number) => void;
 }) {
-  const globalStyles = useGlobalStyles();
   const C = usePalette();
-  // Per-key live subscription. The 7 raw + 7 post audio keys + tempoBpm
-  // participate in the equality check, so this strip re-renders only
-  // when one of THESE values actually ticks. The body below never
-  // re-renders on liveParams. PINNED_LIVE_DEFAULTS is built at module
-  // scope so the key set stays pinned across renders.
-  const live = useLiveParamValues(PINNED_LIVE_DEFAULTS) as Record<string, number>;
+  // DYNAMIC signal set — derived from the engine schema (the audio CPC
+  // keys the Companion routes in). The strip renders whatever is live;
+  // adding/removing a signal in the Companion adds/removes a column with
+  // no code change. Slots carry the post key + (optional) raw mirror key.
+  const signals = useAudioSignals();
+  const slots = useMemo<SignalSlot[]>(() => signals.map(toSignalSlot), [signals]);
+  // Whole live doc — the key set is dynamic, so we read it directly rather
+  // than via useLiveParamValues (whose pinned-key-set contract assumes a
+  // fixed list). The strip re-renders at the analyser cadence; the body
+  // below is a sibling of the ScrollView and never reads this.
+  const liveDoc = useLiveParams();
+  const valueOf = useCallback((key: string | null): number => {
+    if (!key) return 0;
+    const slot = liveDoc?.params?.[key];
+    return slot && typeof slot.value === 'number' ? slot.value : 0;
+  }, [liveDoc]);
+  // Prefer the Companion's analyzed tempo (audioBpm); fall back to the
+  // legacy tempoBpm (/lx/tempo/bpm) only when audioBpm is absent.
+  const tempoLive = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 }) as Record<string, number>;
   // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
 
-  // ── Window picker — persisted to AsyncStorage (same key as before).
-  const [windowS, setWindowS] = useState<number>(DEFAULT_WINDOW_S);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(SIGNAL_WINDOW_KEY).then(raw => {
-      if (!alive || !raw) return;
-      const parsed = parseInt(raw, 10);
-      if (WINDOW_OPTIONS_S.includes(parsed as typeof WINDOW_OPTIONS_S[number])) {
-        setWindowS(parsed);
-      }
-    }).catch(() => { /* benign — first launch, AsyncStorage cold */ });
-    return () => { alive = false; };
-  }, []);
-  const setWindow = useCallback((s: number) => {
-    setWindowS(s);
-    AsyncStorage.setItem(SIGNAL_WINDOW_KEY, String(s))
-      .catch(() => { /* benign — persistence is best-effort */ });
-  }, []);
-
-  // ── Ring buffer — one number[] per (signal, raw|post) pair. Identity
-  // changes on each tick so SignalColumn's useMemo recomputes the
-  // polyline points string. Bounded at MAX_BUFFER_LEN; window picker
-  // controls how many tail samples we hand to the SVG.
-  const [trails, setTrails] = useState<{ raw: number[][]; post: number[][] }>(() => ({
-    raw:  ALL_SIGNALS.map(() => []),
-    post: ALL_SIGNALS.map(() => []),
-  }));
-
-  // Always read the latest live values from a ref so the sample timer
-  // callback (started once per focus) doesn't need `live` in its deps.
-  // The strip re-renders on every live tick, which updates the ref;
-  // the timer pulls from the ref at TRAIL_SAMPLE_HZ.
-  const liveRef = useRef(live);
-  liveRef.current = live;
-
-  // Sample timer — runs ONLY while the audio tab is focused. Pushes
-  // one frame into every ring buffer at TRAIL_SAMPLE_HZ. Tab blur
-  // clears the timer so we don't burn cycles on background tabs.
+  // ── Tab-focus gate — the <AudioTraceCanvas /> rAF loops pause when the
+  // AUDIO tab is blurred so background tabs burn zero CPU (congestion / power
+  // guard). `active` flips false on blur, true on focus.
+  const [active, setActive] = useState(true);
   useFocusEffect(useCallback(() => {
-    const interval = setInterval(() => {
-      const snap = liveRef.current;
-      setTrails(prev => {
-        const nextRaw  = prev.raw.map((buf, i) => {
-          const v = snap[ALL_SIGNALS[i].rawKey] ?? 0;
-          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
-          out.push(v);
-          return out;
-        });
-        const nextPost = prev.post.map((buf, i) => {
-          const v = snap[ALL_SIGNALS[i].postKey] ?? 0;
-          const out = buf.length >= MAX_BUFFER_LEN ? buf.slice(buf.length - MAX_BUFFER_LEN + 1) : buf.slice();
-          out.push(v);
-          return out;
-        });
-        return { raw: nextRaw, post: nextPost };
-      });
-    }, TRAIL_SAMPLE_MS);
-    return () => clearInterval(interval);
+    setActive(true);
+    return () => setActive(false);
   }, []));
 
-  const bufferLen = windowS * TRAIL_SAMPLE_HZ;
+  // NB: the per-frame trace smoothing + ring buffer now live INSIDE each
+  // <AudioTraceCanvas /> (client-side rAF interpolation). The old 15 Hz
+  // setInterval that pushed every signal's samples into a shared trails
+  // object was removed — it ticked the WHOLE strip at the network cadence
+  // and produced a stepped polyline. The canvas instead reads the latest
+  // throttled value (handed down as a prop from the existing live bus) and
+  // glides between updates at the device frame rate, so there is no extra
+  // network traffic and the motion is smooth. The window picker / trail-
+  // length controls went with it (the trace window is now a fixed, calm
+  // ~10 s-equivalent scroll — see ADVANCE_HZ in AudioTraceCanvas).
 
-  const micOn       = audioStatus?.enabled === true;
-  const micPhase    = audioStatus?.phase ?? (micOn ? 'unknown' : 'off');
-  // Engine commit 5d830d6 added coded error states. When audioStatus
-  // reports `configured_mic_not_found` or `device_enumeration_failed`
-  // the engine is intentionally not running capture and `enabled` is
-  // false — so the pill needs to escalate from "MIC OFF" (passive) to
-  // "MIC ERR" (warn) so the operator notices on the meter strip even
-  // before scrolling to the banner below.
-  const micCodedErr =
-    audioStatus?.error === 'configured_mic_not_found' ||
-    audioStatus?.error === 'device_enumeration_failed';
-  const micTone: 'on' | 'off' | 'warn' =
-    micCodedErr                 ? 'warn' :
-    !micOn                      ? 'off'  :
-    micPhase === 'error'        ? 'warn' :
-    micPhase === 'restarting'   ? 'warn' :
-                                  'on';
-  const micLabel = micCodedErr ? 'MIC ERR' : (micOn ? `MIC ${micPhase.toUpperCase()}` : 'MIC OFF');
+  // The in-engine MIC status pill (MIC LISTENING / RESTARTING / ERR /
+  // OFF) was removed on 2026-06-17 — it reflected the retired in-engine
+  // mic listener, which is obsolete now that the Audio Companion is the
+  // sole analyzer. The cross-machine "configured_mic_not_found" /
+  // "device_enumeration_failed" capture errors still surface in the
+  // MicNotFoundBanner below. The OSC + BPM SYNC pills (which reflect the
+  // Companion's OSC path) stay.
   const oscState  = oscStatus?.state ?? null;
   const oscTone: 'on' | 'off' | 'warn' =
     oscState === 'live'     ? 'on'   :
@@ -714,103 +560,95 @@ function PinnedAudioMeters({
     syncOn && oscState !== 'live' ? 'warn' :
     syncOn                        ? 'on'   :
                                     'off';
-  const bpm = live.tempoBpm > 0 ? Math.round(live.tempoBpm) : null;
+  const effectiveBpm = tempoLive.audioBpm > 0 ? tempoLive.audioBpm : tempoLive.tempoBpm;
+  const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
 
   return (
-    <View style={{
-      alignSelf: 'stretch',
-      paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16,
-      backgroundColor: C.surfaceContainerHigh,
-      borderBottomWidth: 1, borderBottomColor: C.ghostBorder,
-      ...globalStyles.ambientShadow,
-      zIndex: 10,
-    }}>
-      {/* Status pills row + shared window picker on the right.
-          One picker controls ALL 7 trails (operator never has to think
-          about which axis they're tuning). */}
+    <View style={{ marginBottom: 24 }}>
+      {/* Status pills row + LIVE rate on the right. This is a normal
+          section of the page (no longer a pinned strip) — it flows in the
+          single page ScrollView so the whole AUDIO tab scrolls as one. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-        <StatusPill label={micLabel} tone={micTone} />
         <StatusPill label={oscLabel} tone={oscTone} />
         <StatusPill label={syncOn ? 'BPM SYNC ON' : 'BPM SYNC OFF'} tone={syncTone} />
         <View style={{ flex: 1 }} />
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.secondary, letterSpacing: 0.8, marginRight: 8,
-        }}>TRAIL</Text>
-        <WindowPicker value={windowS} onChange={setWindow} />
+          color: C.secondary, letterSpacing: 0.8,
+        }}>LIVE · 60 FPS</Text>
       </View>
-      {/* Meters row — two halves split by a vertical divider. Each
-          half contains N signal columns, each stacking
-          [label+value]→[bar]→[trail]. The BPM pill rides at the right
-          end of the STEMS half (no trail — BPM has its own pace). */}
-      <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
-        {/* LEFT half: MIC bands */}
-        <View style={{ flex: 4, paddingRight: 16 }}>
+      {/* Section header — "AUDIO SIGNALS" on the left, the live BPM read-out
+          on the right. BPM is the song tempo, NOT an analyser signal, so it
+          sits OUTSIDE the signal grid (its own headline chip) rather than
+          riding as a grid cell styled like the meters. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+          color: C.secondary, textTransform: 'uppercase', letterSpacing: 1,
+        }}>AUDIO SIGNALS</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
           <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: C.secondary, textTransform: 'uppercase',
-            letterSpacing: 1, marginBottom: 8,
-          }}>MIC</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-            {MIC_SIGNALS.map((slot, i) => (
-              <SignalColumn
-                key={slot.postKey}
-                slot={slot}
-                raw={live[slot.rawKey] ?? 0}
-                post={live[slot.postKey] ?? 0}
-                rawSamples={trails.raw[i]}
-                postSamples={trails.post[i]}
-                bufferLen={bufferLen}
-              />
-            ))}
-          </View>
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: C.secondary, letterSpacing: 0.8, textTransform: 'uppercase',
+          }}>BPM</Text>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22,
+            color: bpm ? C.primary : C.icon,
+          }}>{bpm ?? '—'}</Text>
         </View>
-        {/* Vertical divider */}
-        <View style={{ width: 1, backgroundColor: C.ghostBorder, marginHorizontal: 0 }} />
-        {/* RIGHT half: stems + BPM. Stems get the same SignalColumn
-            treatment as mic; BPM stays as a pill (no trail). */}
-        <View style={{ flex: 4, paddingLeft: 16 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-              color: C.secondary, textTransform: 'uppercase',
-              letterSpacing: 1,
-            }}>STEMS</Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-            {STEMS_SIGNALS.map((slot, i) => (
+      </View>
+      {slots.length === 0 ? (
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
+          No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
+        </Text>
+      ) : (
+        // Full-height 3×N grid that wraps to new rows. No inner scroll /
+        // height cap — the whole AUDIO tab is ONE page ScrollView, so the
+        // grid simply lays out at full height and scrolls with everything
+        // else (no pinned strip, no nested scroller to fight the page).
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {slots.map((slot) => (
+            <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
-                key={slot.postKey}
                 slot={slot}
-                raw={live[slot.rawKey] ?? 0}
-                post={live[slot.postKey] ?? 0}
-                rawSamples={trails.raw[MIC_SIGNALS.length + i]}
-                postSamples={trails.post[MIC_SIGNALS.length + i]}
-                bufferLen={bufferLen}
+                raw={valueOf(slot.rawKey)}
+                post={valueOf(slot.postKey)}
+                active={active}
+                traceHeight={PINNED_TRACE_HEIGHT}
               />
-            ))}
-            {/* BPM pill — biggest single number on the strip. No trail
-                under it: BPM ticks at the song's pace, not the analyser's. */}
-            <View style={{
-              marginLeft: 12, paddingHorizontal: 12, paddingVertical: 4,
-              borderRadius: 10,
-              backgroundColor: bpm ? C.primaryContainer : C.surfaceContainerLowest,
-              borderWidth: 1, borderColor: bpm ? C.primary : C.ghostBorder,
-              minWidth: 72, alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 0.8 }}>
-                BPM
-              </Text>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: bpm ? '#003a44' : C.icon, marginTop: 2 }}>
-                {bpm ?? '—'}
-              </Text>
             </View>
-          </View>
+          ))}
         </View>
+      )}
+      {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
+          gain (patches audio.bands.inputGain): it lifts the mic bands
+          above the noise gate so a quiet mic/feed drives the meters AND
+          the detectors/patterns. */}
+      <View style={{ marginTop: 4, marginHorizontal: 6, maxWidth: 360 }}>
+        <FaderRow
+          label="INPUT GAIN"
+          suffix="×"
+          min={INPUT_GAIN_MIN}
+          max={INPUT_GAIN_MAX}
+          step={0.1}
+          value={inputGain}
+          hint="Software mic-preamp (0–10×). Boosts a quiet mic/line feed so the mic bands lift above the noise gate — affects the engine (meters + kick + patterns), not just the display."
+          onDrag={() => { /* FaderRow shows the live draft; commit on release */ }}
+          onCommit={onCommitInputGain}
+        />
       </View>
     </View>
   );
 }
+
+// STRUCTURE DETECTOR card — RETIRED (2026-06-17). The dedicated
+// build/drop/sustain preview card (StructureDetectorCard +
+// StructureSignalColumn + the STRUCTURE_* state-mirror helpers) was an
+// unused, under-development preview and has been removed. The build /
+// energy / slow signals it previewed still arrive on the live bus and
+// surface in the dynamic AUDIO SIGNALS row at the top of this tab when
+// the Companion routes them in. Restore from git history if a dedicated
+// detector card returns to CaptainPad.
 
 // ── BPM live read-outs ───────────────────────────────────────────────────
 //
@@ -823,9 +661,12 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 }) {
   const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
-  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  // Prefer the Companion's analyzed tempo (audioBpm); fall back to
+  // tempoBpm (legacy /lx/tempo/bpm path) only when audioBpm is absent.
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   if (!bpmSyncOn) return null;
-  const bpmStale = !live.tempoBpm || live.tempoBpm <= 0;
+  const effectiveBpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const bpmStale = !effectiveBpm || effectiveBpm <= 0;
   if (!oscMissing && !bpmStale) return null;
   return (
     <View style={{
@@ -838,8 +679,8 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
       </Text>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
         {oscMissing
-          ? `OSC listener is ${oscState ?? 'unknown'}; nothing is feeding /lx/tempo/bpm. Speed will not move.`
-          : 'OSC is live but no tempoBpm has arrived yet. Confirm LX Studio is sending /lx/tempo/bpm.'}
+          ? `OSC listener is ${oscState ?? 'unknown'}; the Audio Companion isn't streaming a BPM. Speed will not move.`
+          : 'OSC is live but no BPM has arrived yet. Confirm the Audio Companion is analyzing tempo and streaming audioBpm.'}
       </Text>
     </View>
   );
@@ -853,13 +694,14 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 
 // Compact inline live read-out for the BPM card header. Single line,
 // quiet typography — just "126 BPM → 0.43" or "—". Subscribes ONLY to
-// tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
-// re-render on every tempo tick.
+// audioBpm/tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
+// re-render on every tempo tick. Prefers the Companion's analyzed tempo
+// (audioBpm); falls back to tempoBpm only when audioBpm is absent.
 function BpmInlineReadout() {
   const C = usePalette();
-  const live = useLiveParamValues({ tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
-  const bpm = live.tempoBpm;
+  const bpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
   const mapped = useMemo(() => {
     if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));
@@ -969,7 +811,7 @@ function CompactBpmCard({
         </View>
       </View>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
-        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from /lx/tempo/bpm.
+        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the Audio Companion&apos;s analyzed BPM (audioBpm).
       </Text>
     </View>
   );
@@ -1285,7 +1127,7 @@ function AudioConfigBody({
   // at 15-30 Hz; folding them in here re-rendered the ENTIRE config
   // body — every FaderRow, mic picker, BPM range slider — at that
   // cadence. Live meters now live in their own components —
-  // <PinnedAudioMeters /> + <BpmTempoLine /> — which each subscribe to
+  // <LiveAudioMeters /> + <BpmTempoLine /> — which each subscribe to
   // ONLY the live keys they need. Per-band / per-stem gain sliders are
   // retired from this tab (Phase 6); the same params remain editable
   // via chain-editor Gain ops + the deck/mixer chrome's CPCControls.
@@ -1302,22 +1144,18 @@ function AudioConfigBody({
     setDevicesLoading(false);
   }, []);
 
-  // Optimistic local-only update while dragging.
-  const updateLocal = useCallback((group: 'bands' | 'kick', field: string, value: number) => {
-    setCfg(prev => prev && ({ ...prev, [group]: { ...prev[group], [field]: value } } as AudioConfig));
-  }, []);
-
-  // PATCH on slider release — one network hit per gesture, not per drag tick.
-  const commitField = useCallback(async (group: 'bands' | 'kick', field: string, value: number) => {
-    const r = await patchAudioConfig({ [group]: { [field]: value } });
-    if (!r.ok) { setPatchError(r.error || 'patch failed'); reload(); }
-    else setPatchError(null);
-  }, [reload]);
+  // The per-band/per-kick `updateLocal` + `commitField` helpers were
+  // retired with the SIGNALS · CHAINS card (2026-06-17) — they fed the
+  // chain editor's embedded analyzer sliders, which now live in the
+  // Audio Companion. The analyzer config still reaches the engine via
+  // patchAudioConfig (source, input gain, mic device, reset) below.
 
   // Reset to defaults — Phase 6, docs/29 §Interactions step 7. Fires
   // BOTH endpoints (analyzer config + every signal's default chain).
-  // Surfaces inline error if either fails; chains broadcast will refresh
-  // the AudioChainsCard on its own via /ws/control `audioChainsChanged`.
+  // Surfaces inline error if either fails. The chains reset is still fired
+  // so a CaptainPad reset restores engine-side signal chains to defaults
+  // even though chain DESIGN now lives in the Audio Companion (the chain
+  // editor card was removed from this tab on 2026-06-17).
   const resetToDefaults = useCallback(async () => {
     setBusy('reset');
     const [cfgRes, chainsRes] = await Promise.all([
@@ -1339,17 +1177,16 @@ function AudioConfigBody({
     reload();
   }, [reload]);
 
-  // Master enable/disable. Restarts ffmpeg capture under the hood.
-  const toggleEnabled = useCallback(async () => {
+  // Software INPUT GAIN (audio.bands.inputGain) — real engine gain set from
+  // the pinned strip slider. Optimistic local update, then patch + reload.
+  const commitInputGain = useCallback(async (g: number) => {
     if (!cfg) return;
-    const target = !cfg.enabled;
-    setBusy('enable');
-    setCfg(prev => prev && ({ ...prev, enabled: target }));
-    const r = await patchAudioConfig({ enabled: target });
-    setBusy(null);
-    if (!r.ok) { setPatchError(r.error || 'failed to toggle'); reload(); }
-    else { setPatchError(null); reload(); }
-  }, [cfg, reload]);
+    const clamped = Math.max(INPUT_GAIN_MIN, Math.min(INPUT_GAIN_MAX, g));
+    setCfg(prev => prev && ({ ...prev, bands: { ...prev.bands, inputGain: clamped } }));
+    const r = await patchAudioConfig({ bands: { inputGain: clamped } });
+    if (!r.ok) { setPatchError(r.error || 'failed to set input gain'); reload(); }
+    else { setPatchError(null); }
+  }, [cfg, reload, setCfg]);
 
   // Mic picker: swap device on the server. Engine stops ffmpeg cleanly
   // and respawns on the new input. AudioDevice and AudioStatusDevice
@@ -1374,6 +1211,12 @@ function AudioConfigBody({
     if (!r.ok) { setPatchError(r.error || 'failed to switch mic'); }
     else { setPatchError(null); setPickerOpen(false); reload(); }
   }, [reload]);
+
+  // Audio SOURCE is always the MIC / capture device (operator brief
+  // 2026-06-17). The TEST (synthetic) and FILE (clip replay) sources were
+  // removed from this tab — the deck runs off the live mic. The CAPTURE
+  // DEVICE picker below sets `capture.device` (which the Companion honors);
+  // there is no source-mode switch anymore.
 
   // "Open Settings" action on the cross-machine mic banner — expand the
   // SETTINGS disclosure and (if not already loaded) warm the device list
@@ -1415,19 +1258,11 @@ function AudioConfigBody({
   // ── Render ─────────────────────────────────────────────────────────
   //
   // NB: globalStyles.container is `flexDirection: 'row'` (used by other
-  // tabs to layout sidebars). For AUDIO we want the pinned strip
-  // STACKED ABOVE the scrolling body, full viewport width, so the
-  // outer wrapper here is an explicit COLUMN. The strip sits at the
-  // top edge as its own "rig" piece; the page title + cards scroll
-  // below it.
+  // tabs to layout sidebars). For AUDIO we want a single full-width
+  // COLUMN that is ONE scrollable area — title, live meters, sync, and
+  // settings all flow inside the same page ScrollView (no pinned strip).
   return (
     <View style={{ flex: 1, flexDirection: 'column', backgroundColor: C.background }}>
-      {/* Pinned live meters strip — sibling of the ScrollView so it
-          stays anchored at the top regardless of scroll position.
-          Mounted only after cfg loads (we're already inside that
-          gate). All live-data subscriptions live INSIDE this
-          component — the body below never reads liveParams. */}
-      <PinnedAudioMeters audioStatus={status} oscStatus={oscStatus} />
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
@@ -1438,12 +1273,21 @@ function AudioConfigBody({
             the bottom of the SETTINGS disclosure (Phase 6 / docs/29
             §Interactions step 7) and now fires BOTH chain + config
             resets. */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 32, gap: 16 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24, gap: 16 }}>
           <IconSymbol name="waveform" size={32} color={C.primary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 28, color: C.text, letterSpacing: 1.5 }}>
             AUDIO
           </Text>
         </View>
+
+        {/* Live meters — now a normal in-flow section (not a pinned
+            strip), so the whole AUDIO tab is one scrollable area. All
+            live-data subscriptions live INSIDE this component. */}
+        <LiveAudioMeters
+          oscStatus={oscStatus}
+          inputGain={cfg?.bands?.inputGain ?? 1}
+          onCommitInputGain={commitInputGain}
+        />
 
         {patchError ? (
           <View style={{ ...CARD, borderColor: C.error, backgroundColor: 'rgba(186, 26, 26, 0.06)' }}>
@@ -1452,34 +1296,18 @@ function AudioConfigBody({
           </View>
         ) : null}
 
-        {/* ── 1. MASTER ENABLE / DISABLE ──────────────────────────────
-            Stays at the top of the scrolling body (above CHAINS) per
-            the coordinator brief — operators reach for this constantly
-            when troubleshooting "why is the kick not firing?" and we
-            don't want them hunting for it inside SETTINGS. */}
-        <View style={CARD}>
-          <SectionHeader
-            icon="power"
-            title="MIC ANALYSIS"
-            hint="Enable the on-device microphone listener (FFT → bands + kick → CPC)."
-          />
-          <MasterToggle
-            on={enabled}
-            busy={busy === 'enable'}
-            onPress={toggleEnabled}
-            label={enabled ? '● LISTENING' : 'DISABLED'}
-            subtitle={enabled
-              ? `${phase.toUpperCase()} · ${status?.captureFps ?? 0} fps · ${cfg.capture.sampleRate} Hz`
-              : 'Tap to start listening. Chains + SETTINGS below are read-only until enabled.'}
-            accent={enabled ? phaseColor : ACCENT_AUTO}
-          />
-          <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11, marginTop: 12 }}>
-            This toggle only affects the mic listener. Stems (Vocals/Bass/Drums) are streamed
-            independently over OSC and stay active when this is off.
-          </Text>
-        </View>
+        {/* MIC ANALYSIS — RETIRED (2026-06-17). The master enable/disable
+            toggle (MasterToggle) drove the in-engine mic listener's
+            FFT → bands + kick analyzer. That analyzer is obsolete now that
+            the Marsin Audio Companion is the sole analyzer: the engine no
+            longer analyzes audio, and the toggle only fought the Companion
+            for the capture device (producing a confusing "MIC RESTARTING"
+            state). The card + its toggle + the toggleEnabled handler + the
+            in-engine MIC status pill were removed. Capture SOURCE / device
+            config still lives in SETTINGS below. Restore from git history
+            if the in-engine analyzer ever returns. */}
 
-        {/* ── 2. BPM → SPEED SYNC (compact) ─────────────────────────────
+        {/* ── 1. BPM → SPEED SYNC (compact) ─────────────────────────────
             Operator brief 2026-05-26 — pulled out of SETTINGS so the
             mapping is reachable without expanding a disclosure. Tap
             the SYNC pill to flip; min/max sliders side-by-side. The
@@ -1490,6 +1318,13 @@ function AudioConfigBody({
           oscMissing={oscMissing}
           oscState={oscState}
         />
+
+        {/* STRUCTURE DETECTOR — RETIRED (2026-06-17). The dedicated
+            build/drop/sustain preview card was an unused, under-
+            development preview and has been removed. The build / energy /
+            slow signals the detector previewed still surface in the
+            dynamic AUDIO SIGNALS row at the top of this tab whenever the
+            Companion routes them in over OSC. */}
 
         {/* ── Cross-machine mic-not-found banner ──────────────────────
             Surfaces engine commit 5d830d6 audioStatus coded errors:
@@ -1505,32 +1340,15 @@ function AudioConfigBody({
           onExpandSettings={openSettingsForMic}
         />
 
-        {/* ── 3. SIGNALS · CHAINS ───────────────────────────────────────
-            Per-signal post-processing chain editor (docs/29 Phase 5).
-            One row per signal with [edit] disclosure → drag-reorderable
-            op list with per-op param sliders + the engine's 5 Hz
-            signalChain pre/post preview meters.
-            Operator brief 2026-05-26: the chain editor now embeds an
-            ANALYZER sub-section per signal — crossovers + envelope for
-            mic LOW/MID/HIGH, kick detector for micKick. We pass the
-            same audio config + commit handlers we used to keep in the
-            SETTINGS sub-cards; analyzer state is still global in the
-            engine (single FFT), surfaced per-signal in the UI so it
-            lives with the band the operator is tuning. */}
-        <AudioChainsCard
-          audioConfig={cfg}
-          // patchError is shown in the page-level banner above; the
-          // AnalyzerSection's null-cfg branch is only reachable if the
-          // parent's initial fetch failed (which mounts a different
-          // screen entirely), so we hand down `null` here. Reload is
-          // wired for completeness — if the engine ever ships a
-          // post-mount `audioConfig` invalidation event, the retry
-          // button is already wired.
-          audioConfigError={null}
-          onUpdateAudioConfigLocal={updateLocal}
-          onCommitAudioConfigField={commitField}
-          onRetryAudioConfig={reload}
-        />
+        {/* SIGNALS · CHAINS — RETIRED (2026-06-17). Chain / signal DESIGN
+            now lives in the Marsin Audio Companion; CaptainPad is a lean
+            control/monitor surface. The designed signals arrive in the
+            engine CPC over OSC from the Companion and are shown in the
+            pinned AUDIO SIGNALS row at the top of this tab
+            (useAudioSignals / useLiveParams). The per-signal chain editor
+            (AudioChainsCard) and the analyzer commit handlers it consumed
+            were removed here. Restore from git history if the editor ever
+            comes back to CaptainPad. */}
 
         {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
             Pinned bottom disclosure that holds everything rarely touched
@@ -1558,7 +1376,7 @@ function AudioConfigBody({
                 SETTINGS
               </Text>
               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 }}>
-                Microphone · Engine · Reset
+                Overall gain · Device · Engine · Reset
               </Text>
             </View>
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary }}>
@@ -1568,10 +1386,29 @@ function AudioConfigBody({
 
           {!settingsCollapsed ? (
             <View style={{ marginTop: 16 }}>
-              {/* ── MICROPHONE ───────────────────────────────────────── */}
+              {/* ── OVERALL GAIN ─────────────────────────────────────────
+                  The single software preamp the whole PCM lane sees (bands /
+                  kick / dom / FFT). Live-tunable (audio.bands.inputGain). Same
+                  control as the strip's INPUT GAIN — one source of truth. */}
+              <View style={SUB_CARD}>
+                <SubHeader title="OVERALL GAIN" />
+                <FaderRow
+                  label="INPUT GAIN"
+                  suffix="×"
+                  min={INPUT_GAIN_MIN}
+                  max={INPUT_GAIN_MAX}
+                  step={0.1}
+                  value={cfg?.bands?.inputGain ?? 1}
+                  hint="Software preamp on the audio input (0–10×). Boosts a quiet feed so every signal lifts above the noise gate — affects the engine, not just the display."
+                  onDrag={() => { /* commit on release */ }}
+                  onCommit={commitInputGain}
+                />
+              </View>
+
+              {/* ── MICROPHONE / CAPTURE DEVICE ───────────────────────── */}
               <View style={SUB_CARD}>
                 <SubHeader
-                  title="MICROPHONE"
+                  title="CAPTURE DEVICE"
                   right={
                     <TouchableOpacity
                       onPress={() => { setPickerOpen(o => !o); if (!devices && !pickerOpen) loadDevices(); }}

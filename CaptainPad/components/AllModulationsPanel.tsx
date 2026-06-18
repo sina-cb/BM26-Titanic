@@ -28,7 +28,7 @@ import {
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
-  deleteModulation, fetchPlaylistByName, ModulationMapping, patchModulation,
+  deleteModulation, fetchPlaylistByName, migrateModulationMode, ModulationMapping, patchModulation,
   setChannelPlaylistEntry,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
@@ -55,17 +55,17 @@ type EditTarget = {
   mapping: ModulationMapping;
 };
 
+// Pretty label for a modulation source key. The audio source family is
+// dynamic (the Companion routes its own set into the CPC), so we derive a
+// readable label from the key shape rather than a hand-listed switch (which
+// drifted — it still named the retired stems). `micLow` → `MIC LOW`,
+// `audioEnergyRatio` → `AUDIO ENERGY RATIO`, etc.
 function shortSource(key: string): string {
-  switch (key) {
-    case 'micLow': return 'MIC LOW';
-    case 'micMid': return 'MIC MID';
-    case 'micHigh': return 'MIC HIGH';
-    case 'micKick': return 'MIC KICK';
-    case 'stemsBass': return 'STEM BASS';
-    case 'stemsDrums': return 'STEM DRUMS';
-    case 'stemsVocals': return 'STEM VOCALS';
-    default: return key.toUpperCase();
-  }
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
 }
 
 function shortTarget(name: string): string {
@@ -78,7 +78,10 @@ function shortTarget(name: string): string {
 }
 
 function rangeReadout(m: ModulationMapping): string {
-  if (m.polarity === 'bipolar') {
+  // The ± collapse only makes sense for BIPOLAR OFFSET — polarity has no
+  // effect on multiply/override (the engine ignores it), so those always
+  // show the literal [min → max] window.
+  if (m.mode === 'offset' && m.polarity === 'bipolar') {
     const mag = Math.max(Math.abs(m.range[0]), Math.abs(m.range[1]));
     return `[±${mag.toFixed(2)}]`;
   }
@@ -109,7 +112,11 @@ export const AllModulationsPanel: React.FC<Props> = ({
         id: e.id,
         pattern: e.pattern,
         label: e.label ?? null,
-        modulations: Array.isArray(e.modulations) ? e.modulations : [],
+        // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
+        // engine + the deck popover) so the readout never shows a dead mode.
+        modulations: Array.isArray(e.modulations)
+          ? e.modulations.map((m: ModulationMapping) => ({ ...m, mode: migrateModulationMode(m.mode) }))
+          : [],
       })));
     });
     return () => { cancelled = true; };
@@ -450,14 +457,21 @@ function ModulationRow({
         </Text>
         <View style={{
           paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4,
-          backgroundColor: C.surfaceContainerLow,
-          borderWidth: 1, borderColor: C.ghostBorder,
+          // OVERRIDE replaces the static value — call it out with the green
+          // `!` styling, same family as the deck's OverrideBadge.
+          backgroundColor: mapping.mode === 'override' ? '#00a86b' : C.surfaceContainerLow,
+          borderWidth: 1, borderColor: mapping.mode === 'override' ? '#00a86b' : C.ghostBorder,
         }}>
           <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary,
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: mapping.mode === 'override' ? '#fff' : C.secondary,
             letterSpacing: 0.4,
           }}>
-            {mapping.mode}/{mapping.polarity === 'bipolar' ? 'bip' : 'uni'}
+            {mapping.mode === 'override'
+              ? '! override'
+              : mapping.mode === 'multiply'
+                ? 'multiply'
+                : `offset/${mapping.polarity === 'bipolar' ? 'bip' : 'uni'}`}
           </Text>
         </View>
         <Text style={{

@@ -13,7 +13,7 @@ import {
   loadAudioConfig, saveAudioConfig,
   mergeAudioConfig, pickLiveFields, validateLivePatch,
   AUDIO_LIVE_FIELDS,
-} from '../lib/audio_config.js';
+} from '../audio/config/audio_config.js';
 
 function tmpDir() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'marsin-audio-cfg-'));
@@ -160,11 +160,80 @@ test('validateLivePatch rejects non-object payloads', () => {
 test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // Lock in the live-tunable contract; changing this is a doc + UI change.
   // Bands lost `smoothingAlpha` in favour of asymmetric attack/release
-  // + a noise gate (2026-05-25 retune).
+  // + a noise gate (2026-05-25 retune); gained `inputGain` (2026-06-14
+  // software preamp). `kickEma` was REMOVED 2026-06-14 — it was advertised
+  // live-tunable but never wired into the analyzer (silent no-op); the kick
+  // EMA coefficients are hardcoded in audio_analyzer.js. `structureDetector`
+  // is the build/drop/sustain detector group (docs/30).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate'],
-    kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
+    kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    structureDetector: [
+      'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
+      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
+      'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
+    ],
   });
+});
+
+test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects bad values', () => {
+  const ok = validateLivePatch({ structureDetector: { dropEdgeMode: 'windowed', dropDeltaWindowMs: 350 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.structureDetector.dropEdgeMode, 'windowed');
+  assert.equal(ok.live.structureDetector.dropDeltaWindowMs, 350);
+  const badEnum = validateLivePatch({ structureDetector: { dropEdgeMode: 'sideways' } });
+  assert.equal(badEnum.ok, false);
+  const badWin = validateLivePatch({ structureDetector: { dropDeltaWindowMs: 10 } });
+  assert.equal(badWin.ok, false);
+  // 'kalman' is the adopted default edge — must validate.
+  const kal = validateLivePatch({ structureDetector: { dropEdgeMode: 'kalman', dropNisThreshold: 6.63, slowZoneRef: 0.5 } });
+  assert.equal(kal.ok, true, kal.error);
+  assert.equal(kal.live.structureDetector.dropEdgeMode, 'kalman');
+  const badNis = validateLivePatch({ structureDetector: { dropNisThreshold: 0.5 } });
+  assert.equal(badNis.ok, false);
+  // kalman re-tune knobs (exposed 2026-06-16): dropKalmanQ ∈ (0,1], dropCoWindowMs ∈ [0,2000].
+  const tune = validateLivePatch({ structureDetector: { dropKalmanQ: 0.001, dropCoWindowMs: 60 } });
+  assert.equal(tune.ok, true, tune.error);
+  assert.equal(tune.live.structureDetector.dropKalmanQ, 0.001);
+  assert.equal(tune.live.structureDetector.dropCoWindowMs, 60);
+  assert.equal(validateLivePatch({ structureDetector: { dropKalmanQ: 0 } }).ok, false);
+  assert.equal(validateLivePatch({ structureDetector: { dropCoWindowMs: 5000 } }).ok, false);
+});
+
+test('validateLivePatch accepts a structureDetector patch (docs/30)', () => {
+  const res = validateLivePatch({
+    structureDetector: {
+      enabled: true,
+      buildThreshold: 0.4,
+      dropEnergyJump: 1.8,
+      stemsTimeoutMs: 250,
+      eventRefractoryMs: 2000,
+      falseFireCount: 3,
+      falseFireWindowMs: 30000,
+      falseFireQuietMs: 60000,
+    },
+  });
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.live.structureDetector.enabled, true);
+  assert.equal(res.live.structureDetector.buildThreshold, 0.4);
+});
+
+test('validateLivePatch rejects a non-boolean structureDetector.enabled', () => {
+  const res = validateLivePatch({ structureDetector: { enabled: 1 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /enabled.*boolean/);
+});
+
+test('validateLivePatch rejects an out-of-range structureDetector threshold', () => {
+  const res = validateLivePatch({ structureDetector: { dropEnergyJump: 0.5 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /dropEnergyJump/);
+});
+
+test('validateLivePatch rejects an unknown structureDetector field', () => {
+  const res = validateLivePatch({ structureDetector: { bogusKnob: 1 } });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /not live-tunable/);
 });
 
 test('loadAudioConfig recovers gracefully from a malformed YAML file', () => {

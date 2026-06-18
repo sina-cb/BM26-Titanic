@@ -1,39 +1,27 @@
 channel:
   id: ch_base
   name: Base
-  pattern: 09_cyclone
+  pattern: 13_sparkle
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
-  localControls:
-    '1037917937':
-      v0: 0.78
-      v1: 0
-      v2: 0
-    '3032072768':
-      v0: 0.12
-      v1: 0
-      v2: 0
-    '3680310977':
-      v0: 0.09
-      v1: 0
-      v2: 0
+  localControls: {}
   playlist:
-    name: fast
-    activeEntryId: e_1779867338303_9612
-    cursor: 6
+    name: test_show
+    activeEntryId: e_b
+    cursor: 1
     autopilot:
-      active: true
-      delay_s: 15
-      shuffle: true
+      active: false
+      delay_s: 30
+      shuffle: false
   viewSelection:
     type: all
     target: null
     invert: false
 transitionConfig:
-  enabled: true
+  enabled: false
   mode: trans_crossfade
-  durationMs: 500
+  durationMs: 1000
   shuffle: false

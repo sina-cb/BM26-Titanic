@@ -1701,14 +1701,34 @@ export async function stopScheduledTask(id: string): Promise<ApiResult<{ task: S
 // `{ ok: false, error }`.
 
 // Mic-band sources are populated by the engine's audio analysis
-// pipeline; stems* are populated by the OSC listener from
-// `/marsin/stems/*` packets. When the matching pipeline is OFF the
-// value defaults to 0 and the mapping evaluates as a no-op (so the
-// operator's "no change when source disabled" expectation holds).
-export type ModulationSourceKey =
-  | 'micLow' | 'micMid' | 'micHigh' | 'micKick'
-  | 'stemsBass' | 'stemsDrums' | 'stemsVocals';
-export type ModulationMode = 'offset' | 'scale';
+// pipeline (the Audio Companion routes them into the CPC over OSC).
+// When the pipeline is OFF the value defaults to 0 and the mapping
+// evaluates as a no-op (so the operator's "no change when source
+// disabled" expectation holds). The legacy `stems*` sources were
+// removed engine-side (the Audio Companion is the sole analyzer); a
+// modulation referencing one would never receive a value.
+//
+// The mod-source picker is rendered DYNAMICALLY from the live audio CPC
+// keys (the contract's curated set), so this type is the open `string`
+// the engine accepts rather than a hand-listed enum that could drift.
+export type ModulationSourceKey = string;
+// Modulation modes mirror marsin_engine/lib/modulation_engine.js:
+//   offset   — add the scaled signal to the static value.
+//   multiply — use the scaled signal as a MULTIPLIER over the static value.
+//   override — drive the param directly from the scaled signal (the `!`).
+// 'scale' was the legacy name for 'multiply'; the engine migrates it on load
+// and so does CaptainPad (see migrateModulationMode) — it is NOT a valid mode
+// to write, so it is intentionally absent from this union.
+export type ModulationMode = 'offset' | 'multiply' | 'override';
+
+// Migrate a loaded mode string to the current contract. The engine accepts
+// 'scale' as a legacy alias for 'multiply'; mirror that here when reading an
+// existing mapping so editing it doesn't surface an unknown mode.
+export function migrateModulationMode(mode: unknown): ModulationMode {
+  if (mode === 'scale') return 'multiply';
+  if (mode === 'multiply' || mode === 'override') return mode;
+  return 'offset';
+}
 export type ModulationPolarity = 'unipolar' | 'bipolar';
 export type ModulationCurve = 'linear' | 'easeIn' | 'easeOut' | 'exp';
 

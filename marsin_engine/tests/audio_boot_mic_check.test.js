@@ -27,7 +27,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findConfiguredDevice } from '../lib/audio_devices.js';
+import { findConfiguredDevice } from '../audio/capture/audio_devices.js';
 
 const MAC_DEVICES = [
   { id: 'avfoundation-audio-0', label: 'MacBook Pro Microphone', platform: 'darwin', inputFormat: 'avfoundation', ffmpegDevice: ':0', isDefault: true },

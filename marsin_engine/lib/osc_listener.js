@@ -20,6 +20,8 @@
 import dgram from 'node:dgram';
 import * as osc from 'osc-min';
 
+import { gainByKeyForOsc } from '../audio/postproc/audio_signals.js';
+
 // Per-signal post-processing (docs/29) runs in the engine via
 // `lib/signal_post_processor.js`. The OSC listener accepts an OPTIONAL
 // `signalPostProcessor` constructor arg and routes each gainable
@@ -35,15 +37,13 @@ import * as osc from 'osc-min';
 // nothing, which is the failure mode this map exists to prevent).
 // The MATH of gain is now in the chain framework — this map stays
 // only as a boot-time existence check.
-export const GAIN_BY_KEY = Object.freeze({
-  stemsBass:   'stemsBassGain',
-  stemsDrums:  'stemsDrumsGain',
-  stemsVocals: 'stemsVocalsGain',
-  micLow:      'micLowGain',
-  micMid:      'micMidGain',
-  micHigh:     'micHighGain',
-  micKick:     'micKickGain',
-});
+//
+// DERIVED from `lib/audio_signals.js` (the single source of truth for
+// the audio signal family) via `gainByKeyForOsc()` — NOT hand-listed —
+// so adding/removing a gain-aware OSC signal is a one-line descriptor
+// edit there. The `<liveKey>Raw` mirror map below is likewise derived at
+// construction time from whichever `<key>Raw` keys exist in the registry.
+export const GAIN_BY_KEY = Object.freeze(gainByKeyForOsc());
 
 // ── Pure helpers (exported for tests) ──────────────────────────────────────
 
@@ -363,6 +363,67 @@ export class OscListener {
     // Pre-computed metadata for telemetry.
     this._bindingsCount = this._bindingsByAddr.size;
     this._allowedCount = this._allowedByIp.size;
+  }
+
+  /**
+   * Add a runtime scalar OSC binding (address → CPC key, arg 0). Used by
+   * the Audio Companion manifest path to wire a freshly-registered dynamic
+   * live key without rebuilding the whole listener. Idempotent: re-adding
+   * the same (address, key) pair is a no-op; a DIFFERENT key on the same
+   * address replaces the binding (the Companion owns its addresses).
+   *
+   * Refuses to clobber a CANONICAL address (one that already carries a
+   * binding NOT created by addDynamicBinding) — that would silently
+   * redirect a built-in signal. Codex P0: fail loud.
+   *
+   * @param {string} address — OSC address (e.g. /marsin/companion/foo)
+   * @param {string} key — CPC key the address writes to
+   * @throws {Error} on a non-string address/key or a canonical-address collision.
+   */
+  addDynamicBinding(address, key) {
+    if (typeof address !== 'string' || address.length === 0) {
+      throw new Error('addDynamicBinding: address must be a non-empty string.');
+    }
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new Error('addDynamicBinding: key must be a non-empty string.');
+    }
+    this._dynamicAddrs = this._dynamicAddrs || new Set();
+    const prior = this._bindingsByAddr.get(address);
+    if (prior && !this._dynamicAddrs.has(address)) {
+      // The address already carries a binding the listener built at
+      // construction time. If that binding is the SAME single scalar key
+      // we're adding, it's a benign duplicate — the dynamic key was
+      // registered in the CPC BEFORE this listener was constructed, so
+      // buildCanonicalBindings already wired it. Adopt it into the dynamic
+      // set so removeDynamicBinding can clean it up later. Otherwise it
+      // points at a DIFFERENT (built-in) key — refuse loudly so a Companion
+      // address can't silently hijack a curated signal (Codex P0).
+      const sameScalarKey = prior.length === 1
+        && prior[0].kind === 'scalar' && prior[0].key === key;
+      if (!sameScalarKey) {
+        throw new Error(
+          `addDynamicBinding: address "${address}" collides with a non-dynamic ` +
+          `OSC binding — refusing to override.`,
+        );
+      }
+    }
+    this._bindingsByAddr.set(address, [{ key, kind: 'scalar', argIndex: 0 }]);
+    this._dynamicAddrs.add(address);
+    this._bindingsCount = this._bindingsByAddr.size;
+  }
+
+  /**
+   * Remove a runtime binding previously added via addDynamicBinding.
+   * No-op if the address isn't a dynamic binding. Returns true if removed.
+   * @param {string} address
+   * @returns {boolean}
+   */
+  removeDynamicBinding(address) {
+    if (!this._dynamicAddrs || !this._dynamicAddrs.has(address)) return false;
+    this._bindingsByAddr.delete(address);
+    this._dynamicAddrs.delete(address);
+    this._bindingsCount = this._bindingsByAddr.size;
+    return true;
   }
 
   start() {

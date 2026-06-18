@@ -271,30 +271,133 @@ The strict cp1↔cp2 contract is the default for production patterns, but two ex
 
 ---
 
-## 8. Audio Reactivity (Planned Interfaces)
+## 8. Audio Reactivity (Modulators-Only Policy)
 
-The audio analysis subsystem (currently in active integration) will expose frame-level audio metrics. Future patterns can declare these globals to receive automatic BPM and frequency spectrum sync:
+**Operator decision (2026-06-17): patterns MUST NOT read live audio signals
+natively.** There is no "declare `export var micLow` and the engine feeds it"
+path any more — it was removed. A pattern that declares an `export var` whose
+name matches a live audio key (`micLow`, `micDomEnergy1`, `audioBuildScore`, …)
+will **not** receive the CPC audio value; the engine refuses to bind live
+audio-family keys into pattern globals (`lib/param_center.js` `registerChannel`
+skips them; the exclusion set is `isLiveAudioSharedFnName` in
+`audio/postproc/audio_signals.js`).
 
-```javascript
-// Planned hooks (read-only when audio is active):
-export var bpm = 120.0;
-export var volume = 0.0; // overall gain (0..1)
-export var bass = 0.0;   // low-frequency energy (0..1)
-export var treble = 0.0; // high-frequency energy (0..1)
-```
+### 8.1 The contract
 
-> **How audio actually reaches patterns today:** the engine does *not* auto-inject `bpm/volume/...`.
-> The implemented path is the **modulation system**: the audio analyzer publishes CPC signals
-> `micLow` / `micMid` / `micHigh` / `micKick` (plus optional OSC stems `stemsBass/Drums/Vocals`), and
-> a per-playlist-entry modulation mapping binds one of those sources onto a pattern's exported
-> `slider*` parameter (`mode: offset|scale`, a `curve`, and a `range`). So to make a pattern
-> audio-reactive you just expose ordinary `slider*` params (e.g. `sliderAudioKick`) and let the
-> operator/playlist map `micKick → audioKick`. `micKick` is pre-shaped (envelope + Schmitt + hold)
-> into a clean transient, which makes it the natural **trigger** for the feedback effects in §9.
+Audio reactivity is built in two pieces:
+
+1. **The pattern exposes a SLIDER param** for the thing audio should drive,
+   with a default value that looks good at rest (no audio). The pattern reads
+   only that slider — never a CPC audio global. Example:
+
+   ```javascript
+   export var domEnergy = 0.6;            // 0..1, looks lively at rest
+   export function sliderDomEnergy(v) { domEnergy = v; }
+   // ... render reads `domEnergy`, never `micDomEnergy1`.
+   ```
+
+2. **A MODULATION mapping couples an audio source to that slider**, declared
+   on the playlist entry (`simulation/scenes/<scene>/playlists/<name>.yaml`,
+   which is also the engine's playlist library). The modulation engine
+   (`lib/modulation_engine.js`) reads the source from the CPC each frame and
+   writes the modulated value to the slider through the normal control path:
+
+   ```yaml
+   modulations:
+     - id: mod_sliderDomEnergy_micDomEnergy1
+       type: continuous
+       enabled: true
+       source:    { scope: cpc, key: micDomEnergy1 }
+       target:    { scope: pattern, parameter: sliderDomEnergy }
+       mode: offset          # or scale
+       polarity: unipolar    # or bipolar
+       range: [0, 0.4]       # how far the source pushes the slider
+       curve: easeOut        # linear | easeIn | easeOut | exp
+   ```
+
+At slider default (no mapping, or source silent) the pattern renders its
+resting look — codex P0, no black-outs, no fallback.
+
+### 8.2 Available audio sources
+
+Any CPC key can be a modulation source — sources are **not** allow-listed. The
+live audio family (the source of truth is `audio/postproc/audio_signals.js`)
+includes:
+
+| Key(s) | Meaning |
+|---|---|
+| `micLow`, `micMid`, `micHigh`, `micKick`, `micFlux` | Mic band energies / kick / spectral flux (0..1) |
+| `micDomFreq1/2`, `micDomEnergy1/2` | Dominant-frequency analyzer outputs (Hz / 0..1) |
+| `tempoBpm`, `audioBpm`, `audioBeat`, `audioBeatInBar`, `audioBarPhase`, `audioDownbeat` | Tempo / beat-grid signals |
+| `audioStructure`, `audioBuildScore`, `audioEnergyRatio`, `audioVocalsHot`, `audioDropPulse`, `audioSlowZone` | Structure-detector outputs |
+| `audioParty`, `audioNote`, `audioNoteHue`, `audioSwitchPattern`, `audioSwitchColor` | Derived cue signals |
+
+These are fed by the Audio Companion (the sole analyzer) over OSC. They live
+in the CPC as `live:true` params and are broadcast to CaptainPad for the ghost
+slider, but they are **never** injected into pattern globals — only modulators
+read them.
+
+> The persistent `*Gain` knobs (`micLowGain`, …) are operator levels, not
+> signals; they are not part of the live set and are not modulation sources.
 
 ---
 
-## 9. Frame Feedback & Trails — Worked Examples
+## 9. Signal-to-Visual Patterns (audio-reactive-ready)
+
+The modulators-only contract (§8) is the foundation of a whole *family* of
+patterns we call **signal-to-visual**: the pattern renders a look built from a
+few well-chosen, **named visual characteristics**, and every one of those
+characteristics is a plain `slider*` that a modulation can drive. The pattern
+never reads audio — it just exposes the *handles*; the show wires a signal (an
+audio key, a hand fader, an LFO) onto each handle. The same pattern is a calm
+idle at rest and a tightly audio-locked instrument once mapped, with **no code
+change**.
+
+### 9.1 Factor the look into modulatable characteristics
+
+The design move is to decompose a visual into independent, individually
+modulatable parameters — then expose each as a slider with a resting default
+that already looks good (codex P0: alive at zero audio). Typical handles:
+
+| Characteristic | What it controls | Example coupling |
+|---|---|---|
+| **position** | where the effect sits — x along a row, y up a column, an angle around a ring | `micLow → position` (signal literally moves the visual) |
+| **movement radius / orbit** | how far it travels around an anchor | modulate this and a static point becomes a **circulating** pattern |
+| **width / size** | how many pixels the effect covers | `micKick → width` (punch widens it) |
+| **energy / intensity** | how hot it burns (brightness, core pop, halo) | `micDomEnergy1 → energy` |
+| **speed** | how fast it animates | `audioBpm → speed` (beat-locked) |
+| **trail / persistence**, **blur**, **hue / palette position**, **count** | the supporting texture | `audioBuildScore → trail`, `audioNoteHue → palette` |
+
+Pick a small, orthogonal set, name them plainly, and let modulations (§8) do
+the rest. A position-style signal (`micLow`, `micDomEnergy1`) on **position**
+gives a wave that tracks the music; the same signal on **radius** gives an
+orbit that breathes; on **energy** gives a pulse. One pattern, many shows.
+
+### 9.2 `27_swipe` — the simplest high-definition, audio-reactive-ready pattern
+
+`27_swipe` is the canonical starting point of this family — **the simplest
+member, but a real start for beautiful things.** It does one thing — a single
+sharp pixel sweeping a fixture — but it does it as a clean signal-to-visual
+surface:
+
+- **`swipePos`** is the modulatable **position**: drive it with any audio key
+  and the lit pixel tracks the signal — a literal *signal → position* visual.
+- **`swipeWidth` / `blur`** are size/softness, **`trail`** is persistence,
+  **`swipeDir`** flips travel, **`shift`** calibrates the zero-point to the rig.
+- A **sharp single-pixel core on true black** (`BASE_FLOOR = 0`) is what makes
+  it **high definition**: every modulation of `swipePos` reads as a crisp,
+  exact move, not a mushy glow. High contrast + high definition is what lets the
+  audio signal show through faithfully.
+
+It is deliberately one moving point, but the recipe scales straight up: add a
+`radius` + `angle` for an orbiting effect; run several emitters each with its
+own `position`/`energy`; layer `width`/`hue` modulations. The dancer patterns
+(e.g. `26_dom_dancers_chevron`) are richer members of the same family — gliding
+orbs whose position and energy are the modulation handles. Start at the swipe;
+build toward the beautiful things.
+---
+
+## 10. Frame Feedback & Trails — Worked Examples
 
 This section shows how to use the language's **frame-to-frame state persistence** (see
 `MARSIN_PB_LANG_SPEC.md` §9.4–§9.5) to generate motion-trail effects. A compiled pattern is one
@@ -310,7 +413,7 @@ make them correct:
 3. `pixelCount` bakes to a literal `~144`; size feedback buffers to your real model with an explicit
    constant `N`, not `pixelCount`.
 
-### 9.1 Scalar decay-envelope trail (a pulse that fades)
+### 10.1 Scalar decay-envelope trail (a pulse that fades)
 
 The cheapest trail: one persistent scalar, snapped to `1.0` on an event and decayed each frame.
 This is the engine behind heartbeats, pings, and searchlight afterglow.
@@ -331,7 +434,7 @@ export function beforeRender(delta) {
   var dt = (delta / 1310.72) * localMult;
   clock = clock + dt * 0.5;
   var phase = clock % 1.0;
-  if (phase < lastPhase) env = 1.0;          // fire on each wrap (swap for an audio kick — §9.3)
+  if (phase < lastPhase) env = 1.0;          // fire on each wrap (swap for an audio kick — §10.3)
   lastPhase = phase;
   env = env - dt * (1.5 + fade * 4.0);       // decay the envelope toward 0
   if (env < 0.0) env = 0.0;
@@ -345,7 +448,7 @@ export function render3D(index, x, y, z) {
 To make it travel instead of flashing globally, gate it by position: multiply `env` by
 `smoothstep(headX + 0.1, headX, x)` where `headX = clock % 1.0`.
 
-### 9.2 Per-pixel feedback buffer (a comet with a real tail)
+### 10.2 Per-pixel feedback buffer (a comet with a real tail)
 
 For a head that **paints a fading tail into the pixels themselves**, keep your own brightness buffer.
 Decay the whole buffer each frame, inject at the head, read `buf[index]` per pixel. This is the
@@ -381,12 +484,12 @@ export function render3D(index, x, y, z) {
 Variations from the same skeleton:
 - **Ripple from one drop:** inject at a fixed center cell on a trigger, and in `render3D` read
   `buf[abs(index - center)]` so the stored envelope radiates outward.
-- **Bassline snake:** drive `head` speed and `tailLen` from an audio param (§9.3) so the snake
+- **Bassline snake:** drive `head` speed and `tailLen` from an audio param (§10.3) so the snake
   lengthens and accelerates with the bass.
 - **Ink-in-water (near-field):** seed several cells with `random(1)` and use a gentler `decay` for a
   slow organic bloom.
 
-### 9.3 Making a trail sound-reactive
+### 10.3 Making a trail sound-reactive
 
 Expose ordinary `slider*` params and let the modulation system feed audio into them (§8). The
 cleanest trigger is `micKick → audioKick`:
@@ -406,15 +509,15 @@ For continuous "breathe with the music," map `micLow → sliderTailLen` (longer 
 `micHigh → a brightness slider` (sparkle on the hats). No render-math change needed — the modulation
 controller writes the slider for you each frame.
 
-### 9.4 Mixer-level trails (ghost any pattern, no code)
+### 10.4 Mixer-level trails (ghost any pattern, no code)
 
 When you want trails on a pattern that manages no state of its own, skip the buffer entirely and turn
 on the **`feedbackTrails` global effect** (`marsin_engine/effects/feedbackTrails.js`). It keeps an
 RGBWAU trail buffer of the composited output and mixes it back with operator-tunable `decay`,
 `injection`, `mix`, `colorBleed`, and `blendMode` (add / max / replace). This is the "ghost
-everything" knob; §9.1–§9.2 are for trails baked into a specific pattern's design.
+everything" knob; §10.1–§10.2 are for trails baked into a specific pattern's design.
 
-### 9.5 Gotchas (all verified)
+### 10.5 Gotchas (all verified)
 
 | Gotcha | Why | Fix |
 |---|---|---|

@@ -36,7 +36,7 @@ function fakePc() {
 
 function paramSnap(overrides = {}) {
   return {
-    tempoBpm:     { value: 120, ...(overrides.tempoBpm     || {}) },
+    audioBpm:     { value: 120, ...(overrides.audioBpm     || {}) },
     bpmSpeedSync: { value: 1,   ...(overrides.bpmSpeedSync || {}) },
     bpmSpeedMin:  { value: 60,  ...(overrides.bpmSpeedMin  || {}) },
     bpmSpeedMax:  { value: 180, ...(overrides.bpmSpeedMax  || {}) },
@@ -51,7 +51,7 @@ test('constructor rejects non-PC arg', () => {
 test('bpm in the middle of [min,max] maps to 0.5', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 120 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 120 } }));
   assert.equal(pc.writes.length, 1);
   assert.equal(pc.writes[0].key, 'speed');
   assert.equal(pc.writes[0].value, 0.5);
@@ -61,31 +61,31 @@ test('bpm in the middle of [min,max] maps to 0.5', () => {
 test('bpm at min/max edges hit 0 and 1; out-of-range clamps', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 60 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 60 } }));
   assert.equal(pc.writes.at(-1).value, 0);
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 180 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 180 } }));
   assert.equal(pc.writes.at(-1).value, 1);
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 240 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 240 } }));
   assert.equal(pc.writes.at(-1).value, 1, 'over-max clamps to 1');
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 30 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 30 } }));
   assert.equal(pc.writes.at(-1).value, 0, 'under-min clamps to 0');
 });
 
 test('bpm=0 (no signal) does NOT write speed', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({ tempoBpm: { value: 0 } }));
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 0 } }));
   assert.equal(pc.writes.length, 0);
 });
 
 test('sync disabled → no writes even on bpm changes', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({ bpmSpeedSync: { value: 0 } }));
+  pc.emit(['audioBpm'], paramSnap({ bpmSpeedSync: { value: 0 } }));
   assert.equal(pc.writes.length, 0);
 });
 
-test('events that do not touch tempoBpm are ignored', () => {
+test('events that do not touch audioBpm are ignored', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
   pc.emit(['speed'], paramSnap());
@@ -96,10 +96,10 @@ test('events that do not touch tempoBpm are ignored', () => {
 test('min === max maps to fixed 0.5 (div-by-zero guard)', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({
+  pc.emit(['audioBpm'], paramSnap({
     bpmSpeedMin: { value: 120 },
     bpmSpeedMax: { value: 120 },
-    tempoBpm:    { value: 99  },
+    audioBpm:    { value: 99  },
   }));
   assert.equal(pc.writes.length, 1);
   assert.equal(pc.writes[0].value, 0.5);
@@ -108,10 +108,10 @@ test('min === max maps to fixed 0.5 (div-by-zero guard)', () => {
 test('min > max is swapped at use-time', () => {
   const pc = fakePc();
   new BpmSpeedSync(pc).attach();
-  pc.emit(['tempoBpm'], paramSnap({
+  pc.emit(['audioBpm'], paramSnap({
     bpmSpeedMin: { value: 180 },
     bpmSpeedMax: { value: 60  },
-    tempoBpm:    { value: 120 },
+    audioBpm:    { value: 120 },
   }));
   assert.equal(pc.writes[0].value, 0.5);
 });
@@ -123,7 +123,7 @@ test('detach() removes the subscriber; no further writes', () => {
   assert.equal(pc.subscriberCount, 1);
   bs.detach();
   assert.equal(pc.subscriberCount, 0);
-  pc.emit(['tempoBpm'], paramSnap());
+  pc.emit(['audioBpm'], paramSnap());
   assert.equal(pc.writes.length, 0);
 });
 

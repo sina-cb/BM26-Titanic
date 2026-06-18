@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import { AudioCapture } from '../lib/audio_capture.js';
+import { AudioCapture } from '../audio/capture/audio_capture.js';
 
 /** Build a fake child that AudioCapture can talk to. */
 function makeFakeChild() {
@@ -160,6 +160,62 @@ test('stop() during pending restart cancels the timer and resolves', async () =>
   assert.ok(cap._restartTimer, 'restart scheduled');
   await cap.stop();
   assert.equal(cap._restartTimer, null, 'restart timer cleared on stop');
+});
+
+test('file source, loop:false, clean EOF (code 0) → stops, no restart', () => {
+  const { spawnFn, state } = makeFakeSpawn();
+  const phases = [];
+  const cap = new AudioCapture({
+    onFrame: () => {},
+    onStatus: (s) => phases.push(s.phase),
+    frameSamples: 2,
+    device: 'file:/clips/track.wav',
+    loop: false,
+    spawnFn,
+  });
+  cap.start();
+  assert.equal(state.spawnCount, 1);
+  // ffmpeg reaches end-of-file and exits cleanly.
+  state.lastChild.emit('exit', 0, null);
+  // A finished one-shot clip is DONE — no restart, terminal 'stopped'.
+  assert.equal(cap._restartTimer, null, 'no restart for a finished file clip');
+  assert.equal(state.spawnCount, 1, 'must not respawn the clip');
+  assert.equal(phases[phases.length - 1], 'stopped');
+  assert.equal(cap._errorCode, null, 'clean EOF is not an error');
+  cap.stop();
+});
+
+test('file source, loop:false, ERROR exit (code 1) → still restarts', () => {
+  const { spawnFn, state } = makeFakeSpawn();
+  const cap = new AudioCapture({
+    onFrame: () => {},
+    frameSamples: 2,
+    device: 'file:/clips/track.wav',
+    loop: false,
+    spawnFn,
+  });
+  cap.start();
+  // A non-zero exit is a real failure even for a file source → restart.
+  state.lastChild.emit('exit', 1, null);
+  assert.ok(cap._restartTimer, 'a failed file read must still restart');
+  assert.equal(cap._errorCode, 'capture_exited');
+  cap.stop();
+});
+
+test('live source, clean exit (code 0) → restarts (guard is file+loop:false only)', () => {
+  const { spawnFn, state } = makeFakeSpawn();
+  const cap = new AudioCapture({
+    onFrame: () => {},
+    frameSamples: 2,
+    platform: 'darwin',
+    device: ':0',
+    spawnFn,
+  });
+  cap.start();
+  // A live mic process exiting at all is unexpected → restart regardless of code.
+  state.lastChild.emit('exit', 0, null);
+  assert.ok(cap._restartTimer, 'live capture must restart on any exit');
+  cap.stop();
 });
 
 test('a throwing onFrame does not break framing of subsequent frames', () => {

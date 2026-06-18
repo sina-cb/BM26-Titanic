@@ -11,7 +11,19 @@
 import fs from 'fs';
 import yaml from 'js-yaml';
 
+import { audioRegistryEntries, isLiveAudioSharedFnName } from '../audio/postproc/audio_signals.js';
+
 // ── Shared Parameter Registry ─────────────────────────────────────────────
+//
+// The AUDIO signal family (mic bands + kick + flux, stems, their *Gain and
+// *Raw mirrors, tempoBpm, and the 5 detector live keys) is NOT hand-listed
+// here — it is generated from `lib/audio_signals.js`, the single source of
+// truth that kills the old 5-place drift (registry / KNOWN_SIGNALS /
+// DEFAULT_CHAINS / osc_listener maps / CaptainPad liveKeys). The audio block
+// is spliced in below via `...audioRegistryEntries()`, BETWEEN the color
+// params and the BPM→speed-sync params, preserving the exact registry order
+// the schema / OSC bindings depend on. Every NON-audio entry stays
+// hand-listed exactly as before.
 const PARAM_REGISTRY = [
   {
     // `speed` and `size` are ENGINE-OWNED globals since May 2026.
@@ -76,186 +88,11 @@ const PARAM_REGISTRY = [
     default: 800, range: [0, 10000], clamp: true, persist: true,
     oscAddress: '/marsin/param/colorTransitionMs', sharedFnName: 'colorTransitionMs',
   },
-  // ── Audio reactivity knobs (docs/24 §4.3 + §5) ─────────────────────────
-  //
-  // Two roles (the master `audioReactivity` scale was removed
-  // 2026-05-26 — operator review: redundant with the per-stem gain
-  // knobs in the Audio Analysis tab, and the extra slider on the
-  // Deck was eating tap-target space without adding value):
-  //
-  //   stems<Bass|Drums|Vocals> — LIVE OSC scalars from the external
-  //     analyser (bound to /marsin/stems/<name>). High-rate, ephemeral,
-  //     throttled broadcast, no persistence, no LoRa (live-param
-  //     policy, docs/24 §7.4).
-  //
-  //   stems<Bass|Drums|Vocals>Gain — PER-STEM operator gain. Default
-  //     range [0, 2] but configurable per deployment via the
-  //     `osc.gainMax` config field, applied through the ParamCenter
-  //     constructor's `registryOverrides`. Persisted alongside the
-  //     other scene/model parameters.
-  //
-  //   tempoBpm — LIVE BPM scalar on the custom /lx/tempo/bpm address.
-  //     Live-param policy, no per-stem gain (BPM is a tempo reference,
-  //     not a level to be scaled).
-  //
-  // Patterns combine these as:
-  //     effective = stemsVocalsGain * stemsVocals
-  // and similar for bass / drums. See docs/24 §4.3.
-  {
-    key: 'stemsVocalsGain', label: 'Vocals Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/stemsVocalsGain', sharedFnName: 'stemsVocalsGain',
-  },
-  {
-    key: 'stemsBassGain', label: 'Bass Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/stemsBassGain', sharedFnName: 'stemsBassGain',
-  },
-  {
-    key: 'stemsDrumsGain', label: 'Drums Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/stemsDrumsGain', sharedFnName: 'stemsDrumsGain',
-  },
-  {
-    key: 'stemsVocals', label: 'Stems · Vocals', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/stems/vocals', sharedFnName: 'stemsVocals',
-  },
-  {
-    key: 'stemsBass', label: 'Stems · Bass', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/stems/bass', sharedFnName: 'stemsBass',
-  },
-  {
-    key: 'stemsDrums', label: 'Stems · Drums', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/stems/drums', sharedFnName: 'stemsDrums',
-  },
-  // ── RAW (pre-gain) stems live keys ──────────────────────────────────────
-  // Same envelope/compression path as the gained `stems*` keys, but BEFORE
-  // the per-stem operator gain is applied. Published in parallel by
-  // osc_listener.js so the CaptainPad SIGNAL DIAGNOSTICS row can show
-  // raw vs post side-by-side without reconstructing from `value / gain`
-  // (which can't recover clipped post=1.0 cases). No OSC inbound binding —
-  // these are engine-internal mirrors. No portWatch (operator surface
-  // only). See docs/29 + operator brief 2026-05-26 "show raw + post".
-  {
-    key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'stemsVocalsRaw',
-  },
-  {
-    key: 'stemsBassRaw', label: 'Stems · Bass (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'stemsBassRaw',
-  },
-  {
-    key: 'stemsDrumsRaw', label: 'Stems · Drums (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'stemsDrumsRaw',
-  },
-  {
-    key: 'tempoBpm', label: 'Tempo · BPM', type: 'float',
-    default: 0.0, range: [0, 300], clamp: true,
-    persist: false, live: true, broadcastHz: 5, portWatch: false,
-    // Non-canonical address: LX Studio (/lx/tempo/bpm) is the de-facto
-    // upstream tempo source on this rig. Kept here so it auto-binds
-    // out of the box; an operator-defined custom binding could route
-    // a different tempo source if needed.
-    oscAddress: '/lx/tempo/bpm', sharedFnName: 'tempoBpm',
-  },
-
-  // ── Mic-derived live params (docs/25 Marsin Audio Analysis) ────────────
-  // Source: in-engine AudioAnalyzer (lib/audio_analyzer.js). Same
-  // live-param policy as stems — high-rate, non-persistent, hidden
-  // from LoRa. Canonical OSC addresses included so an external
-  // analyser could also feed these keys if the mic listener is off.
-  {
-    key: 'micLow', label: 'Mic · Low', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/mic/low', sharedFnName: 'micLow',
-  },
-  {
-    key: 'micMid', label: 'Mic · Mid', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/mic/mid', sharedFnName: 'micMid',
-  },
-  {
-    key: 'micHigh', label: 'Mic · High', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    oscAddress: '/marsin/mic/high', sharedFnName: 'micHigh',
-  },
-  {
-    key: 'micKick', label: 'Mic · Kick', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 30, portWatch: false,
-    oscAddress: '/marsin/mic/kick', sharedFnName: 'micKick',
-  },
-
-  // ── RAW (pre-gain) mic-derived live keys ───────────────────────────────
-  // Mirror of the `mic*` live keys above, but published BEFORE the per-band
-  // operator gain is applied in the analyzer. Same envelope/compression/
-  // noise-gate path — the only thing that differs is the gain multiplier.
-  // Lets CaptainPad SIGNAL DIAGNOSTICS show raw vs post side-by-side
-  // (operator brief 2026-05-26 "show raw + post"). No OSC inbound binding
-  // — these are engine-internal mirrors.
-  {
-    key: 'micLowRaw', label: 'Mic · Low (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'micLowRaw',
-  },
-  {
-    key: 'micMidRaw', label: 'Mic · Mid (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'micMidRaw',
-  },
-  {
-    key: 'micHighRaw', label: 'Mic · High (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 15, portWatch: false,
-    sharedFnName: 'micHighRaw',
-  },
-  {
-    key: 'micKickRaw', label: 'Mic · Kick (raw)', type: 'float',
-    default: 0.0, range: [0, 1], clamp: true,
-    persist: false, live: true, broadcastHz: 30, portWatch: false,
-    sharedFnName: 'micKickRaw',
-  },
-
-  // ── Per-band mic gains (operator-tunable, persistent) ──────────────────
-  // Range reshaped at boot by `osc.gainMax` via registryOverrides,
-  // same mechanism as the stem gains.
-  {
-    key: 'micLowGain', label: 'Mic Low Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/micLowGain', sharedFnName: 'micLowGain',
-  },
-  {
-    key: 'micMidGain', label: 'Mic Mid Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/micMidGain', sharedFnName: 'micMidGain',
-  },
-  {
-    key: 'micHighGain', label: 'Mic High Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/micHighGain', sharedFnName: 'micHighGain',
-  },
-  {
-    key: 'micKickGain', label: 'Mic Kick Gain', type: 'float',
-    default: 1.0, range: [0, 2], clamp: true, persist: true,
-    oscAddress: '/marsin/param/micKickGain', sharedFnName: 'micKickGain',
-  },
+  // ── Audio signal family (mic / stems / gains / raw mirrors / tempoBpm /
+  //    structure-detector keys) — GENERATED from lib/audio_signals.js.
+  //    Single source of truth; see the header comment on PARAM_REGISTRY
+  //    above and lib/audio_signals.js for why this block is not hand-listed.
+  ...audioRegistryEntries(),
 
   // ── BPM → speed sync (docs/25 §6) ──────────────────────────────────────
   // Operator-tunable, persistent. `bpmSpeedSync` is float-with-options
@@ -711,7 +548,127 @@ export class ParamCenter {
       // CaptainPad can render them with a small "ENGINE" annotation
       // and patterns can stop trying to bind them as pattern vars.
       engineOwned: !!e.engineOwned,
+      // Runtime keys registered from the Audio Companion's signal
+      // manifest (registerDynamicLiveParam). CaptainPad surfaces them
+      // identically to built-in live keys; the flag lets the UI tag
+      // them as Companion-provided if it wants.
+      dynamic: !!e._dynamic,
     }));
+  }
+
+  // ── Dynamic LIVE params (Audio Companion manifest) ──────────────────────
+  //
+  // The Audio Companion is the sole analyzer and may stream signals the
+  // static audio family doesn't know about (operator adds a new OUTPUT
+  // signal in the Companion). Those become RUNTIME live CPC keys here:
+  // non-persistent, live:true, broadcast at ~15 Hz, range chosen by the
+  // signal type. They are NEVER written to disk (persist:false) and NEVER
+  // shadow a built-in key — the caller (api_server) checks
+  // `isRegisteredKey` first and only ever passes keys it created here to
+  // `deregisterDynamicLiveParam`. See docs/24 §7 + the manifest endpoint.
+
+  /** Whether `key` is a currently-registered CPC param (built-in OR dynamic). */
+  isRegisteredKey(key) {
+    return !!this._registryByKey[key];
+  }
+
+  /** Whether `key` was registered at runtime via registerDynamicLiveParam. */
+  isDynamicLiveParam(key) {
+    const e = this._registryByKey[key];
+    return !!(e && e._dynamic === true);
+  }
+
+  /** Snapshot list of dynamic live-param keys (for diffing against a manifest). */
+  getDynamicLiveParamKeys() {
+    return this._registry.filter(e => e._dynamic === true).map(e => e.key);
+  }
+
+  /**
+   * Register a non-persistent LIVE CPC key at runtime from a Companion
+   * manifest entry. Adds the registry entry, lookup maps, and per-param
+   * store slot so getSchema() / get() / set() see it immediately.
+   *
+   * Idempotent on the (key) — re-registering an existing dynamic key
+   * with the same shape is a no-op; re-registering with a DIFFERENT
+   * range/oscAddress updates them in place (the Companion is the source
+   * of truth for its signals). Refuses to touch a built-in key — that
+   * would be a silent override of curated metadata (Codex P0).
+   *
+   * @param {{ key: string, oscAddress: string, label?: string,
+   *           range: [number, number], broadcastHz?: number }} spec
+   * @returns {{ status: 'added' | 'updated' }}
+   * @throws {Error} if `key` collides with a built-in (non-dynamic) entry.
+   */
+  registerDynamicLiveParam(spec) {
+    const { key, oscAddress, label, range, broadcastHz = 15 } = spec;
+    const existing = this._registryByKey[key];
+    if (existing && existing._dynamic !== true) {
+      throw new Error(
+        `registerDynamicLiveParam: "${key}" is a built-in CPC key — refusing to override.`,
+      );
+    }
+    const entry = {
+      key,
+      label: label || key,
+      type: 'float',
+      default: 0.0,
+      range: [range[0], range[1]],
+      clamp: true,
+      persist: false,
+      live: true,
+      broadcastHz,
+      portWatch: false,
+      oscAddress,
+      sharedFnName: key,
+      _dynamic: true,
+    };
+    if (existing) {
+      // Update in place — keep the same store slot / current value.
+      const idx = this._registry.indexOf(existing);
+      this._registry[idx] = entry;
+      this._registryByKey[key] = entry;
+      this._registryByFnName[entry.sharedFnName] = entry;
+      return { status: 'updated' };
+    }
+    this._registry.push(entry);
+    this._registryByKey[key] = entry;
+    this._registryByFnName[entry.sharedFnName] = entry;
+    this._store[key] = {
+      value: deepCopy(entry.default),
+      dirty: false,
+      lastSource: null,
+      lastOrigin: null,
+      lastRevision: 0,
+    };
+    return { status: 'added' };
+  }
+
+  /**
+   * Remove a dynamic live param previously added via
+   * registerDynamicLiveParam. Drops the registry entry, lookup maps, and
+   * store slot so getSchema() no longer surfaces it. Refuses to remove a
+   * built-in key. No-op for an unknown key (already gone).
+   *
+   * @param {string} key
+   * @returns {boolean} true if a dynamic key was removed.
+   * @throws {Error} if `key` is a built-in (non-dynamic) registered key.
+   */
+  deregisterDynamicLiveParam(key) {
+    const entry = this._registryByKey[key];
+    if (!entry) return false;
+    if (entry._dynamic !== true) {
+      throw new Error(
+        `deregisterDynamicLiveParam: "${key}" is a built-in CPC key — refusing to remove.`,
+      );
+    }
+    this._registry = this._registry.filter(e => e.key !== key);
+    delete this._registryByKey[key];
+    if (this._registryByFnName[entry.sharedFnName]
+        && this._registryByFnName[entry.sharedFnName].key === key) {
+      delete this._registryByFnName[entry.sharedFnName];
+    }
+    delete this._store[key];
+    return true;
   }
 
   // ── WASM Integration ──────────────────────────────────────────────────
@@ -726,7 +683,19 @@ export class ParamCenter {
     // `speed`, `size`). The engine reads those CPC values directly
     // each tick; injecting them as pattern variables would let a
     // pattern shadow the engine's authoritative value.
+    //
+    // MODULATORS-ONLY AUDIO POLICY (operator decision 2026-06-17): the
+    // LIVE audio-family signals (mic bands/flux, dom freq+energy, tempoBpm,
+    // structure detector + derived outputs) are NEVER bound into pattern
+    // globals here, even when a pattern declares a matching `export var`
+    // (e.g. `export var micDomEnergy1`). Audio reactivity must flow through
+    // the MODULATION engine driving SLIDER params — patterns do not read
+    // CPC audio signals natively. Persistent `*Gain` knobs are NOT in this
+    // set (they're operator levels, not signals), so they still bind. All
+    // non-audio slider/param exports keep their normal control-write path —
+    // the ModulationController depends on it (see modulation_controller.js).
     for (const exp of exports) {
+      if (isLiveAudioSharedFnName(exp.name)) continue;
       const entry = this._registryByFnName[exp.name];
       if (entry && !entry.engineOwned) {
         controlMap[entry.key] = { id: exp.id, fnName: exp.name };

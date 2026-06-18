@@ -130,6 +130,17 @@ export interface ParamSchemaEntry {
   live: boolean;
   broadcastHz: number;
   portWatch: boolean;
+  /**
+   * True when this key was registered at runtime from the Audio
+   * Companion's signal manifest (param_center.registerDynamicLiveParam).
+   * Engine sets it in getSchema() as `dynamic: !!e._dynamic`. CaptainPad
+   * surfaces dynamic keys in the audio grid + modulation source picker
+   * EXACTLY like the built-in mic / audio / dom family — the flag lets us
+   * include a Companion signal whose custom cpcKey (e.g. `low_test`)
+   * doesn't match the built-in name prefixes. Optional because older
+   * engines / non-audio schema entries don't carry it (treated as false).
+   */
+  dynamic?: boolean;
 }
 
 /**
@@ -352,20 +363,27 @@ function useEngineSlice<T>(selector: (s: EngineLiveState) => T): T {
   return slice;
 }
 
-// rAF-coalesced live emit (May 2026 perf). Even with the engine's
-// 20 Hz bucket cap, a busy network can queue multiple liveParams
-// messages between two React render passes. Without coalescing, each
-// triggers its own setState wave through every live subscriber. Here
-// we accumulate into `_pendingLive` and flush once per frame via
-// rAF / setImmediate — so multiple incoming messages collapse into a
-// single setState per consumer per frame, with no perceptual loss
-// (meters can't paint faster than the device's frame rate anyway).
+// Tick-coalesced live emit (May 2026 perf; scheduler revisited Jun 2026
+// for the audio-meter latency pass). A busy network can queue multiple
+// liveParams messages in the same JS tick; without coalescing each one
+// triggers its own setState wave through every live subscriber. We
+// accumulate into `_pendingLive` and flush once per scheduled callback,
+// so a burst collapses into a single setState per consumer.
+//
+// WHY NOT requestAnimationFrame: on React Native / Expo, rAF is driven
+// by the UI frame loop and only fires while the app is actively
+// rendering — under load (the AUDIO tab is busy) those callbacks get
+// deferred well past one 16 ms frame, and the engine's ~45 Hz live
+// frames then pile up behind a late paint. That deferral was a visible
+// chunk of the meter lag. A `setTimeout(0)` macrotask flushes on the
+// next tick regardless of paint state, so the freshest engine frame
+// reaches React state with near-zero added latency while STILL
+// coalescing everything that arrived in the same tick. The meters can't
+// paint faster than the device frame rate anyway, so there is no
+// downside to handing React the value a frame early.
 let _pendingLive: LiveParams | null = null;
 let _flushScheduled = false;
-const _scheduleFlush: (cb: () => void) => void =
-  typeof requestAnimationFrame === 'function'
-    ? (cb) => requestAnimationFrame(() => cb())
-    : (cb) => setTimeout(cb, 16);
+const _scheduleFlush: (cb: () => void) => void = (cb) => { setTimeout(cb, 0); };
 
 function _flushLive() {
   _flushScheduled = false;
@@ -390,6 +408,46 @@ function _emitLive(next: LiveParams | null) {
   _scheduleFlush(_flushLive);
 }
 
+/**
+ * The set of CPC keys flagged `live: true` in the engine schema. This is
+ * the iPad-side mirror of the engine's live-key list, but DERIVED from
+ * `GET /param-center/schema` instead of hardcoded — so it tracks the
+ * engine's single source of truth (marsin_engine/lib/audio_signals.js)
+ * automatically and can never drift. Returns an empty set if the schema
+ * hasn't been fetched yet (Codex P0: no hardcoded fallback list).
+ */
+function _liveKeysFromSchema(
+  schema: Record<string, ParamSchemaEntry>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const key of Object.keys(schema)) {
+    if (schema[key]?.live === true) out.add(key);
+  }
+  return out;
+}
+
+/**
+ * Extract the live-key subset from a {revision, params} snapshot using the
+ * schema's live flags, and emit it onto the live micro-bus. No-op when the
+ * schema has no live keys yet (cold-boot race — see callers); the WS
+ * liveParams broadcast catches the UI up regardless.
+ */
+function _seedLiveFromSchema(
+  snapshot: { revision?: number; params?: Record<string, SharedParamValue> },
+  schema: Record<string, ParamSchemaEntry>,
+): void {
+  const liveKeys = _liveKeysFromSchema(schema);
+  if (liveKeys.size === 0) return;
+  const liveSlice: Record<string, SharedParamValue> = {};
+  for (const k of liveKeys) {
+    const slot = snapshot.params?.[k];
+    if (slot) liveSlice[k] = slot;
+  }
+  if (Object.keys(liveSlice).length > 0) {
+    _emitLive({ revision: snapshot.revision ?? 0, params: liveSlice });
+  }
+}
+
 function _onMessage(msg: EngineMessage) {
   if (msg.type === 'sharedParams') {
     const raw = msg as unknown as SharedParams & { type: string };
@@ -403,6 +461,41 @@ function _onMessage(msg: EngineMessage) {
         params: (raw.params as Record<string, SharedParamValue>) || {},
       },
     });
+  } else if (msg.type === 'paramSchema') {
+    // The engine re-broadcasts the FULL CPC schema whenever the registry
+    // changes shape — specifically when the Audio Companion POSTs an
+    // OUTPUT manifest and the engine adds / removes / updates dynamic live
+    // params (api_server.js: `broadcastWs({ type: 'paramSchema', … })`).
+    // Without handling it here, `paramSchema` would be frozen at the
+    // single boot-time GET /param-center/schema seed, and a signal the
+    // operator adds in the Companion mid-session would never appear in the
+    // audio grid or the modulation source picker (and a removed one would
+    // ghost forever). We re-flatten into the same shape the boot seed uses.
+    //
+    // Reference-stability: `useAudioSignals` / `useParamRange` short-circuit
+    // on `s.paramSchema === prevSchema`, so we only ever assign a NEW object
+    // here (a real schema change). A no-op re-broadcast still allocates a
+    // fresh map, but the engine only emits this on an ACTUAL add/remove/
+    // update (it gates on `added/removed/updated`), so derived hooks
+    // re-derive exactly when the signal set really changed — no render storm.
+    const rawSchema = (msg as unknown as { schema?: unknown }).schema;
+    if (Array.isArray(rawSchema)) {
+      const flat: Record<string, ParamSchemaEntry> = {};
+      for (const e of rawSchema as ParamSchemaEntry[]) {
+        if (e && typeof e.key === 'string') flat[e.key] = e;
+      }
+      // Re-seed the live slice off the cached sharedParams now that the
+      // live-key set may have grown/shrunk — keeps meters correct without
+      // waiting for the next WS liveParams tick.
+      _emit({ ..._cached, paramSchema: flat });
+      const shared = _cached.sharedParams;
+      if (shared) {
+        _seedLiveFromSchema(
+          { revision: shared.revision, params: shared.params },
+          flat,
+        );
+      }
+    }
   } else if (msg.type === 'liveParams') {
     // Audio-derived high-rate keys. Routed onto its own micro-bus so
     // only audio meters / BPM badge re-render at the analyser's
@@ -617,25 +710,21 @@ function _ensureInitialized() {
           params: data.params || {},
         },
       });
-      // Best-effort live-key extraction. We don't have the schema
-      // yet (the fetchParamCenterSchema chain races us), so we use a
-      // hardcoded list of the live keys defined in
-      // marsin_engine/lib/param_center.js. Adding a new live key
-      // there requires updating this set too; if the set drifts the
-      // worst case is a one-frame stale meter on cold boot.
-      const liveKeys = new Set([
-        'micLow', 'micMid', 'micHigh', 'micKick',
-        'stemsVocals', 'stemsBass', 'stemsDrums',
-        'tempoBpm',
-      ]);
-      const liveSlice: Record<string, SharedParamValue> = {};
-      for (const k of liveKeys) {
-        const slot = data.params?.[k];
-        if (slot) liveSlice[k] = slot;
-      }
-      if (Object.keys(liveSlice).length > 0) {
-        _emitLive({ revision: data.revision ?? 0, params: liveSlice });
-      }
+      // Live-key extraction is now SEEDED FROM THE ENGINE SCHEMA, not a
+      // hardcoded list. The engine's `GET /param-center/schema` marks
+      // every live key with `live: true` (generated, in turn, from
+      // marsin_engine/lib/audio_signals.js — the single source of truth
+      // for the audio signal family), so this set can never drift out of
+      // sync the way the old hardcoded copy did.
+      //
+      // Codex P0 — NO hardcoded fallback: if the schema fetch hasn't
+      // resolved yet (it races this one), `_liveKeysFromSchema` returns an
+      // empty set and we simply emit nothing here. The schema-fetch `.then`
+      // below re-runs the extraction once it lands, and the WS `liveParams`
+      // broadcast catches us up within a couple of frames regardless. The
+      // pre-existing comment already named that empty-for-one-frame window
+      // the acceptable worst case.
+      _seedLiveFromSchema(data, _cached.paramSchema);
     })
     .catch(() => undefined);
 
@@ -647,6 +736,19 @@ function _ensureInitialized() {
         if (e && typeof e.key === 'string') flat[e.key] = e;
       }
       _emit({ ..._cached, paramSchema: flat });
+      // Re-seed the live slice now that we know which keys are live. The
+      // /param-center REST seed above runs in PARALLEL with this schema
+      // fetch, so on a cold boot it may have landed FIRST (empty live set,
+      // nothing emitted). Now that the schema is here, extract the live
+      // slice from the cached sharedParams so the audio meters have a
+      // correct first paint without waiting for the WS liveParams tick.
+      const shared = _cached.sharedParams;
+      if (shared) {
+        _seedLiveFromSchema(
+          { revision: shared.revision, params: shared.params },
+          flat,
+        );
+      }
     })
     .catch(() => undefined);
 
@@ -1053,5 +1155,154 @@ export function useDeckChannel(): MixerChannel | null {
  */
 export function useAudioStatus(): AudioStatus | null {
   return useEngineSlice<AudioStatus | null>((s) => s.audioStatus);
+}
+
+// ── Dynamic audio-signal family (the Companion → CPC contract) ─────────────
+//
+// The Audio Companion designs signals and routes them into the engine's
+// CPC over OSC; the engine binds them to live CPC keys (micLow/Mid/High/
+// Kick, micDomFreq1/2, audioBpm, audioEnergyRatio, audioSlowZone,
+// audioBuildScore, audioParty, …). The set is NOT fixed — the operator
+// can add/remove signals in the Companion — so CaptainPad must render
+// WHATEVER audio CPC keys are live, not a hardcoded list.
+//
+// Source of truth: the engine's `GET /param-center/schema` (mirrored into
+// `paramSchema`). Each entry carries `key`, `label`, `range`, and the
+// `live` flag (generated, in turn, from marsin_engine/audio/postproc/
+// audio_signals.js). We derive the meter list from the live-flagged audio
+// keys, classify each by its range, and split off the internal companions
+// (`*Raw` mirrors, `*Gain` knobs) + tempoBpm (it has its own BPM tile).
+//
+// Codex P0 — NO hardcoded fallback: before the schema fetch lands this
+// returns an empty list. The deck/mixer/audio meters degrade to "no audio
+// signals yet" rather than inventing a list that could drift.
+
+/**
+ * One audio signal as surfaced to the UI. `postKey` is the live (post-gain
+ * / post-chain) CPC key the meter reads; `rawKey` is the engine-published
+ * `<key>Raw` pre-gain mirror when one exists (null otherwise). `bpm`
+ * signals carry a tempo (rendered as an integer count); `frequency`
+ * signals carry Hz (rendered with their Hz value); `intensity` signals are
+ * [0,1] bar meters. `max` is the schema range max (used to normalise the
+ * bar fill for non-[0,1] signals).
+ */
+export interface AudioSignalDescriptor {
+  key: string;
+  postKey: string;
+  rawKey: string | null;
+  label: string;
+  kind: 'intensity' | 'frequency' | 'bpm';
+  max: number;
+}
+
+// Friendlier short label for a meter column. The schema labels read like
+// "Mic · Low" / "Audio · Energy Ratio"; the meters want the trailing token
+// in caps ("LOW", "ENERGY RATIO"). Falls back to the upper-cased key.
+function _shortAudioLabel(label: string | undefined, key: string): string {
+  if (label && label.includes('·')) {
+    const tail = label.split('·').pop();
+    if (tail) return tail.trim().toUpperCase();
+  }
+  if (label) return label.toUpperCase();
+  return key.toUpperCase();
+}
+
+// An audio-family key is one the Companion/analyzer routes into the CPC.
+// Two ways to qualify:
+//
+//   1. By the `dynamic` schema flag — the engine sets it on EVERY key it
+//      registered at runtime from the Audio Companion's OUTPUT manifest
+//      (param_center.registerDynamicLiveParam). This is the load-bearing
+//      path: a Companion signal can carry ANY custom cpcKey (`low_test`,
+//      `crowd_roar`, …) that matches NONE of the built-in name prefixes,
+//      so without this flag it would appear in neither the audio grid nor
+//      the modulation source picker.
+//
+//   2. By name prefix — the built-in mic bands + dominant-frequency
+//      outputs, OSC stems (until retired engine-side), and the audio*
+//      detector/derived family. Matching by prefix means a built-in audio
+//      key shows up even on an engine that predates the `dynamic` flag.
+//
+// `entry` may be undefined on the lookup races; we still fall back to the
+// prefix test so the built-ins never depend on the flag being present.
+function _isAudioFamilyKey(key: string, entry?: ParamSchemaEntry): boolean {
+  if (entry?.dynamic === true) return true;
+  return /^(mic|audio|stems|dom)/.test(key);
+}
+
+/**
+ * Derive the live audio-signal descriptors from the engine schema, in
+ * schema order. Excludes the internal `*Raw` mirrors and `*Gain` knobs
+ * (they pair onto their parent signal) and the BPM keys (audioBpm/tempoBpm,
+ * shown in their own headline tile).
+ * Pure function of the schema map so callers can memoise on it.
+ */
+export function deriveAudioSignals(
+  schema: Record<string, ParamSchemaEntry>,
+): AudioSignalDescriptor[] {
+  const out: AudioSignalDescriptor[] = [];
+  for (const key of Object.keys(schema)) {
+    const entry = schema[key];
+    if (!entry || entry.live !== true) continue;
+    if (!_isAudioFamilyKey(key, entry)) continue;
+    // Companions of a parent signal — never their own meter column.
+    if (key.endsWith('Raw') || key.endsWith('Gain')) continue;
+    // BPM has a dedicated headline tile in the audio grid (fed by audioBpm,
+    // falling back to tempoBpm) — don't double-render either as a bar row.
+    if (key === 'tempoBpm' || key === 'audioBpm') continue;
+    const range = Array.isArray(entry.range) && entry.range.length === 2
+      ? entry.range
+      : [0, 1];
+    const max = typeof range[1] === 'number' && range[1] > 0 ? range[1] : 1;
+    // Classify: BPM keys render as a tempo count; the dominant-frequency Hz
+    // keys (range up to Nyquist) render as Hz; everything else is a bar
+    // meter normalised by its range max (so small-range enums like
+    // audioStructure[0,2] / audioNote[0,11] still read as a [0,1] bar).
+    //
+    // Built-in keys carry their kind in the name (`*bpm*` / a Nyquist-scale
+    // range). A DYNAMIC Companion signal's cpcKey is arbitrary, so the name
+    // tells us nothing — we classify it by the schema RANGE the engine
+    // chose from the Companion `type` (audio_signals manifest →
+    // COMPANION_SIGNAL_RANGES in api_server.js: intensity [0,1],
+    // bpm [0,300], frequency [0,8000]). A [0,300]-style range reads as
+    // BPM; a kHz-scale range reads as frequency; everything else is a bar.
+    let kind: AudioSignalDescriptor['kind'] = 'intensity';
+    if (/bpm/i.test(key)) kind = 'bpm';
+    else if (max >= 1000) kind = 'frequency';
+    else if (entry.dynamic === true && max > 100 && max < 1000) kind = 'bpm';
+    // A `<key>Raw` companion exists iff the schema has it (mic bands +
+    // stems publish one; detectors / dom / derived do not).
+    const rawKey = schema[`${key}Raw`] ? `${key}Raw` : null;
+    out.push({
+      key,
+      postKey: key,
+      rawKey,
+      label: _shortAudioLabel(entry.label, key),
+      kind,
+      max,
+    });
+  }
+  return out;
+}
+
+/**
+ * Reference-stable hook returning the dynamic audio-signal list. Re-renders
+ * only when the schema map reference changes (loaded once at boot, then
+ * static for the engine process lifetime), so meter components subscribing
+ * to this never re-render at the analyser's tick rate.
+ */
+export function useAudioSignals(): AudioSignalDescriptor[] {
+  const EMPTY: AudioSignalDescriptor[] = useMemo(() => [], []);
+  return useEngineSlice<AudioSignalDescriptor[]>(useMemo(() => {
+    let prevSchema: Record<string, ParamSchemaEntry> | null = null;
+    let prevResult: AudioSignalDescriptor[] = EMPTY;
+    return (s: EngineLiveState): AudioSignalDescriptor[] => {
+      if (s.paramSchema === prevSchema) return prevResult;
+      prevSchema = s.paramSchema;
+      const next = deriveAudioSignals(s.paramSchema);
+      prevResult = next.length === 0 ? EMPTY : next;
+      return prevResult;
+    };
+  }, [EMPTY]));
 }
 

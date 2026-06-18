@@ -14,7 +14,7 @@ vis:
 server:
   port: 6968
 playlist:
-  active: true
+  active: false
   delay_s: '15'
   shuffle: true
 web_client:
@@ -29,7 +29,7 @@ osc:
   allowedSenders: []
   bindings: {}
 audio:
-  enabled: true
+  enabled: false
   capture:
     backend: ffmpeg
     ffmpegPath: ffmpeg
@@ -40,6 +40,9 @@ audio:
     sampleRate: 44100
     channels: 1
     inputFormat: null
+    loop: true
+    captureBufferMs: 50
+    jitterBufferHops: 4
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
   fftSize: 1024
@@ -47,15 +50,37 @@ audio:
   bands:
     lowMaxHz: 200
     midMaxHz: 4000
-    attackMs: 8
+    attackMs: 6
     releaseMs: 180
     noiseGate: 0.04
+    inputGain: 1
+    sourceSmoothHz: 12000
   kick:
     minHz: 50
     maxHz: 110
-    threshold: 1.8
-    refractoryMs: 140
-    decayMs: 120
+    threshold: 2.4
+    refractoryMs: 220
+    decayMs: 70
+  structureDetector:
+    enabled: true
+    dropEdgeMode: windowed
+companion:
+  osc:
+    host: 127.0.0.1
+    port: 10000
+  source: mic
+  device: null
+  # Engine API endpoint the Companion live-syncs its SHARED audio TUNING
+  # against (input gain / source smoothing / capture device). The engine
+  # config is the single source of truth: the Companion subscribes to the
+  # engine's /ws/control for `audioConfig` broadcasts and writes its own
+  # UI changes back via PATCH /audio/config. OPTIONAL — analysis never
+  # blocks on the engine; if unreachable the Companion keeps its last
+  # known tuning and reconnects in the background. Defaults to the engine
+  # server.port above on loopback.
+  engine:
+    host: 127.0.0.1
+    port: 6968
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★

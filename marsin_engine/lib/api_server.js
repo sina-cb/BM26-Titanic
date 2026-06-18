@@ -7,7 +7,9 @@ import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
-import { validateModulationMapping } from './modulation_engine.js';
+import {
+  validateModulationMapping,
+} from './modulation_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
 import {
@@ -84,6 +86,67 @@ export function validateViewSelection(vs) {
     default:
       return { ok: false, error: `Unknown viewSelection.type '${type}' (expected: all | group | section | fixture | viewMask)` };
   }
+}
+
+// Range per Companion signal type. The Companion sends a `type`
+// (intensity|frequency|bpm); the engine picks the canonical CPC range so
+// the live key clamps correctly regardless of what the Companion claims.
+const COMPANION_SIGNAL_RANGES = Object.freeze({
+  intensity: [0, 1],
+  frequency: [0, 8000],
+  bpm:       [0, 300],
+});
+
+/**
+ * Validate + normalize a POST /audio/signals/manifest body. The Companion
+ * POSTs `{ signals: [{ cpcKey, address, label, type }] }`. We reject a
+ * malformed manifest with a specific message (→ 400) rather than silently
+ * dropping bad rows (Codex P0).
+ *
+ * Returns { ok: true, signals: [{ cpcKey, address, label, type, range }] }
+ * (deduped, normalized) or { ok: false, error }.
+ */
+export function validateSignalManifest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'manifest must be an object with a "signals" array' };
+  }
+  const { signals } = body;
+  if (!Array.isArray(signals)) {
+    return { ok: false, error: 'manifest.signals must be an array' };
+  }
+  const out = [];
+  const seenKeys = new Set();
+  const seenAddrs = new Set();
+  for (let i = 0; i < signals.length; i++) {
+    const s = signals[i];
+    if (!s || typeof s !== 'object' || Array.isArray(s)) {
+      return { ok: false, error: `signals[${i}] must be an object` };
+    }
+    const { cpcKey, address, label, type } = s;
+    if (typeof cpcKey !== 'string' || cpcKey.length === 0) {
+      return { ok: false, error: `signals[${i}].cpcKey must be a non-empty string` };
+    }
+    if (typeof address !== 'string' || address.length === 0 || address[0] !== '/') {
+      return { ok: false, error: `signals[${i}].address must be an OSC address starting with "/"` };
+    }
+    if (typeof type !== 'string' || !COMPANION_SIGNAL_RANGES[type]) {
+      return { ok: false, error: `signals[${i}].type must be one of intensity|frequency|bpm` };
+    }
+    if (label !== undefined && typeof label !== 'string') {
+      return { ok: false, error: `signals[${i}].label must be a string when present` };
+    }
+    if (seenKeys.has(cpcKey)) {
+      return { ok: false, error: `duplicate cpcKey "${cpcKey}" in manifest` };
+    }
+    if (seenAddrs.has(address)) {
+      return { ok: false, error: `duplicate address "${address}" in manifest` };
+    }
+    seenKeys.add(cpcKey);
+    seenAddrs.add(address);
+    const range = COMPANION_SIGNAL_RANGES[type];
+    out.push({ cpcKey, address, label: label || cpcKey, type, range: [range[0], range[1]] });
+  }
+  return { ok: true, signals: out };
 }
 
 function listPatterns(patternsDir) {
@@ -283,6 +346,58 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     mc.setActiveEntry({ playlistName, entryId, pattern, mappings });
   }
+
+  // ── Dynamic-signal modulation purge ──────────────────────────────────
+  // When a dynamic CPC key is DEREGISTERED (gone from the Companion's
+  // signal manifest), every modulation mapping SOURCED from that key must
+  // be removed across all playlist entries — otherwise CaptainPad keeps
+  // showing the green "ghost" slider for a source that no longer exists,
+  // and the controller would resolve it to 0 forever. We touch ONLY
+  // mappings whose `source.key` matches; all other mappings are preserved
+  // verbatim. Returns the number of mappings purged.
+  function purgeModulationsForSource(removedKey) {
+    let purged = 0;
+    let touchedActive = false;
+    const deckCh = mixer.getDeckChannel();
+    const activePlaylist = deckCh?.playlist?.name || null;
+    for (const name of playlistManager.list()) {
+      let pl;
+      try {
+        pl = playlistManager.load(name);
+      } catch (err) {
+        console.warn(`[CompanionManifest] could not load playlist ${name} for purge: ${err.message}`);
+        continue;
+      }
+      if (!pl || !Array.isArray(pl.entries)) continue;
+      let changed = false;
+      for (const entry of pl.entries) {
+        if (!Array.isArray(entry.modulations) || entry.modulations.length === 0) continue;
+        const before = entry.modulations.length;
+        entry.modulations = entry.modulations.filter(
+          m => !(m && m.source && m.source.key === removedKey),
+        );
+        const removed = before - entry.modulations.length;
+        if (removed > 0) {
+          purged += removed;
+          changed = true;
+        }
+      }
+      if (!changed) continue;
+      try {
+        playlistManager.save(pl);
+        broadcastWs({ type: 'playlistSaved', name });
+        if (name === activePlaylist) touchedActive = true;
+      } catch (err) {
+        console.warn(`[CompanionManifest] could not save purged playlist ${name}: ${err.message}`);
+      }
+    }
+    // Re-push the active entry so the ModulationController drops the now-
+    // gone mappings and broadcasts a fresh modulationState frame — that
+    // clears the iPad's green ghost sliders immediately.
+    if (touchedActive) pushActiveEntryToModulation();
+    return purged;
+  }
+
   if (playlistManager.list().length === 0) {
     try {
       playlistManager.generateDefault();
@@ -403,6 +518,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // connect so the Audio Analysis tab paints the right state without
   // waiting up to a second for the next 1Hz heartbeat (docs/25 §6.3).
   let lastAudioStatus = null;
+  // Same replay-on-connect contract as lastAudioStatus, but for the
+  // operator-tunable audio CONFIG (bands.inputGain / sourceSmoothHz /
+  // capture.device / enabled). Broadcast on PATCH /audio/config + reset
+  // so EVERY /ws/control subscriber (CaptainPad and the Audio Companion)
+  // mirrors the engine's single source of truth. The Companion uses this
+  // to drive its live analyzer gain/smooth/device. Null until the first
+  // config broadcast — a fresh client then seeds via GET /audio/config.
+  let lastAudioConfig = null;
   // Cached most-recent payloads for replay on WS connect. lastSharedParams
   // is the full canonical CPC doc; lastLiveParams is the audio-derived
   // subset that broadcasts on the `liveParams` channel — see
@@ -410,16 +533,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let lastSharedParams = null;
   let lastLiveParams = null;
   const lastBroadcastMs = {};
-  // Bucket-level emit cap (May 2026 perf). Per-key throttles are too
-  // coarse — with 4 mic bands all flagged 15 Hz but staggered, ANY
-  // band passing its 66ms deadline triggers a broadcast carrying ALL
-  // live keys, so the wire rate climbs to ~4×15 = 60 msg/s. The eye
-  // can't see meter ticks above ~20 Hz, and at 60 msg/s the iPad
-  // JS thread pays JSON.parse + listener fan-out for nothing. Cap the
-  // BUCKET so livePayloads emit at most every 50 ms regardless of how
-  // many per-key deadlines are firing. Per-key Hz values still act as
-  // a CEILING (a key flagged 5 Hz still throttles its own contribution).
-  const LIVE_BUCKET_MIN_INTERVAL_MS = 50; // 20 Hz cap
+  // Bucket-level emit cap (May 2026 perf; cadence revisited Jun 2026 for
+  // the audio-meter latency pass). One coalesced `liveParams` frame is
+  // emitted per bucket interval carrying ALL live keys (mic bands + kick
+  // + flux, stems, detector outputs). The bucket interval is the SOLE
+  // pacer for the live channel:
+  //
+  //   - At 50 ms (the old 20 Hz cap) the audio meters looked laggy and
+  //     stepped — a fresh sample could sit up to 50 ms before hitting
+  //     the wire, and 20 Hz is visibly below the ~40-60 Hz the eye reads
+  //     as "smooth" for fast-moving bars.
+  //   - The old design ALSO required `pastThrottle(...)` (per-key Hz) to
+  //     pass on top of the bucket. That was redundant: the live bundle is
+  //     coalesced (every frame carries every live key regardless of which
+  //     one tripped), so a per-key OR-gate only let the effective rate
+  //     float up to the fastest live key (micKick @ 30 Hz) while adding
+  //     no smoothing and a confusing second knob.
+  //
+  // 22 ms ~= 45 Hz: smooth and low-latency for the meters, still far
+  // below the analyser's ~86 Hz hop rate, and the ~150 B payload keeps
+  // the iPad JSON.parse + fan-out cost trivial. Per-key Hz now only
+  // governs the STEADY (sharedParams) bucket; the live bucket is paced
+  // purely by this interval.
+  const LIVE_BUCKET_MIN_INTERVAL_MS = 22; // ~45 Hz coalesced live frame
   let lastLiveBroadcastMs = 0;
   let hzByKeyCache = null;
   let liveKeysSetCache = null;
@@ -439,7 +575,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // SEPARATE `liveParams` WS message so the mixer / deck onmessage
   // path doesn't have to parse + setState a 1.5 KB sharedParams
   // snapshot 30× / second while the audio analyser is running.
-  // Cached once at boot because the schema is immutable per process.
+  // Cached lazily; INVALIDATED whenever the registry changes (a dynamic
+  // Companion-manifest key was added/removed — see invalidateSchemaCaches).
+  // Pre-dynamic-keys this was "cached once at boot, immutable per process";
+  // that assumption no longer holds.
   function getLiveKeysSet() {
     if (liveKeysSetCache) return liveKeysSetCache;
     liveKeysSetCache = new Set();
@@ -449,6 +588,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
     return liveKeysSetCache;
+  }
+  // Drop the schema-derived caches so the next getHzByKey/getLiveKeysSet
+  // rebuilds from the current registry. Called after a dynamic CPC key is
+  // registered or deregistered so a freshly-added live key gets routed to
+  // the liveParams bucket (and a removed one stops being looked up).
+  function invalidateSchemaCaches() {
+    hzByKeyCache = null;
+    liveKeysSetCache = null;
   }
   // Throttle helper, shared by both message types. `bucket` namespaces
   // the timestamps so a key can independently pace its sharedParams
@@ -497,15 +644,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // ── liveParams: tight payload, only live keys ───────────────────
-    // Two gates must both pass: (1) per-key Hz (cheap insurance against
-    // a single key spamming faster than its declared rate) AND (2) the
-    // BUCKET rate cap which keeps total liveParams traffic below 20 Hz
-    // even when multiple keys are evolving in parallel.
+    // Single gate: the BUCKET interval. Whenever any live key changed and
+    // at least LIVE_BUCKET_MIN_INTERVAL_MS has elapsed since the last live
+    // frame, emit ONE coalesced frame carrying every live key's freshest
+    // value. The per-key Hz `pastThrottle` requirement was removed here
+    // (Jun 2026 latency pass) — see the LIVE_BUCKET_MIN_INTERVAL_MS comment
+    // for why it was redundant for a coalesced bundle.
     if (liveChanged.length > 0
-        && (now - lastLiveBroadcastMs) >= LIVE_BUCKET_MIN_INTERVAL_MS
-        && pastThrottle(now, 'live', liveChanged, hzByKey)) {
+        && (now - lastLiveBroadcastMs) >= LIVE_BUCKET_MIN_INTERVAL_MS) {
       lastLiveBroadcastMs = now;
-      stampThrottle(now, 'live', liveChanged);
       const params = {};
       const srcParams = (state && state.params) || {};
       // Only ship live keys; if you need full CPC state, hit
@@ -2763,7 +2910,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         return res.end(JSON.stringify(cached.payload));
       }
       Promise.all([
-        import('./audio_devices.js'),
+        import('../audio/capture/audio_devices.js'),
         import('./ffmpeg_resolver.js'),
       ]).then(async ([{ listAudioDevices }, { resolveFfmpegPath }]) => {
         try {
@@ -2817,7 +2964,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url === '/audio/chains/catalog') {
       // docs/29 §REST endpoints — op catalog for the iPad's "+ ADD OP"
       // picker (Phase 5). Cached client-side per engine version.
-      import('./signal_post_processor.js').then(({ opCatalog }) => {
+      import('../audio/postproc/signal_post_processor.js').then(({ opCatalog }) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(opCatalog()));
       });
@@ -2904,7 +3051,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // inside an async closure isn't worth the complexity in this
         // sync handler — require it at the top of the file would be
         // cleaner, but this keeps the cross-file deps obvious.
-        import('./audio_config.js').then(async ({ validateLivePatch }) => {
+        import('../audio/config/audio_config.js').then(async ({ validateLivePatch }) => {
           const v = validateLivePatch(data);
           if (!v.ok) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -2925,6 +3072,104 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.end(JSON.stringify({ error: err.message }));
           }
         });
+      });
+    } else if (req.method === 'POST' && req.url === '/audio/signals/manifest') {
+      // ── Audio Companion signal manifest (dynamic CPC keys) ────────────
+      // The Companion (sole analyzer) POSTs the set of OUTPUT signals it is
+      // streaming. Each signal NOT already a built-in/registered key becomes
+      // a runtime LIVE CPC key: registered in the CPC, bound in the OSC
+      // listener, surfaced in /param-center/schema, and broadcast so
+      // CaptainPad picks it up live. Keys previously registered this way but
+      // ABSENT from THIS manifest are deregistered (key + OSC binding +
+      // schema), and any modulation sourced from a removed key is purged.
+      // Built-in curated keys are never touched. Malformed manifest → 400.
+      if (!paramCenter) {
+        res.writeHead(503); return res.end(JSON.stringify({ error: 'param_center_not_initialized' }));
+      }
+      readBody(data => {
+        const v = validateSignalManifest(data);
+        if (!v.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: v.error }));
+        }
+        const listener = engineCore && engineCore.oscState && engineCore.oscState.listener;
+        const added = [];
+        const updated = [];
+        const removed = [];
+        let purgedModulations = 0;
+
+        // 1) Register / update every manifest signal that is not a built-in.
+        //    A cpcKey that collides with a built-in is REFUSED loudly (the
+        //    Companion must not shadow curated keys).
+        for (const sig of v.signals) {
+          if (paramCenter.isRegisteredKey(sig.cpcKey)
+              && !paramCenter.isDynamicLiveParam(sig.cpcKey)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `cpcKey "${sig.cpcKey}" is a built-in CPC key — cannot be redefined by the manifest`,
+            }));
+          }
+          let result;
+          try {
+            result = paramCenter.registerDynamicLiveParam({
+              key: sig.cpcKey,
+              oscAddress: sig.address,
+              label: sig.label,
+              range: sig.range,
+              broadcastHz: 15,
+            });
+          } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: err.message }));
+          }
+          if (listener) {
+            try {
+              listener.addDynamicBinding(sig.address, sig.cpcKey);
+            } catch (err) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: err.message }));
+            }
+          }
+          // No source registration needed — modulation sources are not
+          // allow-listed; any CPC key is assignable the moment it exists.
+          if (result.status === 'added') added.push(sig.cpcKey);
+          else updated.push(sig.cpcKey);
+        }
+
+        // 2) Deregister dynamic keys absent from THIS manifest.
+        const present = new Set(v.signals.map(s => s.cpcKey));
+        for (const key of paramCenter.getDynamicLiveParamKeys()) {
+          if (present.has(key)) continue;
+          // Remember its OSC address before we drop the registry entry.
+          const schemaEntry = paramCenter.getSchema().find(e => e.key === key);
+          const addr = schemaEntry && schemaEntry.oscAddress;
+          // Purge modulations sourced from this removed key so a deleted
+          // signal doesn't leave a dangling mapping (the param returns to its
+          // base value rather than freezing).
+          purgedModulations += purgeModulationsForSource(key);
+          if (listener && addr) listener.removeDynamicBinding(addr);
+          paramCenter.deregisterDynamicLiveParam(key);
+          removed.push(key);
+        }
+
+        // 3) Refresh schema-derived caches + broadcast so CaptainPad picks
+        //    up the live key set immediately. We send BOTH the full schema
+        //    (paramSchema — so the iPad re-derives its live-key set without
+        //    a re-fetch) AND a fresh sharedParams snapshot (so values for a
+        //    newly-added key are present). Mirrors the audioConfig pattern.
+        if (added.length > 0 || removed.length > 0 || updated.length > 0) {
+          invalidateSchemaCaches();
+          broadcastWs({ type: 'paramSchema', schema: paramCenter.getSchema() });
+          broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          added, updated, removed,
+          purgedModulations,
+          oscBound: !!listener,
+        }));
       });
     }
     // ── PLAYLIST LIBRARY ─────────────────────────────────────────────────
@@ -3623,6 +3868,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     try {
       if (lastOscStats)    ws.send(JSON.stringify(lastOscStats));
       if (lastAudioStatus) ws.send(JSON.stringify(lastAudioStatus));
+      // Audio TUNING config replay (single source of truth → all
+      // subscribers). Prefer the cached last broadcast; otherwise emit
+      // the engine's current config so a Companion connecting BEFORE the
+      // first PATCH still seeds its analyzer gain/smooth/device.
+      const audioCfg = lastAudioConfig
+        || (engineCore && engineCore.audioState && engineCore.audioState.config
+            ? { type: 'audioConfig', config: engineCore.audioState.config }
+            : null);
+      if (audioCfg) ws.send(JSON.stringify(audioCfg));
     } catch (e) {
       // ignore
     }
@@ -3866,6 +4120,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (data && data.type === 'audioStatus') {
       payload = data;
       lastAudioStatus = data;
+    } else if (data && data.type === 'audioConfig') {
+      // Audio TUNING config rebroadcast (PATCH /audio/config + reset).
+      // Cached so a late-joining /ws/control client (CaptainPad OR the
+      // Audio Companion) gets the current tuning replayed on connect.
+      payload = data;
+      lastAudioConfig = data;
     } else {
       payload = { type: 'stats', ...data };
     }

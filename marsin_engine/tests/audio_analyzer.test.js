@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AudioAnalyzer } from '../lib/audio_analyzer.js';
+import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 
 const SR = 44100;
 
@@ -97,6 +97,69 @@ test('100 Hz sine lights up LOW, leaves MID and HIGH quiet', () => {
   assert.ok(r.low > 0.4,  `low should be loud, got ${r.low}`);
   assert.ok(r.mid < 0.1,  `mid should be quiet, got ${r.mid}`);
   assert.ok(r.high < 0.1, `high should be quiet, got ${r.high}`);
+});
+
+test('bands.inputGain lifts a quiet signal above the noise gate', () => {
+  // A quiet 100 Hz sine that the noise gate would otherwise zero. At unity
+  // gain LOW stays gated near 0; raising inputGain lifts it above the gate.
+  const quiet = sineInt16(100, 0.2, 0.02); // 100 Hz, 200 ms, amplitude 0.02
+  const r1 = []; makeAnalyzer({ bands: { noiseGate: 0.04, inputGain: 1 } }, r1).pushSamples(quiet);
+  const r8 = []; makeAnalyzer({ bands: { noiseGate: 0.04, inputGain: 8 } }, r8).pushSamples(quiet);
+  assert.ok(lastResult(r1).low < 0.05, `unity gain should leave the quiet band gated, got ${lastResult(r1).low}`);
+  assert.ok(lastResult(r8).low > lastResult(r1).low + 0.1, `inputGain=8 should lift LOW well above unity, got ${lastResult(r8).low}`);
+});
+
+test('bands.inputGain out of range throws (codex P0)', () => {
+  assert.throws(() => makeAnalyzer({ bands: { inputGain: -1 } }, []), /inputGain/);
+  assert.throws(() => makeAnalyzer({ bands: { inputGain: 100 } }, []), /inputGain/);
+});
+
+test('kick prominence is input-gain-invariant (no softCompress saturation)', () => {
+  // The kick fires on the LINEAR energy ratio, so the SAME signal fires the
+  // kick the same way regardless of inputGain (was broken when the ratio ran
+  // on the saturating softCompressed value). Build a sub + periodic kick.
+  function countKicks(inputGain) {
+    const results = []; let clock = 0;
+    const an = makeAnalyzer({ bands: { noiseGate: 0.04, inputGain } }, results, () => clock);
+    const buf = new Int16Array(512);
+    for (let i = 0; i < SR * 3; i += 512) {
+      for (let j = 0; j < 512; j++) {
+        const t = (i + j) / SR;
+        let s = Math.sin(2 * Math.PI * 60 * t) * 0.04;
+        if ((i + j) % 22050 < 1500) s += Math.sin(2 * Math.PI * 90 * t) * 0.08;
+        buf[j] = Math.round(Math.max(-1, Math.min(1, s)) * 32767);
+      }
+      clock += (512 / SR) * 1000; an.pushSamples(buf);
+    }
+    return results.filter(r => r.kick >= 0.999).length; // fresh fires (==1.0)
+  }
+  const k2 = countKicks(2), k8 = countKicks(8);
+  assert.ok(k2 > 0, `expected kicks at inputGain=2, got ${k2}`);
+  assert.equal(k2, k8, `kick count must be gain-invariant: inputGain2=${k2} vs inputGain8=${k8}`);
+});
+
+test('kick does NOT fire on a quiet room at calibrated (unity) gain', () => {
+  // Input gain is now a SOURCE stage (applied to the PCM before the FFT), so
+  // the kick reads the same conditioned signal as every other band — it is no
+  // longer specially decoupled from inputGain (operator design: "kick
+  // shouldn't be a different situation"). At unity / calibrated gain the noise
+  // gate + ratio detector still keep a quiet room silent. NOTE the trade-off:
+  // at EXTREME gain on a quiet room, amplified hiss can now fire — that's the
+  // operator's responsibility (calibration sets a healthy gain; the optional
+  // source smoothing suppresses HF noise). Low-amplitude white noise here.
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+  function noiseKicks(inputGain) {
+    const results = []; let clock = 0;
+    const an = makeAnalyzer({ bands: { noiseGate: 0.04, inputGain } }, results, () => clock);
+    const buf = new Int16Array(512);
+    for (let i = 0; i < SR * 3; i += 512) {
+      for (let j = 0; j < 512; j++) buf[j] = Math.round(rnd() * 0.01 * 32767);
+      clock += (512 / SR) * 1000; an.pushSamples(buf);
+    }
+    return results.filter(r => r.kick >= 0.999).length;
+  }
+  assert.equal(noiseKicks(1), 0, 'quiet room must not fire kicks at unity gain');
 });
 
 test('1000 Hz sine lights up MID', () => {
@@ -372,3 +435,110 @@ test('reconfigure rejects invalid bands', () => {
 // wraps each value through `signalPostProcessor.process()` before
 // writing to CPC. Gain math + paramKey live-read + clamp behaviour
 // is now covered by tests/signal_post_processor.test.js.
+
+// ── Spectral flux (micFlux primitive, docs/30 / research memo §A2) ──────
+//
+// The analyzer emits a fifth field `flux` on each onAnalysis callback:
+// half-wave-rectified spectral flux, normalized to the bands' [0,1]
+// scale. SuperFlux-lite (Böck & Widmer 2013). These tests pin: (1) the
+// field is present and finite, (2) it's ~0 on a steady tone across hops
+// (no spectral change → no rising energy), (3) it spikes on a sudden
+// broadband change (a quiet tone followed by loud white noise).
+
+test('onAnalysis emits a finite `flux` field in [0,1]', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(440, 0.1, 0.5));
+  assert.ok(results.length > 0, 'expected at least one analysis');
+  for (const r of results) {
+    assert.ok(typeof r.flux === 'number' && Number.isFinite(r.flux),
+      `flux must be a finite number; got ${r.flux}`);
+    assert.ok(r.flux >= 0 && r.flux <= 1, `flux must be in [0,1]; got ${r.flux}`);
+  }
+});
+
+test('flux is ~0 on a steady tone across hops', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // A long steady tone — after the spectrum settles, consecutive hops
+  // have near-identical magnitude spectra so rising-only flux → ~0.
+  an.pushSamples(sineInt16(440, 0.5, 0.5));
+  // Skip the first few hops (ring buffer still filling / spectrum
+  // ramping in) and check the tail is quiet.
+  const tail = results.slice(Math.floor(results.length / 2));
+  assert.ok(tail.length > 0);
+  for (const r of tail) {
+    assert.ok(r.flux < 0.05, `steady-tone flux should be ~0; got ${r.flux}`);
+  }
+});
+
+test('flux spikes on a sudden broadband change', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // Settle on a quiet tone, capture the steady flux, then hit it with
+  // loud broadband noise — the magnitude spectrum jumps across many
+  // bins so half-wave-rectified flux spikes.
+  an.pushSamples(sineInt16(440, 0.4, 0.2));
+  const steadyTail = results.slice(-3);
+  const steadyMax = Math.max(...steadyTail.map(r => r.flux));
+  const beforeCount = results.length;
+  an.pushSamples(whiteNoiseInt16(0.1, 0.7));
+  const afterNoise = results.slice(beforeCount);
+  const spikeMax = Math.max(...afterNoise.map(r => r.flux));
+  assert.ok(spikeMax > steadyMax + 0.05,
+    `flux should spike on broadband change; steadyMax=${steadyMax} spikeMax=${spikeMax}`);
+});
+
+test('reset() clears the prev-spectrum so flux settles back to ~0', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // Run loud noise (high flux), reset, then a steady tone. After reset
+  // the stored prev-spectrum is cleared (null) and re-allocated zeroed,
+  // so the first post-reset hop diffs against an empty spectrum — but
+  // once the spectrum settles, consecutive steady hops produce ~0 flux.
+  // We assert the tail of the steady run is quiet, proving reset didn't
+  // leave stale prev-spectrum state bleeding in.
+  an.pushSamples(whiteNoiseInt16(0.2, 0.6));
+  an.reset();
+  const before = results.length;
+  an.pushSamples(sineInt16(440, 0.4, 0.5));
+  const fresh = results.slice(before);
+  assert.ok(fresh.length >= 3, 'expected several analyses after reset');
+  const tail = fresh.slice(Math.floor(fresh.length / 2));
+  for (const r of tail) {
+    assert.ok(r.flux < 0.05, `post-reset steady flux should settle to ~0; got ${r.flux}`);
+  }
+});
+
+// ── Dominant-frequency tracking (dom1/dom2 + energy) ─────────────────────
+
+test('dominant-frequency tracker locks onto a pure tone', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  // A strong, steady 440 Hz tone — dom1 should lock onto it with energy > 0.
+  an.pushSamples(sineInt16(440, 0.6, 0.7));
+  const r = lastResult(results);
+  // New payload fields exist and are finite.
+  for (const k of ['domFreq1', 'domEnergy1', 'domFreq2', 'domEnergy2']) {
+    assert.ok(Number.isFinite(r[k]), `${k} should be a finite number; got ${r[k]}`);
+  }
+  // dom1 ≈ 440 Hz (parabolic interp → within a couple of bins at fftSize 1024).
+  assert.ok(Math.abs(r.domFreq1 - 440) < 25,
+    `dom1 should lock near 440 Hz; got ${r.domFreq1.toFixed(1)} Hz`);
+  assert.ok(r.domEnergy1 > 0 && r.domEnergy1 <= 1,
+    `dom1 energy should be in (0, 1]; got ${r.domEnergy1}`);
+  // Single tone → dom2 has nothing strong to lock (energy stays low).
+  assert.ok(r.domEnergy2 <= r.domEnergy1,
+    'dom2 energy should not exceed dom1 for a single tone');
+});
+
+test('dominant-frequency tracker follows a frequency change', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(300, 0.5, 0.7));
+  const lowF = lastResult(results).domFreq1;
+  an.pushSamples(sineInt16(1200, 0.5, 0.7));
+  const highF = lastResult(results).domFreq1;
+  assert.ok(Math.abs(lowF - 300) < 30, `dom1 should track 300 Hz; got ${lowF.toFixed(1)}`);
+  assert.ok(Math.abs(highF - 1200) < 40, `dom1 should re-lock to 1200 Hz; got ${highF.toFixed(1)}`);
+});

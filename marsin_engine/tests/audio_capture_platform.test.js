@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
-import { AudioCapture, buildFfmpegArgs } from '../lib/audio_capture.js';
+import { AudioCapture, buildFfmpegArgs } from '../audio/capture/audio_capture.js';
 
 test('buildFfmpegArgs — macOS default device', () => {
   const args = buildFfmpegArgs({ platform: 'darwin', channels: 1, sampleRate: 44100 });
@@ -36,6 +36,15 @@ test('buildFfmpegArgs — Windows pinned device builds -f dshow -i audio=...', (
   });
   assert.equal(args[args.indexOf('-f') + 1], 'dshow');
   assert.equal(args[args.indexOf('-i') + 1], 'audio=Microphone Array');
+  // Low-latency capture flags (docs/37 §13 — the dshow ~480ms super-chunk fix).
+  assert.equal(args[args.indexOf('-audio_buffer_size') + 1], '50', 'default dshow buffer 50ms');
+  assert.ok(args.includes('-flush_packets'), 'output packets flushed immediately');
+  assert.ok(args.includes('-fflags') && args.includes('nobuffer'), 'demux nobuffer');
+});
+
+test('buildFfmpegArgs — captureBufferMs overrides the dshow audio_buffer_size', () => {
+  const args = buildFfmpegArgs({ platform: 'win32', device: 'audio=Mic', captureBufferMs: 20 });
+  assert.equal(args[args.indexOf('-audio_buffer_size') + 1], '20');
 });
 
 test('buildFfmpegArgs — Windows without device throws device_not_configured', () => {

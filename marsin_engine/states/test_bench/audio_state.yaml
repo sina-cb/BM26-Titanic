@@ -6,133 +6,28 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  device: ':2'
-  deviceLabel: Amazon USB Streaming Mic
-  deviceId: avfoundation-audio-2
-  inputFormat: avfoundation
-  platform: darwin
+  device: audio=Microphone (Amazon USB Streaming Mic)
+  deviceLabel: Microphone (Amazon USB Streaming Mic)
+  deviceId: dshow-audio-Microphone (Amazon USB Streaming Mic)
+  inputFormat: dshow
+  platform: win32
 enabled: true
-chains:
-  micLow:
-    - id: low_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: micLowGain
-    - id: low_compressor
-      type: compressor
-      enabled: true
-      params:
-        threshold: 0.55
-        ratio: 3
-        attackMs: 10
-        releaseMs: 140
-    - id: low_envelope
-      type: envelope
-      enabled: true
-      params:
-        attackMs: 101
-        releaseMs: 220
-  micMid:
-    - id: mid_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: micMidGain
-    - id: mid_envelope
-      type: envelope
-      enabled: true
-      params:
-        attackMs: 20
-        releaseMs: 300
-    - id: mid_curve
-      type: curve
-      enabled: true
-      params:
-        shape: easeOut
-        gamma: 2
-    - id: mid_lpf
-      type: lpf
-      enabled: true
-      params:
-        cutoffHz: 8
-  micHigh:
-    - id: high_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: micHighGain
-    - id: high_slew
-      type: slew
-      enabled: true
-      params:
-        maxStepPerSec: 6
-    - id: high_compressor
-      type: compressor
-      enabled: true
-      params:
-        threshold: 0.35
-        ratio: 4
-        attackMs: 4
-        releaseMs: 90
-    - id: high_lpf
-      type: lpf
-      enabled: true
-      params:
-        cutoffHz: 10
-  micKick:
-    - id: kick_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: micKickGain
-    - id: kick_envelope
-      type: envelope
-      enabled: true
-      params:
-        attackMs: 241
-        releaseMs: 441
-    - id: op_slope_1
-      type: slope
-      enabled: true
-      params:
-        scale: 4
-        bipolar: false
-    - id: op_biquad_1
-      type: biquad
-      enabled: true
-      params:
-        cutoffHz: 2
-        Q: 1.96
-  stemsBass:
-    - id: stems_bass_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: stemsBassGain
-  stemsDrums:
-    - id: stems_drums_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: stemsDrumsGain
-  stemsVocals:
-    - id: stems_vocals_gain
-      type: gain
-      enabled: true
-      params:
-        paramKey: stemsVocalsGain
 fftSize: 1024
 hopSize: 512
 bands:
-  lowMaxHz: 250
-  midMaxHz: 2760
-  attackMs: 41
-  releaseMs: 36
-  noiseGate: 0.05
+  lowMaxHz: 200
+  midMaxHz: 4000
+  attackMs: 6
+  releaseMs: 180
+  noiseGate: 0.04
+  inputGain: 12.7
+  sourceSmoothHz: 12000
 kick:
-  minHz: 54
-  maxHz: 82
-  threshold: 2.25
-  refractoryMs: 140
-  decayMs: 120
+  minHz: 50
+  maxHz: 110
+  threshold: 2.4
+  refractoryMs: 220
+  decayMs: 70
+structureDetector:
+  enabled: true
+  dropEdgeMode: windowed

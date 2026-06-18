@@ -1,25 +1,8 @@
 # Auto-written by MarsinEngine — per-scene audio state.
-# Contains:
-#   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
-#   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
-# Written by `engine.js --choose_mic --model <scene>` (mic) and by
-# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
-# the engine is running.
+# Migrated 2026-06-14: per-scene analyzer tuning (chains/bands/kick/fft) REMOVED
+# so every scene inherits the tuned engine defaults (config.yaml + DEFAULT_CHAINS).
+# Only the machine-specific mic capture + the enabled flag are kept per scene.
 enabled: true
-fftSize: 1024
-hopSize: 512
-bands:
-  lowMaxHz: 250
-  midMaxHz: 4000
-  attackMs: 8
-  releaseMs: 180
-  noiseGate: 0.04
-kick:
-  minHz: 50
-  maxHz: 110
-  threshold: 1.8
-  refractoryMs: 140
-  decayMs: 120
 capture:
   device: audio=Microphone Array (2- Realtek(R) Audio)
   deviceLabel: Microphone Array (2- Realtek(R) Audio)

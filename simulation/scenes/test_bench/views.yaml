@@ -14,3 +14,15 @@ views:
       groups:
         - ParLights
         - VintageLights
+    - name: pars
+      bit: 32
+      groups:
+        - ParLights
+    - name: bars
+      bit: 64
+      groups:
+        - BarLights
+    - name: vintages
+      bit: 128
+      groups:
+        - VintageLights

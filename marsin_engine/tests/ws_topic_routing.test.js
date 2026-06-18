@@ -105,6 +105,8 @@ test('UI/state events ride /ws/control', () => {
     'audioStatus',
     'oscStats',
     'stats',
+    // docs/30: the audio structure detector's sparse drop event.
+    'dropFired',
   ];
   for (const t of controlTypes) {
     assert.equal(topicForType(t), TOPICS.CONTROL,

@@ -9,7 +9,7 @@ import { parseEngineFlags, flagsRequireExit } from '../lib/engine_cli_flags.js';
 
 test('parseEngineFlags — empty argv returns all-false', () => {
   const f = parseEngineFlags([]);
-  assert.deepEqual(f, { listMics: false, chooseMic: false, start: false, mic: null, clearMic: false });
+  assert.deepEqual(f, { listMics: false, chooseMic: false, start: false, mic: null, clearMic: false, audioFile: null });
 });
 
 test('parseEngineFlags — --list_mics', () => {
@@ -35,6 +35,26 @@ test('parseEngineFlags — --mic "audio=Microphone Array"', () => {
 
 test('parseEngineFlags — --clear_mic', () => {
   assert.equal(parseEngineFlags(['--clear_mic']).clearMic, true);
+});
+
+test('parseEngineFlags — --audio_file /x.wav', () => {
+  const f = parseEngineFlags(['--audio_file', '/x.wav']);
+  assert.equal(f.audioFile, '/x.wav');
+});
+
+test('parseEngineFlags — --audio_file is not an exit flag (continues boot)', () => {
+  assert.equal(flagsRequireExit(parseEngineFlags(['--audio_file', '/x.wav'])), false);
+});
+
+test('parseEngineFlags — --audio_file without value throws cli_missing_value', () => {
+  assert.throws(() => parseEngineFlags(['--audio_file']), /requires a path/);
+  assert.throws(() => parseEngineFlags(['--audio_file', '--start']), /requires a path/);
+  try {
+    parseEngineFlags(['--audio_file']);
+    assert.fail('expected throw');
+  } catch (err) {
+    assert.equal(err.code, 'cli_missing_value');
+  }
 });
 
 test('parseEngineFlags — --mic without value throws', () => {

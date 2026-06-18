@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Audio Companion</title>
+  <link rel="stylesheet" href="companion_app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◇</span>
+      <span class="title">AUDIO COMPANION</span>
+      <span class="sub">design · chain · visualise · export — running the engine's real DSP</span>
+    </div>
+    <div class="top-right">
+      <span id="flash" class="flash"></span>
+      <span id="status" class="status">connecting…</span>
+      <button id="export-btn" class="primary">Export config ▾</button>
+    </div>
+  </header>
+
+  <div class="subbar">
+    <span class="subbar-label">SOURCE</span>
+    <div id="sourcebar" class="sourcebar"></div>
+    <div id="gainbar" class="gainbar"></div>
+  </div>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="panel-label">SIGNALS</div>
+      <div id="signals" class="signals"></div>
+    </aside>
+
+    <section class="stage">
+      <div class="live-readouts">
+        <div class="lr-card dom">
+          <div class="lr-title">DOMINANT FREQ</div>
+          <div class="dom-row"><span class="dom-lab" style="color:#f0a23b">dom1</span><span class="dom-f" id="dom1-f">0 Hz</span><span class="dom-meter"><i id="dom1-bar" style="background:#f0a23b"></i></span><span class="dom-e" id="dom1-e">0.00</span></div>
+          <div class="dom-row"><span class="dom-lab" style="color:#c084fc">dom2</span><span class="dom-f" id="dom2-f">0 Hz</span><span class="dom-meter"><i id="dom2-bar" style="background:#c084fc"></i></span><span class="dom-e" id="dom2-e">0.00</span></div>
+        </div>
+        <div class="lr-card struct">
+          <div class="lr-title">STRUCTURE <span id="drop-flash" class="drop-flash">● DROP</span></div>
+          <div class="struct-row"><span id="state-pill" class="state-pill s-thin">THIN</span>
+            <div class="sbars">
+              <div class="sbar"><span>build</span><i id="build-bar"></i></div>
+              <div class="sbar"><span>energy</span><i id="energy-bar"></i></div>
+              <div class="sbar"><span>slow</span><i id="slow-bar" style="background:#7CFC00"></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="lr-card derived">
+          <div class="lr-title">DERIVED
+            <span id="sp-flash" class="cue-flash">⧉ PATTERN</span>
+            <span id="sc-flash" class="cue-flash">◧ COLOR</span>
+          </div>
+          <div class="derived-row">
+            <span class="d-item"><span class="d-lab">BPM</span><span id="bpm-val" class="d-big">—</span><span id="beat-dot" class="beat-dot">●</span></span>
+            <span class="d-item"><span class="d-lab">NOTE</span><span id="note-val" class="d-big">—</span></span>
+            <span id="party-pill" class="party-pill">calm</span>
+          </div>
+        </div>
+      </div>
+      <div class="viz-row">
+        <div class="viz-panel">
+          <div class="viz-title">FREQUENCY SPECTRUM <span class="viz-sub">dom1 / dom2 location + cluster window</span></div>
+          <canvas id="spectrum" width="1100" height="150"></canvas>
+        </div>
+        <div class="viz-panel">
+          <div class="viz-title">AUDIO SIGNAL</div>
+          <canvas id="wave" width="1100" height="84"></canvas>
+        </div>
+      </div>
+
+      <div class="trace-panel">
+        <canvas id="trace" width="1100" height="260"></canvas>
+        <div class="readouts">
+          <div class="ro"><span class="ro-l">RAW</span><span class="ro-v" id="big-raw">0.00</span></div>
+          <div class="ro"><span class="ro-l">POST</span><span class="ro-v big" id="big-post">0.00</span></div>
+          <div class="ro-legend"><span class="dot ghost"></span>raw &nbsp; <span class="dot solid"></span>post</div>
+        </div>
+      </div>
+
+      <div class="lower">
+        <div class="source-panel" id="source-panel">
+          <div class="panel-label">TEST SOURCE</div>
+          <div id="source" class="source"></div>
+        </div>
+        <div class="chain-panel">
+          <div class="panel-label" id="chain-title">chain</div>
+          <div id="chain" class="chain"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="export-modal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head"><span>signal design — <code>audio/companion/companion_config.yaml</code> (the output design)</span>
+        <button id="export-close" class="op-btn">✕</button></div>
+      <textarea id="export-text" spellcheck="false"></textarea>
+      <div class="modal-foot">
+        <button id="export-save" class="primary">Write to disk</button>
+        <button id="export-copy" class="primary">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="browse-modal" class="modal">
+    <div class="modal-box browse-box">
+      <div class="modal-head">
+        <button id="browse-up" class="op-btn" title="up one level">↑</button>
+        <span id="browse-path" class="browse-path"></span>
+        <button id="browse-close" class="op-btn">✕</button>
+      </div>
+      <div id="browse-list" class="browse-list"></div>
+    </div>
+  </div>
+
+  <div id="add-modal" class="modal">
+    <div class="modal-box add-box">
+      <div class="modal-head"><span>add a signal — pick a <code>raw source</code></span>
+        <button id="add-close" class="op-btn">✕</button></div>
+      <div id="add-grid" class="add-grid"></div>
+    </div>
+  </div>
+
+  <div id="view-modal" class="modal">
+    <div class="modal-box view-box">
+      <div class="modal-head"><span>add a <code>view</code> — mix / overlay a subset of signals</span>
+        <button id="view-close" class="op-btn">✕</button></div>
+      <div class="view-form">
+        <div class="view-field"><span class="view-flabel">TYPE</span><div id="view-types" class="view-types"></div></div>
+        <div class="view-field"><span class="view-flabel">NAME</span>
+          <input id="view-name" class="file-input" placeholder="view name" /></div>
+        <div class="view-field"><span class="view-flabel">SIGNALS</span><div id="view-signals" class="view-signals"></div></div>
+      </div>
+      <div class="modal-foot">
+        <button id="view-create" class="primary">Create view</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="companion_app.js"></script>
+</body>
+</html>

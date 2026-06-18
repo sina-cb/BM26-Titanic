@@ -1,0 +1,141 @@
+# companion_config.yaml — Audio Companion signal-designer output design.
+# Persisted by the UI "Export config" action; loaded on boot.
+# Schema + loader: audio/companion/companion_config.js. (2026-06-17 contract.)
+#
+# Single-name rehaul: each osc_out carries ONE `name`. cpcKey + address are
+# DERIVED (cpcKey=slug(name), address=/marsin/audio/<cpcKey>). The curated
+# defaults are named for their canonical CPC key (micLow … micDomFreq2) so
+# they keep their engine-bound addresses (CURATED_OUTPUTS in companion_config.js).
+osc:
+  host: 127.0.0.1
+  port: 10000
+signals:
+  - id: low
+    label: micLow
+    source: rawLow
+    type: intensity
+    chain:
+      - id: low_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 5.5
+      - id: low_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micLow
+    output: true
+  - id: mid
+    label: micMid
+    source: rawMid
+    type: intensity
+    chain:
+      - id: mid_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 8
+      - id: mid_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micMid
+    output: true
+  - id: high
+    label: micHigh
+    source: rawHigh
+    type: intensity
+    chain:
+      - id: high_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 14
+      - id: high_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micHigh
+    output: true
+  - id: kick
+    label: micKick
+    source: rawKick
+    type: intensity
+    chain:
+      - id: kick_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 18
+      - id: kick_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micKick
+    output: true
+  - id: dom1
+    label: micDomFreq1
+    source: rawDom1
+    type: frequency
+    chain:
+      - id: dom1_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomFreq1
+    output: true
+  - id: dom2
+    label: micDomFreq2
+    source: rawDom2
+    type: frequency
+    chain:
+      - id: dom2_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomFreq2
+    output: true
+  # Dom split: each dom lane's ENERGY is its OWN intensity signal with its own
+  # op chain (independently post-processable), routed to /marsin/dom/energy1·2.
+  - id: dom1Energy
+    label: micDomEnergy1
+    source: rawDom1Energy
+    type: intensity
+    chain:
+      - id: dom1Energy_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 10
+      - id: dom1Energy_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomEnergy1
+    output: true
+  - id: dom2Energy
+    label: micDomEnergy2
+    source: rawDom2Energy
+    type: intensity
+    chain:
+      - id: dom2Energy_lpf
+        type: lpf
+        enabled: true
+        params:
+          cutoffHz: 10
+      - id: dom2Energy_out
+        type: osc_out
+        enabled: true
+        params:
+          name: micDomEnergy2
+    output: true
+# Custom VIEWS (VISUALIZERS). The legacy DOM DANCE is now a dancing-balls view
+# instance fed both dom signals (contract §"Companion custom VIEWS").
+views:
+  - id: dance
+    label: ✦ DOM DANCE
+    type: dancing-balls
+    signals:
+      - dom1
+      - dom2

@@ -3,10 +3,11 @@ import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native'
 import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { useSharedParamValues, useLiveParamValues, useOscStatus } from '@/hooks/useEngineState';
+import { useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
@@ -28,35 +29,23 @@ export const CPCControls = () => {
     rotate: 0,
     colorPalette1: { h: 0, s: 1, v: 1 },
     colorPalette2: { h: 0.5, s: 1, v: 1 },
-    // Audio row. See marsin_engine/lib/param_center.js for full
-    // semantics. Three stems with per-stem operator gains (range
-    // 0..gainMax from config). The master `audioReactivity` scale
-    // was retired 2026-05-26 — per-stem gains in the Audio Analysis
-    // tab are the only level control now. BPM is an OSC-driven
-    // readout from LX Studio.
-    stemsVocals: 0.0,
-    stemsBass: 0.0,
-    stemsDrums: 0.0,
-    stemsVocalsGain: 1.0,
-    stemsBassGain: 1.0,
-    stemsDrumsGain: 1.0,
-    tempoBpm: 0.0,
-    // Mic-derived bands + kick (docs/25). Same operator-gain × master
-    // contract as the OSC stems so patterns can treat them uniformly.
-    micLow: 0.0,
-    micMid: 0.0,
-    micHigh: 0.0,
-    micKick: 0.0,
-    micLowGain: 1.0,
-    micMidGain: 1.0,
-    micHighGain: 1.0,
-    micKickGain: 1.0,
+    // The audio reactivity row is rendered DYNAMICALLY from the live
+    // audio CPC keys the Companion routes in (see useAudioSignals +
+    // the live subscription below) — no per-signal keys are listed
+    // here, so adding/removing a signal in the Companion can't leave
+    // a dead column behind. tempoBpm rides the live bus (its own tile).
     // BPM → speed sync visibility on the Deck (docs/25 §6). Read-only
     // here; the operator changes them from the Audio Analysis tab.
     bpmSpeedSync: 0.0,
     bpmSpeedMin: 60,
     bpmSpeedMax: 180,
   }), []);
+
+  // Dynamic audio-signal set the Companion routes into the CPC. Derived
+  // from the engine schema (live audio keys) so the deck/mixer chrome
+  // shows exactly what's live — low/mid/high/kick, dom1/dom2, energy,
+  // slow, build, party, … — and nothing it doesn't.
+  const audioSignals = useAudioSignals();
 
   // Live shared-param values. Every sharedParams broadcast (whether it
   // originated from this UI, PortWatch over LoRa, or any script) flows
@@ -68,18 +57,20 @@ export const CPCControls = () => {
   // keeps this component's re-render scope tight (the BpmTile child
   // is the only thing that visibly changes when BPM nudges).
   const steadyParams = useSharedParamValues(defaultParams) as typeof defaultParams;
-  // Live keys all ride /ws/signals at the analyser's broadcastHz (mic*
-  // and stems* are 15-30 Hz; tempoBpm is 5 Hz). Reading them via
-  // useLiveParamValues — instead of via useSharedParamValues like the
-  // rest of CPC — keeps the meters in the deck/mixer chrome ticking
-  // at the engine's actual rate. Pre-fix they were stuck at the boot
-  // sharedParams snapshot because sharedParams only re-broadcasts when
-  // an operator turns a knob, not on every analyser tick.
-  const live = useLiveParamValues({
-    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
-    stemsVocals: 0, stemsBass: 0, stemsDrums: 0,
-    tempoBpm: 0,
-  });
+  // The tempo rides /ws/signals at the analyser's broadcastHz (5 Hz).
+  // Reading it via useLiveParamValues — instead of via
+  // useSharedParamValues like the rest of CPC — keeps the BPM tile
+  // ticking at the engine's actual rate. The per-signal audio meters
+  // read the whole live doc (useLiveParams) inside <DynamicAudioRow />
+  // so the live key set stays dynamic (the Companion can add/remove
+  // signals at runtime) without the hook's pinned-key-set hazard.
+  //
+  // Tempo SOURCE (2026-06-17 contract): the Audio Companion is the sole
+  // analyzer and streams its analyzed tempo over OSC → CPC key `audioBpm`.
+  // Prefer that; fall back to the legacy `tempoBpm` only when `audioBpm`
+  // is absent. Mirrors the engine's BpmSpeedSync + the AUDIO tab.
+  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 });
+  const liveBpm = (live.audioBpm ?? 0) > 0 ? live.audioBpm : live.tempoBpm;
   const params = useMemo(
     () => ({ ...steadyParams, ...live }),
     [steadyParams, live],
@@ -161,7 +152,7 @@ export const CPCControls = () => {
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
   const bpmMax     = params.bpmSpeedMax ?? 180;
-  const bpm        = params.tempoBpm ?? 0;
+  const bpm        = liveBpm ?? 0;
   const bpmMapped  =
     bpmSyncOn && bpm > 0 && bpmMin !== bpmMax
       ? Math.max(0, Math.min(1, (bpm - bpmMin) / (bpmMax - bpmMin)))
@@ -193,7 +184,7 @@ export const CPCControls = () => {
         }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO OSC TEMPO</Text>
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11, flex: 1 }}>
-            Speed will not move until /lx/tempo/bpm starts arriving. Disable sync on the Audio tab, or fix the OSC source.
+            Speed will not move until the Audio Companion streams a tempo (audioBpm). Disable sync on the Audio tab, or fix the OSC source.
           </Text>
         </View>
       ) : null}
@@ -228,7 +219,7 @@ export const CPCControls = () => {
             size={params.size ?? 0.5}
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
-            bpm={params.tempoBpm ?? 0}
+            bpm={bpm}
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
@@ -270,77 +261,40 @@ export const CPCControls = () => {
 
             {/* BPM tile sits just before the OSC pill — a "tempo + source
                 health" cluster at the end of the row. */}
-            <BpmTile bpm={params.tempoBpm ?? 0} isPortrait={isPortrait} synced={bpmSyncOn} />
+            <BpmTile bpm={bpm} isPortrait={isPortrait} synced={bpmSyncOn} />
 
             <OscStatusPill compact={isPortrait} />
           </View>
         )}
       </View>
 
-      {/* ── Row 2: audio — REACT + compact live-only meter columns ──────
-          New layout (per operator review):
-            REACT slider · [BAS+DRM] · [VOC+LOW] · [MID+HIGH] · [KICK]
-          The deck shows ONLY live data — operators set per-band gains
-          from the Audio Analysis tab, not here. The meter rows are
-          intentionally NOT touch-responsive (they show effective
-          post-gain energy that's already being driven by OSC / mic).
+      {/* ── Row 2: audio — dynamic live-only signal meters ──────────────
+          The columns are rendered from whatever audio CPC keys the
+          Companion routes in (useAudioSignals → the engine schema), so
+          adding/removing a signal in the Companion adds/removes a meter
+          here automatically. The deck shows ONLY live data — operators
+          tune signals in the Companion / Audio tab, not here. The meters
+          are intentionally NOT touch-responsive (they show the effective
+          post-chain value already being driven into the CPC).
        */}
       <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 6 : 8 }}>
-        {/* Same labelWidth + labelGap as row 1 so REACT lines up
+        {/* Same labelWidth + labelGap as row 1 so AUDIO lines up
             directly under SPEED — no white-space gap. The label
             cell also doubles as the collapse-toggle hit target. */}
         <TouchableOpacity
           onPress={() => setAudioCollapsed(c => !c)}
-          accessibilityLabel={audioCollapsed ? 'Expand audio reactivity' : 'Collapse audio reactivity'}
+          accessibilityLabel={audioCollapsed ? 'Expand audio signals' : 'Collapse audio signals'}
           style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
         >
           <IconSymbol name={audioCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO REACTIVITY'}</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
         </TouchableOpacity>
 
-        {audioCollapsed ? (
-          // Live mic/stem values arrive already post-gain (gain applied
-          // at the source in audio_analyzer.js / osc_listener.js before
-          // the value reaches CPC). Do NOT multiply by *Gain here — that
-          // would double-gain the meter. The patterns receive the same
-          // post-gain values, so what you see here is what the patterns
-          // see. See docs/29 for the architecture.
-          <CollapsedAudioSummary
-            isPortrait={isPortrait}
-            bass={params.stemsBass ?? 0}
-            drums={params.stemsDrums ?? 0}
-            vocals={params.stemsVocals ?? 0}
-            kick={params.micKick ?? 0}
-          />
-        ) : (
-          // Master REACTIVITY MiniFader was removed 2026-05-26 (operator
-          // review): per-stem gains in the Audio Analysis tab are now
-          // the only level controls, freeing this row to be all live
-          // meters at full width.
-          //
-          // Values below are already post-gain — see comment above.
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10, paddingRight: isPortrait ? 4 : 12 }}>
-              <LiveMeterColumn
-                isPortrait={isPortrait}
-                top={{ label: 'BASS',   value: params.stemsBass   ?? 0 }}
-                bot={{ label: 'DRUMS',  value: params.stemsDrums  ?? 0 }}
-              />
-              <LiveMeterColumn
-                isPortrait={isPortrait}
-                top={{ label: 'VOCALS', value: params.stemsVocals ?? 0 }}
-                bot={{ label: 'LOW',    value: params.micLow      ?? 0 }}
-              />
-              <LiveMeterColumn
-                isPortrait={isPortrait}
-                top={{ label: 'MID',    value: params.micMid      ?? 0 }}
-                bot={{ label: 'HIGH',   value: params.micHigh     ?? 0 }}
-              />
-              <LiveMeterColumn
-                isPortrait={isPortrait}
-                top={{ label: 'KICK',   value: params.micKick     ?? 0, accent: true }}
-              />
-          </View>
-        )}
+        <DynamicAudioRow
+          signals={audioSignals}
+          isPortrait={isPortrait}
+          collapsed={audioCollapsed}
+        />
       </View>
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
@@ -485,63 +439,151 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
   );
 }
 
-// ── Audio cells ─────────────────────────────────────────────────────────────
+// ── Audio cells (dynamic) ────────────────────────────────────────────────────
 //
-// The Deck's audio row is read-only: four compact LiveMeterColumns
-// showing what's reaching the pattern after `stemGain` is applied.
-// Per-band gain sliders live in the Audio Analysis tab now (see
-// CaptainPad/app/(tabs)/audio.tsx → GainRow). The master
-// `audioReactivity` scale was retired 2026-05-26 — there is no
-// global level above per-stem gains anymore.
+// The Deck's audio row is read-only and DYNAMIC: one compact meter per
+// live audio CPC key the Companion routes in (useAudioSignals). The deck
+// is for performing; signal tuning lives in the Companion / Audio tab,
+// so the meters are non-interactive (they show the value already reaching
+// the patterns). Adding/removing a signal in the Companion adds/removes a
+// meter here with no code change.
+
 /**
- * LiveMeterColumn — compact, read-only "what the patterns are seeing right
- * now" display for the Deck audio row.
+ * DynamicAudioRow — renders the per-signal meters (or the collapsed
+ * one-line summary) from the live audio doc + the dynamic signal list.
+ * Subscribes to the WHOLE live doc so the key set can change at runtime
+ * without tripping useLiveParamValues' pinned-key-set contract.
  *
- * Two stacked bars (top + bottom) per column, each showing the
- * post-gain, post-master value for one band. The deck used to also
- * own per-band gain sliders, but the operator review (2026-05-24)
- * moved those to the Audio Analysis tab — the deck is for performing,
- * the tab is for tuning. Keeping the meters non-interactive avoids the
- * "I dragged something but nothing changed" confusion the per-stem
- * sliders kept causing.
- *
- * `accent` on the top row uses a brighter fill (e.g. for KICK, which
- * is a transient envelope) so it stands out at a glance.
+ * CURATE, DON'T DUMP: the deck/mixer is the densest screen in the app, so
+ * this row shows ONLY the best-practice subset (LOW / MID / HIGH / KICK +
+ * a beat cue — see utils/audioSignals.ts → curateDeckSignals) rather than
+ * the full dynamic set. The FULL set lives on the AUDIO tab. The curation
+ * gracefully degrades: a curated cue the Companion isn't publishing is
+ * simply omitted. A "+N on AUDIO tab" hint flags how many live signals
+ * aren't shown here so the operator knows where the rest are.
  */
-function LiveMeterColumn({ isPortrait, top, bot }: {
+function DynamicAudioRow({ signals, isPortrait, collapsed }: {
+  signals: AudioSignalDescriptor[];
   isPortrait: boolean;
-  top: { label: string; value: number; accent?: boolean };
-  bot?: { label: string; value: number; accent?: boolean };
+  collapsed: boolean;
 }) {
   const C = usePalette();
-  const cellMinWidth = isPortrait ? 56 : 80;
+  const liveDoc = useLiveParams();
+  const valueOf = useCallback((key: string): number => {
+    const slot = liveDoc?.params?.[key];
+    const v = slot && typeof slot.value === 'number' ? slot.value : 0;
+    return v;
+  }, [liveDoc]);
+
+  // Best-practice deck subset (LOW/MID/HIGH/KICK + beat cue), in curated
+  // order. The remainder count drives the "+N on AUDIO tab" hint.
+  const curated = useMemo(() => curateDeckSignals(signals), [signals]);
+
+  if (signals.length === 0) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', paddingLeft: 4 }}>
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: isPortrait ? 9 : 10, color: C.icon }}>
+          No live audio signals — design them in the Audio Companion.
+        </Text>
+      </View>
+    );
+  }
+
+  // If NONE of the curated cues are live (an exotic Companion routing that
+  // publishes signals we don't recognise), fall back to the first few live
+  // signals so the row is never blank while audio IS flowing.
+  const shownSet = curated.length > 0 ? curated : signals.slice(0, isPortrait ? 4 : 6);
+  const remainder = signals.length - shownSet.length;
+
+  if (collapsed) {
+    // One-line micro-meter summary — the curated cues only, so the row
+    // stays ~24px regardless of how many the Companion publishes.
+    return (
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
+        {shownSet.map((s) => (
+          <CollapsedMeter
+            key={s.key}
+            label={s.label}
+            value={normalizeAudio(s, valueOf(s.postKey))}
+            accent={/kick/i.test(s.key)}
+          />
+        ))}
+        {remainder > 0 ? (
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon }}>+{remainder}</Text>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
-    <View style={{
-      flex: 1, minWidth: cellMinWidth,
-      paddingVertical: 4, paddingHorizontal: 6,
-      borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
-      backgroundColor: C.surface,
-      justifyContent: 'space-between',
-    }}>
-      <CompactMeterRow {...top} />
-      {bot ? (
-        <>
-          <View style={{ height: 4 }} />
-          <CompactMeterRow {...bot} />
-        </>
+    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
+      {shownSet.map((s) => (
+        <LiveMeterColumn
+          key={s.key}
+          isPortrait={isPortrait}
+          signal={s}
+          value={valueOf(s.postKey)}
+        />
+      ))}
+      {remainder > 0 ? (
+        <Text
+          numberOfLines={2}
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
+        >
+          +{remainder} on AUDIO tab
+        </Text>
       ) : null}
     </View>
   );
 }
 
-function CompactMeterRow({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+// Map a raw CPC value to a [0,1] bar fill given the signal's kind/range.
+// Intensity signals are already [0,1]; frequency signals are normalised by
+// their schema max (Hz); bpm is normalised by 300 (the schema bpm range).
+function normalizeAudio(signal: AudioSignalDescriptor, value: number): number {
+  if (signal.kind === 'intensity') return Math.max(0, Math.min(1, value));
+  if (signal.max > 0) return Math.max(0, Math.min(1, value / signal.max));
+  return Math.max(0, Math.min(1, value));
+}
+
+// Human-readable value text for the meter header: Hz for frequency, the
+// integer count for bpm, percent for intensity.
+function audioValueText(signal: AudioSignalDescriptor, value: number): string {
+  if (signal.kind === 'frequency') return `${Math.round(value)}Hz`;
+  if (signal.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}`;
+}
+
+/**
+ * LiveMeterColumn — compact, read-only "what the patterns are seeing right
+ * now" display for one dynamic audio signal. Non-interactive (tuning lives
+ * in the Companion / Audio tab). KICK gets a brighter accent fill so the
+ * transient stands out at a glance.
+ */
+function LiveMeterColumn({ isPortrait, signal, value }: {
+  isPortrait: boolean;
+  signal: AudioSignalDescriptor;
+  value: number;
+}) {
   const C = usePalette();
-  const v = Math.max(0, Math.min(1, value));
+  const cellMinWidth = isPortrait ? 52 : 72;
+  const fill = normalizeAudio(signal, value);
+  // Identity colour — the curated bands read with their Companion accent
+  // (teal LOW, blue MID, red KICK, …) so the deck cue matches the AUDIO
+  // tab trace and the modulation source trail. One shared source of truth
+  // in utils/audioSignals.ts.
+  const accentHex = audioAccentHex(signal);
   return (
-    <View>
+    <View style={{
+      flex: 1, minWidth: cellMinWidth, maxWidth: isPortrait ? 80 : 110,
+      paddingVertical: 4, paddingHorizontal: 6,
+      borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surface,
+      justifyContent: 'center',
+    }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.text }}>{Math.round(v * 100)}</Text>
+        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{signal.label}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.text }}>{audioValueText(signal, value)}</Text>
       </View>
       <View style={{
         height: 8, borderRadius: 4,
@@ -550,19 +592,13 @@ function CompactMeterRow({ label, value, accent }: { label: string; value: numbe
       }}>
         <View style={{
           position: 'absolute', left: 0, top: 0, bottom: 0,
-          width: `${v * 100}%`,
-          backgroundColor: accent ? C.primaryContainer : C.primary,
+          width: `${fill * 100}%`,
+          backgroundColor: accentHex,
         }} />
       </View>
     </View>
   );
 }
-
-// The Deck used to render per-stem GAIN sliders here (StemCell / KickCell).
-// Per operator review (2026-05-24), those gain controls moved to the
-// Audio Analysis tab and the Deck is now read-only (LiveMeterColumn
-// above). If you need the gain UI on a new surface, use the GainRow
-// component in CaptainPad/app/(tabs)/audio.tsx.
 
 // BPM gets its own compact tile (no operator gain — it's a tempo
 // reference, not a level to scale). The big numeric readout makes
@@ -636,25 +672,6 @@ function CollapsedGlobalsSummary({
       </Text>
       <View style={{ flex: 1 }} />
       <OscStatusPill compact />
-    </View>
-  );
-}
-
-function CollapsedAudioSummary({
-  isPortrait, bass, drums, vocals, kick,
-}: {
-  isPortrait: boolean;
-  bass: number; drums: number; vocals: number; kick: number;
-}) {
-  // Master REACT readout was removed alongside the audioReactivity
-  // param on 2026-05-26. The four micro-meters are the whole summary
-  // now.
-  return (
-    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
-      <CollapsedMeter label="BAS" value={bass} />
-      <CollapsedMeter label="DRM" value={drums} />
-      <CollapsedMeter label="VOX" value={vocals} />
-      <CollapsedMeter label="KCK" value={kick} accent />
     </View>
   );
 }

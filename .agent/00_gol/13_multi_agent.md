@@ -159,6 +159,8 @@ including the operator's main checkout, may already be using them):
 | Simulation save server | `6970` | `simulation/config.yaml::save_port` |
 | Simulation sACN bridge | `6971` | `simulation/config.yaml::sacn_port` |
 | Simulation sACN out | `6972` | `simulation/config.yaml::sacn_output_port` |
+| Audio Companion (HTTP/WS) | `6966` | `marsin_engine/audio/companion/companion_server.js::--port`, `marsin_engine/config.yaml::audioCompanion.port` |
+| Audio Slice OSC-in (local-only) | `10001` | `config.yaml::audioCompanion.audioSlice.listenPort` (Audio Slice → Companion; see docs/37 §6.2) |
 | CaptainPad `web:serve` | `6967` | `CaptainPad/package.json::web:serve` |
 | CaptainPad Expo Metro | `8081` | Expo default |
 | Server bridge `/health` | `7099` | `control_podium/.config.bridge.yaml::health.port` |

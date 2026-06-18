@@ -83,6 +83,21 @@ export class ModulationController {
       return;
     }
 
+    // Perf early-out: when there are ZERO active mappings AND nothing was
+    // written last frame (so no baseline-restore is owed) AND the last
+    // broadcast was already empty (ghost overlay already cleared), there is
+    // no work to do — skip the per-frame getExports()/JSON.parse(getAll())
+    // entirely. The moment a mapping is added this branch stops short-
+    // circuiting; the moment the last mapping is removed we still run one
+    // more full frame (mappings just went to 0 but _lastWrittenTargets /
+    // _lastBroadcastHadParams are still set) to restore baselines and fire
+    // the single clearing broadcast, then settle into this no-op path.
+    if (this.activeMappings.length === 0
+        && this._lastWrittenTargets.size === 0
+        && !this._lastBroadcastHadParams) {
+      return;
+    }
+
     const wasmHost = this.mixer.wasmHost;
     const exports = wasmHost.getExports(deckCh.handle) || [];
     const exportByName = new Map();
@@ -169,6 +184,19 @@ export class ModulationController {
    * teardown) so we don't keep stale baseline-restore state.
    */
   _restoreBaselinesAndClear(_unused) {
+    // If the last frame we broadcast HAD params, emit one final empty
+    // `modulationState` so the iPad's green ghost overlay clears immediately
+    // when the deck disappears mid-modulation (otherwise it lingers stale
+    // until the deck returns). Mirrors the >0 → 0 transition gate in applyFrame.
+    if (this._lastBroadcastHadParams) {
+      this._lastBroadcastHadParams = false;
+      this.broadcast({
+        type: 'modulationState',
+        deckId: 'main',
+        pattern: this.activePattern || null,
+        parameters: {},
+      });
+    }
     if (this._lastWrittenTargets.size === 0) return;
     this._lastWrittenTargets.clear();
   }

@@ -13,7 +13,7 @@ import {
   normalizeIp,
   coerceArg,
 } from '../lib/osc_listener.js';
-import { SignalPostProcessor } from '../lib/signal_post_processor.js';
+import { SignalPostProcessor } from '../audio/postproc/signal_post_processor.js';
 
 /**
  * Build a real SignalPostProcessor wired to a paramCenter so the
@@ -21,7 +21,16 @@ import { SignalPostProcessor } from '../lib/signal_post_processor.js';
  * default Gain op (paramKey: '<key>Gain'). Mirrors the engine's wiring.
  */
 function makePostProcessor(pc) {
-  return new SignalPostProcessor({ paramCenter: pc });
+  const proc = new SignalPostProcessor({ paramCenter: pc });
+  // These raw+post tests verify the GAIN × raw-mirror dispatch contract in
+  // isolation. Since the corpus-tuning pass (2026-06) the stems default
+  // chain is gain → smoothing LPF, whose one-pole state makes a single
+  // packet's post value lag the pure gain product. Pin a gain-only chain so
+  // the assertions test gain math, not smoothing transients.
+  proc.putChain('micLow', [
+    { id: 'low_gain', type: 'gain', enabled: true, params: { paramKey: 'micLowGain' } },
+  ]);
+  return proc;
 }
 
 // ── Test doubles ───────────────────────────────────────────────────────────
@@ -43,13 +52,13 @@ function makeMockParamCenter(extraEntries = []) {
     { key: 'colorPalette1', label: 'Color 1', type: 'hsv', range: [0, 1],
       default: { h: 0, s: 1, v: 1 },
       oscAddress: '/marsin/param/colorPalette1', live: false, broadcastHz: 30, persist: true, portWatch: true },
-    { key: 'stemsVocals', label: 'Stems · Vocals', type: 'float', range: [0, 1], default: 0,
-      oscAddress: '/marsin/stems/vocals', live: true, broadcastHz: 15, persist: false, portWatch: false },
-    // Gain partner for stemsVocals — required by OscListener constructor
+    { key: 'micLow', label: 'Mic · Low', type: 'float', range: [0, 1], default: 0,
+      oscAddress: '/marsin/mic/low', live: true, broadcastHz: 15, persist: false, portWatch: false },
+    // Gain partner for micLow — required by OscListener constructor
     // (source-side gain validation: every live key in GAIN_BY_KEY whose
     // live key is present must have its gain partner present too).
-    { key: 'stemsVocalsGain', label: 'Vocals Gain', type: 'float', range: [0, 2], default: 1,
-      oscAddress: '/marsin/param/stemsVocalsGain', live: false, broadcastHz: 30, persist: true, portWatch: true },
+    { key: 'micLowGain', label: 'Mic Low Gain', type: 'float', range: [0, 2], default: 1,
+      oscAddress: '/marsin/param/micLowGain', live: false, broadcastHz: 30, persist: true, portWatch: true },
     ...extraEntries,
   ];
   // Flat key→value store seeded from schema defaults. .get() throws on
@@ -339,26 +348,26 @@ test('raw + post pair: gain=2 doubles post but raw passes through, in one setMan
   // twin in the schema the listener still publishes the post-only
   // value (back-compat with deployments missing the raw keys).
   const pc = makeMockParamCenter([
-    { key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
+    { key: 'micLowRaw', label: 'Mic · Low (raw)', type: 'float',
       range: [0, 1], default: 0,
       live: true, broadcastHz: 15, persist: false, portWatch: false },
   ]);
   // Twist the gain knob to 2× so post ≠ raw and we can tell them apart.
-  pc.set('stemsVocalsGain', 2.0, 'api');
+  pc.set('micLowGain', 2.0, 'api');
   // Inject the chain framework's processor — the listener now routes
-  // gain through the chain's first Gain op (`paramKey: 'stemsVocalsGain'`).
+  // gain through the chain's first Gain op (`paramKey: 'micLowGain'`).
   const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   // Drain the .set() bookkeeping call so we can assert on the dispatch
   // batch in isolation.
   pc.calls.length = 0;
-  dispatchPacket(l, '/marsin/stems/vocals', [0.3]);
+  dispatchPacket(l, '/marsin/mic/low', [0.3]);
   assert.equal(pc.calls.length, 1, 'one packet → one setMany call');
   const writes = pc.calls[0].writes;
   // Two writes in the SAME batch: post first, raw second (order matches
   // the dispatch impl). Both must be scalar kind, both for the same hop.
   assert.equal(writes.length, 2, 'raw + post = 2 writes in one batch');
-  const postWrite = writes.find(w => w.key === 'stemsVocals');
-  const rawWrite  = writes.find(w => w.key === 'stemsVocalsRaw');
+  const postWrite = writes.find(w => w.key === 'micLow');
+  const rawWrite  = writes.find(w => w.key === 'micLowRaw');
   assert.ok(postWrite, 'post key written');
   assert.ok(rawWrite,  'raw key written');
   // Float32 round-trip on the wire — same tolerance the other tests use.
@@ -371,33 +380,33 @@ test('raw + post pair: post saturates at 1.0 while raw passes through unclamped 
   // exactly the OSC input value (0.5). Lets the iPad show the operator
   // "the post is saturated but the raw signal is at 0.5".
   const pc = makeMockParamCenter([
-    { key: 'stemsVocalsRaw', label: 'Stems · Vocals (raw)', type: 'float',
+    { key: 'micLowRaw', label: 'Mic · Low (raw)', type: 'float',
       range: [0, 1], default: 0,
       live: true, broadcastHz: 15, persist: false, portWatch: false },
   ]);
-  pc.set('stemsVocalsGain', 4.0, 'api');
+  pc.set('micLowGain', 4.0, 'api');
   const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   pc.calls.length = 0;
-  dispatchPacket(l, '/marsin/stems/vocals', [0.5]);
+  dispatchPacket(l, '/marsin/mic/low', [0.5]);
   const writes = pc.calls[0].writes;
-  const postWrite = writes.find(w => w.key === 'stemsVocals');
-  const rawWrite  = writes.find(w => w.key === 'stemsVocalsRaw');
+  const postWrite = writes.find(w => w.key === 'micLow');
+  const rawWrite  = writes.find(w => w.key === 'micLowRaw');
   assert.ok(Math.abs(rawWrite.value - 0.5) < FLOAT_TOL, `raw was ${rawWrite.value}`);
   assert.equal(postWrite.value, 1.0, `post must clamp to 1.0; got ${postWrite.value}`);
 });
 
 test('raw + post pair: absent *Raw registry entry → post-only (back-compat)', () => {
-  // The mock schema has stemsVocals + stemsVocalsGain but NO
-  // stemsVocalsRaw. The listener must still dispatch the post value;
+  // The mock schema has micLow + micLowGain but NO
+  // micLowRaw. The listener must still dispatch the post value;
   // raw publishing is a UI-only enhancement, not a contract for the
   // post pipeline.
   const pc = makeMockParamCenter();  // no extras
-  pc.set('stemsVocalsGain', 2.0, 'api');
+  pc.set('micLowGain', 2.0, 'api');
   const l = new OscListener({ port: 6970, paramCenter: pc, signalPostProcessor: makePostProcessor(pc) });
   pc.calls.length = 0;
-  dispatchPacket(l, '/marsin/stems/vocals', [0.3]);
+  dispatchPacket(l, '/marsin/mic/low', [0.3]);
   assert.equal(pc.calls[0].writes.length, 1, 'no raw entry → 1 write only');
-  assert.equal(pc.calls[0].writes[0].key, 'stemsVocals');
+  assert.equal(pc.calls[0].writes[0].key, 'micLow');
   assert.ok(Math.abs(pc.calls[0].writes[0].value - 0.6) < FLOAT_TOL);
 });
 
@@ -479,7 +488,7 @@ test('getStatus exposes counts before start()', () => {
   assert.equal(s.enabled, false);
   assert.equal(s.port, 6970);
   assert.equal(s.allowedSendersCount, 2);
-  // canonical (speed/rotate/size + 3 HSV + stemsVocals) + 1 custom
+  // canonical (speed/rotate/size + 3 HSV + micLow) + 1 custom
   assert.ok(s.bindingsCount >= 6);
   assert.equal(s.rxMessagesPerSec, 0);
   assert.ok(typeof s.now === 'number' && s.now > 0);
@@ -579,7 +588,7 @@ test('real-UDP integration: local sender → local listener → mock CPC', async
     // catches encoder/decoder drift if osc-min upgrades change
     // the shape.
     const buf = osc.toBuffer({
-      address: '/marsin/stems/vocals',
+      address: '/marsin/mic/low',
       args: [{ type: 'float', value: 0.617 }],
     });
     const sendBuf = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -594,7 +603,7 @@ test('real-UDP integration: local sender → local listener → mock CPC', async
     }
     assert.equal(pc.calls.length, 1, 'listener received the packet');
     assert.equal(pc.calls[0].method, 'setMany');
-    assert.equal(pc.calls[0].writes[0].key, 'stemsVocals');
+    assert.equal(pc.calls[0].writes[0].key, 'micLow');
     // float32 round-trip can lose precision; check to ~4dp.
     assert.ok(
       Math.abs(pc.calls[0].writes[0].value - 0.617) < 1e-3,

@@ -3,7 +3,10 @@
 // Pure-math + schema-validation surface for the Dynamic Audio Parameter
 // Mapping feature (docs/26_[todo]_audio_params_playlist.md).
 //
-// This module intentionally has ZERO engine dependencies. It exports:
+// This module has ZERO engine RUNTIME dependencies (no param_center, wasm, or
+// I/O). Its ONE import is the STATIC audio descriptor registry — used purely to
+// read a builtin source key's curated range so resolveModulationSources can
+// normalize a wide-range Hz/bpm source into [0,1]. It still exports:
 //
 //   - applyCurve / applyContinuousModulation : per-mapping math (§4.3)
 //   - resolveModulationSources               : snapshot → source values
@@ -21,14 +24,19 @@
 // owns the broadcast call site; do not re-route without re-freezing
 // the contract.
 
+import { descriptorByKey } from '../audio/postproc/audio_signals.js';
+
 /**
  * @typedef {('cpc')} ModulationSourceScope
  *   v1 source scope. Future: 'lfo', 'global', 'tempo'.
  *
  * @typedef {Object} ModulationSource
  * @property {ModulationSourceScope} scope
- * @property {string} key                One of: micLow, micMid, micHigh, micKick,
- *                                       stemsBass, stemsDrums, stemsVocals.
+ * @property {string} key                A built-in [0,1] audio source key
+ *                                       (mic bands/flux, dom energies, the
+ *                                       [0,1] detector/derived keys — see
+ *                                       BUILTIN_SOURCE_KEYS) or a runtime
+ *                                       Companion key (DYNAMIC_SOURCE_KEYS).
  * @property {string} [label]            UI hint only, never used for routing.
  *
  * @typedef {('pattern')} ModulationTargetScope
@@ -41,7 +49,13 @@
  * @typedef {('continuous')} ModulationType
  *   v1 type. 'trigger' reserved (§3.2 of the design doc).
  *
- * @typedef {('offset'|'scale')} ModulationMode
+ * @typedef {('offset'|'multiply'|'override')} ModulationMode
+ *   offset   — add the scaled signal to the static param value.
+ *   multiply — use the scaled signal as a MULTIPLIER over the static value
+ *              (default range [1.0, 1.2]).
+ *   override — drive the param DIRECTLY from the scaled signal, ignoring the
+ *              static UI value (the `!` override). ('scale' is accepted as a
+ *              legacy alias for 'multiply' on load.)
  * @typedef {('unipolar'|'bipolar')} ModulationPolarity
  * @typedef {('linear'|'easeIn'|'easeOut'|'exp')} ModulationCurve
  *
@@ -69,22 +83,23 @@
  * @property {Record<string, ModulationStateParam>} parameters
  */
 
-// Mic-band keys are populated by the AudioCapture pipeline (when audio
-// analysis is ENABLED). OSC stems keys are populated by the OscListener
-// from external `/marsin/stems/*` packets (when OSC is ENABLED). When
-// either pipeline is disabled, the corresponding key is simply absent
-// from the ParamCenter snapshot — `resolveModulationSources` defaults
-// the missing key to 0, which makes the modulation a no-op (operator-
-// requested behavior: "default behavior is no change" with the source
-// pipeline dark, rather than spuriously moving the slider).
-const VALID_SOURCE_KEYS = new Set([
-  'micLow', 'micMid', 'micHigh', 'micKick',
-  'stemsBass', 'stemsDrums', 'stemsVocals',
-]);
+// Modulation SOURCES are NOT allow-listed. Any CPC key the analysis pipeline
+// (the Companion, the sole analyzer, over OSC → CPC) feeds in is a valid
+// source — `resolveModulationSources` passes the live snapshot straight
+// through, and a mapping whose source key isn't present this frame is simply
+// skipped by `applyModulations` (a no-op, which is the operator-requested
+// "default behavior is no change" when a source is dark). No registration, no
+// gate: a new Companion signal is immediately assignable.
 const VALID_TYPES = new Set(['continuous']);
 const VALID_SOURCE_SCOPES = new Set(['cpc']);
 const VALID_TARGET_SCOPES = new Set(['pattern']);
-const VALID_MODES = new Set(['offset', 'scale']);
+const VALID_MODES = new Set(['offset', 'multiply', 'override']);
+// Range bounds. The output is always clamp01'd, so the range only needs to be
+// generous enough for an offset (±) and a multiplier (multiply default is
+// [1.0, 1.2]; a boost up to a few × is plenty). Negative ranges are allowed
+// (e.g. an inverting [-1, 0]).
+const RANGE_MIN = -4;
+const RANGE_MAX = 4;
 const VALID_POLARITIES = new Set(['unipolar', 'bipolar']);
 const VALID_CURVES = new Set(['linear', 'easeIn', 'easeOut', 'exp']);
 
@@ -122,34 +137,45 @@ export function applyContinuousModulation({
   range = [0, 0],
   curve = 'linear',
 }) {
-  const baseClamped = clamp01(baseNorm);
-  const sClamped = clamp01(sourceNorm);
-  const [minDelta, maxDelta] = range;
+  const base = clamp01(baseNorm);
+  // CURVE IS APPLIED TO THE SIGNAL ITSELF — we shape the [0,1] source through
+  // the curve function, then feed the SHAPED signal into the range/mode math
+  // below. (Per operator: "add the signal through a curve function, not the
+  // application of the signal in the param update".)
+  const sc = applyCurve(clamp01(sourceNorm), curve);
+  const [min, max] = range;
+  // The "scaled signal": the curved [0,1] signal mapped linearly into the
+  // operator's range. The range may be negative / inverted (e.g. [-1, 0]).
+  const scaled = min + sc * (max - min);
 
-  let delta;
+  // OVERRIDE — drive the parameter directly from the scaled signal, ignoring
+  // the static UI value entirely (the `!` override).
+  if (mode === 'override') {
+    return clamp01(scaled);
+  }
+
+  // MULTIPLY — the scaled signal is a MULTIPLIER over the static value
+  // (default range [1.0, 1.2]). Polarity does not apply to a multiplier.
+  if (mode === 'multiply') {
+    return clamp01(base * scaled);
+  }
+
+  // OFFSET — add to the static value.
   if (polarity === 'bipolar') {
-    // Bipolar uses a symmetric-curve formulation: compute the
-    // signed deviation from the source's neutral point (0.5)
-    // FIRST, then apply the curve to the magnitude only, then
-    // re-attach the sign. This preserves the "source=0.5 → no
-    // movement" invariant for every curve (otherwise easeIn/exp
-    // would shift the no-move point off 0.5, surprising the
-    // operator). The scale factor `2 * max(|min|, |max|)` is the
-    // peak swing; the magnitude-only curve shapes the response
-    // toward the peak without breaking symmetry.
-    const bipolarS = (sClamped - 0.5) * 2.0;
-    const sign = bipolarS < 0 ? -1 : 1;
-    const curvedMag = applyCurve(Math.abs(bipolarS), curve);
-    delta = sign * curvedMag * Math.max(Math.abs(minDelta), Math.abs(maxDelta));
-  } else {
-    const sCurved = applyCurve(sClamped, curve);
-    delta = minDelta + sCurved * (maxDelta - minDelta);
+    // SYMMETRIC ±swing around the static value: the signal's CENTRE (0.5) =
+    // static, and it swings symmetrically by mag = max(|min|, |max|). signal
+    // 0 → static-mag, 0.5 → static, 1 → static+mag. (The UI stores bipolar as a
+    // symmetric [-mag, mag] range; an asymmetric REST range is treated by its
+    // larger magnitude so the swing stays symmetric. Curve already shaped the
+    // signal, so 0.5-neutral holds under linear.)
+    const bs = sc * 2 - 1;                       // [-1, 1]
+    const mag = Math.max(Math.abs(min), Math.abs(max));
+    return clamp01(base + bs * mag);
   }
-
-  if (mode === 'scale') {
-    return clamp01(baseClamped * (1.0 + delta));
-  }
-  return clamp01(baseClamped + delta);
+  // OFFSET / unipolar — a one-sided offset: static + scaled signal. At signal
+  // rest (0) the offset is `min` (0 for the usual [0, x] range, so the param
+  // sits at its static value); as the signal rises it adds up to `max`.
+  return clamp01(base + scaled);
 }
 
 /**
@@ -160,14 +186,31 @@ export function applyContinuousModulation({
  * @param {{ paramCenterSnapshot: Record<string, number> }} args
  */
 export function resolveModulationSources({ paramCenterSnapshot }) {
-  const sources = {
-    micLow: 0, micMid: 0, micHigh: 0, micKick: 0,
-    stemsBass: 0, stemsDrums: 0, stemsVocals: 0,
-  };
+  const sources = {};
   if (!paramCenterSnapshot) return sources;
-  for (const key of VALID_SOURCE_KEYS) {
+  // Every finite numeric value the pipeline fed in is a usable source — no
+  // allow-list. A mapping referencing a key that isn't present this frame is
+  // skipped by applyModulations (no-op), so a dark/absent source never crashes
+  // a render frame and never spuriously moves the slider.
+  //
+  // NORMALIZE a BUILTIN source whose curated range is wider than [0,1] into
+  // [0,1] so it drives the modulation across its FULL range instead of pinning
+  // the target at 1.0: a Hz dom-freq ([0, 22050]), a bpm ([0, 300]), note
+  // ([0,11]), structure ([0,2]), beat-in-bar ([0,4]). A [0,1] descriptor is an
+  // identity. DYNAMIC Companion keys are NOT in the descriptor registry, so
+  // they pass through RAW — a frequency the operator wants as a source should
+  // be normalized in the Companion (the normalizer op), which is exactly why
+  // we key off the BUILTIN registry here and never double-normalize a
+  // source-normalized dynamic signal.
+  for (const key of Object.keys(paramCenterSnapshot)) {
     const v = paramCenterSnapshot[key];
-    if (typeof v === 'number' && Number.isFinite(v)) sources[key] = v;
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const d = descriptorByKey(key);
+    if (d && Array.isArray(d.range) && d.range.length === 2 && d.range[1] > d.range[0]) {
+      sources[key] = clamp01((v - d.range[0]) / (d.range[1] - d.range[0]));
+    } else {
+      sources[key] = v;
+    }
   }
   return sources;
 }
@@ -265,8 +308,10 @@ export function validateModulationMapping(m) {
   if (!VALID_SOURCE_SCOPES.has(src.scope)) {
     throw new Error(`Modulation ${mod.id}: source.scope must be 'cpc'`);
   }
-  if (!VALID_SOURCE_KEYS.has(src.key)) {
-    throw new Error(`Modulation ${mod.id}: source.key must be one of ${[...VALID_SOURCE_KEYS].join(', ')}`);
+  // No source-key allow-list: any non-empty CPC key is a valid source (all
+  // incoming signals are assignable). An absent key just no-ops at apply time.
+  if (typeof src.key !== 'string' || src.key.length === 0) {
+    throw new Error(`Modulation ${mod.id}: source.key must be a non-empty string`);
   }
   const tgt = mod.target;
   if (!tgt || typeof tgt !== 'object') {
@@ -278,8 +323,10 @@ export function validateModulationMapping(m) {
   if (typeof tgt.parameter !== 'string' || tgt.parameter.length === 0) {
     throw new Error(`Modulation ${mod.id}: target.parameter must be a non-empty string`);
   }
+  // Back-compat: 'scale' was the old name for the multiply mode — migrate it.
+  if (mod.mode === 'scale') mod.mode = 'multiply';
   if (!VALID_MODES.has(mod.mode)) {
-    throw new Error(`Modulation ${mod.id}: mode must be 'offset' or 'scale'`);
+    throw new Error(`Modulation ${mod.id}: mode must be 'offset', 'multiply', or 'override'`);
   }
   if (!VALID_POLARITIES.has(mod.polarity)) {
     throw new Error(`Modulation ${mod.id}: polarity must be 'unipolar' or 'bipolar'`);
@@ -292,11 +339,10 @@ export function validateModulationMapping(m) {
     throw new Error(`Modulation ${mod.id}: range must be [min, max] of finite numbers`);
   }
   const [lo, hi] = mod.range;
-  if (lo < -1 || lo > 1 || hi < -1 || hi > 1) {
-    throw new Error(`Modulation ${mod.id}: range values must be within [-1, 1]`);
+  if (lo < RANGE_MIN || lo > RANGE_MAX || hi < RANGE_MIN || hi > RANGE_MAX) {
+    throw new Error(`Modulation ${mod.id}: range values must be within [${RANGE_MIN}, ${RANGE_MAX}]`);
   }
   return /** @type {ModulationMapping} */ (mod);
 }
 
-export const MODULATION_VALID_SOURCE_KEYS = [...VALID_SOURCE_KEYS];
 export const MODULATION_VALID_CURVES = [...VALID_CURVES];

@@ -22,7 +22,7 @@ import {
   DEFAULT_CHAINS,
   KNOWN_SIGNALS,
   opCatalog,
-} from '../lib/signal_post_processor.js';
+} from '../audio/postproc/signal_post_processor.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ function makeParamCenter(initial = {}) {
 function fullGainPC() {
   return makeParamCenter({
     micLowGain: 1.0, micMidGain: 1.0, micHighGain: 1.0, micKickGain: 1.0,
-    stemsBassGain: 1.0, stemsDrumsGain: 1.0, stemsVocalsGain: 1.0,
+    micFluxGain: 1.0,
   });
 }
 
@@ -61,10 +61,14 @@ function runSingleOp(opCfg, sequence, { signalKey = 'micLow', pc = null } = {}) 
 
 // ── KNOWN_SIGNALS / DEFAULT_CHAINS sanity ────────────────────────────────────
 
-test('KNOWN_SIGNALS covers the 7 docs/29 signals', () => {
+test('KNOWN_SIGNALS covers the docs/29 signals + micFlux (docs/30)', () => {
+  // micFlux added 2026-06-13 (docs/30): the spectral-flux primitive the
+  // audio structure detector consumes. Default chain is a single Gain
+  // tied to micFluxGain, mirroring the mic bands.
+  // (stems removed 2026-06-17 — the mic bands are the only processed signals.)
   assert.deepEqual(
     [...KNOWN_SIGNALS].sort(),
-    ['micHigh', 'micKick', 'micLow', 'micMid', 'stemsBass', 'stemsDrums', 'stemsVocals'],
+    ['micFlux', 'micHigh', 'micKick', 'micLow', 'micMid'],
   );
 });
 
@@ -75,12 +79,18 @@ test('DEFAULT_CHAINS has an entry per known signal', () => {
   }
 });
 
-test('default mic chains are single-op Gain tied to *Gain CPC paramKey (Wireframe A backward-compat)', () => {
+test('default mic chains are Gain(→*Gain CPC paramKey) + tuned smoothing LPF', () => {
+  // The non-kick signals shipped GAIN-ONLY (flickery). A per-signal smoothing
+  // LPF was appended, later raised to low 5.5 Hz, mid 8 Hz, high 14 Hz (EDM
+  // tuning, report 202606) for faster band rise at unchanged flicker.
+  const cutoff = { micLow: 5.5, micMid: 8.0, micHigh: 14.0 };
   for (const sig of ['micLow', 'micMid', 'micHigh']) {
     const chain = DEFAULT_CHAINS[sig];
-    assert.equal(chain.length, 1, `${sig} default chain should be single-op`);
+    assert.equal(chain.length, 2, `${sig} default chain should be gain + lpf`);
     assert.equal(chain[0].type, 'gain');
     assert.equal(chain[0].params.paramKey, `${sig}Gain`);
+    assert.equal(chain[1].type, 'lpf');
+    assert.equal(chain[1].params.cutoffHz, cutoff[sig]);
   }
 });
 
@@ -94,14 +104,16 @@ test('micKick default chain has Envelope → Schmitt → Hold per design doc Wir
   assert.ok(types.includes('hold'));
 });
 
-test('stems default chains are single-op Gain (loopback OSC — Hold NOT in default)', () => {
-  for (const sig of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
-    const chain = DEFAULT_CHAINS[sig];
-    assert.equal(chain.length, 1, `stems default for ${sig} should be single Gain op`);
-    assert.equal(chain[0].type, 'gain', `stems ${sig} default op should be gain`);
-    assert.ok(!chain.some(op => op.type === 'hold'), `${sig} default must NOT include Hold (loopback OSC)`);
-    assert.equal(chain[0].params.paramKey, `${sig}Gain`);
-  }
+test('micFlux default chain is Gain(→micFluxGain) + tuned smoothing LPF (Hold NOT in default)', () => {
+  // (stems removed 2026-06-17 — micFlux is the remaining non-kick band that
+  // ships gain + a gentle build-up smoothing LPF, NO Hold in the default.)
+  const chain = DEFAULT_CHAINS.micFlux;
+  assert.equal(chain.length, 2, 'micFlux default should be gain + lpf');
+  assert.equal(chain[0].type, 'gain', 'micFlux default op should be gain');
+  assert.equal(chain[0].params.paramKey, 'micFluxGain');
+  assert.equal(chain[1].type, 'lpf');
+  assert.equal(chain[1].params.cutoffHz, 4.5);
+  assert.ok(!chain.some(op => op.type === 'hold'), 'micFlux default must NOT include Hold');
 });
 
 // ── validateChain — happy path + every rejection branch ─────────────────────
@@ -363,22 +375,23 @@ test('Schmitt: refractoryMs blocks re-fire within window', () => {
 // Source: design doc §Operator catalog row "Hold" — TD CHOP Hold + Speed.
 // If now − lastInputAt > timeoutMs: y = y_prev · exp(−dt/τ_decay).
 // Else y = max(x, y_prev · exp(−dt/τ_decay)).
-test('Hold: latches peak, then decays exponentially after timeout', () => {
-  // timeoutMs=100, decayMs=100 → τ_decay = 0.1 s.
+test('Hold: latches peak, holds FLAT through the timeout, then decays', () => {
+  // timeoutMs=100, decayMs=100 → τ_decay = 0.1 s. The op holds flat for the
+  // timeout window (no decay inside it — that was the old bug), then decays.
   const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
   proc.putChain('micKick', [{ id: 'h', type: 'hold', params: { timeoutMs: 100, decayMs: 100 } }]);
-  // Tick 1: x=1, dt=0.025. lastInputAt=25ms; clock=25ms. y = max(1, 0*exp(...)) = 1.
+  // Tick 1: x=1, dt=0.025. lastInputAt=25ms; clock=25ms. Latch → y = 1.
   let y = proc.process('micKick', 1.0, 0.025);
   approxEqual(y, 1.0);
-  // Tick 2: x=0, dt=0.025. clock=50ms. now-lastInputAt = 50-25 = 25 ≤ 100 → y = max(0, 1*exp(-0.025/0.1)) = exp(-0.25) ≈ 0.7788.
+  // Tick 2: x=0, dt=0.025. clock=50ms. now-lastInputAt = 25 ≤ 100 → FLAT hold → y = 1.
   y = proc.process('micKick', 0, 0.025);
-  approxEqual(y, Math.exp(-0.25), 1e-9);
-  // Tick 3: x=0, dt=0.025. clock=75ms. now-lastInputAt = 50 ≤ 100 → y = max(0, prev*exp(-0.25)) = exp(-0.5).
+  approxEqual(y, 1.0, 1e-9);
+  // Tick 3: x=0, dt=0.025. clock=75ms. now-lastInputAt = 50 ≤ 100 → FLAT hold → y = 1.
   y = proc.process('micKick', 0, 0.025);
-  approxEqual(y, Math.exp(-0.5), 1e-9);
-  // Tick 4: x=0, dt=0.100. clock=175ms. now-lastInputAt = 150 > 100 → y = prev * exp(-0.1/0.1) = exp(-0.5)*exp(-1).
+  approxEqual(y, 1.0, 1e-9);
+  // Tick 4: x=0, dt=0.100. clock=175ms. now-lastInputAt = 150 > 100 → decay → y = 1·exp(-0.1/0.1) = exp(-1).
   y = proc.process('micKick', 0, 0.100);
-  approxEqual(y, Math.exp(-0.5) * Math.exp(-1), 1e-9);
+  approxEqual(y, Math.exp(-1), 1e-9);
 });
 
 test('Hold: positive sample re-latches even before timeout expires', () => {
@@ -796,16 +809,25 @@ test('resetSignal triggers audioChainsChanged broadcast', () => {
 
 // ── opCatalog (public for iPad picker) ──────────────────────────────────────
 
-test('opCatalog lists the 12 op types (7 Phase-2 + 5 Phase-7)', () => {
+test('opCatalog lists the 15 op types (7 Phase-2 + 5 Phase-7 + Phase-8 normalizer + osc_out + danceMaker)', () => {
+  // osc_out (2026-06-17 companion signal-designer contract) is the terminal
+  // OSC output tap — identity in the DSP chain, marks a chain as an OUTPUT.
+  // danceMaker (docs/37 §2.2) is the frequency-domain dom-dance spring op.
   const cat = opCatalog();
   const types = Object.keys(cat).sort();
   assert.deepEqual(types, [
-    'bias', 'biquad', 'clamp', 'compressor', 'curve',
-    'envelope', 'gain', 'hold', 'lpf', 'schmitt',
-    'slew', 'slope',
+    'bias', 'biquad', 'clamp', 'compressor', 'curve', 'danceMaker',
+    'envelope', 'gain', 'hold', 'lpf', 'normalizer',
+    'osc_out', 'schmitt', 'slew', 'slope',
   ]);
+  // danceMaker is a frequency-domain spring with a single omega param.
+  assert.equal(cat.danceMaker.params.omega.default, 7);
   assert.equal(cat.gain.paramKeyOrValue, true);
   assert.equal(cat.bias.paramKeyOrValue, false);
+  // osc_out carries a single operator-facing `name` (derives cpcKey+address).
+  assert.equal(cat.osc_out.params.name.default, 'out');
+  assert.equal(cat.osc_out.params.address, undefined);
+  assert.equal(cat.osc_out.params.cpcKey, undefined);
   // Phase 7 schema spot-checks (the iPad picker / chain editor reads these).
   assert.equal(cat.curve.params.shape.default, 'linear');
   assert.deepEqual(cat.curve.params.shape.oneOf, ['linear', 'easeIn', 'easeOut', 'exp']);
@@ -813,6 +835,10 @@ test('opCatalog lists the 12 op types (7 Phase-2 + 5 Phase-7)', () => {
   assert.equal(cat.biquad.params.cutoffHz.default, 8.0);
   assert.equal(cat.slope.params.bipolar.default, false);
   assert.equal(cat.slew.params.maxStepPerSec.default, 4.0);
+  // Phase 8 — Normalizer (AGC) schema spot-checks.
+  assert.equal(cat.normalizer.params.windowSec.default, 30);
+  assert.equal(cat.normalizer.params.strength.default, 1.0);
+  assert.equal(cat.normalizer.paramKeyOrValue, false);
 });
 
 // ── Constructor guards ──────────────────────────────────────────────────────
@@ -1367,4 +1393,183 @@ test('Phase 7 contract: NO new ops added to DEFAULT_CHAINS (7 existing chains un
         `default chain for ${sig} must not include Phase 7 op "${t}"`);
     }
   }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE 8 — Normalizer (AGC) op.
+// Source: design doc §Operator catalog row "Normalizer" — adaptive level /
+// dual-envelope follower (Pirkle, *Designing Audio Effect Plug-Ins in C++*
+// 2nd ed. 2019 ch. 6; Zölzer *DAFX* 2nd ed. 2011 §4.3). Two one-pole
+// envelopes (floor / peak) with time constant windowSec map the input to a
+// [0, 1] range; `strength` blends raw↔normalized. See docs/34 for the
+// calibration-tool companion.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('Normalizer: schema accepts valid windowSec / strength', () => {
+  const r = validateChain('micLow', [
+    { id: 'nrm', type: 'normalizer', params: { windowSec: 30, strength: 0.8 } },
+  ]);
+  assert.equal(r.ok, true, `expected ok, got ${r.error}`);
+  // Defaults injected for omitted params.
+  const r2 = validateChain('micLow', [{ id: 'nrm', type: 'normalizer', params: {} }]);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.normalized[0].params.windowSec, 30);
+  assert.equal(r2.normalized[0].params.strength, 1.0);
+});
+
+test('Normalizer: schema rejects out-of-range windowSec / strength (Codex P0)', () => {
+  const tooSmall = validateChain('micLow', [
+    { id: 'nrm', type: 'normalizer', params: { windowSec: 0.5 } },
+  ]);
+  assert.equal(tooSmall.ok, false);
+  assert.match(tooSmall.error, /out of range/);
+
+  const tooBig = validateChain('micLow', [
+    { id: 'nrm', type: 'normalizer', params: { windowSec: 999 } },
+  ]);
+  assert.equal(tooBig.ok, false);
+  assert.match(tooBig.error, /out of range/);
+
+  const badStrength = validateChain('micLow', [
+    { id: 'nrm', type: 'normalizer', params: { strength: 1.5 } },
+  ]);
+  assert.equal(badStrength.ok, false);
+  assert.match(badStrength.error, /out of range/);
+});
+
+test('Normalizer: rejects unknown param key (no silent ignore, Codex P0)', () => {
+  const r = validateChain('micLow', [
+    { id: 'nrm', type: 'normalizer', params: { lowPct: 10 } },
+  ]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /unknown param "lowPct"/);
+});
+
+test('Normalizer: output always stays in [0, 1] over a noisy input stream', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 5 } }]);
+  // Hammer with pseudo-random values; assert every output is in range and finite.
+  let seed = 12345;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 2000; i++) {
+    const y = proc.process('micLow', rand(), 0.025);
+    assert.ok(Number.isFinite(y), `output must be finite (got ${y} at tick ${i})`);
+    assert.ok(y >= 0 && y <= 1, `output must be in [0,1] (got ${y} at tick ${i})`);
+  }
+});
+
+test('Normalizer: flat input never emits NaN/Infinity (peak==floor divide guard)', () => {
+  // A perfectly constant input keeps peak == floor == x, so the span is 0
+  // and the epsilon guard must keep the output finite (converging to 0 —
+  // x sits exactly on the floor).
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 10 } }]);
+  // Push thousands of identical samples so floor and peak both converge to
+  // x and the span collapses to ~0 — the worst case for the divide guard.
+  let y = 0;
+  for (let i = 0; i < 50000; i++) y = proc.process('micLow', 0.5, 0.025);
+  assert.ok(Number.isFinite(y), `flat-input normalizer must stay finite (got ${y})`);
+  assert.ok(y >= 0 && y <= 1, `flat-input normalizer must stay in range (got ${y})`);
+});
+
+test('Normalizer: a constant input converges so output stabilizes', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 8 } }]);
+  // Run a long settle on a constant input, then confirm two consecutive
+  // outputs are essentially identical (the envelopes have converged).
+  let prev = 0;
+  for (let i = 0; i < 3000; i++) prev = proc.process('micLow', 0.6, 0.025);
+  const next = proc.process('micLow', 0.6, 0.025);
+  approxEqual(next, prev, 1e-4, 'constant-input output should be stable once converged');
+});
+
+test('Normalizer: a step UP in level gets re-normalized toward the top of range over time', () => {
+  // Run a quiet baseline, then step the level up and keep it there. The
+  // normalizer should adapt: shortly after the step the new (louder) level
+  // reads HIGH (peak set by the transient, floor still low), then as the
+  // window catches up the steady loud level relaxes back down the range.
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 4 } }]);
+  // Establish a quiet floor around 0.1.
+  for (let i = 0; i < 2000; i++) proc.process('micLow', 0.1, 0.025);
+  // Step up to 0.6 — the peak rises fast on the way up, so the first
+  // post-step samples should read well above the pre-step quiet output.
+  const justAfterStep = proc.process('micLow', 0.6, 0.025);
+  assert.ok(justAfterStep > 0.5,
+    `a level step up should read high right after the step (got ${justAfterStep})`);
+  // Hold the new level long enough for the window to adapt — the floor
+  // rises toward 0.6, compressing the normalized output back down.
+  let settled = justAfterStep;
+  for (let i = 0; i < 4000; i++) settled = proc.process('micLow', 0.6, 0.025);
+  assert.ok(settled < justAfterStep,
+    `held loud level should re-normalize DOWN as the window adapts ` +
+    `(just-after=${justAfterStep.toFixed(4)}, settled=${settled.toFixed(4)})`);
+});
+
+test('Normalizer: strength=0 is identity (raw passes through unchanged)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 10, strength: 0 } }]);
+  // out = 0*norm + 1*x = x for every sample, regardless of envelope state.
+  for (const x of [0.0, 0.13, 0.5, 0.87, 1.0]) {
+    approxEqual(proc.process('micLow', x, 0.025), x, 1e-9, `strength=0 identity for x=${x}`);
+  }
+});
+
+test('Normalizer: strength blends raw and normalized (0.5 lands between)', () => {
+  // With strength=0.5: out = 0.5*norm + 0.5*x. We don't pin the exact
+  // norm value (depends on envelope state), but out must lie on the
+  // segment between x and the strength=1 normalized output.
+  const procFull = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  procFull.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 4, strength: 1.0 } }]);
+  const procHalf = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  procHalf.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 4, strength: 0.5 } }]);
+  // Drive both identically.
+  let full = 0, half = 0;
+  const xs = [0.1, 0.8, 0.3, 0.9, 0.2, 0.7];
+  for (let rep = 0; rep < 50; rep++) {
+    for (const x of xs) {
+      full = procFull.process('micLow', x, 0.025);
+      half = procHalf.process('micLow', x, 0.025);
+    }
+  }
+  // half = 0.5*norm + 0.5*x; full = norm. So half = 0.5*full + 0.5*x for
+  // the SAME last x — both processors saw the same envelope history.
+  const lastX = xs[xs.length - 1];
+  approxEqual(half, 0.5 * full + 0.5 * lastX, 1e-6,
+    'strength=0.5 must be the midpoint of raw and the strength=1 normalized value');
+});
+
+test('Normalizer: patchOp preserves floor/peak envelope state (no pop on window tweak)', () => {
+  const proc = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc.putChain('micLow', [{ id: 'nrm', type: 'normalizer', params: { windowSec: 6 } }]);
+  // Build envelope state with a varying signal.
+  for (let i = 0; i < 1000; i++) proc.process('micLow', 0.2 + 0.4 * (i % 7) / 7, 0.025);
+  const before = proc.process('micLow', 0.5, 0.025);
+  // Patch windowSec mid-stream — floor/peak must NOT reset to 0.
+  const r = proc.patchOp('micLow', 'nrm', { params: { windowSec: 12 } });
+  assert.equal(r.ok, true);
+  const after = proc.process('micLow', 0.5, 0.025);
+  // If floor/peak had reset to 0, span would be ~0.5 and the output would
+  // jump (norm = (0.5-0)/0.5 = 1). Continuity means `after` stays close to
+  // `before`; assert it didn't snap to the reset-state extreme.
+  assert.ok(Math.abs(after - before) < 0.2,
+    `Normalizer envelope must survive patchOp — before=${before.toFixed(4)}, after=${after.toFixed(4)}`);
+});
+
+test('Persistence round-trip: a Normalizer-bearing chain survives snapshot → loadChains', () => {
+  const proc1 = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  const customChain = [
+    { id: 'g',   type: 'gain',       params: { paramKey: 'micLowGain' } },
+    { id: 'nrm', type: 'normalizer', params: { windowSec: 20, strength: 0.7 } },
+  ];
+  const putRes = proc1.putChain('micLow', customChain);
+  assert.equal(putRes.ok, true, `expected putChain ok, got ${putRes.error}`);
+  const snapshot = proc1.getAllChains();
+  const proc2 = new SignalPostProcessor({ paramCenter: fullGainPC() });
+  proc2.loadChains(snapshot);
+  assert.deepEqual(proc2.getAllChains(), snapshot,
+    'Normalizer op must round-trip through YAML snapshot/loadChains');
 });

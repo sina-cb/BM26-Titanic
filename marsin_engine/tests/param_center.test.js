@@ -29,16 +29,17 @@ test('getSchema includes live / broadcastHz / persist / portWatch with sensible 
   assert.equal(bySpeed.portWatch, true, 'speed.portWatch defaults true');
 });
 
-test('stemsVocals is registered as live, non-persist, non-portWatch, 15Hz', () => {
+// (stems removed 2026-06-17 — the old "stemsVocals is registered…" test is
+// gone; the mic bands cover the live-OSC-param policy below.)
+
+test('the stems family is REMOVED from the schema (operator brief 2026-06-17)', () => {
   const pc = new ParamCenter(tmpStatePath());
   const schema = pc.getSchema();
-  const e = schema.find(s => s.key === 'stemsVocals');
-  assert.ok(e, 'stemsVocals present in schema');
-  assert.equal(e.live, true, 'stemsVocals.live true');
-  assert.equal(e.persist, false, 'stemsVocals.persist false');
-  assert.equal(e.portWatch, false, 'stemsVocals.portWatch false');
-  assert.equal(e.broadcastHz, 15, 'stemsVocals.broadcastHz 15');
-  assert.equal(e.type, 'float');
+  for (const key of ['stemsBass', 'stemsDrums', 'stemsVocals',
+    'stemsBassGain', 'stemsDrumsGain', 'stemsVocalsGain',
+    'stemsBassRaw', 'stemsDrumsRaw', 'stemsVocalsRaw']) {
+    assert.equal(schema.find(s => s.key === key), undefined, `${key} must not be registered`);
+  }
 });
 
 test('audioReactivity is REMOVED from the schema (operator review 2026-05-26)', () => {
@@ -50,18 +51,9 @@ test('audioReactivity is REMOVED from the schema (operator review 2026-05-26)', 
   assert.equal(e, undefined, 'audioReactivity must not be registered');
 });
 
-test('stemsBass, stemsDrums, stemsVocals, tempoBpm are live OSC-driven params', () => {
+test('tempoBpm is a live OSC-driven param', () => {
   const pc = new ParamCenter(tmpStatePath());
   const schema = pc.getSchema();
-  for (const key of ['stemsBass', 'stemsDrums', 'stemsVocals']) {
-    const e = schema.find(s => s.key === key);
-    assert.ok(e, `${key} present in schema`);
-    assert.equal(e.live, true);
-    assert.equal(e.persist, false);
-    assert.equal(e.portWatch, false);
-    assert.equal(e.broadcastHz, 15);
-    assert.deepEqual(e.range, [0, 1]);
-  }
   const bpm = schema.find(s => s.key === 'tempoBpm');
   assert.ok(bpm);
   assert.equal(bpm.live, true);
@@ -165,10 +157,11 @@ test('subscribe throws on non-function input', () => {
   assert.throws(() => pc.subscribe('not a fn'), TypeError);
 });
 
-test('per-stem gains are persistent operator knobs with range [0,2] by default', () => {
+test('per-band mic gains are persistent operator knobs with range [0,2] by default', () => {
+  // (stems gains removed 2026-06-17 — mic gains are now the only audio gains.)
   const pc = new ParamCenter(tmpStatePath());
   const schema = pc.getSchema();
-  for (const key of ['stemsVocalsGain', 'stemsBassGain', 'stemsDrumsGain']) {
+  for (const key of ['micLowGain', 'micMidGain', 'micHighGain', 'micKickGain', 'micFluxGain']) {
     const e = schema.find(s => s.key === key);
     assert.ok(e, `${key} present in schema`);
     assert.equal(e.persist, true, `${key} persists with scene/model params`);
@@ -178,23 +171,23 @@ test('per-stem gains are persistent operator knobs with range [0,2] by default',
   }
 });
 
-test('registryOverrides reshapes per-stem gain range and re-clamps default', () => {
+test('registryOverrides reshapes a mic gain range and re-clamps default', () => {
   // Simulate engine.js with osc.gainMax: 4 → range becomes [0, 4].
   const pcWide = new ParamCenter(tmpStatePath(), {
     registryOverrides: {
-      stemsVocalsGain: { range: [0, 4], default: 1.0 },
+      micLowGain: { range: [0, 4], default: 1.0 },
     },
   });
-  const wide = pcWide.getSchema().find(s => s.key === 'stemsVocalsGain');
+  const wide = pcWide.getSchema().find(s => s.key === 'micLowGain');
   assert.deepEqual(wide.range, [0, 4]);
   assert.equal(wide.default, 1.0);
   // Tight cap: osc.gainMax: 0.5 → default re-clamped to 0.5 (not 1.0).
   const pcTight = new ParamCenter(tmpStatePath(), {
     registryOverrides: {
-      stemsVocalsGain: { range: [0, 0.5], default: 1.0 },
+      micLowGain: { range: [0, 0.5], default: 1.0 },
     },
   });
-  const tight = pcTight.getSchema().find(s => s.key === 'stemsVocalsGain');
+  const tight = pcTight.getSchema().find(s => s.key === 'micLowGain');
   assert.deepEqual(tight.range, [0, 0.5]);
   assert.equal(tight.default, 0.5, 'default re-clamped into the new range');
   // Override for an unknown key is a silent no-op.
@@ -332,9 +325,9 @@ test('hasPersistentDirty true for ["speed"]', () => {
   assert.equal(pc.hasPersistentDirty(['speed']), true);
 });
 
-test('hasPersistentDirty false for ["stemsVocals"]', () => {
+test('hasPersistentDirty false for ["micLow"] (live, non-persistent)', () => {
   const pc = new ParamCenter(tmpStatePath());
-  assert.equal(pc.hasPersistentDirty(['stemsVocals']), false);
+  assert.equal(pc.hasPersistentDirty(['micLow']), false);
 });
 
 test('hasPersistentDirty true for ["speed"] (operator-tuned, persists)', () => {
@@ -346,7 +339,7 @@ test('hasPersistentDirty true for ["speed"] (operator-tuned, persists)', () => {
 
 test('hasPersistentDirty true if any key persists', () => {
   const pc = new ParamCenter(tmpStatePath());
-  assert.equal(pc.hasPersistentDirty(['stemsVocals', 'speed']), true);
+  assert.equal(pc.hasPersistentDirty(['micLow', 'speed']), true);
 });
 
 test('hasPersistentDirty false for unknown keys', () => {
@@ -354,4 +347,57 @@ test('hasPersistentDirty false for unknown keys', () => {
   assert.equal(pc.hasPersistentDirty(['nonexistent']), false);
   assert.equal(pc.hasPersistentDirty([]), false);
   assert.equal(pc.hasPersistentDirty(null), false);
+});
+
+// ── Modulators-only audio policy (operator decision 2026-06-17) ─────────────
+// Patterns must NOT read live audio signals natively. registerChannel must
+// refuse to bind a live audio-family `export var` into pattern globals, while
+// still binding normal slider/param/color exports (modulators depend on that
+// general control-write path). See lib/param_center.js step 1 +
+// audio/postproc/audio_signals.js isLiveAudioSharedFnName.
+
+// Probe the control map a channel built. registerChannel stores it on
+// pc._channels[channelId].controlMap (key → { id, fnName }).
+function controlMapFor(pc, channelId) {
+  return pc._channels?.[channelId]?.controlMap || {};
+}
+
+test('registerChannel does NOT bind live audio exports into pattern globals', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 1, name: 'micLow' },
+    { id: 2, name: 'micDomEnergy1' },
+    { id: 3, name: 'micDomFreq1' },
+    { id: 4, name: 'audioBuildScore' },
+    { id: 5, name: 'tempoBpm' },
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  for (const k of ['micLow', 'micDomEnergy1', 'micDomFreq1', 'audioBuildScore', 'tempoBpm']) {
+    assert.equal(cm[k], undefined, `${k} must not bind (modulators-only audio policy)`);
+    assert.equal(pc.isSharedExport('deck', k), false, `${k} not a bound shared export`);
+  }
+});
+
+test('registerChannel STILL binds non-audio shared exports (color/rotate)', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 10, name: 'colorPalette1' },
+    { id: 11, name: 'rotate' },
+    { id: 12, name: 'micDomEnergy1' }, // audio — excluded
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  assert.deepEqual(cm.colorPalette1, { id: 10, fnName: 'colorPalette1' });
+  assert.deepEqual(cm.rotate, { id: 11, fnName: 'rotate' });
+  assert.equal(cm.micDomEnergy1, undefined, 'audio still excluded alongside non-audio binds');
+});
+
+test('engine-owned globals (speed/size) remain unbound — unchanged by audio policy', () => {
+  const pc = new ParamCenter(tmpStatePath());
+  pc.registerChannel('deck', { __h: true }, [
+    { id: 20, name: 'speed' },
+    { id: 21, name: 'size' },
+  ]);
+  const cm = controlMapFor(pc, 'deck');
+  assert.equal(cm.speed, undefined, 'speed is engine-owned, never injected');
+  assert.equal(cm.size, undefined, 'size is engine-owned, never injected');
 });

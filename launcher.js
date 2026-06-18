@@ -11,10 +11,11 @@
  *   node launcher.js status                Show what is running
  *   node launcher.js stop                  Stop a running stack
  *
- * Profiles:
- *   prod      sim + engine. Sim in its lightest rendering mode
+ * Profiles (all include the Audio Companion — the sole audio analyzer, which
+ * feeds the engine over OSC; docs/37):
+ *   prod      sim + engine + companion. Sim in its lightest rendering mode
  *             (edit profile, 0 spotlights) — minimal resources, no fancy lighting.
- *   dev       sim + engine + CaptainPad Expo dev server. Sim in full
+ *   dev       sim + engine + companion + CaptainPad Expo dev server. Sim in full
  *             analytic mode with 60 spotlights.
  *   dev-lite  Like dev, but no fancy lighting (emissive, 0 spotlights).
  *
@@ -22,6 +23,8 @@
  *   --scene <name>     Sim scene AND engine model (default: titanic)
  *   --pattern <name>   Engine boot pattern (default: 00_golden_hour_wash)
  *   --no-kill          Don't kill stale stack listeners on our ports
+ *   -f, --force        Force-kill ANY process holding our ports (incl. foreign);
+ *                      the `prod` profile force-claims by default.
  *   --help             Show usage
  *
  * Behavior contract:
@@ -45,6 +48,7 @@ const os = require('os');
 const path = require('path');
 
 const portCleanup = require('./tools/port_cleanup.cjs');
+const browserSplit = require('./tools/browser_split.cjs');
 
 const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
@@ -97,18 +101,18 @@ const STACK_PROCESS_SIGNATURES = [
 //   dev-lite  sim + engine + CaptainPad   · emissive lighting, no spotlights
 const PROFILES = {
   prod: {
-    description: 'Show stack: sim + engine, lightest sim rendering (no fancy lighting)',
-    processes: ['sim', 'engine'],
+    description: 'Show stack: sim + engine + audio companion, lightest sim rendering',
+    processes: ['sim', 'engine', 'companion'],
     simParams: { profile: 'edit', spotlights: 0 },
   },
   dev: {
-    description: 'Full dev stack: sim + engine + CaptainPad Expo, full analytic lighting, 60 spotlights',
-    processes: ['sim', 'engine', 'captainpad'],
+    description: 'Full dev stack: sim + engine + companion + CaptainPad Expo, full analytic lighting, 60 spotlights',
+    processes: ['sim', 'engine', 'companion', 'captainpad'],
     simParams: { profile: 'full', spotlights: 60 },
   },
   'dev-lite': {
-    description: 'Dev stack without fancy lighting: sim + engine + CaptainPad Expo, emissive only',
-    processes: ['sim', 'engine', 'captainpad'],
+    description: 'Dev stack without fancy lighting: sim + engine + companion + CaptainPad Expo, emissive only',
+    processes: ['sim', 'engine', 'companion', 'captainpad'],
     simParams: { profile: 'emissive', spotlights: 0 },
   },
 };
@@ -121,7 +125,7 @@ const SIM_QUERY_COMMON = { lighting_mode: 'sacn_in' };
 
 // ── Logging ─────────────────────────────────────────────────────────────
 const USE_COLOR = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
+const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', companion: '\x1b[34m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
 const RESET = '\x1b[0m';
 
 function log(tag, line, stream = process.stdout) {
@@ -155,7 +159,11 @@ function usage(stream = process.stdout) {
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
     `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
+    '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
     '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
+    '    --split            OPT-IN: tile sim + CaptainPad side-by-side in two Chrome',
+    '                       windows (falls back to the default browser if Chrome is',
+    '                       missing). DEFAULT is off — open in your existing browser.',
     '    --help             Show this help',
     ''
   );
@@ -164,7 +172,10 @@ function usage(stream = process.stdout) {
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const opts = { command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN, kill: true, open: true };
+  const opts = {
+    command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN,
+    kill: true, open: true, force: false, split: 'auto',
+  };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
       logError(`${flag} requires a value (got ${value === undefined ? 'nothing' : `'${value}'`}).`);
@@ -178,7 +189,10 @@ function parseArgs(argv) {
       case '--scene':   opts.scene = takeValue(arg, argv[++i]); break;
       case '--pattern': opts.pattern = takeValue(arg, argv[++i]); break;
       case '--no-kill': opts.kill = false; break;
+      case '-f': case '--force': opts.force = true; break;
       case '--no-open': opts.open = false; break;
+      case '--split': opts.split = 'on'; break;
+      case '--no-split': opts.split = 'off'; break;
       case '--help': case '-h': usage(); process.exit(0); break;
       default:
         if (arg.startsWith('-')) {
@@ -278,16 +292,30 @@ function lockLauncherAlive(lock) {
   return commandlineOf(lock.pid).includes('launcher.js');
 }
 
-function assertSingleInstance() {
+async function assertSingleInstance(force = false) {
   const lock = readLock();
   if (!lock) return;
   if (lockLauncherAlive(lock)) {
-    logError(`A stack is already running: profile '${lock.profile}', launcher pid ${lock.pid}, started ${lock.startedAt}.`);
-    logError('Stop it first (`node launcher.js stop`, or Ctrl+C in its terminal).');
-    process.exit(1);
+    if (!force) {
+      logError(`A stack is already running: profile '${lock.profile}', launcher pid ${lock.pid}, started ${lock.startedAt}.`);
+      logError('Stop it first (`node launcher.js stop`, or Ctrl+C in its terminal), or rerun with -f/--force to take it over.');
+      process.exit(1);
+    }
+    // -f: take over — force-kill the running launcher (and its whole child tree)
+    // and replace the lock so we can restart fast. Wait until its PID is gone.
+    log('launcher', `-f: taking over the running stack (force-killing launcher pid ${lock.pid} + children)…`);
+    try { forceKillTree(lock.pid); } catch (err) { logError(`Could not kill launcher pid ${lock.pid}: ${err.message}`); }
+    const deadline = Date.now() + 10000;
+    while (pidAlive(lock.pid) && Date.now() < deadline) await sleep(200);
+    if (pidAlive(lock.pid)) {
+      logError(`Launcher pid ${lock.pid} still alive after force-kill — kill it manually (taskkill /PID ${lock.pid} /T /F) and rerun.`);
+      process.exit(1);
+    }
+    log('launcher', `Took over: previous stack (pid ${lock.pid}) is gone.`);
+  } else {
+    log('launcher', `Removing stale lock from dead launcher pid ${lock.pid} (${LOCK_PATH}).`);
   }
-  log('launcher', `Removing stale lock from dead launcher pid ${lock.pid} (${LOCK_PATH}).`);
-  fs.unlinkSync(LOCK_PATH);
+  try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
 }
 
 // ── Port inspection / identity-checked cleanup ──────────────────────────
@@ -345,19 +373,20 @@ function forceKillTree(pid) {
   }
 }
 
-function killStaleListeners(ports) {
+function killStaleListeners(ports, force = false) {
   for (const port of ports) {
     for (const pid of listenersOnPort(port)) {
       if (pid === process.pid) continue;
       const cmdline = commandlineOf(pid);
       if (!cmdline) continue; // exited between listing and inspection
       const ours = STACK_PROCESS_SIGNATURES.some((sig) => cmdline.includes(sig));
-      if (!ours) {
+      if (!ours && !force) {
         logError(`Port ${port} is held by pid ${pid} (${cmdline.slice(0, 120)}) — not part of this stack; refusing to kill it.`);
-        logError('Free the port yourself, then rerun.');
+        logError('Free the port yourself, or rerun with -f/--force to claim it anyway.');
         process.exit(1);
       }
-      log('launcher', `Killing stale stack process on :${port} (pid ${pid}: ${cmdline.slice(0, 90)})`);
+      const why = ours ? 'stale stack process' : 'FOREIGN process (--force)';
+      log('launcher', `Killing ${why} on :${port} (pid ${pid}: ${cmdline.slice(0, 90)})`);
       try {
         if (IS_WIN) forceKillTree(pid);
         else process.kill(pid, 'SIGTERM');
@@ -582,6 +611,49 @@ function openInBrowser(label, url) {
   } catch (err) {
     log('launcher', `  ↗ ${label}: could not auto-open (${err.message}) — open ${url} manually`);
   }
+}
+
+// Auto-open this profile's UIs in the operator's browser, in the proven order
+// sim → CaptainPad → Companion. Called once, AFTER every relevant process is
+// confirmed up (each waited via waitForHttp), so no tab races the engine.
+//
+// What opens is DERIVED from the profile's `processes` list — a UI is only
+// opened if its process is part of the profile:
+//   - prod (no captainpad process)  → sim → Companion
+//   - dev / dev-lite                → sim → CaptainPad → Companion
+//
+// Split view (best-effort): when enabled, sim + CaptainPad are tiled
+// side-by-side as two positioned Chrome windows; the Companion still opens
+// normally. If Chrome is missing or placement fails, we fall back to the normal
+// per-UI openInBrowser — never crashing the launch over cosmetic placement.
+function openProfileUis(opts, profileDef, urls) {
+  if (!opts.open) return;
+  const has = (name) => profileDef.processes.includes(name);
+
+  // Split view is OPT-IN ONLY (`--split`). By DEFAULT everything opens in your
+  // existing browser (tabs in the current window) via openInBrowser — cleaner
+  // than popping separate Chrome windows. `--split` tiles sim + CaptainPad in
+  // two Chrome windows; anything else (incl. the 'auto' default) does not split.
+  const wantSplit = opts.split === 'on';
+
+  let simHandled = false;
+  let captainPadHandled = false;
+  if (wantSplit && has('sim') && has('captainpad')) {
+    const tiled = browserSplit.openSideBySide(urls.sim, urls.captainPad, {
+      log: (msg) => log('launcher', `  ↗ ${msg}`),
+    });
+    if (tiled) {
+      log('launcher', `  ↗ Opening Simulation + CaptainPad side-by-side in Chrome`);
+      simHandled = true;
+      captainPadHandled = true;
+    }
+    // tiled === false → fall through to default-browser opens below.
+  }
+
+  // Strict order: sim → CaptainPad → Companion.
+  if (has('sim') && !simHandled) openInBrowser('Simulation', urls.sim);
+  if (has('captainpad') && !captainPadHandled) openInBrowser('CaptainPad', urls.captainPad);
+  if (has('companion')) openInBrowser('Audio Companion', urls.companion);
 }
 
 function stopChild(tag, child) {
@@ -828,13 +900,23 @@ async function cmdStop() {
   else process.kill(lock.pid, 'SIGTERM');
   const deadline = Date.now() + STOP_GRACE_MS + 7000;
   while (Date.now() < deadline) {
-    if (!pidAlive(lock.pid) && !fs.existsSync(LOCK_PATH)) {
+    // A force-killed launcher (Windows taskkill /T /F) never runs its own
+    // teardown, so it can't remove its lock — once its PID is gone, WE remove
+    // the lock + reap any orphaned children instead of waiting forever.
+    if (!pidAlive(lock.pid)) {
+      for (const [tag, pid] of Object.entries(lock.children || {})) {
+        if (pidAlive(pid) && STACK_PROCESS_SIGNATURES.some((sig) => commandlineOf(pid).includes(sig))) {
+          console.log(`Force-killing orphaned ${tag} (pid ${pid}).`);
+          forceKillTree(pid);
+        }
+      }
+      try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
       console.log('Stack stopped.');
       return;
     }
     await sleep(500);
   }
-  logError(`Launcher pid ${lock.pid} did not stop within ${(STOP_GRACE_MS + 7000) / 1000}s. Inspect it manually.`);
+  logError(`Launcher pid ${lock.pid} did not stop within ${(STOP_GRACE_MS + 7000) / 1000}s. Force it: taskkill /PID ${lock.pid} /T /F (Windows), then delete ${LOCK_PATH}.`);
   process.exit(1);
 }
 
@@ -848,7 +930,7 @@ async function main() {
   const profileDef = PROFILES[opts.command];
   const ports = readPorts();
 
-  assertSingleInstance();
+  await assertSingleInstance(opts.force);
   validate(opts, profileDef);
 
   // Build the sim URL straight from the profile config + the common params,
@@ -858,6 +940,10 @@ async function main() {
     simQuery.set(key, String(value));
   }
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
+  // Audio Companion (the sole audio analyzer — feeds the engine over OSC). Its
+  // HTTP/WS port is fixed at the companion_server.js default; see docs/37 §9.
+  const COMPANION_PORT = 6966;
+  const companionUrl = `http://localhost:${COMPANION_PORT}`;
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
   log('launcher', `Scene/model: ${opts.scene} · boot pattern: ${opts.pattern}`);
@@ -865,8 +951,15 @@ async function main() {
   const stackPorts = [ports.http_port, ports.save_port, ports.sacn_port, ports.sacn_output_port,
     ports.marsin_engine_port];
   if (profileDef.processes.includes('captainpad')) stackPorts.push(ports.captainpad_web_port);
+  if (profileDef.processes.includes('companion')) stackPorts.push(COMPANION_PORT);
 
-  if (opts.kill) killStaleListeners(stackPorts);
+  // `prod` is the show stack — it force-claims its ports by default (a stuck
+  // foreign process must never block the rig coming up). Any profile + `-f`.
+  const force = opts.force || opts.command === 'prod';
+  if (force && opts.command === 'prod' && !opts.force) {
+    log('launcher', 'prod profile: force-claiming stack ports (kills any process holding them).');
+  }
+  if (opts.kill) killStaleListeners(stackPorts, force);
   await assertPortsFree(stackPorts);
 
   writeLock({
@@ -937,10 +1030,17 @@ async function main() {
   await startEngine(opts.scene);
   log('launcher', '✅ Engine is ready.');
 
-  // Open the sim only now that the engine is up: the sim's boot probes
-  // :6968/status and falls back from sacn_in to the in-browser Pixelblaze
-  // engine if it loads while the engine is still down.
-  if (opts.open) openInBrowser('Simulation', simUrl);
+  // 2b. Audio Companion — the sole audio analyzer. Started after the engine so
+  // its OSC output (host/port from config.companion.osc) lands in the engine CPC.
+  // Supervised like the other stack children; UDP send is fire-and-forget, so it
+  // tolerates the engine restarting under it.
+  if (profileDef.processes.includes('companion')) {
+    startChild('companion', 'node',
+      ['audio/companion/companion_server.js', '--port', String(COMPANION_PORT)],
+      ENGINE_DIR);
+    await waitForHttp('audio companion', companionUrl, 60000);
+    log('launcher', '✅ Audio Companion is ready.');
+  }
 
   // 3. CaptainPad Expo dev server (dev profiles only).
   if (profileDef.processes.includes('captainpad')) {
@@ -950,8 +1050,15 @@ async function main() {
       { EXPO_NO_TELEMETRY: '1', CI: '1', BROWSER: 'none' });
     await waitForHttp('captainpad web', captainPadUrl, 300000);
     log('launcher', '✅ CaptainPad is ready.');
-    if (opts.open) openInBrowser('CaptainPad', captainPadUrl);
   }
+
+  // All relevant processes are confirmed up — now auto-open this profile's UIs
+  // in the proven order sim → CaptainPad → Companion (see openProfileUis).
+  openProfileUis(opts, profileDef, {
+    sim: simUrl,
+    captainPad: captainPadUrl,
+    companion: companionUrl,
+  });
 
   log('launcher', '────────────────────────────────────────────────────────');
   log('launcher', `🚀 Stack is up (profile: ${opts.command})`);
@@ -961,6 +1068,9 @@ async function main() {
   log('launcher', `     Simulation:  ${simUrl}`);
   if (profileDef.processes.includes('captainpad')) {
     log('launcher', `     CaptainPad:  ${captainPadUrl}`);
+  }
+  if (profileDef.processes.includes('companion')) {
+    log('launcher', `     Companion:   ${companionUrl}   (audio analyzer → feeds the engine over OSC)`);
   }
   log('launcher', '');
   log('launcher', `   Engine API:    http://localhost:${ports.marsin_engine_port}/status`);

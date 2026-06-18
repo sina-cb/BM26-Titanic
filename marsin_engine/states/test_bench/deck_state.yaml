@@ -1,29 +1,53 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 13_sparkle
+  pattern: 29_bar_dancers
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
+    '438507424':
+      v0: 0
+      v1: 0
+      v2: 0
+    '801282547':
+      v0: 0.56
+      v1: 0
+      v2: 0
     '1037917937':
-      v0: 0.31
+      v0: 0
       v1: 0
       v2: 0
-    '2393603498':
-      v0: 0.5
+    '1703382777':
+      v0: 0.66
       v1: 0
       v2: 0
-    '2524999969':
-      v0: 0.5
+    '2032005017':
+      v0: 0.21
+      v1: 0
+      v2: 0
+    '2388682063':
+      v0: 0
+      v1: 0
+      v2: 0
+    '3884763796':
+      v0: 0.32
+      v1: 0
+      v2: 0
+    '3988485704':
+      v0: 0.25
+      v1: 0
+      v2: 0
+    '4294396969':
+      v0: 0
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_13_13_sparkle
-    cursor: 13
+    activeEntryId: e_1781748878700_5868
+    cursor: 29
     autopilot:
       active: false
       delay_s: 1
