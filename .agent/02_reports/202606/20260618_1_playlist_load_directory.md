@@ -59,6 +59,23 @@ The picker was reworked from a single append-on-tap into a richer chooser
 - Folder button is now always enabled (New-playlist needs no loaded
   playlist); shared `fetchDirEntries` helper backs both actions.
 
+## Fix — name prompt for "New playlist" (web Alert bug)
+
+Operator report: "New playlist" from the `default` folder did nothing.
+Root cause: CaptainPad runs as a **web** build, and react-native-web's
+`Alert.alert(title, msg, buttons)` maps to `window.alert` — it shows the
+message but **drops the button callbacks**, so the "Overwrite?" confirm's
+`onPress` never fired (and `default` always collides → always hit that
+path).
+
+Fix (and the operator's request): don't auto-name + Alert-confirm. Tapping
+**New playlist** now opens an in-app `NewPlaylistNameModal` (a real Modal +
+TextInput), pre-filled with the folder name but editable. It shows an
+inline "⚠ already exists — will overwrite" note when the typed name
+collides, and Create is disabled until the name is non-empty. No
+`Alert.alert` on the create path. `confirmDirNewPlaylist` builds the
+entries, saves under the chosen name, and loads it.
+
 ## Checks
 
 - Engine: `node --test tests/playlist_api.test.js` → **18/18 pass**
@@ -68,4 +85,7 @@ The picker was reworked from a single append-on-tap into a richer chooser
   → 0 errors (only the pre-existing `clearPending` dep warning).
 - Verified live with screenshots on test_bench (deck + mixer): taller
   modal with `default` + folders, "New playlist" creating + loading a
-  `transitions` playlist, and the same modal on a mixer channel.
+  `transitions` playlist, and — after the fix — the name prompt appearing
+  for the `default` folder (prefilled + overwrite warning), rename to
+  `my_show`, and the new playlist created from the `default` folder and
+  loaded onto a mixer channel.

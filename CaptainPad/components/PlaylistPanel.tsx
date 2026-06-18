@@ -144,6 +144,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [showLoadDir, setShowLoadDir] = useState(false);
+  // "New playlist from folder" name prompt. `pendingNewDir` holds the
+  // folder whose patterns will seed the playlist while the operator names
+  // it; the name modal is open whenever it's non-null.
+  const [pendingNewDir, setPendingNewDir] = useState<string | null>(null);
+  const [newDirPlaylistName, setNewDirPlaylistName] = useState('');
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -754,40 +759,34 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     }));
   }, []);
 
-  // "New playlist" action: create a playlist named after the folder,
-  // fill it with that folder's patterns, and load it onto this channel.
-  // If a playlist of that name already exists we confirm before
-  // overwriting (the folder name IS the playlist name, per spec).
-  const handleDirNewPlaylist = useCallback(async (dir: string) => {
-    const name = sanitizeName(dir);
-    if (!name) {
-      Alert.alert('Invalid name', `Cannot derive a playlist name from "${dir}".`);
+  // "New playlist" action: open a name prompt seeded with the folder
+  // name. We DON'T auto-create — the operator confirms (and can rename)
+  // first. This avoids silently clobbering an existing playlist (e.g.
+  // "default") and works on web, where Alert.alert button callbacks don't
+  // fire (so a confirm-via-Alert never resolved).
+  const handleDirNewPlaylist = useCallback((dir: string) => {
+    setShowLoadDir(false);
+    setNewDirPlaylistName(sanitizeName(dir));
+    setPendingNewDir(dir);
+  }, []);
+
+  // Confirm the name prompt: build entries from the pending folder, save
+  // under the chosen name, and load the new playlist onto this channel.
+  const confirmDirNewPlaylist = useCallback(async () => {
+    const dir = pendingNewDir;
+    if (!dir) return;
+    const name = sanitizeName(newDirPlaylistName);
+    if (!name) return; // Create is disabled when empty; guard anyway.
+    const entries = await fetchDirEntries(dir);
+    if (!entries) { setPendingNewDir(null); return; }
+    const save = await savePlaylist({ name, entries });
+    if (!save.ok) {
+      Alert.alert('Create failed', save.error || 'Unknown error');
       return;
     }
-    const entries = await fetchDirEntries(dir);
-    if (!entries) return;
-    const create = async () => {
-      setShowLoadDir(false);
-      const save = await savePlaylist({ name, entries });
-      if (!save.ok) {
-        Alert.alert('Create failed', save.error || 'Unknown error');
-        return;
-      }
-      await handleLoadPlaylist(name);
-    };
-    if (playlists.includes(name)) {
-      Alert.alert(
-        'Overwrite playlist?',
-        `A playlist named "${name}" already exists. Replace its contents with the ${entries.length} pattern(s) from this folder?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Overwrite', style: 'destructive', onPress: () => { create(); } },
-        ],
-      );
-    } else {
-      await create();
-    }
-  }, [playlists, fetchDirEntries, handleLoadPlaylist]);
+    setPendingNewDir(null);
+    await handleLoadPlaylist(name);
+  }, [pendingNewDir, newDirPlaylistName, fetchDirEntries, handleLoadPlaylist]);
 
   // "Append" action: bulk-add every pattern in a directory to the
   // currently-loaded playlist, then persist — same auto-save model as
@@ -1313,6 +1312,16 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         onNewPlaylist={handleDirNewPlaylist}
         onAppend={handleDirAppend}
       />
+
+      <NewPlaylistNameModal
+        visible={pendingNewDir !== null}
+        dir={pendingNewDir}
+        name={newDirPlaylistName}
+        setName={setNewDirPlaylistName}
+        exists={playlists.includes(sanitizeName(newDirPlaylistName))}
+        onCancel={() => setPendingNewDir(null)}
+        onCreate={confirmDirNewPlaylist}
+      />
     </View>
   );
 };
@@ -1524,6 +1533,79 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
               </View>
             ))}
           </ScrollView>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface NewPlaylistNameModalProps {
+  visible: boolean;
+  dir: string | null;
+  name: string;
+  setName: (s: string) => void;
+  exists: boolean;
+  onCancel: () => void;
+  onCreate: () => void;
+}
+
+// Name prompt for "new playlist from folder". Pre-filled with the folder
+// name but editable, so the operator can avoid overwriting an existing
+// playlist. An in-app modal (not Alert.alert) because RN-web drops
+// Alert button callbacks.
+const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
+  visible, dir, name, setName, exists, onCancel, onCreate,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const clean = sanitizeName(name);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onCancel}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close new-playlist name prompt"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={modalStyles.card}>
+          <Text style={modalStyles.title}>NEW PLAYLIST FROM {dir?.toUpperCase() || 'FOLDER'}</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            {"Name the new playlist. It will be filled with this folder's patterns and loaded onto the channel."}
+          </Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="playlist name"
+            placeholderTextColor={C.icon}
+            autoFocus
+            onSubmitEditing={() => { if (clean) onCreate(); }}
+            returnKeyType="done"
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
+          />
+          {exists && clean ? (
+            <Text style={{ color: C.error, fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 6 }}>
+              {`⚠ "${clean}" already exists — creating will overwrite it.`}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              onPress={onCancel}
+              accessibilityLabel="Cancel new playlist"
+              style={{ paddingHorizontal: 14, height: 34, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { if (clean) onCreate(); }}
+              disabled={!clean}
+              accessibilityLabel="Create new playlist"
+              style={{ paddingHorizontal: 18, height: 34, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: clean ? 1 : 0.4 }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#FFF' }}>Create</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </TouchableOpacity>
     </TouchableOpacity>
