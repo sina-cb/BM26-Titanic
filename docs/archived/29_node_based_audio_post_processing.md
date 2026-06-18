@@ -12,7 +12,7 @@
 5. Detection / processing tuning audit + tightening of `audio_analyzer.js`.
 6. Same chain framework applied to OSC stems (`stemsBass/Drums/Vocals`).
 
-**Related:** investigation report `.agent/02_reports/202605/20260526_1_audio_analysis_report.md` · existing audio spec `docs/25_marsin_audio_analysis.md` · modulation contract `docs/26_audio_params_playlist.md`.
+**Related:** investigation report `.agent/02_reports/202605/20260526_1_audio_analysis_report.md` · existing audio spec `docs/archived/25_marsin_audio_analysis.md` · modulation contract `docs/26_audio_params_playlist.md`.
 
 ---
 

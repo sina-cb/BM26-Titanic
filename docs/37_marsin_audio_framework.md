@@ -1,9 +1,9 @@
 # 37 — The Marsin Audio Framework
 
 **Status:** Active — design + in-build (the audio subsystem ships from here)
-**Supersedes / folds in:** `25_marsin_audio_analysis.md` (in-engine analyzer),
-`29_node_based_audio_post_processing.md` (chain framework),
-`30_[todo]_audio_structure_detector.md` (build/drop/sustain detector)
+**Supersedes / folds in:** `archived/25_marsin_audio_analysis.md` (in-engine analyzer),
+`archived/29_node_based_audio_post_processing.md` (chain framework),
+`archived/30_audio_structure_detector.md` (build/drop/sustain detector)
 **Works with (still valid):** `24_osc_integration.md` (OSC → CPC transport),
 `26_audio_params_playlist.md` (routing CPC audio signals → pattern/global params)
 **Build contract:** `.agent/02_reports/202606/20260617_0_companion_signal_designer_contract.md`

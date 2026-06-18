@@ -8,7 +8,7 @@
 
 **Related:**
 - Research memo `.agent/02_reports/202605/20260526_2_drop_mood_detection_research.md` (revised 2026-05-26; the "research vs. implementation" split was intentional — that memo holds the literature, this doc holds the buildable shape).
-- Existing audio spec `docs/25_marsin_audio_analysis.md`.
+- Existing audio spec `docs/archived/25_marsin_audio_analysis.md`.
 - Audio params modulation contract `docs/26_audio_params_playlist.md`.
 - Adjacent (not a dependency) `docs/29_[todo]_node_based_audio_post_processing.md`. The chain framework is not required for this to ship; if it lands later, the detector's outputs could optionally feed it.
 

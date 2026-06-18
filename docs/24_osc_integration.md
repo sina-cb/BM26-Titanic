@@ -358,7 +358,7 @@ out *= audioReactivity * stemsVocalsGain * stemsVocals;
 > that now applies to `stemsVocals` / `stemsBass` / `stemsDrums`.
 
 > **Mic-derived siblings** (May 2026): the in-engine microphone
-> listener (`docs/25_marsin_audio_analysis.md`) writes four more
+> listener (`docs/archived/25_marsin_audio_analysis.md`) writes four more
 > live-param CPC keys — `micLow`, `micMid`, `micHigh`, `micKick` — and
 > four matching persistent gain knobs (`micLowGain`, `micMidGain`,
 > `micHighGain`, `micKickGain`). They follow the same live-param
@@ -1401,7 +1401,7 @@ Adding MIDI does not touch the OSC listener.
 ### 15.3 In-engine audio capture — **shipped**
 
 Originally listed as a future extension; landed in May 2026. See
-[`docs/25_marsin_audio_analysis.md`](./25_marsin_audio_analysis.md)
+[`docs/archived/25_marsin_audio_analysis.md`](./archived/25_marsin_audio_analysis.md)
 for the full design (cross-platform `ffmpeg` capture, FFT analyzer,
 kick detector, BPM-to-speed sync, per-scene `audio_state.yaml`,
 CaptainPad Audio Analysis tab). The mic adapter calls

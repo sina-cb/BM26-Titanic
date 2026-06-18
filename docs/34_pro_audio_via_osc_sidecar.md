@@ -1,7 +1,7 @@
 # 34 — Pro Audio via an OSC Sidecar (the heavy-analysis extension point)
 
 **Status:** Design note + operator playbook (still valid — external-analyzer lane)
-**Related docs:** `37_marsin_audio_framework.md` (the first-party Companion realizes this same OSC-in pattern) · `24_osc_integration.md` (OSC adapter) · `25_marsin_audio_analysis.md` (in-engine analyzer) · `29_node_based_audio_post_processing.md` (chain framework) · `15_central_param_center_cpc.md` (CPC)
+**Related docs:** `37_marsin_audio_framework.md` (the first-party Companion realizes this same OSC-in pattern) · `24_osc_integration.md` (OSC adapter) · `archived/25_marsin_audio_analysis.md` (in-engine analyzer) · `archived/29_node_based_audio_post_processing.md` (chain framework) · `15_central_param_center_cpc.md` (CPC)
 **Related code:** `marsin_engine/lib/osc_listener.js` · `marsin_engine/lib/param_center.js` (`/marsin/stems/*`, `/lx/tempo/bpm` bindings) · `marsin_engine/lib/signal_post_processor.js` (the Normalizer op) · `marsin_engine/tools/audio_calibrate.js` (calibration helper)
 
 ---
