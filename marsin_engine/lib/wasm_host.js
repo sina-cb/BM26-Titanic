@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 
 import { injectMaskConstants } from './view_mask_constants.js';
+import { injectFixtureConstants } from './fixture_type_constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,13 @@ export class WasmHost {
     // at compile time (see view_mask_constants.js). Set by the engine
     // after loadModel and refreshed on model hot-reload.
     this.maskConstants = {};
+
+    // Model-derived {FIX_ROLE: bit} table for Tier-A fixture-type
+    // targeting (see fixture_type_constants.js). Empty when the model's
+    // fixture types do not fit the viewMask bit budget (Tier B owns that
+    // model's fixture-typing — see engine loadModel). Injected into
+    // pattern source alongside maskConstants at compile time.
+    this.fixtureConstants = {};
 
     // Pointers and Views
     this.coordPtr = 0;
@@ -75,14 +83,21 @@ export class WasmHost {
     this.maskConstants = constants || {};
   }
 
+  setFixtureConstants(constants) {
+    this.fixtureConstants = constants || {};
+  }
+
   // Every compile path (boot pattern, mixer channels, live-edit API,
-  // blends/transitions) funnels through here, so MASK_* name resolution
-  // is uniform: referenced-but-undeclared constants are prepended as
-  // integer `var` declarations, unknown names fail the compile loudly.
+  // blends/transitions) funnels through here, so MASK_*/FIX_* name
+  // resolution is uniform: referenced-but-undeclared constants are
+  // prepended as integer `var` declarations, unknown names fail the
+  // compile loudly. The two injectors are prefix-isolated, so a pattern
+  // may freely mix MASK_* and FIX_*.
   compile(code) {
     let source;
     try {
       source = injectMaskConstants(code, this.maskConstants);
+      source = injectFixtureConstants(source, this.fixtureConstants);
     } catch (err) {
       return { ok: false, error: err.message };
     }

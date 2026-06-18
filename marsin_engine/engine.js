@@ -46,6 +46,8 @@ import { DerivedSignals } from './audio/signals/derived_signals.js';
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
+import { buildFixtureTypeBits, fixtureTypeId, roleForId } from './lib/fixture_type_constants.js';
+import { pixelsUsedMask } from './lib/model_loader.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
@@ -433,6 +435,45 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
+  // ── Tier-A fixture-type targeting (no WASM rebuild) ───────────────
+  // Encode each PRESENT fixture type as a fixed reserved viewMask bit
+  // placed ABOVE every bit the model already uses, so a pattern can say
+  // `(viewMask & FIX_PAR) != 0` model-independently on the CURRENT
+  // vendored WASM (report 20260618_1 §2.5). buildFixtureTypeBits returns
+  // null when the present types don't fit the free bit budget — titanic
+  // burns bits 0..25, so it MAY not fit; in that case fixture-typing
+  // there is delivered by Tier B (the real `fixtureType` builtin) at
+  // integration, with the SAME FIX_* authoring surface. The FIX_*
+  // constant TABLE is what patterns compile against; it is empty when
+  // Tier A doesn't fit, so a FIX_* reference fails loudly on that model
+  // (codex P0) rather than silently matching nothing.
+  const usedMask = pixelsUsedMask(mod.pixels);
+  const fixtureBits = buildFixtureTypeBits(mod.pixels, usedMask);
+  let fixtureConstants = {};
+  if (fixtureBits) {
+    for (const px of mod.pixels) {
+      if (!px) continue;
+      const bit = fixtureBits.bitOf(px.fixtureType);
+      if (bit) {
+        px.vMask = (px.vMask ?? 0) | bit;
+        px.viewMask = px.vMask;
+      }
+    }
+    fixtureConstants = fixtureBits.table;
+    console.log(`[Model] Tier-A fixture-type bits (viewMask):`);
+    for (const [id, bit] of fixtureBits.idToBit) {
+      console.log(`[Model]   0x${bit.toString(16).padStart(8, '0')}  ${roleForId(id)}`);
+    }
+  } else {
+    const presentRoles = [...new Set(mod.pixels
+      .map(px => px && roleForId(fixtureTypeId(px.fixtureType)))
+      .filter(Boolean))];
+    if (presentRoles.length > 0) {
+      console.log(`[Model] Tier-A fixture-type bits DO NOT FIT this model's viewMask budget ` +
+        `(${presentRoles.join(', ')}) — FIX_* targeting here is delivered by Tier B at integration.`);
+    }
+  }
+
   // {MASK_NAME: bit} table WasmHost injects into pattern source at
   // compile time, so patterns reference masks by name instead of magic
   // numbers. Built here (and only here) so sanitized-name collisions
@@ -440,7 +481,10 @@ async function loadModel(modelName, bustCache = false) {
   const maskConstants = buildMaskConstants({ groupBits, viewMasks });
   console.log(`[Model] Pattern constants: ${Object.keys(maskConstants).join(', ') || '(none)'}`);
 
-  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits, maskConstants };
+  return {
+    pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits,
+    maskConstants, fixtureConstants,
+  };
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
@@ -895,9 +939,10 @@ async function main() {
     process.exit(1);
   }
 
-  // Model-derived MASK_* constants must be registered before ANY
+  // Model-derived MASK_*/FIX_* constants must be registered before ANY
   // compile (boot pattern, mixer channels, live edits, blends).
   wasmHost.setMaskConstants(model.maskConstants);
+  wasmHost.setFixtureConstants(model.fixtureConstants);
 
   console.log(`  Compiling pattern...`);
   const result = wasmHost.compile(patternCode);
@@ -1186,7 +1231,9 @@ async function main() {
           model.viewMasks = newModel.viewMasks;
           model.groupBits = newModel.groupBits;
           model.maskConstants = newModel.maskConstants;
+          model.fixtureConstants = newModel.fixtureConstants;
           wasmHost.setMaskConstants(model.maskConstants);
+          wasmHost.setFixtureConstants(model.fixtureConstants);
 
           wasmHost.setCoords(model.pixels);
           wasmHost.setPixelMeta(model.pixels.map(px => ({

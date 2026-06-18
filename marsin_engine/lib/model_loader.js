@@ -19,6 +19,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
 
+import { buildFixtureTypeBits } from './fixture_type_constants.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const MODELS_DIR = path.resolve(__dirname, '..', 'models');
@@ -34,7 +36,18 @@ async function importModel(modelName) {
   if (!Array.isArray(mod.pixels)) {
     throw new Error(`Model ${modelName} must export a pixels array`);
   }
-  return mod;
+  // The imported module is a cached singleton; bit assignment + fixture-
+  // bit merge MUTATE per-pixel vMask in place. Clone the pixels (and zero
+  // vMask/viewMask) so repeated loads of the same model are independent
+  // and idempotent — otherwise usedMask would accumulate across loads
+  // and eventually overflow the bit budget. The engine's own loadModel
+  // re-imports with a cache-buster for the same reason.
+  return {
+    pixelCount: mod.pixelCount,
+    pixels: mod.pixels.map((px) => (px ? { ...px, vMask: 0, viewMask: 0 } : px)),
+    viewMasks: mod.viewMasks,
+    groupBits: mod.groupBits,
+  };
 }
 
 async function importViewMaskSidecar(modelName, mod) {
@@ -177,8 +190,24 @@ export async function loadModelForGauge(modelName, transform = null) {
   mergeGroupBits(mod, groupBits);
   const viewMasks = resolvePresets(mod, declaredViewMasks, groupBits);
 
+  // Tier-A fixture-type bits merged into vMask, mirroring engine.js
+  // loadModel so the gauge/tests see the same viewMask the runtime
+  // produces. Null (titanic) → no merge; FIX_* there is Tier B.
+  const fixtureBits = buildFixtureTypeBits(mod.pixels, pixelsUsedMask(mod.pixels));
+  if (fixtureBits) {
+    for (const px of mod.pixels) {
+      if (!px) continue;
+      const bit = fixtureBits.bitOf(px.fixtureType);
+      if (bit) {
+        px.vMask = (px.vMask ?? 0) | bit;
+        px.viewMask = px.vMask;
+      }
+    }
+  }
+  const fixtureConstants = fixtureBits ? fixtureBits.table : {};
+
   if (typeof transform === 'function') {
-    transform({ mod, groupBits, viewMasks });
+    transform({ mod, groupBits, viewMasks, fixtureConstants });
   }
 
   const metaArray = mod.pixels.map((px) => ({
@@ -194,6 +223,7 @@ export async function loadModelForGauge(modelName, transform = null) {
     groupBits,
     viewMasks,
     metaArray,
+    fixtureConstants,
   };
 }
 
