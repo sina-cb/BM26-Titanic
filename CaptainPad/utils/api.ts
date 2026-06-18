@@ -174,6 +174,34 @@ export function invalidatePatternsCache() {
   _patternsCache = null;
 }
 
+// ── Pattern directories ("load directory") ─────────────────────────────
+// patterns/ has sub-directories (e.g. transitions, channel_blends). The
+// "load directory" affordance lets an operator bulk-add every pattern in
+// one of those folders into a playlist. `fetchPatternDirs` lists the
+// folder names; `fetchPatternsInDir` lists the `<dir>/<name>` slugs in
+// one folder, ready to append as playlist entries.
+export async function fetchPatternDirs(): Promise<ApiResult<string[]>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/pattern-dirs`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    warnThrottled('Fetch pattern dirs failed:', 'Fetch pattern dirs failed:', err);
+    return { ok: false, error: err.message, data: [] };
+  }
+}
+
+export async function fetchPatternsInDir(dir: string): Promise<ApiResult<string[]>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/pattern-dirs/${encodeURIComponent(dir)}`);
+    const data = await res.json();
+    return { ok: true, data: Array.isArray(data) ? data : [] };
+  } catch (err: any) {
+    warnThrottled('Fetch patterns in dir failed:', 'Fetch patterns in dir failed:', err);
+    return { ok: false, error: err.message, data: [] };
+  }
+}
+
 export async function fetchChannelBlends(): Promise<ApiResult<string[]>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/channel-blends`);

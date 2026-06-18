@@ -7,7 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
   fetchChannelPlaylist, setChannelPlaylist, setChannelPlaylistEntry,
-  fetchPatterns,
+  fetchPatterns, fetchPatternDirs, fetchPatternsInDir,
   getApiBaseAsync,
   invalidatePlaylistCache, invalidatePlaylistsCache, primePlaylistCache,
   PlaylistData, PlaylistEntry, PlaylistAssignment,
@@ -136,8 +136,14 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // and the panel never has to depend on refresh()'s GETs landing in time.
   const [playlist, setPlaylist] = useState<PlaylistData | null>(initialPlaylist ?? null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
+  // "Load directory" support: the patterns/ sub-folders the operator can
+  // bulk-add from. Fetched lazily the first time the picker opens so the
+  // panel's hot path (mount + refresh under burst channel adds) doesn't
+  // pay an extra GET it rarely needs.
+  const [patternDirs, setPatternDirs] = useState<string[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
+  const [showLoadDir, setShowLoadDir] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -719,6 +725,49 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [flashSaved, refresh]);
 
+  // Open the "load directory" picker, fetching the available patterns/
+  // sub-folders lazily on first open.
+  const openLoadDir = useCallback(async () => {
+    setShowLoadDir(true);
+    const res = await fetchPatternDirs();
+    if (res.ok && res.data) setPatternDirs(res.data);
+  }, []);
+
+  // Bulk-add every pattern in a patterns/ sub-directory to the current
+  // playlist, then persist — same auto-save model as handleAddPattern,
+  // just for a whole folder at once. Each pattern becomes its own entry
+  // (referenced as `<dir>/<name>`) with a fresh id and empty defaults.
+  const handleLoadDirectory = useCallback(async (dir: string) => {
+    setShowLoadDir(false);
+    const cur = playlistRef.current;
+    if (!cur) return;
+    const res = await fetchPatternsInDir(dir);
+    if (!res.ok || !res.data) {
+      Alert.alert('Load directory failed', res.error || 'Unknown error');
+      return;
+    }
+    if (res.data.length === 0) {
+      Alert.alert('Empty directory', `No patterns found in "${dir}".`);
+      return;
+    }
+    const newEntries: PlaylistEntry[] = res.data.map((pattern) => ({
+      id: genEntryId(),
+      pattern,
+      label: null,
+      defaults: {},
+    }));
+    const nextEntries = [...cur.entries, ...newEntries];
+    // Optimistic UI: show the new rows instantly.
+    setPlaylist({ ...cur, entries: nextEntries });
+    const save = await savePlaylist({ name: cur.name, entries: nextEntries });
+    if (!save.ok) {
+      Alert.alert('Load directory failed', save.error || 'Unknown error');
+      await refresh();
+      return;
+    }
+    flashSaved();
+  }, [flashSaved, refresh]);
+
   // Remove + persist in one step.
   const handleRemoveEntry = useCallback(async (entryId: string) => {
     const cur = playlistRef.current;
@@ -982,6 +1031,32 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           </View>
         )}
 
+        {/* Load-directory button — bulk-adds every pattern in a
+            patterns/ sub-folder. Same visibility rules as the +
+            button: hidden when the channel is locked (read-only show
+            mode) and, on the deck, when the operator has engaged the
+            playlist-edits lock. On the mixer this rides the `compact`
+            sizing so it renders as the requested small button. */}
+        {editable && !(role === 'deck' && playlistEditsLocked) && (
+          <TouchableOpacity
+            onPress={openLoadDir}
+            disabled={!playlist}
+            style={{
+              width: sz.btnH,
+              height: sz.btnH,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.primary,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: !playlist ? 0.4 : 1,
+            }}
+            accessibilityLabel="Load a directory of patterns into playlist"
+          >
+            <IconSymbol name="folder.fill" size={sz.btnFont + 2} color={C.primary} />
+          </TouchableOpacity>
+        )}
+
         {editable && !(role === 'deck' && playlistEditsLocked) && (
           <TouchableOpacity
             onPress={() => setShowAddPattern(true)}
@@ -1187,6 +1262,14 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         allPatterns={allPatterns}
         onPick={handleAddPattern}
       />
+
+      <LoadDirectoryModal
+        visible={showLoadDir}
+        onClose={() => setShowLoadDir(false)}
+        playlistName={playlist?.name || null}
+        dirs={patternDirs}
+        onPick={handleLoadDirectory}
+      />
     </View>
   );
 };
@@ -1314,6 +1397,59 @@ const AddPatternModal: React.FC<AddPatternModalProps> = ({
                 style={{ paddingHorizontal: 10, paddingVertical: 8, marginBottom: 3, borderRadius: 6, backgroundColor: C.surfaceContainerHigh }}
               >
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{p}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface LoadDirectoryModalProps {
+  visible: boolean;
+  onClose: () => void;
+  playlistName: string | null;
+  dirs: string[];
+  onPick: (dir: string) => void;
+}
+
+// Picker for the "load directory" action. Lists the patterns/ sub-folders
+// the engine reports; tapping one bulk-appends every pattern in it to the
+// current playlist. Mirrors AddPatternModal's backdrop/card layout.
+const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
+  visible, onClose, playlistName, dirs, onPick,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onClose}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close load-directory picker"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={[modalStyles.card, { maxHeight: '80%' }]}>
+          <Text style={modalStyles.title}>
+            LOAD DIRECTORY INTO {playlistName?.toUpperCase() || 'PLAYLIST'}
+          </Text>
+          <ScrollView style={{ maxHeight: 400 }}>
+            {dirs.length === 0 && (
+              <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                No pattern directories found.
+              </Text>
+            )}
+            {dirs.map((d) => (
+              <TouchableOpacity
+                key={d}
+                onPress={() => onPick(d)}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 3, borderRadius: 6, backgroundColor: C.surfaceContainerHigh }}
+              >
+                <IconSymbol name="folder.fill" size={14} color={C.primary} />
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{d}</Text>
               </TouchableOpacity>
             ))}
           </ScrollView>

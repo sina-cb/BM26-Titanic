@@ -156,6 +156,41 @@ function listPatterns(patternsDir) {
     .map(f => f.replace(/\.js$/, ''));
 }
 
+// Directory name guard. Mirrors the playlist VALID_NAME slug so a
+// directory request can never escape patternsDir via traversal or odd
+// characters. Subdir patterns reference as `<dir>/<name>` which the
+// playlist VALID_PATTERN regex already accepts.
+const VALID_PATTERN_DIR = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+// Enumerate the immediate sub-directories of patternsDir. These are the
+// "load directory" targets — an operator can bulk-add every pattern in
+// one of these folders into a playlist in a single action.
+function listPatternDirs(patternsDir) {
+  if (!fs.existsSync(patternsDir)) return [];
+  return fs.readdirSync(patternsDir, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name)
+    .filter(name => VALID_PATTERN_DIR.test(name))
+    .sort();
+}
+
+// List the patterns inside one sub-directory as fully-qualified
+// `<dir>/<name>` slugs ready to drop straight into playlist entries.
+// `_`-prefixed files are internal helpers and are skipped, matching
+// PlaylistManager.generateDefault's top-level filter.
+function listPatternsInDir(patternsDir, dir) {
+  if (!VALID_PATTERN_DIR.test(dir)) {
+    throw new Error(`Invalid pattern directory: "${dir}"`);
+  }
+  const full = path.join(patternsDir, dir);
+  if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) return [];
+  return fs.readdirSync(full)
+    .filter(f => f.endsWith('.js'))
+    .filter(f => !f.startsWith('_'))
+    .map(f => `${dir}/${f.replace(/\.js$/, '')}`)
+    .sort();
+}
+
 function loadPattern(patternsDir, name) {
   const filePath = path.join(patternsDir, `${name}.js`);
   if (!fs.existsSync(filePath)) {
@@ -1719,6 +1754,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (req.method === 'GET' && (req.url === '/patterns' || req.url === '/list-patterns')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(listPatterns(patternsDir)));
+    } else if (req.method === 'GET' && req.url === '/pattern-dirs') {
+      // List the sub-directories of patterns/ — the "load directory"
+      // targets for bulk-adding a folder of patterns into a playlist.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(listPatternDirs(patternsDir)));
+    } else if (req.method === 'GET' && req.url.match(/^\/pattern-dirs\/[^\/]+$/)) {
+      // List the patterns inside one sub-directory as `<dir>/<name>`
+      // slugs ready to drop into playlist entries.
+      try {
+        const dir = decodeURIComponent(req.url.split('/')[2]);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(listPatternsInDir(patternsDir, dir)));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.method === 'GET' && req.url === '/channel-blends') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       const blendsDir = path.join(patternsDir, 'channel_blends');
