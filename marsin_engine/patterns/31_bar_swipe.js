@@ -54,7 +54,7 @@ export function sliderTrail(v) { trail = v; }
 // ── Tunables ────────────────────────────────────────────────────────────────
 var PIX_N = 36;         // bar LEDs across both strips (physical-ordinal range)
 var MAX_RATE = 0.5;     // sweeps per second at localSpeed = 1.0 (slow-ish)
-var BASE_FLOOR = 0.04;  // tiny resting glow on un-swept pixels (P0: not a blackout)
+var BASE_FLOOR = 0.0;   // un-swept LEDs OFF (no bg glow on hardware); the swept core is always lit, so the rig is never fully dark
 var BLUR_MAX = 4.0;     // max halo radius in LEDs at blur = 1.0
 var TRAIL_N = 14;       // trail history length (frames) — pixelated tail
 
