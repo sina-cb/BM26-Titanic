@@ -60,6 +60,81 @@ export const DEFAULT_PORT_COUNT = 4;
 
 const IP_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
+// ── Controller type (DMX vs LED) ────────────────────────────────────────
+// Every controller carries an explicit `type`. DMX controllers patch
+// DMX fixtures (sACN unicast to fixed addresses, host-synthesised white).
+// LED controllers patch LED strands (sequential pixel addressing over the
+// same sACN/E1.31 transport, RGBW stride, native white pass-through). The
+// type is EXPLICIT — un-typed legacy files default to DMX at load with a
+// one-time loud log (a schema-migration default, never a runtime fallback;
+// codex P0). LED parity design: report 20260618_6 §D.1.
+export const CONTROLLER_TYPE_DMX = 'DMX';
+export const CONTROLLER_TYPE_LED = 'LED';
+export const CONTROLLER_TYPES = [CONTROLLER_TYPE_DMX, CONTROLLER_TYPE_LED];
+
+// LED channel-order presets → per-pixel channel offset maps (1-based,
+// relative to the pixel's start). `stride` is bytes-per-pixel. White
+// lanes carry the rendered W byte raw (native pass-through). Used by the
+// exporter to derive each strand pixel's `channels` map and by the LED
+// output mapper.
+export const LED_CHANNEL_ORDERS = {
+  RGB: { r: 1, g: 2, b: 3 },
+  GRB: { r: 2, g: 1, b: 3 },
+  BGR: { r: 3, g: 2, b: 1 },
+  RGBW: { r: 1, g: 2, b: 3, w: 4 },
+  GRBW: { r: 2, g: 1, b: 3, w: 4 },
+  RGBWA: { r: 1, g: 2, b: 3, w: 4, a: 5 },
+};
+export const DEFAULT_LED_ORDER = 'RGBW';
+export const DEFAULT_LED_STRIDE = 4;
+export const DEFAULT_LED_WHITE_MODE = 'native';
+export const LED_WHITE_MODES = ['native', 'synth'];
+
+/** Stride (bytes per pixel) for a channel order, or its explicit override. */
+export function ledStrideForOrder(order, overrideStride) {
+  if (Number.isInteger(overrideStride) && overrideStride >= 1) return overrideStride;
+  const map = LED_CHANNEL_ORDERS[order];
+  if (!map) return DEFAULT_LED_STRIDE;
+  return Math.max(...Object.values(map));
+}
+
+/**
+ * Normalize a controller's LED config (or undefined) to a complete,
+ * validated shape. Range/type problems THROW — an LED controller with a
+ * broken config must hard-stop the boot, exactly like a malformed port,
+ * rather than silently emit garbage pixels (codex P0).
+ */
+export function normalizeLedConfig(raw, controllerName) {
+  const src = (raw && typeof raw === 'object') ? raw : {};
+  const order = typeof src.order === 'string' ? src.order : DEFAULT_LED_ORDER;
+  if (!LED_CHANNEL_ORDERS[order]) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': unknown channel order ` +
+      `'${order}' (expected one of ${Object.keys(LED_CHANNEL_ORDERS).join(', ')})`);
+  }
+  const stride = ledStrideForOrder(order, src.stride);
+  const minStride = Math.max(...Object.values(LED_CHANNEL_ORDERS[order]));
+  if (!Number.isInteger(stride) || stride < minStride) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': stride ${src.stride} must ` +
+      `be an integer ≥ ${minStride} (the channel order '${order}' needs ${minStride} bytes/pixel)`);
+  }
+  const baseUniverse = Number.isInteger(src.baseUniverse) ? src.baseUniverse : 0;
+  if (baseUniverse !== 0 && (baseUniverse < 1 || baseUniverse > MAX_UNIVERSE)) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': baseUniverse ${baseUniverse} ` +
+      `must be 0 (auto-allocate) or in 1–${MAX_UNIVERSE}`);
+  }
+  const startAddr = Number.isInteger(src.startAddr) ? src.startAddr : 1;
+  if (startAddr < 1 || startAddr > DMX_UNIVERSE_SIZE) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': startAddr ${startAddr} must ` +
+      `be in 1–${DMX_UNIVERSE_SIZE}`);
+  }
+  const whiteMode = typeof src.whiteMode === 'string' ? src.whiteMode : DEFAULT_LED_WHITE_MODE;
+  if (!LED_WHITE_MODES.includes(whiteMode)) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': whiteMode '${whiteMode}' must ` +
+      `be one of ${LED_WHITE_MODES.join(', ')}`);
+  }
+  return { baseUniverse, startAddr, order, stride, whiteMode };
+}
+
 export function isValidIp(ip) {
   const m = IP_RE.exec(String(ip || ''));
   if (!m) return false;
@@ -99,6 +174,17 @@ export function entryFixtureName(entry) {
 export function createControllerRegistry(tree) {
   const src = (tree && typeof tree === 'object') ? tree : {};
   const registry = { nextControllerId: 1, nextUniverse: 2, controllers: [] };
+  // Ids of controllers that loaded with no explicit `type` and were
+  // schema-migrated to DMX. Surfaced (not swallowed) so the caller logs
+  // the migration once — codex P0: no silent defaults. NON-ENUMERABLE so
+  // it never serializes into controllers.yaml (the registry IS the saved
+  // config tree node; yaml.dump must not emit a Set).
+  Object.defineProperty(registry, '_untypedControllers', {
+    value: new Set(),
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 
   const rawControllers = src.controllers;
   if (rawControllers !== undefined && !Array.isArray(rawControllers)) {
@@ -122,12 +208,30 @@ export function createControllerRegistry(tree) {
     }
     seenIds.add(id);
 
+    // Type is EXPLICIT. An un-typed legacy controller loads as DMX (a
+    // one-time schema-migration default, logged loudly by the caller via
+    // the returned `_untypedControllers` set) — never a silent runtime
+    // fallback (codex P0). An unrecognized type is structural corruption
+    // and hard-stops the boot, like a malformed port.
+    let type = rawCtl.type;
+    if (type === undefined || type === null) {
+      type = CONTROLLER_TYPE_DMX;
+      registry._untypedControllers.add(id);
+    } else if (!CONTROLLER_TYPES.includes(type)) {
+      throw new Error(`[Controllers] Controller '${rawCtl.name || id}' has invalid type ` +
+        `'${type}' — must be one of ${CONTROLLER_TYPES.join(', ')}`);
+    }
+
     const controller = {
       id,
       name: typeof rawCtl.name === 'string' ? rawCtl.name : `Controller ${id}`,
       ip: typeof rawCtl.ip === 'string' ? rawCtl.ip : '',
+      type,
       ports: [],
     };
+    if (type === CONTROLLER_TYPE_LED) {
+      controller.led = normalizeLedConfig(rawCtl.led, controller.name);
+    }
 
     if (rawCtl.ports !== undefined && !Array.isArray(rawCtl.ports)) {
       throw new Error(`[Controllers] Controller '${controller.name}': ports must be a list`);
@@ -289,16 +393,46 @@ export function noteUniverseUsed(registry, universe) {
 
 // ── Mutations (panel operations) ────────────────────────────────────────
 
-export function addController(registry, { name, ip }) {
+export function addController(registry, { name, ip, type }) {
+  const ctlType = CONTROLLER_TYPES.includes(type) ? type : CONTROLLER_TYPE_DMX;
   const controller = {
     id: registry.nextControllerId,
     name: String(name || `Controller ${registry.nextControllerId}`),
     ip: String(ip || ''),
+    type: ctlType,
     ports: [],
   };
+  if (ctlType === CONTROLLER_TYPE_LED) {
+    controller.led = normalizeLedConfig(null, controller.name);
+  }
   registry.nextControllerId += 1;
   registry.controllers.push(controller);
   for (let i = 0; i < DEFAULT_PORT_COUNT; i++) addPort(registry, controller);
+  return controller;
+}
+
+/** True when the controller patches LED strands (vs DMX fixtures). */
+export function isLedController(controller) {
+  return !!controller && controller.type === CONTROLLER_TYPE_LED;
+}
+
+/**
+ * Switch a controller's type in place. DMX→LED installs a default LED
+ * config (preserving any existing one); LED→DMX drops it. The chain
+ * entries (fixture/strand names) are NOT cleared — the operator may have
+ * mis-toggled; the projection flags entries that no longer resolve to a
+ * member of the new tray, loudly, rather than silently discarding work.
+ */
+export function setControllerType(controller, type) {
+  if (!CONTROLLER_TYPES.includes(type)) {
+    throw new Error(`[Controllers] setControllerType: invalid type '${type}'`);
+  }
+  controller.type = type;
+  if (type === CONTROLLER_TYPE_LED) {
+    if (!controller.led) controller.led = normalizeLedConfig(null, controller.name);
+  } else {
+    delete controller.led;
+  }
   return controller;
 }
 
@@ -490,6 +624,125 @@ export function migrateLegacyChains(registry, configsByName, pins) {
   return migrated;
 }
 
+// ── LED projection (strand → sequential pixel addressing) ───────────────
+
+/**
+ * Project every LED controller's bound strands onto sequential sACN
+ * pixel addresses. Each strand pixel `k` lands at
+ *   universe = base + floor((startAddr-1 + (pixelOffset+k)*stride) / 512)
+ *   addr     = ((startAddr-1 + (pixelOffset+k)*stride) % 512) + 1
+ * where `pixelOffset` accumulates across the strands earlier in the
+ * controller's chain. A strand whose pixel would straddle a 512-byte
+ * universe boundary is bumped to the next universe wholesale (LED
+ * controllers address pixels, never split one across universes) — the
+ * straightforward WLED/E1.31 layout.
+ *
+ * The strand's `at` from the chain entry (if present) pins its START
+ * address explicitly; otherwise it packs after the previous strand.
+ *
+ * Returns Map<strandName, {
+ *   controllerId, controllerIp, universe, addr, stride, order, whiteMode,
+ *   footprint, ledCount
+ * }> for every strand bound to an LED controller. Strands on a bad-IP
+ * controller still project (so the sim can show them) but are flagged via
+ * `violations`. UNBOUND strands are simply absent from the map — the
+ * exporter turns that into a LOUD unpatched marker (never a silent skip).
+ *
+ * @param {Object} registry
+ * @param {Map<string, number>} strandLedCounts - strand name → ledCount
+ */
+export function computeLedProjection(registry, strandLedCounts) {
+  const out = new Map();
+  const violations = [];
+  if (!registryIsActive(registry)) return { fields: out, violations };
+
+  const counts = strandLedCounts instanceof Map
+    ? strandLedCounts
+    : new Map(Object.entries(strandLedCounts || {}));
+
+  for (const controller of registry.controllers) {
+    if (!isLedController(controller)) continue;
+    const led = controller.led || normalizeLedConfig(null, controller.name);
+    const ipOk = isValidIp(controller.ip);
+    if (!ipOk) {
+      violations.push({
+        code: 'led_bad_ip',
+        controllerId: controller.id,
+        message: `LED controller '${controller.name}' has a malformed or missing IP ` +
+          `('${controller.ip}') — its strands project unpatched`,
+      });
+    }
+    const ordinal = registry.controllers.indexOf(controller) + 1;
+
+    for (const port of controller.ports) {
+      // Each port resets to the controller's base/startAddr lane unless
+      // the port carries its own universe — a port IS a physical data
+      // line on the LED controller, so its universe is the lane base.
+      const baseUniverse = (led.baseUniverse && led.baseUniverse > 0)
+        ? led.baseUniverse
+        : (Number.isInteger(port.universe) ? port.universe : 2);
+      let cursorByte = (led.startAddr - 1); // 0-based channel offset within baseUniverse
+      let universeOffset = 0;
+
+      for (const entry of port.chain) {
+        const name = entryFixtureName(entry);
+        if (name === null) continue;
+        const ledCount = counts.get(name);
+        if (!Number.isInteger(ledCount) || ledCount < 1) {
+          violations.push({
+            code: 'led_unknown_strand',
+            controllerId: controller.id,
+            message: `LED controller '${controller.name}': chain entry '${name}' is not a known ` +
+              'LED strand (or has no ledCount) — it projects unpatched',
+          });
+          continue;
+        }
+        // Explicit per-strand START pin (chain entry `at`, absolute byte
+        // within its universe). Otherwise pack after the previous strand.
+        let startUniverse = baseUniverse + universeOffset;
+        let startByte = cursorByte;
+        if (isPinnedEntry(entry) && Number.isInteger(entry.at) && entry.at > 0) {
+          startByte = entry.at - 1;
+        }
+        // A strand never splits a pixel across a universe: if the whole
+        // run won't fit from startByte, advance to the next universe.
+        const footprint = ledCount * led.stride;
+        if (startByte + led.stride > DMX_UNIVERSE_SIZE) {
+          startUniverse += 1;
+          universeOffset += 1;
+          startByte = 0;
+        }
+        out.set(name, {
+          controllerId: ordinal,
+          controllerIp: ipOk ? controller.ip : '',
+          universe: startUniverse,
+          addr: startByte + 1, // 1-based start address
+          stride: led.stride,
+          order: led.order,
+          whiteMode: led.whiteMode,
+          footprint,
+          ledCount,
+        });
+        noteUniverseUsed(registry, startUniverse);
+        // Advance the cursor across this strand, wrapping universes by
+        // whole pixels (a pixel that won't fit rolls to the next universe).
+        let byte = startByte;
+        let uni = startUniverse - baseUniverse; // relative
+        for (let k = 0; k < ledCount; k++) {
+          if (byte + led.stride > DMX_UNIVERSE_SIZE) {
+            uni += 1;
+            byte = 0;
+          }
+          byte += led.stride;
+        }
+        universeOffset = uni;
+        cursorByte = byte;
+      }
+    }
+  }
+  return { fields: out, violations };
+}
+
 // ── Projection (allocation model) ───────────────────────────────────────
 
 /**
@@ -579,8 +832,13 @@ export function computeProjection(registry, configsByName, pins) {
   // within a universe — is caught by the per-universe overlap sweep
   // below, which aggregates occupancy across ALL controllers. Ports are
   // iterated in stable id order purely for deterministic claim ordering.
+  // LED controllers patch strands via computeLedProjection, NOT the DMX
+  // allocation model — their chain entries are strand names, not DMX
+  // fixtures, so they must not flow through the DMX overlap/footprint
+  // sweep (they would all surface as 'orphan' against the fixture set).
   const allPortsSorted = [];
   for (const controller of [...registry.controllers].sort((a, b) => a.id - b.id)) {
+    if (isLedController(controller)) continue;
     for (const port of controller.ports) allPortsSorted.push({ controller, port });
   }
 

@@ -30,6 +30,12 @@ import {
   computeProjection,
   projectOntoConfigs,
   isValidIp,
+  CONTROLLER_TYPE_DMX,
+  CONTROLLER_TYPE_LED,
+  isLedController,
+  setControllerType,
+  normalizeLedConfig,
+  computeLedProjection,
 } from '../src/dmx/controller_registry.js';
 
 const PINS = {
@@ -685,4 +691,58 @@ test('registry survives a JSON round-trip identically', () => {
   const r1 = reg(tree);
   const r2 = reg(JSON.parse(JSON.stringify(r1)));
   assert.deepEqual(r2, r1);
+});
+
+// ── LED parity: controller type + LED projection (report 20260618_6/_7) ─
+
+test('LED parity: un-typed controller migrates to DMX (loud, not silent)', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'L', ip: '10.1.1.10', ports: [] }] });
+  assert.equal(r.controllers[0].type, CONTROLLER_TYPE_DMX);
+  assert.ok(r._untypedControllers.has(1));
+});
+
+test('LED parity: LED controller carries normalized led config; DMX path skips its chain', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'LEDs', ip: '10.1.1.20', type: 'LED',
+      led: { order: 'GRBW' },
+      ports: [{ port: 1, universe: 2, chain: ['StrandA'] }],
+    }],
+  });
+  const c = r.controllers[0];
+  assert.ok(isLedController(c));
+  assert.equal(c.led.order, 'GRBW');
+  assert.equal(c.led.stride, 4);
+  // The DMX projection must NOT treat the strand as an orphan fixture.
+  const { violations } = computeProjection(r, new Map(), PINS);
+  assert.ok(!violations.some(v => v.code === 'orphan'));
+});
+
+test('LED parity: setControllerType toggles led config in place', () => {
+  const r = reg({});
+  const c = addController(r, { name: 'C', ip: '10.1.1.30', type: CONTROLLER_TYPE_DMX });
+  assert.equal(c.led, undefined);
+  setControllerType(c, CONTROLLER_TYPE_LED);
+  assert.equal(c.led.order, 'RGBW');
+  setControllerType(c, CONTROLLER_TYPE_DMX);
+  assert.equal(c.led, undefined);
+});
+
+test('LED parity: computeLedProjection allocates sequential RGBW patches', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'LEDs', ip: '10.1.1.20', type: 'LED',
+      led: { order: 'RGBW', startAddr: 1, baseUniverse: 7 },
+      ports: [{ port: 1, universe: 7, chain: ['A', 'B'] }],
+    }],
+  });
+  const { fields } = computeLedProjection(r, new Map([['A', 50], ['B', 50]]));
+  assert.equal(fields.get('A').universe, 7);
+  assert.equal(fields.get('A').addr, 1);
+  assert.equal(fields.get('B').addr, 201); // after A's 50*4=200 ch
+});
+
+test('LED parity: normalizeLedConfig throws on bad inputs (no fallback)', () => {
+  assert.throws(() => normalizeLedConfig({ order: 'NOPE' }, 'C'), /unknown channel order/);
+  assert.throws(() => normalizeLedConfig({ whiteMode: 'x' }, 'C'), /whiteMode/);
 });

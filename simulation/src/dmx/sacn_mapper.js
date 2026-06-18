@@ -208,9 +208,32 @@ export function mapPixelsToSacn(list, dmxRouter) {
       buf[addr + ch.r - 1] = Math.max(0, Math.min(255, entry.r * 255)) || 0;
       buf[addr + ch.g - 1] = Math.max(0, Math.min(255, entry.g * 255)) || 0;
       buf[addr + ch.b - 1] = Math.max(0, Math.min(255, entry.b * 255)) || 0;
-      
-      // Extended channels natively emitted by Marsin Engine (6-channel WAU values mapped back into entry by renderer)
-      if (ch.w !== undefined) buf[addr + ch.w - 1] = (entry.w !== undefined) ? Math.max(0, Math.min(255, entry.w * 255)) : Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]);
+
+      // ── White lane policy ──────────────────────────────────────────
+      // LED strands (patch.led) default to NATIVE pass-through: the W
+      // byte is the rendered W lane AS-IS — 0 for plain rgb()/hsv()
+      // patterns (the LED controller extracts white in hardware), the
+      // explicit value for rgbwau(...,w,...) patterns. This is the
+      // Pixelblaze RGBW philosophy and the LED-parity contract (report
+      // 20260618_6 §D.3). An LED controller MAY opt into host-side white
+      // synth via whiteMode:'synth'. DMX fixtures keep their existing
+      // min(R,G,B) host-synth when the pattern produced no explicit W.
+      const isLed = !!(entry.patch && entry.patch.led);
+      const ledNative = isLed && (entry.whiteMode !== 'synth');
+      if (ch.w !== undefined) {
+        if (entry.w !== undefined && (ledNative || entry.w > 0)) {
+          buf[addr + ch.w - 1] = Math.max(0, Math.min(255, entry.w * 255));
+        } else if (ledNative) {
+          // Native LED with no W rendered: pass through 0 (hardware
+          // derives white), NEVER synthesize min(R,G,B) (that is the
+          // DMX-fixture behavior and must stay DMX-only).
+          buf[addr + ch.w - 1] = 0;
+        } else {
+          // DMX fixture (or LED whiteMode:'synth') with no explicit W:
+          // host-synthesize white as min(R,G,B).
+          buf[addr + ch.w - 1] = Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]);
+        }
+      }
       if (ch.a !== undefined && entry.a !== undefined) buf[addr + ch.a - 1] = Math.max(0, Math.min(255, entry.a * 255));
       if (ch.u !== undefined && entry.u !== undefined) buf[addr + ch.u - 1] = Math.max(0, Math.min(255, entry.u * 255));
     } else if (ch.w !== undefined) {

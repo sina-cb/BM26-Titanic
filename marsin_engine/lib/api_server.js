@@ -2486,6 +2486,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           bit: vm.bit,
           inUse: (viewMaskUnion & vm.bit) !== 0,
         }));
+      // Tier-A named views (report 20260618_2 §3.3): every mask the
+      // MaskRegistry interns is selectable by name via viewSelection
+      // {type:'viewMask', target:'<name>'} WITHOUT a viewMask bit — this
+      // is how LED-strand per-strand and LEFT/RIGHT views (LED parity
+      // §D.5) surface to CaptainPad/the mixer. We list them all (groups +
+      // composites + pixelSets) with their kind and member count so the
+      // picker can render them; the existing `viewMasks` array stays the
+      // bit-backed subset for back-compat.
+      const reg = mixer && mixer.maskRegistry;
+      const namedViews = reg
+        ? reg.names().map(name => {
+          const e = reg.get(name);
+          let memberCount = 0;
+          if (e && e.members) {
+            for (let k = 0; k < e.members.length; k++) memberCount += e.members[k];
+          }
+          return { name, kind: e ? e.kind : 'group', bit: e ? e.bit : 0, memberCount };
+        })
+        : [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         groups: [...groups].sort(),
@@ -2493,6 +2512,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
         viewMasks,
+        namedViews,
         // Group→bit table for this model (pinned by the sidecar or
         // derived at load time — docs/13 §4.5.1) and the MASK_* pattern
         // constants built from it. Surfaced so operators, tools, and

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
+import { scaleSimulationPreviewRgb, mixRgbwauToRgb } from "../core/sim_preview.js";
 
 // Shared geometry for endpoint handles
 const handleGeo = new THREE.SphereGeometry(0.3, 12, 12);
@@ -228,6 +228,20 @@ export class LedStrand {
     if (halo && halo.material) {
       halo.material.color.setRGB(rn, gn, bn);
     }
+  }
+
+  /**
+   * Set an LED's color from the FULL RGBWAU pixel. The W/A/U channels are
+   * folded into RGB using the firmware's exact toRGBFallback weights
+   * (mixRgbwauToRgb) so a pattern that calls rgbwau(...,w,...) lights this
+   * strand white in the sim, matching how the WS2812-RGBW hardware would
+   * render the same pixel. Then the standard sim-brightness scale applies.
+   * @param {number} index - LED index (0-based)
+   * @param {number} r,g,b,w,a,u - channels (0-1)
+   */
+  setLedColorRGBWAU(index, r, g, b, w = 0, a = 0, u = 0) {
+    const [mr, mg, mb] = mixRgbwauToRgb(r, g, b, w, a, u);
+    this.setLedColorRGB(index, mr, mg, mb);
   }
 
   setVisibility(visible) {
