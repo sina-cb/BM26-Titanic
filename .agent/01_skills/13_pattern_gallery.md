@@ -201,3 +201,53 @@ node tools/gallery/publish.mjs --name NN_name --model titanic \
   --capture ~/tmp/genkit/out/NN_name__titanic.json --layout map --view top
 ```
 <!-- END clip-length-and-map (feat/highdef_patterns) -->
+
+<!-- BEGIN live-vis (feat/highdef_patterns) — keep separate for merge -->
+## LIVE mode — visualize the running engine (`/live`)
+
+Everything above is **OFFLINE** (pre-rendered clips, no engine). The gallery
+also has an **ONLINE / LIVE** view that renders the running engine's real-time
+per-pixel output, in the **same visual style as the clips**. Offline and online
+are clearly separated: `/ /grid /compare /w/<name>` need no engine; only
+`/live` talks to the engine.
+
+`/live` opens a **browser WebSocket** to `ws://<engineHost>/ws/viz` (the same
+vis stream `capture_vis.mjs` records), decodes the chosen buffer, and paints the
+rig live. The strip + physical-map renderers are factored from
+`make_vis_clip.mjs` into `live_layout.mjs` (server) + `live_client.js` (browser).
+
+```bash
+cd marsin_engine
+# 1. run the engine on a model — the live view mirrors its vis:
+node engine.js --model test_bench --pattern 27_swipe
+# 2. start the gallery (another shell) and open /live:
+node tools/gallery/gallery_launcher.mjs        # or server.mjs
+#    http://localhost:6965/live                 # test_bench strip, master buffer
+#    http://localhost:6965/live?model=titanic   # titanic top-down map
+#    http://localhost:6965/live?buffer=rig      # hardware-truth buffer
+#    http://localhost:6965/live?host=100.x.y.z:6968  # remote engine over Tailscale
+# 3. after capturing live, restore residue: git restore marsin_engine/states/ simulation/
+```
+
+- **buffer**: `master` (default, DECK MAIN composition) vs `rig` (post dimmers/
+  FX, hardware truth) — toggle in the header or with `?buffer=rig`. **Pause**
+  freezes the loop.
+- **Model-aware layout.** The WS buffer is bytes only (6/px RGBWAU, in
+  `model.pixels[]` order, **no coords**). The SERVER imports
+  `models/<model>.js` (`?model=`, default `test_bench`), reads each pixel's
+  `i/fId/sId/nx/ny/nz`, and embeds a layout spec the client positions from
+  (strip for test_bench, top-down dot map for titanic/dome/logsville). A
+  **missing model file fails LOUD** (HTTP 500), never a silent test_bench swap.
+- **engineHost** resolves `?host=` query > `gallery_config.json "engineHost"`
+  (default `127.0.0.1:6968`) > built-in default. A malformed `engineHost` is a
+  hard error at startup.
+- **Connection state (codex P0: fail visibly).** The header shows `○
+  connecting…`, `● connected to engine · <buffer> · Npx live`, or `✕ engine not
+  reachable at <host>`. On disconnect the cells blank to black — never stale/
+  zero data shown as live. Auto-retries every 2 s.
+
+Routes added: `/live`, `/live/<name>` (name is a caption only — the gallery
+never drives the engine), `/live_client.js` (the renderer), `/api/live-layout`
+(the raw layout JSON). The sibling model-picker links here as
+`/live?model=<active>`. See `README.md` for the same from the tool's side.
+<!-- END live-vis (feat/highdef_patterns) -->
