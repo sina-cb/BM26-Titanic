@@ -26,7 +26,12 @@ const fps = parseInt(arg('fps', '14'), 10);
 
 const data = JSON.parse(fs.readFileSync(inPath, 'utf8'));
 const meta = data.meta, frames = data.frames, N = frames.length;
-const SECTION_NAMES = { 1: 'Pars', 2: 'Vintage', 3: 'Bars' };
+// Section labels are model-specific. test_bench's sIds 1/2/3 are Pars/Vintage/
+// Bars; for any other model — or an unknown id on test_bench — we fall back to
+// a neutral "Section N", so a foreign rig is never mislabeled with test_bench
+// section names.
+const TEST_BENCH_SECTION_NAMES = { 1: 'Pars', 2: 'Vintage', 3: 'Bars' };
+const SECTION_NAMES = data.model === 'test_bench' ? TEST_BENCH_SECTION_NAMES : {};
 
 // Group by section id.
 const bySection = {};

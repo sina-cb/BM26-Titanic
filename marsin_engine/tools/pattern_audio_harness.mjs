@@ -23,6 +23,9 @@
  *   --set     static control presets (export=value)
  *   --frames  render frames at 40 fps (default 80 ≈ 2 s)
  *   --bpm     override synth bpm
+ *   --model   rig model in models/<name>.js (default test_bench). FAILS LOUDLY
+ *             if the file is missing or its pixels[] lack the required fields —
+ *             never silently falls back to test_bench (codex P0).
  */
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
@@ -41,6 +44,8 @@ const patternPath = path.resolve(A.pattern);
 const synth = A.synth || 'full_track';
 if (!SYNTHS[synth]) { console.log('SYNTH_FAIL: unknown synth ' + synth); process.exit(2); }
 const frames = parseInt(A.frames || '80', 10);
+const modelName = (A.model && A.model !== 'true') ? A.model : 'test_bench';
+if (!/^[A-Za-z0-9._-]+$/.test(modelName)) { console.log('MODEL_FAIL: bad model name ' + modelName); process.exit(2); }
 const out = A.out || (process.env.HOME + '/tmp/genkit/out/vis.json');
 const SR = 44100, FFT = 1024, HOP = 512, DT = 0.025;
 const SIG_FIELD = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
@@ -51,7 +56,17 @@ if (A.mod) for (const m of A.mod.split(',')) { const [sig, target] = m.split(':'
   mods.push({ sig, target }); }
 
 // ── model + VM ───────────────────────────────────────────────────────────────
-const model = await import(pathToFileURL(path.join(ENGINE_DIR, 'models', 'test_bench.js')).href);
+// Load models/<modelName>.js. FAIL LOUDLY if the file is missing or its
+// pixels[] lack the fields meta/coords need — never silently use test_bench.
+const modelPath = path.join(ENGINE_DIR, 'models', modelName + '.js');
+if (!fs.existsSync(modelPath)) { console.log('MODEL_FAIL: no model file ' + modelPath); process.exit(2); }
+const model = await import(pathToFileURL(modelPath).href);
+if (!Array.isArray(model.pixels) || model.pixels.length === 0) {
+  console.log('MODEL_FAIL: ' + modelName + '.js exports no non-empty pixels[]'); process.exit(2); }
+const REQUIRED_PIXEL_FIELDS = ['i', 'fId', 'sId', 'nx', 'ny', 'nz'];
+for (const f of REQUIRED_PIXEL_FIELDS) {
+  if (model.pixels[0][f] === undefined) {
+    console.log('MODEL_FAIL: ' + modelName + '.js pixels[] missing required field "' + f + '"'); process.exit(2); } }
 const px = model.pixels; const N = px.length;
 const rt = await createWasmRuntime(N);
 rt.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
@@ -113,16 +128,22 @@ for (let f = 0; f < frames; f++) {
   let tot = 0; for (let i = 0; i < N; i++) { const s = rgb[i][0] + rgb[i][1] + rgb[i][2]; tot += s; if (s > 8) everLit[i] = true; }
   frameData.push(rgb); totals.push(tot); sigLog.push({ ...sig });
 }
-fs.writeFileSync(out, JSON.stringify({ pattern: path.basename(patternPath, '.js'), buffer: 'harness', model: 'test_bench', meta, frames: frameData }));
+fs.writeFileSync(out, JSON.stringify({ pattern: path.basename(patternPath, '.js'), buffer: 'harness', model: modelName, meta, frames: frameData }));
 
 // ── assertions ───────────────────────────────────────────────────────────────
 const litCount = everLit.filter(Boolean).length;
 const maxChan = Math.max(...frameData.flat().map(c => Math.max(...c)));
 const minT = Math.min(...totals), maxT = Math.max(...totals), avgT = totals.reduce((a, b) => a + b, 0) / totals.length;
 const bySec = {}; px.forEach((p, i) => { if (everLit[i]) bySec[p.sId] = (bySec[p.sId] || 0) + 1; });
-console.log(`SYNTH=${synth} FRAMES=${frames} PIX=${N} LIT=${litCount}/${N} maxChan=${maxChan}`);
+console.log(`SYNTH=${synth} FRAMES=${frames} MODEL=${modelName} PIX=${N} LIT=${litCount}/${N} maxChan=${maxChan}`);
 console.log(`TOTAL_BRI min/avg/max=${Math.round(minT)}/${Math.round(avgT)}/${Math.round(maxT)} (${maxT - minT > avgT * 0.15 ? 'ANIMATING' : 'LOW-VARIATION'})`);
-console.log(`LIT_BY_SECTION pars=${bySec[1] || 0} vintage=${bySec[2] || 0} bars=${bySec[3] || 0}`);
+// Model-agnostic per-section lit counts (test_bench labels its 1/2/3 as
+// pars/vintage/bars; any other section id reports as "s<id>").
+const TEST_BENCH_SECTION_NAMES = { 1: 'pars', 2: 'vintage', 3: 'bars' };
+const secReport = Object.keys(bySec).sort((a, b) => a - b)
+  .map(sId => `${(modelName === 'test_bench' && TEST_BENCH_SECTION_NAMES[sId]) || ('s' + sId)}=${bySec[sId]}`)
+  .join(' ');
+console.log(`LIT_BY_SECTION ${secReport}`);
 // ── QUALITY: two-color use (hue spread), contrast (dark/bright split), peak ────
 function rgb2hue(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
   if (d < 1) return -1; let h; if (mx === r) h = ((g - b) / d) % 6; else if (mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
