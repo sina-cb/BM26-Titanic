@@ -8,6 +8,49 @@
 - If a test modifies tracked state files, restore those files from a temp
   snapshot or fix the test to restore them in `finally`.
 
+## Branch Naming and Lifecycle
+
+Every branch on `origin` falls into one of the namespaces below. Use the
+right namespace for the work; do not invent new top-level prefixes.
+
+| Namespace | Purpose | Lifetime | Typical author |
+| --- | --- | --- | --- |
+| `main` | Production / integration trunk. All work lands here via squash-merged PRs. | Permanent | Human op (merges) |
+| `feat/<snake_case>` | **Durable feature branches** that outlive a single agent session — long-running work, deploy hosts, anything an open PR tracks. This is the only namespace for work meant to stick around. | Long-lived, until merged | Promoted from a session branch, or created intentionally |
+| `dev/claude/<slug>` | Multi-agent worktree sub-agent branches. Governed by `.agent/00_gol/13_multi_agent.md`. | Transient, one per multi-agent run | Instigator / sub-agents |
+| `claude/<auto_name>` | Auto-named branches created by **Claude Code on the web / cloud sessions** (random codenames like `nice-cerf-bl2jnk`). Treat as scratch until promoted. | Ephemeral | Claude Code web sessions |
+| `worktree-agent-<hash>` | **Temporary local worktree** scratch branches. Never durable work. | Ephemeral, delete after use | Local worktree agents |
+
+Rules:
+
+- **Durable work → `feat/<snake_case>`.** The slug is `snake_case` (matches
+  the codex filename rule), short and descriptive: `feat/views_rehaul`,
+  `feat/timeline_support`, `feat/wiring_diagram`. Do not leave long-lived work
+  on an auto-named `claude/<auto_name>` branch — promote it.
+- **Promote by renaming, not re-creating.** When a `claude/<auto_name>` or
+  `dev/claude/<slug>` branch becomes durable, rename it to `feat/<snake_case>`
+  using GitHub's branch-rename (UI: repo → Branches → rename; or
+  `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>`).
+  GitHub rename **retargets any open PR and preserves its history**. NEVER do a
+  manual `git push origin <new> && git push origin --delete <old>` on a branch
+  that has an open PR — that closes the PR and orphans the review.
+- **Never delete the head branch of an open PR** unless you intend to close
+  that PR. (Deleting it auto-closes the PR.)
+- **Temp branches are cleanup candidates.** `worktree-agent-*`,
+  `dev/claude/*`, and merged or superseded `claude/<auto_name>` branches should
+  be deleted from `origin` once their work has landed — i.e. merged via PR, or
+  absorbed into a `feat/` host. **Verify the content actually landed before
+  deleting** (diff against `origin/main` or the absorbing `feat/` branch); a
+  squash-merge means `git branch --merged` will NOT list them, so check by
+  content, not by the merged flag. Record the tip SHA before deleting so the
+  branch can be restored with `git push origin <sha>:refs/heads/<name>`.
+- **Worktree branches follow `13_multi_agent.md`.** Worktrees live in the
+  sibling `BM26-Titanic-worktrees/` dir, never inside the repo or `~/tmp/`.
+  Remove them with `git worktree remove` (never `rm -rf`), then delete the
+  branch. Local-only port edits to `config.yaml` never get committed.
+- **Branches stay local until the Human op says "push"** (see the first rule
+  of this file and `13_multi_agent.md` §3).
+
 ## Auto-Check Specs
 
 Before commit or merge-readiness review, follow the relevant spec files:
