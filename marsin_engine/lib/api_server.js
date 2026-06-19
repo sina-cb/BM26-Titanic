@@ -347,27 +347,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
     const { defaults, computed } = parsePatternDefaults(src);
-    for (const c of computed) {
-      console.warn(
-        `[SliderDefaults] ${channel.pattern || channel.id}: control "${c.control}" `
-        + `(var ${c.varName}) has a non-literal default "${c.raw}" — leaving VM default.`,
-      );
-    }
     const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
+    const noDefault = [];
     for (const exp of sliderExports) {
       // CPC owns these — never let a code default fight the global value.
       if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
       if (paramCenter && paramCenter.getBlockedIds(channel.id).has(exp.id)) continue;
       if (!(exp.name in defaults)) {
-        // No declared default for this slider — leave the VM's seed, but say so
-        // (Codex P0: no silent fallback). Common for non-conventional sliders.
-        console.warn(
-          `[SliderDefaults] ${channel.pattern || channel.id}: slider "${exp.name}" `
-          + 'has no parsed export var default — falling back to VM default.',
-        );
+        noDefault.push(exp.name);   // collected; summarized once below
         continue;
       }
       channel.setControl(wasmHost, exp.id, defaults[exp.name], 0, 0);
+    }
+    // Surface non-literal / no-default sliders as ONE summary line per load
+    // instead of one per slider — under autopilot cycling 50+ patterns the
+    // per-slider spam buried the actionable swap/compile errors. Still surfaced
+    // (codex P0: no silent fallback), just not flooded.
+    const who = channel.pattern || channel.id;
+    if (computed.length) {
+      console.warn(`[SliderDefaults] ${who}: ${computed.length} non-literal default(s) `
+        + `left at VM default: ${computed.map(c => `${c.control}(${c.varName})`).join(', ')}`);
+    }
+    if (noDefault.length) {
+      console.warn(`[SliderDefaults] ${who}: ${noDefault.length} slider(s) with no parsed `
+        + `export var default, left at VM default: ${noDefault.join(', ')}`);
     }
   }
 

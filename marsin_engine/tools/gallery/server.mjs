@@ -1594,6 +1594,18 @@ function handleEngineProxy(req, res, u, pathname) {
 // <!-- END deck-control -->
 
 
+// Fail with a clear, actionable message instead of an uncaught EADDRINUSE stack
+// trace when the port is already taken (codex P0: fail visibly, not cryptically).
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    process.stderr.write('FATAL: port ' + PORT + ' is already in use — another gallery/server is '
+      + 'running, or set a different --port / GALLERY_PORT.\n');
+  } else {
+    process.stderr.write('FATAL: gallery server error: ' + (e.message || e) + '\n');
+  }
+  process.exit(1);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   const lines = [];
   lines.push('');

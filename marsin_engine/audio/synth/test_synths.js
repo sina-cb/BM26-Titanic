@@ -222,7 +222,12 @@ export const SYNTH_NAMES = Object.keys(SYNTHS);
  * merged params (so callers can surface defaults).
  */
 export function fillFrame(buf, name, cursor, SR, params = {}) {
-  const synth = SYNTHS[name] || SYNTHS.tone;
+  // Fail loud on an unknown synth instead of silently substituting `tone`
+  // (codex P0: no silent fallback). Callers validate, but this is the contract.
+  const synth = SYNTHS[name];
+  if (!synth) {
+    throw new Error(`fillFrame: unknown synth "${name}" (have: ${Object.keys(SYNTHS).join(', ')})`);
+  }
   const p = { ...synth.defaults, ...params };
   for (let i = 0; i < buf.length; i++) {
     const s = synth.sample(cursor + i, SR, p);
