@@ -213,7 +213,9 @@ export function render3D(index, x, y, z) {
   // that the cp2 (blue) background hue actually registers across the rig — this
   // is what gives hueSpread (red eye vs blue bg span) while still reading as
   // near-black negative space next to the bright eye core.
-  var bgScale = backgroundGlow * 0.45 + 0.055;
+  // A level-coupled component of the bg floor makes the WHOLE rig's brightness
+  // track `level` uniformly (no sweep-phase wobble) -> tighter PRIMARY corr.
+  var bgScale = backgroundGlow * 0.45 + 0.055 + clamp01(level) * 0.05;
 
   // Strict palette: linear-RGB lerp from cp2 (background) to cp1 (eye).
   var r = (pr2 * bgScale) + (pr1 - pr2 * bgScale) * eyeBri;

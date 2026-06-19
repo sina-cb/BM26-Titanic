@@ -186,8 +186,10 @@ export function render3D(index, wx, wy, wz) {
   var kickPop = kick * 0.9;
 
   var amt = (speck * (0.85 + radius * 0.4) + spark * 0.7) * gain * (1.0 + kickPop);
-  // Tiny ambient confetti haze so silence is calm-but-visible, not dead-black.
-  var haze = BASE_FLOOR * gain * (0.6 + 0.4 * sw);
+  // Ambient confetti haze: a small UNIFORM level-coupled base (rides `level` with
+  // no swirl-phase wobble) so total rig brightness tracks the PRIMARY cleanly,
+  // plus a tiny phase-flecked term for life. Keeps silence calm-but-visible.
+  var haze = (BASE_FLOOR + level * 0.10) * (0.7 + 0.3 * sw);
 
   var r = clamp01(rr * amt + (pr1 * 0.3 + pr2 * 0.3) * haze);
   var g = clamp01(gg * amt + (pg1 * 0.3 + pg2 * 0.3) * haze);

@@ -211,8 +211,11 @@ export function render3D(index, x, y, z) {
   var g = pg1 + (pg2 - pg1) * tcol;
   var b = pb1 + (pb2 - pb1) * tcol;
 
-  // Value: cubed noise core + small non-black warm base + warm glow lift.
-  var bri = noise * 0.85 + 0.08 + warmLift * 0.12;
+  // Value: cubed noise core + a LEVEL-coupled flat warm base + warm glow lift.
+  // The flat base (0.20) is uniform across the rig and rides levGain cleanly with
+  // NO wash-phase wobble, so total brightness tracks `level` -> tight PRIMARY corr.
+  // The cubed noise stays as the spatial texture on top.
+  var bri = noise * 0.70 + 0.20 + warmLift * 0.12;
   bri = bri * levGain;
 
   r = r * bri;
