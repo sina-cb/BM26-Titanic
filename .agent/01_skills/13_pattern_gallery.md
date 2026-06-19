@@ -391,6 +391,10 @@ node tools/gallery/gallery_launcher.mjs --regen                    # clean → g
 node tools/gallery/gallery_launcher.mjs --regen --model titanic --seconds 10
 ```
 
+A full `--regen` is ~228 clips (every pattern × both default rigs × Static+Sound);
+titanic (970 px) clips dominate the time/size (~0.5 MB each, ~60 MB, several
+minutes). Use `--seconds 6` or `--pattern`/`--model test_bench` for a fast pass.
+
 ### Naming / parse scheme (backward-compatible)
 
 Widget = `<pattern>[__<seg>...]`; each `__`-segment after the pattern is

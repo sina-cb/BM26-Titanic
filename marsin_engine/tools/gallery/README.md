@@ -37,6 +37,11 @@ node tools/gallery/gallery_launcher.mjs --regen --model titanic --seconds 10
 node tools/gallery/gallery_launcher.mjs --regen --pattern 24,25,27    # rebuild a subset only
 ```
 
+**Cost (plan strike time):** a full `--regen` renders every pattern on BOTH
+default rigs × Static+Sound ≈ **~228 clips**, and titanic (970 px) clips are the
+slow/large ones (~0.5 MB each, ~60 MB total, several minutes on a laptop). For a
+quick first pass use `--seconds 6` or scope with `--pattern` / `--model test_bench`.
+
 It is standalone — NOT the production stack launcher (`launcher.js`) and shares
 no code with it. To start the bare server without the Tailscale highlight:
 
