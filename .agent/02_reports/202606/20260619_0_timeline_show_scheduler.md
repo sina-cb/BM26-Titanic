@@ -135,20 +135,39 @@ The repo already has adjacent designs; this is genuinely a new concern that sits
 ## 5. Build phases & tracker
 
 - [x] **Phase 0** — research + design doc (`docs/38`) + this tracker.
-- [ ] **Phase 1** — companions framework: launcher `companions` list +
-  `companion_base.js`; timeline child spawns/health-probes; `companions.timeline`
-  config block. *(Recommend: keep audio companion in place; just add the list.)*
-- [ ] **Phase 2** — timeline core (headless): `sun.js`, `triggers.js`,
-  `show_plan.js`, `timeline_server.js` (:6965), `engine_link.js`; clock/sun/phase
-  cues fire playlists/scenes/looks; **channel-aware actions** (deck + mixer via
-  existing routes); state persistence; unit tests.
-- [ ] **Phase 2.5 (enabling, separate slice)** — engine **per-channel autopilot
-  pool** (`docs/19` Phase 2.3): refactor `Autopilot` to `Map<channelId,state>`,
-  add `POST /mixer/channels/:id/autopilot`, restore per-channel autopilot on boot.
-- [ ] **Phase 3** — mood triggers: WS subscribe to `audioParty`/`audioStructure`;
-  dwell+cooldown; phase-gated calm→party playlist swaps.
+- [x] **Phase 1** — companions framework: launcher `COMPANIONS` registry +
+  timeline child spawns/`/health`-probes + `companions.timeline` config block.
+  Audio companion kept in place. *(launcher commit; `--help` shows "companions
+  (audio + timeline)".)*
+- [x] **Phase 2** — timeline core + server: `sun.js`, `triggers.js`,
+  `show_plan.js`, `timeline_config.js`, `timeline_state.js`, `engine_link.js`,
+  `actions.js`, `timeline_server.js` (:6965) + monitor UI. Clock/sun/phase cues
+  fire playlists/looks; channel-aware actions (deck + mixer). **31 core + 4
+  server tests.**
+- [x] **Phase 2.5** — engine **per-channel autopilot pool** (`AutopilotPool`) +
+  `GET/POST /mixer/channels/:id/autopilot`; deck back-compat preserved. **9 + 40
+  tests.** Verified LIVE: overlay cursor cycled 0→1→2→3 while deck held at 0.
+- [x] **Phase 3** — mood triggers: audio companion emits `audioParty`/
+  `audioStructure` (`mood_emit.js`, **23 tests**); timeline WS-subscribes,
+  phase-gated calm→party. Verified LIVE end-to-end (synthetic audio → CPC →
+  timeline fired `c_mood_party` → deck swap; no injection).
 - [ ] **Phase 4** — CaptainPad TIMELINE tab: day ribbon, countdowns, mood pill,
-  manual fire/hold/pause.
+  manual fire/hold/pause. *(in progress)*
+
+### 5.1 Live E2E validation (2026-06-19, container, test_bench)
+Full stack (sim :6969 + engine :6968 + timeline :6965 + audio companion :6966):
+- Timeline ↔ engine connected; sun/phase resolved tz-correctly (party_night active).
+- Manual cue fire → look applied (palette + playlist) → deck pattern swapped
+  (bioluminescence/rainbow/golden, confirmed via engine API).
+- **Mixer per-channel autopilot** cycled an overlay independently of the deck.
+- **Live mood**: audio companion synthetic-audio loud → `audioParty=1` in engine
+  CPC → timeline caught calm→party edge (gated `party_night`) → fired
+  `c_mood_party` → deck = `rainbow`. Screenshots: `.agent_renders/
+  timeline_ui_{offline,connected,live_mood}.png`.
+- Known: test_bench is sparsely patched, so sim renders muted/red — look swaps
+  are real (engine API confirms), just not dramatic on a partial model.
+- Minor polish logged: monitor-UI "NOW" clock should render in plan tz (server
+  logic already tz-correct); stale `lastError`; `lastFiredCueId` field name.
 
 ---
 
@@ -242,4 +261,10 @@ Add to `.agent/00_gol/13_multi_agent.md` ports table when Phase 1 lands.
 
 - **2026-06-19** — Phase 0: research complete; `docs/38` design doc written;
   multi-channel mixer stretch analyzed (`docs/38 §13`); this tracker created.
-  Awaiting operator review before Phase 1.
+- **2026-06-19** — Operator green-lit full build (0→100, remote-tested). Shipped
+  Phases 1, 2, 2.5, 3 on `feat/timeline_support`: timeline core + companion
+  server + monitor UI; engine per-channel autopilot pool + mixer route; audio
+  companion mood emit; launcher companions registry. ~110 tests green across the
+  slices. Full live E2E validated in-container (see §5.1) with screenshots.
+  Remaining: Phase 4 (CaptainPad TIMELINE tab) + pre-merge auto-checks + UI tz
+  polish.

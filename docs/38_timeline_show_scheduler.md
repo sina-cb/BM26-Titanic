@@ -1,7 +1,8 @@
 # 38 — Timeline / Show Director (event & mood-driven playlists)
 
-**Status:** Draft v1 — for operator review (Sina). Nothing built yet; this is
-the doc to react to before code lands.
+**Status:** v1 — **Phases 1, 2, 2.5, 3 BUILT + live-validated** on
+`feat/timeline_support` (2026-06-19); Phase 4 (CaptainPad tab) in progress. See
+the tracker for status + evidence. Original design below is unchanged.
 **Author:** remote agent (Claude), branch `feat/timeline_support`.
 **Project tracker / context:** `.agent/02_reports/202606/20260619_0_timeline_show_scheduler.md`
 **Related (all real, all reused):**
