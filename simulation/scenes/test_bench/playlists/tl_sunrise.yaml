@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: tl_sunrise
+entries:
+  - id: e_sun
+    pattern: 00_golden_hour_wash
+    label: Sunrise Warm
+    defaults: {}
+    modulations: []
+    notes: null

@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: tl_party
+entries:
+  - id: e_party
+    pattern: rainbow
+    label: Party Rainbow
+    defaults: {}
+    modulations: []
+    notes: null

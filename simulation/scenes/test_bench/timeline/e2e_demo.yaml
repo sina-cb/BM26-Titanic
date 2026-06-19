@@ -1,0 +1,24 @@
+schemaVersion: 1
+name: e2e_demo
+location: { lat: 40.7864, lon: -119.2065, tz: America/Los_Angeles, elevationM: 1190 }
+phases:
+  philharmonic: { start: { sun: sunset, offsetMin: -30 }, end: { sun: sunset, offsetMin: 60 } }
+  party_night:  { start: { sun: sunset, offsetMin: 120 }, end: { sun: sunrise, offsetMin: -60 } }
+  sunrise_set:  { start: { sun: sunrise, offsetMin: -30 }, end: { sun: sunrise, offsetMin: 90 } }
+looks:
+  calm:    { playlist: tl_calm,    palette: deep_sea }
+  party:   { playlist: tl_party,   palette: bass_drop }
+  sunrise: { playlist: tl_sunrise, palette: sunset_coral }
+cues:
+  - id: c_calm
+    label: "Set calm look"
+    trigger: { type: manual }
+    action:  { type: look, look: calm }
+  - id: c_mood_party
+    label: "DJ ramps: calm -> party"
+    trigger: { type: mood, from: calm, to: party, minDwellSec: 0, cooldownSec: 0, whenPhase: party_night }
+    action:  { type: look, look: party }
+  - id: c_sunrise
+    label: "Sunrise wind-down"
+    trigger: { type: manual }
+    action:  { type: look, look: sunrise }

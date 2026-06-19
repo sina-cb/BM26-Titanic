@@ -1,0 +1,9 @@
+schemaVersion: 1
+name: tl_calm
+entries:
+  - id: e_calm
+    pattern: 11_bioluminescence
+    label: Calm Bio
+    defaults: {}
+    modulations: []
+    notes: null
