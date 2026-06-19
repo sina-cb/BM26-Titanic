@@ -70,21 +70,24 @@ orchestrates. The one exception is the multi-agent meta files
 
 ## 3. Branch naming
 
-All sub-agent branches MUST live under the `dev/claude/` namespace:
+All sub-agent branches MUST live under the `dev/` namespace:
 
 ```text
-dev/claude/<short_slug>
+dev/<short_slug>
 ```
+
+This repo is **agent-agnostic** — do NOT put an agent's name (`claude`, etc.)
+in the branch name. The slug describes the *work*, not the tool doing it.
 
 Examples (from the 2026-05-25 multi-agent run):
 
-- `dev/claude/playlist_loading_fix`
-- `dev/claude/mixer_layer_view`
-- `dev/claude/global_effect_macros`
-- `dev/claude/deck_density_optimization`
-- `dev/claude/sidebar_scroll`
-- `dev/claude/transition_pack`
-- `dev/claude/channel_isolation`
+- `dev/playlist_loading_fix`
+- `dev/mixer_layer_view`
+- `dev/global_effect_macros`
+- `dev/deck_density_optimization`
+- `dev/sidebar_scroll`
+- `dev/transition_pack`
+- `dev/channel_isolation`
 
 Rules:
 
@@ -92,7 +95,10 @@ Rules:
 - Branches are created from the parent branch the operator is currently on
   (verify with `git rev-parse --abbrev-ref HEAD` in the main repo BEFORE
   creating worktrees). Record that parent branch in the per-task report.
-- Branches stay **local** until the operator says "push".
+- **`dev/*` branches are local only — never push them to `origin`.** They stay
+  on the machine that created them until the operator promotes the work to a
+  `feat/<snake_case>` branch (see `01_git.md` → Branch Naming and Lifecycle).
+  Pushing worktree branches to `origin` clutters the shared remote.
 
 ## 4. Worktree convention
 
@@ -121,7 +127,7 @@ PARENT=$(git rev-parse --abbrev-ref HEAD)
 
 # one per slice — example for slot 0:
 git worktree add \
-  -b dev/claude/playlist_loading_fix \
+  -b dev/playlist_loading_fix \
   ~/workspace/BM26-Titanic-worktrees/playlist_loading_fix \
   "$PARENT"
 ```
@@ -136,7 +142,7 @@ Cleanup (after merge or abandonment, on operator approval):
 
 ```bash
 git worktree remove ~/workspace/BM26-Titanic-worktrees/<slug>
-git branch -D dev/claude/<slug>        # only if abandoned
+git branch -D dev/<slug>        # only if abandoned
 ```
 
 > NEVER `rm -rf` a worktree directory. Always `git worktree remove`, which
@@ -260,7 +266,7 @@ Required sections:
 ```markdown
 # Slot <N> — <slug>
 
-- **Branch:** dev/claude/<slug>
+- **Branch:** dev/<slug>
 - **Parent branch:** <parent>
 - **Worktree:** ~/workspace/BM26-Titanic-worktrees/<slug>
 - **Slot ports:** engine <port>, sim <port>, metro <port>
@@ -322,7 +328,7 @@ the cleanest possible tip:
 For each branch:
 
 ```bash
-git merge --no-ff dev/claude/<slug> \
+git merge --no-ff dev/<slug> \
   -m "merge(claude): <slug> from slot <N> [<short summary>]"
 ```
 
@@ -355,11 +361,11 @@ for slug in <list of slugs>; do
 done
 ```
 
-Branches (`dev/claude/*`) can stay around for archival, or be deleted on
+Branches (`dev/*`) can stay around for archival, or be deleted on
 operator request:
 
 ```bash
-git branch -d dev/claude/<slug>     # safe delete (only if merged)
+git branch -d dev/<slug>     # safe delete (only if merged)
 ```
 
 ## 9. Anti-patterns (don't do these)
@@ -411,7 +417,7 @@ For sub-agents that need quick orientation:
 2. `mkdir -p ~/workspace/BM26-Titanic-worktrees`.
 3. For each slice `i` in `0..N-1`:
    - Pick a `<slug>` and a slot `i`.
-   - `git worktree add -b dev/claude/<slug> ~/workspace/BM26-Titanic-worktrees/<slug> "$PARENT"`.
+   - `git worktree add -b dev/<slug> ~/workspace/BM26-Titanic-worktrees/<slug> "$PARENT"`.
 4. Spawn N sub-agents in parallel, each with a self-contained prompt that
    contains its slot index, worktree path, branch name, design-doc link,
    and a pointer to **this** spec file.
