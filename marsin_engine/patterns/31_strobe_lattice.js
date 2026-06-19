@@ -211,7 +211,7 @@ export function render3D(index, x, y, z) {
   // cores AND brightens them. We scale the core term DOWN as flash rises so the
   // bloom stays a SHAPE cue (wider pinpoints) without pumping total brightness —
   // that keeps the kick off the brightness axis and out of the micLow correlation.
-  var bloomComp = 1.0 - clamp01(flash) * 0.45;
+  var bloomComp = 1.0 - clamp01(flash) * 0.32;
   // Cores are a crisp ACCENT (0.55×) on top of the level-borne glow budget, so
   // their drift-aliasing flicker is a small share of the per-frame total and
   // cannot dilute the micLow correlation.
