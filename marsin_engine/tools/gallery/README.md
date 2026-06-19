@@ -239,3 +239,74 @@ node tools/gallery/publish.mjs --name 27_swipe --model titanic \
   --capture ~/tmp/genkit/out/27_swipe__titanic.json --layout map --view top
 ```
 <!-- END clip-length-and-map (feat/highdef_patterns) -->
+
+<!-- BEGIN live-vis (feat/highdef_patterns) — keep separate for merge -->
+## LIVE mode — visualize the running engine (`/live`)
+
+Everything above is **OFFLINE**: pre-rendered clips in `widgets/`, no engine
+needed. The gallery ALSO has an **ONLINE / LIVE** view that renders the running
+engine's real-time per-pixel output. Both coexist and are clearly separated:
+the offline clip views (`/ /grid /compare /w/<name>`) keep working with no
+engine; `/live` is the only view that talks to the engine.
+
+### What it is
+`/live` opens a **browser WebSocket** to the engine's vis broadcast
+(`ws://<engineHost>/ws/viz` — the same stream `capture_vis.mjs` records),
+decodes the chosen buffer, and paints the rig LIVE in the **same visual style
+as the offline clips** (the strip + physical-map dot renderers are factored
+from `make_vis_clip.mjs` into `live_layout.mjs` + `live_client.js`).
+
+- **master** (default) = the DECK MAIN composition. **rig** = post dimmers / FX
+  (hardware truth). Toggle with the `master / rig` segmented control (or
+  `?buffer=rig`).
+- **Pause** freezes the paint loop. On disconnect the cells blank to black —
+  we never show stale/zero data as if it were live (codex P0: fail visibly).
+
+### Model-aware layout (why a model is needed)
+The live WS buffer is just bytes (6/px RGBWAU, in `model.pixels[]` order) with
+**no coordinates**. So the SERVER imports the active model
+(`marsin_engine/models/<model>.js`), reads each pixel's `i/fId/sId/nx/ny/nz`,
+and embeds a layout spec in the page; the client positions pixels from it
+(strip for `test_bench`, top-down dot map for `titanic`/dome/logsville — same
+`--layout/--view auto` rules as the clips). Pick the model with
+`?model=<name>` (default `test_bench`). A **missing model file fails LOUD**
+(HTTP 500 with the reason) — never a silent test_bench fallback.
+
+### engineHost resolution
+The engine host:port resolves in this order:
+
+1. `?host=<ip:port>` query on `/live`
+2. `gallery_config.json` `"engineHost"` (default `"127.0.0.1:6968"`)
+3. built-in default `127.0.0.1:6968`
+
+A present-but-malformed `engineHost` (not a bare `host:port`) is a hard error
+at startup (same fail-loud contract as `port`). The startup banner prints the
+resolved engine host.
+
+### Routes added
+| Path | Serves |
+|------|--------|
+| `/live` | LIVE visualizer page (model-aware, connection-state UI) |
+| `/live/<name>` | same page, with `<name>` shown as a caption (gallery never drives the engine — load the pattern in the engine yourself) |
+| `/live_client.js` | the browser-side live renderer module |
+| `/api/live-layout?model=<name>` | the raw model-aware layout JSON `/live` embeds |
+
+### Use it
+```bash
+cd marsin_engine
+# 1. run the engine on a model (this is what the live view mirrors):
+node engine.js --model test_bench --pattern 27_swipe
+# 2. (in another shell) start the gallery and open /live:
+node tools/gallery/gallery_launcher.mjs        # or server.mjs
+#    http://localhost:6965/live                 # test_bench strip, master buffer
+#    http://localhost:6965/live?model=titanic   # titanic top-down map
+#    http://localhost:6965/live?buffer=rig      # hardware-truth buffer
+#    http://localhost:6965/live?host=100.x.y.z:6968   # remote engine over Tailscale
+```
+The header shows the connection state: `○ connecting…`, `● connected to
+engine · <buffer> · Npx live`, or `✕ engine not reachable at <host>` (auto-
+retries every 2 s). The sibling model-picker links here as `/live?model=<active>`.
+
+Live-mode files: `live_layout.mjs` (server: model → layout spec; fail-loud),
+`live_client.js` (browser: WS decode + paint + connection-state UX).
+<!-- END live-vis (feat/highdef_patterns) -->

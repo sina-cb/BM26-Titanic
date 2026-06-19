@@ -25,13 +25,26 @@
     GET /compare         side-by-side: ?a=<name>&b=<name> (pickers if absent)
     GET /w/<name>        standalone widget HTML with sticky bar + prev/next nav
     GET /api/list        JSON [{name, mtime, num, family, model}] newest first
+    GET /live            LIVE visualizer of the running engine's vis WS
+    GET /live/<name>     same, with the pattern name as a caption
+    GET /live_client.js  the live renderer (browser module)
+    GET /api/live-layout model-aware layout JSON (?model=<name>)
     *                    clean 404
+
+  OFFLINE vs ONLINE: /, /grid, /compare, /w/<name> are OFFLINE — they replay
+  pre-rendered clips and need no engine. /live is ONLINE — it streams the
+  running engine's per-pixel vis over ws://<engineHost>/ws/viz. engineHost
+  resolves: /live?host= > gallery_config.json "engineHost" > 127.0.0.1:6968.
 */
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import url from 'url';
 import os from 'os';
+// <!-- BEGIN live-vis -->
+import { buildLiveLayout } from './live_layout.mjs';
+// <!-- END live-vis -->
+
 
 function arg(name, def) {
   const i = process.argv.indexOf('--' + name);
@@ -68,6 +81,39 @@ const PORT = parseInt(arg('port', process.env.GALLERY_PORT || configPort() || DE
 
 // Reject anything that is not a bare pattern name (no slashes, no traversal).
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+
+// <!-- BEGIN live-vis -->
+// marsin_engine/ — used to import models/<name>.js for the live layout.
+const ENGINE_DIR = path.resolve(HERE, '..', '..');
+const HERE_DIR = HERE; // for serving live_client.js statically
+const DEFAULT_ENGINE_HOST = '127.0.0.1:6968';
+const LIVE_CLIENT_PATH = path.join(HERE, 'live_client.js');
+// host:port for the running engine's vis WS. A present-but-malformed config
+// value is fatal (codex P0: no silent fallback). host:port must be a bare
+// authority — no scheme, no path.
+const SAFE_HOST = /^[A-Za-z0-9._-]+:\d{1,5}$/;
+function configEngineHost() {
+  if (!fs.existsSync(CONFIG_PATH)) return null;
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  } catch (e) {
+    process.stderr.write('FATAL: ' + CONFIG_PATH + ' is not valid JSON: ' + e.message + '\n');
+    process.exit(1);
+  }
+  if (cfg.engineHost === undefined || cfg.engineHost === null) return null;
+  if (typeof cfg.engineHost !== 'string' || !SAFE_HOST.test(cfg.engineHost)) {
+    process.stderr.write('FATAL: ' + CONFIG_PATH + ' "engineHost" must be "host:port", got: ' + cfg.engineHost + '\n');
+    process.exit(1);
+  }
+  return cfg.engineHost;
+}
+// Resolution: ?host= query (per-request) > gallery_config.json engineHost >
+// DEFAULT_ENGINE_HOST. The config value is resolved once at startup; the query
+// override is applied per request in the /live handler.
+const ENGINE_HOST = configEngineHost() || DEFAULT_ENGINE_HOST;
+// <!-- END live-vis -->
+
 
 // ---------------------------------------------------------------------------
 // Naming convention: NN_name or NN_name__<model>.
@@ -171,6 +217,9 @@ function navStrip(active) {
     ['/', 'List'],
     ['/grid', 'Grid'],
     ['/compare', 'Compare'],
+    // <!-- BEGIN live-vis -->
+    ['/live', 'Live'],
+    // <!-- END live-vis -->
   ];
   return '<nav class="nav">' + links.map(([href, lbl]) =>
     `<a href="${href}"${href === active ? ' class="on"' : ''}>${lbl}</a>`).join('') + '</nav>';
@@ -545,6 +594,124 @@ ${THEME_CSS}
 </body></html>`;
 }
 
+// <!-- BEGIN live-vis -->
+// ---------------------------------------------------------------------------
+// Live page: a LIVE visualizer of the running engine's per-pixel vis buffer.
+//
+// Unlike the offline clip views (pre-rendered HTML in widgets/), this page
+// connects a browser WebSocket to ws://<engineHost>/ws/viz, decodes the chosen
+// buffer (master|rig), and paints the rig LIVE. The WS buffer carries no
+// coordinates, so the layout is computed SERVER-side from the active model
+// (?model=<name>, default test_bench) and embedded here; the client positions
+// pixels from it. Connection state is shown explicitly — connected vs not
+// reachable — and we never show fake/zero data when disconnected (codex P0).
+//
+// host resolution: ?host= > gallery_config.json engineHost > 127.0.0.1:6968.
+// model: ?model=<name> (FAIL LOUD if the model file is missing — returns 500).
+// buffer: ?buffer=master|rig (default master). patternLabel: optional, just a
+// caption (the gallery never drives the engine; load the pattern in the engine).
+// ---------------------------------------------------------------------------
+async function livePage(opts) {
+  const model = opts.model;
+  const host = opts.host;
+  const buffer = opts.buffer === 'rig' ? 'rig' : 'master';
+  const patternLabel = opts.patternLabel || '';
+
+  // Model-aware layout (throws if the model file is missing — caller maps that
+  // to a 500 with the loud message, never a silent test_bench fallback).
+  const spec = await buildLiveLayout(ENGINE_DIR, model, { buffer });
+
+  // Build the layout body markup (empty cells; the client fills them live).
+  let bodyHtml = '';
+  if (spec.layoutMode === 'map') {
+    const L = spec.layout;
+    bodyHtml = `<div id="live-map" style="position:relative;width:${L.W}px;height:${L.H}px;max-width:100%;margin:0 auto;"></div>`;
+  } else {
+    for (let s = 0; s < spec.layout.sections.length; s++) {
+      const sec = spec.layout.sections[s];
+      const sub = sec.axis === 'x' ? 'swipe x' : 'swipe y · ' + sec.cols.length + ' strip(s)';
+      bodyHtml += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">` +
+        `<span style="font-size:12px;letter-spacing:1px;color:#9aa;">${esc(sec.name.toUpperCase())}</span>` +
+        `<span style="font-size:11px;color:#667;">${sub}</span></div>`;
+      if (sec.axis === 'x') {
+        bodyHtml += `<div id="live_r${s}" style="display:flex;gap:2px;height:28px;margin-bottom:16px;"></div>`;
+      } else {
+        bodyHtml += `<div style="display:flex;gap:18px;align-items:flex-start;margin-bottom:16px;">` +
+          sec.cols.map((_, k) => `<div id="live_r${s}_${k}" style="display:flex;flex-direction:column;gap:3px;"></div>`).join('') +
+          `</div>`;
+      }
+    }
+  }
+
+  // The client config: the model-aware layout + connection params. Only the
+  // serializable layout (no functions) goes over the wire.
+  const cfg = {
+    host, buffer, model: spec.model, pixelCount: spec.pixelCount,
+    layoutMode: spec.layoutMode, layout: spec.layout,
+  };
+  const cfgJson = JSON.stringify(cfg).replace(/</g, '\\u003c');
+
+  const layoutNote = spec.layoutMode === 'map'
+    ? 'physical map · ' + spec.view + ' · ' + spec.pixelCount + 'px'
+    : 'strip · ' + spec.pixelCount + 'px';
+
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gallery — Live</title>
+<style>
+${THEME_CSS}
+  :root {
+    --border-radius-lg: 14px;
+    --color-border-tertiary: #1d1d26;
+    --color-text-secondary: #9aa;
+    --color-text-tertiary: #667;
+  }
+  .live-bar { display:flex; align-items:center; gap:12px; margin:0 2px 10px; flex-wrap:wrap; }
+  .live-status { font-size:13px; padding:6px 12px; border-radius:999px; border:1px solid #1d1d26;
+    background:#12121a; white-space:nowrap; }
+  .live-status.connecting { color:#cda; border-color:#3a3a20; }
+  .live-status.up { color:#bfeede; border-color:#2f6a4f; background:#102a20; }
+  .live-status.down { color:#f7a7a7; border-color:#6a2f2f; background:#2a1010; }
+  .seg { display:inline-flex; border:1px solid #1d1d26; border-radius:999px; overflow:hidden; }
+  .seg button { background:#12121a; color:#9aa; border:0; padding:6px 12px; font-size:13px; cursor:pointer; }
+  .seg button.on { background:#173026; color:#bfeede; }
+  #live-pp { font-size:13px; background:#12121a; color:#9bd; border:1px solid #1d1d26;
+    border-radius:999px; padding:6px 14px; cursor:pointer; }
+  .live-meta { color:#667; font-size:12px; }
+  .live-stage { background:#06060a; border-radius:var(--border-radius-lg); padding:18px 20px;
+    border:0.5px solid var(--color-border-tertiary); overflow:auto; }
+  .live-host { color:#9bd; }
+</style></head><body>
+<header>
+  <h1>Live Visualizer <span class="sub">LIVE ENGINE</span></h1>
+  ${navStrip('/live')}
+  <div class="live-bar">
+    <span id="live-status" class="live-status connecting">○ connecting…</span>
+    <span class="seg" id="live-buf">
+      <button data-buf="master"${buffer === 'master' ? ' class="on"' : ''}>master</button>
+      <button data-buf="rig"${buffer === 'rig' ? ' class="on"' : ''}>rig</button>
+    </span>
+    <button id="live-pp">Pause</button>
+    <span class="live-meta">model <b>${esc(spec.model)}</b> · ${esc(layoutNote)} · engine <span class="live-host">${esc(host)}</span>${patternLabel ? ' · ' + esc(patternLabel) : ''}</span>
+  </div>
+</header>
+<main>
+  <div class="live-stage">
+    ${bodyHtml}
+  </div>
+  <p class="live-meta" style="margin:12px 2px;">
+    <b>master</b> = DECK MAIN composition · <b>rig</b> = post dimmers/FX (hardware truth).
+    The gallery never drives the engine — load a pattern in the engine, this view mirrors its vis.
+    Override the engine with <code>?host=ip:port</code>, the rig with <code>?model=titanic</code>.
+  </p>
+</main>
+<script>window.__LIVE__ = ${cfgJson};</script>
+<script src="/live_client.js"></script>
+</body></html>`;
+}
+// <!-- END live-vis -->
+
 // ---------------------------------------------------------------------------
 // Widget page: the published clip with a sticky bar + prev/next nav.
 // ---------------------------------------------------------------------------
@@ -623,8 +790,94 @@ const server = http.createServer((req, res) => {
     return send(res, 200, 'text/html; charset=utf-8', page);
   }
 
+  // <!-- BEGIN live-vis -->
+  // Static client module for the live visualizer (served from this dir).
+  if (pathname === '/live_client.js') {
+    let js;
+    try {
+      js = fs.readFileSync(LIVE_CLIENT_PATH, 'utf8');
+    } catch (e) {
+      return notFound(res, 'live_client.js missing: ' + e.message);
+    }
+    return send(res, 200, 'application/javascript; charset=utf-8', js);
+  }
+
+  // /live and /live/<name>: the LIVE visualizer page. <name> is just a caption
+  // (the gallery never drives the engine). Resolves model/host/buffer from the
+  // query, builds the model-aware layout, and serves the page. A missing model
+  // file fails LOUD (500), never a silent test_bench fallback.
+  if (pathname === '/live' || pathname.startsWith('/live/')) {
+    return handleLive(req, res, u, pathname);
+  }
+
+  // /api/live-layout?model=<name>[&buffer=]: the raw model-aware layout JSON
+  // (what /live embeds). Useful for the sibling model-picker / debugging.
+  if (pathname === '/api/live-layout') {
+    return handleLiveLayout(req, res, u);
+  }
+  // <!-- END live-vis -->
+
   return notFound(res, 'Unknown path: ' + pathname);
 });
+
+// <!-- BEGIN live-vis -->
+// Resolve the engine host: ?host= query > config/default. Validated to a bare
+// host:port authority so it can be dropped into ws://<host>/ws/viz.
+function resolveHost(u) {
+  const q = typeof u.query.host === 'string' ? u.query.host.trim() : '';
+  if (q) {
+    if (!SAFE_HOST.test(q)) return { error: 'Bad ?host= (want host:port): ' + q };
+    return { host: q };
+  }
+  return { host: ENGINE_HOST };
+}
+
+function resolveModel(u) {
+  const m = typeof u.query.model === 'string' && u.query.model ? u.query.model : 'test_bench';
+  if (!SAFE_NAME.test(m)) return { error: 'Bad ?model= name: ' + m };
+  return { model: m };
+}
+
+async function handleLive(req, res, u, pathname) {
+  const hr = resolveHost(u);
+  if (hr.error) return notFound(res, hr.error);
+  const mr = resolveModel(u);
+  if (mr.error) return notFound(res, mr.error);
+  const buffer = u.query.buffer === 'rig' ? 'rig' : 'master';
+  // /live/<name>: caption only.
+  let patternLabel = '';
+  if (pathname.startsWith('/live/')) {
+    patternLabel = pathname.slice('/live/'.length);
+    if (patternLabel && !SAFE_NAME.test(patternLabel)) return notFound(res, 'Bad pattern name.');
+  }
+  try {
+    const page = await livePage({ model: mr.model, host: hr.host, buffer, patternLabel });
+    return send(res, 200, 'text/html; charset=utf-8', page);
+  } catch (e) {
+    // FAIL LOUD: missing model file / bad meta is a 500 with the real reason.
+    return send(res, 500, 'text/html; charset=utf-8',
+      `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<style>body{background:#0a0a0e;color:#f7a7a7;font:16px/1.5 system-ui,sans-serif;padding:2rem;}` +
+      `a{color:#7cc;}code{color:#cdd;}</style></head><body><h1>Live error</h1>` +
+      `<p>${esc(e.message)}</p><p><a href="/live?model=test_bench">try test_bench</a> · ` +
+      `<a href="/">gallery</a></p></body></html>`);
+  }
+}
+
+async function handleLiveLayout(req, res, u) {
+  const mr = resolveModel(u);
+  if (mr.error) return notFound(res, mr.error);
+  const buffer = u.query.buffer === 'rig' ? 'rig' : 'master';
+  try {
+    const spec = await buildLiveLayout(ENGINE_DIR, mr.model, { buffer });
+    return send(res, 200, 'application/json; charset=utf-8', JSON.stringify(spec));
+  } catch (e) {
+    return send(res, 500, 'application/json; charset=utf-8',
+      JSON.stringify({ error: e.message }));
+  }
+}
+// <!-- END live-vis -->
+
 
 server.listen(PORT, '0.0.0.0', () => {
   const lines = [];
@@ -646,7 +899,8 @@ server.listen(PORT, '0.0.0.0', () => {
   } else {
     lines.push('  (no external IPv4 found — only reachable on localhost)');
   }
-  lines.push('  routes: /  /grid  /compare  /w/<name>  /api/list');
+  lines.push('  routes: /  /grid  /compare  /live  /w/<name>  /api/list  /api/live-layout');
+  lines.push('  engine host (live vis): ' + ENGINE_HOST + '  (override with /live?host=ip:port)');
   lines.push('  widgets dir: ' + WIDGETS_DIR);
   lines.push('');
   process.stdout.write(lines.join('\n') + '\n');
