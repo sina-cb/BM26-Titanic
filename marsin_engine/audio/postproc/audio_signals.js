@@ -95,7 +95,7 @@ const MIC_BANDS = [
 // analyzer, 2026-06-17 contract) feeds this key from. The detector outputs
 // the companion emits carry a binding; the rest stay engine-internal.
 const DETECTORS = [
-  { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10 },
+  { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10, osc: '/marsin/audio/structure' },
   { key: 'audioBuildScore',  label: 'Audio · Build Score',  range: [0, 1], hz: 10, osc: '/marsin/audio/build' },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', range: [0, 1], hz: 10, osc: '/marsin/audio/energy' },
   { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5  },

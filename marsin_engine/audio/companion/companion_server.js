@@ -66,6 +66,7 @@ import {
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { emitDerivedBpm } from './bpm_emit.js';
+import { emitDerivedMood } from './mood_emit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -563,6 +564,13 @@ const analyzer = new AudioAnalyzer({
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
     emitDerivedBpm(paramCenter, sendOsc);
+    // PARTY + STRUCTURE are the music-MOOD cues (PartyMode / the structure
+    // detector), emitted as built-in always-on outputs right after BPM →
+    // engine /marsin/audio/party + /marsin/audio/structure → CPC audioParty /
+    // audioStructure. The Timeline companion reads these live off the engine's
+    // param WS (no manual injection). Guarded in mood_emit.js — a NaN/out-of-
+    // range value is dropped (fail safe, no stale).
+    emitDerivedMood(paramCenter, sendOsc);
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS
