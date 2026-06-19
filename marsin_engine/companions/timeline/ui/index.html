@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Timeline Companion — Show Director</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header id="hdr">
+    <div class="hdr-left">
+      <span class="brand">TIMELINE</span>
+      <span id="planName" class="plan">—</span>
+      <span id="modePill" class="pill mode">—</span>
+    </div>
+    <div class="hdr-right">
+      <span id="engineDot" class="dot" title="engine link"></span>
+      <span id="engineLabel" class="muted">engine</span>
+      <span id="moodPill" class="pill mood">● —</span>
+      <span id="clock" class="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <section id="nextCueBar">
+    <span class="next-label">NEXT CUE</span>
+    <span id="nextCue" class="next-value">—</span>
+  </section>
+
+  <section id="controls">
+    <button id="btnPause" class="btn">PAUSE</button>
+    <button id="btnResume" class="btn primary">RESUME</button>
+    <button id="btnHold" class="btn">HOLD 30m</button>
+    <span id="bootError" class="err"></span>
+  </section>
+
+  <main id="main">
+    <div id="ribbon" class="panel">
+      <h2>DAY RIBBON</h2>
+      <div id="ribbonBody"></div>
+    </div>
+    <div id="cuesPanel" class="panel">
+      <h2>CUES</h2>
+      <div id="cuesBody"></div>
+      <h2 class="recent-h">RECENT FIRES</h2>
+      <div id="recentBody" class="recent"></div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
