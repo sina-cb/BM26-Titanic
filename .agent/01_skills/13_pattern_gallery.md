@@ -380,6 +380,17 @@ For each pattern it renders the static clip and (when the pattern has an
 widgets, and prints a per-pattern summary. No block → only the static clip,
 reported as `no-block`. A compile/render error **stops the run** (codex P0).
 
+**One action — clean + generate + serve.** To rebuild the WHOLE gallery from
+scratch and serve it in a single command, use the launcher's `--regen`: it wipes
+the old `widgets/` clips, runs the full `gen_variations` over every pattern, then
+serves — aborting before it serves if any pattern fails to render (so you never
+serve over freshly-wiped data). Forwards `--model`/`--seconds`/`--fps`/`--pattern`.
+
+```bash
+node tools/gallery/gallery_launcher.mjs --regen                    # clean → generate ALL → serve
+node tools/gallery/gallery_launcher.mjs --regen --model titanic --seconds 10
+```
+
 ### Naming / parse scheme (backward-compatible)
 
 Widget = `<pattern>[__<seg>...]`; each `__`-segment after the pattern is

@@ -21,6 +21,22 @@ node tools/gallery/gallery_launcher.mjs --port 6965  # explicit override
 GALLERY_PORT=6965 node tools/gallery/gallery_launcher.mjs
 ```
 
+**One-action refresh — `--regen`.** `node tools/gallery/gallery_launcher.mjs
+--regen` does the whole rebuild in one shot: it **wipes** the old generated
+clips from `widgets/` (the gitignored scratch — never the tracked `.gitignore`),
+**regenerates the full gallery data** (every pattern's STATIC + SOUND variation
+via `gen_variations.mjs`), and only **then serves** it. Generation is fail-loud
+(codex P0): a compile/render error aborts BEFORE the server starts, so you never
+serve a half-built gallery over freshly-wiped data. Pass-through flags forwarded
+to the generator: `--model`, `--seconds`, `--fps`, `--pattern` (subset; omit for
+the whole library).
+
+```bash
+node tools/gallery/gallery_launcher.mjs --regen                       # clean+generate ALL, then serve
+node tools/gallery/gallery_launcher.mjs --regen --model titanic --seconds 10
+node tools/gallery/gallery_launcher.mjs --regen --pattern 24,25,27    # rebuild a subset only
+```
+
 It is standalone — NOT the production stack launcher (`launcher.js`) and shares
 no code with it. To start the bare server without the Tailscale highlight:
 
