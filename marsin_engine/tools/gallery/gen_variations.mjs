@@ -124,12 +124,18 @@ function listPatterns() {
 //   modArgs   : extra harness flags (['--synth','silence'] or sound spec args)
 // Returns the final widget basename.
 function makeClip(patternFile, patternBase, model, variation, harnessFlags) {
-  const capture = path.join(TMP_DIR, patternBase + '__' + model + '__' + variation + '.json');
+  // Run-unique capture path so concurrent gen_variations processes (e.g. several
+  // tuning agents) can't clobber each other's scratch JSON for the same clip.
+  const capture = path.join(TMP_DIR,
+    patternBase + '__' + model + '__' + variation + '.' + process.pid + '.json');
   const harnessArgs = [
     HARNESS,
     '--pattern', path.join('patterns', patternFile),
     '--model', model,
     '--seconds', String(seconds),
+    // Record AT the requested fps so --fps actually changes the clip (the harness
+    // captures at --out-fps; without this it always stored 20fps).
+    '--out-fps', String(fps),
     '--out', capture,
     ...harnessFlags,
   ];

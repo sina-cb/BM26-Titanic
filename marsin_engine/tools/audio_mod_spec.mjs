@@ -104,8 +104,18 @@ function pickSynth(mappings, patternName) {
 
 // Format a float for the modString the way the block writes it (2 decimals is
 // the block convention, e.g. 0.30, 1.00). Keeps the harness token readable.
+// FAIL LOUD if a range value needs more than 2 decimals: toFixed(2) would
+// SILENTLY round it (0.305 -> 0.30), so the harness would drive a different
+// range than the block declared. The block convention is 2 decimals; anything
+// finer is a mistake we surface rather than quietly truncate.
 function fmt(n) {
-  return n.toFixed(2);
+  const s = n.toFixed(2);
+  if (Number(s) !== n) {
+    throw new Error('audio_mod_spec: range value ' + n + ' needs >2 decimals; ' +
+      'the modString is 2-decimal and would lose precision — widen it to 2 ' +
+      'decimals in the AUDIO_MODULATION_V1 block.');
+  }
+  return s;
 }
 
 // Parse the AUDIO_MODULATION_V1 block out of a pattern's SOURCE string.

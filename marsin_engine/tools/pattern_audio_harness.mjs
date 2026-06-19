@@ -233,7 +233,11 @@ for (let step = 0; step < internalSteps; step++) {
   // legacy slider := signal behaviour).
   for (const m of mods) { const id = idOf(m.target); if (id != null) {
     const s = sig[SIG_FIELD[m.sig]];
-    rt.setControl(id, m.min + (m.max - m.min) * m.curve(s));
+    // clamp01 to match the deployed engine's OVERRIDE (lib/modulation_engine.js),
+    // so an inverted (min>max) or over-range mapping renders the SAME offline as
+    // on the rig — never a quietly different result.
+    const v01 = m.min + (m.max - m.min) * m.curve(s);
+    rt.setControl(id, v01 < 0 ? 0 : (v01 > 1 ? 1 : v01));
   } }
   rt.beginFrame(internalT * DT);
   const rgb = fold(rt.renderAll6ch());

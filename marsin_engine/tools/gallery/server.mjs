@@ -1299,7 +1299,15 @@ function widgetPage(name, activeModel) {
 
 const server = http.createServer((req, res) => {
   const u = url.parse(req.url, true);
-  const pathname = decodeURIComponent(u.pathname || '/');
+  // decodeURIComponent throws URIError on a malformed escape (e.g. /w/%ZZ, /%).
+  // Guard it so one bad request returns 400 instead of throwing out of this
+  // callback and crashing the whole server (codex P0: fail visibly, not fatally).
+  let pathname;
+  try {
+    pathname = decodeURIComponent(u.pathname || '/');
+  } catch {
+    return notFound(res, 'Bad request path.');
+  }
 
   // <!-- BEGIN deck-control -->
   // Engine proxy for the deck-control surface. This is the ONLY route that
@@ -1509,11 +1517,22 @@ function handleEngineProxy(req, res, u, pathname) {
     enginePath = pathname.slice('/api/engine'.length); // includes leading '/'
   }
 
+  // Reject any '..' segment: a path like /playlists/../../mixer/view-override
+  // passes a bare prefix check but, once the engine normalizes it, reaches
+  // endpoints the allowlist means to block. Normalize-and-compare here so the
+  // allowlist is the real boundary (no traversal escape).
+  if (enginePath.split('/').includes('..')) {
+    return sendJson(res, 403, { error: 'engine path traversal rejected', path: enginePath });
+  }
+
   if (!engineAllowed(req.method, enginePath)) {
     return sendJson(res, 403, { error: 'engine endpoint not allowed', method: req.method, path: enginePath });
   }
 
-  const search = u.search || '';
+  // Do NOT forward the query string: the allowlist inspects the path only, and
+  // no allowed endpoint needs a query — relaying it verbatim would smuggle
+  // un-vetted input to the engine. Drop it entirely.
+  const search = '';
   const enginePort = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[1] : '6968';
   const engineHostname = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[0] : ENGINE_HOST;
 
