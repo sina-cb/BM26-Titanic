@@ -33,6 +33,15 @@
       MODULATE sliderRadius (radius) <- micFlux  // sweep travel / eye-width amplitude
       MODULATE sliderTrail  (trail)  <- micHigh  // soft glow / afterglow
     PRIMARY is a clean level->gain (no phase wobble) so corr stays high.
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep/amount
+    The VINTAGE heads (sectionId == 2) are audience BLINDERS: a soft warm-white
+    keep glows there always, and when the eye PASSES under them (or the kick
+    hits) the W channel snaps hard to a white punch. sliderBlinderBite shapes how
+    snappy/concentrated that hit is. White is ADDITIVE over the strict cp1/cp2
+    geometry — pars/bars stay coloured, only the vintage heads carry the bite.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -44,6 +53,9 @@ export var trail = 0.3;        // soft afterglow / glow (audio target)
 export var eyeWidth = 0.15;    // eye core half-width knob (identity)
 export var backgroundGlow = 0.05; // faint background glow knob (identity)
 export var direction = 0.55;   // sweep direction (guarded; never freezes)
+export var whiteLevel = 0.35;  // WHITE: overall vintage-head white amount/keep
+export var whiteKick = 0.0;    // WHITE: kick-driven blinder pop (audio target)
+export var blinderBite = 0.55; // WHITE: how snappy/concentrated the blinder hit
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Classic Red eye
 export var cp2H = 0.6, cp2S = 1.0, cp2V = 0.5; // Blue background
@@ -57,6 +69,9 @@ export function sliderRadius(v) { radius = v; }
 export function sliderTrail(v) { trail = v; }
 export function sliderEyeWidth(v) { eyeWidth = v; }
 export function sliderBackgroundGlow(v) { backgroundGlow = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 export function sliderDirection(v) {
   // Dead-zone guard: slider-center would give 0 (frozen sweep). Keep the sign
   // away from 0 so the user-direction component never freezes.
@@ -205,5 +220,28 @@ export function render3D(index, x, y, z) {
   var g = (pg2 * bgScale) + (pg1 - pg2 * bgScale) * eyeBri;
   var b = (pb2 * bgScale) + (pb1 - pb2 * bgScale) * eyeBri;
 
-  rgb(clamp01(r * briGain), clamp01(g * briGain), clamp01(b * briGain));
+  r = clamp01(r * briGain);
+  g = clamp01(g * briGain);
+  b = clamp01(b * briGain);
+
+  // VINTAGE BLINDER (sectionId == 2 upper heads). White is its own dimension via
+  // the W emitter — additive, only on the vintage heads, so pars/bars keep the
+  // strict red/blue geometry. A gentle warm-white keep always glows; the PASS of
+  // the eye under a head and/or the kick snaps W hard for an audience punch.
+  var w = 0.0;
+  var a = 0.0;
+  if (sectionId == 2) {
+    var wl = clamp01(whiteLevel);
+    // blinderBite shapes the eye-pass falloff: high bite -> tighter, snappier.
+    var bite = 1.0 + clamp01(blinderBite) * 4.0;
+    var pass = pow(eye, bite);                 // eye core proximity -> snappy
+    var keep = wl * 0.16;                       // calm always-on warm-white keep
+    var passW = pass * wl * (0.5 + 0.5 * clamp01(blinderBite));
+    var hitW = clamp01(whiteKick) * (0.55 + 0.45 * pass) * (0.7 + 0.3 * eyeBri);
+    w = clamp01((keep + passW + hitW * 1.6) * briGain);
+    // Tiny warm amber under the white so the blinder reads warm, not clinical.
+    a = clamp01(w * 0.18);
+  }
+
+  rgbwau(r, g, b, w, a, 0.0);
 }

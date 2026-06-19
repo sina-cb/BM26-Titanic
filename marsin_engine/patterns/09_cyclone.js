@@ -31,6 +31,15 @@
       MODULATE sliderKick    (kick)    <- micKick   // confetti burst
       MODULATE sliderRadius  (radius)  <- micFlux   // travel / speck size
       MODULATE sliderDensity (density) <- micHigh   // speck count / sparkle
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // white burst flash + blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep/amount
+    On the KICK the confetti specks throw a crisp white catch-light glint, and the
+    VINTAGE heads (sectionId == 2) fire HARD as audience BLINDERS via the W
+    channel. sliderBlinderBite shapes how concentrated/snappy that vintage flash
+    is. White is ADDITIVE over the strict cp1/cp2 confetti — it must not wash the
+    whole rig white; pars/bars keep their colour, the vintage heads carry the bite.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -40,6 +49,9 @@ export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
 export var kick = 0.0;           // AUDIO: confetti burst pop
 export var radius = 0.4;         // AUDIO: travel reach / speck size
 export var density = 0.45;       // AUDIO: speck count / sparkle
+export var whiteLevel = 0.3;     // WHITE: overall white amount (speck glint + vintage keep)
+export var whiteKick = 0.0;      // WHITE: kick-driven white flash / blinder pop (audio target)
+export var blinderBite = 0.6;    // WHITE: vintage-head blinder snap / concentration
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;  // confetti A (red)
 export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // confetti B (green)
@@ -52,6 +64,9 @@ export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
 export function sliderDensity(v) { density = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var SWIRL_RATE = 0.45;      // swirl streams per second at localSpeed = 1.0
@@ -178,5 +193,23 @@ export function render3D(index, wx, wy, wz) {
   var g = clamp01(gg * amt + (pg1 * 0.3 + pg2 * 0.3) * haze);
   var b = clamp01(bb * amt + (pb1 * 0.3 + pb2 * 0.3) * haze);
 
-  rgb(r, g, b);
+  // WHITE (additive over the strict confetti). The catch-light sparkle glints
+  // white on the kick; the vintage heads fire hard as audience blinders.
+  var wl = clamp01(whiteLevel);
+  var wk = clamp01(whiteKick);
+  // Speck/sparkle white glint — crisp, kick-flashed, kept off the coloured body
+  // so the confetti stays two-colour (white only on the bright catch-lights).
+  var w = spark * wl * (0.4 + 0.6 * wk) * gain;
+  var a = 0.0;
+  if (sectionId == 2) {
+    // Vintage BLINDER: snap the W channel on the kick. blinderBite concentrates
+    // the flash (higher bite -> punchier, less always-on glow).
+    var bite = clamp01(blinderBite);
+    var keep = wl * (0.14 * (1.0 - 0.6 * bite));   // calm warm-white keep
+    var hit = wk * (0.7 + 0.6 * bite) * (0.6 + 0.4 * sw);  // hard blinder pop
+    w = clamp01((keep + hit * 1.7) * gain);
+    a = clamp01(w * 0.16);                           // faint warm tint
+  }
+
+  rgbwau(r, g, b, clamp01(w), a, 0.0);
 }

@@ -26,6 +26,16 @@
       MODULATE sliderKick    (kick)    <- micKick  // sparkle-burst brightness pop
       MODULATE sliderRadius  (radius)  <- micFlux  // sparkle spread / bloom reach
       MODULATE sliderDensity (density) <- micHigh  // how many sparkles fire (hats)
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // white-hot sparkle pop + vintage blinder
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white-glint amount
+    Sparkles throw a crisp W glint (white-hot on the kick); sliderWhiteWarmth
+    tints that glint toward warm amber (a) vs cool UV (u). On the kick the VINTAGE
+    heads (sectionId == 2) also fire a white blinder pop. White is ADDITIVE over
+    the strict cp1/cp2 wash — only the sparks/heads carry it, never washing the
+    whole rig white. The legacy whiteGlint/amberGlint/uvGlint knobs set the base
+    glint mix; the white_* controls scale + kick-drive it.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -41,6 +51,9 @@ export var backgroundLevel = 0.2;
 export var whiteGlint = 0.42;
 export var amberGlint = 0.18;
 export var uvGlint = 0.12;
+export var whiteLevel = 0.6;   // WHITE: overall white-glint amount (scales the glint mix)
+export var whiteKick = 0.0;    // WHITE: kick-driven white-hot sparkle pop + blinder (audio target)
+export var whiteWarmth = 0.45; // WHITE: glint tint, 0=cool/UV .. 1=warm/amber
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Left / "A" colour (cyan)
 export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // Right / "B" colour (amber)
@@ -59,6 +72,9 @@ export function sliderBackgroundLevel(v) { backgroundLevel = v; }
 export function sliderWhiteGlint(v) { whiteGlint = v; }
 export function sliderAmberGlint(v) { amberGlint = v; }
 export function sliderUvGlint(v) { uvGlint = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var MAX_RATE = 0.5;          // base wash drift turns/sec at localSpeed = 1.0
@@ -182,9 +198,26 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tColour) * bri;
   var b = (pb1 + (pb2 - pb1) * tColour) * bri;
 
-  // Crisp glints on the spark (kept audio-coupled via level).
-  var w = sparkV * whiteGlint * level;
-  var a = sparkV * amberGlint * level;
-  var u = sparkV * uvGlint * level;
+  // WHITE — crisp glints on the spark, now controllable + kick-driven. whiteLevel
+  // scales the base glint mix; whiteKick makes the spark go WHITE-HOT on the beat;
+  // whiteWarmth tints the glint between cool UV (0) and warm amber (1). Additive
+  // over the strict cp1/cp2 wash — only the firing sparks carry the white.
+  var wl = clamp01(whiteLevel);
+  var wk = clamp01(whiteKick);
+  var warm = clamp01(whiteWarmth);
+  var glint = sparkV * level * (0.35 + 1.3 * wl) * (1.0 + wk * 1.8);
+  var w = glint * whiteGlint;
+  // Warmth crossfades the glint's secondary emitter between amber and UV.
+  var a = glint * amberGlint * warm;
+  var u = glint * uvGlint * (1.0 - warm);
+
+  // VINTAGE BLINDER: on the kick the upper heads punch white for the audience.
+  if (sectionId == 2) {
+    var keep = wl * 0.12;                          // calm warm-white keep
+    var hit = wk * (0.7 + 0.5 * sparkV);          // hard blinder pop on kick
+    w = clamp01(w + (keep + hit * 1.6) * level);
+    a = clamp01(a + w * 0.16 * warm);
+  }
+
   rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(a), clamp01(u));
 }
