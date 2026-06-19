@@ -9,14 +9,14 @@
 
   What it adds over `node server.mjs`: it resolves the served port up front
   (same contract as the server: --port > GALLERY_PORT > gallery_config.json >
-  6765, malformed config is fatal), prints the Tailscale phone URL prominently,
+  6965, malformed config is fatal), prints the Tailscale phone URL prominently,
   then spawns server.mjs pinned to that port so launcher and server can never
   disagree. Ctrl+C tears the server down cleanly.
 
   Start (from marsin_engine/, or anywhere):
-    node tools/gallery/gallery_launcher.mjs            # port from gallery_config.json (6765)
-    node tools/gallery/gallery_launcher.mjs --port 6765
-    GALLERY_PORT=6765 node tools/gallery/gallery_launcher.mjs
+    node tools/gallery/gallery_launcher.mjs            # port from gallery_config.json (6965)
+    node tools/gallery/gallery_launcher.mjs --port 6965
+    GALLERY_PORT=6965 node tools/gallery/gallery_launcher.mjs
 */
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -32,7 +32,7 @@ function arg(name, def) {
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const SERVER = path.join(HERE, 'server.mjs');
 const CONFIG_PATH = path.join(HERE, 'gallery_config.json');
-const DEFAULT_PORT = 6765;
+const DEFAULT_PORT = 6965;
 
 // Mirror server.mjs's port contract so the URL we print is the port the server
 // will actually bind. A present-but-malformed config is fatal — we never

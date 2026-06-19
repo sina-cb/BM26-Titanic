@@ -5,14 +5,14 @@
   DEV/REVIEW TOOL ONLY. Completely separate from engine.js / launcher.js.
   Node built-ins only (http, fs, path, url, os) — no npm deps, no CDNs.
 
-  Port comes from tools/gallery/gallery_config.json ({"port": 6765}); override
+  Port comes from tools/gallery/gallery_config.json ({"port": 6965}); override
   with --port or GALLERY_PORT. A present-but-malformed config is a hard error
   (codex P0: fail loudly, never silently fall back).
 
   Start (from marsin_engine/, or anywhere):
-    node tools/gallery/server.mjs            # port from gallery_config.json (6765)
-    node tools/gallery/server.mjs --port 6765
-    GALLERY_PORT=6765 node tools/gallery/server.mjs
+    node tools/gallery/server.mjs            # port from gallery_config.json (6965)
+    node tools/gallery/server.mjs --port 6965
+    GALLERY_PORT=6965 node tools/gallery/server.mjs
 
   Routes:
     GET /            phone-friendly index (search + list of widgets)
@@ -34,7 +34,7 @@ function arg(name, def) {
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const WIDGETS_DIR = path.join(HERE, 'widgets');
 const CONFIG_PATH = path.join(HERE, 'gallery_config.json');
-const DEFAULT_PORT = 6765;
+const DEFAULT_PORT = 6965;
 
 // Port resolution: --port arg > GALLERY_PORT env > gallery_config.json port >
 // DEFAULT_PORT. A present-but-malformed config is fatal — we never quietly fall

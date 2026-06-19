@@ -24,12 +24,12 @@ skill is just how you get them onto a phone.
 
 ## The port (config-driven)
 The served port lives in **`marsin_engine/tools/gallery/gallery_config.json`**
-(`{ "port": 6765 }`). Resolution order:
-`--port` arg > `GALLERY_PORT` env > `gallery_config.json` > built-in `6765`.
+(`{ "port": 6965 }`). Resolution order:
+`--port` arg > `GALLERY_PORT` env > `gallery_config.json` > built-in `6965`.
 A present-but-malformed config is a **hard error** — the server exits loudly
 rather than quietly picking another port (codex P0: no silent fallbacks).
-Port **6765** binds `0.0.0.0` and deliberately stays off the engine/sim range
-6967–6972.
+Port **6965** binds `0.0.0.0` — in the 69xx range, one slot below the
+engine/sim block 6967–6972 (no collision).
 
 ## The loop (capture → publish → serve → phone)
 
@@ -62,17 +62,17 @@ Port **6765** binds `0.0.0.0` and deliberately stays off the engine/sim range
    appears without a restart):
    ```bash
    cd marsin_engine
-   node tools/gallery/gallery_launcher.mjs   # port from gallery_config.json (6765)
+   node tools/gallery/gallery_launcher.mjs   # port from gallery_config.json (6965)
    ```
    The launcher resolves the port (same contract as the server), prints the
-   **Tailscale phone URL** (`http://100.x.y.z:6765/`) up front, then spawns
+   **Tailscale phone URL** (`http://100.x.y.z:6965/`) up front, then spawns
    `server.mjs` pinned to that port. It is standalone — NOT the production stack
    launcher (`launcher.js`) and shares no code with it. (You can still run
    `node tools/gallery/server.mjs` directly if you don't want the Tailscale
    highlight.)
 
 4. **Phone** (Tailscale up on both machine and phone): open
-   `http://<your-tailscale-ip>:6765/`, use the search box, tap a pattern, watch
+   `http://<your-tailscale-ip>:6965/`, use the search box, tap a pattern, watch
    it animate (the clip has Pause + Speed; a sticky `← gallery` bar returns).
 
 ## URL scheme

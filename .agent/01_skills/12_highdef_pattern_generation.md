@@ -299,10 +299,10 @@ node tools/gallery/publish.mjs --name NN_name --capture ~/tmp/genkit/out/NN_name
 without restarting):
 ```bash
 cd marsin_engine
-node tools/gallery/server.mjs            # port from gallery_config.json (6765), binds 0.0.0.0
+node tools/gallery/server.mjs            # port from gallery_config.json (6965), binds 0.0.0.0
 ```
 It prints the candidate URLs; on the **phone** (Tailscale up) open
-`http://<your-tailscale-ip>:6765/`, use the search box, tap the pattern name, and
+`http://<your-tailscale-ip>:6965/`, use the search box, tap the pattern name, and
 watch the visualization. (`/` = index, `/w/<name>` = the clip, `/api/list` = JSON.)
 
 So the loop is: *"I just made `NN_name`"* → `publish.mjs --name NN_name` →

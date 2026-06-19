@@ -144,9 +144,9 @@ offline **pattern gallery** and open it on the phone:
 ```bash
 cd marsin_engine
 node tools/gallery/publish.mjs --name <pattern> --capture ~/tmp/genkit/out/<pattern>.json
-node tools/gallery/server.mjs            # port from gallery_config.json (6765) — prints the Tailscale URL
+node tools/gallery/server.mjs            # port from gallery_config.json (6965) — prints the Tailscale URL
 ```
-Then open `http://<your-tailscale-ip>:6765/` on the phone, search, tap the name.
+Then open `http://<your-tailscale-ip>:6965/` on the phone, search, tap the name.
 The gallery is a standalone offline tool (not wired to the launcher). Full pipeline
 + details: skill `13_pattern_gallery.md`,
 `.agent/01_skills/12_highdef_pattern_generation.md` §11, and

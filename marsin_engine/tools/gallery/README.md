@@ -16,9 +16,9 @@ phone URL up front, then spawns the server):
 
 ```bash
 cd marsin_engine
-node tools/gallery/gallery_launcher.mjs              # port from gallery_config.json (6765)
-node tools/gallery/gallery_launcher.mjs --port 6765  # explicit override
-GALLERY_PORT=6765 node tools/gallery/gallery_launcher.mjs
+node tools/gallery/gallery_launcher.mjs              # port from gallery_config.json (6965)
+node tools/gallery/gallery_launcher.mjs --port 6965  # explicit override
+GALLERY_PORT=6965 node tools/gallery/gallery_launcher.mjs
 ```
 
 It is standalone — NOT the production stack launcher (`launcher.js`) and shares
@@ -27,15 +27,15 @@ no code with it. To start the bare server without the Tailscale highlight:
 ```bash
 cd marsin_engine
 node tools/gallery/server.mjs              # same port contract
-node tools/gallery/server.mjs --port 6765  # explicit override
-GALLERY_PORT=6765 node tools/gallery/server.mjs
+node tools/gallery/server.mjs --port 6965  # explicit override
+GALLERY_PORT=6965 node tools/gallery/server.mjs
 ```
 
-The port lives in **`gallery_config.json`** (`{ "port": 6765 }`). Resolution
+The port lives in **`gallery_config.json`** (`{ "port": 6965 }`). Resolution
 order is `--port` arg > `GALLERY_PORT` env > `gallery_config.json` > built-in
-default `6765`. A present-but-malformed config is a hard error (we never
-silently fall back to a different port). **Port 6765** binds `0.0.0.0` and
-deliberately stays off the engine/sim range 6967–6972. On startup it prints the
+default `6965`. A present-but-malformed config is a hard error (we never
+silently fall back to a different port). **Port 6965** binds `0.0.0.0` — in the
+69xx range, one slot below the engine/sim block 6967–6972 (no collision). On startup it prints the
 port, the localhost URL, and every non-internal IPv4 address so you can pick
 your Tailscale one.
 
@@ -44,7 +44,7 @@ your Tailscale one.
 With Tailscale up on both the laptop and the phone, open:
 
 ```text
-http://<your-tailscale-ip>:6765/
+http://<your-tailscale-ip>:6965/
 ```
 
 on the phone. The server prints the candidate addresses at startup — use the
@@ -96,7 +96,7 @@ trailing `<script>` animates it.
 
 - `gallery_launcher.mjs` — launch + serve: Tailscale-aware wrapper that spawns `server.mjs` on the resolved port.
 - `server.mjs` — the http server (index, `/w/<name>`, `/api/list`, 404).
-- `gallery_config.json` — the served port (`{ "port": 6765 }`).
+- `gallery_config.json` — the served port (`{ "port": 6965 }`).
 - `publish.mjs` — CLI to publish/update a widget (both forms above).
 - `widgets/` — published `<name>.html` pages (scratch; gitignored).
 - `widgets/.gitignore` — ignores everything in the dir except itself.
