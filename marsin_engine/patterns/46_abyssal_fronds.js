@@ -1,5 +1,5 @@
 /*
-  46_abyssal_fronds.js — ABYSSAL FRONDS (HD, sound-reactive).
+  46_abyssal_fronds.js — ABYSSAL FRONDS (HD, sound-reactive, BREATHING).
 
   An HD, audio-reactive reinterpretation of 22_abyssal_sway_garden. Vertical
   fronds / kelp stand across the whole rig and sway laterally in a slow abyssal
@@ -8,6 +8,14 @@
   frond's phosphorescent glowing TIP is cp2 (bright, distinct) so BOTH palette
   colours always read on the rig. HD comes from sharp bright tips on crisp
   stalks over genuinely DARK water between fronds — never a mushy wash.
+
+  THE BREATH (autonomous, clock-driven — alive even in silence):
+    The whole garden breathes like a tide. A slow smooth swell/ebb cycle
+    (breathe) on its OWN clock makes the fronds sway WIDER on the in-breath and
+    draw back on the out-breath, with a gentle brightness lift riding the swell.
+    This runs from the clock alone, so the garden sways and breathes with NO
+    audio mapped. `breathRate` sets the breath speed; `localSpeed` sets the base
+    animation rate of the current itself.
 
   SPATIAL LAYOUT (coordinate-driven, covers the whole rig):
     - Every section roots fronds in nx (lateral) and grows them in height.
@@ -24,18 +32,30 @@
       PHI=1.6180339887, SQRT2=1.4142135624, SQRT3=1.7320508076,
       GOLDEN=11.0905 (golden-angle * 1000-ish irrational), density=irr float.
 
+  TWO AUDIO DIMENSIONS (decoupled so neither fights the other):
+    PRIMARY  — the GLOW LEVEL. micLow -> sliderLevel is a DIRECT brightness
+               multiplier on the whole garden. It does NOT drive the sway
+               amplitude (that is the autonomous breath) or reshape geometry,
+               so total rig brightness tracks the lows cleanly (corr >= 0.6).
+    DETAIL   — the GLINTS. micHigh -> sliderGlints raises the phosphorescent tip
+               level / lowers the glint threshold (a DIFFERENT visual dimension:
+               fine tip sparkle, not bulk brightness).
+
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
   AUDIO_MODULATION_V1:
-    sliderCurrent <- micLow  range 0.30..0.95 curve linear   # PRIMARY brightness + sway amplitude
-    sliderGlints  <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: tip phosphorescence/glints
-  Static (unmapped) params: localSpeed, frondDensity, baseGlow, colorPalette1/2.
+    sliderLevel  <- micLow  range 0.35..1.00 curve linear   # PRIMARY brightness: bass directly brightens the garden
+    sliderGlints <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: tip phosphorescence/glints
+  Static (unmapped) params: localSpeed, breathRate, breathDepth, frondDensity,
+  baseGlow, colorPalette1/2.
   Identity-slider convention: each slider stores v directly; scaling happens in
   render. At rest (silence) the garden glows a calm, non-black blue/green sway.
 
   CONTROLS (UI order = declaration order)
     - localSpeed : current drift rate (sway + flicker animation speed).
-    - current    : sway amplitude + overall brightness. PRIMARY audio handle.
-    - glints     : tip phosphorescence / glint intensity. 2nd audio handle.
+    - level      : overall brightness. PRIMARY audio handle (micLow).
+    - glints     : tip phosphorescence / glint intensity. 2nd audio handle (micHigh).
+    - breathRate : how fast the autonomous tide swell/ebb breathing cycles.
+    - breathDepth: how much the breath widens/narrows the sway.
     - frondDensity : how many fronds stand across the rig.
     - baseGlow   : calm resting brightness floor (never fully black).
     - colorPalette1/2 : cp1 deep abyssal blue body, cp2 bioluminescent tip.
@@ -43,8 +63,10 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;     // current drift / animation rate
-export var current = 0.5;        // PRIMARY: sway amplitude + overall brightness (<- micLow) — mid bias
+export var level = 0.5;          // PRIMARY: DIRECT overall brightness (<- micLow)
 export var glints = 0.5;         // 2nd dimension: tip phosphorescence (<- micHigh)
+export var breathRate = 0.5;     // autonomous tide swell/ebb breathing speed
+export var breathDepth = 0.5;    // how much the breath widens/narrows the sway
 export var frondDensity = 0.5;   // how many fronds stand across the rig
 export var baseGlow = 0.4;       // calm resting floor (never fully black)
 
@@ -54,8 +76,10 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderCurrent(v) { current = v; }     // micLow maps here (PRIMARY)
-export function sliderGlints(v) { glints = v; }        // micHigh maps here (2nd dim)
+export function sliderLevel(v) { level = v; }          // micLow maps here (PRIMARY)
+export function sliderGlints(v) { glints = v; }         // micHigh maps here (2nd dim)
+export function sliderBreathRate(v) { breathRate = v; }
+export function sliderBreathDepth(v) { breathDepth = v; }
 export function sliderFrondDensity(v) { frondDensity = v; }
 export function sliderBaseGlow(v) { baseGlow = v; }
 
@@ -106,8 +130,10 @@ function clamp01(v) {
 // ── Per-frame scalars (delta-accumulated so SPEED drags don't phase-jump) ────
 var tCur = 0.0;       // slow sway-current phase (turns, 0..1)
 var tFlick = 0.0;     // faster phosphorescent flicker phase (turns, 0..1)
+var breathe = 0.0;    // autonomous tide swell/ebb breath phase (turns, 0..1)
 var swayAmp = 0.0;    // resolved sway amplitude this frame
-var briGain = 0.0;    // resolved overall brightness gain this frame
+var briGain = 0.0;    // resolved overall DIRECT brightness gain (micLow) this frame
+var breathFloor = 0.0;// resolved resting floor this frame (swells with the breath)
 var density = 7.0;    // resolved frond count this frame (irrational)
 
 export function beforeRender(delta) {
@@ -126,13 +152,39 @@ export function beforeRender(delta) {
   tFlick = tFlick + dt * 0.14 * rate;
   tFlick = tFlick - floor(tFlick);
 
-  // PRIMARY audio handle: micLow -> `current` drives BOTH sway amplitude and
-  // overall brightness, so louder lows visibly sway the garden harder AND
-  // brighten it (continuous corr(micLow, brightness) >= 0.5). briGain has a
-  // small floor (calm visible garden) but is dominated by the micLow term so
-  // total rig brightness tracks the lows.
-  swayAmp = 0.08 + current * 0.42;
-  briGain = 0.22 + current * 1.40;     // overall brightness rises hard with micLow
+  // The BREATH runs on its OWN clock (breathRate), independent of localSpeed and
+  // of audio, so the garden sways/breathes even in silence. Exponential rate so
+  // the breathRate fader feels even (slow tide ~11 s .. brisk ~3 s per breath;
+  // the ~7 s default reads as a calm ocean tide).
+  var breathMult = pow(2.0, (breathRate - 0.5) * 3.0);
+  breathe = breathe + dt * 0.135 * breathMult;
+  breathe = breathe - floor(breathe);
+
+  // ── BREATH SIZE (autonomous): the swell/ebb wave drives the SWAY amplitude,
+  // so the fronds open wide on the in-breath and draw back on the out-breath.
+  // This is the SPATIAL motion — it is NOT the audio brightness, so it never
+  // decorrelates micLow. breathDepth sets how much the sway opens and closes.
+  var swell = wave(breathe);                 // 0..1 smooth swell/ebb
+  // Keep the breath's SWAY swing GENTLE: a wider sway shifts which fronds are
+  // lit and so nudges TOTAL brightness, which would decorrelate the micLow
+  // response. A modest swing keeps the open/close sway clearly VISIBLE while the
+  // bulk brightness stays governed by micLow.
+  var depth = 0.26 + breathDepth * 0.50;     // breath swing on the sway (visible tide)
+  swayAmp = 0.08 + (0.10 + 0.14 * swell) * depth;
+
+  // ── PRIMARY audio handle: micLow -> `level` is a DIRECT brightness multiplier
+  // on the whole garden, a PURE function of micLow with NO breath term, so TOTAL
+  // rig brightness tracks the lows cleanly (corr >= 0.6) and the tide-breath
+  // never reads as a brightness pulse the lows didn't cause (the decorrelation
+  // the review flagged). The breath is fully SPATIAL — it widens/narrows the
+  // sway above — so it reads as open/close motion without touching brightness.
+  briGain = 0.26 + level * 1.74;
+
+  // Resting floor: a tiny non-black keep that SWELLS with the breath so the dark
+  // water visibly breathes in silence (mission-critical: never fully black). It
+  // is a small additive lift, well below the micLow body brightness, so it does
+  // not decorrelate the PRIMARY brightness response.
+  breathFloor = baseGlow * (0.030 + 0.030 * swell);
 
   // Irrational frond count, never an integer multiple.
   density = 4.3 + frondDensity * 9.7;
@@ -167,7 +219,8 @@ export function render3D(index, x, y, z) {
   // ── Lateral sway: slow abyssal current, irrational phase per frond ───────
   // Higher up a frond bends MORE (cantilever): scale by hw^2 on the primary
   // sway, hw on the slow counter-sway. Two irrational frequencies (PHI, SQRT2/
-  // SQRT3) never lock into a repeating period.
+  // SQRT3) never lock into a repeating period. swayAmp is the BREATH (clock),
+  // so the garden opens and closes on its own tide, audio-independent.
   var bend = sin(tCur * 6.2831853 + nx * PHI * 7.0) * swayAmp * hw * hw;
   var bendSlow = sin(tCur * SQRT2 * 6.2831853 + nx * SQRT3 * 4.0) * swayAmp * hw * 0.5;
   var swayedX = nx + bend + bendSlow;
@@ -190,8 +243,8 @@ export function render3D(index, x, y, z) {
   // ── Phosphorescent TIP: localized to the top of each frond, jittered per
   // frond so tips don't flicker in unison. micHigh -> `glints` lowers the
   // threshold and lifts intensity, so highs make the tips glint brighter
-  // (a DIFFERENT dimension than micLow's sway/brightness). The tip rides on
-  // the frond spine and on the broad top band so the bright cp2 colour shows
+  // (a DIFFERENT dimension than micLow's brightness). The tip rides on the
+  // frond spine and on the broad top band so the bright cp2 colour shows
   // across the rig (not just the very top heads). ──────────────────────────
   var tipBand = clamp01((hw - 0.40) / 0.60);
   tipBand = tipBand * tipBand;                       // crisp-ish top band
@@ -210,9 +263,10 @@ export function render3D(index, x, y, z) {
 
   // ── Compose: dark water between fronds, calm non-black resting floor. The
   // body brightness is multiplied by briGain (micLow) so total rig brightness
-  // tracks the lows; floor is a tiny static lift so silence is never black. ──
-  var floorV = baseGlow * 0.045;
-  var bri = (body * 0.95 + tipGlow) * briGain + floorV;
+  // tracks the lows; the floor is a tiny lift that SWELLS AND EBBS with the
+  // breath so the dark water visibly breathes in silence without pulsing the
+  // audio-driven frond brightness. `breathFloor` is the resolved per-frame value.
+  var bri = (body * 0.95 + tipGlow) * briGain + breathFloor;
   bri = clamp01(bri);
 
   // ── Palette: dark water leans cp1 (deep blue), the bright frond SPINES and
@@ -220,7 +274,7 @@ export function render3D(index, x, y, z) {
   // always present across the rig. Driving tcol off the frond spine (`frond`)
   // makes every lit stalk glow green against blue water — the cp1/cp2 split
   // shows on the bars too, not just the tall heads (hueSpread). ─────────────
-  var tcol = frond * 0.62 + tipBand * 0.55 + tipGlow * 0.9;
+  var tcol = frond * 0.66 + tipBand * 0.58 + tipGlow * 0.9;
   tcol = clamp01(tcol);
 
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
