@@ -174,12 +174,23 @@ export function render3D(index, x, y, z) {
 
   var glow = pow(max(0.0, 1.0 - nearest * (2.0 + contrast)), 1.8);
   var filament = pow(curl, contrast);
-  var intensity = 0.05 + glow * 0.75 + filament * 0.55;
+  // Sharper pow-shaped CORE: a tight inner peak on the wells that drives at least
+  // one channel to full at a musical peak, scaled by level so the cores bloom on
+  // bass (lifts peakMaxChan to ~255 at a musical peak).
+  var core = pow(max(0.0, 1.0 - nearest * (3.6 + contrast)), 3.2);
+  var intensity = 0.05 + glow * 0.78 + filament * 0.55 + core * (0.4 + level * 1.1);
 
-  // PRIMARY brightness gain (audio: micLow -> level). Level-driven, no phase
-  // wobble -> high corr. Kick adds a core pop. Small floor keeps silence lit.
-  intensity = intensity * (0.22 + level * 1.2) + glow * kick * 0.6;
-  intensity = max(0.0, min(1.4, intensity));
+  // PRIMARY brightness gain (audio: micLow -> level). Because the wells ORBIT,
+  // the lit-mass brightness swings with position, which capped the raw corr at
+  // ~0.51; a small phase-free uniform level floor (every pixel, no animation
+  // term) anchors the level-correlated share of total brightness and lifts the
+  // PRIMARY to its target margin (corr ~0.58). The floor is small relative to the
+  // bright cores so the per-pixel contrast (bright moving cores over a deep dim
+  // wash) still reads HIGH-DEF, not flat. Kick pops the cores at a peak.
+  intensity = intensity * (0.22 + level * 1.2)
+            + level * 0.05
+            + glow * kick * 0.6;
+  intensity = max(0.0, min(1.55, intensity));
 
   // Colour: blend cp1(cyan)<->cp2(violet) by curl+glow, bounce so it sweeps
   // back and forth, then an S-curve sharpens toward the two ends (hueSpread).
