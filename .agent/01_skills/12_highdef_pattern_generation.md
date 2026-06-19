@@ -38,6 +38,36 @@ Plus two always-on invariants:
 - **`localSpeed` must drive motion** (see §6) — declaring it is not enough.
 - **Silence-safe** — renders a calm, non-black, non-crashing base on `--synth silence`.
 
+### Consistency ground rules (apply to EVERY pattern in the set)
+These are non-negotiable across the whole `patterns/` library — old and new —
+so the show feels coherent. A pattern (or an upgrade of an existing one) is not
+done until all hold:
+
+1. **`localSpeed` is the first control and is genuinely effective** — motion
+   visibly speeds up / slows down across its range (§6); it is never declared
+   but unused.
+2. **Direction is not always forward.** Provide a guarded `direction` control
+   AND give the pattern *autonomous direction variation* — some patterns
+   **occasionally auto-switch direction on their own** (clock-driven, on an
+   incommensurate cadence, so the rig doesn't flip in lockstep). Motion should
+   feel organic, not one-way-forever.
+3. **High-def** — follow the four bars above (crisp cores, true-black-ish
+   negative space, `peakMaxChan >= 200`, two colours spanning the rig).
+4. **Never static at zero audio.** With no modulation and all controls at
+   default the pattern still animates from the clock alone.
+5. **The `direction` parameter must never freeze the pattern** at any value —
+   guard the slider-centre dead-zone (§6) so it changes heading, never stalls.
+6. **Validate in the gallery.** Publish every pattern (skill `13`) and iterate
+   on the harness gates until the clip is strong; the operator does the final
+   on-phone visual pass.
+7. **Expose clearly audio-reactive knobs** — at minimum a movement **radius**
+   (how far elements travel / how much they scale) and a brightness **kick**
+   (kick-driven brightness pop), plus 1–2 more natural to the pattern, each an
+   identity `slider*` designed to be modulated (§3, §5).
+
+When *upgrading* an existing pattern, keep its identity (concept, palette feel,
+name) — modernize it to these rules, don't rewrite it into something new.
+
 ---
 
 ## 1. Idea — start from what we love
@@ -197,6 +227,20 @@ all pre-scaled by the global SPEED fader.** Therefore:
     globalDir = d;
   }
   ```
+- **Autonomous direction variation (ground rule #2).** Don't run forever in one
+  heading. Layer a slow clock-driven sign over the manual `direction`, and on
+  *some* patterns let it **occasionally auto-switch** on an incommensurate
+  cadence so the rig never flips in lockstep. The manual control biases it; the
+  pattern still varies on its own at default:
+  ```javascript
+  // autoFlip drifts on an irrational period; sign() flips heading occasionally.
+  autoFlip = autoFlip + dt * localMultiplier * 0.013;   // ~slow, prime-ish rate
+  if (autoFlip >= 10000.0) autoFlip = autoFlip - 10000.0;
+  var autoDir = wave(autoFlip * 1.6180339) < 0.5 ? -1.0 : 1.0; // golden-ratio cadence
+  var heading = globalDir * autoDir;                    // manual bias × autonomous flip
+  ```
+  Vary the rate/cadence per pattern (different irrational multipliers) so they
+  feel individual. Never let `heading` resolve to exactly 0 (ground rule #5).
 
 ---
 

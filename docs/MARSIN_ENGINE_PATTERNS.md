@@ -6,6 +6,45 @@ For the formal grammar, syntax rules, and standard functions of the programming 
 
 ---
 
+## 0. Pattern consistency ground rules (every pattern)
+
+These rules apply to **every** pattern in `marsin_engine/patterns/` — both new
+work and upgrades of existing patterns — so the whole show reads as one
+coherent, high-definition, sound-reactive library. The full recipe lives in the
+skill `.agent/01_skills/12_highdef_pattern_generation.md`; this is the contract
+it enforces.
+
+1. **`localSpeed` is the first local control and is genuinely effective.**
+   Motion visibly accelerates/decelerates across its range (see §3.2). Never
+   declare it and leave it unused.
+2. **Direction varies — it is not always forward.** Provide a guarded
+   `direction`/sign control (§3.2, "avoid the static dead-zone") *and* give the
+   pattern autonomous direction variation: some patterns **occasionally
+   auto-switch direction on their own**, on an incommensurate (irrational)
+   cadence so the rig never flips in lockstep. Motion should feel organic.
+3. **High-definition + bright.** Crisp cores, true-black-ish negative space, a
+   real per-channel peak at musical peaks, and two palette colours spanning the
+   rig (strict `cp1`/`cp2`, §3.1, §7).
+4. **Never static at zero audio.** With no modulation and all controls at
+   default, the pattern still animates from the clock alone (never dead-static,
+   never dead-black; keep a small non-black base for silence visibility).
+5. **The direction parameter never freezes the pattern** at any value — guard
+   the slider-centre dead-zone so it changes heading, never stalls.
+6. **Validate in the gallery.** Render each pattern through the offline harness
+   and publish it to the pattern gallery (skill `13_pattern_gallery.md`) for an
+   on-device visual pass; iterate until it is visually appealing.
+7. **Expose clearly audio-reactive knobs** — at minimum a movement **radius**
+   (travel/scale extent) and a brightness **kick** (kick-driven brightness pop),
+   plus 1–2 more natural to the pattern, each an identity `slider*` meant to be
+   modulated (§3.2, §8). Audio is modulators-only — never read CPC audio globals
+   natively (§8).
+
+When upgrading an existing pattern, **preserve its identity** (concept, palette
+feel, name) and modernize it to these rules — do not rewrite it into a different
+pattern.
+
+---
+
 ## 1. Engine Architecture & Environment
 
 Every pattern is written in MarsinScript (a Javascript-like dialect compiling to stack-based bytecode) and executes inside the **MarsinVM** WebAssembly sandboxed runtime.
