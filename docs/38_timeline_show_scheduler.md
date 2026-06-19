@@ -759,56 +759,150 @@ mixer access, and the only UI is CaptainPad.
 
 ---
 
-## 16. Handoff guarantee & manual pending-program lease (operator 2026-06-19)
+## 16. The Handoff Protocol (normative, operator 2026-06-19)
 
 > Operator: *"I don't want the rig stuck on a pattern after a scheduled program
 > runs. And in manual mode, if a scheduled program is due, show a sign for the
 > operator to enable it; if no action in 30 s, expire the lease and start the
-> program."*
+> program. Make it a proper protocol — don't miss any variation."*
 
-### 16.1 Handoff guarantee — never stuck on the program's last pattern
-When a program's window ends (hold expires, next program preempts, or operator
-`/program/end`), control **must hand back cleanly**:
-- **autopilot enabled** → the arbiter emits `__autopilot_resume__` which re-loads
-  the baseline `plan.autopilot.playlist` and **re-arms engine autopilot**, so the
-  deck immediately resumes cycling — it never freezes on the program's last
-  pattern. (The §14 program-expiry path; the resume action is emitted *before* any
-  same-tick mood/ambient action so the look isn't clobbered — bug fixed
-  2026-06-19.)
-- **autopilot disabled** → control returns to **manual**; the rig intentionally
-  holds the last look (manual means the operator owns it). This is not "stuck" —
-  it is deliberate; the operator drives. If they want motion, they re-enable
-  autopilot (or the next program's lease, below, prompts them).
+This section is **normative**: it enumerates **every** control-handoff variation
+and the exact action for each. The §14 arbiter implements it; the §16.7
+validation matrix proves it. The governing promise: **the lights are never
+silently wrong and never accidentally stuck.**
 
-This is explicitly validated (handoff eval): fire a program → end it → assert the
-deck pattern advances again within one autopilot delay; assert it is NOT the
-program's pattern frozen.
+### 16.1 Control owners (who is driving the deck)
 
-### 16.2 Manual mode: pending-program lease (30 s, auto-start)
-When the controller is **manual** (paused / overridden / autopilot-disabled) and a
-**program** cue comes due, the timeline does **not** silently override the
-operator, and does **not** silently skip the show. It **arms a lease**:
+| Owner | Meaning | Driving? |
+|---|---|---|
+| **AUTOPILOT** (`AP`) | regular programming — engine autopilot cycles the baseline playlist; mood swaps fire | yes, actively cycling |
+| **PROGRAM** (`PG`) | a scheduled show owns the deck for its window (`activeProgram`) | yes, holding the show look |
+| **MANUAL** | operator owns the deck. Sub-states: `PAUSED` (explicit pause), `IDLE` (autopilot disabled, no program), `HOLDING` (look frozen for N min, auto-expires), `OVERRIDDEN` (operator changed the deck out-of-band — detection is a follow-up) | operator drives |
+| **PENDING** | not an owner — a **lease** armed *on top of* a MANUAL sub-state while a program is due (`pendingProgram`) | the current manual owner still drives until the lease resolves |
+
+`controller ∈ {autopilot, program, manual}` is the derived field surfaced to the
+UI; `pendingProgram` and the manual sub-state are surfaced alongside it.
+
+### 16.2 Invariants (the promises every transition must keep)
+
+- **I1 — never stuck.** Control always converges to an owner that is *actively
+  cycling* (AP) or is *deliberate manual*. A program ending NEVER leaves the rig
+  frozen on the program's last pattern.
+- **I2 — the show goes on.** A due **program** is never silently skipped: in AP it
+  preempts immediately; in MANUAL it arms a lease that auto-starts after the
+  window unless the operator dismisses it.
+- **I3 — operator visibility & say.** Every pending takeover is shown (a "sign")
+  with ENABLE / KEEP-MANUAL; a dismiss sticks for the day.
+- **I4 — fail loud.** A handoff that cannot complete (missing playlist entries,
+  invalid tz) records a loud `cueError`/`lastError` — never a silent wrong look.
+- **I5 — single driver.** Exactly one owner drives a channel; preempting first
+  **disarms the previous owner's autopilot on its configured target(s)**
+  (deck | mixer | all) — no two loops fighting.
+- **I6 — restart-safe.** Across engine restart / scene switch, runtime owner state
+  (`activeProgram`, `pendingProgram`) is **re-derived** from plan + wall-clock,
+  never resumed stale; already-passed cues are latched (no replay).
+
+### 16.3 Trigger vocabulary
+
+`P-due` scheduled program comes due · `P-end` program window ends (hold expiry /
+`/program/end` / superseded) · `P-new` a newer program comes due while one is
+active · `M-edge` mood calm→party edge · `pause` · `resume` · `ap-off` ·
+`ap-on` · `hold(N)` · `hold-exp` · `fire` (operator manual cue fire) ·
+`lease-enable` · `lease-dismiss` · `lease-exp` · `boot` (restart/scene-switch
+catchUp) · `midnight` (day rollover).
+
+### 16.4 The full transition matrix (no variation omitted)
+
+| From \ Trigger | P-due | P-end | M-edge | pause | resume | ap-off | ap-on | hold(N) | hold-exp | fire | boot | midnight |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **AP** | →PG: disarm baseline target, apply show, set `activeProgram` | — | →AP: apply mood look (no owner change) | →PAUSED: disarm autopilot, keep look | — | →IDLE: disarm autopilot | — | →HOLDING: freeze look | — | →PG (program)/apply | re-derive (I6) | reset `firedToday`; AP continues |
+| **PG** | (latched; same prog ignored) | **→AP** if ap-on: resume baseline (re-load playlist + re-arm) ; **→IDLE** if ap-off: hold look (deliberate, I1) | suppressed (→`wouldFire`) | →PAUSED: suspend program | — | sets ap flag; on P-end→IDLE | sets ap flag; on P-end→AP | →HOLDING | — | →PG′ (replace) | re-derive | a midnight-spanning program continues |
+| **P-new while PG** | **→PG′**: replace `activeProgram`, re-disarm/apply new show | | | | | | | | | | | |
+| **PAUSED** | **arm lease** (PENDING) | n/a | suppressed | — | →AP/PG/IDLE via arbiter re-eval | (already manual) | →AP (or →PG if pending) | →HOLDING | n/a | →PG/apply (fire overrides) | re-derive | reset `firedToday` |
+| **IDLE** (ap-off) | **arm lease** (PENDING) | n/a | suppressed | →PAUSED | — | — | →AP (pending? →PG) | →HOLDING | n/a | →PG/apply | re-derive | reset `firedToday` |
+| **HOLDING** | **arm lease** (PENDING) | n/a | suppressed | →PAUSED | →AP/PG/IDLE | →IDLE | →AP | — | →AP/PG/IDLE via re-eval | →PG/apply | re-derive | reset `firedToday` |
+| **PENDING** (lease armed, on any manual) | `P-new` replaces the pending | n/a | suppressed | stays pending | re-eval (pending survives) | stays pending | **→PG** (program fires) | stays pending | re-eval | →PG (fire) | re-derive (drop stale pending) | reset |
+| | **lease-enable → PG now** · **lease-dismiss → manual, latch `firedToday`** · **lease-exp → PG auto-start (show goes on, I2)** | | | | | | | | | | | |
+
+Reading the key rows: **P-end** is the "never stuck" row (I1) — autopilot resumes
+or manual is deliberate. **P-due in any manual sub-state** is the lease row (I2/I3).
+**M-edge** only changes the *look* under AP (never a controller change) and is
+suppressed everywhere else (recorded in `wouldFire`, not lost silently).
+
+### 16.5 Pending-program lease — state machine
 
 ```
-pendingProgram = { cueId, label, action, armedAtMs, expiresAtMs: armedAtMs + leaseSec*1000 }
+            P-due (in any MANUAL sub-state)
+                     │
+                     ▼
+   ┌─────────────────────────────────────────┐
+   │ PENDING  pendingProgram = {              │   newer P-due
+   │   cueId, label, action, armedAtMs,       │◀───────────────  replace
+   │   expiresAtMs = armedAtMs + leaseSec*1000│
+   │ }  (leaseSec = config.timeline.programLeaseSec, default 30)
+   └───────┬──────────────┬───────────────┬───┘
+   lease-enable      lease-dismiss     lease-exp (now ≥ expiresAtMs)
+   /program/enable   /program/dismiss   (no operator action)
+        │                  │                 │
+        ▼                  ▼                 ▼
+   start NOW          cancel; stay      auto-start the
+   exit manual,       manual; latch     program (show goes on);
+   →PG                firedToday[cue]   exit manual, →PG
+                      (sticks today)
+   ap-on while pending → program fires (→PG), lease cleared
 ```
-- Surfaced in `timelineState.pendingProgram`; CaptainPad shows a prominent
-  **"⚠ SCHEDULED SHOW PENDING — <label> · starts in M:SS"** banner with
-  **[ENABLE NOW]** and **[KEEP MANUAL]**.
-- `POST /timeline/program/enable` → start it immediately (exit manual: clear
-  pause/override, set the program active, controller=program).
-- `POST /timeline/program/dismiss` → cancel the lease, stay manual; the cue is
-  latched `firedToday` so it does not re-arm today (operator's "no" sticks).
-- **No operator action by `expiresAtMs`** → the lease **expires and the program
-  auto-starts** (the show goes on): exit manual, start the program,
-  controller=program.
-- Applies to **program** cues only (mood cues stay suppressed in manual — no
-  lease). One pending lease at a time (a newer due program replaces an
-  un-actioned older one). Lease window = `config.timeline.programLeaseSec`
-  (default 30).
 
-State additions: `pendingProgram` (above) | null. Routes:
-`POST /timeline/program/enable`, `POST /timeline/program/dismiss`.
+Rules: **one** pending lease at a time (a newer due program replaces an
+un-actioned one); the lease applies to **program** cues only (mood/ambient never
+arm a lease); on `boot` a stale `pendingProgram` is dropped and re-derived.
+
+### 16.6 Cross-cutting handoff variations (the easy-to-miss ones)
+
+- **Engine restart / scene switch (`boot`)** — catchUp clears `activeProgram` +
+  `pendingProgram`, then re-derives: a program whose window still covers *now* →
+  PG (restore look); else autopilot-enabled → AP (establish baseline); else IDLE.
+  Passed cues are latched (no replay). [verified: stale-ghost discard]
+- **Missing baseline playlist on resume/boot** — fail loud (`cueError`), do NOT
+  load a `_missing` pattern; surface so the operator fixes it (I4). [fixed]
+- **Program whose look targets `mixer`/`all`** — preempt disarms the baseline on
+  *its* target(s), not just the deck (I5). [fixed]
+- **Mood edge on the exact program-expiry tick** — resume is applied *before* the
+  mood action so the mood look wins, not the baseline (no clobber). [fixed]
+- **Day rollover mid-program** — a program with `untilMs` on the next day keeps
+  running; `firedToday` resets so the next day's cues arm.
+- **Operator `fire` always wins** — a manual cue fire applies immediately
+  regardless of mode/lease (it is an explicit operator act).
+- **Lease + `ap-on`** — enabling autopilot while a lease is pending starts the
+  program (it was due) rather than just resuming autopilot.
+
+### 16.7 What the operator sees + validation matrix
+
+`timelineState` carries: `controller`, `activeProgram{cueId,untilMs}`,
+`pendingProgram{cueId,label,expiresAtMs}`, `autopilotEnabled`, `mode`. CaptainPad
+renders the controller pill, the active-program countdown + END, and — when a
+lease is armed — a prominent **"⚠ SCHEDULED SHOW PENDING — <label> · starts in
+M:SS"** banner with **[ENABLE NOW]** / **[KEEP MANUAL]**.
+
+Routes: `POST /timeline/program/enable`, `POST /timeline/program/dismiss` (plus
+the existing `/program/end`, `/mode`, `/autopilot`, `/hold`, `/resume`).
+
+**Validation matrix (every row must be proven by the handoff eval agents):**
+
+| # | Scenario | Pass criterion |
+|---|---|---|
+| V1 | AP → P-due → PG → P-end (ap on) | deck **resumes cycling** within one autopilot delay; NOT frozen on the show pattern |
+| V2 | PG → P-end (ap off) | deck holds the look; controller=manual; no error; not "stuck" (deliberate) |
+| V3 | PG → P-new | new show applied; old `activeProgram` replaced |
+| V4 | mood edge on P-end tick | final look = mood look (not baseline) |
+| V5 | program targets `all` → preempt | every baseline autopilot loop disarmed (no fight) |
+| V6 | MANUAL(idle) + P-due | `pendingProgram` armed + sign shown; no immediate override |
+| V7 | V6 then no action 30 s | program **auto-starts**; controller=program |
+| V8 | V6 then ENABLE | program starts immediately |
+| V9 | V6 then DISMISS | stays manual; cue latched (no re-arm today) |
+| V10 | PAUSED + P-due → lease-exp | program auto-starts (show goes on even when paused) |
+| V11 | lease pending + ap-on | program fires |
+| V12 | restart mid-show | re-derived (no stale ghost); correct owner; deck not stuck |
+| V13 | missing baseline playlist on resume | loud error; deck not silently broken |
 
 ---
 

@@ -297,6 +297,19 @@ Add to `.agent/00_gol/13_multi_agent.md` ports table when Phase 1 lands.
   night), ADD CUE sheet (`.agent_renders/cp_timeline_maker|cp_day_editor|
   cp_cue_editor.png`).
 
+### 5.1.1 Handoff Protocol (normative) — `docs/38 §16`
+The control-handoff behavior is now a **normative protocol** in `docs/38 §16`:
+control owners (AUTOPILOT / PROGRAM / MANUAL{paused,idle,holding,overridden} +
+the PENDING lease), six invariants (I1 never-stuck · I2 show-goes-on · I3
+operator-visibility · I4 fail-loud · I5 single-driver · I6 restart-safe), a
+**full transition matrix** (every trigger × every owner — no variation omitted),
+the pending-program lease state machine (30 s, ENABLE/DISMISS/auto-start), the
+easy-to-miss cross-cutting variations (restart, missing playlist, mixer/all
+target, mood-on-expiry-tick, day rollover, fire-always-wins, lease+ap-on), and a
+**13-row validation matrix (V1–V13)** the handoff eval agents must prove. Several
+rows (V1, V4, V5, V12, V13) are already satisfied by the 2026-06-19 fix pass; the
+lease rows (V6–V11) are implemented + validated in the handoff slice.
+
 ### 5.2 v2 final state (2026-06-19)
 **DONE & pushed:** timeline runs IN the engine; CaptainPad is the only UI (themed);
 precedence arbiter (program > autopilot > manual); 8-day festival model + fluid
