@@ -21,12 +21,13 @@ import path from 'path';
 
 import { buildFixtureTypeIds, fixtureTypeId } from './fixture_type_constants.js';
 import { derivePixelLocalIndices } from './pixel_local_index.js';
+import { ViewBitAllocator, MAX_WORD_BIT, MAX_VIEW_SLOTS } from './view_word.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const MODELS_DIR = path.resolve(__dirname, '..', 'models');
 
-const MAX_BIT = 0x40000000; // bit 30 — highest safe signed-Int32 view-mask bit
+const MAX_BIT = MAX_WORD_BIT; // bit 30 — highest safe signed-Int32 view-mask bit (per word)
 
 async function importModel(modelName) {
   const modelPath = path.join(MODELS_DIR, `${modelName}.js`);
@@ -45,7 +46,7 @@ async function importModel(modelName) {
   // re-imports with a cache-buster for the same reason.
   return {
     pixelCount: mod.pixelCount,
-    pixels: mod.pixels.map((px) => (px ? { ...px, vMask: 0, viewMask: 0 } : px)),
+    pixels: mod.pixels.map((px) => (px ? { ...px, vMask: 0, viewMask: 0, vMaskHi: 0 } : px)),
     viewMasks: mod.viewMasks,
     groupBits: mod.groupBits,
   };
@@ -144,11 +145,25 @@ function mergeGroupBits(mod, groupBits) {
   }
 }
 
-function resolvePresets(mod, declaredViewMasks, groupBits) {
-  const mergeBit = (px, bit) => {
-    const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
-    px.vMask = cur;
-    px.viewMask = cur;
+// Resolve declared presets into { name, bit, word, ... } view entries,
+// merging each pixel-set / explicit-bit preset's bit into the per-pixel
+// word it lives in. Word 0 → px.vMask (lane 3, legacy `viewMask`); word 1
+// → px.vMaskHi (lane 6, the Tier-C `viewMaskHi`, 31 more bits).
+//
+// `alloc` is a shared two-word ViewBitAllocator (groups already claimed in
+// word 0). A preset that needs a NEW single bit (an explicit pixelIndices
+// set without a declared bit) draws the lowest free slot, filling word 0
+// before word 1 — so the first 31 views stay byte-identical to the legacy
+// single-word layout, and only the 32nd+ spills into viewMaskHi.
+function resolvePresets(mod, declaredViewMasks, groupBits, alloc) {
+  const mergeWordBit = (px, word, bit) => {
+    if (word === 1) {
+      px.vMaskHi = (px.vMaskHi ?? 0) | bit;
+    } else {
+      const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
+      px.vMask = cur;
+      px.viewMask = cur;
+    }
   };
   return declaredViewMasks.map((entry) => {
     if (Array.isArray(entry.groups) && entry.groups.length > 0) {
@@ -159,18 +174,32 @@ function resolvePresets(mod, declaredViewMasks, groupBits) {
         }
       }
       if (entry.bit !== undefined) {
-        for (const px of mod.pixels) if (px && groupSet.has(px.group)) mergeBit(px, entry.bit);
-        return { name: entry.name, bit: entry.bit, groups: [...groupSet] };
+        const word = entry.word === 1 ? 1 : 0;
+        for (const px of mod.pixels) if (px && groupSet.has(px.group)) mergeWordBit(px, word, entry.bit);
+        return { name: entry.name, bit: entry.bit, word, groups: [...groupSet] };
       }
+      // Computed composite: ORs base-group bits (always word 0 — groups
+      // are word-0 only). Not merged into pixels (the base bits already are).
       let bit = 0;
       for (const g of groupSet) bit |= groupBits[g];
-      return { name: entry.name, bit, groups: [...groupSet] };
+      return { name: entry.name, bit, word: 0, groups: [...groupSet] };
+    }
+    // pixelIndices preset. An explicit bit pins its (word=entry.word||0,
+    // bit); otherwise the allocator hands out the lowest free slot, which
+    // spills into word 1 (viewMaskHi) past the 31st view.
+    let word;
+    let bit;
+    if (entry.bit !== undefined) {
+      word = entry.word === 1 ? 1 : 0;
+      bit = entry.bit;
+    } else {
+      ({ word, bit } = alloc.next(`viewMasks entry '${entry.name}'`));
     }
     for (const idx of entry.pixelIndices || []) {
       const px = mod.pixels[idx];
-      if (px) mergeBit(px, entry.bit);
+      if (px) mergeWordBit(px, word, bit);
     }
-    return { name: entry.name, bit: entry.bit, pixelIndices: [...(entry.pixelIndices || [])] };
+    return { name: entry.name, bit, word, pixelIndices: [...(entry.pixelIndices || [])] };
   });
 }
 
@@ -189,7 +218,23 @@ export async function loadModelForGauge(modelName, transform = null) {
   const reservedMask = reserveExplicitBits(declaredViewMasks);
   const groupBits = assignGroupBits(mod, declaredGroupBits, reservedMask);
   mergeGroupBits(mod, groupBits);
-  const viewMasks = resolvePresets(mod, declaredViewMasks, groupBits);
+
+  // Two-word view-bit allocator (Tier-C). Word 0 = legacy `viewMask`,
+  // word 1 = `viewMaskHi`. Every bit already taken in word 0 (group bits +
+  // explicit reserved preset bits) is claimed so a NEW bit-less preset
+  // draws the lowest free slot, filling word 0 first then spilling into
+  // word 1 — keeping the first 31 views byte-identical to the legacy
+  // single-word layout. Throws LOUDLY past slot 61 (62 total).
+  const alloc = new ViewBitAllocator();
+  for (const bit of Object.values(groupBits)) alloc.claim(0, bit, 'group');
+  for (const entry of declaredViewMasks) {
+    if (entry && entry.bit !== undefined && entry.word !== 1 && !alloc.isUsed(0, entry.bit)) {
+      alloc.claim(0, entry.bit, `viewMasks entry '${entry.name}'`);
+    } else if (entry && entry.bit !== undefined && entry.word === 1 && !alloc.isUsed(1, entry.bit)) {
+      alloc.claim(1, entry.bit, `viewMasks entry '${entry.name}'`);
+    }
+  }
+  const viewMasks = resolvePresets(mod, declaredViewMasks, groupBits, alloc);
 
   // Tier-B fixture-type ids, mirroring engine.js loadModel: the canonical
   // FIX_* id table is injected as integers (no viewMask-bit merge), and
@@ -210,6 +255,7 @@ export async function loadModelForGauge(modelName, transform = null) {
     viewMask: px.vMask || 0,
     fixtureTypeId: fixtureTypeId(px.fixtureType),
     pixelLocalIndex: localIndices[i],
+    viewMaskHi: px.vMaskHi || 0, // lane 6 — Tier-C high view word (views 31..61)
   }));
 
   return {

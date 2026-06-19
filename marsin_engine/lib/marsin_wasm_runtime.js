@@ -16,6 +16,8 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+import { META_LANES, VIEW_MASK_HI_ENABLED } from './meta_abi.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -61,7 +63,7 @@ export async function createWasmRuntime(pixelCount) {
   const coordBufSize  = pixelCount * 3 * 4;  // 3 floats per pixel
   const outBufSize    = pixelCount * 3;       // 3 bytes per pixel (RGB)
   const outBuf6chSize = pixelCount * 6;       // 6 bytes per pixel (RGBWAU)
-  const metaBufSize   = pixelCount * 6 * 4;   // 6 ints per pixel (ABI: ctrl,sec,fix,view,fixtureTypeId,localIndex)
+  const metaBufSize   = pixelCount * META_LANES * 4; // META_LANES ints per pixel (ABI: ctrl,sec,fix,view,fixtureTypeId,localIndex[,viewMaskHi]) — see meta_abi.js
 
   const coordPtr  = Module._malloc(coordBufSize);
   const outPtr    = Module._malloc(outBufSize);
@@ -141,18 +143,24 @@ export async function createWasmRuntime(pixelCount) {
       metaPtr = Module._malloc(metaBufSize);
     }
 
-    // Stride is 6 int32/pixel (ABI: [ctrl, sec, fix, view, fixtureTypeId,
-    // localIndex]) — see views_rehaul_abi_contract §2. Must match the WASM's
-    // 6-int stride; metaBufSize above is sized for 6.
-    const metaView = new Int32Array(Module.HEAP32.buffer, metaPtr, pixelCount * 6);
+    // Stride is META_LANES int32/pixel (ABI: [ctrl, sec, fix, view,
+    // fixtureTypeId, localIndex] + optional [viewMaskHi]) — see meta_abi.js.
+    // Gated by VIEW_MASK_HI_ENABLED so this matches the vendored WASM stride;
+    // metaBufSize above is sized for the same META_LANES.
+    const stride = META_LANES;
+    const metaView = new Int32Array(Module.HEAP32.buffer, metaPtr, pixelCount * stride);
     for (let i = 0; i < pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      metaView[i * 6]     = m.controllerId || 0;
-      metaView[i * 6 + 1] = m.sectionId || 0;
-      metaView[i * 6 + 2] = m.fixtureId || 0;
-      metaView[i * 6 + 3] = m.viewMask || 0;
-      metaView[i * 6 + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
-      metaView[i * 6 + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
+      const base = i * stride;
+      metaView[base]     = m.controllerId || 0;
+      metaView[base + 1] = m.sectionId || 0;
+      metaView[base + 2] = m.fixtureId || 0;
+      metaView[base + 3] = m.viewMask || 0;
+      metaView[base + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
+      metaView[base + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
+      if (VIEW_MASK_HI_ENABLED) {
+        metaView[base + 6] = m.viewMaskHi || 0;    // second view word (Tier C)
+      }
     }
   }
 

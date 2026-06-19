@@ -47,6 +47,7 @@ import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
+import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
 import { deriveStrandViews } from './lib/strand_views.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
@@ -253,7 +254,15 @@ async function loadModel(modelName, bustCache = false) {
   }
 
   // Validate every declared entry and reserve explicit bits.
+  //
+  // Tier-C: a preset may pin into the high view word with `word: 1` (the
+  // `viewMaskHi` lane, views 31..61). Word 0 and word 1 are independent bit
+  // spaces — a word-1 bit value may equal a word-0 bit value without
+  // collision — so reservation is tracked per word. `reservedMask` is the
+  // WORD-0 reservation that group-bit assignment below must avoid;
+  // `reservedMaskHi` guards word-1 reuse.
   let reservedMask = 0;
+  let reservedMaskHi = 0;
   const seenNames = new Set();
   for (const entry of declaredViewMasks) {
     if (!entry || typeof entry.name !== 'string' || entry.name.length === 0) {
@@ -267,6 +276,14 @@ async function loadModel(modelName, bustCache = false) {
     const hasGroups = Array.isArray(entry.groups) && entry.groups.length > 0;
     const hasIndices = Array.isArray(entry.pixelIndices) && entry.pixelIndices.length > 0;
     const hasBit = entry.bit !== undefined;
+    const word = entry.word === 1 ? 1 : 0;
+    if (entry.word !== undefined && entry.word !== 0 && entry.word !== 1) {
+      throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource}: word must be 0 or 1, got ${entry.word}`);
+    }
+    if (word === 1 && !hasBit) {
+      throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} declares word:1 (viewMaskHi) ` +
+        `and therefore needs an explicit single-bit value`);
+    }
     if (hasGroups === hasIndices) {
       throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} must declare exactly one of ` +
         `groups:[...] or pixelIndices:[...] for its pixel membership`);
@@ -276,8 +293,8 @@ async function loadModel(modelName, bustCache = false) {
         `therefore needs an explicit bit`);
     }
     if (hasBit) {
-      // Same cap as groupBits below: vMask is Int32 across the WASM
-      // boundary, so 0x40000000 (bit 30) is the highest safe bit.
+      // Per-word cap: vMask/vMaskHi are Int32 across the WASM boundary, so
+      // 0x40000000 (bit 30) is the highest safe bit IN EITHER WORD.
       // 0x80000000 passes the power-of-two check via Int32 coercion but
       // ORs in a NEGATIVE value, and 2^32 silently merges as zero.
       if (!Number.isInteger(entry.bit) || entry.bit <= 0 || entry.bit > 0x40000000 ||
@@ -286,10 +303,18 @@ async function loadModel(modelName, bustCache = false) {
           `power of two ≤ 0x40000000, got ${entry.bit}. Unions of base groups belong in a bit-less ` +
           `groups:[...] entry.`);
       }
-      if ((reservedMask & entry.bit) !== 0) {
-        throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses bit 0x${entry.bit.toString(16)}`);
+      if (word === 1) {
+        if ((reservedMaskHi & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses viewMaskHi ` +
+            `bit 0x${entry.bit.toString(16)}`);
+        }
+        reservedMaskHi |= entry.bit;
+      } else {
+        if ((reservedMask & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses bit 0x${entry.bit.toString(16)}`);
+        }
+        reservedMask |= entry.bit;
       }
-      reservedMask |= entry.bit;
     }
   }
 
@@ -315,6 +340,7 @@ async function loadModel(modelName, bustCache = false) {
     if (!px) continue;
     px.vMask = px.vMask ?? 0;
     px.viewMask = px.viewMask ?? 0;
+    px.vMaskHi = px.vMaskHi ?? 0; // Tier-C high view word (views 31..61)
     if (typeof px.group === 'string' && px.group.length > 0 && !modelGroups.includes(px.group)) {
       modelGroups.push(px.group);
     }
@@ -389,13 +415,20 @@ async function loadModel(modelName, bustCache = false) {
   // (mapPixelsToSacn, vis, wasm meta, etc.). Computed-bit composites
   // are NOT merged — their multi-bit value already matches via
   // `(vMask & bit) !== 0` and merging would pollute base bits.
-  const mergeBit = (px, bit) => {
-    const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
-    px.vMask = cur;
-    px.viewMask = cur;
+  // Word-aware merge: word 0 → px.vMask (lane 3, legacy `viewMask`),
+  // word 1 → px.vMaskHi (lane 6, Tier-C `viewMaskHi`, views 31..61).
+  const mergeWordBit = (px, word, bit) => {
+    if (word === 1) {
+      px.vMaskHi = (px.vMaskHi ?? 0) | bit;
+    } else {
+      const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
+      px.vMask = cur;
+      px.viewMask = cur;
+    }
   };
 
   const viewMasks = declaredViewMasks.map((entry) => {
+    const word = entry.word === 1 ? 1 : 0;
     if (Array.isArray(entry.groups) && entry.groups.length > 0) {
       const groupSet = new Set(entry.groups);
       for (const g of groupSet) {
@@ -406,15 +439,17 @@ async function loadModel(modelName, bustCache = false) {
       }
       if (entry.bit !== undefined) {
         // Explicit reserved bit, membership by group: tag every pixel
-        // of the named groups with the bit.
+        // of the named groups with the bit, in the entry's word.
         for (const px of mod.pixels) {
-          if (px && groupSet.has(px.group)) mergeBit(px, entry.bit);
+          if (px && groupSet.has(px.group)) mergeWordBit(px, word, entry.bit);
         }
-        return { name: entry.name, bit: entry.bit, groups: [...groupSet] };
+        return { name: entry.name, bit: entry.bit, word, groups: [...groupSet] };
       }
+      // Computed composite of base-group bits — always word 0 (groups are
+      // word-0 only) and never merged (the base bits already are).
       let bit = 0;
       for (const g of groupSet) bit |= groupBits[g];
-      return { name: entry.name, bit, groups: [...groupSet] };
+      return { name: entry.name, bit, word: 0, groups: [...groupSet] };
     }
 
     for (const idx of entry.pixelIndices) {
@@ -423,9 +458,9 @@ async function loadModel(modelName, bustCache = false) {
           `pixel index ${idx} (model has ${mod.pixels.length} pixels)`);
       }
       const px = mod.pixels[idx];
-      if (px) mergeBit(px, entry.bit);
+      if (px) mergeWordBit(px, word, entry.bit);
     }
-    return { name: entry.name, bit: entry.bit, pixelIndices: [...entry.pixelIndices] };
+    return { name: entry.name, bit: entry.bit, word, pixelIndices: [...entry.pixelIndices] };
   });
 
   if (viewMasksSource) {
@@ -1048,7 +1083,8 @@ async function main() {
     fixtureId: px.fId || 0,
     viewMask: px.vMask || 0,
     fixtureTypeId: fixtureTypeId(px.fixtureType),
-    pixelLocalIndex: bootLocalIndices[i]
+    pixelLocalIndex: bootLocalIndices[i],
+    viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word (views 31..61)
   }));
   wasmHost.setPixelMeta(metaArray);
 
@@ -1298,7 +1334,8 @@ async function main() {
             fixtureId: px.fId || 0,
             viewMask: px.vMask || 0,
             fixtureTypeId: fixtureTypeId(px.fixtureType),
-            pixelLocalIndex: reloadLocalIndices[i]
+            pixelLocalIndex: reloadLocalIndices[i],
+            viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word
           })));
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);

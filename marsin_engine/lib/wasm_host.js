@@ -4,6 +4,7 @@ import path from 'path';
 
 import { injectMaskConstants } from './view_mask_constants.js';
 import { injectFixtureConstants } from './fixture_type_constants.js';
+import { META_LANES, VIEW_MASK_HI_ENABLED } from './meta_abi.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -247,21 +248,28 @@ export class WasmHost {
     }
 
     if (!this.metaPtr) {
-      // Stride is 6 int32/pixel (ABI: [ctrl, sec, fix, view, fixtureTypeId,
-      // localIndex]) — see views_rehaul_abi_contract §2.
-      const metaBufSize = this.pixelCount * 6 * 4;
+      // Stride is META_LANES int32/pixel (ABI lanes: [ctrl, sec, fix, view,
+      // fixtureTypeId, localIndex] + optional [viewMaskHi] — see meta_abi.js).
+      // The stride is gated by VIEW_MASK_HI_ENABLED so the host keeps the
+      // current 6-int pack until the 7-lane WASM is vendored at integration.
+      const metaBufSize = this.pixelCount * META_LANES * 4;
       this.metaPtr = this.Module._malloc(metaBufSize);
-      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * 6);
+      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * META_LANES);
     }
 
+    const stride = META_LANES;
     for (let i = 0; i < this.pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      this.metaView[i * 6] = m.controllerId || 0;
-      this.metaView[i * 6 + 1] = m.sectionId || 0;
-      this.metaView[i * 6 + 2] = m.fixtureId || 0;
-      this.metaView[i * 6 + 3] = m.viewMask || 0;
-      this.metaView[i * 6 + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
-      this.metaView[i * 6 + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
+      const base = i * stride;
+      this.metaView[base] = m.controllerId || 0;
+      this.metaView[base + 1] = m.sectionId || 0;
+      this.metaView[base + 2] = m.fixtureId || 0;
+      this.metaView[base + 3] = m.viewMask || 0;
+      this.metaView[base + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
+      this.metaView[base + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
+      if (VIEW_MASK_HI_ENABLED) {
+        this.metaView[base + 6] = m.viewMaskHi || 0;    // second view word (Tier C)
+      }
     }
   }
 
