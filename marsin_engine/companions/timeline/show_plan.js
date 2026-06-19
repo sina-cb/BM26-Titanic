@@ -1,0 +1,458 @@
+/*
+ * show_plan.js — load / validate / save the Timeline Companion's SHOW PLAN
+ * YAML (the authored timeline: phases, looks, cues for a scene). Mirrors the
+ * Audio Companion's companion_config.js contract:
+ *   - loadShowPlan(filePath) returns the built-in default ONLY on ENOENT;
+ *     any other read/parse error THROWS (codex P0 — no silent fallback over a
+ *     corrupt plan).
+ *   - validateShowPlan(plan) THROWS on any invalid field (throw-style
+ *     validation) and returns a normalized object.
+ *   - saveShowPlan validates-then-writes; dumpShowPlan returns YAML text.
+ *
+ * The schema is docs/38 §3 (trigger/action/look/phase model). Cross-reference
+ * checks (a phase-trigger's phase, a look-action's look, a mood whenPhase must
+ * all be defined in the plan) fail loud on a dangling reference.
+ */
+import fs from 'node:fs';
+
+import yaml from 'js-yaml';
+
+// Sun events a sun anchor / sun trigger may reference (mirrors sun.js output).
+export const SUN_EVENTS = Object.freeze([
+  'sunrise', 'sunset', 'solarNoon',
+  'civilDawn', 'civilDusk',
+  'nauticalDawn', 'nauticalDusk',
+  'goldenHourEnd', 'goldenHourStart',
+]);
+
+const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+const MOOD_VALUES = Object.freeze(['calm', 'party']);
+const TARGET_CHANNELS = Object.freeze(['deck', 'mixer', 'all']);
+
+// ── small validators (all throw-style; first arg is a context label) ──────────
+
+function isPlainObject(v) {
+  return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function assertSlug(value, label) {
+  if (typeof value !== 'string' || !SLUG_RE.test(value)) {
+    throw new Error(`${label} must be a slug /^[a-z0-9][a-z0-9_-]{0,63}$/, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertNumber(value, label) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new Error(`${label} must be a number, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertBool(value, label) {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${label} must be a boolean, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertClock(value, label) {
+  if (typeof value !== 'string' || !CLOCK_RE.test(value)) {
+    throw new Error(`${label} must be a 24h "HH:MM" clock time, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertSunEvent(value, label) {
+  if (!SUN_EVENTS.includes(value)) {
+    throw new Error(`${label} must be one of ${SUN_EVENTS.join(', ')}, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function assertInteger(value, label) {
+  if (!Number.isInteger(value)) {
+    throw new Error(`${label} must be an integer, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+// A CPC globals value is either a plain Number or an {h,s,v} color triple.
+function validateGlobalsMap(map, label) {
+  if (!isPlainObject(map)) throw new Error(`${label} must be an object of CPC keys`);
+  const out = {};
+  for (const [key, val] of Object.entries(map)) {
+    if (typeof val === 'number') {
+      if (Number.isNaN(val)) throw new Error(`${label}.${key} number is NaN`);
+      out[key] = val;
+    } else if (isPlainObject(val)) {
+      const keys = Object.keys(val).sort();
+      if (keys.length !== 3 || keys[0] !== 'h' || keys[1] !== 's' || keys[2] !== 'v') {
+        throw new Error(`${label}.${key} object must be an {h,s,v} color triple`);
+      }
+      out[key] = {
+        h: assertNumber(val.h, `${label}.${key}.h`),
+        s: assertNumber(val.s, `${label}.${key}.s`),
+        v: assertNumber(val.v, `${label}.${key}.v`),
+      };
+    } else {
+      throw new Error(`${label}.${key} must be a Number or an {h,s,v} object`);
+    }
+  }
+  return out;
+}
+
+function validateTarget(target, label) {
+  if (target === undefined) return { channel: 'deck', id: null };
+  if (!isPlainObject(target)) throw new Error(`${label} must be an object { channel, id }`);
+  if (!TARGET_CHANNELS.includes(target.channel)) {
+    throw new Error(`${label}.channel must be one of ${TARGET_CHANNELS.join(', ')}, got ${JSON.stringify(target.channel)}`);
+  }
+  let id = null;
+  if (target.id !== undefined && target.id !== null) {
+    id = assertString(target.id, `${label}.id`);
+  }
+  return { channel: target.channel, id };
+}
+
+function validateAutopilot(ap, label) {
+  if (!isPlainObject(ap)) throw new Error(`${label} must be an object { active, delay_s, shuffle }`);
+  assertBool(ap.active, `${label}.active`);
+  if (typeof ap.delay_s !== 'number' || Number.isNaN(ap.delay_s) || ap.delay_s <= 0) {
+    throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ap.delay_s)}`);
+  }
+  assertBool(ap.shuffle, `${label}.shuffle`);
+  return { active: ap.active, delay_s: ap.delay_s, shuffle: ap.shuffle };
+}
+
+function validateIdList(list, label) {
+  if (!Array.isArray(list)) throw new Error(`${label} must be an array of ids`);
+  return list.map((id, i) => assertString(id, `${label}[${i}]`));
+}
+
+// ── anchors (clock | sun ± offset) ────────────────────────────────────────────
+
+function validateAnchor(anchor, label) {
+  if (!isPlainObject(anchor)) throw new Error(`${label} must be an object`);
+  const hasClock = anchor.clock !== undefined;
+  const hasSun = anchor.sun !== undefined;
+  if (hasClock === hasSun) {
+    throw new Error(`${label} must have exactly one of { clock } or { sun }`);
+  }
+  if (hasClock) {
+    return { clock: assertClock(anchor.clock, `${label}.clock`) };
+  }
+  const out = { sun: assertSunEvent(anchor.sun, `${label}.sun`), offsetMin: 0 };
+  if (anchor.offsetMin !== undefined) {
+    out.offsetMin = assertInteger(anchor.offsetMin, `${label}.offsetMin`);
+  }
+  return out;
+}
+
+// ── location / phases / looks ─────────────────────────────────────────────────
+
+function validateLocation(loc) {
+  if (!isPlainObject(loc)) throw new Error('plan.location must be an object');
+  const lat = assertNumber(loc.lat, 'plan.location.lat');
+  const lon = assertNumber(loc.lon, 'plan.location.lon');
+  if (lat < -90 || lat > 90) throw new Error(`plan.location.lat must be in [-90, 90], got ${lat}`);
+  if (lon < -180 || lon > 180) throw new Error(`plan.location.lon must be in [-180, 180], got ${lon}`);
+  const tz = assertString(loc.tz, 'plan.location.tz');
+  let elevationM = 0;
+  if (loc.elevationM !== undefined) elevationM = assertNumber(loc.elevationM, 'plan.location.elevationM');
+  return { lat, lon, tz, elevationM };
+}
+
+function validatePhases(phases) {
+  if (!isPlainObject(phases)) throw new Error('plan.phases must be an object of phase windows');
+  const out = {};
+  for (const [name, win] of Object.entries(phases)) {
+    assertSlug(name, `plan.phases key "${name}"`);
+    if (!isPlainObject(win)) throw new Error(`plan.phases.${name} must be an object { start, end }`);
+    out[name] = {
+      start: validateAnchor(win.start, `plan.phases.${name}.start`),
+      end: validateAnchor(win.end, `plan.phases.${name}.end`),
+    };
+  }
+  return out;
+}
+
+function validateLook(name, look) {
+  if (!isPlainObject(look)) throw new Error(`plan.looks.${name} must be an object`);
+  const out = {};
+  if (look.playlist !== undefined) out.playlist = assertSlug(look.playlist, `plan.looks.${name}.playlist`);
+  if (look.autopilot !== undefined) out.autopilot = validateAutopilot(look.autopilot, `plan.looks.${name}.autopilot`);
+  if (look.palette !== undefined) out.palette = assertSlug(look.palette, `plan.looks.${name}.palette`);
+  if (look.globals !== undefined) out.globals = validateGlobalsMap(look.globals, `plan.looks.${name}.globals`);
+  if (look.tasks !== undefined) {
+    if (!isPlainObject(look.tasks)) throw new Error(`plan.looks.${name}.tasks must be an object { enable, disable }`);
+    out.tasks = {
+      enable: validateIdList(look.tasks.enable !== undefined ? look.tasks.enable : [], `plan.looks.${name}.tasks.enable`),
+      disable: validateIdList(look.tasks.disable !== undefined ? look.tasks.disable : [], `plan.looks.${name}.tasks.disable`),
+    };
+  }
+  out.target = validateTarget(look.target, `plan.looks.${name}.target`);
+  return out;
+}
+
+function validateLooks(looks) {
+  if (!isPlainObject(looks)) throw new Error('plan.looks must be an object of looks');
+  const out = {};
+  for (const [name, look] of Object.entries(looks)) {
+    assertSlug(name, `plan.looks key "${name}"`);
+    out[name] = validateLook(name, look);
+  }
+  return out;
+}
+
+// ── triggers / actions ────────────────────────────────────────────────────────
+
+function validateTrigger(trigger, label, phaseNames) {
+  if (!isPlainObject(trigger)) throw new Error(`${label} must be an object`);
+  switch (trigger.type) {
+    case 'clock':
+      return { type: 'clock', at: assertClock(trigger.at, `${label}.at`) };
+    case 'sun': {
+      const out = { type: 'sun', event: assertSunEvent(trigger.event, `${label}.event`), offsetMin: 0 };
+      if (trigger.offsetMin !== undefined) out.offsetMin = assertInteger(trigger.offsetMin, `${label}.offsetMin`);
+      return out;
+    }
+    case 'phase': {
+      const phase = assertSlug(trigger.phase, `${label}.phase`);
+      if (!phaseNames.has(phase)) throw new Error(`${label}.phase "${phase}" is not a defined phase`);
+      return { type: 'phase', phase };
+    }
+    case 'mood': {
+      if (!MOOD_VALUES.includes(trigger.from)) throw new Error(`${label}.from must be one of ${MOOD_VALUES.join(', ')}`);
+      if (!MOOD_VALUES.includes(trigger.to)) throw new Error(`${label}.to must be one of ${MOOD_VALUES.join(', ')}`);
+      const out = { type: 'mood', from: trigger.from, to: trigger.to, minDwellSec: 0, cooldownSec: 0 };
+      if (trigger.minDwellSec !== undefined) {
+        out.minDwellSec = assertNumber(trigger.minDwellSec, `${label}.minDwellSec`);
+        if (out.minDwellSec < 0) throw new Error(`${label}.minDwellSec must be >= 0`);
+      }
+      if (trigger.cooldownSec !== undefined) {
+        out.cooldownSec = assertNumber(trigger.cooldownSec, `${label}.cooldownSec`);
+        if (out.cooldownSec < 0) throw new Error(`${label}.cooldownSec must be >= 0`);
+      }
+      if (trigger.whenPhase !== undefined) {
+        const wp = assertSlug(trigger.whenPhase, `${label}.whenPhase`);
+        if (!phaseNames.has(wp)) throw new Error(`${label}.whenPhase "${wp}" is not a defined phase`);
+        out.whenPhase = wp;
+      }
+      return out;
+    }
+    case 'manual':
+      return { type: 'manual' };
+    default:
+      throw new Error(`${label}.type must be one of clock, sun, phase, mood, manual, got ${JSON.stringify(trigger.type)}`);
+  }
+}
+
+function validateAction(action, label, lookNames) {
+  if (!isPlainObject(action)) throw new Error(`${label} must be an object`);
+  switch (action.type) {
+    case 'playlist': {
+      const out = { type: 'playlist', name: assertSlug(action.name, `${label}.name`) };
+      out.target = validateTarget(action.target, `${label}.target`);
+      if (action.autopilot !== undefined) out.autopilot = validateAutopilot(action.autopilot, `${label}.autopilot`);
+      return out;
+    }
+    case 'look': {
+      const look = assertSlug(action.look, `${label}.look`);
+      if (!lookNames.has(look)) throw new Error(`${label}.look "${look}" is not a defined look`);
+      return { type: 'look', look };
+    }
+    case 'scene':
+      return { type: 'scene', scene: assertSlug(action.scene, `${label}.scene`) };
+    case 'globals': {
+      const out = { type: 'globals', set: validateGlobalsMap(action.set, `${label}.set`) };
+      out.target = validateTarget(action.target, `${label}.target`);
+      return out;
+    }
+    case 'tasks':
+      return {
+        type: 'tasks',
+        enable: validateIdList(action.enable !== undefined ? action.enable : [], `${label}.enable`),
+        disable: validateIdList(action.disable !== undefined ? action.disable : [], `${label}.disable`),
+      };
+    case 'effect': {
+      const out = {
+        type: 'effect',
+        effectId: assertString(action.effectId, `${label}.effectId`),
+      };
+      if (typeof action.presetId === 'string') {
+        if (!action.presetId.trim()) throw new Error(`${label}.presetId string must be non-empty`);
+        out.presetId = action.presetId;
+      } else if (typeof action.presetId === 'number' && !Number.isNaN(action.presetId)) {
+        out.presetId = action.presetId;
+      } else {
+        throw new Error(`${label}.presetId must be a string or number`);
+      }
+      if (action.params !== undefined) {
+        if (!isPlainObject(action.params)) throw new Error(`${label}.params must be an object`);
+        out.params = action.params;
+      }
+      return out;
+    }
+    default:
+      throw new Error(`${label}.type must be one of playlist, look, scene, globals, tasks, effect, got ${JSON.stringify(action.type)}`);
+  }
+}
+
+function validateCue(cue, index, phaseNames, lookNames, seenIds) {
+  const label = `plan.cues[${index}]`;
+  if (!isPlainObject(cue)) throw new Error(`${label} must be an object`);
+  const id = assertSlug(cue.id, `${label}.id`);
+  if (seenIds.has(id)) throw new Error(`${label}.id "${id}" is not unique within the plan`);
+  seenIds.add(id);
+  const out = { id };
+  if (cue.label !== undefined) out.label = assertString(cue.label, `${label}.label`);
+  out.enabled = cue.enabled !== undefined ? assertBool(cue.enabled, `${label}.enabled`) : true;
+  out.catchUp = cue.catchUp !== undefined ? assertBool(cue.catchUp, `${label}.catchUp`) : true;
+  out.trigger = validateTrigger(cue.trigger, `${label}.trigger`, phaseNames);
+  out.action = validateAction(cue.action, `${label}.action`, lookNames);
+  return out;
+}
+
+// ── top-level ─────────────────────────────────────────────────────────────────
+
+/**
+ * Validate a full show plan. THROWS on any invalid field (throw-style).
+ * Returns a normalized plan object.
+ */
+export function validateShowPlan(plan) {
+  if (!isPlainObject(plan)) throw new Error('show plan must be an object');
+  if (plan.schemaVersion !== 1) throw new Error(`plan.schemaVersion must === 1, got ${JSON.stringify(plan.schemaVersion)}`);
+  const name = assertSlug(plan.name, 'plan.name');
+  const location = validateLocation(plan.location);
+  const phases = validatePhases(plan.phases !== undefined ? plan.phases : {});
+  const looks = validateLooks(plan.looks !== undefined ? plan.looks : {});
+
+  const phaseNames = new Set(Object.keys(phases));
+  const lookNames = new Set(Object.keys(looks));
+
+  if (!Array.isArray(plan.cues)) throw new Error('plan.cues must be an array');
+  const seenIds = new Set();
+  const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds));
+
+  return { schemaVersion: 1, name, location, phases, looks, cues };
+}
+
+/**
+ * Load a show plan from disk. A MISSING file is the only non-error path → the
+ * built-in default plan. Any present-but-broken file THROWS (codex P0).
+ *
+ * @param {string} filePath
+ * @returns {object} normalized plan
+ */
+export function loadShowPlan(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return validateShowPlan(defaultShowPlan());
+    throw new Error(`show plan read failed (${filePath}): ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = yaml.load(text);
+  } catch (err) {
+    throw new Error(`show plan parse failed (${filePath}): ${err.message}`);
+  }
+  return validateShowPlan(parsed);
+}
+
+/** Validate-then-write a plan to disk (never persist an invalid plan). */
+export function saveShowPlan(plan, filePath) {
+  const normalized = validateShowPlan(plan);
+  fs.writeFileSync(filePath, dumpShowPlan(normalized), 'utf8');
+  return normalized;
+}
+
+/** Serialize a (validated) plan to YAML text without writing. */
+export function dumpShowPlan(plan) {
+  const normalized = validateShowPlan(plan);
+  return yaml.dump(normalized, { lineWidth: 100, noRefs: true });
+}
+
+/**
+ * The built-in default — a runnable BRC nightly plan. Playlists are all
+ * 'default' (the only name guaranteed to exist) so the plan is runnable in
+ * tests; looks still carry palettes/autopilot to exercise the look bundle.
+ * Cues mirror docs/38 §3.5 (golden-hour look, party_night phase look, mood
+ * calm→party gated to party_night, sunrise look).
+ */
+export function defaultShowPlan() {
+  return {
+    schemaVersion: 1,
+    name: 'playa_default',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles', elevationM: 1190 },
+    phases: {
+      philharmonic: {
+        start: { sun: 'sunset', offsetMin: -30 },
+        end: { sun: 'sunset', offsetMin: 60 },
+      },
+      party_night: {
+        start: { sun: 'sunset', offsetMin: 120 },
+        end: { sun: 'sunrise', offsetMin: -60 },
+      },
+      sunrise_set: {
+        start: { sun: 'sunrise', offsetMin: -30 },
+        end: { sun: 'sunrise', offsetMin: 90 },
+      },
+    },
+    looks: {
+      daytime: { playlist: 'default', palette: 'deep_sea', globals: { master: 0.5 } },
+      philharmonic: {
+        playlist: 'default', palette: 'sunset_coral',
+        autopilot: { active: true, delay_s: 90, shuffle: false },
+      },
+      party: {
+        playlist: 'default', palette: 'bass_drop',
+        autopilot: { active: true, delay_s: 30, shuffle: true },
+      },
+      sunrise: { playlist: 'default', palette: 'aurora', globals: { master: 0.6 } },
+    },
+    cues: [
+      {
+        id: 'c_visibility_on',
+        label: 'Exterior up at golden hour',
+        trigger: { type: 'sun', event: 'sunset', offsetMin: -45 },
+        action: { type: 'look', look: 'philharmonic' },
+      },
+      {
+        id: 'c_party_start',
+        label: 'Party night ramp',
+        trigger: { type: 'phase', phase: 'party_night' },
+        action: { type: 'look', look: 'party' },
+      },
+      {
+        id: 'c_mood_to_party',
+        label: 'Follow the DJ: calm -> party',
+        trigger: {
+          type: 'mood', from: 'calm', to: 'party',
+          minDwellSec: 20, cooldownSec: 300, whenPhase: 'party_night',
+        },
+        action: {
+          type: 'playlist', name: 'default',
+          autopilot: { active: true, delay_s: 30, shuffle: true },
+        },
+      },
+      {
+        id: 'c_sunrise',
+        label: 'Sunrise wind-down',
+        trigger: { type: 'sun', event: 'sunrise', offsetMin: -15 },
+        action: { type: 'look', look: 'sunrise' },
+      },
+    ],
+  };
+}
