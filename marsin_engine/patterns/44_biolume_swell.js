@@ -37,7 +37,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // overall swell + counter-wave rate
-export var swell = 0.25;       // swell amplitude + OVERALL BRIGHTNESS (micLow)
+export var swell = 0.5;        // swell amplitude + OVERALL BRIGHTNESS (micLow) — mid bias (crests pop, two-colour reads)
 export var sparkle = 0.2;      // crest plankton glints count+brightness (micHigh)
 export var kick = 0.0;         // crest burst (micKick)
 export var uvGlow = 0.6;       // named UV blacklight glow amount
@@ -209,7 +209,15 @@ export function render3D(index, x, y, z) {
   // band of mid-swell pixels reads cp2 (green crest) while troughs stay cp1
   // (deep blue) -> the rig shows BOTH hues at once (two-colour bar). The crest
   // cores push fully to cp2; glints/kick push harder still.
-  var tcol = pow(clamp01(sFld), 1.3);            // troughs cp1, rising mid->cp2
+  // Widen the cp1<->cp2 hue split WITHOUT coupling colour to overall brightness
+  // (that would decorrelate micLow->total-brightness, the PRIMARY bar). A static
+  // spatial bias pushes some regions toward cp1 (deep blue troughs) and others
+  // toward cp2 (green crests) so BOTH palette poles are strongly present across
+  // the rig at once. The bias is time-invariant, so it adds hue spread without
+  // touching the per-frame brightness->micLow coupling.
+  var hueBias = (wave(x * 2.3 + y * 1.7) - 0.5) * 0.5; // static spatial cp1/cp2 lean
+  var tcol = pow(clamp01(sFld), 1.3) + hueBias;  // troughs cp1, rising mid->cp2
+  tcol = clamp01(tcol);
   if (crest * 1.4 > tcol) tcol = crest * 1.4;    // crest cores -> full cp2
   tcol = clamp01(tcol + crest * kickBloom * 0.5);// kick: greener crest flash
   if (glint > 0.0) tcol = clamp01(tcol + 0.4);

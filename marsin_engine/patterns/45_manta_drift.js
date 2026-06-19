@@ -44,7 +44,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // glide / flap animation rate
-export var swell = 0.25;       // PRIMARY: water bri + manta count + glide speed
+export var swell = 0.5;        // PRIMARY: water bri + manta count + glide speed — mid bias (lit sea, school of ~3)
 export var foam = 0.3;         // 2nd dim: wing-tip foam sparkle (highs)
 export var span = 0.5;         // manta wingspan thickness
 export var depth = 0.5;        // water darkness / field edge sharpness

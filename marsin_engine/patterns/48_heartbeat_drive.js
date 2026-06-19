@@ -41,7 +41,7 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // resting breath rate + envelope decay trim
 export var kick = 0.0;         // PRIMARY: micKick -> lub-dub pulse + shell + blinder
-export var low = 0.0;          // micLow -> baseline body gradient brightness
+export var low = 0.5;          // micLow -> baseline body gradient brightness (mid: lit body in silence)
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0; // BODY  — deep red
 export var cp2H = 0.17, cp2S = 1.0, cp2V = 1.0; // SHELL — warm amber-gold
@@ -99,7 +99,9 @@ function clamp01(v) {
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var KICK_ON = 0.45;     // rising-edge threshold for a fresh beat
 var SHELL_W = 0.16;     // half-width of the bright shell band (normalized radius)
-var REST_GLOW = 0.05;   // resting body floor in silence (never fully black)
+var REST_GLOW = 0.16;   // resting body floor in silence (never fully black) — lifted so the muscle reads
+var AUTO_BEAT = 0.62;   // autonomous resting heartbeat period (turns) — keeps the beat alive with NO audio
+var KICK_HOLD = 4.0;    // turns of self-beat suppression after a real audio kick (audio takes over)
 var RIG_CX = 0.5;       // rig center, normalized X (pars/bars span 0..1)
 var RIG_CY = 0.55;      // rig center, normalized Y (shell radiates in X & Y)
 
@@ -112,6 +114,8 @@ var gPhase = 0.0;       // irrational gradient drift phase
 var shellPos = 0.0;     // 0..1 current shell radius from center
 var bodyBri = 0.0;      // resolved baseline body brightness this frame
 var restBreath = 0.0;   // slow resting breath phase 0..1
+var autoBeat = 0.5;     // autonomous resting-beat timer (turns since last self-beat; pre-armed so the first beat fires early)
+var kickHold = 0.0;     // turns remaining of self-beat suppression after an audio kick
 
 // Double-bump (lub-dub) envelope over post-beat phase pp in 0..1.
 // Two quick swells: a big LUB near pp~0.10 and a smaller DUB near pp~0.42.
@@ -142,11 +146,29 @@ export function beforeRender(delta) {
   gPhase = gPhase - floor(gPhase);
 
   // PRIMARY trigger: rising edge of the kick re-arms the lub-dub from pp=0.
+  // A real audio kick also suppresses the autonomous resting beat for a while so
+  // the music drives the rhythm cleanly (audio takes over from the self-beat).
   if (kick >= KICK_ON && prevKick < KICK_ON) {
     envPhase = 0.0;
     bigKick = clamp01(kick);   // blinder strength scales with the punch
+    kickHold = KICK_HOLD;      // hand the rhythm to the audio
+    autoBeat = 0.0;
   }
   prevKick = kick;
+
+  // AUTONOMOUS RESTING HEARTBEAT (codex P0: pattern reads at default with NO
+  // audio). When no audio kick is driving the beat, an internal timer fires the
+  // same lub-dub on a calm resting period — the heart keeps beating in silence.
+  if (kickHold > 0.0) {
+    kickHold = kickHold - dt;
+    if (kickHold < 0.0) kickHold = 0.0;
+  } else {
+    autoBeat = autoBeat + dt;
+    if (autoBeat >= AUTO_BEAT) {
+      autoBeat = autoBeat - AUTO_BEAT;
+      envPhase = 0.0;          // re-arm the lub-dub from the top (self-beat)
+    }
+  }
 
   // Advance the post-beat phase. ~0.62 turns/frame-block tuned so the lub-dub
   // resolves in roughly a kick interval; decay trims via localSpeed.

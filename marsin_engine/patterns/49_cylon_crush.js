@@ -56,7 +56,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // base scan-rate trim
-export var level = 0.28;       // PRIMARY: scan rate + brightness (resting ~lively)
+export var level = 0.5;        // PRIMARY: scan rate + brightness (mid bias — bright lively idle scan)
 export var kick = 0.0;         // KICK trigger: edge->center crush + flash (0 at rest)
 export var trail = 0.35;       // scanner trail length (feedback decay)
 

@@ -52,7 +52,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;     // base drift rate of the interference lattice
-export var nodeContrast = 0.0;   // PRIMARY: node brightness + contrast (micLow)
+export var nodeContrast = 0.5;   // PRIMARY: node brightness + contrast (micLow) — mid: bright lit lattice in silence
 export var phaseShift = 0.0;     // slides the four plane phases (micMid)
 export var kickLock = 0.0;       // beat jolt to drift phase (micKick)
 export var sharpBase = 0.45;     // resting HD sharpness of node cores

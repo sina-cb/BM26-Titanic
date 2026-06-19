@@ -35,7 +35,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // dune roll + rotation rate
-export var duneHeight = 0.45;  // PRIMARY audio handle: brightness/height (micLow)
+export var duneHeight = 0.5;   // PRIMARY audio handle: brightness/height (micLow) — mid bias
 export var surf = 0.5;         // 2nd audio handle: crest sharpness/shimmer (micHigh)
 export var duneScale = 0.5;    // spatial frequency (zoom)
 export var floor_ = 0.1;       // calm base glow (never fully black)

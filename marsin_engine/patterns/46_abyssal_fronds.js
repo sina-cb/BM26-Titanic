@@ -43,7 +43,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;     // current drift / animation rate
-export var current = 0.45;       // PRIMARY: sway amplitude + overall brightness (<- micLow)
+export var current = 0.5;        // PRIMARY: sway amplitude + overall brightness (<- micLow) — mid bias
 export var glints = 0.5;         // 2nd dimension: tip phosphorescence (<- micHigh)
 export var frondDensity = 0.5;   // how many fronds stand across the rig
 export var baseGlow = 0.4;       // calm resting floor (never fully black)
