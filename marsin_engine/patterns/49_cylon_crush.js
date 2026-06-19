@@ -38,6 +38,14 @@
   render/beforeRender. At rest (level=default, kick=0) the pattern is a calm,
   non-black idle scan — codex P0, no fallback, no blackout.
 
+  RIG-AGNOSTIC: every visual is driven off the normalized x coord (0..1), so the
+  pattern lights on EVERY rig (test_bench 52, titanic 970, dome 266, logsville
+  216). sectionId is never a gate. The scanner-trail feedback buffer is a fixed
+  128-cell lane indexed by normalized X (NOT one cell per physical pixel, which
+  is impossible: the VM caps an array at ~162 elements while rigs reach 970 px;
+  never pixelCount=144, never 52). Each pixel samples the lane by its own x, so
+  the trail renders identically on every rig; every lane access is guarded 0..N-1.
+
   CONTROLS (UI order = declaration order)
     - localSpeed : base scan-rate trim.
     - level      : PRIMARY audio handle — scan rate + overall brightness.
@@ -73,9 +81,15 @@ var CORE_W = 0.055;        // sharp scanner core half-width (HD on true black)
 var FLASH_W = 0.16;        // collision-flash half-width around center
 var CENTER = 0.5;          // physical rig center in nx
 
-// ── Per-pixel feedback buffer for the scanner trail (PATTERNS.md §10.2) ───────
-var N = 52;                // test_bench pixel count — NEVER pixelCount (=144)
-var buf = array(52);       // persistent trail buffer, allocated ONCE at init
+// ── Scanner-trail feedback lane (COORDINATE-indexed, rig-agnostic) ────────────
+// The trail is NOT one cell per physical pixel (that can't work: the VM caps an
+// array at ~162 elements, and rigs have up to 970 px, NEVER pixelCount=144).
+// Instead the trail is a fixed 128-cell lane along the normalized X axis (0..1);
+// every pixel samples the lane cell for its OWN x, so the trail renders
+// identically on every rig (test_bench 52, titanic 970, dome 266, logsville 216).
+// 128 < the VM's ~162-element array cap, so the buffer is real (not silently 0).
+var N = 128;               // lane resolution along X (under the VM array cap)
+var buf = array(128);      // persistent trail lane, allocated ONCE at init
 var bufInit = 0;
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ─────────────
@@ -175,7 +189,10 @@ export function beforeRender(delta) {
     if (flashEnv < 0.0) flashEnv = 0.0;
   }
 
-  // ── Scanner trail: decay the whole buffer, inject the bright core ───────────
+  // ── Scanner trail lane: decay the whole lane, then paint the bright core at
+  //    the scanner's X position (coordinate-indexed, rig-agnostic). The lane is
+  //    sampled per-pixel in render3D by each pixel's own x, so the trail reads the
+  //    same on every rig regardless of pixel count.
   if (bufInit == 0) {
     for (var kk = 0; kk < N; kk++) buf[kk] = 0.0;
     bufInit = 1;
@@ -183,29 +200,46 @@ export function beforeRender(delta) {
   // trail 0 -> short stub (fast decay); trail 1 -> long banner (slow decay).
   var decay = 0.55 + clamp01(trail) * 0.40;
   for (var kk = 0; kk < N; kk++) buf[kk] = buf[kk] * decay;
+
+  // Paint the core into the lane cell(s) under the scanner head. Footprint scales
+  // with the core half-width so louder lows leave a slightly wider hot streak.
+  var cwLane = CORE_W * (1.0 + clamp01(level) * 1.4);
+  var loCell = floor((scannerX - cwLane) * (N - 1));
+  var hiCell = floor((scannerX + cwLane) * (N - 1) + 0.5);
+  if (loCell < 0) loCell = 0;
+  if (hiCell > N - 1) hiCell = N - 1;
+  for (var kk = loCell; kk <= hiCell; kk++) {
+    var cellX = kk / (N - 1);
+    var dC = abs(cellX - scannerX);
+    var inj = 0.0;
+    if (dC < cwLane) { inj = 1.0 - dC / cwLane; inj = inj * inj; }
+    if (inj > buf[kk]) buf[kk] = inj;
+  }
 }
 
 export function render3D(index, x, y, z) {
-  // P0 self-filter: only light known sections (pars=1, vintage=2, bars=3).
-  if (sectionId != 1 && sectionId != 2 && sectionId != 3) { rgb(0, 0, 0); return; }
+  // RIG-AGNOSTIC: drive ALL visuals off the normalized coords (x in 0..1) — every
+  // rig provides them. sectionId is NEVER a gate here (titanic ships every pixel
+  // as sectionId 0, which would black the whole rig); it is only an OPTIONAL
+  // additive accent below. The coord-driven base always lights on every rig.
 
-  // ── SCANNER core: sharp bright pixel on true black, along physical X ────────
-  // Core half-width widens slightly with level so louder lows light MORE pixels
-  // along the sweep — this couples the dominant (scanner) brightness term
-  // directly to micLow, the PRIMARY continuous correlation.
+  // ── SCANNER core + trail: sample the coordinate-indexed lane by this pixel's
+  //    own normalized X. The lane already holds the freshly-painted core plus the
+  //    decaying trail (painted in beforeRender at the scanner X). Sampling by x
+  //    means this reads identically on EVERY rig (52 / 970 / 266 / 216 px).
+  var laneF = clamp01(x) * (N - 1);
+  var li = floor(laneF + 0.5);
+  if (li < 0) li = 0;
+  if (li > N - 1) li = N - 1;
+  var scanBri = buf[li];             // core + decaying trail at this pixel's X
+  // Live core term layered on top so the head is always razor-crisp on every rig.
   var cw = CORE_W * (1.0 + clamp01(level) * 1.4);
   var dCore = abs(x - scannerX);
-  var coreBri = 0.0;
   if (dCore < cw) {
-    coreBri = 1.0 - dCore / cw;
-    coreBri = coreBri * coreBri;   // sharpen -> crisp HD core
+    var coreBri = 1.0 - dCore / cw;
+    coreBri = coreBri * coreBri;     // sharpen -> crisp HD core
+    if (coreBri > scanBri) scanBri = coreBri;
   }
-  // Inject the freshly-lit core into this pixel's trail memory (paint & fade).
-  // Bounds-guard the buffer so a model larger than N can't read/write OOB.
-  if (index >= 0 && index < N) {
-    if (coreBri > buf[index]) buf[index] = coreBri;
-  }
-  var scanBri = (index >= 0 && index < N) ? buf[index] : coreBri; // core + decaying trail
 
   // ── CRUSH: twin bars sweep edges -> center on the kick ──────────────────────
   // Bar position this frame: distance from center grows with crushEnv (1 at the

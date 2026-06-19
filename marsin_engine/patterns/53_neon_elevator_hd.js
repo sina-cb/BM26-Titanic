@@ -48,6 +48,12 @@
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
       MODULATE sliderLevel (level) <- micLow    PRIMARY: brightness + speed
       MODULATE sliderKick  (kick)  <- micKick   floor STEP + vintage blinder
+
+  RIG-AGNOSTIC: the floor-coordinate fc is driven off the normalized Y coord
+  (0..1) as a base, so the shaft lights on EVERY rig (test_bench 52, titanic 970,
+  dome 266, logsville 216). The known test_bench sections (1/3 pars/bars, 2
+  vintage) refine fc and add the vintage-head W blinder as OPTIONAL ACCENTS only;
+  sectionId is never a gate, so titanic (all sectionId 0) still lights.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -196,7 +202,12 @@ function floorTcol(fc) {
 
 export function render3D(index, x, y, z) {
   // ── Assign this pixel a unified vertical floor-coordinate fc (0 bottom..1 top)
-  var fc = 0.0;
+  // RIG-AGNOSTIC BASE: drive fc straight off the normalized Y coord (0..1) so the
+  // elevator shaft reads on EVERY rig (titanic ships every pixel as sectionId 0;
+  // a sectionId gate here would black the whole rig). The known test_bench
+  // sections then ADD their bespoke layout on top as an optional accent, so the
+  // test_bench look is unchanged.
+  var fc = clamp01(y);                              // coord-driven shaft: bottom..top
   var isVintage = 0;
   if (sectionId == 3) {
     // BARS: lower shaft 0.00..0.45. Gentle x-tilt -> crisp diagonal shimmer (HD).
@@ -209,8 +220,6 @@ export function render3D(index, x, y, z) {
     var ny = y / 0.2727;                            // vintage strip 0..1 (head6..head1)
     fc = 0.72 + 0.28 * clamp01(ny);                 // 0.72..1.00
     isVintage = 1;
-  } else {
-    rgb(0.0, 0.0, 0.0); return;                     // P0 self-filter
   }
 
   // ── Crisp neon floor band on true black ──────────────────────────────────

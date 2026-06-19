@@ -1,18 +1,28 @@
 /*
-  27_swipe.js — ONE unified swipe for the whole rig.
+  27_swipe.js — ONE unified swipe for the whole rig (RIG-AGNOSTIC).
 
-  A single sharp, high-contrast pixel sweeps every fixture group along the axis
-  that fits it, all driven by one position. Per pixel we pick the fixture's own
-  PHYSICAL-ordinal lane:
-    - Pars   (fId 1..4) : X axis, ordinal 0..3   (ord = 4 - fId; fId4 left … fId1 right)
-    - Vintage(fId 5..6) : Y axis, ordinal 0..5   (ord = (fId5?9:15) - index; bottom→top, strips mirror)
-    - Bars   (fId 7..8) : X axis, ordinal 0..35  (ord = (fId7?33:69) - index; both bars, left→right)
-  Any other fixtureId renders black (P0 self-filter).
+  A single sharp, high-contrast band sweeps every fixture group along the axis
+  that fits it, all driven by one position.
 
-  Ordinals are the PHYSICAL rank (sorted by nx for X, ny for Y — verified
-  monotonic against the model), NOT the LED wiring index. `swipePos` 0..1 maps
-  onto each group's own 0..(n-1) range so the swipe stays coherent across the
-  rig (left pars + left bar LEDs + bottom vintage heads all light at pos 0).
+  TWO ROUTES, SAME LOOK:
+   - test_bench (the original, EXACTLY preserved): per pixel we pick the
+     fixture's own PHYSICAL-ordinal lane by fixtureId:
+       - Pars   (fId 1..4) : X axis, ordinal 0..3   (ord = 4 - fId; fId4 left … fId1 right)
+       - Vintage(fId 5..6) : Y axis, ordinal 0..5   (ord = (fId5?9:15) - index; bottom→top)
+       - Bars   (fId 7..8) : X axis, ordinal 0..35  (ord = (fId7?33:69) - index; left→right)
+   - ANY OTHER RIG (titanic/dome/logsville, fId not 1..8): a COORDINATE-derived
+     lane. The sweep axis comes from the pixel's height: pixels in a tall
+     vertical band (low-ish ny, like the test_bench vintage heads) sweep on Y,
+     everything else sweeps on X. The swipe position 0..1 maps onto the
+     normalized coordinate directly, so the whole ship sweeps left→right (or
+     bottom→top on the vertical band) by POSITION. NEVER returns black — every
+     pixel participates in the coordinate lane.
+
+  Ordinals (test_bench) are the PHYSICAL rank (sorted by nx for X, ny for Y —
+  verified monotonic), NOT the LED wiring index. `swipePos` 0..1 maps onto each
+  group's own range so the swipe stays coherent across the rig (left pars + left
+  bar LEDs + bottom vintage heads all light at pos 0). On a coord rig the same
+  0..1 maps straight onto nx (or ny) so position 0 lights the left/bottom edge.
 
   CONTRAST: BASE_FLOOR = 0 — un-swept LEDs are TRUE BLACK. Only the swept core
   (+ optional blur / trail) lights, so the rig is high-contrast / high-def. The
@@ -116,7 +126,8 @@ function coreOrdOf(posv, nPix) {
   return floor(shifted(posv) * (nPix - 1.0) + 0.5);
 }
 
-// Pixelated fading trail at ordinal `ordv` for a lane of `nPix` LEDs.
+// Pixelated fading trail at ordinal `ordv` for a lane of `nPix` LEDs (test_bench
+// ordinal route — discrete physical pixels).
 function trailAt(ordv, nPix) {
   if (trail <= 0.0) return 0.0;
   var acc = 0.0;
@@ -124,6 +135,23 @@ function trailAt(ordv, nPix) {
     var idx = histHead - 1 - kk;
     if (idx < 0) idx = idx + TRAIL_N;
     if (coreOrdOf(posHist[idx], nPix) == ordv) {
+      var fdamt = trail * (1.0 - kk / TRAIL_N);
+      if (fdamt > acc) acc = fdamt;
+    }
+  }
+  return acc;
+}
+
+// Continuous trail for the COORDINATE lane: `posAxis` is this pixel's normalized
+// 0..1 position along the sweep axis; `bandW` is the crisp band half-width. Past
+// swipe positions within bandW of posAxis light a fading tail.
+function trailAtCoord(posAxis, bandW) {
+  if (trail <= 0.0) return 0.0;
+  var acc = 0.0;
+  for (var kk = 1; kk < TRAIL_N; kk++) {
+    var idx = histHead - 1 - kk;
+    if (idx < 0) idx = idx + TRAIL_N;
+    if (abs(shifted(posHist[idx]) - posAxis) <= bandW) {
       var fdamt = trail * (1.0 - kk / TRAIL_N);
       if (fdamt > acc) acc = fdamt;
     }
@@ -157,41 +185,64 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // ── Pick this fixture's physical-ordinal lane (axis + length) ───────────
-  var nPix = 0;
-  var ord = 0;
-  if (fixtureId >= 1 && fixtureId <= 4) {
-    nPix = 4;  ord = 4 - fixtureId;                       // pars — X
-  } else if (fixtureId >= 5 && fixtureId <= 6) {
-    nPix = 6;  ord = (fixtureId == 5 ? 9 : 15) - index;   // vintage — Y
-  } else if (fixtureId >= 7 && fixtureId <= 8) {
-    nPix = 36; ord = (fixtureId == 7 ? 33 : 69) - index;  // bars — X
-  } else {
-    rgb(0, 0, 0); return;                                 // P0 self-filter
-  }
-
-  var centerOrd = shifted(swipeBase) * (nPix - 1.0);
-  var coreOrd = floor(centerOrd + 0.5);
-
-  // Sharp single-pixel core (BASE_FLOOR = 0 → un-swept LEDs are true black).
   var bri = 0.0;
-  if (ord == coreOrd) bri = 1.0;
 
-  // Blur: soft halo onto neighbour LEDs, radius scaled to the lane length.
-  if (blur > 0.0) {
-    var bmax = (nPix - 1.0) * 0.18;
-    if (bmax < 1.2) bmax = 1.2;
-    var radius = blur * bmax;
-    var dd = abs(ord - centerOrd);
-    if (dd < radius) {
-      var bv = 0.5 + 0.5 * cos(dd / radius * PI);
-      if (bv > bri) bri = bv;
+  if (fixtureId >= 1 && fixtureId <= 8) {
+    // ── ROUTE A: test_bench physical-ordinal lane (axis + length) ─────────
+    // EXACTLY the original — preserves the test_bench look/identity.
+    var nPix = 0;
+    var ord = 0;
+    if (fixtureId >= 1 && fixtureId <= 4) {
+      nPix = 4;  ord = 4 - fixtureId;                       // pars — X
+    } else if (fixtureId >= 5 && fixtureId <= 6) {
+      nPix = 6;  ord = (fixtureId == 5 ? 9 : 15) - index;   // vintage — Y
+    } else {
+      nPix = 36; ord = (fixtureId == 7 ? 33 : 69) - index;  // bars — X
     }
-  }
 
-  // Pixelated trail behind the swipe.
-  var tr = trailAt(ord, nPix);
-  if (tr > bri) bri = tr;
+    var centerOrd = shifted(swipeBase) * (nPix - 1.0);
+    var coreOrd = floor(centerOrd + 0.5);
+
+    // Sharp single-pixel core (BASE_FLOOR = 0 → un-swept LEDs are true black).
+    if (ord == coreOrd) bri = 1.0;
+
+    // Blur: soft halo onto neighbour LEDs, radius scaled to the lane length.
+    if (blur > 0.0) {
+      var bmax = (nPix - 1.0) * 0.18;
+      if (bmax < 1.2) bmax = 1.2;
+      var radius = blur * bmax;
+      var dd = abs(ord - centerOrd);
+      if (dd < radius) {
+        var bv = 0.5 + 0.5 * cos(dd / radius * PI);
+        if (bv > bri) bri = bv;
+      }
+    }
+
+    // Pixelated trail behind the swipe.
+    var tr = trailAt(ord, nPix);
+    if (tr > bri) bri = tr;
+
+  } else {
+    // ── ROUTE B: COORDINATE lane (titanic/dome/logsville — fId not 1..8) ──
+    // Drive the sweep purely from normalized coords. Vintage-like vertical
+    // band (low ny, mirroring the test_bench upper heads) sweeps on Y; the
+    // rest sweeps on X. NEVER returns black — every pixel is in a lane.
+    var posAxis = x;                         // default: sweep across X
+    if (y < 0.30) posAxis = y;               // vertical band -> sweep on Y
+    posAxis = clamp01(posAxis);
+
+    var center = shifted(swipeBase);         // 0..1 swipe position
+    // Crisp band half-width: tight enough to read as a sharp moving line on a
+    // dense rig, widened by `blur` for a soft halo.
+    var bandW = 0.018 + blur * 0.10;
+    var dpos = abs(posAxis - center);
+    if (dpos <= bandW) {
+      bri = 0.5 + 0.5 * cos(dpos / bandW * PI);  // crisp cosine core
+    }
+
+    var trc = trailAtCoord(posAxis, bandW);
+    if (trc > bri) bri = trc;
+  }
 
   // Colour blends cp1->cp2 along the swipe position (shared across the rig).
   var tcol = clamp01(shifted(swipeBase));

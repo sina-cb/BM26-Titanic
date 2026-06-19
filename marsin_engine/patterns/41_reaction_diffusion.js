@@ -2,9 +2,15 @@
   41_reaction_diffusion.js — GRAY-SCOTT reaction-diffusion on a feedback buffer.
 
   A living chemical skin for the whole rig. Two reagents (u = "substrate",
-  v = "catalyst") share a per-pixel feedback buffer (PATTERNS.md §10.2): one
-  cell per pixel, mapped by `index` (the test_bench model is exactly N=52 px so
-  the map is 1:1). Each frame we run one Gray-Scott step over the buffer in
+  v = "catalyst") share a feedback LANE of N=128 cells laid along the normalized
+  X axis (0..1) — NOT one cell per physical pixel. Every physical pixel samples
+  the catalyst lane cell for its OWN x, so the chemistry reads across the WHOLE
+  rig on every model (test_bench 52, titanic 970, dome 266, logsville 216).
+
+  RIG-AGNOSTIC: a coordinate lane (not a per-pixel buffer) is required because the
+  VM caps an array at ~162 elements while rigs reach 970 px — so N is NEVER
+  pixelCount (=144), NEVER a hardcoded 52, and never >162; every lane access is
+  guarded 0..N-1. Each frame we run one Gray-Scott step over the lane in
   `beforeRender` (kept out of the per-pixel path, PATTERNS.md §10.5):
 
     DIFFUSE — every cell blends with its two index-neighbours using IRRATIONAL
@@ -68,7 +74,12 @@ export function sliderFeed(v) { feed = v; }     // micMid maps here
 export function sliderSeed(v) { seed = v; }     // micKick maps here
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var N = 52;                 // feedback buffer size (explicit; NOT pixelCount)
+// RIG-AGNOSTIC: the reaction runs on a fixed N=128-cell lane along the normalized
+// X axis, sampled per-pixel by each pixel's x. NOT one cell per physical pixel
+// (the VM caps an array at ~162 elements; rigs reach 970 px), NEVER pixelCount
+// (=144), NEVER 52. 128 < the array cap so all four lane arrays are real, and a
+// 128-cell lane gives plenty of reaction detail on every rig.
+var N = 128;                // reaction-lane resolution along X (under the VM cap)
 var BASE_FLOOR = 0.0;       // quiet substrate is (near) black
 var PHI = 1.61803;          // golden ratio
 var GOLD = 2.39996;         // golden angle (turns) — irrational seed wander
@@ -117,10 +128,10 @@ function clamp01(v) {
 }
 
 // ── Persistent state ─────────────────────────────────────────────────────────
-var bufU = array(52);       // substrate concentration (feedback buffer)
-var bufV = array(52);       // catalyst  concentration (the VISIBLE reagent)
-var tmpU = array(52);       // scratch for one diffusion+react pass
-var tmpV = array(52);
+var bufU = array(128);      // substrate concentration (lane, under VM array cap)
+var bufV = array(128);      // catalyst  concentration (the VISIBLE reagent)
+var tmpU = array(128);      // scratch for one diffusion+react pass
+var tmpV = array(128);
 var bufInit = 0;
 var seedPhase = 0.0;        // wandering seed-site phase (golden-angle advance)
 var faintPhase = 0.0;       // slow phase for the silent-base shimmer
@@ -131,7 +142,7 @@ var stepClock = 0.0;        // accumulates time toward the next reaction sub-ste
 // diffusion has a core to grow from.
 function injectAt(center, amt) {
   if (center < 0) center = 0;
-  if (center > N - 1) center = N - 1;
+  if (center > N - 1) center = N - 1;           // hard lane guard
   bufV[center] = bufV[center] + amt;          if (bufV[center] > 1.0) bufV[center] = 1.0;
   bufU[center] = bufU[center] - amt * 0.5;    if (bufU[center] < 0.0) bufU[center] = 0.0;
   if (center > 0)     { bufV[center - 1] = bufV[center - 1] + amt * 0.5; if (bufV[center - 1] > 1.0) bufV[center - 1] = 1.0; }
@@ -147,7 +158,8 @@ export function beforeRender(delta) {
   _hsv2rgb2();
 
   // ── First-frame seeding: substrate full, a few catalyst nuclei so the
-  //    reaction has something to chew on (otherwise u=v=0 stays inert). ──
+  //    reaction has something to chew on (otherwise u=v=0 stays inert). Seeds
+  //    spread across the WHOLE lane (= the whole rig in X). ──
   if (bufInit == 0) {
     for (var kk = 0; kk < N; kk++) { bufU[kk] = 1.0; bufV[kk] = 0.0; tmpU[kk] = 0.0; tmpV[kk] = 0.0; }
     injectAt(floor(N * 0.27), 0.7);
@@ -192,7 +204,7 @@ export function beforeRender(delta) {
     for (var kk = 0; kk < N; kk++) {
       var u = bufU[kk];
       var v = bufV[kk];
-      // index-neighbours (clamped at the strand ends)
+      // lane-neighbours (clamped at the lane ends)
       var ul = (kk > 0)     ? bufU[kk - 1] : u;
       var ur = (kk < N - 1) ? bufU[kk + 1] : u;
       var vl = (kk > 0)     ? bufV[kk - 1] : v;
@@ -215,8 +227,12 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  var conc = 0.0;            // catalyst concentration at this pixel
-  if (index >= 0 && index < N) conc = bufV[index];
+  // RIG-AGNOSTIC: sample the catalyst lane by this pixel's normalized X (0..1),
+  // so the reaction reads across the WHOLE rig on every model (52/970/266/216 px).
+  var li = floor(clamp01(x) * (N - 1) + 0.5);
+  if (li < 0) li = 0;
+  if (li > N - 1) li = N - 1;
+  var conc = bufV[li];       // catalyst concentration at this pixel's X (guarded)
 
   // ── Faint resting cp1 wash so the still rig is never pure black (P0).
   //    Slow, per-pixel-phased shimmer so it reads "alive" not "stuck". The
@@ -224,7 +240,7 @@ export function render3D(index, x, y, z) {
   //    changes (lag-free) on EVERY pixel — this uniform component is what makes
   //    the rig's total brightness track micLow tightly (the PRIMARY corr). It
   //    rides strictly on cp1 so it does not pollute the reaction's coral hue. ──
-  var faint = (base + level * 0.34) * (0.30 + 0.70 * wave(faintPhase + index * 0.013));
+  var faint = (base + level * 0.34) * (0.30 + 0.70 * wave(faintPhase + x * 1.7));
 
   // ── Reaction layer: catalyst concentration -> brightness, also gained by
   //    `level` so a live front during loud bass burns a channel hot (peak>200)

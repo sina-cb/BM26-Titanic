@@ -214,14 +214,19 @@ export function render3D(index, x, y, z) {
   var d = min(d1, min(d2, d3));
 
   // falloff/focus shape the core: bright at attractor, near-black away.
+  // NOTE: the pow base is floored to a tiny epsilon (never EXACTLY 0). On the
+  // VM pow(0, foc) returns NaN, which poisoned `bri` and zeroed entire strands
+  // on rigs where pixels land exactly outside an attractor's reach (the dark
+  // strand on titanic). With the epsilon the field stays finite everywhere and
+  // the coord-driven floor below lights every pixel.
   var fall = 1.0 + falloff * 5.0;   // map slider 0..1 -> 1..6
   var foc  = 1.0 + focus * 4.0;     // map slider 0..1 -> 1..5
-  var v = pow(max(0.0, min(1.0, 1.0 - d * fall)), foc);
+  var v = pow(max(0.000001, min(1.0, 1.0 - d * fall)), foc);
 
   // Per-attractor influence -> which colour end dominates here.
-  var influence1 = pow(max(0.0, 1.0 - d1 * fall), foc);
-  var influence2 = pow(max(0.0, 1.0 - d2 * fall), foc);
-  var influence3 = pow(max(0.0, 1.0 - d3 * fall), foc);
+  var influence1 = pow(max(0.000001, 1.0 - d1 * fall), foc);
+  var influence2 = pow(max(0.000001, 1.0 - d2 * fall), foc);
+  var influence3 = pow(max(0.000001, 1.0 - d3 * fall), foc);
   var influenceTotal = influence1 + influence2 + influence3 + 0.0001;
 
   // tCol spans cp1<->cp2 across the rig: blend by which attractor wins + a
@@ -252,7 +257,12 @@ export function render3D(index, x, y, z) {
   var bri = v * gain;
 
   // Small non-black floor so silence is calm-but-visible (mission critical).
-  var floorV = 0.02 + 0.015 * wave(nx * 0.7 + ny * 0.5 + beatPhase073);
+  // COORD-DRIVEN (nx/ny only) so EVERY pixel on ANY rig lights from coordinates
+  // alone — sections are additive accents below, never the source of light.
+  // Kept comfortably above the visibility threshold across the whole field even
+  // after the master/output attenuation — a pure-cp1 pixel only carries this
+  // floor on its dim channels, so it must be generous enough to stay readable.
+  var floorV = 0.16 + 0.060 * wave(nx * 0.7 + ny * 0.5 + beatPhase073);
 
   var outR = cr * bri;
   var outG = cg * bri;
@@ -319,6 +329,17 @@ export function render3D(index, x, y, z) {
     outW = outW * blackMask;
     outA = outA * blackMask;
   }
+
+  // Final guarantee that EVERY pixel clears the visibility floor on EVERY rig:
+  // re-floor each colour channel against a freshly-evaluated coord-driven
+  // minimum (tinted along the palette). This also defends against any single
+  // accumulated channel collapsing to zero — the base must always read.
+  var floorR = cr * floorV;
+  var floorG = cg * floorV;
+  var floorB = cb * floorV;
+  if (outR < floorR) outR = floorR;
+  if (outG < floorG) outG = floorG;
+  if (outB < floorB) outB = floorB;
 
   rgbwau(clamp01(outR), clamp01(outG), clamp01(outB),
          clamp01(outW), clamp01(outA), 0.0);

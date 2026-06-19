@@ -168,6 +168,11 @@ export function beforeRender(delta) {
 export function render3D(index, x, y, z) {
   // ── Map this fixture into the shared normalized weave plane (nx,ny) ────────
   // All groups are sampled against the SAME curve so the figure drapes the rig.
+  // RIG-AGNOSTIC: on test_bench the fixtureId lanes reproduce the original
+  // placement (pars top row, vintage vertical strips, bars full-width band).
+  // On ANY other rig (titanic/dome/logsville, fId not 1..8) the pixel's OWN
+  // normalized coords (x,y) ARE the weave plane, so the Lissajous figure drapes
+  // the whole ship directly from coordinates. NEVER returns black.
   var nx = 0.0;
   var ny = 0.0;
   if (fixtureId >= 1 && fixtureId <= 4) {
@@ -183,7 +188,9 @@ export function render3D(index, x, y, z) {
     nx = x;
     ny = 0.5;
   } else {
-    rgb(0.0, 0.0, 0.0); return;               // P0 self-filter
+    // Coordinate plane straight from normalized coords (every other rig).
+    nx = x;
+    ny = y;
   }
   nx = clamp01(nx);
   ny = clamp01(ny);

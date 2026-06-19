@@ -179,6 +179,13 @@ export function render3D(index, x, y, z) {
 
   // Wash brightness: cubed field swelled by micLow, plus shimmer glints.
   var bri = noise * washGain + shim;
+  // COORD-DRIVEN non-black floor: the cubed wash drops to true black in its
+  // troughs, which on a rig with no section/fixture accents (titanic/dome/
+  // logsville have fixtureId 0) would leave those pixels dark. A small floor
+  // driven only by the wash field's smooth phase keeps EVERY pixel lit above
+  // the visibility threshold while the cubed cores still read HD-bright.
+  var warmFloor = 0.045 + 0.025 * raw;
+  bri = bri + warmFloor;
   bri = clamp01(bri);
 
   // Palette blend cp1 (deep red/amber) <-> cp2 (warm gold) along a decorrelated

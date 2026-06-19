@@ -3,11 +3,17 @@
   leaves a fading tail via a per-pixel feedback buffer (LANG_SPEC §9.5(B)).
 
   CONCEPT (amalgamates 01_cylon_sweep + 10_chasers + 27_swipe trail):
-    A persistent brightness buffer `buf[index]` (N = 52, the full test_bench:
-    pars 0..3, vintage 4..15, bars 16..51 — one contiguous index lane, so the
-    comet streaks pars → vintage → bars and back). Each frame we DECAY the whole
-    buffer, then PAINT the head cell at the comet position. Reading buf[index]
-    per pixel gives a true paint-and-fade pixel trail.
+    A persistent brightness lane `buf` of N=128 cells laid along the normalized X
+    axis (0..1) — NOT one cell per physical pixel. Each frame we DECAY the whole
+    lane, then PAINT the head cell at the comet's lane position. Every physical
+    pixel samples the lane cell for its OWN x, giving a true paint-and-fade trail.
+
+  RIG-AGNOSTIC: a coordinate lane (not a per-pixel buffer) is required because the
+  VM caps an array at ~162 elements while rigs reach 970 px (NEVER pixelCount=144,
+  NEVER 52). The comet streaks the full X axis and bounces at the lane ends, so it
+  sweeps the whole rig on EVERY model — identical look on test_bench 52 and a full
+  streak across titanic 970 / dome 266 / logsville 216. Every lane access is
+  guarded 0..N-1.
 
     Everything scales with BASS (sliderBass, fed by micLow):
       - SPEED : more bass → the comet flies faster (more sweeps/sec).
@@ -55,12 +61,18 @@ export function sliderTail(v) { tail = v; }
 export function sliderHeadBright(v) { headBright = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var N = 52;             // feedback buffer size — explicit constant, NOT pixelCount
-var MIN_RATE = 0.1241;  // cells/sec floor (silence: a slow faint comet) — irrational
-var MAX_RATE = 27.7128; // cells/sec at full speed + full bass (= 16*sqrt3, irrational)
+// RIG-AGNOSTIC: the trail is a fixed N=128-cell lane along the normalized X axis,
+// sampled per-pixel by each pixel's x. NOT one cell per physical pixel (the VM
+// caps an array at ~162 elements; rigs reach 970 px), NEVER pixelCount (=144),
+// NEVER 52. 128 < the array cap so the lane is real, and a 128-cell lane gives a
+// crisp comet on the 52-px test_bench while still covering the 970-px titanic.
+var N = 128;            // trail-lane resolution along X (under the VM array cap)
+var MIN_RATE = 0.1241;  // lane-cells/sec floor (silence: a slow faint comet) — irrational
+var MAX_RATE = 27.7128; // lane-cells/sec at full speed + full bass (= 16*sqrt3, irrational)
 var DECAY_SLOW = 0.62;  // per-frame keep factor at shortest tail (fast fade)
 var DECAY_FAST = 0.93;  // per-frame keep factor at longest tail (slow fade)
 var EMBER = 0.12;       // minimal head floor in silence (never fully black)
+var HEAD_CELLS = 2.5;   // head half-width in lane cells (~the 52-px 1-2 px core)
 
 // HEAD GAIN — remap micLow's narrow musical range to a full 0..1 head drive.
 var BASS_LO = 0.46;        // micLow value treated as "no bass" (silence baseline)
@@ -108,10 +120,15 @@ function clamp01(v) {
 }
 
 // ── Persistent state (carried across frames) ─────────────────────────────────
-var buf = array(52);    // per-pixel brightness feedback buffer (size = N)
-var headPos = 0.0;      // comet head position in continuous cell space [0,N)
-var dir = 1.0;          // sweep direction (+1 / -1) — bounces at the ends
+var buf = array(128);   // trail lane along normalized X (size = N), under VM cap
+var headPos = 0.0;      // comet head position in continuous lane-cell space [0,N)
+var dir = 1.0;          // sweep direction (+1 / -1) — bounces at the lane ends
 var inited = 0;
+// The original rates were tuned for a 52-cell sweep (the test_bench rig length).
+// The lane is now 128 cells, so scale rates by 128/52 to keep the comet's visual
+// speed (sweeps of the whole rig per second) identical to the test_bench look.
+var RATE_SCALE = 2.4615;  // 128/52 — preserves the test_bench sweep cadence
+var bassDrive = 0.0;      // gamma-remapped bass drive (resolved each frame, used in render3D)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -130,13 +147,17 @@ export function beforeRender(delta) {
   // so a strong-but-sub-1.0 bass value still drives the head toward saturation).
   var bassHead = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO));
   bassHead = pow(bassHead, HEAD_GAMMA);
+  bassDrive = bassHead;   // expose to render3D for the bass-glow floor (PRIMARY corr)
 
   // BASS drives speed: louder bass → faster comet. An irrational SQRT3 phase term
   // gives the sweep a non-repeating wobble so it never locks to an integer period.
   var wob = 0.92 + 0.08 * wave(time(0.37) * SQRT3);
-  var rate = MIN_RATE + (MAX_RATE - MIN_RATE) * clamp01(localSpeed) * clamp01(0.18 + 0.82 * bass) * wob;
+  // Rate is in lane-cells/sec, scaled by 128/52 so the comet sweeps the whole rig
+  // at the same visual cadence as the original 52-cell test_bench look.
+  var rate = (MIN_RATE + (MAX_RATE - MIN_RATE) * clamp01(localSpeed) * clamp01(0.18 + 0.82 * bass) * wob) * RATE_SCALE;
 
-  // Advance the head and bounce at the rail ends so it streaks the whole rig.
+  // Advance the head and bounce at the lane ends so it streaks the whole X axis
+  // (= the whole rig, on every model, since pixels sample the lane by their x).
   headPos = headPos + dir * rate * dt;
   if (headPos >= N - 1.0) { headPos = N - 1.0; dir = -1.0; }
   if (headPos <= 0.0)     { headPos = 0.0;     dir = 1.0;  }
@@ -156,33 +177,61 @@ export function beforeRender(delta) {
   var hb = clamp01(headBright) * (EMBER + (1.0 - EMBER) * bassHead);
   if (hb < EMBER) hb = EMBER;
 
-  // Paint the head cell with a tight bright core (the remap drives it to 1.0 at a
-  // musical peak so the peak channel saturates >=210), plus a half-bright
-  // neighbour for a crisp 1–2 px core — written into the feedback buffer.
+  // Paint the head as a small bright cluster in the 128-cell lane. On the coarse
+  // 52-px test_bench this was a 1–2 px core; on the fine lane it is ~HEAD_CELLS
+  // wide so every rig's per-pixel sampling reliably catches the head (a 1-cell
+  // head in a 128-lane would be missed by a 52-px sampling, decorrelating the
+  // bass→brightness coupling). The cluster widens slightly with bass so louder
+  // bass lights MORE pixels along the head — reinforcing corr(micLow, brightness).
   var ci = floor(headPos + 0.5);
   if (ci < 0) ci = 0;
-  if (ci > N - 1) ci = N - 1;
+  if (ci > N - 1) ci = N - 1;        // hard lane guard (never OOB)
   var core = clamp01(hb * HEAD_OVERDRIVE);
-  if (core > buf[ci]) buf[ci] = core;
-
-  var ni = ci + dir;
-  if (ni >= 0 && ni <= N - 1) {
-    var nb = hb * 0.5;
-    if (nb > buf[ni]) buf[ni] = nb;
+  var halfW = floor(HEAD_CELLS * (0.7 + 0.6 * clamp01(bass)) + 0.5);  // ~2..4 cells
+  if (halfW < 1) halfW = 1;
+  for (var hk = ci - halfW; hk <= ci + halfW; hk++) {
+    if (hk >= 0 && hk <= N - 1) {
+      var dh = hk - ci; if (dh < 0) dh = 0 - dh;
+      var prof = 1.0 - dh / (halfW + 1.0);   // linear falloff -> crisp head
+      var hv = core * prof;
+      if (hv > buf[hk]) buf[hk] = hv;
+    }
   }
 }
 
 export function render3D(index, x, y, z) {
-  // Guard the buffer index (P0 — never read out of range).
-  var ix = index;
+  // RIG-AGNOSTIC: sample the trail lane by this pixel's normalized X (0..1), so
+  // the comet renders identically on every rig (52 / 970 / 266 / 216 px). The
+  // lane index is guarded 0..N-1 (P0 — never read out of range).
+  var ix = floor(clamp01(x) * (N - 1) + 0.5);
   if (ix < 0) ix = 0;
   if (ix > N - 1) ix = N - 1;
 
-  var bri = buf[ix];
+  var cometBri = buf[ix];
+
+  // ── Bass glow floor (PRIMARY corr): a faint, spatially-structured wash whose
+  //    level tracks bass on EVERY pixel the SAME frame the bass changes. This is
+  //    the clean micLow->brightness coupling the comet's moving head can't give on
+  //    its own (the head's lit-pixel count is noisy under per-pixel x sampling).
+  //    It is kept dim and shaped (dark troughs) so the comet head/tail still read
+  //    crisp on near-black and the negative space stays dark. bassDrive is the
+  //    gamma-remapped musical drive, so the wash lifts cleanly with the low band. ──
+  var washShape = wave(x * 1.7);
+  washShape = washShape * washShape;          // sharpen -> keep troughs dark
+  var glow = (0.012 + bassDrive * 0.20) * washShape;
+
+  // Colour: the COMET keeps its identity (fresh = cp1 head, faded = cp2 tail);
+  // the GLOW spans cp1<->cp2 by X so BOTH palette colours read across the whole
+  // rig (preserves the two-colour spread the head-only comet would lose).
+  var bri = cometBri;
+  var tcol = clamp01(1.0 - cometBri);         // comet: fresh->cp1, faded->cp2
+  if (glow > bri) {
+    bri = glow;
+    tcol = clamp01(x);                        // glow: cp1 at left -> cp2 at right
+  }
+
   if (bri <= 0.0) { rgb(0, 0, 0); return; }   // true black where un-painted
 
-  // Fresh energy = head colour (cp1), faded energy = tail colour (cp2).
-  var tcol = clamp01(1.0 - bri);
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;

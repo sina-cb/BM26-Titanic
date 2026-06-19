@@ -210,8 +210,25 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  // Self-filter: only known sections render (P0).
-  if (sectionId != 1 && sectionId != 2 && sectionId != 3) { rgb(0, 0, 0); return; }
+  // RIG-AGNOSTIC ROLE: every rig drives the helix from normalized coords. The
+  // test_bench sectionId roles (1=pars core, 2=vintage blinder, 3=bars walls) are
+  // mapped from Y height when no real sectionId is present (titanic/dome/logsville
+  // report sId 0 or rig-specific ids). On test_bench the real sectionId wins, so
+  // the original per-section look is preserved exactly; elsewhere `roleSec` is
+  // derived from height so the same three behaviours drape the whole ship.
+  //   - top band (high y)    -> vintage blinder accent (role 2)
+  //   - upper-mid            -> pars beat-pop core (role 1)
+  //   - body (lower)         -> bars depth-faded tunnel walls (role 3)
+  var roleSec = 3;
+  if (sectionId == 1 || sectionId == 2 || sectionId == 3) {
+    roleSec = sectionId;                 // test_bench: keep the exact original role
+  } else if (y >= 0.80) {
+    roleSec = 2;                         // top heads -> vintage blinder accent
+  } else if (y >= 0.62) {
+    roleSec = 1;                         // upper -> pars beat-pop core
+  } else {
+    roleSec = 3;                         // body -> bars tunnel walls
+  }
 
   // Coords are ALREADY 0..1 — used directly. Build a tunnel centred on the rig.
   var cx = (x - 0.5) * 2.0;                     // -1..1 across X
@@ -237,11 +254,11 @@ export function render3D(index, x, y, z) {
   var outA = 0.0;
   var outU = 0.0;
 
-  if (sectionId == 3) {
+  if (roleSec == 3) {
     // BARS — depth-faded helix tunnel walls (fade out toward the axis).
     var dfade = dist * 2.4; if (dfade > 1.0) dfade = 1.0;
     outV = floorv + v * 1.5 * dfade;
-  } else if (sectionId == 1) {
+  } else if (roleSec == 1) {
     // PARS — beat-pop core + a subtler W flash on the beat, scaled by whiteLevel.
     outV = floorv + v * 0.6;
     if (beatPulse > 0.0 && field > 0.0) {
@@ -250,7 +267,7 @@ export function render3D(index, x, y, z) {
       outW = beatPulse * (0.30 + 0.55 * whiteKeep) * (0.6 + 0.7 * whiteBite);
     }
   } else {
-    // VINTAGE (sectionId == 2) — headline audience BLINDER. Always-on warm-white
+    // VINTAGE (roleSec == 2) — headline audience BLINDER. Always-on warm-white
     // keep (whiteKeep) glows tungsten; on the kick whiteBite drives W HARD. The
     // beat pulse (carrying the kick slider) modulates the bite so it slams on
     // the beat. whiteTint splits the white between amber(A) warm and UV(U) cool.

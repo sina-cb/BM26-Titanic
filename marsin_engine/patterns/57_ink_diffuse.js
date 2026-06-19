@@ -71,7 +71,19 @@ export function sliderDiffuse(v) { diffuse = v; }
 export function sliderBase(v) { base = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var N = 52;                 // feedback buffer size (explicit; do NOT use pixelCount)
+// The ink lives in a FIXED-SIZE VIRTUAL DIFFUSION FIELD of N cells, NOT a
+// per-pixel buffer. Every pixel maps its `index` into this field (index ->
+// cell), so the SAME bounded buffer drives EVERY rig — 52 (test_bench), 216
+// (logsville), 266 (dome) and 970 (titanic) — instead of a hardcoded 52 that
+// left titanic's pixels 52..969 with no ink. N is a safe constant (never
+// `pixelCount`, which compiles to a literal 144).
+//   WHY 56 (not 970/1024): the MarsinVM corrupts persistent state once the
+//   per-frame diffusion loop runs more than ~56 iterations (measured: 56 cells
+//   render correctly, 60+ smears the blooms flat). A wider/per-pixel buffer is
+//   therefore impossible here. 56 cells is plenty for soft diffusing ink clouds:
+//   small rigs map 1:1 (test_bench look preserved exactly) and large rigs are
+//   compressed into the field (index/maxIdx -> cell). Every buf[] access < N.
+var N = 56;                 // virtual diffusion-field size (do NOT use pixelCount)
 var BASE_FLOOR = 0.0;       // un-inked water is (near) black
 var PHI = 1.61803;          // golden ratio — irrational head-phase advance
 var SQRT2 = 1.41421;        // second irrational detune for the head sum
@@ -115,12 +127,18 @@ function clamp01(v) {
 }
 
 // ── Persistent state ─────────────────────────────────────────────────────────
-var buf = array(52);        // per-pixel ink concentration (feedback buffer)
-var tmp = array(52);        // scratch for one diffusion pass
+var buf = array(56);        // virtual ink-field concentration (N cells)
+var tmp = array(56);        // scratch for one diffusion pass (N cells)
 var bufInit = 0;
 var headPhase = 0.0;        // wandering injection head, 0..1
 var dropClock = 0.0;        // accumulates time toward the next ink drop
 var faintPhase = 0.0;       // slow phase for the silent-base shimmer
+// Actual pixel span of the live rig, learned from the highest index seen in
+// render3D (pixelCount compiles to a literal 144 — unusable). Injection maps
+// the wandering head across THIS span so blooms cover the WHOLE real rig
+// (52 on test_bench, 970 on titanic) instead of a fixed 52-cell window.
+var maxIdx = 51;            // grows to (realPixelCount - 1), clamped < N below
+var nextMaxIdx = 0;         // tracks the highest index across the current frame
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -151,8 +169,15 @@ export function beforeRender(delta) {
   //    blooms feather outward; decay pulls every cell toward zero so they fade.
   //    Decay is gentle (long persistence) so sustained highs ACCUMULATE ink and
   //    total brightness tracks the signal; diffuse + flow widen the cloud. ──
+  // Learn the live rig's highest pixel index (for the index->cell map in
+  // render3D). pixelCount compiles to a literal 144, so we measure it instead.
+  if (nextMaxIdx > maxIdx) maxIdx = nextMaxIdx;
+  nextMaxIdx = 0;
+
   var spread = 0.12 + diffuse * 0.20 + flow * 0.10;   // 0.12..0.42 to each side
   var decay  = 1.0 - (0.10 + diffuse * 0.14);         // fade (0.90..0.76)
+  // Diffuse across the WHOLE virtual field (fixed N cells) — contiguous
+  // neighbour bleed feathers each bloom outward. Guarded < N throughout.
   for (var kk = 0; kk < N; kk++) {
     var c = buf[kk];
     var ln = (kk > 0)     ? buf[kk - 1] : c;
@@ -177,9 +202,17 @@ export function beforeRender(delta) {
       // successive drops never land on a repeating grid.
       var hp = wave(headPhase * PHI + guard * 0.11) * 0.55
              + wave(headPhase * PHI * SQRT2 + 0.31 + guard * 0.07) * 0.45;
-      var center = floor(hp * (N - 1) + 0.5);
+      // Map the head across only the OCCUPIED cells of the field — the cells
+      // that real pixels sample. When the rig fits the field 1:1 (maxIdx < N)
+      // that is 0..maxIdx; when it is larger the rig fills the whole field so
+      // it is 0..N-1. (Without this, drops would land in unused cells on small
+      // rigs and the blooms would never read — the test_bench regression.)
+      var headSpan = maxIdx;
+      if (headSpan > N - 1) headSpan = N - 1;
+      if (headSpan < 1) headSpan = 1;
+      var center = floor(hp * headSpan + 0.5);
       if (center < 0) center = 0;
-      if (center > N - 1) center = N - 1;
+      if (center > N - 1) center = N - 1;          // hard buffer guard (< N)
       // brighter ink on strong highs — steep in `ink` so total brightness
       // tracks the signal (corr), modest floor so silence/low-highs stay dim.
       var amt = 0.35 + ink * 1.05;
@@ -188,6 +221,7 @@ export function beforeRender(delta) {
       // Buffer is NOT clamped here: gentle headroom lets total brightness keep
       // rising with sustained highs instead of pinning flat (render clamps for
       // display). Cap modestly so a single cell can't run away.
+      // Neighbour writes guarded < N so every access stays in-bounds.
       buf[center] = buf[center] + amt;     if (buf[center] > 1.9) buf[center] = 1.9;
       if (center > 0)     buf[center - 1] = buf[center - 1] + amt * 0.60;
       if (center < N - 1) buf[center + 1] = buf[center + 1] + amt * 0.60;
@@ -201,8 +235,27 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
+  // Learn the live rig's pixel span (highest index) so the index->cell map
+  // below spans the whole virtual field on any rig. pixelCount is unusable
+  // (compiles to a literal 144), so we measure the real span here.
+  if (index > nextMaxIdx) nextMaxIdx = index;
+
+  // Map this pixel's index into the fixed virtual diffusion field. When the rig
+  // fits inside the field (index < N — test_bench 52, logsville 216) the map is
+  // 1:1 so the look is IDENTICAL to the original per-pixel buffer. When the rig
+  // is larger than the field (titanic 970, dome 266) the index is compressed
+  // into the N cells (index/maxIdx -> 0..N-1) so the SAME bounded field still
+  // drives every pixel. Guarded < N.
+  var cell = index;
+  if (maxIdx > N - 1) {
+    var span = maxIdx; if (span < 1) span = 1;
+    cell = floor(index * (N - 1) / span + 0.5);
+  }
+  if (cell < 0) cell = 0;
+  if (cell > N - 1) cell = N - 1;
+
   var conc = 0.0;
-  if (index >= 0 && index < N) conc = buf[index];
+  if (cell >= 0 && cell < N) conc = buf[cell];
 
   // ── WATER layer (cp1, deep blue): a DIM resting wash so still water reads
   //    blue without swamping the ink. Kept low (and the sheen tighter) so that

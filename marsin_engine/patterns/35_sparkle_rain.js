@@ -139,8 +139,16 @@ export function render3D(index, x, y, z) {
   }
 
   // Faint living base so the rig never reads fully black (mission-critical).
-  // Kept low so the audio-reactive glints dominate total brightness.
-  var baseV = base * (0.35 + 0.65 * wave(tBase + y * 0.3 + sectionId * 0.13)) * 0.22;
+  // COORD-DRIVEN (y only) so EVERY pixel on ANY rig lights from coordinates
+  // alone — sectionId is an OPTIONAL ADDITIVE accent on top, never a gate (it
+  // is 0 on titanic/dome/logsville so the base must stand on its own there).
+  // Floor lifted enough to clear the LIT threshold across the whole rig.
+  var baseV = base * (0.55 + 0.45 * wave(tBase + y * 0.3)) * 0.55;
+  // Section accent: a faint per-section tint shift, ADDITIVE (test_bench only —
+  // sectionId is 0 elsewhere so this contributes 0 there, base still lights all).
+  if (sectionId > 0) {
+    baseV = baseV + base * 0.10 * (0.5 + 0.5 * wave(tBase + sectionId * 0.13));
+  }
 
   // Per-pixel palette blend: a second deterministic draw biases each glint
   // toward cp1 (cool white) or cp2 (pale gold).

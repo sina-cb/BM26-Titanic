@@ -140,6 +140,11 @@ export function beforeRender(delta) {
 
 export function render3D(index, x, y, z) {
   // ── Lateral root (nx) + per-section frond HEIGHT (hw, 0..1) ──────────────
+  // RIG-AGNOSTIC: on test_bench the sectionId roles set the original frond
+  // heights (vintage = tallest crowned heads, pars = tip band, bars = mid-water
+  // body). On ANY other rig (titanic/dome/logsville, sId not 1..3) the frond
+  // height comes straight from the pixel's normalized Y, so the garden grows
+  // up the whole ship from coordinates. NEVER returns black.
   var nx = x;
   var hw = 0.0;             // 0 = frond base (dark water), 1 = frond tip (glow)
   if (sectionId == 2) {
@@ -154,7 +159,9 @@ export function render3D(index, x, y, z) {
     // BARS: the broad mid-water band of swaying stalk bodies.
     hw = 0.5;
   } else {
-    rgb(0, 0, 0); return;    // P0 self-filter — unknown section is true black
+    // Coordinate-driven frond height: Y maps the dark water base (bottom) up to
+    // the glowing tip (top), so fronds stand across the whole rig.
+    hw = clamp01(y);
   }
 
   // ── Lateral sway: slow abyssal current, irrational phase per frond ───────
