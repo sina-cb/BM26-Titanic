@@ -584,7 +584,101 @@ timeline consumes it for free because it only ever sets the per-channel
 
 ---
 
-## 14. What this deliberately is **not** (v1)
+## 14. Control precedence & arbitration (operator model, 2026-06-19)
+
+> Refines §6. The timeline is not a flat cue list — it is a **layered arbiter**.
+> Operator's words: *"Autopilot regular programming, changing moods as needed
+> unless there's a preprogrammed program; sunrise everyday has a show. The
+> scheduled programming is priority and overrides the autopilot. Autopilot can
+> also be disabled and just manually controlled — and these must work nicely
+> together."*
+
+### 14.1 The three control layers (highest priority wins)
+
+| Layer | What it is | Beats |
+|---|---|---|
+| **MANUAL / paused** | Operator takeover — `paused` (timeline drives nothing) or `overridden` (operator changed the deck out-of-band). Full manual. | everything |
+| **PROGRAM** | A **preprogrammed show** — a scheduled cue (`kind: program`) like the daily sunrise show or a fixed-time set. Holds priority for its window; **overrides autopilot** and **suppresses mood swaps**. | autopilot |
+| **AUTOPILOT** (regular programming) | The baseline: the **engine autopilot** cycles the configured playlist **and mood cues fire** "as needed." Toggleable off → manual. | — |
+
+### 14.2 The arbiter (runs each tick, after `evaluateTick`)
+
+```
+expire activeProgram if now ≥ activeProgram.untilMs
+  → program ends → if autopilotEnabled: RESUME autopilot (re-apply baseline
+    playlist + engine autopilot ON); else → manual idle
+
+controller :=
+  paused / overridden / holding → 'manual'   (drive nothing; hold keeps the look)
+  activeProgram active          → 'program'
+  autopilotEnabled              → 'autopilot' (ensure engine autopilot ON; mood allowed)
+  else                          → 'manual'    (autopilot off; operator drives; programs still preempt)
+
+for each fired cue:
+  kind 'program' (and not paused/overridden): START program — apply its look,
+      turn engine autopilot OFF, set activeProgram {cueId, untilMs}; controller='program'
+  kind 'mood': apply ONLY when controller would be 'autopilot' (suppressed under
+      program/manual). This is "moods as needed unless there's a program."
+  kind 'ambient'/other: apply when not manual.
+```
+
+So: **scheduled programs always preempt autopilot** (priority), **mood only moves
+the lights during autopilot**, and **disabling autopilot** hands the deck to the
+operator while **scheduled shows still fire on time** (and a program ending
+returns to manual rather than resuming autopilot). `paused`/`overridden` is the
+operator's hard takeover above all of it (§6 "operator's hands always win").
+
+### 14.3 Schema additions
+
+```yaml
+# plan-level baseline (the AUTOPILOT layer)
+autopilot:
+  enabled: true
+  playlist: night_rotation     # the regular-programming playlist
+  delay_s: 45
+  shuffle: true
+  target: { channel: deck }
+  mood: true                   # do mood swaps run during autopilot?
+
+cues:
+  - id: c_sunrise_show
+    kind: program              # program | mood | ambient  (default: mood-trigger→mood, else program)
+    trigger: { type: sun, event: sunrise, offsetMin: -15 }
+    action:  { type: look, look: sunrise }
+    hold:    { min: 90 }       # program owns priority 90 min (or hold.until: <anchor>,
+                               #   or omit → until the next program cue)
+```
+
+### 14.4 Runtime state additions
+
+```yaml
+autopilotEnabled: true
+controller: autopilot          # autopilot | program | manual  (derived, surfaced to UI)
+activeProgram: { cueId, startedAtMs, untilMs } | null
+```
+
+### 14.5 Operator controls (companion REST + CaptainPad)
+
+`POST /autopilot {enabled}` (toggle the baseline layer) · `POST /mode {paused}` ·
+`POST /hold {minutes}` · `POST /resume` (clear pause/override) ·
+`POST /cues/:id/fire` (manual program fire) · `POST /program/end` (end the active
+program early → fall back to autopilot). The CaptainPad tab shows the live
+**controller** (PROGRAM / AUTOPILOT / MANUAL), the autopilot toggle, and the
+active program + its countdown.
+
+### 14.6 The companion is a *designer + scheduler helper* (may migrate to CaptainPad)
+
+The companion **owns the schedule brain** today (authoring plans, computing
+sun/phase, arbitrating, driving the engine). It is explicitly a **design +
+scheduler aid**, and the control surface **may eventually move wholly into
+CaptainPad**. Architecture keeps that open: the companion only ever calls the
+engine's public REST/WS (no private engine coupling), the plan/state are plain
+YAML, and the arbiter is a **pure function** — so the same logic could later run
+inside CaptainPad or be folded into the engine with no semantic change.
+
+---
+
+## 15. What this deliberately is **not** (v1)
 
 - **Not** a second analyzer — mood comes from the Audio Companion via CPC.
 - **Not** a replacement for `docs/31` interval tasks — it can *enable* them.
