@@ -34,6 +34,20 @@
       MODULATE sliderKick   (kick)   <- micKick   // beat amplitude + blinder pop
       MODULATE sliderRadius (radius) <- micFlux   // ripple spread (travel)
       MODULATE sliderDetail (detail) <- micHigh   // lub/dub crispness
+
+  WHITE (modulators-only):
+      MODULATE sliderKick       (kick)       <- micKick   // beat amplitude DRIVES the blinder bite
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // extra white pop (optional 2nd kick mod)
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  WHITE control set: the vintage heads (sectionId==2) are the headline audience
+  BLINDER. The blinder bite is driven by the BEAT envelope (the `kick` slider, =
+  micKick), so the heads PUNCH white on every beat with the standard kick mapping;
+  `whiteKick` is an optional extra white boost on top. whiteLevel sets the overall
+  white amount (and a small always-on warm keep so the heads read warm at rest),
+  blinderBite shapes how snappy/hard the blinder attack lands. A subtle white core
+  also rides the beat on pars/bars so the pulse has a bright center. White is
+  ADDITIVE over the strict cp1/cp2 sweep (hueSpread stays high — never washes out).
+  PRIMARY corr validated on kick_4floor with micKick->sliderKick wired.
 */
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
@@ -44,7 +58,10 @@ export var kick = 0.0;          // beat amplitude + blinder pop (audio: micKick)
 export var radius = 0.45;       // ripple spread / travel (audio: micFlux)
 export var detail = 0.45;       // lub/dub crispness (audio: micHigh)
 export var minBright = 0.05;    // dormant glow between beats
-export var blinder = 0.7;       // vintage-head white-blinder strength
+export var blinder = 0.7;       // vintage-head white-blinder strength (structural)
+export var whiteLevel = 0.55;   // WHITE: overall white amount / keep (audio: micLow)
+export var whiteKick = 0.0;     // WHITE: beat-driven white pop / blinder bite (audio: micKick)
+export var blinderBite = 0.7;   // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0; // Pulse core (red)
 export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // Pulse accent (green, wide sep)
@@ -63,6 +80,9 @@ export function sliderRadius(v) { radius = v; }
 export function sliderDetail(v) { detail = v; }
 export function sliderDormantGlow(v) { minBright = v * 0.3; }
 export function sliderBlinder(v) { blinder = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
 var BEAT_RATE = 0.85;   // beats(cycles)/sec at localSpeed = 1 (~51 bpm base)
@@ -173,12 +193,32 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tColour) * v;
   var b = (pb1 + (pb2 - pb1) * tColour) * v;
 
-  // Vintage-blinder: on the kick, the upper Y heads (sectionId==2) punch their
-  // W channel hard — audience blinders flash on each beat.
-  var white = 0.0;
+  // WHITE — controllable via the white_* set, additive over the cp1/cp2 sweep.
+  var wAmt = max(0.0, min(1.0, whiteLevel));
+  var wKick = max(0.0, min(1.0, whiteKick));
+  var bite = max(0.0, min(1.0, blinderBite));
+
+  // Subtle white CORE on the pulse for pars/bars so the beat has a bright center
+  // (kept modest so the rig never washes white; gated by the beat + whiteLevel).
+  // beatBri already carries the kick envelope; whiteKick adds extra pop on top.
+  var white = beatBri * (0.15 + 0.35 * wAmt) * (0.5 + wKick * 0.6) * (0.4 + level * 0.8);
+
+  // VINTAGE-BLINDER headline: the upper Y heads (sectionId==2) PUNCH their W hard
+  // on each beat. The BEAT envelope (beatBri, driven by the kick slider) is the
+  // bite source; blinder = structural strength; blinderBite = attack snappiness
+  // (higher = kick-dominated punch); whiteLevel adds a small always-on warm keep
+  // so the heads read warm at rest; whiteKick is an additive extra white pop.
   if (sectionId == 2) {
-    white = min(1.0, beatBri * blinder * (0.5 + level) * (0.6 + kick * 1.2));
+    var keep = 0.06 * wAmt;                                   // warm white rest-glow
+    var soft = beatBri * (1.0 - bite * 0.5);                  // softer swell part
+    var punch = beatBri * (0.6 + bite * 0.9) * (1.0 + wKick * 0.8); // snappy bite
+    var blind = blinder * (0.4 + 0.8 * wAmt) * (0.4 + level) * (soft * 0.4 + punch);
+    white = keep + blind;
+    // warm core lift so the heads glow warm, not just blank white
+    r = r + beatBri * 0.10 * bite;
+    g = g + beatBri * 0.04 * bite;
   }
+  white = max(0.0, min(1.0, white));
 
   rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, 0.0, 0.0);
 }

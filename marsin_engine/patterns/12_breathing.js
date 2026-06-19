@@ -27,6 +27,14 @@
       MODULATE sliderKick   (kick)   <- micKick   // breath-peak brightness pop
       MODULATE sliderRadius (radius) <- micFlux   // how far the breath swells/travels
       MODULATE sliderDepth  (depth)  <- micMid    // inhale depth (cp2 reach)
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // white spark on inhale + vintage blinder swell
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  White is ADDITIVE over the strict cp1/cp2 breath: a crisp white SPARK rides the
+  inhale crest across the whole rig, and the vintage heads (sectionId==2) carry a
+  gentle, kick-gated white BLINDER that swells on the inhale. blinderBite shapes
+  how snappy that swell hits. White never washes the rig (hueSpread stays high).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -38,6 +46,9 @@ export var radius = 0.5;       // AUDIO: breath swell / travel distance
 export var depth = 0.5;        // AUDIO: inhale depth (how far toward cp2)
 export var spatialOffset = 0.3;// breath ripple spread across the rig
 export var sharpness = 0.3;    // breath crest sharpness
+export var whiteLevel = 0.45;  // WHITE: overall white amount / keep (audio: micLow)
+export var whiteKick = 0.0;    // WHITE: white spark on inhale + blinder pop (audio: micKick)
+export var blinderBite = 0.6;  // WHITE: how snappy the vintage-head blinder swell hits
 
 export var cp1H = 0.02, cp1S = 1.0, cp1V = 1.0; // Exhale (warm red)
 export var cp2H = 0.50, cp2S = 1.0, cp2V = 1.0; // Inhale (calm cyan)
@@ -52,6 +63,9 @@ export function sliderRadius(v) { radius = v; }
 export function sliderDepth(v) { depth = v; }
 export function sliderRipple(v) { spatialOffset = v; }
 export function sliderSharpness(v) { sharpness = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var MAX_RATE = 0.5;          // base breaths/sec at localSpeed = 1.0
@@ -172,8 +186,30 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
   var b = (pb1 + (pb2 - pb1) * tcol) * bri;
 
-  // Crisp white spark on the breath peak (kick-boosted) — guarantees a true
-  // 255 core for high-def crests; scales with level so it stays audio-coupled.
-  var spark = pow(breathV, 2.0) * (0.45 + kick * 0.55) * level;
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(spark), 0.0, 0.0);
+  // WHITE — additive over the cp1/cp2 breath, controllable via white_* sliders.
+  // A crisp white SPARK rides the inhale crest across the whole rig: it tracks
+  // breathV (so it appears at the breath peak), is scaled by whiteLevel (overall
+  // amount) and popped by whiteKick (the inhale white pop), and stays coupled to
+  // the PRIMARY level so it never lights up in silence-with-no-level.
+  var wAmt = clamp01(whiteLevel);
+  var wKick = clamp01(whiteKick);
+  var sparkCore = pow(breathV, 2.0);
+  var spark = sparkCore * (0.25 + 0.75 * wAmt) * (0.4 + wKick * 1.1) * level;
+
+  var w = spark;
+
+  // VINTAGE BLINDER (sectionId == 2): the upper heads carry a gentle white swell
+  // that breathes WITH the inhale and bites on the kick. blinderBite shapes the
+  // attack — higher = snappier, kick-dominated punch; lower = soft swell.
+  if (sectionId == 2) {
+    var bite = clamp01(blinderBite);
+    var swell = breathV * (1.0 - bite * 0.6);          // soft inhale swell
+    var punch = wKick * (0.4 + 0.6 * bite) * (0.5 + 0.5 * breathV); // snappy kick bite
+    var blind = (swell * 0.5 + punch) * (0.3 + 0.7 * wAmt) * (0.4 + 0.6 * level);
+    w = w + blind;
+    // keep the heads glowing warm, not just blank white
+    r = r + wKick * 0.06 * bite;
+  }
+
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), 0.0, 0.0);
 }

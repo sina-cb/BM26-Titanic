@@ -218,10 +218,10 @@ export function render3D(index, x, y, z) {
   var nodeCore = max(0.0, min(1.0, lattice));
   var wAmt = max(0.0, min(1.0, whiteLevel));
   var wKick = max(0.0, min(1.0, whiteKick));
-  var crest = crestEnv * crestEnv;                   // tighten the crest window
-  var sect = 0.55 + 0.45 * (1.0 - whiteSpread);      // base reach over the rig
-  if (sectionId == 2) sect = 0.7 + 0.3 * (1.0 - whiteSpread); // vintage emphasis
-  var white = nodeCore * crest * (0.3 + 0.7 * wAmt) * (0.35 + wKick * 1.0) * sect * level;
+  var crest = 0.35 + 0.65 * crestEnv;                // crest-weighted (always some)
+  var sect = 0.7 + 0.5 * whiteSpread;                // whole-rig reach grows w/ spread
+  if (sectionId == 2) sect = sect + 0.5 * (1.0 - whiteSpread); // vintage emphasis
+  var white = nodeCore * crest * (0.4 + 1.0 * wAmt) * (0.5 + wKick * 1.0) * sect * (0.5 + level);
   white = max(0.0, min(1.0, white));
 
   rgbwau(max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)), white, 0.0, 0.0);
