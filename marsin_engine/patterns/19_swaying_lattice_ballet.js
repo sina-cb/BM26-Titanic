@@ -1,37 +1,77 @@
 /*
   19_swaying_lattice_ballet.js
-  A regular grid of glowing lattice nodes that sways in counter-phase along
-  two axes — like a corps de ballet bowing left while the row behind bows
-  right. Two decorrelated lattice fields interleave; a slow Lissajous pivot
-  walks the sway center so the pattern never visibly repeats.
+  A regular grid of glowing lattice nodes that sways in counter-phase along two
+  axes — like a corps de ballet bowing left while the row behind bows right. Two
+  decorrelated lattice fields interleave; a slow Lissajous pivot walks the sway
+  center so the pattern never visibly repeats.
+
+  IDENTITY (preserved): the counter-phase "ballet bow" of two interleaved lattice
+  fields, the wandering Lissajous pivot, teal->violet palette. Upgrades: 0..1
+  coords used directly (no re-normalize), identity-slider convention, audio
+  reactivity, guarded direction with smooth autonomous reversal.
+
+  NON-REPEATING MATH
+    Two sway phases accumulate by delta at an irrational ratio (1 : 1.382) so the
+    lattices never re-align; the Lissajous pivot uses two more incommensurate
+    rates (0.27 : 0.31). All phases accumulate continuously and wrap at a large
+    multiple of TAU (PHASE_WRAP) far from any in-frame use, so no seam (skill 12
+    §7). The sway/pivot are read as sin/cos of these phases (C0 across wrap).
+    Autonomous direction: a smooth rate sway (0.4 + 0.6*cos(slowClock))*dirSign
+    eases the sway through reversals on a slow incommensurate clock — never a hard
+    sign flip — so the bow is not one-way and never seams.
+
+  AUDIO (modulators-only — never read CPC audio globals natively):
+      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
+      MODULATE sliderKick   (kick)   <- micKick     // kick brightness pop on the nodes
+      MODULATE sliderRadius (radius) <- micFlux     // how far the corps bows (sway radius)
+      MODULATE sliderDetail (detail) <- micHigh     // node sharpness / sparkle
 */
 
-export var localSpeed = 0.5;
-export var latticeScale = 6.0;
-export var swayAmount = 0.35;
-export var nodeSoftness = 2.4;
-export var counterPhase = 0.6;
-export var floorLevel = 0.08;
+// ── Exported controls (UI order = declaration order) ─────────────────────────
+export var localSpeed = 0.5;     // sway rate (0 still creeps, 1 ~4x faster)
+export var direction = 0.5;      // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
+export var level = 1.0;          // PRIMARY audio: overall brightness (micLow)
+export var kick = 0.0;           // audio: kick brightness pop (micKick)
+export var radius = 0.5;         // audio: sway radius / how far the corps bows (micFlux)
+export var detail = 0.5;         // audio: node sharpness / sparkle (micHigh)
+export var latticeScale = 0.32;  // grid density (0..1; scaled in render)
+export var counterPhase = 0.6;   // how strongly field B opposes field A (0..1)
+export var floorLevel = 0.32;    // base glow floor (0..1; scaled in render)
 
-export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0; // base lattice (teal/blue)
+export var cp1H = 0.55, cp1S = 0.92, cp1V = 1.0; // base lattice (teal/blue)
 export var cp2H = 0.84, cp2S = 0.92, cp2V = 1.0; // accent (violet/magenta)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderLatticeScale(v) { latticeScale = 2.5 + v * 11.0; }
-export function sliderSwayAmount(v) { swayAmount = v * 0.7; }
-export function sliderNodeSoftness(v) { nodeSoftness = 1.2 + v * 4.5; }
+export function sliderDirection(v) {
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
+  direction = d;
+}
+export function sliderLevel(v) { level = v; }
+export function sliderKick(v) { kick = v; }
+export function sliderRadius(v) { radius = v; }
+export function sliderDetail(v) { detail = v; }
+export function sliderLatticeScale(v) { latticeScale = v; }
 export function sliderCounterPhase(v) { counterPhase = v; }
-export function sliderFloorLevel(v) { floorLevel = v * 0.25; }
+export function sliderFloorLevel(v) { floorLevel = v; }
 
-var phaseA = 0.0;
-var phaseB = 0.0;
+var phaseA = 0.0;        // sway phase A (radians, accumulated)
+var phaseB = 0.0;        // sway phase B
+var pivotA = 0.0;        // Lissajous pivot phase A
+var pivotB = 0.0;        // Lissajous pivot phase B
+var breathPhase = 0.0;   // slow vertical breath
+var autoClock = 0.0;     // slow clock for autonomous reversal
+var dirSign = 1.0;
 var swayX = 0.0;
 var swayY = 0.0;
 var pivotX = 0.0;
 var pivotY = 0.0;
-var currentScale = 0.018;
+var liveScale = 6.0;
+var liveSoft = 2.4;
+var liveSway = 0.35;
+var PHASE_WRAP = 62831.853; // 10000*TAU
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -66,59 +106,87 @@ function _hsv2rgb2() {
 }
 
 export function beforeRender(delta) {
+  var dt = delta / 1000.0;
+  if (dt < 0.0) dt = 0.0;
+  if (dt > 0.1) dt = 0.1;
   var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  currentScale = 0.018 / localMultiplier;
+
+  dirSign = direction;
+  if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
+  else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
+
+  // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
+  autoClock = autoClock + dt * 0.057 * localMultiplier;
+  if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
+  var rate = (0.4 + 0.6 * cos(autoClock)) * dirSign * localMultiplier;
+
   // Two sway phases at an irrational ratio so lattices never re-align.
-  phaseA = time(currentScale) * 6.2831853;
-  phaseB = time(currentScale * 1.382) * 6.2831853;
-  // Sway oscillations — these are the "ballet bow" left/right & up/down.
-  swayX = sin(phaseA) * swayAmount;
-  swayY = sin(phaseB * 0.83) * swayAmount * 0.65;
-  // Lissajous pivot walks the sway center so the lattice "wanders".
-  pivotX = sin(time(currentScale * 0.27) * 6.2831853) * 0.12;
-  pivotY = cos(time(currentScale * 0.31) * 6.2831853) * 0.10;
+  phaseA = phaseA + dt * 0.69 * rate;       if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP; else if (phaseA <= -PHASE_WRAP) phaseA += PHASE_WRAP;
+  phaseB = phaseB + dt * 0.69 * 1.382 * rate; if (phaseB >= PHASE_WRAP) phaseB -= PHASE_WRAP; else if (phaseB <= -PHASE_WRAP) phaseB += PHASE_WRAP;
+  // Lissajous pivot walks the sway center on its own incommensurate rates.
+  pivotA = pivotA + dt * 0.69 * 0.27 * rate; if (pivotA >= PHASE_WRAP) pivotA -= PHASE_WRAP; else if (pivotA <= -PHASE_WRAP) pivotA += PHASE_WRAP;
+  pivotB = pivotB + dt * 0.69 * 0.31 * rate; if (pivotB >= PHASE_WRAP) pivotB -= PHASE_WRAP; else if (pivotB <= -PHASE_WRAP) pivotB += PHASE_WRAP;
+  breathPhase = breathPhase + dt * 0.34 * localMultiplier * dirSign; if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP; else if (breathPhase <= -PHASE_WRAP) breathPhase += PHASE_WRAP;
+
+  liveScale = 2.5 + latticeScale * 11.0;       // 0..1 -> 2.5..13.5
+  liveSoft = 1.2 + detail * 4.5;               // node crispness from micHigh
+  liveSway = (0.10 + radius * 0.6);            // sway radius from micFlux
+
+  // Ballet bow oscillations.
+  swayX = sin(phaseA) * liveSway;
+  swayY = sin(phaseB * 0.83) * liveSway * 0.65;
+  pivotX = sin(pivotA) * 0.12;
+  pivotY = cos(pivotB) * 0.10;
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  var nx = (x + 1.264) / 3.125;
-  var ny = y / 6.5;
-  nx = max(0.0, min(1.0, nx));
-  ny = max(0.0, min(1.0, ny));
+  // Coords are already 0..1 — use directly (clamped). No re-normalize.
+  var nx = max(0.0, min(1.0, x));
+  var ny = max(0.0, min(1.0, y));
 
   // Lattice A — sways left/right with phaseA, walks with pivot.
-  var uxA = (nx - 0.5 - pivotX) * latticeScale + swayX;
-  var uyA = (ny - 0.5 - pivotY) * latticeScale * 0.78 - swayY;
+  var uxA = (nx - 0.5 - pivotX) * liveScale + swayX;
+  var uyA = (ny - 0.5 - pivotY) * liveScale * 0.78 - swayY;
   var nodeA = wave(uxA) * wave(uyA);
 
   // Lattice B — counter-phase (offset by half-cell), sways opposite.
-  var uxB = (nx - 0.5 + pivotX) * latticeScale - swayX * counterPhase;
-  var uyB = (ny - 0.5 + pivotY) * latticeScale * 0.78 + swayY * counterPhase;
+  var uxB = (nx - 0.5 + pivotX) * liveScale - swayX * counterPhase;
+  var uyB = (ny - 0.5 + pivotY) * liveScale * 0.78 + swayY * counterPhase;
   var nodeB = wave(uxB + 0.5) * wave(uyB + 0.5);
 
   // Sharpen nodes so the grid reads as dots, not a wash.
-  nodeA = pow(max(0.0, nodeA), nodeSoftness);
-  nodeB = pow(max(0.0, nodeB), nodeSoftness);
+  nodeA = pow(max(0.0, nodeA), liveSoft);
+  nodeB = pow(max(0.0, nodeB), liveSoft);
 
-  // Counter-phase interleave: pixels favour A vs B depending on the
-  // alternating cell parity — produces the "two rows bowing opposite" feel.
-  var bowMask = wave((nx + ny) * latticeScale * 0.5);
+  // Counter-phase interleave: pixels favour A vs B by alternating cell parity —
+  // the "two rows bowing opposite" feel.
+  var bowMask = wave((nx + ny) * liveScale * 0.5);
   var lattice = nodeA * bowMask + nodeB * (1.0 - bowMask);
 
   // Slow vertical breath so the corps de ballet breathes as one.
-  var breath = 0.85 + sin(phaseA * 0.5 + ny * 1.8) * 0.15;
-  var v = floorLevel + lattice * 0.92 * breath;
-  v = max(0.0, min(1.0, v));
+  var breath = 0.85 + sin(breathPhase + ny * 1.8) * 0.15;
 
-  // Palette mix follows which lattice dominates this pixel — A is cp1, B is cp2.
+  // Base floor keeps silence calm-but-visible; nodes sit on top. Kept small so
+  // the negative space between nodes reads near-black (high-def contrast).
+  var floorK = floorLevel * 0.06;
+  var bri = floorK + lattice * 1.05 * breath;
+
+  // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
+  // brightness driver (corr>=0.5); the lattice shapes WHERE, the bass HOW BRIGHT.
+  var levelGain = 0.18 + level * level * 2.4;
+  var pop = kick * 0.55 * lattice;     // kick pop only on lit nodes
+  bri = min(1.0, (bri + pop) * levelGain);
+
+  // Palette mix follows which lattice dominates — A is cp1, B is cp2.
   var total = nodeA + nodeB + 0.0001;
   var tVal = nodeB / total;
   tVal = max(0.0, min(1.0, tVal));
 
-  var r = (pr1 + (pr2 - pr1) * tVal) * v;
-  var g = (pg1 + (pg2 - pg1) * tVal) * v;
-  var b = (pb1 + (pb2 - pb1) * tVal) * v;
+  var r = (pr1 + (pr2 - pr1) * tVal) * bri;
+  var g = (pg1 + (pg2 - pg1) * tVal) * bri;
+  var b = (pb1 + (pb2 - pb1) * tVal) * bri;
 
   rgb(r, g, b);
 }

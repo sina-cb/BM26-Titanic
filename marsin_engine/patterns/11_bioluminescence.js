@@ -1,13 +1,39 @@
 /*
   11_bioluminescence.js
-  Party-Ready Bioluminescence — slow ambient swell with bright crests.
-  Strict palette: ambient = cp1, crests = cp2, no rainbow / W / UV leak.
+  HD Bioluminescence — slow ambient cp1 swell with sharp pow-shaped cp2 crests
+  and a gentle additive UV glow (the signature blacklight feel preserved).
+
+  Identity kept: ambient = cp1, crests = cp2, additive UV undertow. Now HD,
+  render3D-based, audio-reactive, and never dead-static.
+
+  CORE NON-REPEATING MATH (documented per skill 12 §3/§7):
+    Two drift accumulators advance at INCOMMENSURATE rates (ratio ~ √2) and a
+    third caustic phase uses the golden angle (2.39996). Crests are sampled at
+    spatial frequencies density and density*√2 so the swell never re-locks.
+    Phases accumulate against a large PHASE_WRAP (no wrapped-then-scaled seam).
+
+  SPEED / DIRECTION:
+    localSpeed drives every drift via rate = pow(2,(localSpeed-0.5)*4) (creeps at
+    0, ~4x at 1). `direction` is guarded off slider-center; an autonomous, clock
+    driven sign (incommensurate ~91s period) occasionally flips the current's
+    travel on its own so it feels organic, not mechanical.
+
+  AUDIO (modulators-only — never read CPC audio globals natively):
+      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
+      MODULATE sliderKick   (kick)   <- micKick   // crest brightness pop
+      MODULATE sliderRadius (radius) <- micFlux   // how far crests travel / spread
+      MODULATE sliderDetail (detail) <- micHigh   // fine crest sharpness / shimmer
 */
 
-export var localSpeed = 0.5;
-export var density = 2.0;
-export var uvIntensity = 0.6;
-export var partyMode = 0.0;
+// ── Exported controls (UI order = declaration order) ─────────────────────────
+export var localSpeed = 0.5;   // master motion rate
+export var direction = 0.5;    // current travel direction (0.5 = guarded center)
+export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
+export var kick = 0.0;         // AUDIO: crest brightness pop
+export var radius = 0.5;       // AUDIO: crest travel / spread distance
+export var detail = 0.5;       // AUDIO: crest sharpness / shimmer
+export var density = 0.4;      // spatial frequency of the swell
+export var uvIntensity = 0.6;  // additive UV undertow
 
 export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Ambient swell
 export var cp2H = 0.3, cp2S = 1.0, cp2V = 1.0; // Crest pop
@@ -15,14 +41,21 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderDensity(v) { density = 1.0 + v * 5.0; }
+export function sliderDirection(v) { direction = v; }
+export function sliderLevel(v) { level = v; }
+export function sliderKick(v) { kick = v; }
+export function sliderRadius(v) { radius = v; }
+export function sliderDetail(v) { detail = v; }
+export function sliderDensity(v) { density = v; }
 export function sliderUvGlow(v) { uvIntensity = v; }
-export function sliderPartyMode(v) { partyMode = v; }
 
-var t1, t2;
-var localMultiplier = 1.0;
+// ── Tunables ─────────────────────────────────────────────────────────────────
+var MAX_RATE = 0.55;         // base drift turns/sec at localSpeed = 1.0
+var PHASE_WRAP = 10000.0;    // large wrap; far from any in-frame scale (§7)
+var AUTO_PERIOD = 91.0;      // seconds for autonomous direction oscillation
+var BASE_FLOOR = 0.05;       // small non-black floor so silence stays visible
 
-// ── Palette RGB cache ─────────────────────────────────────────────────
+// ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
 function _hsv2rgb1() {
@@ -54,43 +87,93 @@ function _hsv2rgb2() {
   else             { pr2 = cp2V; pg2 = pv;    pb2 = qv;    }
 }
 
+function clamp01(v) {
+  if (v < 0.0) return 0.0;
+  if (v > 1.0) return 1.0;
+  return v;
+}
+
+// ── Persistent state ─────────────────────────────────────────────────────────
+var driftA = 0.0;     // primary swell drift
+var driftB = 0.0;     // secondary (incommensurate) drift
+var driftUV = 0.0;    // UV undertow drift
+var autoClock = 0.0;  // seconds, for autonomous direction oscillation
+var effDir = 1.0;     // resolved travel sign this frame
+var localMul = 1.0;
+
 export function beforeRender(delta) {
-  localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  t1 = time(0.08 / localMultiplier);
-  t2 = time(0.04 / localMultiplier);
+  var dt = delta / 1000.0;
+  if (dt < 0.0) dt = 0.0;
+  if (dt > 0.1) dt = 0.1;
+
+  localMul = pow(2.0, (localSpeed - 0.5) * 4.0);
+
+  // Guard the slider center so the manual direction sign never sits at 0.
+  var manDir = (direction * 2.0) - 1.0;
+  if (manDir >= 0.0 && manDir < 0.06) manDir = 0.06;
+  else if (manDir < 0.0 && manDir > -0.06) manDir = -0.06;
+
+  // Autonomous, incommensurate direction oscillation (organic auto-switch).
+  autoClock = autoClock + dt;
+  if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
+  var autoWave = sin(autoClock / AUTO_PERIOD * PI2);
+  var autoSign = (autoWave >= 0.0) ? 1.0 : -1.0;
+  effDir = manDir * autoSign;
+
+  // Drift accumulators advance with localSpeed; √2 ratio = non-repeating.
+  driftA = driftA + dt * localMul * MAX_RATE * effDir;
+  driftB = driftB + dt * localMul * MAX_RATE * 1.41421 * effDir;
+  driftUV = driftUV + dt * localMul * MAX_RATE * 0.37;
+  if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
+  else if (driftA <= -PHASE_WRAP) driftA = driftA + PHASE_WRAP;
+  if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
+  else if (driftB <= -PHASE_WRAP) driftB = driftB + PHASE_WRAP;
+  if (driftUV >= PHASE_WRAP) driftUV = driftUV - PHASE_WRAP;
+
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
-export function render(index) {
-  var pct = index / (pixelCount > 0 ? pixelCount : 144);
+export function render3D(index, x, y, z) {
+  // Coords are already 0..1 — use directly (clamp only).
+  var pct = clamp01(x);
+  var pcy = clamp01(y);
 
-  var swell = wave(t1 + pct * density);
-  var blend = pow(swell, 4.0); // sharpens crests, ambient dominates elsewhere
+  var dens = 1.0 + density * 5.0;
+  var spread = 0.6 + radius * 1.6;   // AUDIO: crest spatial reach
 
-  var crest = (swell > 0.9) ? 1.0 : 0.0;
-  if (partyMode > 0.5) {
-     var strobeClock = time(0.1 / localMultiplier);
-     crest *= (strobeClock * 10.0 % 1.0 < 0.5) ? 1.0 : 0.0;
-  }
+  // Slow ambient swell (cp1 dominates) — incommensurate sample frequencies.
+  var swell = wave(driftA * 0.18 + pct * dens + pcy * 0.31);
+  var swell2 = wave(driftB * 0.18 + pct * dens * 1.41421 + pcy * 0.17);
+  var combined = swell * 0.62 + swell2 * 0.38;
 
-  // Brightness floor uses the wave so the rig "breathes" even when not
-  // at a crest; full brightness only at the crest peak.
-  var v = max(swell * 0.8, crest);
+  // Crest sharpness: detail tightens the pow exponent for crisper cores.
+  var sharp = 4.0 + detail * 6.0;
+  var blend = pow(combined, sharp);
 
-  // Strict RGB lerp between cp1 (ambient) and cp2 (crest)
-  var r = (pr1 + (pr2 - pr1) * blend) * v;
-  var g = (pg1 + (pg2 - pg1) * blend) * v;
-  var b = (pb1 + (pb2 - pb1) * blend) * v;
+  // Crest gate travels/spreads with radius (AUDIO movement RADIUS).
+  var crestField = wave(driftA * 0.18 * spread + pct * dens * spread + pcy * 0.23);
+  var crest = (crestField > (0.92 - radius * 0.12)) ? 1.0 : 0.0;
+  crest = crest * pow(combined, 2.0);
 
-  // UV glow rides the slow underwater wave — restored as an additive
-  // emitter so the pattern still has its signature blacklight feel.
-  // Set sliderUvGlow to 0 if you want strict RGB-only output.
-  var uvGlow = wave(t2 - pct * 0.5);
-  var outU = uvGlow * uvIntensity * 0.6;
-  // Crest "spark" gets a little white pop when the cp2 colour is heavily
-  // saturated — keeps the highlight crisp without injecting non-palette hue.
-  var outW = crest * 0.4;
+  // Brightness: ambient breathes (floor), crest pops; kick adds a pop.
+  var bri = combined * 0.7;
+  var crestBri = crest * (0.6 + kick * 0.8);
+  var v = max(bri, crestBri);
+  v = BASE_FLOOR + v * (1.0 - BASE_FLOOR);
+  v = v * level;   // AUDIO PRIMARY: overall brightness gain
 
-  rgbwau(r, g, b, outW, 0.0, outU);
+  // Strict cp1->cp2 RGB lerp (crest pushes toward cp2).
+  var tcol = clamp01(blend + crest * 0.5);
+  var r = (pr1 + (pr2 - pr1) * tcol) * v;
+  var g = (pg1 + (pg2 - pg1) * tcol) * v;
+  var b = (pb1 + (pb2 - pb1) * tcol) * v;
+
+  // Additive UV undertow — the signature blacklight glow.
+  var uvGlow = wave(driftUV * 0.18 - pct * 0.5 + pcy * 0.2);
+  var outU = uvGlow * uvIntensity * 0.6 * level;
+  // Crisp white spark on the crest peak.
+  var outW = crest * 0.4 * (0.5 + kick * 0.5) * level;
+
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(outW), 0.0, clamp01(outU));
 }
