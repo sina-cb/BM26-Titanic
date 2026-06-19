@@ -10,9 +10,11 @@ import {
 
 test('defaultShowPlan validates', () => {
   const plan = validateShowPlan(defaultShowPlan());
-  assert.equal(plan.schemaVersion, 1);
+  assert.equal(plan.schemaVersion, 2);
   assert.equal(plan.name, 'playa_default');
-  assert.equal(plan.cues.length, 4);
+  // 4 recurring + 2 day-specific (burn night, temple).
+  assert.equal(plan.cues.length, 6);
+  assert.deepEqual(plan.festival, { startDate: '2026-08-30', days: 8 });
 });
 
 test('round-trips through dump -> load via a tmp file', () => {
@@ -142,4 +144,85 @@ test('hold:{until:anchor} validates; hold with both min and until throws', () =>
   assert.deepEqual(validateShowPlan(plan).cues[0].hold, { until: { clock: '06:30' } });
   plan.cues[0].hold = { min: 30, until: { clock: '06:30' } };
   assert.throws(() => validateShowPlan(plan), /exactly one of/);
+});
+
+// ── §15.2 schemaVersion 2 (festival + cue.days) ───────────────────────────────
+
+function v1Plan() {
+  // A bare schemaVersion:1 plan (no festival, no cue.days) — the pre-v2 shape.
+  return {
+    schemaVersion: 1,
+    name: 'legacy_nightly',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles', elevationM: 1190 },
+    autopilot: { enabled: true, playlist: 'default', delay_s: 45, shuffle: true, mood: true },
+    phases: {},
+    looks: { show: { playlist: 'default', palette: 'aurora' } },
+    cues: [
+      { id: 'c_one', trigger: { type: 'clock', at: '20:00' }, action: { type: 'look', look: 'show' } },
+    ],
+  };
+}
+
+test('v1 back-compat: loads and normalizes to v2 with festival:null, days:all', () => {
+  const v = validateShowPlan(v1Plan());
+  assert.equal(v.schemaVersion, 2);
+  assert.equal(v.festival, null);
+  assert.equal(v.cues[0].days, 'all');
+});
+
+test('schemaVersion 2 festival validates and round-trips', () => {
+  const plan = defaultShowPlan();
+  const v = validateShowPlan(plan);
+  const round = validateShowPlan(JSON.parse(JSON.stringify(v)));
+  assert.deepEqual(round, v);
+});
+
+test('festival.days out of [1,31] throws', () => {
+  const plan = defaultShowPlan();
+  plan.festival.days = 0;
+  assert.throws(() => validateShowPlan(plan), /days must be an integer in \[1, 31\]/);
+  plan.festival.days = 40;
+  assert.throws(() => validateShowPlan(plan), /days must be an integer in \[1, 31\]/);
+});
+
+test('festival.startDate must be a valid calendar date', () => {
+  const plan = defaultShowPlan();
+  plan.festival.startDate = '2026-02-30';
+  assert.throws(() => validateShowPlan(plan), /not a valid calendar date/);
+  plan.festival.startDate = 'nope';
+  assert.throws(() => validateShowPlan(plan), /must be a 'YYYY-MM-DD' date/);
+});
+
+test('cue days integer index out of range throws', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].days = [8]; // span is days:8 → valid indices 0..7
+  assert.throws(() => validateShowPlan(plan), /day index 8 out of range \[0, 7\]/);
+});
+
+test('cue days date-string array validates', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].days = ['2026-09-01', '2026-09-03'];
+  const v = validateShowPlan(plan);
+  assert.deepEqual(v.cues[0].days, ['2026-09-01', '2026-09-03']);
+});
+
+test('cue days mixing ints and dates throws', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].days = [1, '2026-09-01'];
+  assert.throws(() => validateShowPlan(plan), /all integer day-indices OR all 'YYYY-MM-DD'/);
+});
+
+test('cue days index/date without a festival block throws', () => {
+  const plan = v1Plan();
+  plan.schemaVersion = 2;
+  plan.cues[0].days = [0];
+  assert.throws(() => validateShowPlan(plan), /no festival block/);
+});
+
+test('default day-specific cues: burn night days:[6], temple days:[7]', () => {
+  const v = validateShowPlan(defaultShowPlan());
+  const byId = Object.fromEntries(v.cues.map((c) => [c.id, c]));
+  assert.deepEqual(byId.c_burn_night.days, [6]);
+  assert.deepEqual(byId.c_temple.days, [7]);
+  assert.equal(byId.c_sunrise.days, 'all');
 });
