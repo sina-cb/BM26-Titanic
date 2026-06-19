@@ -129,16 +129,153 @@ async function timelineSend<T>(
   }
 }
 
+// ── Plan v2 schema (the maker authors / POSTs these) ───────────────────
+// Mirrors marsin_engine/lib/timeline/show_plan.js (validateShowPlan). We
+// keep the action/trigger unions permissive (Record passthrough) so the
+// maker can round-trip fields the UI doesn't expose yet without dropping
+// them — the engine is the validator of record (Codex P0: fail loud there).
+
+export type SunEvent =
+  | 'sunrise' | 'sunset' | 'solarNoon'
+  | 'civilDawn' | 'civilDusk'
+  | 'nauticalDawn' | 'nauticalDusk'
+  | 'goldenHourEnd' | 'goldenHourStart';
+
+export interface PlanAnchorClock { clock: string }
+export interface PlanAnchorSun { sun: SunEvent; offsetMin?: number }
+export type PlanAnchor = PlanAnchorClock | PlanAnchorSun;
+
+export type CueKind = 'program' | 'mood' | 'ambient';
+
+export interface TriggerClock { type: 'clock'; at: string }
+export interface TriggerSun { type: 'sun'; event: SunEvent; offsetMin?: number }
+export interface TriggerPhase { type: 'phase'; phase: string }
+export interface TriggerMood {
+  type: 'mood';
+  from: string;
+  to: string;
+  minDwellSec?: number;
+  cooldownSec?: number;
+  whenPhase?: string;
+}
+export interface TriggerManual { type: 'manual' }
+export type CueTrigger = TriggerClock | TriggerSun | TriggerPhase | TriggerMood | TriggerManual;
+
+export interface ActionLook { type: 'look'; look: string }
+export interface ActionPlaylist {
+  type: 'playlist';
+  name: string;
+  target?: PlanTarget;
+  autopilot?: PlanAutopilotInline;
+}
+export interface ActionScene { type: 'scene'; scene: string }
+export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
+export type CueAction = ActionLook | ActionPlaylist | ActionScene | ActionGlobals;
+
+export interface PlanTarget { channel: 'deck' | 'mixer' | 'all'; id: string | null }
+export interface PlanAutopilotInline { active?: boolean; delay_s?: number; shuffle?: boolean }
+
+export type CueDays = 'all' | number[] | string[];
+
+export interface PlanCue {
+  id: string;
+  label?: string;
+  kind?: CueKind;
+  enabled?: boolean;
+  trigger: CueTrigger;
+  action: CueAction;
+  hold?: { min: number } | { until: PlanAnchor };
+  days?: CueDays;
+}
+
+export interface PlanLocation { lat: number; lon: number; tz: string; elevationM?: number }
+export interface PlanFestival { startDate: string; days: number }
+export interface PlanAutopilot {
+  enabled: boolean;
+  playlist?: string;
+  delay_s: number;
+  shuffle: boolean;
+  target?: PlanTarget;
+  mood?: string;
+}
+export interface PlanLook {
+  playlist?: string;
+  autopilot?: PlanAutopilotInline;
+  palette?: string;
+  globals?: Record<string, unknown>;
+  tasks?: Record<string, unknown>;
+  target?: PlanTarget;
+}
+export interface PlanPhase { start: PlanAnchor; end: PlanAnchor }
+
+export interface ShowPlan {
+  schemaVersion: 2;
+  name: string;
+  location: PlanLocation;
+  festival: PlanFestival;
+  autopilot: PlanAutopilot;
+  looks: Record<string, PlanLook>;
+  phases: Record<string, PlanPhase>;
+  cues: PlanCue[];
+}
+
+// ── Overview (the maker's backbone, GET active / POST draft) ────────────
+
+export interface OverviewSun {
+  sunrise: string | null;
+  sunset: string | null;
+  solarNoon: string | null;
+  civilDusk: string | null;
+  goldenHourStart: string | null;
+  goldenHourEnd: string | null;
+  [k: string]: string | null | undefined;
+}
+
+export interface OverviewCue {
+  id: string;
+  label: string;
+  kind: CueKind;
+  trigger: CueTrigger;
+  action: CueAction;
+  atLocal: string | null;
+}
+
+export interface OverviewDay {
+  index: number;
+  date: string;
+  weekday: string;
+  sun: OverviewSun;
+  cues: OverviewCue[];
+}
+
+export interface TimelineOverview {
+  plan: string | null;
+  festival: PlanFestival | null;
+  location: PlanLocation | null;
+  days: OverviewDay[];
+}
+
 export function fetchTimelineState(): Promise<ApiResult<TimelineState>> {
   return timelineGet<TimelineState>('/timeline/state');
+}
+
+export function fetchTimelineOverview(): Promise<ApiResult<TimelineOverview>> {
+  return timelineGet<TimelineOverview>('/timeline/overview');
+}
+
+// Overview of an UNSAVED draft plan — live maker preview. The engine
+// validates first and returns 400 {error} on a malformed draft; we surface
+// that verbatim so the operator sees the error loudly (Codex P0).
+export function previewTimelineOverview(plan: ShowPlan): Promise<ApiResult<TimelineOverview>> {
+  return timelineSend<TimelineOverview>('POST', '/timeline/overview', plan);
 }
 
 export function fetchTimelinePlans(): Promise<ApiResult<{ plans: string[] }>> {
   return timelineGet<{ plans: string[] }>('/timeline/plans');
 }
 
-export function fetchTimelinePlan(name: string): Promise<ApiResult<unknown>> {
-  return timelineGet<unknown>(`/timeline/plans/${encodeURIComponent(name)}`);
+export function fetchTimelinePlan(name: string): Promise<ApiResult<ShowPlan>> {
+  return timelineGet<ShowPlan>(`/timeline/plans/${encodeURIComponent(name)}`);
 }
 
 export function saveTimelinePlan(plan: unknown): Promise<ApiResult<unknown>> {
