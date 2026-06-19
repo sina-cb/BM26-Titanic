@@ -51,9 +51,11 @@
                    front). Reaction blends cp1<->cp2 by catalyst concentration.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel (level) <- micLow    (PRIMARY: bass -> brightness)
-      MODULATE sliderFeed  (feed)  <- micMid    (2nd dim: mids reshape pattern)
-      MODULATE sliderSeed  (seed)  <- micKick   (discrete: kick injects catalyst)
+  AUDIO_MODULATION_V1:
+    sliderLevel <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass lifts the teal floor + reaction-front gain
+    sliderFeed  <- micMid  range 0.20..0.80 curve linear   # mids reshape the chemistry (spots <-> stripes geometry)
+    sliderSeed  <- micKick range 0.00..1.00 curve linear   # kick: drops a fresh catalyst nucleus into the buffer
+  STATIC (operator handles, not audio-mapped): localSpeed, base, colorPalette1/2.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -138,6 +140,7 @@ var bufInit = 0;
 var seedPhase = 0.0;        // wandering seed-site phase (golden-angle advance)
 var faintPhase = 0.0;       // slow phase for the silent-base shimmer
 var stepClock = 0.0;        // accumulates time toward the next reaction sub-step
+var feedExp = 2.0;          // resolved coral-front concentration exponent this frame (micMid -> geometry)
 
 // Inject a small patch of catalyst (and deplete substrate) at a cell — this is
 // how a kick "drops" a fresh reaction into the buffer. Soft 3-cell footprint so
@@ -170,12 +173,18 @@ export function beforeRender(delta) {
     bufInit = 1;
   }
 
-  var localMult = pow(2.0, (localSpeed - 0.5) * 2.0);
+  // localSpeed warps the chemistry crawl rate exponentially across 0..1
+  // (2^((localSpeed-0.5)*4): 0.0625x at 0 .. 16x at 1) so the slider VISIBLY
+  // changes how fast the reaction (and the living base shimmer) crawls; a small
+  // floor keeps the rig always alive (never frozen, even at localSpeed=0).
+  var localMult = 0.06 + pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  // Slow irrational wander of the seed sites + the silent-base shimmer.
+  // Slow irrational wander of the seed sites + the silent-base shimmer. Both the
+  // seed wander AND the resting shimmer track localSpeed so the rig's living
+  // motion clearly speeds up/slows with the slider even with no audio.
   seedPhase = seedPhase + dt * 0.07 * localMult;
   seedPhase = seedPhase - floor(seedPhase);
-  faintPhase = faintPhase + dt * 0.18;
+  faintPhase = faintPhase + dt * 0.18 * localMult;
   faintPhase = faintPhase - floor(faintPhase);
 
   // ── micKick -> seed: a beat drops a fresh catalyst nucleus at a wandering
@@ -191,7 +200,17 @@ export function beforeRender(delta) {
   // ── Gray-Scott feed rate from `feed` (micMid). Mids push the chemistry
   //    between spot- and stripe-forming regimes -> the pattern RESHAPES, a
   //    different visual dimension from the brightness gain. ──
-  var fr = 0.018 + feed * 0.044;     // ~0.018..0.062 feed regime
+  var fr = 0.018 + clamp01(feed) * 0.044;     // ~0.018..0.062 feed regime
+
+  // The Gray-Scott regime change is slow to read on a settled lane, so `feed`
+  // (micMid) ALSO resolves a lag-free SHAPE term used in render: feedExp is the
+  // exponent applied to catalyst concentration when shaping the front's
+  // BRIGHTNESS profile (NOT its hue). Higher mids -> lower exponent -> the coral
+  // fronts BROADEN / bloom (more lit front area); lower mids -> higher exponent
+  // -> the fronts pull into tight crisp filaments. The hue mapping stays strong
+  // and independent, so the two-colour split is preserved while the mids reshape
+  // the front GEOMETRY the same frame — a distinct, lag-free visual dimension.
+  feedExp = 1.7 - clamp01(feed) * 1.1;         // 1.7 (tight) .. 0.6 (broad)
 
   // ── Run reaction sub-steps. Each sub-step: diffuse (irrational weights) +
   //    react (feed/kill). Sub-step count scales with localSpeed so the crawl
@@ -246,17 +265,24 @@ export function render3D(index, x, y, z) {
 
   // ── Reaction layer: catalyst concentration -> brightness, also gained by
   //    `level` so a live front during loud bass burns a channel hot (peak>200)
-  //    and stays crisp on the dark substrate (high contrast / high def). ──
-  var reactBri = conc * (0.55 + level * 1.40);
+  //    and stays crisp on the dark substrate (high contrast / high def). The
+  //    GEOMETRY of the front (how broad vs tight the lit coral band reads) is
+  //    shaped by feedExp (micMid): pow(conc, feedExp) blooms the front at high
+  //    mids and pinches it to a tight filament at low mids — a lag-free
+  //    geometry dimension that does NOT recolour the rig. ──
+  var concShaped = pow(clamp01(conc), feedExp);
+  var reactBri = concShaped * (0.55 + level * 1.40);
 
   // Composite: brighter of faint-water vs reaction. Colour follows whichever
   // dominates — cp1 for the quiet substrate, cp1->cp2 by concentration for the
   // live front (snaps to coral for any meaningful reaction so fronts read hot).
+  // The hue mapping rides RAW concentration (not the feed-shaped brightness), so
+  // the strong two-colour split is independent of the mid-driven geometry.
   var tcol = 0.0;
   var bri = faint;
   if (reactBri > faint) {
     bri = reactBri;
-    tcol = clamp01(conc * 6.0);            // any front edge -> coral fast
+    tcol = clamp01(conc * 6.0);            // any front edge -> coral fast (two-colour)
   }
 
   if (bri < BASE_FLOOR) bri = BASE_FLOOR;

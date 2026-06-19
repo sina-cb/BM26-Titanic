@@ -29,7 +29,8 @@
   core is always lit, so the fixture is never fully dark.
 
   CONTROLS
-    - localSpeed : auto-animate rate (0 = freeze, position purely by swipePos).
+    - localSpeed : auto-animate rate (pow2 law ~0.25x..4x; at 0 the swipe only
+                   CREEPS so audio/swipePos dominates the band position).
     - swipePos   : 0..1 swipe position (X for pars/bars, Y for vintage). Modulatable.
     - swipeDir   : <0.5 = forward (left→right / bottom→top), >=0.5 = reverse.
     - blur       : soft halo onto neighbour LEDs (0 = hard single pixel = max def).
@@ -38,17 +39,24 @@
                    true physical first pixel (per-fixture wrap). 0 = no shift.
     - colorPalette1/2 : strict cp1<->cp2 palette; colour blends along swipePos.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderSwipePos (swipePos) <- micLow
-      MODULATE sliderTrail    (trail)    <- micDomEnergy1
+  AUDIO_MODULATION_V1:
+    sliderSwipePos <- micLow  range 0.10..0.90 curve linear  # PRIMARY (POSITIONAL): the swipe MOVES with the low band
+    sliderTrail    <- micFlux range 0.10..0.90 curve linear  # tail length grows on a build (movement)
+  (static, omit from playlist: sliderSwipeDir, sliderBlur, sliderShift,
+   sliderLocalSpeed — operator-set, not audio-driven.)
+  NOTE: 27's audio is POSITIONAL, not brightness. micLow -> sliderSwipePos drives
+  the swipe BAND POSITION across the rig (not overall brightness), so the standard
+  band->brightness corr does NOT apply — the headline reactivity is the swipe
+  tracking the low band's position. localSpeed=0 freezes auto-animation so the
+  position is purely audio-driven; >0 adds an autonomous sweep on top.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // auto-animate rate (0 = freeze, drive by swipePos)
-export var swipePos = 0.0;     // 0..1 swipe position (X pars/bars, Y vintage)
+export var swipePos = 0.0;     // PRIMARY (positional): 0..1 swipe position (audio: micLow 0.10..0.90)
 export var swipeDir = 0.0;     // <0.5 = forward, >=0.5 = reverse
 export var blur = 0.2;         // 0 = hard single pixel (max definition); small default keeps the swipe readable on dense rigs while staying crisp
-export var trail = 0.5;        // pixelated fading tail behind the swipe
+export var trail = 0.5;        // pixelated fading tail behind the swipe (audio: micFlux 0.10..0.90)
 export var shift = 0.0;        // calibration: rotate swipe start to physical pixel 0
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 (start / cyan)
@@ -57,10 +65,20 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderSwipePos(v) { swipePos = v; }
+// Audio sliders remap the incoming signal (0..1) into a SANE range. swipePos is
+// POSITIONAL: micLow walks the swipe band across the rig (0.10..0.90, leaving a
+// small margin at each end so the band stays on-rig). trail length rides micFlux.
+// micLow's live window is narrow (~0.45..0.80); EXPAND it so the swipe travels
+// the FULL rig (0..1 palette swing) instead of dithering in the middle — this is
+// what makes the positional reactivity (and the cp1<->cp2 hue swing) read big.
+export function sliderSwipePos(v) {
+  var e = (v - 0.45) / 0.35;          // map live low-band window -> 0..1
+  if (e < 0.0) e = 0.0; if (e > 1.0) e = 1.0;
+  swipePos = 0.05 + e * 0.90;          // 0.05..0.95 across the rig (PRIMARY, positional)
+}
 export function sliderSwipeDir(v) { swipeDir = v; }
 export function sliderBlur(v) { blur = v; }
-export function sliderTrail(v) { trail = v; }
+export function sliderTrail(v) { trail = 0.10 + v * 0.80; }         // micFlux 0.10..0.90 tail length
 export function sliderShift(v) { shift = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
@@ -167,7 +185,12 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  phase = phase + dt * localSpeed * MAX_RATE;
+  // Auto-animation rate uses the canonical localSpeed law: rate = pow(2,(s-0.5)*4)
+  // spans ~0.25x..4x about a base rate, so the swipe still CREEPS at localSpeed=0
+  // (motion never fully zero) and reaches a brisk ~4x sweep at 1. The creep is
+  // slow enough that audio (swipePos) still dominates the band position.
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  phase = phase + dt * localMultiplier * MAX_RATE;
   phase = phase - floor(phase);
 
   var pp = phase + swipePos;

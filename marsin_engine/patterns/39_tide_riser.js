@@ -38,8 +38,10 @@
     - colorPalette1/2 : cp1 deep ocean blue (body), cp2 warm foam amber-white.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderRise  (rise)  <- micFlux   (primary: tide height + body bri)
-      MODULATE sliderSpray (spray) <- micKick   (2nd dim: crest spray pop)
+  AUDIO_MODULATION_V1:
+    sliderRise  <- micFlux range 0.20..0.90 curve linear   # PRIMARY build/riser: flux climbs the tide height + body brightness
+    sliderSpray <- micKick range 0.00..1.00 curve linear   # kick: flings the warm crest spray up above the waterline
+  STATIC (operator handles, not audio-mapped): localSpeed, foam, base, colorPalette1/2.
 */
 
 // ── Exported controls ────────────────────────────────────────────────────────
@@ -130,9 +132,14 @@ export function beforeRender(delta) {
   _hsv2rgb2();
 
   // Aperiodic drift: increments use irrational ratios so nothing loops cleanly.
-  shimmer = shimmer + dt * (0.25 + localSpeed * 1.4) * R_PHI;
+  // localSpeed warps the surface drift rate exponentially across 0..1
+  // (2^((localSpeed-0.5)*4): 0.0625x at 0 .. 16x at 1) so the slider VISIBLY
+  // changes how fast the water shimmers; a small floor keeps the surface always
+  // alive (never a dead-flat waterline, even at localSpeed=0).
+  var rateMul = 0.06 + pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
+  shimmer = shimmer + dt * rateMul * 0.35 * R_PHI;
   shimmer = shimmer - floor(shimmer);
-  swell = swell + dt * (0.05 + localSpeed * 0.25) * R_GOLD;
+  swell = swell + dt * rateMul * 0.08 * R_GOLD;
   swell = swell - floor(swell);
 
   // Waterline rides the rig bottom->top with the rise control (flux). Headroom

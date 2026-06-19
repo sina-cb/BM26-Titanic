@@ -28,8 +28,10 @@
                DIFFERENT dimension (high-frequency texture, not master level),
                so the two signals never collapse into one.
 
-      MODULATE sliderLevel   (level)      <- micLow    (PRIMARY: overall brightness)
-      MODULATE sliderShimmer (shimmerAmt) <- micHigh   (prism shimmer / detail)
+  AUDIO_MODULATION_V1:
+    sliderLevel   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass drives whole-strand master gain
+    sliderShimmer <- micHigh range 0.10..0.85 curve linear   # highs: fine fast prism sparkle / detail texture
+  STATIC (operator handles, not audio-mapped): localSpeed, twist, contrast, arms, colorPalette1/2.
 
   CONTRAST/twist remain operator handles (static at rest, modulatable if a show
   wants kick-snap), but are NOT wired to a band that fights the level coupling.

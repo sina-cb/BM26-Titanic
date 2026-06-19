@@ -24,20 +24,22 @@
     non-integer (avoids the §7 seam). Auto-dir at 1/√11 ≈ 0.30151. Wrap at
     PHASE_WRAP=10000 turns. Ribbon = wave((dA-dB+dC)*density + drift).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // flock reach (travel)
-      MODULATE sliderDetail (detail) <- micHigh   // filament density
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness budget
+    sliderKick   <- micKick range 0.00..1.00 curve pow2    # additive core pop on the beat
+    sliderRadius <- micFlux range 0.20..1.00 curve linear  # flock reach / travel (build = wider sweep)
+    sliderDetail <- micHigh range 0.25..1.00 curve linear  # filament density (sparkle/detail)
+  (static, omit from playlist: sliderDirection, sliderFlockFocus, sliderContrast,
+   sliderAfterglow, sliderLocalSpeed — these are operator-set, not audio-driven.)
 */
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
 export var direction = 0.06;    // 0..1; 0.5 center (guarded), <0.5 reverse wheel
-export var level = 0.5;         // PRIMARY: overall brightness (audio: micLow)
-export var kick = 0.0;          // brightness pop (audio: micKick)
-export var radius = 0.34;       // flock reach / travel (audio: micFlux)
-export var detail = 0.5;        // filament density (audio: micHigh)
+export var level = 0.5;         // PRIMARY: overall brightness (audio: micLow 0.30..1.00)
+export var kick = 0.0;          // additive core pop (audio: micKick 0..1 pow2)
+export var radius = 0.34;       // flock reach / travel (audio: micFlux 0.20..1.00)
+export var detail = 0.5;        // filament density (audio: micHigh 0.25..1.00)
 export var flockFocus = 3.0;
 export var contrast = 3.0;
 export var afterglow = 0.135;
@@ -53,10 +55,12 @@ export function sliderDirection(v) {
   if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
   direction = d;
 }
-export function sliderLevel(v) { level = v; }
-export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = 0.20 + v * 0.28; }   // 0.20..0.48 reach
-export function sliderDetail(v) { detail = v; }
+// Audio sliders map the incoming signal (0..1) into a SANE range: a silence
+// floor (so the rig stays alive at 0) up to a bright peak at full signal.
+export function sliderLevel(v) { level = 0.30 + v * 0.70; }           // micLow  0.30..1.00 (PRIMARY)
+export function sliderKick(v) { kick = v * v; }                       // micKick 0..1 pow2 (snappy pop)
+export function sliderRadius(v) { radius = 0.20 + v * 0.28; }         // micFlux 0.20..0.48 physical reach
+export function sliderDetail(v) { detail = 0.25 + v * 0.75; }         // micHigh 0.25..1.00 filament density
 export function sliderFlockFocus(v) { flockFocus = 1.4 + v * 3.2; } // 1.4..4.6
 export function sliderContrast(v) { contrast = 1.2 + v * 3.6; }     // 1.2..4.8
 export function sliderAfterglow(v) { afterglow = v * 0.27; }        // 0..0.27 floor

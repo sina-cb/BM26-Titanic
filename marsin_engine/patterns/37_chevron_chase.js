@@ -34,8 +34,10 @@
     - colorPalette1/2 : cp1 (lime) -> cp2 (hot pink); colour blends along chase.
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderStep   (step)   <- micKick   // beat-locked stepping
-      MODULATE sliderBright  (bright) <- micLow    // level -> brightness (REACTIVE)
+  AUDIO_MODULATION_V1:
+    sliderBright <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: level -> chevron core + floor brightness
+    sliderStep   <- micKick range 0.00..1.00 curve linear   # kick: rising edge SNAPS the chevron field one step forward
+  STATIC (operator handles, not audio-mapped): localSpeed, width, count, colorPalette1/2.
 */
 
 // ── Exported controls ────────────────────────────────────────────────────────
@@ -154,7 +156,12 @@ export function beforeRender(delta) {
   if (step < KICK_THRESH * 0.6) kickArmed = 1; // hysteresis re-arm
 
   // ── Free-run between kicks so the chase is never frozen (P0) ─────────────
-  chasePhase = chasePhase + dt * FREE_RATE * clamp01(localSpeed);
+  // localSpeed warps the free-run rate exponentially (2^((localSpeed-0.5)*4):
+  // ~0.06x at 0 .. 16x at 1) so the slider VISIBLY changes the chase speed end
+  // to end. A small additive floor keeps the chevrons always creeping forward
+  // even at localSpeed=0 (never a dead-frozen rig).
+  var rateMul = pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
+  chasePhase = chasePhase + dt * FREE_RATE * (0.06 + rateMul);
   chasePhase = chasePhase - floor(chasePhase);
 }
 

@@ -27,21 +27,27 @@
 
   CONTROLS (declaration order = UI order)
     - localSpeed : base-ring breathing rate (0 = freeze).
-    - kick       : 0..1 trigger; crossing ~0.5 fires a shockwave. Modulatable.
-    - level      : 0..1 base/ambient brightness floor. Modulatable.
+    - kick       : 0..1 trigger; crossing ~0.5 fires a shockwave (audio: micKick).
+    - level      : PRIMARY 0..1 base/ambient brightness floor (audio: micLow 0.25..1.00).
     - decay      : shockwave envelope decay rate (slow ring = big slow wave).
     - ringWidth  : thickness of the expanding ring (tight = max definition).
     - colorPalette1/2 : cp1 hot white-amber (core), cp2 deep blue (outer).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel (level) <- micLow    // PRIMARY: drives brightness
-      MODULATE sliderKick  (kick)  <- micKick   // fires the expanding ring
+  AUDIO_MODULATION_V1:
+    sliderKick  <- micKick range 0.00..1.00 curve linear  # HEADLINE: crossing ~0.5 FIRES the shockwave (linear keeps the trigger crossing reliable)
+    sliderLevel <- micLow  range 0.25..1.00 curve linear  # PRIMARY continuous brightness floor/glow
+  (static, omit from playlist: sliderDecay, sliderRingWidth, sliderLocalSpeed —
+   operator-set, not audio-driven.)
+  KICK-GATED: validate PRIMARY corr on --synth kick_4floor. micKick is the headline
+  event (fires the ring); micLow->level is the continuous band->brightness that
+  keeps the PRIMARY corr high. kick stays LINEAR (not pow2) so the rising crossing
+  of KICK_ARM=0.5 reliably arms a fresh wave on every beat.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // base-ring breathing rate (0 = freeze)
-export var kick = 0.0;         // 0..1 trigger; crossing ~0.5 fires a shockwave
-export var level = 0.5;        // 0..1 base brightness floor (ambient ring/glow)
+export var kick = 0.0;         // 0..1 trigger; crossing ~0.5 fires a shockwave (audio: micKick)
+export var level = 0.5;        // PRIMARY base brightness floor / glow (audio: micLow 0.25..1.00)
 export var decay = 0.5;        // shockwave envelope decay rate
 export var ringWidth = 0.5;    // expanding-ring thickness (tight = max def)
 
@@ -51,8 +57,11 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderKick(v) { kick = v; }
-export function sliderLevel(v) { level = v; }
+// kick is a TRIGGER (KICK_ARM=0.5 crossing) — keep it LINEAR so the rising edge
+// reliably fires. level remaps into a SANE range: a silence floor up to a bright
+// peak, so the ambient glow stays visible at rest and burns bright on the low band.
+export function sliderKick(v) { kick = v; }                 // micKick 0..1 linear (fires the ring)
+export function sliderLevel(v) { level = 0.25 + v * 0.75; } // micLow  0.25..1.00 (PRIMARY brightness)
 export function sliderDecay(v) { decay = v; }
 export function sliderRingWidth(v) { ringWidth = v; }
 

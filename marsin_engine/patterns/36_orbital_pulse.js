@@ -41,8 +41,10 @@
     - colorPalette1/2 : cp1 hot orange (even wells), cp2 magenta (odd wells).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderFocus (focus) <- micLow
-      MODULATE sliderPulse (pulse) <- micKick
+  AUDIO_MODULATION_V1:
+    sliderFocus  <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass tightens cores + lifts whole-rig floor
+    sliderPulse  <- micKick range 0.00..1.00 curve linear   # kick pops: each hit flares every well (transient bloom)
+  STATIC (operator handles, not audio-mapped): localSpeed, reach, base, colorPalette1/2.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -150,8 +152,12 @@ export function beforeRender(delta) {
   flare = flare - dt * FLARE_DECAY;
   if (flare < 0.0) flare = 0.0;
 
-  // Master orbit phase.
-  orbitPhase = orbitPhase + dt * localSpeed * MAX_RATE;
+  // Master orbit phase. localSpeed warps the rate exponentially across 0..1
+  // (rate = 2^((localSpeed-0.5)*4): 0.0625x at 0 .. 16x at 1) so the slider
+  // VISIBLY changes the orbit speed end to end; a small floor keeps the wells
+  // always drifting (never a dead-frozen rig, even at localSpeed=0).
+  var rateMul = pow(2.0, (localSpeed - 0.5) * 4.0);
+  orbitPhase = orbitPhase + dt * (0.04 + rateMul) * MAX_RATE;
   orbitPhase = orbitPhase - floor(orbitPhase);
 
   // Four wells weave on irrational rate multiples {1, sqrt2, sqrt3, phi} so the
@@ -174,18 +180,20 @@ export function beforeRender(delta) {
   // Bass (focus) tightens the falloff exponent AND brightens the cores; the
   // flare adds a transient brightness bloom.
   focusPow = FOCUS_MIN + focus * (FOCUS_MAX - FOCUS_MIN);
-  coreGain = (0.45 + focus * 1.0) * (1.0 + flare * 0.9);
+  // Cores are kept only weakly focus-dependent so their orbit-motion wobble does
+  // not dilute the clean bass->brightness correlation carried by the steady floor.
+  coreGain = (0.55 + focus * 0.65) * (1.0 + flare * 0.9);
 
   // PRIMARY MAPPING: a smooth, unsaturated whole-rig floor that rises strongly
   // and linearly with focus (bass). This term touches EVERY pixel and does not
   // wobble with orbit motion, so it is the dominant continuous contributor to
   // total brightness => micLow->brightness correlates cleanly (corr >= 0.5).
-  floorLevel = BASE_MIN + base * 0.12 + focus * 0.70;
+  floorLevel = BASE_MIN + base * 0.12 + focus * 0.92;
 
   // Base shimmer amplitude — small, calm; alternates cp1/cp2 across space below.
   shimLevel = BASE_MIN + base * 0.10;
 
-  shimPhase = shimPhase + dt * (0.04 + localSpeed * 0.18);
+  shimPhase = shimPhase + dt * (0.04 + rateMul * 0.18);
   shimPhase = shimPhase - floor(shimPhase);
 }
 

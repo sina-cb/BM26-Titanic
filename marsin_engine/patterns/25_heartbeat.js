@@ -29,16 +29,18 @@
     irrational with the beat rate so the sweep direction drifts independently of
     the pulse cadence. Phases wrap at PHASE_WRAP=10000 turns.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // beat amplitude + blinder pop
-      MODULATE sliderRadius (radius) <- micFlux   // ripple spread (travel)
-      MODULATE sliderDetail (detail) <- micHigh   // lub/dub crispness
-
-  WHITE (modulators-only):
-      MODULATE sliderKick       (kick)       <- micKick   // beat amplitude DRIVES the blinder bite
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // extra white pop (optional 2nd kick mod)
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  AUDIO_MODULATION_V1:
+    sliderKick       <- micKick range 0.00..1.00 curve pow2    # HEADLINE beat/blinder pop (kick-gated)
+    sliderLevel      <- micLow  range 0.30..1.00 curve linear  # PRIMARY continuous brightness budget
+    sliderRadius     <- micFlux range 0.00..1.00 curve linear  # ripple spread / travel (build = wider sweep)
+    sliderDetail     <- micHigh range 0.20..1.00 curve linear  # lub/dub crispness (sparkle/detail)
+    sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # extra white blinder pop on the beat
+    sliderWhiteLevel <- micLow  range 0.30..1.00 curve linear  # overall white amount / keep
+  (static, omit from playlist: sliderDirection, sliderDormantGlow, sliderBlinder,
+   sliderBlinderBite, sliderLocalSpeed — operator-set, not audio-driven.)
+  KICK-GATED PRIMARY: validate corr on --synth kick_4floor (full_track's low band
+  is near-constant). micKick is the headline event; micLow->level is the continuous
+  band->brightness so the PRIMARY corr holds.
   WHITE control set: the vintage heads (sectionId==2) are the headline audience
   BLINDER. The blinder bite is driven by the BEAT envelope (the `kick` slider, =
   micKick), so the heads PUNCH white on every beat with the standard kick mapping;
@@ -53,14 +55,14 @@
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
 export var direction = 0.06;    // 0..1; 0.5 center (guarded), <0.5 reverse sweep
-export var level = 0.5;         // PRIMARY: overall brightness budget (audio: micLow)
-export var kick = 0.0;          // beat amplitude + blinder pop (audio: micKick)
-export var radius = 0.5;        // ripple spread / travel (audio: micFlux)
-export var detail = 0.5;        // lub/dub crispness (audio: micHigh)
+export var level = 0.5;         // PRIMARY: overall brightness budget (audio: micLow 0.30..1.00)
+export var kick = 0.0;          // beat amplitude + blinder pop (audio: micKick pow2)
+export var radius = 0.5;        // ripple spread / travel (audio: micFlux 0..1)
+export var detail = 0.5;        // lub/dub crispness (audio: micHigh 0.20..1.00)
 export var minBright = 0.075;   // dormant glow between beats
 export var blinder = 0.5;       // vintage-head white-blinder strength (structural)
-export var whiteLevel = 0.5;    // WHITE: overall white amount / keep (audio: micLow)
-export var whiteKick = 0.0;     // WHITE: beat-driven white pop / blinder bite (audio: micKick)
+export var whiteLevel = 0.5;    // WHITE: overall white amount / keep (audio: micLow 0.30..1.00)
+export var whiteKick = 0.0;     // WHITE: beat-driven white pop (audio: micKick pow2)
 export var blinderBite = 0.5;   // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0; // Pulse core (red)
@@ -74,14 +76,16 @@ export function sliderDirection(v) {
   if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
   direction = d;
 }
-export function sliderLevel(v) { level = v; }
-export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = v; }
-export function sliderDetail(v) { detail = v; }
+// Audio sliders remap the incoming signal (0..1) into a SANE range with a
+// silence floor up to a bright peak. kick params use pow2 for a snappy beat.
+export function sliderLevel(v) { level = 0.30 + v * 0.70; }       // micLow  0.30..1.00 (PRIMARY)
+export function sliderKick(v) { kick = v * v; }                   // micKick 0..1 pow2 (headline beat)
+export function sliderRadius(v) { radius = v; }                   // micFlux 0..1 ripple spread
+export function sliderDetail(v) { detail = 0.20 + v * 0.80; }     // micHigh 0.20..1.00 crispness
 export function sliderDormantGlow(v) { minBright = v * 0.3; }
 export function sliderBlinder(v) { blinder = v; }
-export function sliderWhiteLevel(v) { whiteLevel = v; }
-export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteLevel(v) { whiteLevel = 0.30 + v * 0.70; } // micLow  0.30..1.00 white keep
+export function sliderWhiteKick(v) { whiteKick = v * v; }             // micKick 0..1 pow2 white pop
 export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ──────────────────────────────────────────────────────────────────

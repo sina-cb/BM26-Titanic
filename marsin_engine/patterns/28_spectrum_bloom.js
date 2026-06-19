@@ -25,16 +25,20 @@
 
   CONTROLS (UI order = declaration order)
     - localSpeed : base shimmer / glint animation rate.
-    - low        : LOW band level — bars block extent + brightness.
-    - mid        : MID band level — vintage column height + brightness.
-    - high       : HIGH band level — par glint count + brightness.
+    - low        : LOW band level — bars block extent + brightness (PRIMARY; audio micLow 0.20..1.00).
+    - mid        : MID band level — vintage column height + brightness (audio micMid 0.15..1.00).
+    - high       : HIGH band level — par glint count + brightness (audio micHigh 0.10..1.00).
     - floor      : minimum time-based base brightness (0 .. ~0.15).
     - colorPalette1/2 : strict cp1<->cp2 palette (cool blue -> warm amber).
 
-  AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderLow  (low)  <- micLow
-      MODULATE sliderMid  (mid)  <- micMid
-      MODULATE sliderHigh (high) <- micHigh
+  AUDIO_MODULATION_V1:
+    sliderLow  <- micLow  range 0.20..1.00 curve linear  # PRIMARY brightness (bars block, the mission-critical mass)
+    sliderMid  <- micMid  range 0.15..1.00 curve linear  # geometry (vintage column height)
+    sliderHigh <- micHigh range 0.10..1.00 curve linear  # sparkle/detail (par glint count + brightness)
+  (static, omit from playlist: sliderFloor, sliderLocalSpeed — operator-set, not
+   audio-driven.)
+  PRIMARY is the literal LOW band -> the bars block; it is the dominant light mass
+  so frame brightness tracks micLow tightly (corr high).
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -50,9 +54,11 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderLow(v) { low = v; }
-export function sliderMid(v) { mid = v; }
-export function sliderHigh(v) { high = v; }
+// Audio sliders remap the incoming signal (0..1) into a SANE range with a silence
+// floor (band stays seeded/visible at 0) up to a full-energy peak at 1.
+export function sliderLow(v) { low = 0.20 + v * 0.80; }   // micLow  0.20..1.00 (PRIMARY)
+export function sliderMid(v) { mid = 0.15 + v * 0.85; }    // micMid  0.15..1.00 (geometry)
+export function sliderHigh(v) { high = 0.10 + v * 0.90; }  // micHigh 0.10..1.00 (sparkle)
 export function sliderFloor(v) { floor_ = v * 0.15; } // map 0..1 -> 0..0.15
 
 // ── Tunables ────────────────────────────────────────────────────────────────
@@ -119,7 +125,9 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  var rate = pow(2.0, (localSpeed - 0.5) * 3.0);
+  // Canonical localSpeed law (rate = pow(2,(s-0.5)*4) ~0.25x..4x) so the shimmer
+  // and glint cadence VISIBLY speed up across 0..1 (faster division of time()).
+  var rate = pow(2.0, (localSpeed - 0.5) * 4.0);
   tBase = time(0.06 / rate);
   tGlint = time(0.013 / rate);
 
@@ -131,17 +139,24 @@ export function beforeRender(delta) {
   var br2 = 0.5 + 0.5 * wave(tBase * 0.41 + 0.37);  // column breath 0..1
 
   // Map band sliders -> spatial extent + brightness. A little base extent so the
-  // very center stays seeded; the rest scales hard with the signal.
-  lowExtent = 0.06 + clamp01(low) * 0.44 * (0.82 + 0.18 * br1); // half-width ~0.06..0.50
-  midFill = 0.05 + clamp01(mid) * 0.95 * (0.82 + 0.18 * br2);   // fill ~0.05..1.0 of the column
+  // very center stays seeded; the rest scales hard with the signal. The breath
+  // depth on the EXTENT/FILL is deep enough (±0.35) that the lit borders visibly
+  // pulse in/out at rest — so the localSpeed cadence (which sets tBase's rate) is
+  // clearly visible even in silence, while the band signal still dominates extent.
+  lowExtent = 0.06 + clamp01(low) * 0.44 * (0.65 + 0.35 * br1); // half-width ~0.06..0.50
+  midFill = 0.05 + clamp01(mid) * 0.95 * (0.65 + 0.35 * br2);   // fill ~0.05..1.0 of the column
   lowBri = 0.64 + clamp01(low) * 0.36 * (0.78 + 0.22 * br1);    // bars brightness (lifted)
   midBri = 0.45 + clamp01(mid) * 0.55 * (0.78 + 0.22 * br2);    // vintage brightness (lifted)
   highBri = 0.30 + clamp01(high) * 0.70;      // par glint brightness
 }
 
 export function render3D(index, x, y, z) {
-  // Slow time-based base so silence still reads (never fully dark).
-  var base = floor_ * (0.55 + 0.45 * wave(tBase + x * 0.7 + y * 0.4));
+  // Time-based base so silence still reads (never fully dark). It is a TRAVELING
+  // shimmer (tBase phase + a spatial gradient) so as tBase advances the wash
+  // visibly sweeps the rig — its speed is set by the localSpeed cadence (tBase's
+  // time() rate), making localSpeed clearly effective even in pure silence.
+  var travel = wave(tBase * 1.6 + x * 1.1 + y * 0.5);
+  var base = floor_ * (0.40 + 0.60 * travel);
 
   var bri = base;
   var tcol = 0.5; // palette blend position cp1(0)->cp2(1)

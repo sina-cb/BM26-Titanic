@@ -30,9 +30,11 @@
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively). Map on the
   playlist entry:
-      MODULATE sliderLevel  (level)  <- micLow     # PRIMARY: amplitude + overall brightness
-      MODULATE sliderDetail (detail) <- micHigh    # 2nd dim: core sharpness + sparkle glints
-      MODULATE sliderKick   (kick)   <- micKick    # discrete: phase-jump of the weave
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass drives curve amplitude + overall brightness
+    sliderDetail <- micHigh range 0.10..0.85 curve linear   # highs: sparkle glints riding the filament (detail)
+    sliderKick   <- micKick range 0.00..1.00 curve linear   # kick: discrete phase-jump of the weave on the beat
+  STATIC (operator handles, not audio-mapped): localSpeed, spread, base, colorPalette1/2.
 
   IDENTITY-SLIDER convention: each slider stores v directly; scaling happens in
   render so the modulation range stays predictable.
@@ -128,8 +130,12 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // Drift + golden-ratio precession (never-repeating).
-  phase = phase + dt * (0.1 + localSpeed * MAX_RATE);
+  // Drift + golden-ratio precession (never-repeating). localSpeed warps the
+  // drift rate exponentially across 0..1 (2^((localSpeed-0.5)*4): 0.0625x at 0
+  // .. 16x at 1) so the slider VISIBLY changes how fast the weave precesses; a
+  // small floor keeps the figure always drifting (never frozen, even at 0).
+  var rateMul = 0.06 + pow(2.0, (localSpeed - 0.5) * 4.0);
+  phase = phase + dt * rateMul * MAX_RATE;
   phase = phase - floor(phase);
 
   // micKick -> discrete phase-jump of the curve (rising edge fires a jump).
