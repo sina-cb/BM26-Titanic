@@ -36,11 +36,11 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // flock drift / swirl rate
-export var flockEnergy = 0.34; // PRIMARY: flock cohesion + overall brightness (micLow)
-export var scatter = 0.0;      // birds scatter into glints (micHigh)
-export var build = 0.0;        // murmuration build / flock expansion (micFlux)
+export var flockEnergy = 0.5;  // PRIMARY: flock cohesion + overall brightness (micLow)
+export var scatter = 0.5;      // birds scatter into glints (micHigh)
+export var build = 0.5;        // murmuration build / flock expansion (micFlux)
 export var focus = 0.5;        // flock core tightness (1 = pinpoint cores)
-export var haze = 0.16;        // faint living night-sky floor (never fully black)
+export var haze = 0.35;        // faint living night-sky floor (never fully black)
 
 // cp1 = cool storm blue (leading edge), cp2 = warm ember (trailing edge).
 // Distinct hues (0.60 vs 0.05) so the rig reads two colours -> hueSpread high.

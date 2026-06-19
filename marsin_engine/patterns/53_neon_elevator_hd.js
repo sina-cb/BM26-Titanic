@@ -58,10 +58,10 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // base scroll rate trim
-export var level = 0.18;       // PRIMARY: floor brightness + scroll speed + overall (micLow)
+export var level = 0.55;       // PRIMARY: floor brightness + scroll speed + overall (micLow)
 export var kick = 0.0;         // floor STEP + vintage top blinder (micKick)
-export var sharp = 0.45;       // band crispness (higher = thinner, crisper floors)
-export var floorCount = 0.45;  // number-of-floors knob (mapped to irrational count)
+export var sharp = 0.5;        // band crispness (higher = thinner, crisper floors)
+export var floorCount = 0.5;   // number-of-floors knob (mapped to irrational count)
 
 export var cp1H = 0.83, cp1S = 1.0, cp1V = 1.0; // palette 1 — neon magenta (odd floors)
 export var cp2H = 0.50, cp2S = 1.0, cp2V = 1.0; // palette 2 — neon cyan    (even floors)
@@ -150,7 +150,7 @@ export function beforeRender(delta) {
   // Steep curve so overall brightness tracks micLow tightly (corr target >=0.5).
   var lv = clamp01(level);
   var lvc = lv * lv;                               // emphasise the signal
-  bri0 = 0.10 + lvc * 0.90;                        // overall brightness 0.10..1.0
+  bri0 = 0.10 + lvc * 0.95;                         // overall brightness 0.10..1.05 (steep quadratic)
 
   // Continuous UPWARD scroll at an IRRATIONAL rate (SQRT2), faster on the drops.
   var rate = (SCROLL_BASE + lv * SCROLL_GAIN) * SQRT2 * localMult;

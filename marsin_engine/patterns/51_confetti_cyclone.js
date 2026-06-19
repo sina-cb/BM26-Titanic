@@ -37,10 +37,10 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // overall swirl animation rate trim
-export var low = 0.25;         // PRIMARY: brightness + spin + density  <- micLow
-export var high = 0.2;         // 2nd dim: extra confetti sparkle       <- micHigh
+export var low = 0.5;          // PRIMARY: brightness + spin + density  <- micLow
+export var high = 0.5;         // 2nd dim: extra confetti sparkle       <- micHigh
 export var kick = 0.0;         // confetti burst flare                  <- micKick
-export var sparkSize = 0.45;   // base spark radius (crispness vs. bloom)
+export var sparkSize = 0.5;    // base spark radius (crispness vs. bloom)
 
 export var cp1H = 0.08, cp1S = 1.0, cp1V = 1.0; // palette 1 — warm amber
 export var cp2H = 0.52, cp2S = 1.0, cp2V = 1.0; // palette 2 — cyan
@@ -144,7 +144,7 @@ export function beforeRender(delta) {
   // the PRIMARY micLow->brightness coupling stays dominant.
   var density = 0.22 + clamp01(low) * 0.78;          // 0.22..1.0 fraction hot
   var burst = clamp01(kick);                         // 0..1 burst amount
-  var sizePx = 0.085 + sparkSize * 0.10 + burst * 0.035; // px-space core radius (kick fattens)
+  var sizePx = 0.07 + sparkSize * 0.13 + burst * 0.035; // px-space core radius (kick fattens)
 
   // PRIMARY brightness coupling: a SMOOTH global gain rises steeply with micLow
   // and is applied to every pixel in render3D. This makes overall brightness
@@ -153,7 +153,7 @@ export function beforeRender(delta) {
   // through the musical mid-band where micLow lives, so overall brightness tracks
   // micLow closely (PRIMARY corr >= 0.5) without crushing the silent floor.
   var lowC = clamp01(low);
-  lowGain = 0.30 + lowC * lowC * 1.62;               // 0.30..1.92, quadratic ramp
+  lowGain = 0.42 + lowC * lowC * 1.75;               // 0.42..2.17, steep quadratic ramp
 
   for (var kk = 0; kk < NSPARK; kk++) {
     // Each spark gets a golden-angle phase on the swirl + its own irrational
@@ -178,7 +178,7 @@ export function beforeRender(delta) {
     // globally as lowGain in render3D). micHigh adds crisp twinkle. kick does NOT
     // brighten here — it only fattens sparks via sizePx — so micLow stays the
     // dominant brightness driver and the PRIMARY corr stays high.
-    var bv = 0.55 * weight;
+    var bv = 0.85 * weight;
     bv = bv + sparkle * 0.4;
     sparkV[kk] = clamp01(bv);
     sparkR[kk] = sizePx;

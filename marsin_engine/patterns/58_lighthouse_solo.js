@@ -32,9 +32,9 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // rotation rate (0 = freeze)
-export var beam = 0.45;        // level: beam brightness + width (resting = visible)
+export var beam = 0.5;         // level: beam brightness + width (resting = visible)
 export var flash = 0.0;        // kick: bright flash / double-pulse
-export var width = 0.4;        // base angular half-width of the beam
+export var width = 0.5;        // base angular half-width of the beam
 
 export var cp1H = 0.11, cp1S = 0.55, cp1V = 1.0; // beam core: warm white / amber
 export var cp2H = 0.62, cp2S = 1.0,  cp2V = 0.5; // night: deep blue
@@ -139,8 +139,10 @@ export function render3D(index, x, y, z) {
   if (ad < halfW) {
     var prof = 1.0 - (ad / halfW); // 1 at core -> 0 at edge
     prof = prof * prof;            // tighten the core (high-def)
-    // brightness scales with level, with a guaranteed dim base so it always reads
-    var lvl = BASE_GLOW + (1.0 - BASE_GLOW) * beamLvl;
+    // brightness scales with level, with a guaranteed dim base so it always reads.
+    // The level maps with a >1 headroom so the beam CORE burns bright (peak >=200)
+    // at the default level while still ramping monotonically with micLow (corr).
+    var lvl = BASE_GLOW + (1.7 - BASE_GLOW) * beamLvl;
     var wedge = BASE_GLOW + (1.0 - BASE_GLOW) * prof;
     bri = wedge * lvl;
     if (bri < BASE_GLOW) bri = BASE_GLOW;   // never black inside the wedge

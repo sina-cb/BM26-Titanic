@@ -54,10 +54,10 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // wander / refresh rate
-export var ink = 0.45;         // injection amount + bloom brightness (micHigh)
-export var flow = 0.30;        // current strength: wander + spread (micLow)
+export var ink = 0.5;          // injection amount + bloom brightness (micHigh)
+export var flow = 0.5;         // current strength: wander + spread (micLow)
 export var diffuse = 0.5;      // spread + decay rate
-export var base = 0.07;        // faint resting BLUE floor (never fully black)
+export var base = 0.09;        // faint resting BLUE floor (never fully black)
 
 export var cp1H = 0.62, cp1S = 1.00, cp1V = 1.0; // deep blue  (still / faint water)
 export var cp2H = 0.85, cp2S = 1.00, cp2V = 1.0; // magenta-violet (hot fresh ink)
@@ -175,7 +175,7 @@ export function beforeRender(delta) {
   nextMaxIdx = 0;
 
   var spread = 0.12 + diffuse * 0.20 + flow * 0.10;   // 0.12..0.42 to each side
-  var decay  = 1.0 - (0.10 + diffuse * 0.14);         // fade (0.90..0.76)
+  var decay  = 1.0 - (0.085 + diffuse * 0.125);       // fade (0.915..0.79) — slight persistence for two-colour
   // Diffuse across the WHOLE virtual field (fixed N cells) — contiguous
   // neighbour bleed feathers each bloom outward. Guarded < N throughout.
   for (var kk = 0; kk < N; kk++) {
@@ -276,7 +276,7 @@ export function render3D(index, x, y, z) {
   // this is what gives the rig a large magenta area against the blue water and
   // pushes hueSpread well over the gate. inkBri is lifted so blooms are the
   // brightest, most saturated thing on the rig.
-  var tcol = clamp01(conc * 8.0);                 // any ink edge -> magenta fast
+  var tcol = clamp01(conc * 15.0);                // any ink edge -> magenta fast
   var inkBri = conc * 1.30;                       // lifted core so peaks burn hot
 
   // Composite: take the brighter of water vs ink so the field is crisp, but

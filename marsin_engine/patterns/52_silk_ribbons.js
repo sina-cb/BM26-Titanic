@@ -43,10 +43,10 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // ribbon glide rate
-export var audioLevel = 0.35;  // PRIMARY: width + brightness + overall (micLow)
-export var shimmer = 0.25;     // 2nd dim: crest highlight glint (micHigh)
-export var ribbons = 0.4;      // ribbon band count
-export var softness = 0.45;    // core falloff softness
+export var audioLevel = 0.5;   // PRIMARY: width + brightness + overall (micLow)
+export var shimmer = 0.5;      // 2nd dim: crest highlight glint (micHigh)
+export var ribbons = 0.5;      // ribbon band count
+export var softness = 0.5;     // core falloff softness
 
 export var cp1H = 0.52, cp1S = 0.92, cp1V = 1.0; // Silk A — cyan default
 export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // Silk B — magenta default
@@ -140,8 +140,8 @@ export function beforeRender(delta) {
   var lv = clamp01(audioLevel);
   nRib = 2.0 + ribbons * 6.0;                 // 2..8 ribbons (non-integer ok)
   halfW = 0.045 + lv * 0.085;                 // wider silk on bass
-  ribBri = 0.40 + lv * 0.95;                  // brighter cores on bass (peak >1 -> 255)
-  overall = 0.20 + lv * 0.85;                 // overall brightness tracks micLow
+  ribBri = 0.50 + lv * 1.10;                  // brighter cores on bass (peak >1 -> 255)
+  overall = 0.22 + lv * 1.05;                 // overall brightness tracks micLow
   soft = 1.2 + softness * 3.5;                // crisp(1.2) -> satin(4.7)
   shim = clamp01(shimmer);                     // 2nd dim: crest highlight
 }
