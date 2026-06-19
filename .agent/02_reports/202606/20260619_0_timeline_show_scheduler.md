@@ -277,3 +277,10 @@ Add to `.agent/00_gol/13_multi_agent.md` ports table when Phase 1 lands.
   (`festival{startDate,days}` + per-cue `days` applicability). Behavioral model
   (§1–§14) and tests carry forward. **In progress** — superseding the standalone
   Phase 4 tab with the in-engine + maker build.
+- **2026-06-19 — M1 DONE (timeline in engine).** Relocated cores to
+  `lib/timeline/` + new `timeline_service.js`; `/timeline/*` REST + `timelineState`
+  WS on :6968; companion/launcher-child/:6965 removed; CaptainPad repointed to the
+  engine. 95 engine tests green; CaptainPad tsc + web:build clean. Live in-engine
+  precedence verified: program (catchUp) → `program/end` → **autopilot resumes** →
+  autopilot-off → **manual** (controller transitions confirmed via /timeline/state).
+  Next: M2 8-day festival schema + M3 fluid maker UI.
