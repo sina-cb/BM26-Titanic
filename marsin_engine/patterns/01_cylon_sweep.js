@@ -27,7 +27,14 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 // so the eye-width control is renamed to be its own local slider.
 export function sliderBeamWidth(v) { eyeWidth = 0.05 + v * 0.3; }
 export function sliderBackgroundGlow(v) { bgBrightness = v * 0.3; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+export function sliderDirection(v) {
+  // Dead-zone guard: slider-center would give globalDir=0 (frozen sweep). Keep the
+  // sweep always creeping — slightly forward at/above center, slightly reverse below.
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06;
+  else if (d < 0.0 && d > -0.06) d = -0.06;
+  globalDir = d;
+}
 export function sliderAudioBrightness(v) { audioBrightness = v; }
 
 var scanT = 0.0;

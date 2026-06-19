@@ -6,7 +6,7 @@
 
 export var localSpeed = 0.5;
 export var reach = 0.42;
-export var focus = 3.0;
+export var focus = 1.6;
 export var trailBlend = 0.55;
 
 export var cp1H = 0.58, cp1S = 0.88, cp1V = 1.0;
@@ -16,7 +16,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderReach(v) { reach = 0.18 + v * 0.55; }
-export function sliderFocus(v) { focus = 1.2 + v * 5.5; }
+export function sliderFocus(v) { focus = 0.9 + v * 3.0; }
 export function sliderTrailBlend(v) { trailBlend = v; }
 
 // ── Continuity: each attractor harmonic gets its own time() base, scaled at
@@ -83,10 +83,9 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  var nx = (x + 1.264) / 3.125;
-  var ny = y / 6.5;
-  nx = max(0.0, min(1.0, nx));
-  ny = max(0.0, min(1.0, ny));
+  // Coords arrive already normalized in [0,1]; use directly (clamped).
+  var nx = max(0.0, min(1.0, x));
+  var ny = max(0.0, min(1.0, y));
 
   var ax = 0.5 + reach * sin(pA) * cos(qB);
   var ay = 0.5 + reach * sin(pB + 0.8) * 0.62 + sin(qC) * 0.09;
@@ -102,10 +101,10 @@ export function render3D(index, x, y, z) {
   var dC = hypot(nx - cx, ny - cy);
 
   var nearest = min(dA, min(dB, dC));
-  var glow = pow(max(0.0, 1.0 - nearest * focus), 2.0);
+  var glow = pow(max(0.0, 1.0 - nearest * focus), 2.0) * 1.5;
 
   var trail = wave((dA - dB + dC) * 3.0 + time(currentScale * 0.67));
-  var v = min(1.0, glow + trail * trailBlend * 0.22);
+  var v = min(1.0, 0.05 + glow + trail * trailBlend * 0.22);
 
   var mixVal = wave((dB - dA) * 2.2 + nx * 0.5 + time(currentScale * 0.29));
 

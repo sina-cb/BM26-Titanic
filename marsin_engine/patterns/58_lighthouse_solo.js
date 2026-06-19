@@ -18,7 +18,7 @@
     - Colour: beam CORE is cp1 (warm white / amber), the trailing edge of the
       wedge fades toward cp2 (deep blue night). Un-lit night = near-black.
 
-  CONTRALS (UI order = declaration order)
+  CONTROLS (UI order = declaration order)
     - localSpeed : rotation rate of the beam (0 = freeze).
     - beam       : LEVEL → beam brightness + angular width.
     - flash      : KICK → bright flash / double-pulse overlaid on the beam.

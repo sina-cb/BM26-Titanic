@@ -139,7 +139,7 @@ export function beforeRender(delta) {
   lvl = clamp01(bright);
 
   // ── Beat-locked stepping: rising edge of the kick slider -> +1 step ──────
-  // The step is an IRRATIONAL fraction of a turn (1/phi^2), so successive kicks
+  // The step is an IRRATIONAL fraction of a turn (sqrt(3)/12), so successive kicks
   // never re-land on a repeating phase grid — the chase always looks fresh.
   if (kickArmed == 1 && step >= KICK_THRESH) {
     chasePhase = chasePhase + STEP_SIZE;    // SNAP forward one irrational step

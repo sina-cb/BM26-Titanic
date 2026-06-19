@@ -17,7 +17,14 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderCount(v) { swipeLength = 0.2 + v * 1.5; }
 export function sliderBeamWidth(v) { beamWidth = 0.1 + v * 0.8; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+export function sliderDirection(v) {
+  // Dead-zone guard: slider-center would give globalDir=0 (frozen attack). Keep the
+  // collapse always advancing — slightly forward at/above center, slightly reverse below.
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06;
+  else if (d < 0.0 && d > -0.06) d = -0.06;
+  globalDir = d;
+}
 
 var attackPos = 0.0;
 var flashIntensity = 0;

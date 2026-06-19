@@ -102,6 +102,45 @@ Local parameters are unique to each deck slot and are mapped to UI sliders in th
   export var localSpeed = 0.5; // Local speed trim variable
   export function sliderLocalSpeed(v) { localSpeed = v; }
   ```
+- **MANDATORY — `localSpeed` must actually drive motion, not merely exist.** Declaring
+  the variable is NOT enough. Every pattern MUST have autonomous, continuous motion
+  driven by the VM clock (`t`, `time(scale)`, or accumulated `delta`), and that motion's
+  *rate* MUST be scaled by `localSpeed`. Canonical idiom:
+  ```javascript
+  export function beforeRender(delta) {
+    var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0); // 0.5->1x, 1->4x, 0->0.25x
+    // advance a phase from the clock, trimmed by localSpeed (pick one style):
+    phase = (phase + (delta / 65536.0) * localMultiplier) % 1.0;   // delta-driven
+    // tPhase = time(BASE_SCALE / localMultiplier);                // time()-driven
+  }
+  ```
+- **Why this also gives you GLOBAL speed for free.** The engine advances the VM clock by
+  `wallDelta * globalSpeedMultiplier()` and hands the pattern that already-scaled clock
+  (see `engine.js` `globalSpeedMultiplier` / `beginFrame(elapsed)`). So `t`, `time(scale)`,
+  and `beforeRender`'s `delta` are ALL pre-scaled by the global SPEED fader. Drive motion
+  from those (× `localSpeed`) and the pattern automatically obeys **both** global speed
+  (engine) and local speed (slider). Do not invent a separate clock.
+- **No dead-static patterns.** A pattern whose only motion comes from audio modulation —
+  or from any control that can sit at zero — freezes when nothing is mapped or the fader
+  is centered. That is a bug. There MUST be a baseline clock-driven animation that still
+  moves (and responds to `localSpeed`) with no audio mapped and every other control at
+  default. Audio/other controls then *modulate* that baseline motion, never gate it to a
+  standstill.
+
+#### Direction / sign parameters (avoid the static dead-zone)
+- A `direction` slider commonly maps `globalDir = (v * 2.0) - 1.0` and multiplies the
+  phase increment by it — which means slider-center (`v = 0.5 → globalDir = 0`) FREEZES
+  the pattern (and the engine may apply a `0.5` default at load, so it ships frozen).
+  Never leave that dead-zone in. Guard the magnitude so the effective direction is always
+  slightly positive or slightly negative — never exactly 0:
+  ```javascript
+  export function sliderDirection(v) {
+    var d = (v * 2.0) - 1.0;
+    if (d >= 0.0 && d < 0.06) d = 0.06;       // never freeze; bias slightly forward
+    else if (d < 0.0 && d > -0.06) d = -0.06; // ...or slightly reverse
+    globalDir = d;
+  }
+  ```
 
 #### Custom Parameter Sliders (`slider*`)
 - Any exported function beginning with the prefix `slider` is registered as a custom deck slider (inputs scaled `0.0` to `1.0`).

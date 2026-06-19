@@ -12,8 +12,8 @@ export var blackoutDepth = 0.35;
 export var stageSurf = 0.70;
 export var amberWarmth = 0.40;
 
-export var cp1H = 0.08, cp1S = 0.88, cp1V = 0.78;
-export var cp2H = 0.47, cp2S = 0.88, cp2V = 0.72;
+export var cp1H = 0.08, cp1S = 0.88, cp1V = 1.0;
+export var cp2H = 0.47, cp2S = 0.88, cp2V = 1.0;
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -100,9 +100,9 @@ export function render3D(index, x, y, z) {
   var isBar = sectionId == 2 && y <= 2.0;
   var isVintage = sectionId == 3;
 
-  var nx = clamp01((x + 10.0) / 20.0);
-  var ny = clamp01(y / 6.8);
-  var nz = clamp01((z + 10.0) / 20.0);
+  var nx = clamp01(x);
+  var ny = clamp01(y);
+  var nz = clamp01(z);
   var scale = 2.0 + duneScale * 8.0;
 
   var shearA = wave(nx * 1.37 - nz * 0.83 + driftPhase * 0.71);
@@ -115,7 +115,7 @@ export function render3D(index, x, y, z) {
   var contourC = wave((foldX - foldZ) * scale * 0.913 + wave(ny * 1.7 + driftPhase) * 0.23 - rollPhase * 0.43);
   var contourD = wave(sqrt(abs(foldX - 0.5) * 1.7 + abs(foldZ - 0.5) * 1.1) * scale * 1.9 - driftPhase * 2.3);
   var dune = contourA * 0.38 + contourB * 0.27 + contourC * 0.22 + contourD * 0.13;
-  dune = pow(clamp01(dune), 1.1 + duneContrast * 4.2);
+  dune = pow(clamp01(dune), 0.8 + duneContrast * 2.6);
 
   var valley = pow(wave(foldX * 5.0 - foldZ * 7.0 + ny * 1.13 + driftPhase * 0.7), 2.0 + blackoutDepth * 4.0);
   var shardGate = pow(wave(foldX * 11.0 + foldZ * 17.0 - rollPhase * 0.83), 5.0);
@@ -126,9 +126,9 @@ export function render3D(index, x, y, z) {
     var barIndex = floor((index - 57) / 18.0);
     var sandRipple = wave(barT * 1.45 - rollPhase * 1.9 + barIndex * 0.137 + shearA * 0.31);
     var brokenLane = pow(wave(barIndex * 0.271 + barT * 2.3 + driftPhase * 1.61), 3.8);
-    stage = dune * (0.30 + sandRipple * 0.50 + brokenLane * 0.32);
+    stage = dune * (0.55 + sandRipple * 0.70 + brokenLane * 0.45);
     stage = stage * (1.0 - valley * blackoutDepth * 0.55);
-    stage = stage * (0.65 + shardGate * 0.35);
+    stage = stage * (0.72 + shardGate * 0.45);
     uv = pow(stage, 2.0) * 0.20;
   } else if (isEdge) {
     var edgeId = floor(index / 18.0);
@@ -152,7 +152,7 @@ export function render3D(index, x, y, z) {
 
   var colorBlend = clamp01(0.14 + contourB * 0.28 + contourC * 0.22 + contourD * 0.18 + foldX * 0.10 + dune * 0.26);
   var darkFloor = (1.0 - blackoutDepth) * 0.045;
-  var brightness = darkFloor + stage * (0.55 + duneContrast * 0.45);
+  var brightness = darkFloor + stage * (0.95 + duneContrast * 0.55);
   if (isVintage) brightness = darkFloor * 0.35 + stage;
   if (isPar) brightness = darkFloor * 0.20 + stage;
 

@@ -7,7 +7,7 @@ export var localSpeed = 0.5;
 export var radialDensity = 15.0;
 export var ratioA = 1.618;
 export var ratioB = 0.618;
-export var sharpness = 4.0;
+export var sharpness = 2.5;
 export var globalDir = 1.0;
 
 export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Deep Blue default
@@ -20,7 +20,14 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 // globals; size is engine-owned and sharpness is a per-pattern tunable).
 export function sliderCount(v) { radialDensity = 2 + v * 20; }
 export function sliderSharpness(v) { sharpness = 1 + v * 9; }
-export function sliderDirection(v) { globalDir = (v * 2.0) - 1.0; }
+export function sliderDirection(v) {
+  // Dead-zone guard: slider-center would give globalDir=0 (frozen field). Keep the
+  // interference always drifting — slightly forward at/above center, slightly reverse below.
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06;
+  else if (d < 0.0 && d > -0.06) d = -0.06;
+  globalDir = d;
+}
 
 var beatPhase = 0.0;
 
@@ -40,11 +47,11 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  var nx = (x + 1.264) / 3.125;
-  var ny = y / 6.5; 
-  if (nx < 0) nx = 0; 
+  var nx = x;
+  var ny = y;
+  if (nx < 0) nx = 0;
   if (nx > 1) nx = 1;
-  if (ny < 0) ny = 0; 
+  if (ny < 0) ny = 0;
   if (ny > 1) ny = 1;
 
   var f1 = sin((nx * 10.0) * PI2 + beatPhase);
@@ -56,8 +63,12 @@ export function render3D(index, x, y, z) {
   var dist = sqrt(dx*dx + dy*dy);
   var f4 = sin((dist * radialDensity) * PI2 - beatPhase * ratioB);
   
-  var field = (f1 + f2 + f3 + f4) * 0.25; 
+  var field = (f1 + f2 + f3 + f4) * 0.25;
   var magnitude = pow(abs(field), sharpness);
+  // Small brightness floor: the interference field can crush to ~0 at nodes,
+  // and with all planes near a zero-crossing every fixture could go dark at
+  // once. Keep a faint glow so the cathedral is NEVER fully black.
+  magnitude = 0.08 + magnitude * 0.92;
   
   var h = cp2H;
   var s = cp2S;
@@ -72,20 +83,21 @@ export function render3D(index, x, y, z) {
   var finalA = 0.0;
   var finalU = 0.0;
   
-  if (y < 1.8) {
-     // 36 Bars
-  } 
-  else if (y < 4.0) {
-    // 4 Huge Pars
+  if (sectionId == 3) {
+     // Bars: the plain interference field (finalV already set above)
+  }
+  else if (sectionId == 1) {
+    // Pars: brighter zero-crossing-cored treatment. zc^(sharpness*2) crushes
+    // hard away from the nodes, so keep a faint floor so all 4 pars stay lit.
     var zc = 1.0 - abs(field);
-    zc = pow(zc, sharpness * 2); 
-    finalV = (finalV * 0.2) + (zc * 0.8 * (field > 0 ? cp1V : cp2V));
+    zc = pow(zc, sharpness * 2);
+    finalV = (finalV * 0.35) + (zc * 0.8 * (field > 0 ? cp1V : cp2V));
   }
   else {
-    // 12 Vintage Whites
+    // Vintage Whites: white/amber emitter treatment
     finalW = magnitude * (1.0 - s);
-    finalA = finalW * 0.25; 
-    finalV = finalV * 0.5; 
+    finalA = finalW * 0.25;
+    finalV = finalV * 0.5;
   }
 
   // --- Inline HSV to RGB Converter ---

@@ -75,15 +75,20 @@ export function beforeRender(delta) {
 }
 
 export function render3D(index, x, y, z) {
-  var nx = (x + 1.264) / 3.125;
-  var ny = y / 6.5;
-  nx = max(0.0, min(1.0, nx));
-  ny = max(0.0, min(1.0, ny));
+  // Coords arrive normalized in [0,1]. Use x/y directly as spatial gradients.
+  var nx = max(0.0, min(1.0, x));
+  var ny = max(0.0, min(1.0, y));
+
+  // Tall Vintage heads (sectionId == 2) read as the tallest fronds with the
+  // brightest phosphorescent tips. Lift their effective height + tip strength.
+  var tall = 0.0;
+  if (sectionId == 2) tall = 1.0;
+  var nyEff = max(0.0, min(1.0, ny + tall * 0.22));
 
   // Per-frond lateral sway — fronds higher up bend more (cantilever).
   // The "kelp in current" feel comes from sway scaling with ny^2.
-  var bend = sin(tCurrent + nx * 4.0) * swayAmplitude * ny * ny;
-  var bendSlow = sin(tCurrent * 0.41 + nx * 2.3) * swayAmplitude * ny * 0.5;
+  var bend = sin(tCurrent + nx * 4.0) * swayAmplitude * nyEff * nyEff;
+  var bendSlow = sin(tCurrent * 0.41 + nx * 2.3) * swayAmplitude * nyEff * 0.5;
   var swayedX = nx + bend + bendSlow;
 
   // Vertical fronds: a phase pattern in x produces tall thin stalks.
@@ -93,29 +98,33 @@ export function render3D(index, x, y, z) {
   // Sharpen into stalks — soft sides, bright spine.
   frond = pow(frond, 2.6);
 
-  // Vertical falloff: dark base, bright top (kelp grows toward the light).
-  var heightWeight = pow(ny, 1.2);
+  // Vertical falloff: deep body low, brighter toward the top
+  // (kelp grows toward the light). Computed from the real ny.
+  var heightWeight = 0.35 + pow(nyEff, 1.2) * 0.65;
   var body = frond * heightWeight;
 
-  // Phosphorescent tip flicker — localized to top 35% of each frond,
-  // jittered per-frond so tips don't all flicker in unison.
-  var tipBand = pow(max(0.0, ny - 0.62) / 0.38, 1.5);
-  var flick = wave(tFlicker + swayedX * 7.3 + ny * 2.1);
+  // Phosphorescent tip flicker — localized to top of each frond,
+  // jittered per-frond so tips don't all flicker in unison. Vintage
+  // heads (tall) flicker brighter.
+  var tipBand = pow(max(0.0, nyEff - 0.55) / 0.45, 1.5);
+  var flick = wave(tFlicker + swayedX * 7.3 + nyEff * 2.1);
   flick = pow(flick, 4.0);
-  var tipFlicker = tipBand * flick * tipGlow * frond;
+  var tipFlicker = tipBand * flick * tipGlow * (1.0 + tall * 0.6) * frond;
 
   // Long slow tide breath — whole garden brightens/dims over ~30s.
   var tide = 0.8 + sin(tTide * 6.2831853) * 0.2;
 
-  // Dark abyssal floor — base of garden is genuinely dark.
-  var darkFloor = (1.0 - heightWeight) * baseDarkness;
+  // Additive non-black baseline so the garden is calm-but-visible at rest;
+  // a faint bioluminescent shimmer keeps it alive, never fully black.
+  var glowFloor = (0.06 + baseDarkness * 0.10) * (0.6 + 0.4 * heightWeight);
+  var shimmer = 0.5 + 0.5 * sin(tCurrent * 0.7 + nx * 5.0 + ny * 3.0);
   var v = body * 0.85 + tipFlicker;
-  v = v * tide - darkFloor * 0.5;
+  v = v * tide + glowFloor * (0.7 + 0.3 * shimmer);
   v = max(0.0, min(1.0, v));
 
   // Palette: base of frond leans cp1 (deep blue), tips lean cp2
   // (bioluminescent green). Flickers push hard toward cp2.
-  var tVal = heightWeight * 0.55 + tipFlicker * 0.8;
+  var tVal = pow(nyEff, 1.2) * 0.55 + tipFlicker * 0.8;
   tVal = max(0.0, min(1.0, tVal));
 
   var r = (pr1 + (pr2 - pr1) * tVal) * v;

@@ -200,7 +200,6 @@ export function render3D(index, x, y, z) {
   var isVintage = 0;
   if (sectionId == 3) {
     // BARS: lower shaft 0.00..0.45. Gentle x-tilt -> crisp diagonal shimmer (HD).
-    fc = 0.02 + 0.41 * 0.5 + (x - 0.5) * 0.06;     // centered band w/ slight tilt
     fc = 0.04 + 0.40 * (0.5 + (x - 0.5) * 0.30);   // 0.04..0.44 across the bars
   } else if (sectionId == 1) {
     // PARS: mid shaft 0.45..0.70 spread across the four pars by x.

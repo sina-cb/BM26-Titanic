@@ -201,8 +201,11 @@ export function render3D(index, x, y, z) {
     coreBri = coreBri * coreBri;   // sharpen -> crisp HD core
   }
   // Inject the freshly-lit core into this pixel's trail memory (paint & fade).
-  if (coreBri > buf[index]) buf[index] = coreBri;
-  var scanBri = buf[index];        // core + decaying trail
+  // Bounds-guard the buffer so a model larger than N can't read/write OOB.
+  if (index >= 0 && index < N) {
+    if (coreBri > buf[index]) buf[index] = coreBri;
+  }
+  var scanBri = (index >= 0 && index < N) ? buf[index] : coreBri; // core + decaying trail
 
   // ── CRUSH: twin bars sweep edges -> center on the kick ──────────────────────
   // Bar position this frame: distance from center grows with crushEnv (1 at the
