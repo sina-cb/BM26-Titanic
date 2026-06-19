@@ -50,6 +50,26 @@ test('buildMaskConstants: merges groups and presets', () => {
   });
 });
 
+test('buildMaskConstants: bit-free (Tier-A, bit:0) views are excluded — no silent zero', () => {
+  const constants = buildMaskConstants({
+    groupBits: { 'TowerBars': 0x40 },
+    viewMasks: [
+      { name: 'PORT', bit: 0 },        // Tier-A auto-view: membership-only, no bit
+      { name: 'BAND_LOW', bit: 0 },
+      { name: 'RedwoodPARs', bit: 0x80, word: 0 }, // bit-bearing → kept
+    ],
+  });
+  assert.equal('MASK_PORT' in constants, false);
+  assert.equal('MASK_BAND_LOW' in constants, false);
+  assert.equal(constants.MASK_REDWOOD_PARS, 0x80);
+  // A pattern referencing a bit-free view via MASK_ must fail LOUDLY (steering
+  // to inView()), never inject `var MASK_PORT = 0;` (always-false silent zero).
+  assert.throws(
+    () => injectMaskConstants('export function render3D(i){ if (viewMask & MASK_PORT) rgb(1,0,0); }', constants),
+    /MASK_PORT/,
+  );
+});
+
 test('buildMaskConstants: sanitized collision with different bits throws', () => {
   assert.throws(() => buildMaskConstants({
     groupBits: { 'DJ Lights': 0x01, 'DJ_Lights': 0x02 },

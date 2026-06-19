@@ -56,7 +56,13 @@ export function buildMaskConstants({ groupBits = {}, viewMasks = [] }) {
     entries.push({ name: group, value: bit, origin: 'group' });
   }
   for (const vm of viewMasks) {
-    if (vm && typeof vm.name === 'string' && Number.isInteger(vm.bit)) {
+    // Skip bit-free (Tier-A) views: they carry `bit: 0` (membership lives in
+    // the host MaskRegistry, not the per-pixel viewMask word). Injecting them
+    // as `var MASK_X = 0;` would make `viewMask & MASK_X` silently false — the
+    // exact silent-zero this module forbids (codex P0). Omitting them makes a
+    // raw MASK_X reference fail LOUDLY as unknown, steering authors to the
+    // correct API for bit-free views: `inView("X")`.
+    if (vm && typeof vm.name === 'string' && Number.isInteger(vm.bit) && vm.bit !== 0) {
       const inline = vm.word === 1;
       entries.push({ name: vm.name, value: vm.bit, inline, origin: 'preset' });
     }
