@@ -95,7 +95,7 @@ if (flag('regen')) {
 
   // Forward only the gen_variations pass-through flags the operator actually set.
   const passthrough = [];
-  for (const name of ['model', 'seconds', 'fps', 'pattern']) {
+  for (const name of ['model', 'models', 'seconds', 'fps', 'pattern']) {
     const v = arg(name);
     if (v !== undefined) passthrough.push('--' + name, v);
   }

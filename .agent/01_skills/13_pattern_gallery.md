@@ -406,10 +406,18 @@ clip with no variation segment counts as `static`, so the pre-existing bare
 
 ### Gallery UX
 
-One card per pattern (as before) with a small **Static | Sound** toggle; the
-card's main tap defaults to **Sound** when present, else Static, else the bare
-clip. List/grid still scope to the active rig first, then pick the variation.
-`/api/list` additionally exposes `variation` per clip (additive).
+One card per pattern (as before) with a small **Static | Sound** toggle.
+**Opening a pattern** (card tap or grid tile) lands on a **combined view** that
+shows BOTH the Static and the Sound clip **side by side**, each labelled, with a
+`Both | Static | Sound` switch (default Both) — so you never get stuck on one
+variation. The raw single clips are served chrome-free at `/raw/<name>` and are
+what the grid thumbnails and `/compare` panes embed. List/grid still scope to
+the active rig first. `/api/list` additionally exposes `variation` per clip.
+
+**Both rigs by default.** `gen_variations` (and the launcher's `--regen`) render
+every pattern on **test_bench AND titanic** by default, so the model picker has
+both rigs' Static/Sound clips out of the box. `--model <one>` forces a single
+rig; `--models a,b,c` an explicit set.
 
 ### Spec parser — `tools/audio_mod_spec.mjs`
 

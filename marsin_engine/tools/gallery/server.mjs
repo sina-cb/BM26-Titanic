@@ -858,7 +858,8 @@ ${THEME_CSS}
     const md = (it.fallback
       ? '<span class="md fb">(test_bench)</span>'
       : (it.model ? '<span class="md">' + it.model + '</span>' : '')) + vtag;
-    const src = '/w/' + encodeURIComponent(it.name) + MODEL_QS;
+    // Thumbnail = raw clip (no chrome); tapping the tile opens the combined /w/ view.
+    const src = '/raw/' + encodeURIComponent(it.name) + MODEL_QS;
     a.innerHTML =
       '<div class="frame">' +
         '<iframe loading="lazy" data-src="' + src + '" title="' + it.label + '"></iframe>' +
@@ -922,7 +923,7 @@ function comparePage(a, b, activeModel) {
     }
     return `<div class="pane">` +
       `<div class="ph">${esc(name)}</div>` +
-      `<iframe src="/w/${encodeURIComponent(name)}${mqs}" title="${esc(name)}"></iframe></div>`;
+      `<iframe src="/raw/${encodeURIComponent(name)}${mqs}" title="${esc(name)}"></iframe></div>`;
   };
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
@@ -1174,48 +1175,126 @@ ${THEME_CSS}
 // ---------------------------------------------------------------------------
 // Widget page: the published clip with a sticky bar + prev/next nav.
 // ---------------------------------------------------------------------------
-function widgetPage(name, activeModel) {
+// Raw published widget HTML (no chrome) — embedded by the combined pattern
+// view, the grid thumbnails, and compare. Kept separate from /w/ so those
+// surfaces get the bare animating clip, not the full Static-vs-Sound page.
+function rawWidget(name) {
   const file = path.join(WIDGETS_DIR, name + '.html');
-  let body;
   try {
-    body = fs.readFileSync(file, 'utf8');
+    return fs.readFileSync(file, 'utf8');
   } catch {
     return null;
   }
-  // Prev/next over the number-sorted list so stepping through a band is easy.
-  const items = listWidgets().slice().sort(byNumber);
-  const idx = items.findIndex((it) => it.name === name);
-  const prev = idx > 0 ? items[idx - 1].name : '';
-  const next = idx >= 0 && idx < items.length - 1 ? items[idx + 1].name : '';
-  // <!-- BEGIN model-select -->
-  // Keep the operator's chosen rig as they walk clips and return to the gallery.
-  const mqs = activeModel ? '?model=' + encodeURIComponent(activeModel) : '';
-  const modelTag = activeModel
-    ? `<span style="font-size:11px;color:#bfeede;background:#173026;border:1px solid #2f6a4f;` +
-      `border-radius:999px;padding:2px 8px;white-space:nowrap;">${esc(activeModel)}</span>`
-    : '';
-  // <!-- END model-select -->
-  const navBtn = (target, sym, title) => target
-    ? `<a href="/w/${encodeURIComponent(target)}${mqs}" title="${esc(title)}" ` +
-      `style="color:#9bd;text-decoration:none;font-size:18px;padding:0 6px;">${sym}</a>`
-    : `<span style="color:#33333c;font-size:18px;padding:0 6px;">${sym}</span>`;
-  // The published page is already a full self-contained document. Inject a
-  // sticky top bar right after <body> so review is one tap from the gallery.
-  const bar = `<div style="position:sticky;top:0;z-index:9999;display:flex;align-items:center;gap:10px;` +
-    `padding:10px 14px;background:#08080cE6;backdrop-filter:blur(8px);` +
-    `border-bottom:1px solid #1d1d26;font:14px/1 -apple-system,system-ui,sans-serif;color:#e6e9ee;">` +
-    `<a href="/${mqs}" style="color:#7cc;text-decoration:none;font-size:14px;">&larr; gallery</a>` +
-    `<span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>` +
-    modelTag +
-    navBtn(prev, '&#8249;', prev ? 'Prev: ' + prev : 'No previous') +
-    navBtn(next, '&#8250;', next ? 'Next: ' + next : 'No next') +
-    `</div>`;
-  if (/<body[^>]*>/i.test(body)) {
-    body = body.replace(/(<body[^>]*>)/i, `$1\n${bar}`);
-  } else {
-    body = bar + body;
+}
+
+// Combined pattern view served at /w/<name>: opening ANY clip shows BOTH the
+// STATIC and the SOUND variation for that pattern (same rig), side by side,
+// each in its own panel, with a Both | Static | Sound switch. This is what the
+// index card and grid "open" action land on, so the operator can always see and
+// compare both recordings from one page — the per-clip raw HTML is embedded from
+// /raw/<name>. A missing variation shows a clear "no clip" panel (fail visible).
+function widgetPage(name, activeModel) {
+  if (rawWidget(name) == null) return null;
+  const all = listWidgets();
+  const known = modelNameSet();
+  const meta = all.find((it) => it.name === name) || parseName(name, known);
+  const family = meta.family;
+  const model = meta.model;             // '' = default rig (test_bench)
+
+  // The two variation clips for THIS pattern on THIS rig. Prefer the explicit
+  // __static / __sound clip; fall back to a bare/legacy clip as static.
+  const sibs = all.filter((it) => it.family === family && it.model === model);
+  const pickVar = (vv) => sibs.filter((s) => s.variation === vv)
+    .sort((a, b) => b.name.length - a.name.length)[0] || null;
+  const staticClip = pickVar('static');
+  const soundClip = pickVar('sound');
+
+  // Family-level prev/next within the SAME rig (one lead per family, sound-led).
+  const rank = (v) => (v === 'sound' ? 2 : v === 'static' ? 1 : 0);
+  const leadByFam = new Map();
+  for (const it of all) {
+    if (it.model !== model) continue;
+    const cur = leadByFam.get(it.family);
+    if (!cur || rank(it.variation) > rank(cur.variation)) leadByFam.set(it.family, it);
   }
-  return body;
+  const leads = [...leadByFam.values()].sort(byNumber);
+  const idx = leads.findIndex((l) => l.family === family);
+  const prev = idx > 0 ? leads[idx - 1] : null;
+  const next = idx >= 0 && idx < leads.length - 1 ? leads[idx + 1] : null;
+
+  const mqs = activeModel ? '?model=' + encodeURIComponent(activeModel) : '';
+  const modelTag = `<span class="tag">${esc(model || DEFAULT_MODEL)}</span>`;
+  const navBtn = (t, sym, title) => t
+    ? `<a class="nav" href="/w/${encodeURIComponent(t.name)}${mqs}" title="${esc(title)}">${sym}</a>`
+    : `<span class="nav off">${sym}</span>`;
+  const panel = (clip, vlabel, sub) => {
+    const v = vlabel.toLowerCase();
+    return clip
+      ? `<section class="panel" data-var="${v}">` +
+          `<h3>${vlabel}<span>${esc(sub)}</span></h3>` +
+          `<iframe src="/raw/${encodeURIComponent(clip.name)}${mqs}" title="${esc(clip.name)}" loading="eager"></iframe>` +
+        `</section>`
+      : `<section class="panel dis" data-var="${v}">` +
+          `<h3>${vlabel}<span>${esc(sub)}</span></h3>` +
+          `<div class="none">no ${v} clip yet — run <code>gen_variations</code></div>` +
+        `</section>`;
+  };
+
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>${esc(family)} — Static vs Sound</title>
+<style>
+  :root{color-scheme:dark;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:#08080c;color:#e6e9ee;font:14px/1.4 -apple-system,system-ui,sans-serif;}
+  .bar{position:sticky;top:0;z-index:9999;display:flex;align-items:center;gap:10px;padding:10px 14px;
+    background:#08080cE6;backdrop-filter:blur(8px);border-bottom:1px solid #1d1d26;}
+  .bar a.home{color:#7cc;text-decoration:none;font-size:14px;}
+  .bar .nm{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .tag{font-size:11px;color:#bfeede;background:#173026;border:1px solid #2f6a4f;border-radius:999px;padding:2px 8px;white-space:nowrap;}
+  .nav{color:#9bd;text-decoration:none;font-size:18px;padding:0 6px;}
+  .nav.off{color:#33333c;}
+  .seg{display:flex;margin:10px 14px 0;border:1px solid #2f6a4f;border-radius:999px;overflow:hidden;width:max-content;}
+  .seg button{appearance:none;border:0;background:#10141a;color:#9bd;font:13px/1 inherit;padding:7px 16px;cursor:pointer;}
+  .seg button.on{background:#173026;color:#bfeede;}
+  .panels{display:flex;flex-wrap:wrap;gap:12px;padding:12px 14px 24px;}
+  .panel{flex:1 1 380px;min-width:280px;background:#0d0f14;border:1px solid #1d1d26;border-radius:12px;overflow:hidden;}
+  .panel h3{margin:0;padding:9px 12px;font-size:13px;font-weight:600;color:#cfe;border-bottom:1px solid #1d1d26;background:#10141a;}
+  .panel h3 span{font-weight:400;color:#789;font-size:11px;margin-left:8px;}
+  .panel iframe{width:100%;height:320px;border:0;display:block;background:#000;}
+  .panel.dis .none{padding:48px 16px;text-align:center;color:#556;}
+  .panel.dis code{color:#789;}
+  body.m-static .panel[data-var=sound]{display:none;}
+  body.m-sound .panel[data-var=static]{display:none;}
+</style></head>
+<body class="m-both">
+<div class="bar">
+  <a class="home" href="/${mqs}">&larr; gallery</a>
+  <span class="nm">${esc(meta.label || family)}</span>
+  ${modelTag}
+  ${navBtn(prev, '&#8249;', prev ? 'Prev: ' + prev.family : 'No previous')}
+  ${navBtn(next, '&#8250;', next ? 'Next: ' + next.family : 'No next')}
+</div>
+<div class="seg" id="seg">
+  <button data-m="both" class="on">Both</button>
+  <button data-m="static">Static</button>
+  <button data-m="sound">Sound</button>
+</div>
+<div class="panels">
+  ${panel(staticClip, 'Static', 'no audio')}
+  ${panel(soundClip, 'Sound', soundClip ? 'synthetic audio' : '')}
+</div>
+<script>
+  var seg = document.getElementById('seg');
+  seg.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button') : null;
+    if (!b) return;
+    document.body.className = 'm-' + b.dataset.m;
+    for (var i = 0; i < seg.children.length; i++) seg.children[i].classList.toggle('on', seg.children[i] === b);
+  });
+</script>
+</body></html>`;
 }
 
 const server = http.createServer((req, res) => {
@@ -1276,6 +1355,16 @@ const server = http.createServer((req, res) => {
       JSON.stringify({ models: listModels(), default: DEFAULT_MODEL }));
   }
   // <!-- END model-select -->
+
+  // Raw single-clip HTML (no chrome) — embedded by the combined /w/ view, the
+  // grid thumbnails, and compare panes.
+  if (pathname.startsWith('/raw/')) {
+    const name = pathname.slice('/raw/'.length);
+    if (!SAFE_NAME.test(name)) return notFound(res, 'Bad pattern name.');
+    const raw = rawWidget(name);
+    if (raw == null) return notFound(res, 'No such pattern: ' + name);
+    return send(res, 200, 'text/html; charset=utf-8', raw);
+  }
 
   if (pathname.startsWith('/w/')) {
     const name = pathname.slice('/w/'.length);

@@ -33,11 +33,16 @@
   "__" in --name, so we publish under a SAFE temp name and rename the widget.
 
   Usage (run from marsin_engine/):
-    node tools/gallery/gen_variations.mjs                 # all patterns/[0-9]*_*.js
-    node tools/gallery/gen_variations.mjs --pattern 27    # just NN_* (e.g. 27_swipe)
+    node tools/gallery/gen_variations.mjs                 # ALL patterns × test_bench + titanic
+    node tools/gallery/gen_variations.mjs --pattern 27    # just NN_* (e.g. 27_swipe), both rigs
     node tools/gallery/gen_variations.mjs --pattern 24,25,27
-    node tools/gallery/gen_variations.mjs --model titanic # render on a non-default rig
+    node tools/gallery/gen_variations.mjs --model titanic # a SINGLE non-default rig
+    node tools/gallery/gen_variations.mjs --models test_bench,titanic,summer_camp_dome
     node tools/gallery/gen_variations.mjs --seconds 10 --fps 14
+
+  MODELS: by default we render BOTH test_bench and titanic so the gallery ships
+  with both rigs. --model <one> forces a single rig; --models a,b,c an explicit
+  set. Each (pattern, model) yields a STATIC and (if it has a block) a SOUND clip.
 
   FAIL LOUD: a compile/render error STOPS the run (codex P0 — never skip
   silently). A pattern with NO AUDIO_MODULATION_V1 block gets its STATIC clip
@@ -66,11 +71,30 @@ const home = process.env.USERPROFILE || process.env.HOME;
 const TMP_DIR = path.join(home, 'tmp', 'gen_variations');
 
 const DEFAULT_MODEL = 'test_bench';
-const model = arg('model', DEFAULT_MODEL);
-if (!/^[A-Za-z0-9._-]+$/.test(model) || model.includes('__')) {
-  console.error('error: --model must be a bare model name (no "__"), got: ' + model);
-  process.exit(1);
+// By DEFAULT we render every pattern on BOTH the bench and the ship so the
+// gallery ships with both rigs out of the box. Override with --model <one> for
+// a single rig, or --models a,b,c for an explicit set.
+const DEFAULT_MODELS = ['test_bench', 'titanic'];
+function resolveModels() {
+  const single = arg('model');
+  const list = arg('models');
+  let models;
+  if (single !== undefined) models = [single];
+  else if (list !== undefined) models = list.split(',').map((s) => s.trim()).filter(Boolean);
+  else models = DEFAULT_MODELS.slice();
+  if (!models.length) {
+    console.error('error: no models resolved (empty --models?)');
+    process.exit(1);
+  }
+  for (const m of models) {
+    if (!/^[A-Za-z0-9._-]+$/.test(m) || m.includes('__')) {
+      console.error('error: model must be a bare model name (no "__"), got: ' + m);
+      process.exit(1);
+    }
+  }
+  return models;
 }
+const models = resolveModels();
 const seconds = arg('seconds', '10');
 const fps = arg('fps', '14');
 const patternFilter = arg('pattern'); // e.g. "27" or "24,25,27"
@@ -99,7 +123,7 @@ function listPatterns() {
 //   variation : 'static' | 'sound'
 //   modArgs   : extra harness flags (['--synth','silence'] or sound spec args)
 // Returns the final widget basename.
-function makeClip(patternFile, patternBase, variation, harnessFlags) {
+function makeClip(patternFile, patternBase, model, variation, harnessFlags) {
   const capture = path.join(TMP_DIR, patternBase + '__' + model + '__' + variation + '.json');
   const harnessArgs = [
     HARNESS,
@@ -145,35 +169,37 @@ fs.mkdirSync(TMP_DIR, { recursive: true });
 fs.mkdirSync(WIDGETS_DIR, { recursive: true });
 
 const patterns = listPatterns();
-console.log('gen_variations: ' + patterns.length + ' pattern(s), model=' + model +
-  ', ' + seconds + 's @ ' + fps + 'fps');
+console.log('gen_variations: ' + patterns.length + ' pattern(s) × ' + models.length +
+  ' model(s) [' + models.join(', ') + '], ' + seconds + 's @ ' + fps + 'fps');
 console.log('');
 
 const summary = [];
 for (const file of patterns) {
   const base = file.replace(/\.js$/, '');
   const src = fs.readFileSync(path.join(PATTERNS_DIR, file), 'utf8');
-  let spec = null;
   // parseAudioModSpec throws on a MALFORMED block (fail loud); a missing block
   // is null (we still do the static clip + report no-block).
-  spec = parseAudioModSpec(src, base);
+  const spec = parseAudioModSpec(src, base);
 
   console.log('── ' + base + ' ' + '─'.repeat(Math.max(0, 40 - base.length)));
 
-  // STATIC clip — silence, no modulation.
-  const staticName = makeClip(file, base, 'static', ['--synth', 'silence']);
-  console.log('  static -> /w/' + staticName);
+  for (const model of models) {
+    const tag = '[' + model + '] ';
+    // STATIC clip — silence, no modulation.
+    const staticName = makeClip(file, base, model, 'static', ['--synth', 'silence']);
+    console.log('  ' + tag + 'static -> /w/' + staticName);
 
-  // SOUND clip — only when the pattern has an AUDIO_MODULATION_V1 block.
-  let soundName = null;
-  if (spec) {
-    soundName = makeClip(file, base, 'sound', ['--synth', spec.synth, '--mod', spec.modString]);
-    console.log('  sound  -> /w/' + soundName + '   (synth=' + spec.synth + ')');
-  } else {
-    console.log('  sound  -> SKIPPED (no AUDIO_MODULATION_V1 block)');
+    // SOUND clip — only when the pattern has an AUDIO_MODULATION_V1 block.
+    let soundName = null;
+    if (spec) {
+      soundName = makeClip(file, base, model, 'sound', ['--synth', spec.synth, '--mod', spec.modString]);
+      console.log('  ' + tag + 'sound  -> /w/' + soundName + '   (synth=' + spec.synth + ')');
+    } else {
+      console.log('  ' + tag + 'sound  -> SKIPPED (no AUDIO_MODULATION_V1 block)');
+    }
+
+    summary.push({ base, model, static: true, sound: !!soundName, synth: spec ? spec.synth : null, noBlock: !spec });
   }
-
-  summary.push({ base, static: true, sound: !!soundName, synth: spec ? spec.synth : null, noBlock: !spec });
   console.log('');
 }
 
@@ -188,10 +214,10 @@ for (const s of summary) {
     s.static ? 'static✓' : 'static✗',
     s.sound ? ('sound✓(' + s.synth + ')') : (s.noBlock ? 'sound—(no-block)' : 'sound✗'),
   ].join('  ');
-  console.log('  ' + s.base.padEnd(34) + flags);
+  console.log('  ' + (s.base + ' @' + s.model).padEnd(44) + flags);
 }
 console.log('----------------------------------------');
-console.log('  ' + summary.length + ' pattern(s): ' + staticOk + ' static, ' + soundOk +
-  ' sound, ' + noBlock + ' no-block');
+console.log('  ' + patterns.length + ' pattern(s) × ' + models.length + ' model(s) = ' +
+  summary.length + ' renders: ' + staticOk + ' static, ' + soundOk + ' sound, ' + noBlock + ' no-block');
 console.log('  widgets dir: ' + WIDGETS_DIR);
 console.log('  serve: node tools/gallery/server.mjs   then open /');
