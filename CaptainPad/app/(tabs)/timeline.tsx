@@ -110,9 +110,21 @@ export default function TimelineScreen() {
   const [draft, setDraft] = useState<ShowPlan | null>(null);
   const [draftOverview, setDraftOverview] = useState<TimelineOverview | null>(null);
   const [draftVersion, setDraftVersion] = useState(0);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  // Validation (HTTP 400) error — BLOCKS save. Tagged with the draftVersion it
+  // belongs to so a stale late response can't stick after a newer draft.
+  const [previewError, setPreviewError] = useState<{ msg: string; version: number } | null>(null);
+  // Transport failure (offline / timeout / 5xx) — does NOT block save; the
+  // operator may still write a structurally-valid draft while the engine blips.
+  const [previewTransportError, setPreviewTransportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
+
+  // Latest draft version that has been requested — used to discard out-of-order
+  // preview responses (a slow v1 must not overwrite a newer v2).
+  const latestDraftVersionRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => { latestDraftVersionRef.current = draftVersion; }, [draftVersion]);
 
   // ── UI sheet state ──
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
@@ -150,23 +162,49 @@ export default function TimelineScreen() {
   // ── Debounced draft preview (POST /timeline/overview) ──
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!draft) { setDraftOverview(null); setPreviewError(null); return; }
+    if (!draft) {
+      setDraftOverview(null);
+      setPreviewError(null);
+      setPreviewTransportError(null);
+      return;
+    }
     if (previewTimer.current) clearTimeout(previewTimer.current);
+    // Capture the version this request belongs to BEFORE the await so an
+    // out-of-order response can be discarded (fix: preview race).
+    const v = draftVersion;
+    const controller = new AbortController();
     previewTimer.current = setTimeout(async () => {
-      const r = await previewTimelineOverview(draft);
+      const r = await previewTimelineOverview(draft, controller.signal);
+      // Bail if a newer draft has since superseded this one, or we unmounted.
+      if (!mountedRef.current || v !== latestDraftVersionRef.current) return;
       if (r.ok && r.data) {
         setDraftOverview(r.data);
         setPreviewError(null);
+        setPreviewTransportError(null);
+      } else if (r.status === 400) {
+        // Schema-invalid draft — BLOCK save. Codex P0: surface the engine's
+        // validation error verbatim, loudly. Tagged with this draft version.
+        setPreviewError({ msg: r.error || 'Draft invalid', version: v });
+        setPreviewTransportError(null);
       } else {
-        // Codex P0 — surface the engine's validation error verbatim, loudly.
-        setPreviewError(r.error || 'Draft preview failed');
+        // Transport failure (offline / timeout / 5xx) — do NOT block save;
+        // the last good preview (if any) stays on screen.
+        setPreviewTransportError(r.error || 'Could not reach the engine to preview the draft');
       }
     }, PREVIEW_DEBOUNCE_MS);
-    return () => { if (previewTimer.current) clearTimeout(previewTimer.current); };
+    return () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+      controller.abort();
+    };
   }, [draft, draftVersion]);
 
   // The overview the strip / day editor render from.
   const overview = draft ? draftOverview : liveOverview;
+
+  // SAVE is blocked ONLY by a schema-validation (HTTP 400) error that belongs
+  // to the CURRENT draft version — never by a transient transport failure, and
+  // never by a stale error from an older draft (fix: sticky previewError).
+  const saveBlocked = !!previewError && previewError.version === draftVersion;
 
   // Today's festival index for highlighting (from the overview's dates vs now).
   const todayIndex = useMemo(() => {
@@ -189,23 +227,31 @@ export default function TimelineScreen() {
     setSaveOk(null);
   }, []);
 
-  const loadPlanIntoDraft = useCallback(async (name: string) => {
+  // Returns true when a draft was actually loaded onto the 8-day grid; false
+  // when the load failed or the plan has no festival span (the caller must
+  // NOT open the day editor in that case — fix: half-load + dangling day).
+  const loadPlanIntoDraft = useCallback(async (name: string): Promise<boolean> => {
     const r = await fetchTimelinePlan(name);
     if (!r.ok || !r.data) {
       setActionError(r.error || `Could not load plan ${name}`);
-      return;
+      return false;
     }
-    // Force schemaVersion 2 shape for the maker (engine normalises v1→v2 on
-    // read, but be defensive so the editor's day-pick UI has a festival).
+    // The maker's day grid math needs a festival span (engine normalises
+    // v1→v2 on read, but a festival-less plan still can't be edited on the
+    // 8-day grid). Refuse the load loudly rather than half-load a broken grid.
     const plan = r.data;
     if (!plan.festival) {
-      setActionError(`Plan "${name}" has no festival span — duplicate it from the BRC template to edit on the 8-day grid.`);
+      setActionError(`This plan has no festival span — duplicate from the BRC template to edit on the 8-day grid.`);
+      setPlanPickerOpen(false);
+      return false;
     }
     setDraft(clonePlan(plan));
     setDraftVersion((v) => v + 1);
     setSaveOk(null);
     setActionError(null);
+    setPreviewTransportError(null);
     setPlanPickerOpen(false);
+    return true;
   }, []);
 
   const handleNewTemplate = useCallback(() => {
@@ -213,6 +259,7 @@ export default function TimelineScreen() {
     setDraftVersion((v) => v + 1);
     setSaveOk(null);
     setActionError(null);
+    setPreviewTransportError(null);
     setPlanPickerOpen(false);
   }, []);
 
@@ -222,6 +269,7 @@ export default function TimelineScreen() {
     setDraft(duplicatePlan(r.data, `${name}_copy`.slice(0, 64)));
     setDraftVersion((v) => v + 1);
     setActionError(null);
+    setPreviewTransportError(null);
     setPlanPickerOpen(false);
   }, []);
 
@@ -247,6 +295,7 @@ export default function TimelineScreen() {
     setDraft(null);
     setDraftOverview(null);
     setPreviewError(null);
+    setPreviewTransportError(null);
     setSaveOk(null);
     setSelectedDay(null);
   }, []);
@@ -353,13 +402,19 @@ export default function TimelineScreen() {
             <IconSymbol name="wifi.slash" size={24} color={C.error} />
             <View style={{ flex: 1 }}>
               <Text style={styles.offlineTitle}>TIMELINE OFFLINE</Text>
-              <Text style={styles.offlineBody}>{error || 'CaptainPad cannot reach the engine timeline. It keeps firing cues on its own; reconnecting…'}</Text>
+              {/* Friendly explanation is primary; the raw error is a secondary
+                  detail so the operator still sees it but isn't led by it. */}
+              <Text style={styles.offlineBody}>
+                CaptainPad can&apos;t reach the engine timeline; it keeps firing cues on its own — reconnecting…
+              </Text>
+              {error ? <Text style={styles.offlineDetail}>{error}</Text> : null}
             </View>
           </View>
         ) : null}
         {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
         {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
-        {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError}`} tone="error" /> : null}
+        {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError.msg}`} tone="error" /> : null}
+        {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (you can still SAVE a valid draft)`} tone="error" /> : null}
         {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
         {/* ── Live controls ── */}
@@ -424,8 +479,8 @@ export default function TimelineScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={handleSave}
-                  disabled={!!previewError}
-                  style={[styles.miniBtn, !!previewError && { opacity: 0.4 }]}
+                  disabled={saveBlocked}
+                  style={[styles.miniBtn, saveBlocked && { opacity: 0.4 }]}
                   accessibilityLabel="Save draft plan"
                 >
                   <Text style={styles.miniBtnText}>SAVE</Text>
@@ -441,8 +496,10 @@ export default function TimelineScreen() {
               onSelectDay={(idx) => {
                 // The day editor needs a draft to edit. If we're viewing the
                 // live plan, load it into the draft first so taps mutate a copy.
+                // Only open the day editor if the load actually succeeded —
+                // a failed / festival-less load must not leave a dangling day.
                 if (!draft && state?.activePlan) {
-                  loadPlanIntoDraft(state.activePlan).then(() => setSelectedDay(idx));
+                  loadPlanIntoDraft(state.activePlan).then((ok) => { if (ok) setSelectedDay(idx); });
                 } else if (draft) {
                   setSelectedDay(idx);
                 } else {
@@ -649,6 +706,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     },
     offlineTitle: { fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 14, letterSpacing: 0.8 },
     offlineBody: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12, marginTop: 4 },
+    offlineDetail: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 10, marginTop: 4, opacity: 0.7 },
     actionErrorBanner: {
       backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12,
     },

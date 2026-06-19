@@ -229,3 +229,88 @@ test('setAutopilotEnabled(false) → controller manual, autopilot off', async ()
   assert.equal(r.controller, 'manual');
   assert.ok(calls.setAutopilot.some((c) => c.state && c.state.active === false), 'disable should turn deck autopilot off');
 });
+
+// ── Fix 5: autopilotOff disarms the BASELINE's configured target ──────────────
+
+// A plan whose autopilot baseline targets ALL channels (deck + mixer). A
+// program preempting it must disarm autopilot on deck AND mixer, not just deck.
+function makeAllTargetPlan() {
+  const plan = makePlan();
+  plan.autopilot.target = { channel: 'all', id: null };
+  return plan;
+}
+
+function setupAllTarget({ now } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tlsvc-all-'));
+  const sceneDir = path.join(dir, 'scene_timeline');
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(sceneDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  saveShowPlan(makeAllTargetPlan(), path.join(sceneDir, 'test_plan.yaml'));
+
+  const { deps, calls } = makeDeps();
+  // Override listMixerChannelIds so 'all' resolves to deck + one mixer channel.
+  deps.listMixerChannelIds = () => ['mix_a'];
+  const svc = new TimelineService({
+    scene: 'summer_camp_dome',
+    sceneDir,
+    stateDir,
+    getMood: () => ({ party: 0, value: 0 }),
+    deps,
+    broadcast: () => {},
+    config: {
+      enabled: true, activePlan: 'test_plan', tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => (now !== undefined ? now : Date.UTC(2026, 7, 30, 2, 0, 0)),
+  });
+  return { svc, calls };
+}
+
+test('program preempting an all-channel baseline disarms deck AND mixer (Fix 5)', async () => {
+  const { svc, calls } = setupAllTarget();
+  await svc.start();
+  svc.stop();
+  calls.setAutopilot.length = 0;
+
+  await svc.fireCue('c_show'); // program cue → autopilotOff
+
+  const offTargets = calls.setAutopilot
+    .filter((c) => c.state && c.state.active === false)
+    .map((c) => (c.target.kind === 'deck' ? 'deck' : `mixer:${c.target.id}`));
+  assert.ok(offTargets.includes('deck'), `expected deck disarm, got ${JSON.stringify(offTargets)}`);
+  assert.ok(offTargets.includes('mixer:mix_a'), `expected mixer disarm, got ${JSON.stringify(offTargets)}`);
+});
+
+// ── Fix 8: hold() updates controller immediately ──────────────────────────────
+
+test('hold() sets controller to manual immediately (Fix 8)', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  assert.equal(svc.state.controller, 'autopilot');
+  svc.hold(5);
+  assert.equal(svc.state.controller, 'manual');
+});
+
+// ── Fix 9: activatePlan clears stale fires/errors ─────────────────────────────
+
+test('activatePlan clears recentFires / wouldFire / cueErrors (Fix 9)', async () => {
+  const { svc, sceneDir } = setup();
+  await svc.start();
+  svc.stop();
+  // Seed stale history.
+  svc.recentFires.push({ cueId: 'stale', atMs: 0, reason: 'x' });
+  svc.wouldFire.push({ cueId: 'stale', reason: 'x', controller: 'autopilot', atMs: 0 });
+  svc.cueErrors.stale = 'boom';
+
+  // Write a second plan and activate it.
+  const authored = makePlan();
+  authored.name = 'authored_plan';
+  saveShowPlan(authored, path.join(sceneDir, 'authored_plan.yaml'));
+  await svc.activatePlan('authored_plan');
+
+  assert.ok(!svc.recentFires.some((f) => f.cueId === 'stale'), 'recentFires cleared');
+  assert.ok(!svc.wouldFire.some((f) => f.cueId === 'stale'), 'wouldFire cleared');
+  assert.equal(svc.cueErrors.stale, undefined, 'cueErrors cleared');
+});

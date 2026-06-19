@@ -75,6 +75,17 @@ test('cueAppliesOn: date-string array matches today in tz', () => {
   assert.equal(cueAppliesOn(cue, plan, localNoonUtc(2026, 9, 2)), false);
 });
 
+test('cueAppliesOn: no-festival plan rejects BOTH index and date forms (Fix 10)', () => {
+  const plan = brcPlan();
+  plan.festival = null;
+  const idxCue = { days: [0], trigger: { type: 'clock', at: '20:00' } };
+  const dateCue = { days: ['2026-08-30'], trigger: { type: 'clock', at: '20:00' } };
+  // Both must be false — no asymmetry where a date-array applies but an index
+  // array does not.
+  assert.equal(cueAppliesOn(idxCue, plan, localNoonUtc(2026, 8, 30)), false);
+  assert.equal(cueAppliesOn(dateCue, plan, localNoonUtc(2026, 8, 30)), false);
+});
+
 // ── applicableCues ────────────────────────────────────────────────────────────
 
 test('applicableCues filters by festival day', () => {

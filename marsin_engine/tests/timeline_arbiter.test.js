@@ -100,6 +100,26 @@ test('program expiry emits resume + controller autopilot', () => {
   assert.equal(r.actions[0].action.type, '__resume_autopilot__');
 });
 
+test('program expiry + mood fire same tick → [resume, mood], mood wins (Fix 4)', () => {
+  const plan = makePlan();
+  const state = baseState({
+    controller: 'program',
+    activeProgram: { cueId: 'c_program', startedAtMs: NOW - 600000, untilMs: NOW - 1000 },
+  });
+  const r = arbitrate({
+    now: NOW, plan, state,
+    fires: [{ cueId: 'c_mood', reason: 'mood' }],
+    dayTimes: DAY_TIMES,
+  });
+  assert.equal(r.controller, 'autopilot');
+  assert.equal(r.state.activeProgram, null);
+  // Resume MUST come first so the baseline re-arms, then the mood swap lands on
+  // top and wins (a server applies actions in order).
+  assert.equal(r.actions.length, 2);
+  assert.equal(r.actions[0].cueId, '__autopilot_resume__');
+  assert.equal(r.actions[1].cueId, 'c_mood');
+});
+
 test('program expiry with autopilot disabled → manual, no resume', () => {
   const plan = makePlan();
   const state = baseState({

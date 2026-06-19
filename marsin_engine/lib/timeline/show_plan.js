@@ -213,6 +213,14 @@ function validateLocation(loc) {
   if (lat < -90 || lat > 90) throw new Error(`plan.location.lat must be in [-90, 90], got ${lat}`);
   if (lon < -180 || lon > 180) throw new Error(`plan.location.lon must be in [-180, 180], got ${lon}`);
   const tz = assertString(loc.tz, 'plan.location.tz');
+  // A bad zone passes the string check but throws RangeError on every tick
+  // (Intl with an invalid timeZone) → a silent show dead-stop. Probe it now so
+  // an authoring error fails loud at validation, not at 19:42 on the playa.
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+  } catch (_) {
+    throw new Error(`plan.location.tz "${tz}" is not a valid IANA time zone`);
+  }
   let elevationM = 0;
   if (loc.elevationM !== undefined) elevationM = assertNumber(loc.elevationM, 'plan.location.elevationM');
   return { lat, lon, tz, elevationM };
@@ -331,21 +339,26 @@ function validateAction(action, label, lookNames) {
         disable: validateIdList(action.disable !== undefined ? action.disable : [], `${label}.disable`),
       };
     case 'effect': {
+      // fire-now uses the scheduled task's OWN preset; presetId is OPTIONAL and
+      // params are NOT supported in v1 (the runtime cannot pass them through).
+      // Accepting params and dropping them silently would violate codex P0 — so
+      // we throw loud here rather than honor a field we can't apply.
       const out = {
         type: 'effect',
         effectId: assertString(action.effectId, `${label}.effectId`),
       };
-      if (typeof action.presetId === 'string') {
-        if (!action.presetId.trim()) throw new Error(`${label}.presetId string must be non-empty`);
-        out.presetId = action.presetId;
-      } else if (typeof action.presetId === 'number' && !Number.isNaN(action.presetId)) {
-        out.presetId = action.presetId;
-      } else {
-        throw new Error(`${label}.presetId must be a string or number`);
+      if (action.presetId !== undefined) {
+        if (typeof action.presetId === 'string') {
+          if (!action.presetId.trim()) throw new Error(`${label}.presetId string must be non-empty`);
+          out.presetId = action.presetId;
+        } else if (typeof action.presetId === 'number' && !Number.isNaN(action.presetId)) {
+          out.presetId = action.presetId;
+        } else {
+          throw new Error(`${label}.presetId must be a string or number`);
+        }
       }
       if (action.params !== undefined) {
-        if (!isPlainObject(action.params)) throw new Error(`${label}.params must be an object`);
-        out.params = action.params;
+        throw new Error(`${label}.params is not supported in v1`);
       }
       return out;
     }
@@ -477,6 +490,11 @@ export function validateShowPlan(plan) {
   const autopilot = validatePlanAutopilot(plan.autopilot, 'plan.autopilot');
 
   if (!Array.isArray(plan.cues)) throw new Error('plan.cues must be an array');
+  // Bound the plan: buildOverview is O(days × cues) with per-cue Intl, so a huge
+  // plan can stall the engine's event loop (a 10k-cue POST froze /status ~32s).
+  if (plan.cues.length > 512) {
+    throw new Error(`plan has too many cues (max 512), got ${plan.cues.length}`);
+  }
   const seenIds = new Set();
   const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds, festival));
 

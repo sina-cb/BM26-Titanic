@@ -108,7 +108,7 @@ export function buildOverview(plan, nowMs) {
     // Anchor the day at local noon so sun math + clock resolution land on the
     // intended calendar day in tz regardless of UTC offset.
     const dayNoonMs = dateClockToEpochMs(date, '12:00', tz);
-    const sunEvents = computeSunEvents({ lat, lon, date: new Date(dayNoonMs) });
+    const sunEvents = computeSunEvents({ lat, lon, date: new Date(dayNoonMs), tz });
 
     const sun = {};
     for (const name of OVERVIEW_SUN_EVENTS) {
@@ -275,7 +275,9 @@ export class TimelineService {
     if (this.sunCache.dayKey !== dayKey) {
       this.sunCache = {
         dayKey,
-        events: computeSunEvents({ lat: this.plan.location.lat, lon: this.plan.location.lon, date: new Date(now) }),
+        events: computeSunEvents({
+          lat: this.plan.location.lat, lon: this.plan.location.lon, date: new Date(now), tz,
+        }),
       };
     }
     return this.sunCache.events;
@@ -422,9 +424,10 @@ export class TimelineService {
         break;
       }
       case 'effect': {
+        // fire-now uses the scheduled task's OWN preset. params are rejected at
+        // validation (show_plan.js) so they can never reach here silently.
         await this.deps.fireScheduledTask(action.effectId);
         steps.push(`effect fire scheduled-task "${action.effectId}"`);
-        if (action.params) steps.push(`effect params ignored in v1: ${JSON.stringify(action.params)}`);
         break;
       }
       default:
@@ -457,9 +460,24 @@ export class TimelineService {
    * baseline, everything else is a normal cue action. Ported verbatim from the
    * companion's dispatchArbitratedAction, minus HTTP.
    */
+  /**
+   * Disarm engine autopilot on the BASELINE's configured target(s). A program
+   * preempting an all-channel (or mixer) baseline must turn autopilot OFF on the
+   * SAME channels the baseline armed — disarming only the deck would leave the
+   * mixer cycling underneath the program (docs/38 §14). Resolves the plan's
+   * autopilot.target the same way actions resolve targets.
+   */
+  async _disarmBaselineAutopilot() {
+    const ap = this.plan && this.plan.autopilot ? this.plan.autopilot : null;
+    const targets = await this._resolveTargets(ap ? ap.target : { channel: 'deck', id: null });
+    for (const target of targets) {
+      await this.deps.setAutopilot({ target, state: { active: false } });
+    }
+  }
+
   async _dispatchArbitratedAction(act, reason) {
     if (act.autopilotOff) {
-      await this.deps.setAutopilot({ target: { kind: 'deck' }, state: { active: false } });
+      await this._disarmBaselineAutopilot();
     }
     if (act.action && act.action.type === '__resume_autopilot__') {
       const result = await this._applyAutopilotBaseline();
@@ -554,7 +572,7 @@ export class TimelineService {
         const result = await this._dispatchCue(best.cue.id, 'catchUp');
         console.log(`  ⏪ [timeline] catchUp restored "${best.cue.id}": ${result.steps.join('; ')}`);
         if (programCaughtUp) {
-          await this.deps.setAutopilot({ target: { kind: 'deck' }, state: { active: false } });
+          await this._disarmBaselineAutopilot();
           this.state.controller = 'program';
         }
       } catch (e) {
@@ -781,6 +799,11 @@ export class TimelineService {
     this.activePlan = name;
     this.state.activePlan = name;
     this.state.firedToday = {};
+    // Stale fires/errors belong to the OUTGOING plan — clearing firedToday alone
+    // would leave the previous plan's history bleeding into the new plan's UI.
+    this.recentFires = [];
+    this.wouldFire = [];
+    this.cueErrors = {};
     await this._catchUp();
     this._broadcastState();
     return name;
@@ -802,6 +825,9 @@ export class TimelineService {
     const m = Number(minutes);
     if (!Number.isFinite(m) || m <= 0) throw new Error('minutes must be a number > 0');
     this.state.manualHoldUntilMs = this.nowFn() + m * 60000;
+    // A hold is operator takeover — reflect that in the controller immediately
+    // rather than letting it read stale (e.g. 'autopilot') until the next tick.
+    this.state.controller = 'manual';
     this._persistAndBroadcast();
     return { manualHoldUntilMs: this.state.manualHoldUntilMs };
   }
@@ -820,7 +846,7 @@ export class TimelineService {
       if (enabled) {
         await this._establishBaselineIfActive('operator');
       } else {
-        await this.deps.setAutopilot({ target: { kind: 'deck' }, state: { active: false } });
+        await this._disarmBaselineAutopilot();
         if (!this.state.activeProgram) this.state.controller = 'manual';
         this.lastError = null;
       }

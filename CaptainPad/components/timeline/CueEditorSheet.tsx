@@ -83,6 +83,17 @@ export function CueEditorSheet({
   const lookNames = Object.keys(plan.looks);
   const phaseNames = Object.keys(plan.phases);
 
+  type DaysMode = 'all' | 'this' | 'pick';
+
+  // Classify a saved `days` value into an initial segmented mode. A date-string
+  // array (e.g. ['2026-08-31']) has no grid representation, so we surface it as
+  // 'pick' (read-only) rather than clobbering it.
+  const initialDaysMode = (d: CueDays | undefined): DaysMode => {
+    if (d === 'all' || d === undefined) return 'all';
+    if (Array.isArray(d) && d.length === 1 && d[0] === dayIndex) return 'this';
+    return 'pick';
+  };
+
   // Working copy. Re-seeded each time the sheet opens with a different cue.
   const [kind, setKind] = useState<CueKind>('program');
   const [label, setLabel] = useState<string>('');
@@ -90,6 +101,9 @@ export function CueEditorSheet({
   const [action, setAction] = useState<CueAction>(defaultAction('look', lookNames[0] || null));
   const [holdMin, setHoldMin] = useState<number | null>(null);
   const [days, setDays] = useState<CueDays>('all');
+  // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
+  // from `days` on every render (deriving made "Pick…" snap back to "This day").
+  const [daysMode, setDaysModeState] = useState<DaysMode>('all');
   const [seedKey, setSeedKey] = useState<string>('');
 
   // Seed when the sheet opens / target cue changes. We key on cue id +
@@ -104,6 +118,7 @@ export function CueEditorSheet({
       setAction(initialCue.action);
       setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
       setDays(initialCue.days ?? 'all');
+      setDaysModeState(initialDaysMode(initialCue.days));
     } else {
       setKind('program');
       setLabel('');
@@ -111,30 +126,29 @@ export function CueEditorSheet({
       setAction(defaultAction('look', lookNames[0] || null));
       setHoldMin(null);
       setDays([dayIndex]); // new cue defaults to "this day"
+      setDaysModeState('this');
     }
   }
 
-  // ── Derived day-mode for the DAYS segmented ──
-  const daysMode: 'all' | 'this' | 'pick' =
-    days === 'all'
-      ? 'all'
-      : Array.isArray(days) && days.length === 1 && days[0] === dayIndex
-        ? 'this'
-        : 'pick';
+  // True when `days` holds date strings (no grid representation; read-only).
+  const isDateStringDays = Array.isArray(days) && days.some((d) => typeof d === 'string');
 
-  const setDaysMode = (mode: 'all' | 'this' | 'pick') => {
+  const setDaysMode = (mode: DaysMode) => {
+    setDaysModeState(mode);
     if (mode === 'all') setDays('all');
     else if (mode === 'this') setDays([dayIndex]);
     else {
-      // entering "pick": seed from current selection (numeric) or this day
-      const cur = Array.isArray(days) && days.every((d) => typeof d === 'number')
-        ? (days as number[])
-        : [dayIndex];
-      setDays(cur);
+      // entering "pick": keep an existing numeric/date selection; otherwise
+      // seed from this day so the grid opens with something selected.
+      if (Array.isArray(days) && days.length > 0) return; // preserve as-is
+      setDays([dayIndex]);
     }
   };
 
   const togglePickDay = (idx: number) => {
+    // Toggling is only meaningful for numeric (grid) selections; a date-string
+    // array is shown read-only and left untouched.
+    if (isDateStringDays) return;
     const cur = Array.isArray(days) && days.every((d) => typeof d === 'number') ? (days as number[]) : [];
     const next = cur.includes(idx) ? cur.filter((d) => d !== idx) : [...cur, idx].sort((a, b) => a - b);
     setDays(next.length ? next : [dayIndex]);
@@ -143,7 +157,11 @@ export function CueEditorSheet({
   const festivalDays = plan.festival?.days ?? 8;
 
   const buildCue = (): PlanCue => {
+    // Spread the ORIGINAL cue first so fields the editor doesn't surface
+    // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
+    // then overlay only what the editor manages.
     const cue: PlanCue = {
+      ...(initialCue ?? {}),
       id: initialCue?.id ?? '', // parent mints id for new cues
       kind,
       trigger,
@@ -151,8 +169,9 @@ export function CueEditorSheet({
       days,
     };
     if (label.trim()) cue.label = label.trim();
+    else delete cue.label;
     if (kind === 'program' && holdMin && holdMin > 0) cue.hold = { min: holdMin };
-    if (initialCue?.enabled !== undefined) cue.enabled = initialCue.enabled;
+    else delete cue.hold;
     return cue;
   };
 
@@ -373,7 +392,10 @@ export function CueEditorSheet({
               ) : null}
             </View>
 
-            <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
+            {/* paddingBottom clears the sticky footer (≈48pt button + 16pt
+                margin + slack) so the last DAYS / SHUFFLE controls aren't
+                hidden behind it. */}
+            <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
               {/* KIND */}
               <FieldLabel>KIND</FieldLabel>
               <Segmented
@@ -412,7 +434,12 @@ export function CueEditorSheet({
                   { id: 'scene', label: 'Scene' },
                 ]}
                 value={action.type === 'globals' ? 'look' : action.type}
-                onChange={(v) => setAction(defaultAction(v as CueAction['type'], lookNames[0] || null))}
+                onChange={(v) => {
+                  // Only reset to a default when the action TYPE actually
+                  // changes — re-tapping the current segment must not clobber
+                  // the edited action (e.g. a configured playlist/target).
+                  if (v !== action.type) setAction(defaultAction(v as CueAction['type'], lookNames[0] || null));
+                }}
               />
               {renderActionBody()}
 
@@ -452,7 +479,15 @@ export function CueEditorSheet({
                 value={daysMode}
                 onChange={(v) => setDaysMode(v as 'all' | 'this' | 'pick')}
               />
-              {daysMode === 'pick' ? (
+              {daysMode === 'pick' && isDateStringDays ? (
+                // Saved as explicit date strings — no grid representation.
+                // Show read-only so we never clobber the operator's dates.
+                <View style={styles.subBlock}>
+                  <Text style={styles.hint}>
+                    {`Specific dates: ${(days as string[]).join(', ')} (edit dates in the plan file).`}
+                  </Text>
+                </View>
+              ) : daysMode === 'pick' ? (
                 <View style={styles.pickRow}>
                   {Array.from({ length: festivalDays }, (_, i) => i).map((i) => {
                     const sel = Array.isArray(days) && (days as number[]).includes(i);
