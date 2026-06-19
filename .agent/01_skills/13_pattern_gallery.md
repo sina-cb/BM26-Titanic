@@ -164,3 +164,40 @@ and writes no capture. `make_vis_clip.mjs` stays model-agnostic — it
 auto-detects each section's axis from the coord spread and only labels sections
 `Pars/Vintage/Bars` for test_bench (other rigs get neutral `Section N`).
 <!-- END model-switching (feat/highdef_patterns) -->
+
+<!-- BEGIN clip-length-and-map (feat/highdef_patterns) — keep separate for merge -->
+## ~10-second clips + the physical map view
+
+**Real-time clip length.** The harness records real-time clips: `--seconds <S>`
+(wins over `--frames`) makes an S-second clip, `--out-fps <F>` (default 20) is
+the playback rate. The analyzer + VM keep stepping at the internal 40 fps, but a
+stored frame is emitted every `round((1/F)/DT)` internal steps for `round(S*F)`
+stored frames — a true S-second span (not slo-mo). `fps`/`seconds` are stamped
+into the JSON and the clip plays at that rate. So 10 s @ 20 fps = 200 frames.
+
+```bash
+cd marsin_engine
+node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
+  --seconds 10 --out ~/tmp/genkit/out/NN_name.json     # 200 frames @ 20 fps
+```
+
+**Big-rig safety.** The harness caps emitted color cells (`frames × pixels`,
+`--max-cells` default 150 000): it first lowers out-fps, then strides pixels for
+the clip, and **prints** what it did (`DOWNSAMPLED: …`) — never a silent
+truncation. test_bench/dome/logsville stay full fidelity; titanic (970 px) drops
+to ~15 fps.
+
+**Physical map layout.** `make_vis_clip.mjs --layout strip|map|auto` (default
+`auto` = strip for test_bench, **map** for titanic/dome/logsville) lays each
+pixel as a glowing bloom dot at its real coordinate on a dark field — like
+looking at the actual lights. `--view top|front|auto` (default `auto` picks the
+two physically-widest axes; titanic → top-down **X/Z** ship outline). `publish.mjs`
+passes both flags through and respects the stamped fps:
+
+```bash
+node tools/gallery/publish.mjs --name NN_name --model titanic \
+  --capture ~/tmp/genkit/out/NN_name__titanic.json   # auto map, top-down
+node tools/gallery/publish.mjs --name NN_name --model titanic \
+  --capture ~/tmp/genkit/out/NN_name__titanic.json --layout map --view top
+```
+<!-- END clip-length-and-map (feat/highdef_patterns) -->

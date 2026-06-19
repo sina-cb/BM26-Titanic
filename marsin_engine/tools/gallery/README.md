@@ -178,3 +178,64 @@ field recorded in the `--capture` JSON, else `test_bench`. The `--capture` and
 swapped for test_bench — the harness fails loudly (non-zero exit) if the model
 file is missing or its `pixels[]` lack the required `i/fId/sId/nx/ny/nz` fields.
 <!-- END model-switching (feat/highdef_patterns) -->
+
+<!-- BEGIN clip-length-and-map (feat/highdef_patterns) — keep separate for merge -->
+## 10-second clips (`--seconds` / `--out-fps`) and the physical map view (`--layout` / `--view`)
+
+### Recording length — real-time ~10 s clips
+The offline harness now records **real-time** clips instead of a fixed frame
+count. `--seconds <S>` (wins over `--frames`) makes an S-second clip; the audio
+analyzer + VM still step at the internal 40 fps for fidelity, but a stored frame
+is **emitted every `round((1/F)/DT)` internal steps** for `round(S*F)` stored
+frames — so it spans S real seconds of pattern + audio (not slow-mo, not
+compressed). `--out-fps <F>` (default 20) is the clip's playback rate, stamped
+into the JSON as `fps`; `make_vis_clip`/`publish` play at that rate
+automatically. Legacy `--frames` is unchanged (stamps `fps: 40`).
+
+```bash
+cd marsin_engine
+# 10 s @ 20 fps test_bench clip (200 stored frames, full 52-px fidelity):
+node tools/pattern_audio_harness.mjs --pattern patterns/27_swipe.js \
+  --seconds 10 --out ~/tmp/genkit/out/27_swipe.json
+node tools/gallery/publish.mjs --name 27_swipe --capture ~/tmp/genkit/out/27_swipe.json
+```
+
+**Big-rig safety.** A 10 s clip on the titanic (970 px) would be a heavy HTML
+page, so the harness caps total emitted color cells (`frames × pixels`,
+`--max-cells`, default 150 000): it first lowers `out-fps` (down to 8 fps), then
+strides pixels for the clip — and **prints** exactly what it did
+(`DOWNSAMPLED: …`). It never silently truncates. test_bench / dome / logsville
+keep full fidelity; titanic drops to ~15 fps (≈ 145 k cells, no striding).
+`capture_vis.mjs` (live engine) takes the same `--seconds` / `--out-fps`
+(out-fps defaults to the ~5 Hz vis-WS rate) and stamps `fps`/`seconds`/
+`coordSpread` so its JSON stays shape-compatible.
+
+### Physical map view — `--layout strip|map|auto`, `--view top|front|auto`
+`make_vis_clip.mjs` can lay the rig out as a **top-down physical map**: every
+pixel is an absolutely-positioned glowing dot at its real coordinate, on a dark
+field (`#06060a`), with a brightness-scaled bloom — it reads like looking at the
+actual lights.
+
+- `--layout auto` (default): keep the section-**strip** layout for `test_bench`,
+  use the **map** for every other rig (titanic, dome, logsville). `--layout
+  strip|map` overrides. test_bench strip output is unchanged.
+- `--view auto` (default): pick the two **physically widest** axes as the plane
+  (from the capture's `coordSpread`, else normalized std-dev) — titanic →
+  top-down **X/Z** ship outline, a flat front rig → **X/Y**. `top` = X/Z,
+  `front` = X/Y. The vertical axis is flipped so up/forward reads naturally and
+  the real aspect ratio is preserved (not stretched to a square).
+
+`publish.mjs` passes `--layout` / `--view` straight through and respects the
+capture's stamped `fps`:
+
+```bash
+cd marsin_engine
+node tools/pattern_audio_harness.mjs --pattern patterns/27_swipe.js \
+  --model titanic --seconds 10 --out ~/tmp/genkit/out/27_swipe__titanic.json
+node tools/gallery/publish.mjs --name 27_swipe --model titanic \
+  --capture ~/tmp/genkit/out/27_swipe__titanic.json   # auto → map, top-down X/Z
+# force the strip layout or a specific plane:
+node tools/gallery/publish.mjs --name 27_swipe --model titanic \
+  --capture ~/tmp/genkit/out/27_swipe__titanic.json --layout map --view top
+```
+<!-- END clip-length-and-map (feat/highdef_patterns) -->

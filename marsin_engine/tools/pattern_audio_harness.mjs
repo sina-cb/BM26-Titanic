@@ -21,7 +21,17 @@
  *   --mod     comma list of <signal>:<sliderExport>; signal ∈
  *             micLow|micMid|micHigh|micKick|micFlux
  *   --set     static control presets (export=value)
- *   --frames  render frames at 40 fps (default 80 ≈ 2 s)
+ *   --frames  render frames at 40 fps (default 80 ≈ 2 s). Ignored if --seconds.
+ *   --seconds real-time clip length in seconds (wins over --frames). The audio
+ *             analyzer + VM still step at the internal 40 fps DT for fidelity;
+ *             we EMIT one stored frame every round((1/F)/DT) internal steps,
+ *             for round(S*F) stored frames — a true S-second clip, not slo-mo.
+ *   --out-fps clip playback frame rate (default 20) for --seconds (the stored
+ *             frame cadence). Stamped into the JSON as `fps`.
+ *   --max-cells  big-rig safety cap on emitted color cells (frames×pixels,
+ *             default 150000). When a clip would exceed it, out-fps is lowered
+ *             and/or pixels are strided for the clip — PRINTED loudly, never a
+ *             silent truncation. test_bench (52 px) keeps full fidelity.
  *   --bpm     override synth bpm
  *   --model   rig model in models/<name>.js (default test_bench). FAILS LOUDLY
  *             if the file is missing or its pixels[] lack the required fields —
@@ -43,11 +53,24 @@ const A = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => {
 const patternPath = path.resolve(A.pattern);
 const synth = A.synth || 'full_track';
 if (!SYNTHS[synth]) { console.log('SYNTH_FAIL: unknown synth ' + synth); process.exit(2); }
-const frames = parseInt(A.frames || '80', 10);
+const framesArg = parseInt(A.frames || '80', 10);
 const modelName = (A.model && A.model !== 'true') ? A.model : 'test_bench';
 if (!/^[A-Za-z0-9._-]+$/.test(modelName)) { console.log('MODEL_FAIL: bad model name ' + modelName); process.exit(2); }
 const out = A.out || (process.env.HOME + '/tmp/genkit/out/vis.json');
 const SR = 44100, FFT = 1024, HOP = 512, DT = 0.025;
+
+// ── recording length / cadence ────────────────────────────────────────────────
+// Internal stepping always runs at the DT (40 fps) cadence for audio fidelity.
+// --seconds (real-time clip length) wins over --frames. --out-fps is the clip's
+// playback frame rate (the stored-frame cadence). Without --seconds, behavior is
+// unchanged: emit `--frames` stored frames, one per internal step.
+const useSeconds = A.seconds !== undefined && A.seconds !== 'true';
+const seconds = useSeconds ? parseFloat(A.seconds) : null;
+if (useSeconds && (!(seconds > 0) || !isFinite(seconds))) { console.log('SECONDS_FAIL: --seconds must be > 0, got ' + A.seconds); process.exit(2); }
+let outFps = (A['out-fps'] !== undefined && A['out-fps'] !== 'true') ? parseFloat(A['out-fps']) : 20;
+if (!(outFps > 0) || !isFinite(outFps)) { console.log('OUTFPS_FAIL: --out-fps must be > 0, got ' + A['out-fps']); process.exit(2); }
+const maxCells = (A['max-cells'] !== undefined && A['max-cells'] !== 'true') ? parseInt(A['max-cells'], 10) : 150000;
+if (!(maxCells > 0)) { console.log('MAXCELLS_FAIL: --max-cells must be > 0, got ' + A['max-cells']); process.exit(2); }
 const SIG_FIELD = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
 
 const mods = [];
@@ -118,24 +141,95 @@ const fold = b6 => { const o = []; for (let i = 0; i < N; i++) { const k = i * 6
   o.push([Math.min(255, Math.round(R + W + Am * 0.8 + U * 0.1)), Math.min(255, Math.round(G + W + Am * 0.4)), Math.min(255, Math.round(B + W + U * 0.5))]); }
   return o; };
 
-const meta = px.map(p => ({ i: p.i, fId: p.fId || 0, sId: p.sId || 0, nx: p.nx, ny: p.ny, nz: p.nz }));
+// ── plan the clip: internal steps, emit cadence, stored-frame count ────────────
+// Two modes:
+//   --frames N  (legacy)  : N internal steps, emit every step → N stored frames,
+//                           stamped fps = legacy 40 (DT cadence).
+//   --seconds S           : real-time S-second clip at outFps. Emit one stored
+//                           frame every `emitEvery = round((1/F)/DT)` internal
+//                           steps, for `round(S*F)` stored frames spanning S real
+//                           seconds of pattern+audio time.
+// BIG-RIG SAFETY: cap emitted color cells (storedFrames × emittedPixels) at
+// maxCells. First lower outFps (seconds mode only), then stride pixels for the
+// clip. Always PRINT what was done — never a silent misleading truncation.
+let emitEvery, storedFrames, internalSteps, stampFps;
+if (useSeconds) {
+  emitEvery = Math.max(1, Math.round((1 / outFps) / DT));
+  storedFrames = Math.max(1, Math.round(seconds * outFps));
+  internalSteps = storedFrames * emitEvery;          // run the audio/VM in real time
+  stampFps = outFps;
+} else {
+  emitEvery = 1;
+  storedFrames = framesArg;
+  internalSteps = framesArg;
+  stampFps = Math.round(1 / DT);                       // legacy clips play at 40 fps DT cadence
+}
+
+// Big-rig cell-cap: storedFrames × N must stay ≲ maxCells.
+let pixelStride = 1; let downsampleNote = '';
+if (storedFrames * N > maxCells) {
+  if (useSeconds) {
+    // 1) try lowering outFps (and thus storedFrames) down to a floor of 8 fps.
+    const minFps = 8;
+    while (outFps > minFps && storedFrames * N > maxCells) {
+      outFps = Math.max(minFps, Math.floor(outFps) - 1);
+      emitEvery = Math.max(1, Math.round((1 / outFps) / DT));
+      storedFrames = Math.max(1, Math.round(seconds * outFps));
+      internalSteps = storedFrames * emitEvery;
+      stampFps = outFps;
+    }
+  }
+  // 2) if still over, stride pixels for the clip (keep every Kth pixel).
+  if (storedFrames * N > maxCells) {
+    pixelStride = Math.ceil((storedFrames * N) / maxCells);
+  }
+  const emittedPx = Math.ceil(N / pixelStride);
+  downsampleNote = `DOWNSAMPLED: ${storedFrames}f×${N}px=${storedFrames * N} cells > cap ${maxCells}; `
+    + `using out-fps=${outFps}` + (pixelStride > 1 ? `, pixelStride=${pixelStride} (→ ${emittedPx} px/frame)` : ' (no pixel striding)')
+    + ` → ${storedFrames}f×${emittedPx}px=${storedFrames * emittedPx} cells.`;
+  console.log(downsampleNote);
+}
+
+// Indices of the pixels we actually store (strided if downsampling).
+const keepIdx = []; for (let i = 0; i < N; i++) if (i % pixelStride === 0) keepIdx.push(i);
+
+const meta = keepIdx.map(i => { const p = px[i]; return { i: p.i, fId: p.fId || 0, sId: p.sId || 0, nx: p.nx, ny: p.ny, nz: p.nz }; });
 const frameData = []; const totals = []; const sigLog = []; const everLit = new Array(N).fill(false);
-for (let f = 0; f < frames; f++) {
+let internalT = 0;
+for (let step = 0; step < internalSteps; step++) {
   advanceAudio();
   for (const m of mods) { const id = idOf(m.target); if (id != null) rt.setControl(id, sig[SIG_FIELD[m.sig]]); }
-  rt.beginFrame(f * DT);
+  rt.beginFrame(internalT * DT);
   const rgb = fold(rt.renderAll6ch());
+  internalT++;
+  // brightness/lit accounting runs over the full pixel set every internal step.
   let tot = 0; for (let i = 0; i < N; i++) { const s = rgb[i][0] + rgb[i][1] + rgb[i][2]; tot += s; if (s > 8) everLit[i] = true; }
-  frameData.push(rgb); totals.push(tot); sigLog.push({ ...sig });
+  if (step % emitEvery === 0 && frameData.length < storedFrames) {
+    frameData.push(keepIdx.map(i => rgb[i]));          // store only the kept (strided) pixels
+    totals.push(tot); sigLog.push({ ...sig });
+  }
 }
-fs.writeFileSync(out, JSON.stringify({ pattern: path.basename(patternPath, '.js'), buffer: 'harness', model: modelName, meta, frames: frameData }));
+const frames = frameData.length;
+
+// Raw physical axis spreads (from the un-normalized model coords if present) so
+// the clip generator's `--view auto` can pick the two physically-widest axes for
+// the top-down/front projection — nx/ny/nz are normalized per-axis and lose the
+// real-world aspect, so we carry the raw ranges here.
+function rawSpread(ax) { const v = px.map(p => p[ax]).filter(x => typeof x === 'number'); return v.length ? (Math.max(...v) - Math.min(...v)) : 0; }
+const coordSpread = (typeof px[0].x === 'number') ? { x: rawSpread('x'), y: rawSpread('y'), z: rawSpread('z') } : null;
+
+fs.writeFileSync(out, JSON.stringify({
+  pattern: path.basename(patternPath, '.js'), buffer: 'harness', model: modelName,
+  fps: stampFps, seconds: useSeconds ? seconds : +(storedFrames / stampFps).toFixed(3),
+  coordSpread, pixelStride, meta, frames: frameData,
+}));
 
 // ── assertions ───────────────────────────────────────────────────────────────
 const litCount = everLit.filter(Boolean).length;
-const maxChan = Math.max(...frameData.flat().map(c => Math.max(...c)));
+let maxChan = 0; for (const fr of frameData) for (const c of fr) { if (c[0] > maxChan) maxChan = c[0]; if (c[1] > maxChan) maxChan = c[1]; if (c[2] > maxChan) maxChan = c[2]; }
 const minT = Math.min(...totals), maxT = Math.max(...totals), avgT = totals.reduce((a, b) => a + b, 0) / totals.length;
 const bySec = {}; px.forEach((p, i) => { if (everLit[i]) bySec[p.sId] = (bySec[p.sId] || 0) + 1; });
-console.log(`SYNTH=${synth} FRAMES=${frames} MODEL=${modelName} PIX=${N} LIT=${litCount}/${N} maxChan=${maxChan}`);
+console.log(`SYNTH=${synth} FRAMES=${frames}@${stampFps}fps${useSeconds ? ` (${seconds}s real-time, emitEvery=${emitEvery} internal steps)` : ''} MODEL=${modelName} PIX=${N}${pixelStride > 1 ? ` (stored ${keepIdx.length}/${N}, stride ${pixelStride})` : ''} LIT=${litCount}/${N} maxChan=${maxChan}`);
 console.log(`TOTAL_BRI min/avg/max=${Math.round(minT)}/${Math.round(avgT)}/${Math.round(maxT)} (${maxT - minT > avgT * 0.15 ? 'ANIMATING' : 'LOW-VARIATION'})`);
 // Model-agnostic per-section lit counts (test_bench labels its 1/2/3 as
 // pars/vintage/bars; any other section id reports as "s<id>").

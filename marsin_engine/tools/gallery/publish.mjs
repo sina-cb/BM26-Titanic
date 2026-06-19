@@ -46,6 +46,20 @@ const capture = expand(arg('capture'));
 const inFrag = expand(arg('in'));
 const fps = arg('fps', '14');
 const modelArg = arg('model');
+// Passed straight through to make_vis_clip: --layout strip|map|auto (default
+// auto = strip for test_bench, map for other rigs) and --view top|front|auto
+// (the map projection plane). The capture's stamped fps is respected by
+// make_vis_clip regardless of --fps.
+const layoutArg = arg('layout');
+const viewArg = arg('view');
+if (layoutArg !== undefined && !['strip', 'map', 'auto'].includes(layoutArg)) {
+  console.error('error: --layout must be strip|map|auto, got: ' + layoutArg);
+  process.exit(1);
+}
+if (viewArg !== undefined && !['top', 'front', 'auto'].includes(viewArg)) {
+  console.error('error: --view must be top|front|auto, got: ' + viewArg);
+  process.exit(1);
+}
 
 if (!name) {
   console.error('error: --name <pattern> is required');
@@ -82,8 +96,10 @@ if (capture) {
   fs.mkdirSync(tmpDir, { recursive: true });
   const tmpFrag = path.join(tmpDir, 'gallery_' + name + '.html');
   // make_vis_clip must run from marsin_engine/.
-  execFileSync('node', [MAKE_VIS, '--in', capture, '--out', tmpFrag, '--fps', String(fps)],
-    { cwd: ENGINE_DIR, stdio: 'inherit' });
+  const makeArgs = [MAKE_VIS, '--in', capture, '--out', tmpFrag, '--fps', String(fps)];
+  if (layoutArg !== undefined) makeArgs.push('--layout', layoutArg);
+  if (viewArg !== undefined) makeArgs.push('--view', viewArg);
+  execFileSync('node', makeArgs, { cwd: ENGINE_DIR, stdio: 'inherit' });
   fragment = fs.readFileSync(tmpFrag, 'utf8');
 } else {
   if (!fs.existsSync(inFrag)) {

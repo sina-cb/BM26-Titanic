@@ -370,6 +370,13 @@ the same look as CaptainPad DECK MAIN. See skill `08` for the widget anatomy.
 (Inline `show_widget` works in the desktop/terminal client; if it ever doesn't,
 use the gallery below.)
 
+**~10 s clips + physical map view.** Record real-time clips with the harness'
+`--seconds 10` (default `--out-fps 20` → 200 frames; big rigs auto-downsample
+with a printed `DOWNSAMPLED:` line). For the titanic and other rigs, `make_vis_clip`
+defaults (`--layout auto`) to a **top-down physical map** — each pixel a glowing
+dot at its real coordinate — instead of strips; `--view top|front` sets the
+plane. See skill `13` / the gallery README for the flags.
+
 ---
 
 ## 11. Gallery — review it on your phone (offline, over Tailscale)
@@ -377,11 +384,15 @@ use the gallery below.)
 The gallery is a **standalone offline tool** (`marsin_engine/tools/gallery/`), NOT
 wired to the launcher — start it separately.
 
-**Publish** a pattern (preferred form builds the clip for you):
+**Publish** a pattern (preferred form builds the clip for you; pass `--layout` /
+`--view` to control the map projection, e.g. a titanic top-down clip):
 ```bash
 cd marsin_engine
 node tools/gallery/publish.mjs --name NN_name --capture ~/tmp/genkit/out/NN_name.json
 # -> writes tools/gallery/widgets/NN_name.html, prints /w/NN_name
+# titanic top-down physical map (auto-selected for non-test_bench rigs):
+node tools/gallery/publish.mjs --name NN_name --model titanic \
+  --capture ~/tmp/genkit/out/NN_name__titanic.json   # [--view top|front] [--layout strip|map]
 ```
 
 **Start** the server (once; it re-reads the widgets dir per request, so re-publish
