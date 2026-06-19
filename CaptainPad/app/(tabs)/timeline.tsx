@@ -1,38 +1,62 @@
 /**
- * Timeline tab — operator surface for the Timeline / Show Director
- * companion (docs/38 §8). The companion is a server-side, engine-
- * supervised process on its OWN port (6965) that fires playlists / looks
- * / scenes off wall-clock, sun events, named phases, and music mood. This
- * tab is a THIN mirror, exactly like scheduler.tsx is for the engine's
- * scheduled tasks: the companion owns the schedule, the sun math, and the
- * dispatch; CaptainPad renders state and sends taps.
+ * Timeline tab — viewer + MAKER for the in-engine Timeline (docs/38 §14–§15).
  *
- * Layout (docs/38 §8):
- *   - Header: plan + scene, mode pill (ARMED/PAUSED/HOLDING/OVERRIDDEN),
- *     engine-connected dot, mood pill (● CALM / ● PARTY), next-cue
- *     countdown ("next in M:SS · <label>" or "no upcoming cue").
- *   - Controls: PAUSE/RESUME toggle, HOLD 30m, plan picker.
- *   - Day ribbon: sun events + phase bands + a NOW marker, time-ordered.
- *   - Cue list: label + trigger + countdown + FIRE; error cues in red.
- *   - Recent fires log.
- *   - "Timeline companion offline" banner when the WS / GET /state are
- *     unreachable — fail loud, never show stale (Codex P0).
+ * The Timeline now lives IN the engine (REST/WS on the engine base :6968).
+ * This tab is the ONLY UI for it (§15.3): a live viewer AND a super-fluid
+ * 8-day festival maker, all in CaptainPad's theme.
  *
- * Zero required keyboard input — pill / stepper / button idioms only,
- * matching scheduler.tsx.
+ * Sections:
+ *   A. Header / live status — plan + scene, controller pill (AUTOPILOT /
+ *      PROGRAM / MANUAL), autopilot toggle, PAUSE/RESUME + HOLD, mood pill,
+ *      active-program countdown, engine dot, offline banner.
+ *   B. 8-day overview — horizontally-scannable day cards (sun arc + cue
+ *      markers by kind). Live (GET /overview) until the operator edits, then
+ *      a debounced preview of the DRAFT (POST /overview) so changes are seen
+ *      across all days before saving.
+ *   C. Day editor / maker — tap a day → vertical timeline; add/edit/delete
+ *      cues via the themed CueEditorSheet (segmented/stepper/dropdown — no
+ *      keyboard walls). Validation 400s surface inline, loudly.
+ *   D. Cue list + controls — per-cue FIRE, recent fires, program/end.
+ *
+ * Draft / preview / save loop:
+ *   - The draft plan is local state (loaded from GET /timeline/plans/:name,
+ *     or seeded from the BRC template). Every draft mutation bumps a version
+ *     counter; a 350 ms debounce POSTs the draft to /timeline/overview and
+ *     re-renders the strip + day editor from the returned overview.
+ *   - SAVE → POST /timeline/plans; ACTIVATE → POST /timeline/plan/activate.
+ *   - With NO draft, the strip shows the live active-plan overview.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, FlatList, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTimeline } from '@/hooks/useTimeline';
-import { fetchTimelinePlans, TimelineState, TimelineCue, TimelineRecentFire } from '@/utils/timelineApi';
+import { fetchPlaylists } from '@/utils/api';
+import {
+  fetchTimelinePlans,
+  fetchTimelinePlan,
+  fetchTimelineOverview,
+  previewTimelineOverview,
+  saveTimelinePlan,
+  TimelineState,
+  TimelineCue,
+  TimelineRecentFire,
+  TimelineOverview,
+  ShowPlan,
+  PlanCue,
+} from '@/utils/timelineApi';
+import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
+import { DayEditor } from '@/components/timeline/DayEditor';
+import { CueEditorSheet } from '@/components/timeline/CueEditorSheet';
+import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
+import {
+  brcStarterPlan, clonePlan, duplicatePlan, makeCueId,
+} from '@/components/timeline/timelineTemplate';
 
 const HOLD_MINUTES = 30;
-
-// ── Time helpers ────────────────────────────────────────────────────────
+const PREVIEW_DEBOUNCE_MS = 350;
 
 function formatCountdown(sec: number | null): string {
   if (sec === null || sec === undefined || !Number.isFinite(sec) || sec < 0) return '—';
@@ -44,132 +68,14 @@ function formatCountdown(sec: number | null): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function nowHHMM(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-// "HH:MM" → minutes since midnight, for ordering the ribbon. Returns null
-// for malformed strings so they sort to the end rather than crashing.
-function hhmmToMinutes(v: string | undefined): number | null {
-  if (!v || typeof v !== 'string') return null;
-  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (hh > 23 || mm > 59) return null;
-  return hh * 60 + mm;
-}
-
-// ── Ribbon model ────────────────────────────────────────────────────────
-
-interface RibbonItem {
-  key: string;
-  minutes: number | null;
-  time: string;
-  kind: 'sun' | 'phaseStart' | 'phaseEnd' | 'now';
-  label: string;
-  icon: 'sun.max' | 'sunrise' | 'sunset' | 'moon.stars' | 'clock';
-}
-
-// Sun events we surface, in the doc's order, with a friendly label + icon.
-const SUN_EVENTS: { key: string; label: string; icon: RibbonItem['icon'] }[] = [
-  { key: 'sunrise',         label: 'Sunrise',          icon: 'sunrise' },
-  { key: 'goldenHourEnd',   label: 'Golden hour end',  icon: 'sun.max' },
-  { key: 'solarNoon',       label: 'Solar noon',       icon: 'sun.max' },
-  { key: 'goldenHourStart', label: 'Golden hour',      icon: 'sun.max' },
-  { key: 'sunset',          label: 'Sunset',           icon: 'sunset' },
-  { key: 'civilDusk',       label: 'Civil dusk',       icon: 'moon.stars' },
-];
-
-function buildRibbon(state: TimelineState): RibbonItem[] {
-  const items: RibbonItem[] = [];
-
-  for (const ev of SUN_EVENTS) {
-    const t = state.sun?.[ev.key];
-    if (!t) continue;
-    items.push({
-      key: `sun:${ev.key}`,
-      minutes: hhmmToMinutes(t),
-      time: t,
-      kind: 'sun',
-      label: ev.label,
-      icon: ev.icon,
-    });
-  }
-
-  const phases = state.phases || {};
-  for (const name of Object.keys(phases)) {
-    const w = phases[name];
-    if (w?.start) {
-      items.push({
-        key: `phaseStart:${name}`,
-        minutes: hhmmToMinutes(w.start),
-        time: w.start,
-        kind: 'phaseStart',
-        label: `${name} starts`,
-        icon: 'clock',
-      });
-    }
-    if (w?.end) {
-      items.push({
-        key: `phaseEnd:${name}`,
-        minutes: hhmmToMinutes(w.end),
-        time: w.end,
-        kind: 'phaseEnd',
-        label: `${name} ends`,
-        icon: 'clock',
-      });
-    }
-  }
-
-  const nowStr = nowHHMM();
-  items.push({
-    key: 'now',
-    minutes: hhmmToMinutes(nowStr),
-    time: nowStr,
-    kind: 'now',
-    label: 'NOW',
-    icon: 'clock',
-  });
-
-  // Order by time; null-minute (malformed) rows sink to the bottom.
-  items.sort((a, b) => {
-    if (a.minutes === null && b.minutes === null) return 0;
-    if (a.minutes === null) return 1;
-    if (b.minutes === null) return -1;
-    return a.minutes - b.minutes;
-  });
-  return items;
-}
-
-// ── Offline banner ──────────────────────────────────────────────────────
-// The companion can be down even when the engine is up — it's a separate
-// process on :6965. Fail loud: tell the operator the companion is offline,
-// never render stale schedule data.
-function OfflineBanner({ error, styles, C }: { error: string | null; styles: Styles; C: Palette }) {
-  return (
-    <View style={styles.offlineBanner}>
-      <IconSymbol name="wifi.slash" size={24} color={C.error} />
-      <View style={{ flex: 1 }}>
-        <Text style={styles.offlineTitle}>TIMELINE COMPANION OFFLINE</Text>
-        <Text style={styles.offlineBody}>
-          {error || 'CaptainPad cannot reach the Timeline Companion on :6965. The companion fires cues on its own; reconnecting…'}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-// ── Mode pill ───────────────────────────────────────────────────────────
-function ModePill({ mode, styles, C }: { mode: TimelineState['mode']; styles: Styles; C: Palette }) {
-  const map: Record<TimelineState['mode'], { label: string; color: string }> = {
-    armed:      { label: 'ARMED',      color: C.tertiary },
-    paused:     { label: 'PAUSED',     color: C.secondary },
-    holding:    { label: 'HOLDING',    color: C.primary },
-    overridden: { label: 'OVERRIDDEN', color: C.error },
+// ── Controller pill (§14): AUTOPILOT green / PROGRAM amber / MANUAL grey ──
+function ControllerPill({ state, styles, C }: { state: TimelineState; styles: Styles; C: Palette }) {
+  const map: Record<TimelineState['controller'], { label: string; color: string }> = {
+    autopilot: { label: 'AUTOPILOT', color: C.tertiary },
+    program: { label: 'PROGRAM', color: '#f5a623' },
+    manual: { label: 'MANUAL', color: C.icon },
   };
-  const m = map[mode] || { label: String(mode).toUpperCase(), color: C.secondary };
+  const m = map[state.controller] || { label: String(state.controller).toUpperCase(), color: C.secondary };
   return (
     <View style={[styles.pill, { borderColor: m.color }]}>
       <Text style={[styles.pillText, { color: m.color }]}>{m.label}</Text>
@@ -177,7 +83,6 @@ function ModePill({ mode, styles, C }: { mode: TimelineState['mode']; styles: St
   );
 }
 
-// ── Mood pill ───────────────────────────────────────────────────────────
 function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | null; styles: Styles; C: Palette }) {
   const color = party ? C.error : C.tertiary;
   const label = party ? 'PARTY' : (mood ? mood.toUpperCase() : 'CALM');
@@ -188,106 +93,219 @@ function MoodPill({ party, mood, styles, C }: { party: boolean; mood: string | n
   );
 }
 
-// ── Plan picker modal ───────────────────────────────────────────────────
-function PlanPicker({
-  visible, plans, active, onPick, onClose, styles, C,
-}: {
-  visible: boolean;
-  plans: string[];
-  active: string | null;
-  onPick: (name: string) => void;
-  onClose: () => void;
-  styles: Styles;
-  C: Palette;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose}>
-        <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>ACTIVATE PLAN</Text>
-          {plans.length === 0 ? (
-            <Text style={styles.modalEmpty}>No plans reported by the companion.</Text>
-          ) : (
-            <FlatList
-              data={plans}
-              keyExtractor={(p) => p}
-              renderItem={({ item }) => {
-                const isActive = item === active;
-                return (
-                  <TouchableOpacity
-                    onPress={() => { onPick(item); onClose(); }}
-                    style={[styles.planRow, isActive && { borderColor: C.primary, backgroundColor: C.sidebarActiveBackground }]}
-                  >
-                    <Text style={[styles.planRowText, isActive && { color: C.primary }]}>{item}</Text>
-                    {isActive ? <IconSymbol name="checkmark.circle.fill" size={20} color={C.primary} /> : null}
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          )}
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-}
-
 export default function TimelineScreen() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
-  const { state, connected, error, activatePlan, setMode, hold, resume, fireCue } = useTimeline();
+  const { state, connected, error, setMode, setAutopilot, hold, resume, endProgram, fireCue, activatePlan } = useTimeline();
 
+  // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  // One 1 s ticker drives the NOW marker / live "current time" read. The
-  // server-supplied countdowns (nextInSec) refresh on each WS push; this
-  // tick keeps the ribbon NOW row honest between pushes.
-  const [, setNowTick] = useState(0);
+  const [playlists, setPlaylists] = useState<string[]>([]);
+  const [liveOverview, setLiveOverview] = useState<TimelineOverview | null>(null);
 
+  // ── Maker draft state ──
+  // draft === null → viewer shows the LIVE active-plan overview.
+  // draft !== null → operator is editing; the strip shows the draft preview.
+  const [draft, setDraft] = useState<ShowPlan | null>(null);
+  const [draftOverview, setDraftOverview] = useState<TimelineOverview | null>(null);
+  const [draftVersion, setDraftVersion] = useState(0);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState<string | null>(null);
+
+  // ── UI sheet state ──
+  const [planPickerOpen, setPlanPickerOpen] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [cueSheetOpen, setCueSheetOpen] = useState(false);
+  const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
+
+  const [, setNowTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setNowTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Plans list — fetched on mount and after each activate so the picker
-  // reflects what the companion actually has.
+  // ── Resource loaders ──
   const refreshPlans = useCallback(() => {
     fetchTimelinePlans().then((r) => {
       if (r.ok && r.data && Array.isArray(r.data.plans)) setPlans(r.data.plans);
     });
   }, []);
-  useEffect(() => { refreshPlans(); }, [refreshPlans]);
+  const refreshLiveOverview = useCallback(() => {
+    fetchTimelineOverview().then((r) => {
+      if (r.ok && r.data) setLiveOverview(r.data);
+    });
+  }, []);
+  useEffect(() => {
+    refreshPlans();
+    refreshLiveOverview();
+    fetchPlaylists().then((r) => { if (r.ok && r.data) setPlaylists(r.data); });
+  }, [refreshPlans, refreshLiveOverview]);
 
-  const handlePickPlan = useCallback(async (name: string) => {
-    const ok = await activatePlan(name);
-    if (ok) refreshPlans();
-  }, [activatePlan, refreshPlans]);
+  // Keep the live overview fresh when the active plan flips (server-driven).
+  const activePlanName = state?.activePlan ?? null;
+  useEffect(() => { refreshLiveOverview(); }, [activePlanName, refreshLiveOverview]);
 
-  // "Offline" = no live socket AND no seeded state. A socket that's up but
-  // hasn't pushed yet still shows whatever the REST seed gave us.
-  const isOffline = !connected && !state;
+  // ── Debounced draft preview (POST /timeline/overview) ──
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!draft) { setDraftOverview(null); setPreviewError(null); return; }
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    previewTimer.current = setTimeout(async () => {
+      const r = await previewTimelineOverview(draft);
+      if (r.ok && r.data) {
+        setDraftOverview(r.data);
+        setPreviewError(null);
+      } else {
+        // Codex P0 — surface the engine's validation error verbatim, loudly.
+        setPreviewError(r.error || 'Draft preview failed');
+      }
+    }, PREVIEW_DEBOUNCE_MS);
+    return () => { if (previewTimer.current) clearTimeout(previewTimer.current); };
+  }, [draft, draftVersion]);
 
-  const ribbon = useMemo(() => (state ? buildRibbon(state) : []), [state]);
+  // The overview the strip / day editor render from.
+  const overview = draft ? draftOverview : liveOverview;
 
-  const nextCueLabel = useMemo(() => {
-    if (!state) return '';
-    if (state.nextCue) {
-      return `next in ${formatCountdown(state.nextCue.inSec)} · ${state.nextCue.label}`;
+  // Today's festival index for highlighting (from the overview's dates vs now).
+  const todayIndex = useMemo(() => {
+    if (!overview) return null;
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const d = overview.days.find((day) => day.date === todayKey);
+    return d ? d.index : null;
+  }, [overview]);
+
+  // ── Draft mutators ──
+  const mutateDraft = useCallback((fn: (p: ShowPlan) => void) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = clonePlan(prev);
+      fn(next);
+      return next;
+    });
+    setDraftVersion((v) => v + 1);
+    setSaveOk(null);
+  }, []);
+
+  const loadPlanIntoDraft = useCallback(async (name: string) => {
+    const r = await fetchTimelinePlan(name);
+    if (!r.ok || !r.data) {
+      setActionError(r.error || `Could not load plan ${name}`);
+      return;
     }
-    return 'no upcoming cue';
-  }, [state]);
+    // Force schemaVersion 2 shape for the maker (engine normalises v1→v2 on
+    // read, but be defensive so the editor's day-pick UI has a festival).
+    const plan = r.data;
+    if (!plan.festival) {
+      setActionError(`Plan "${name}" has no festival span — duplicate it from the BRC template to edit on the 8-day grid.`);
+    }
+    setDraft(clonePlan(plan));
+    setDraftVersion((v) => v + 1);
+    setSaveOk(null);
+    setActionError(null);
+    setPlanPickerOpen(false);
+  }, []);
 
+  const handleNewTemplate = useCallback(() => {
+    setDraft(brcStarterPlan());
+    setDraftVersion((v) => v + 1);
+    setSaveOk(null);
+    setActionError(null);
+    setPlanPickerOpen(false);
+  }, []);
+
+  const handleDuplicate = useCallback(async (name: string) => {
+    const r = await fetchTimelinePlan(name);
+    if (!r.ok || !r.data) { setActionError(r.error || `Could not load plan ${name}`); return; }
+    setDraft(duplicatePlan(r.data, `${name}_copy`.slice(0, 64)));
+    setDraftVersion((v) => v + 1);
+    setActionError(null);
+    setPlanPickerOpen(false);
+  }, []);
+
+  const handleActivate = useCallback(async (name: string) => {
+    const ok = await activatePlan(name);
+    if (ok) { refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false); }
+    else setActionError('Engine rejected plan activation');
+  }, [activatePlan, refreshPlans, refreshLiveOverview]);
+
+  const handleSave = useCallback(async () => {
+    if (!draft) return;
+    const r = await saveTimelinePlan(draft);
+    if (r.ok) {
+      setSaveOk(`Saved "${draft.name}"`);
+      setActionError(null);
+      refreshPlans();
+    } else {
+      setActionError(r.error || 'Engine rejected save');
+    }
+  }, [draft, refreshPlans]);
+
+  const handleDiscardDraft = useCallback(() => {
+    setDraft(null);
+    setDraftOverview(null);
+    setPreviewError(null);
+    setSaveOk(null);
+    setSelectedDay(null);
+  }, []);
+
+  // ── Cue CRUD (within the draft) ──
+  const handleSaveCue = useCallback((cue: PlanCue) => {
+    mutateDraft((p) => {
+      if (cue.id && p.cues.some((c) => c.id === cue.id)) {
+        p.cues = p.cues.map((c) => (c.id === cue.id ? cue : c));
+      } else {
+        const id = cue.id || makeCueId(new Set(p.cues.map((c) => c.id)));
+        p.cues = [...p.cues, { ...cue, id }];
+      }
+    });
+    setCueSheetOpen(false);
+    setEditingCue(null);
+  }, [mutateDraft]);
+
+  const handleDeleteCue = useCallback((cueId: string) => {
+    mutateDraft((p) => { p.cues = p.cues.filter((c) => c.id !== cueId); });
+    setCueSheetOpen(false);
+    setEditingCue(null);
+  }, [mutateDraft]);
+
+  const openAddCue = useCallback(() => {
+    if (!draft) return;
+    setEditingCue(null);
+    setCueSheetOpen(true);
+  }, [draft]);
+
+  const openEditCue = useCallback((cue: PlanCue) => {
+    setEditingCue(cue);
+    setCueSheetOpen(true);
+  }, []);
+
+  // ── Live controls ──
+  const isOffline = !connected && !state;
   const mode = state?.mode ?? 'armed';
   const isPaused = mode === 'paused';
-
   const handlePauseResume = useCallback(() => {
-    if (isPaused) { resume(); } else { setMode('paused'); }
+    if (isPaused) resume(); else setMode('paused');
   }, [isPaused, resume, setMode]);
+
+  const programCountdown = useMemo(() => {
+    const p = state?.activeProgram;
+    if (!p || p.untilMs == null) return null;
+    return Math.max(0, Math.round((p.untilMs - Date.now()) / 1000));
+  }, [state?.activeProgram]);
+
+  // The selected day's overview object.
+  const selectedDayOverview = useMemo(() => {
+    if (selectedDay === null || !overview) return null;
+    return overview.days.find((d) => d.index === selectedDay) ?? null;
+  }, [selectedDay, overview]);
 
   return (
     <View style={styles.container}>
       <View style={styles.surface}>
-        {/* ── Header ── */}
+        {/* ── A. Header / live status ── */}
         <View style={styles.headerRow}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
             <IconSymbol name="sun.max" size={28} color={C.primary} />
@@ -299,7 +317,7 @@ export default function TimelineScreen() {
             </View>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {state ? <ModePill mode={state.mode} styles={styles} C={C} /> : null}
+            {state ? <ControllerPill state={state} styles={styles} C={C} /> : null}
             {state ? <MoodPill party={!!state.party} mood={state.currentMood} styles={styles} C={C} /> : null}
             <View style={styles.engineDotWrap}>
               <View style={[styles.engineDot, { backgroundColor: state?.engineConnected ? C.tertiary : C.error }]} />
@@ -308,36 +326,48 @@ export default function TimelineScreen() {
           </View>
         </View>
 
-        {/* Next-cue countdown line */}
-        {state ? (
+        {/* Active-program countdown */}
+        {state?.activeProgram ? (
           <View style={styles.nextCueRow}>
-            <IconSymbol name="clock" size={16} color={C.secondary} />
-            <Text style={styles.nextCueText} numberOfLines={1}>{nextCueLabel}</Text>
-            {state.currentPhase ? (
-              <Text style={styles.phaseChip}>{`phase · ${state.currentPhase}`}</Text>
-            ) : null}
+            <IconSymbol name="play.fill" size={14} color="#f5a623" />
+            <Text style={styles.nextCueText} numberOfLines={1}>
+              {`program · ${state.activeProgram.cueId}${programCountdown != null ? ` · ${formatCountdown(programCountdown)} left` : ''}`}
+            </Text>
+            <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+              <Text style={styles.endProgramText}>END</Text>
+            </TouchableOpacity>
+          </View>
+        ) : state?.nextCue ? (
+          <View style={styles.nextCueRow}>
+            <IconSymbol name="clock" size={14} color={C.secondary} />
+            <Text style={styles.nextCueText} numberOfLines={1}>
+              {`next in ${formatCountdown(state.nextCue.inSec)} · ${state.nextCue.label}`}
+            </Text>
+            {state.currentPhase ? <Text style={styles.phaseChip}>{`phase · ${state.currentPhase}`}</Text> : null}
           </View>
         ) : null}
 
-        {isOffline ? <OfflineBanner error={error} styles={styles} C={C} /> : null}
-        {!isOffline && error ? (
-          <View style={styles.actionErrorBanner}>
-            <Text style={styles.actionErrorText} numberOfLines={2}>{error}</Text>
+        {/* Banners */}
+        {isOffline ? (
+          <View style={styles.offlineBanner}>
+            <IconSymbol name="wifi.slash" size={24} color={C.error} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.offlineTitle}>TIMELINE OFFLINE</Text>
+              <Text style={styles.offlineBody}>{error || 'CaptainPad cannot reach the engine timeline. It keeps firing cues on its own; reconnecting…'}</Text>
+            </View>
           </View>
         ) : null}
-        {state?.lastError ? (
-          <View style={styles.actionErrorBanner}>
-            <Text style={styles.actionErrorText} numberOfLines={2}>{state.lastError}</Text>
-          </View>
-        ) : null}
+        {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
+        {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
+        {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError}`} tone="error" /> : null}
+        {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
-        {/* ── Controls row ── */}
+        {/* ── Live controls ── */}
         <View style={styles.controlsRow}>
           <TouchableOpacity
             onPress={handlePauseResume}
             disabled={!state}
             style={[styles.controlButton, isPaused ? { backgroundColor: C.tertiary } : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityRole="button"
             accessibilityLabel={isPaused ? 'Resume timeline' : 'Pause timeline'}
           >
             <IconSymbol name={isPaused ? 'play.fill' : 'pause.fill'} size={16} color={isPaused ? '#FFF' : C.text} />
@@ -348,80 +378,103 @@ export default function TimelineScreen() {
             onPress={() => hold(HOLD_MINUTES)}
             disabled={!state}
             style={[styles.controlButton, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityRole="button"
-            accessibilityLabel={`Hold current look for ${HOLD_MINUTES} minutes`}
+            accessibilityLabel={`Hold for ${HOLD_MINUTES} minutes`}
           >
             <IconSymbol name="pin.fill" size={16} color={C.text} />
             <Text style={[styles.controlLabel, { color: C.text }]}>{`HOLD ${HOLD_MINUTES}m`}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => { refreshPlans(); setPickerOpen(true); }}
+            onPress={() => state && setAutopilot(!state.autopilotEnabled)}
             disabled={!state}
+            style={[
+              styles.controlButton,
+              state?.autopilotEnabled
+                ? { backgroundColor: C.tertiary }
+                : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 },
+            ]}
+            accessibilityLabel={state?.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
+          >
+            <IconSymbol name="shuffle" size={16} color={state?.autopilotEnabled ? '#FFF' : C.text} />
+            <Text style={[styles.controlLabel, { color: state?.autopilotEnabled ? '#FFF' : C.text }]}>
+              {state?.autopilotEnabled ? 'AUTO ON' : 'AUTO OFF'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => { refreshPlans(); setPlanPickerOpen(true); }}
             style={[styles.controlButton, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Pick show plan"
+            accessibilityLabel="Open plans"
           >
             <IconSymbol name="calendar.badge.clock" size={16} color={C.text} />
-            <Text style={[styles.controlLabel, { color: C.text }]} numberOfLines={1}>
-              {state?.activePlan ? state.activePlan.toUpperCase() : 'PLAN ▾'}
-            </Text>
+            <Text style={[styles.controlLabel, { color: C.text }]} numberOfLines={1}>PLANS ▾</Text>
           </TouchableOpacity>
         </View>
 
-        {/* ── Body ── */}
-        {state ? (
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-            {/* Day ribbon */}
-            <Text style={styles.sectionLabel}>DAY RIBBON</Text>
-            <View style={styles.ribbonWrap}>
-              {ribbon.length === 0 ? (
-                <Text style={styles.emptyHint}>No sun events or phases reported yet.</Text>
-              ) : (
-                ribbon.map((it) => (
-                  <View
-                    key={it.key}
-                    style={[
-                      styles.ribbonRow,
-                      it.kind === 'now' && { backgroundColor: C.sidebarActiveBackground, borderColor: C.primary },
-                    ]}
-                  >
-                    <Text style={[styles.ribbonTime, it.kind === 'now' && { color: C.primary }]}>{it.time}</Text>
-                    <IconSymbol
-                      name={it.icon}
-                      size={18}
-                      color={it.kind === 'now' ? C.primary : it.kind === 'sun' ? C.primary : C.secondary}
-                    />
-                    <Text
-                      style={[
-                        styles.ribbonLabel,
-                        it.kind === 'now' && { color: C.primary, fontFamily: 'SpaceGrotesk_700Bold' },
-                        (it.kind === 'phaseStart' || it.kind === 'phaseEnd') && { color: C.secondary },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {it.kind === 'now' ? '► NOW' : it.label}
-                    </Text>
-                  </View>
-                ))
-              )}
-            </View>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+          {/* ── B. 8-day overview ── */}
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionLabel}>
+              {draft ? `MAKER — ${draft.name} (DRAFT)` : '8-DAY OVERVIEW'}
+            </Text>
+            {draft ? (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity onPress={handleDiscardDraft} style={styles.miniBtnGhost} accessibilityLabel="Discard draft">
+                  <Text style={styles.miniBtnGhostText}>DISCARD</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleSave}
+                  disabled={!!previewError}
+                  style={[styles.miniBtn, !!previewError && { opacity: 0.4 }]}
+                  accessibilityLabel="Save draft plan"
+                >
+                  <Text style={styles.miniBtnText}>SAVE</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
 
-            {/* Cue list */}
-            <Text style={styles.sectionLabel}>CUES</Text>
-            <View>
+          {overview ? (
+            <DayOverviewStrip
+              days={overview.days}
+              todayIndex={todayIndex}
+              onSelectDay={(idx) => {
+                // The day editor needs a draft to edit. If we're viewing the
+                // live plan, load it into the draft first so taps mutate a copy.
+                if (!draft && state?.activePlan) {
+                  loadPlanIntoDraft(state.activePlan).then(() => setSelectedDay(idx));
+                } else if (draft) {
+                  setSelectedDay(idx);
+                } else {
+                  setActionError('No active plan to edit — start from the BRC template via PLANS.');
+                }
+              }}
+            />
+          ) : (
+            <Text style={styles.emptyHint}>
+              {draft ? 'Previewing draft…' : 'No active plan overview. Open PLANS to start one.'}
+            </Text>
+          )}
+
+          {!draft ? (
+            <Text style={styles.helperLine}>Tap a day to edit it — the active plan loads into the maker.</Text>
+          ) : (
+            <Text style={styles.helperLine}>Edits preview live across all days. SAVE writes the plan; ACTIVATE (in PLANS) makes it run.</Text>
+          )}
+
+          {/* ── D. Cue list + controls (live) ── */}
+          {state ? (
+            <>
+              <Text style={styles.sectionLabel}>CUES (LIVE)</Text>
               {state.cues.length === 0 ? (
-                <Text style={styles.emptyHint}>This plan has no cues.</Text>
+                <Text style={styles.emptyHint}>The active plan has no cues.</Text>
               ) : (
                 state.cues.map((cue) => (
                   <CueRow key={cue.id} cue={cue} onFire={fireCue} styles={styles} C={C} />
                 ))
               )}
-            </View>
 
-            {/* Recent fires */}
-            <Text style={styles.sectionLabel}>RECENT FIRES</Text>
-            <View>
+              <Text style={styles.sectionLabel}>RECENT FIRES</Text>
               {(!state.recentFires || state.recentFires.length === 0) ? (
                 <Text style={styles.emptyHint}>No cues fired yet.</Text>
               ) : (
@@ -429,37 +482,70 @@ export default function TimelineScreen() {
                   <RecentFireRow key={`${f.cueId}:${f.atMs}:${i}`} fire={f} styles={styles} />
                 ))
               )}
-            </View>
-          </ScrollView>
-        ) : !isOffline ? (
-          <View style={styles.loadingWrap}>
-            <Text style={styles.loadingText}>Loading timeline…</Text>
-          </View>
-        ) : null}
-
-        <PlanPicker
-          visible={pickerOpen}
-          plans={plans}
-          active={state?.activePlan ?? null}
-          onPick={handlePickPlan}
-          onClose={() => setPickerOpen(false)}
-          styles={styles}
-          C={C}
-        />
+            </>
+          ) : !isOffline ? (
+            <Text style={styles.emptyHint}>Loading timeline…</Text>
+          ) : null}
+        </ScrollView>
       </View>
+
+      {/* ── Sheets ── */}
+      <PlanPickerSheet
+        visible={planPickerOpen}
+        plans={plans}
+        activePlan={state?.activePlan ?? null}
+        draftName={draft?.name ?? null}
+        onLoad={loadPlanIntoDraft}
+        onActivate={handleActivate}
+        onDuplicate={handleDuplicate}
+        onNewTemplate={handleNewTemplate}
+        onClose={() => setPlanPickerOpen(false)}
+      />
+
+      <DayEditor
+        visible={selectedDay !== null && !!draft}
+        day={selectedDayOverview}
+        plan={draft ?? brcStarterPlan()}
+        onAddCue={openAddCue}
+        onEditCue={openEditCue}
+        onDeleteCue={handleDeleteCue}
+        onClose={() => setSelectedDay(null)}
+      />
+
+      {draft ? (
+        <CueEditorSheet
+          visible={cueSheetOpen}
+          initialCue={editingCue}
+          plan={draft}
+          playlists={playlists}
+          dayIndex={selectedDay ?? 0}
+          onSave={handleSaveCue}
+          onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
+          onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
+        />
+      ) : null}
     </View>
   );
 }
 
-// ── Cue row ─────────────────────────────────────────────────────────────
-function CueRow({
-  cue, onFire, styles, C,
-}: {
-  cue: TimelineCue;
-  onFire: (id: string) => void;
-  styles: Styles;
-  C: Palette;
-}) {
+// ── Banner ──
+function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone: 'error' | 'ok'; C?: Palette }) {
+  if (tone === 'ok' && C) {
+    return (
+      <View style={[styles.actionErrorBanner, { backgroundColor: 'transparent', borderColor: C.tertiary }]}>
+        <Text style={[styles.actionErrorText, { color: C.tertiary }]} numberOfLines={2}>{text}</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.actionErrorBanner}>
+      <Text style={styles.actionErrorText} numberOfLines={3}>{text}</Text>
+    </View>
+  );
+}
+
+// ── Cue row (live, with FIRE) ──
+function CueRow({ cue, onFire, styles, C }: { cue: TimelineCue; onFire: (id: string) => void; styles: Styles; C: Palette }) {
   const hasError = !!cue.lastError;
   return (
     <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
@@ -471,19 +557,13 @@ function CueRow({
       <Text style={[styles.cueCountdown, !cue.enabled && { color: C.icon }]}>
         {cue.enabled ? formatCountdown(cue.nextInSec) : 'off'}
       </Text>
-      <TouchableOpacity
-        onPress={() => onFire(cue.id)}
-        style={styles.fireButton}
-        accessibilityRole="button"
-        accessibilityLabel={`Fire cue ${cue.label}`}
-      >
+      <TouchableOpacity onPress={() => onFire(cue.id)} style={styles.fireButton} accessibilityLabel={`Fire cue ${cue.label}`}>
         <Text style={styles.fireButtonLabel}>FIRE</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-// ── Recent-fire row ─────────────────────────────────────────────────────
 function RecentFireRow({ fire, styles }: { fire: TimelineRecentFire; styles: Styles }) {
   const t = new Date(fire.atMs);
   const time = Number.isFinite(fire.atMs)
@@ -502,326 +582,76 @@ type Styles = ReturnType<typeof makeStyles>;
 
 function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   return StyleSheet.create({
-    container: {
-      ...globalStyles.container,
-      padding: 24,
-      flexDirection: 'column',
-    },
-    surface: {
-      flex: 1,
-      ...globalStyles.surfaceLow,
-      padding: 24,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
-    },
-    headerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 12,
-      gap: 12,
-    },
-    headerTitle: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 16,
-      color: C.text,
-      letterSpacing: 1.2,
-      textTransform: 'uppercase',
-    },
-    headerScene: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 11,
-      color: C.secondary,
-      marginTop: 2,
-    },
-    pill: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 999,
-      borderWidth: 1.5,
-      minHeight: 30,
-      justifyContent: 'center',
-    },
-    pillText: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 11,
-      letterSpacing: 0.8,
-    },
-    engineDotWrap: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-    },
-    engineDot: {
-      width: 10,
-      height: 10,
-      borderRadius: 5,
-    },
-    engineDotLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 9,
-      letterSpacing: 0.8,
-      color: C.secondary,
-    },
-    nextCueRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      marginBottom: 16,
-      flexWrap: 'wrap',
-    },
-    nextCueText: {
-      fontFamily: 'Inter_600SemiBold',
-      fontSize: 13,
-      color: C.text,
-      flexShrink: 1,
-    },
+    container: { ...globalStyles.container, padding: 24, flexDirection: 'column' },
+    surface: { flex: 1, ...globalStyles.surfaceLow, padding: 24, borderWidth: 1, borderColor: C.ghostBorder },
+    headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 12 },
+    headerTitle: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 1.2, textTransform: 'uppercase' },
+    headerScene: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 2 },
+    pill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, borderWidth: 1.5, minHeight: 30, justifyContent: 'center' },
+    pillText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8 },
+    engineDotWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    engineDot: { width: 10, height: 10, borderRadius: 5 },
+    engineDotLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.8, color: C.secondary },
+    nextCueRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
+    nextCueText: { fontFamily: 'Inter_600SemiBold', fontSize: 13, color: C.text, flexShrink: 1 },
+    endProgramBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#f5a623' },
+    endProgramText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.8, color: '#f5a623' },
     phaseChip: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
-      letterSpacing: 0.6,
-      color: C.primary,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
-      borderRadius: 8,
-      paddingHorizontal: 8,
-      paddingVertical: 3,
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: C.primary,
+      borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
     },
-    controlsRow: {
-      flexDirection: 'row',
-      gap: 10,
-      marginBottom: 20,
-      flexWrap: 'wrap',
-    },
+    controlsRow: { flexDirection: 'row', gap: 10, marginBottom: 16, flexWrap: 'wrap' },
     controlButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderRadius: 8,
-      minHeight: 44,
-      justifyContent: 'center',
+      flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 12,
+      borderRadius: 8, minHeight: 44, justifyContent: 'center',
     },
-    controlLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 12,
-      letterSpacing: 0.8,
-    },
+    controlLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.8 },
+    sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
     sectionLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 11,
-      color: C.icon,
-      letterSpacing: 1.2,
-      textTransform: 'uppercase',
-      marginTop: 8,
-      marginBottom: 10,
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.icon, letterSpacing: 1.2,
+      textTransform: 'uppercase', marginTop: 8, marginBottom: 10,
     },
-    ribbonWrap: {
-      marginBottom: 12,
-      gap: 4,
+    helperLine: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 8, marginBottom: 4 },
+    miniBtn: {
+      paddingHorizontal: 16, paddingVertical: 8, minHeight: 36, borderRadius: 8,
+      backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
     },
-    ribbonRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: 'transparent',
+    miniBtnText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: C.onPrimary },
+    miniBtnGhost: {
+      paddingHorizontal: 16, paddingVertical: 8, minHeight: 36, borderRadius: 8,
+      borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center',
     },
-    ribbonTime: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 13,
-      color: C.text,
-      width: 52,
-    },
-    ribbonLabel: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 13,
-      color: C.text,
-      flex: 1,
-    },
+    miniBtnGhostText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: C.text },
     cueRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingVertical: 12,
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
-      backgroundColor: C.surfaceContainerLowest,
-      marginBottom: 8,
+      flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14,
+      borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, marginBottom: 8,
     },
-    cueLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 14,
-      color: C.text,
-    },
-    cueTrigger: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 12,
-      color: C.secondary,
-      marginTop: 2,
-    },
-    cueError: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 11,
-      color: C.error,
-      marginTop: 4,
-    },
-    cueCountdown: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 14,
-      color: C.text,
-      minWidth: 56,
-      textAlign: 'right',
-    },
+    cueLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text },
+    cueTrigger: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 },
+    cueError: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.error, marginTop: 4 },
+    cueCountdown: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text, minWidth: 56, textAlign: 'right' },
     fireButton: {
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 8,
-      backgroundColor: C.primary,
-      minHeight: 40,
-      minWidth: 64,
-      alignItems: 'center',
-      justifyContent: 'center',
+      paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, backgroundColor: C.primary,
+      minHeight: 40, minWidth: 64, alignItems: 'center', justifyContent: 'center',
     },
-    fireButtonLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 12,
-      color: C.onPrimary,
-      letterSpacing: 0.8,
-    },
+    fireButtonLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.onPrimary, letterSpacing: 0.8 },
     fireLogRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 8,
-      backgroundColor: C.surfaceContainerLowest,
-      marginBottom: 4,
+      flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8, paddingHorizontal: 12,
+      borderRadius: 8, backgroundColor: C.surfaceContainerLowest, marginBottom: 4,
     },
-    fireLogCue: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 12,
-      color: C.text,
-      flex: 1,
-    },
-    fireLogReason: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 12,
-      color: C.secondary,
-      flex: 1,
-    },
-    fireLogTime: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 12,
-      color: C.icon,
-    },
-    emptyHint: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 12,
-      color: C.secondary,
-      paddingVertical: 8,
-      paddingHorizontal: 4,
-    },
-    loadingWrap: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 16,
-    },
-    loadingText: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 14,
-      color: C.secondary,
-    },
+    fireLogCue: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, flex: 1 },
+    fireLogReason: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, flex: 1 },
+    fireLogTime: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon },
+    emptyHint: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, paddingVertical: 8, paddingHorizontal: 4 },
     offlineBanner: {
-      backgroundColor: C.errorContainer,
-      borderColor: C.error,
-      borderWidth: 1,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
+      backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 12,
+      padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 12,
     },
-    offlineTitle: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      color: C.error,
-      fontSize: 14,
-      letterSpacing: 0.8,
-    },
-    offlineBody: {
-      fontFamily: 'Inter_400Regular',
-      color: C.error,
-      fontSize: 12,
-      marginTop: 4,
-    },
+    offlineTitle: { fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 14, letterSpacing: 0.8 },
+    offlineBody: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12, marginTop: 4 },
     actionErrorBanner: {
-      backgroundColor: C.errorContainer,
-      borderColor: C.error,
-      borderWidth: 1,
-      borderRadius: 8,
-      padding: 12,
-      marginBottom: 12,
+      backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12,
     },
-    actionErrorText: {
-      fontFamily: 'Inter_400Regular',
-      color: C.error,
-      fontSize: 12,
-    },
-    modalBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.5)',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24,
-    },
-    modalCard: {
-      width: '100%',
-      maxWidth: 420,
-      maxHeight: '70%',
-      backgroundColor: C.surfaceContainerLow,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
-      padding: 20,
-    },
-    modalTitle: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 14,
-      color: C.text,
-      letterSpacing: 1,
-      textTransform: 'uppercase',
-      marginBottom: 12,
-    },
-    modalEmpty: {
-      fontFamily: 'Inter_400Regular',
-      fontSize: 13,
-      color: C.secondary,
-      paddingVertical: 16,
-    },
-    planRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 14,
-      paddingHorizontal: 14,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
-      marginBottom: 8,
-    },
-    planRowText: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 14,
-      color: C.text,
-    },
+    actionErrorText: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12 },
   });
 }
