@@ -35,6 +35,16 @@
       MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
       MODULATE sliderKick   (kick)   <- micKick  // vintage W blinder pop (sec 2)
       MODULATE sliderRadius (radius) <- micFlux  // how far attractors travel
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  The vintage heads (sectionId==2) are the headline audience BLINDER: a small
+  always-on warm-white keep (whiteLevel) near attractor cores, driven HARD on the
+  kick (whiteKick + the kick slider) for the punch. blinderBite shapes how
+  snappy/hard the bite lands (pow on the kick envelope). The pars (sectionId==1)
+  carry a gentler white core scaled by whiteLevel. White is ADDITIVE over the
+  cp1<->cp2 field (hueSpread stays >=0.10 — never washes the rig white).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -53,6 +63,9 @@ export var falloff = 2.5;
 export var focus = 1.5;
 export var colorVariation = 0.35;
 export var blackoutTexture = 0.0;
+export var whiteLevel = 0.5;       // WHITE: overall white amount / keep (micLow)
+export var whiteKick = 0.0;        // WHITE: kick-driven blinder bite (micKick)
+export var blinderBite = 0.6;      // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.92, cp1S = 1.0, cp1V = 1.0; // Classic Red (deep crimson-red)
 export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0; // Yellow/Orange (gold->yellow)
@@ -68,6 +81,9 @@ export function sliderFalloff(v) { falloff = v; }
 export function sliderFocus(v) { focus = v; }
 export function sliderColorVariation(v) { colorVariation = v; }
 export function sliderBlackoutTexture(v) { blackoutTexture = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Palette RGB cache — VERBATIM from 27_swipe (blend in RGB, not HSV) ────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -245,21 +261,35 @@ export function render3D(index, x, y, z) {
   var outA = 0.0;
 
   // ── Per-section roles ──────────────────────────────────────────────────────
+  // White controls (clamped). whiteKeep = overall amount, whiteBite = kick pop,
+  // bite = attack snap (pow on the kick envelope so higher = harder/snappier).
+  var whiteKeep = clamp01(whiteLevel);
+  var whiteBite = clamp01(whiteKick);
+  var bite = clamp01(blinderBite);
+  // Combined kick envelope driving the blinder: the kick slider IS the beat
+  // envelope; whiteKick adds extra pop on top; blinderBite sharpens the attack.
+  var kickEnv = clamp01(kick * (0.7 + 0.6 * whiteBite));
+  kickEnv = pow(kickEnv, 1.0 + bite * 2.0);
+
   if (sectionId == 3) {
     // bars — plain colour cores
   } else if (sectionId == 2) {
-    // vintage — W + amber heads; kick drives the W channel hard (blinders).
-    outW = outW + v * v * 0.6 * gain;
+    // vintage — headline audience BLINDER. Always-on warm-white keep near cores
+    // (whiteKeep) glows tungsten; on the kick the W channel is driven HARD
+    // (kickEnv) for the punch. Amber rides the warm keep for tungsten feel.
+    outW = outW + v * v * (0.30 + 0.60 * whiteKeep) * gain;     // warm keep near cores
     outA = outA + v * 0.4 * gain;
-    var blind = kick * (0.5 + 0.5 * v);   // kick pop, strongest near a core
+    var blind = kickEnv * (0.5 + 0.5 * v);   // kick pop, strongest near a core
     outW = outW + blind;
-    outA = outA + blind * 0.5;
+    outA = outA + blind * 0.4;
   } else if (sectionId == 1) {
-    // pars — brighter cores + a crisp white core punch.
+    // pars — brighter cores + a crisp white core punch (scaled by whiteLevel,
+    // with an extra kick pop so the cores flash on the beat).
     outR = outR * 1.15;
     outG = outG * 1.15;
     outB = outB * 1.15;
-    outW = outW + max(0.0, 1.0 - d * fall * 2.0) * 0.5 * gain;
+    var core = max(0.0, 1.0 - d * fall * 2.0);
+    outW = outW + core * (0.25 + 0.45 * whiteKeep) * (1.0 + kickEnv * 0.8) * gain;
   }
 
   // Subtle colour-variation value shimmer (kept gentle so we hug the palette).

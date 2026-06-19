@@ -26,6 +26,11 @@
     - detail     : AUDIO — shimmer glint sharpness/density (highs/sparkle).
     - radius     : AUDIO — how far glints travel per breath / glint reach.
     - kick       : AUDIO — brightness pop on the kick.
+    - whiteLevel : overall WHITE amount — white core under the glints + warm
+                   vintage keep. (audio)
+    - whiteKick  : kick-driven WHITE pop on the glint cores. (audio)
+    - whiteWarmth: tint of the white — warm amber (A) at 0 -> cool/UV (U) at 1,
+                   so the candle-glints can read tungsten-warm or moonlight-cool.
     - colorPalette1/2 : cp1 (wash) -> cp2 (glint), strict RGB blend.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
@@ -33,6 +38,16 @@
       MODULATE sliderDetail (detail) <- micHigh   // shimmer sparkle
       MODULATE sliderRadius (radius) <- micFlux   // glint reach / travel
       MODULATE sliderKick   (kick)   <- micKick   // brightness pop
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // glint-core white pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  This is a GENTLE white pattern (no hard blinder, matching the candlelight feel):
+  a soft white CORE rides the crisp shimmer glints (under the cp2 colour) and a
+  warm-white keep glows on the vintage heads. whiteWarmth splits the white tint
+  amber(A)<->cool/UV(U). White is ADDITIVE over the cp1/cp2 wash (hueSpread stays
+  high — never washes the rig white), gated by the level gain so it doesn't
+  decorrelate the PRIMARY.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -42,6 +57,9 @@ export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
 export var detail = 0.4;         // AUDIO: shimmer sharpness / density
 export var radius = 0.4;         // AUDIO: glint travel reach
 export var kick = 0.0;           // AUDIO: kick brightness pop
+export var whiteLevel = 0.45;    // WHITE: overall white amount / keep (micLow)
+export var whiteKick = 0.0;      // WHITE: kick-driven glint-core pop (micKick)
+export var whiteWarmth = 0.35;   // WHITE: warm amber(A) <-> cool/UV(U) tint
 
 export var cp1H = 0.08, cp1S = 1.0, cp1V = 1.0; // base wash (warm amber)
 export var cp2H = 0.52, cp2S = 0.85, cp2V = 1.0; // shimmer glints (cool moonlight)
@@ -54,6 +72,9 @@ export function sliderLevel(v) { level = v; }
 export function sliderDetail(v) { detail = v; }
 export function sliderRadius(v) { radius = v; }
 export function sliderKick(v) { kick = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var BREATH_RATE = 0.12;     // breaths per second at localSpeed = 1.0
@@ -187,8 +208,26 @@ export function render3D(index, wx, wy, wz) {
   var g = clamp01(pg1 * washV + pg2 * glintV);
   var b = clamp01(pb1 * washV + pb2 * glintV);
 
-  // A whisper of amber warmth on the vintage heads keeps the candlelight feel.
-  var outA = (sectionId == 2) ? clamp01(washV * 0.2) : 0.0;
+  // WHITE (gentle, additive over the glints). whiteLevel sets the amount, whiteKick
+  // adds a soft pop on the kick. The white CORE rides the glint amount so only the
+  // bright shimmer cores whiten — never the whole rig. Gated by the level gain so
+  // it doesn't decorrelate the PRIMARY.
+  var whiteKeep = clamp01(whiteLevel);
+  var whiteBite = clamp01(whiteKick);
+  var whiteTint = clamp01(whiteWarmth);
+  var whiteCore = glint * (0.18 + 0.5 * whiteKeep) * (0.7 + 0.8 * whiteBite * kick)
+                * gain;
+  var outW = clamp01(whiteCore);
 
-  rgbwau(r, g, b, 0.0, outA, 0.0);
+  // A whisper of warm-white keep on the vintage heads keeps the candlelight feel,
+  // raised by whiteLevel. whiteWarmth tilts the tint amber(A)<->cool/UV(U).
+  var vintKeep = (sectionId == 2)
+    ? clamp01(washV * (0.15 + 0.35 * whiteKeep)) : 0.0;
+  outW = clamp01(outW + vintKeep);
+  // Tint the emitted white amber<->UV; the vintage keep retains the amber base.
+  var tintMag = outW;
+  var outA = tintMag * (1.0 - whiteTint) * 0.5 + ((sectionId == 2) ? clamp01(washV * 0.2) : 0.0);
+  var outU = tintMag * whiteTint * 0.5;
+
+  rgbwau(r, g, b, outW, clamp01(outA), clamp01(outU));
 }

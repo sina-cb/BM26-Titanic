@@ -32,12 +32,27 @@
     direction   : tunnel travel into/out-of screen + spin direction (guarded,
                   never freezes). The pattern ALSO auto-reverses on its own on an
                   incommensurate golden-ratio cadence (organic, not lockstep).
+    whiteLevel  : overall WHITE amount — pars W flash + vintage always-on keep. (audio)
+    whiteKick   : kick-driven WHITE pop — the vintage-head BLINDER bite. (audio)
+    whiteWarmth : tint of the vintage white: warm amber (A) at 0 -> cool/UV (U)
+                  at 1, so the blinder reads tungsten-warm or cool-punch.
     colorPalette1/2 : strict cp1<->cp2; blended in RGB space.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
       MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
       MODULATE sliderKick   (kick)   <- micKick   // beat pop + vintage W blinders
       MODULATE sliderRadius (radius) <- micFlux   // tunnel speed / arm spread
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  The vintage heads (sectionId==2) are the headline audience BLINDER: a small
+  always-on warm-white keep (whiteLevel) glows tungsten between hits, and on the
+  kick the W channel is driven HARD (whiteKick) for the punch. whiteWarmth splits
+  the tint amber(A)<->cool/UV(U). The pars (sectionId==1) carry a subtler W flash
+  scaled by whiteLevel. White is ADDITIVE over the cp1<->cp2 helix (hueSpread
+  stays high). The beat `kick` slider still drives the body pulse; whiteKick is
+  the dedicated white pop on top.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -49,6 +64,9 @@ export var count = 0.18;        // armCount selector
 export var twistFreqN = 0.625;  // twistFreq selector (maps to -10..30)
 export var contrast = 1.5;      // arm crispness
 export var direction = 0.75;    // tunnel/spin heading (0.5 = center)
+export var whiteLevel = 0.5;    // WHITE: overall white amount / vintage keep (audio: micLow)
+export var whiteKick = 0.0;     // WHITE: kick-driven blinder bite (audio: micKick)
+export var whiteWarmth = 0.3;   // WHITE: warm amber(A) <-> cool/UV(U) tint of the white
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Cyan default (cp1)
 export var cp2H = 0.0, cp2S = 1.0, cp2V = 1.0; // Red default  (cp2)
@@ -68,6 +86,9 @@ export function sliderDirection(v) {
   else if (d < 0.0 && d > -0.06) d = -0.06;
   globalDir = d;
 }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var TRAVEL_RATE = 0.55;   // tunnel turns/sec at localSpeed=1, radius=0.5
@@ -126,6 +147,9 @@ var beatPulse = 0.0;       // 0..1 beat pulse this frame
 var headingNow = 1.0;      // resolved heading this frame (manual x auto-flip)
 var armCount = 3.0;        // resolved arm count this frame
 var twistFreq = 4.0;       // resolved twist freq this frame
+var whiteKeep = 0.0;       // resolved overall white amount this frame
+var whiteBite = 0.0;       // resolved kick-driven blinder bite this frame
+var whiteTint = 0.0;       // resolved white tint: 0 warm(A) -> 1 cool/UV(U)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -177,6 +201,12 @@ export function beforeRender(delta) {
   // Resolved controls.
   armCount = 1.0 + floor(count * 12.0);        // 1..13 arms
   twistFreq = -10.0 + twistFreqN * 40.0;       // -10..30
+
+  // White controls resolved once per frame (clamped). whiteKeep = always-on
+  // amount, whiteBite = kick-driven blinder pop, whiteTint = amber<->UV split.
+  whiteKeep = clamp01(whiteLevel);
+  whiteBite = clamp01(whiteKick);
+  whiteTint = clamp01(whiteWarmth);
 }
 
 export function render3D(index, x, y, z) {
@@ -205,23 +235,32 @@ export function render3D(index, x, y, z) {
   var outV = floorv;
   var outW = 0.0;
   var outA = 0.0;
+  var outU = 0.0;
 
   if (sectionId == 3) {
     // BARS — depth-faded helix tunnel walls (fade out toward the axis).
     var dfade = dist * 2.4; if (dfade > 1.0) dfade = 1.0;
     outV = floorv + v * 1.5 * dfade;
   } else if (sectionId == 1) {
-    // PARS — beat-pop core + W flash on the beat.
+    // PARS — beat-pop core + a subtler W flash on the beat, scaled by whiteLevel.
     outV = floorv + v * 0.6;
     if (beatPulse > 0.0 && field > 0.0) {
       outV = max(outV, 0.55 + 0.45 * beatPulse);
-      outW = 0.85 * beatPulse;
+      // White flash: overall amount via whiteKeep, extra pop via whiteBite.
+      outW = beatPulse * (0.30 + 0.55 * whiteKeep) * (0.6 + 0.7 * whiteBite);
     }
   } else {
-    // VINTAGE (sectionId == 2) — W + amber blinders, driven HARD by the kick.
+    // VINTAGE (sectionId == 2) — headline audience BLINDER. Always-on warm-white
+    // keep (whiteKeep) glows tungsten; on the kick whiteBite drives W HARD. The
+    // beat pulse (carrying the kick slider) modulates the bite so it slams on
+    // the beat. whiteTint splits the white between amber(A) warm and UV(U) cool.
     outV = floorv + v * 0.9;
-    outW = (0.25 * v + 0.9 * beatPulse) * (0.5 + 0.5 * kick);
-    outA = 0.45 * v + 0.35 * beatPulse;
+    var ambW = whiteKeep * (0.20 + 0.30 * v);         // calm warm keep
+    var hitW = whiteBite * (0.5 + 0.5 * v) + beatPulse * (0.5 + 0.7 * whiteKeep);
+    outW = ambW + hitW;                                // drive W HARD on the kick
+    var wmag = clamp01(outW);
+    outA = wmag * (1.0 - whiteTint) * 0.6;             // tungsten warmth
+    outU = wmag * whiteTint * 0.5;                     // cool / UV bite
   }
 
   // Colour: cp1<->cp2 blended in RGB space, drifting down the tunnel (√3 ratio).
@@ -240,6 +279,7 @@ export function render3D(index, x, y, z) {
   b = clamp01(b * outV * gain);
   outW = clamp01(outW * gain);
   outA = clamp01(outA * gain);
+  outU = clamp01(outU * gain);
 
-  rgbwau(r, g, b, outW, outA, 0.0);
+  rgbwau(r, g, b, outW, outA, outU);
 }

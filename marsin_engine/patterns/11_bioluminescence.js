@@ -18,11 +18,24 @@
     driven sign (incommensurate ~91s period) occasionally flips the current's
     travel on its own so it feels organic, not mechanical.
 
+  KICK-GATED PRIMARY: validate the micLow PRIMARY corr on --synth kick_4floor
+  (full_track's low band is near-constant so corr reads lower there).
+
   AUDIO (modulators-only — never read CPC audio globals natively):
       MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
       MODULATE sliderKick   (kick)   <- micKick   // crest brightness pop
       MODULATE sliderRadius (radius) <- micFlux   // how far crests travel / spread
       MODULATE sliderDetail (detail) <- micHigh   // fine crest sharpness / shimmer
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // crest-core white pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  GENTLE white pattern (no hard blinder — matches the soft blacklight feel): a
+  crisp white SPARK rides only the crest peaks (additive under the cp1/cp2 colour),
+  controlled by whiteLevel (amount) and whiteKick (kick pop). whiteWarmth tilts the
+  white tint between warm amber (A) and cool/UV (U) — natural here since the
+  pattern already carries a signature UV undertow on the u channel (uvIntensity).
+  White is ADDITIVE (hueSpread stays high — never washes the rig white).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -34,6 +47,9 @@ export var radius = 0.5;       // AUDIO: crest travel / spread distance
 export var detail = 0.5;       // AUDIO: crest sharpness / shimmer
 export var density = 0.4;      // spatial frequency of the swell
 export var uvIntensity = 0.6;  // additive UV undertow
+export var whiteLevel = 0.4;   // WHITE: overall white crest amount / keep (micLow)
+export var whiteKick = 0.0;    // WHITE: kick-driven crest-core white pop (micKick)
+export var whiteWarmth = 0.4;  // WHITE: warm amber(A) <-> cool/UV(U) tint of the white
 
 export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Ambient swell
 export var cp2H = 0.3, cp2S = 1.0, cp2V = 1.0; // Crest pop
@@ -48,6 +64,9 @@ export function sliderRadius(v) { radius = v; }
 export function sliderDetail(v) { detail = v; }
 export function sliderDensity(v) { density = v; }
 export function sliderUvGlow(v) { uvIntensity = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var MAX_RATE = 0.55;         // base drift turns/sec at localSpeed = 1.0
@@ -169,11 +188,22 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tcol) * v;
   var b = (pb1 + (pb2 - pb1) * tcol) * v;
 
-  // Additive UV undertow — the signature blacklight glow.
+  // Additive UV undertow — the signature blacklight glow (kept on its own knob).
   var uvGlow = wave(driftUV * 0.18 - pct * 0.5 + pcy * 0.2);
   var outU = uvGlow * uvIntensity * 0.6 * level;
-  // Crisp white spark on the crest peak.
-  var outW = crest * 0.4 * (0.5 + kick * 0.5) * level;
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(outW), 0.0, clamp01(outU));
+  // WHITE crest spark (gentle, additive on the crest peaks only). whiteLevel sets
+  // the amount, whiteKick the kick pop; gated by level so it tracks the PRIMARY.
+  var whiteKeep = clamp01(whiteLevel);
+  var whiteBite = clamp01(whiteKick);
+  var whiteTint = clamp01(whiteWarmth);
+  var outW = crest * (0.18 + 0.55 * whiteKeep) * (0.5 + kick * 0.5 + whiteBite * 0.7)
+           * level;
+  outW = clamp01(outW);
+  // Tint the white spark amber(A)<->cool/UV(U); the cool side reinforces the
+  // blacklight feel, the warm side reads like a phosphorescent glow.
+  var outA = outW * (1.0 - whiteTint) * 0.5;
+  outU = outU + outW * whiteTint * 0.5;
+
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), outW, clamp01(outA), clamp01(outU));
 }

@@ -26,6 +26,16 @@
       MODULATE sliderKick   (kick)   <- micKick     // kick -> surf crest + Vintage white blinder pop
       MODULATE sliderRadius (radius) <- micFlux     // dune fold depth / how far sand shifts
       MODULATE sliderDetail (detail) <- micHigh     // dune contrast / surf sharpness
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  The Vintage heads (sectionId==2) are the headline audience BLINDER: a small
+  always-on warm-white keep (whiteLevel) glows tungsten, driven HARD on the kick
+  (the kick slider + whiteKick) for the punch. blinderBite shapes how snappy/hard
+  the bite lands (pow on the kick envelope). The Pars surf crests (sectionId==1)
+  carry a white crest scaled by whiteLevel. White is ADDITIVE over the cp1<->cp2
+  amber/teal dunes (hueSpread stays high — never washes the rig white).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -38,6 +48,9 @@ export var detail = 0.5;         // audio: dune contrast / surf sharpness (micHi
 export var duneScale = 0.42;     // dune density (0..1)
 export var stageSurf = 0.6;      // surf-line strength on the Pars (0..1)
 export var amberWarmth = 0.55;   // Vintage amber warmth (0..1)
+export var whiteLevel = 0.5;     // WHITE: overall white amount / vintage keep (micLow)
+export var whiteKick = 0.0;      // WHITE: kick-driven blinder bite (micKick)
+export var blinderBite = 0.6;    // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.08, cp1S = 0.90, cp1V = 1.0; // amber sand
 export var cp2H = 0.47, cp2S = 0.90, cp2V = 1.0; // teal trough
@@ -57,6 +70,9 @@ export function sliderDetail(v) { detail = v; }
 export function sliderDuneScale(v) { duneScale = v; }
 export function sliderStageSurf(v) { stageSurf = v; }
 export function sliderAmberWarmth(v) { amberWarmth = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -104,6 +120,8 @@ var dirSign = 1.0;
 var liveScale = 6.0;
 var foldDepth = 0.2;
 var duneSharp = 1.5;
+var whiteKeep = 0.0;     // resolved overall white amount this frame
+var kickEnv = 0.0;       // resolved kick blinder envelope this frame (bite-shaped)
 var PHASE_WRAP = 10000.0;
 
 export function beforeRender(delta) {
@@ -128,6 +146,14 @@ export function beforeRender(delta) {
   liveScale = 3.0 + duneScale * 8.0;          // 0..1 -> 3..11
   foldDepth = 0.08 + radius * 0.30;           // micFlux: dune fold depth
   duneSharp = 0.8 + detail * 2.6;             // micHigh: dune contrast
+
+  // White blinder controls: the kick slider IS the beat envelope; whiteKick adds
+  // extra pop on top; blinderBite sharpens the attack (pow exponent).
+  whiteKeep = clamp01(whiteLevel);
+  var bite = clamp01(blinderBite);
+  var rawKick = clamp01(kick * (0.7 + 0.6 * clamp01(whiteKick)));
+  kickEnv = pow(rawKick, 1.0 + bite * 2.0);
+
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -167,13 +193,17 @@ export function render3D(index, x, y, z) {
     var surf = pow(wave(surfPhase + nx * 2.0 + ny * 0.7 + index * 0.21), 6.0);
     var crest = surf * (1.0 + kick * 1.2);
     stage = (0.06 + crest) * (0.30 + stageSurf * 0.70);
-    white = crest * stageSurf * 0.5;
+    // White surf crest scaled by whiteLevel (amount) with an extra kick pop.
+    white = crest * stageSurf * (0.20 + 0.55 * whiteKeep) * (1.0 + kickEnv * 0.6);
   } else if (sectionId == 2) {
-    // Vintage heads — amber warmth + white blinder pop on the kick.
+    // Vintage heads — headline audience BLINDER. Amber warmth + always-on warm
+    // white keep (whiteLevel) glows tungsten; on the kick the W channel is driven
+    // HARD (kickEnv, snappiness via blinderBite) for the punch.
     var ember = wave(surfPhase * 0.47 + index * 0.13 + ny * 0.9);
     amber = (0.10 + ember * 0.55) * amberWarmth;
     stage = amber * 0.40 + dune * 0.15;
-    white = kick * 0.85;   // vintage-blinder: drive W hard on the kick
+    var keep = whiteKeep * (0.06 + ember * 0.10);   // warm white rest-glow
+    white = keep + kickEnv * 0.9;                    // drive W hard on the kick
   }
 
   // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
