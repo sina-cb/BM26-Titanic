@@ -44,14 +44,14 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;      // spin dir (center guarded, auto-varies)
-export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var kick = 0.0;           // AUDIO: confetti burst pop
-export var radius = 0.4;         // AUDIO: travel reach / speck size
-export var density = 0.45;       // AUDIO: speck count / sparkle
-export var whiteLevel = 0.3;     // WHITE: overall white amount (speck glint + vintage keep)
-export var whiteKick = 0.0;      // WHITE: kick-driven white flash / blinder pop (audio target)
-export var blinderBite = 0.6;    // WHITE: vintage-head blinder snap / concentration
+export var direction = 0.5;      // spin dir (center guarded, auto-varies)
+export var level = 0.5;          // AUDIO PRIMARY: overall brightness gain
+export var kick = 0.5;           // AUDIO: confetti burst pop
+export var radius = 0.5;         // AUDIO: travel reach / speck size
+export var density = 0.5;        // AUDIO: speck count / sparkle
+export var whiteLevel = 0.5;     // WHITE: overall white amount (speck glint + vintage keep)
+export var whiteKick = 0.5;      // WHITE: kick-driven white flash / blinder pop (audio target)
+export var blinderBite = 0.5;    // WHITE: vintage-head blinder snap / concentration
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;  // confetti A (red)
 export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // confetti B (green)
@@ -182,10 +182,15 @@ export function render3D(index, wx, wy, wz) {
 
   // PRIMARY audio: one level gain on the whole speck field. BASE_FLOOR keeps a
   // calm visible base in silence (mission-critical visibility).
-  var gain = BASE_FLOOR + level * 0.95;
+  var gain = 0.07 + level * 0.93;
   var kickPop = kick * 0.9;
 
-  var amt = (speck * (0.85 + radius * 0.4) + spark * 0.7) * gain * (1.0 + kickPop);
+  // Gentle autonomous "gust": a slow, low-amplitude swell of the speck field on
+  // an incommensurate swirl-phase rate so the cyclone visibly surges even with no
+  // audio (keeps the silent wash ANIMATING). Small amplitude so it barely touches
+  // the level-driven PRIMARY budget (corr stays clean).
+  var gust = 0.86 + 0.14 * sin((swirlPhase * 0.37 + sparkPhase * 0.19) * PI2);
+  var amt = (speck * (0.85 + radius * 0.4) + spark * 0.7) * gain * (1.0 + kickPop) * gust;
   // Ambient confetti haze: a small UNIFORM level-coupled base (rides `level` with
   // no swirl-phase wobble) so total rig brightness tracks the PRIMARY cleanly,
   // plus a tiny phase-flecked term for life. Keeps silence calm-but-visible.

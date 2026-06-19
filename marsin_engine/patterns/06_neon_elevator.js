@@ -52,14 +52,14 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.75;     // >0.5 up, <0.5 down (center guarded)
-export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var kick = 0.0;           // AUDIO: arrival colour "ding" on the Par row
-export var radius = 0.4;         // AUDIO: floor thickness / car glow height
-export var stepCount = 5.0;      // floors in the stack
-export var whiteLevel = 0.4;     // WHITE: vintage penthouse white keep
-export var whiteKick = 0.0;      // WHITE: kick-driven vintage blinder bite
-export var blinderBite = 0.6;    // WHITE: blinder attack/decay snap
+export var direction = 0.5;      // >0.5 up, <0.5 down (center guarded, auto-varies)
+export var level = 0.5;          // AUDIO PRIMARY: overall brightness gain
+export var kick = 0.5;           // AUDIO: arrival colour "ding" on the Par row
+export var radius = 0.5;         // AUDIO: floor thickness / car glow height
+export var stepCount = 5.0;      // floors in the stack (5 = clean stack; see sliderSteps)
+export var whiteLevel = 0.5;     // WHITE: vintage penthouse white keep
+export var whiteKick = 0.5;      // WHITE: kick-driven vintage blinder bite
+export var blinderBite = 0.5;    // WHITE: blinder attack/decay snap
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Bottom floor colour (cyan)
 export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // Top floor colour (magenta)
@@ -221,7 +221,7 @@ export function render3D(index, wx, wy, wz) {
   // taller glowing car that spans more of the shaft. Track the GLIDING carY (not
   // the quantized floor) so the car hands brightness smoothly between sections
   // as it rises/falls — total energy stays roughly constant (level dominates).
-  var thick = 0.22 + radius * 0.22;
+  var thick = 0.16 + radius * 0.40;
 
   var dist = abs(visualY - carY);
   var v = 1.0 - (dist / thick);
@@ -243,7 +243,7 @@ export function render3D(index, wx, wy, wz) {
   // budget on EVERY pixel, so total rig brightness tracks `level` (not the car's
   // animation phase). The crisp car core rides on top as a smaller accent.
   // BASE_FLOOR keeps a calm, non-black base so silence is still visible.
-  var gain = BASE_FLOOR + level * 0.96;
+  var gain = 0.10 + level * 0.90;
   // Faint ALWAYS-FORWARD shaft shimmer / floor-indicator creep: a low-amplitude
   // travelling ripple up the shaft on the independent shimPhase clock. A SAWTOOTH
   // (constant-slope, never-zero temporal derivative) per-pixel creep guarantees

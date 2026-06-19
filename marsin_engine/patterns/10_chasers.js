@@ -37,11 +37,11 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;      // run dir (center guarded, auto-varies)
-export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var kick = 0.0;           // AUDIO: head flare pop
-export var radius = 0.45;        // AUDIO: tail length / head size
-export var count = 0.4;          // AUDIO: number of chasers
+export var direction = 0.5;      // run dir (center guarded, auto-varies)
+export var level = 0.5;          // AUDIO PRIMARY: overall brightness gain
+export var kick = 0.5;           // AUDIO: head flare pop
+export var radius = 0.5;         // AUDIO: tail length / head size
+export var count = 0.5;          // AUDIO: number of chasers
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;  // head (red)
 export var cp2H = 0.55, cp2S = 1.0, cp2V = 1.0; // tail (cyan trail)
@@ -162,7 +162,7 @@ export function render3D(index, wx, wy, wz) {
   // it re-grows on the new side smoothly — no flip seam.
   var tailLen = (0.03 + radius * 0.13) * (0.30 + 0.70 * velMag);
 
-  var gain = BASE_FLOOR + level * 0.95;
+  var gain = 0.07 + level * 0.93;
   var kickPop = kick * 0.9;
 
   // How many chasers are flying (count = AUDIO). Always >= 5 so the fleet total

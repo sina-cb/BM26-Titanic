@@ -52,14 +52,14 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;      // glint drift dir (center guarded, auto-varies)
-export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var detail = 0.4;         // AUDIO: shimmer sharpness / density
-export var radius = 0.4;         // AUDIO: glint travel reach
-export var kick = 0.0;           // AUDIO: kick brightness pop
-export var whiteLevel = 0.45;    // WHITE: overall white amount / keep (micLow)
-export var whiteKick = 0.0;      // WHITE: kick-driven glint-core pop (micKick)
-export var whiteWarmth = 0.35;   // WHITE: warm amber(A) <-> cool/UV(U) tint
+export var direction = 0.5;      // glint drift dir (center guarded, auto-varies)
+export var level = 0.5;          // AUDIO PRIMARY: overall brightness gain
+export var detail = 0.5;         // AUDIO: shimmer sharpness / density
+export var radius = 0.5;         // AUDIO: glint travel reach
+export var kick = 0.5;           // AUDIO: kick brightness pop
+export var whiteLevel = 0.5;     // WHITE: overall white amount / keep (micLow)
+export var whiteKick = 0.5;      // WHITE: kick-driven glint-core pop (micKick)
+export var whiteWarmth = 0.5;    // WHITE: warm amber(A) <-> cool/UV(U) tint
 
 export var cp1H = 0.08, cp1S = 1.0, cp1V = 1.0; // base wash (warm amber)
 export var cp2H = 0.52, cp2S = 0.85, cp2V = 1.0; // shimmer glints (cool moonlight)
@@ -193,7 +193,7 @@ export function render3D(index, wx, wy, wz) {
 
   // PRIMARY audio: one level-driven gain on the whole pixel so total brightness
   // tracks level (not animation phase). BASE_FLOOR keeps silence calm/visible.
-  var gain = BASE_FLOOR + level * 0.95;
+  var gain = 0.10 + level * 0.90;
 
   // Glint amount adds the cp2 colour on top of the wash; kick gives a uniform
   // brightness pop (gain-scaled so it doesn't decorrelate the PRIMARY).

@@ -45,14 +45,14 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;      // porthole drift dir (center guarded, auto-varies)
-export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var kick = 0.0;           // AUDIO: porthole flare pop
-export var radius = 0.4;         // AUDIO: porthole travel / glow size
-export var detail = 0.4;         // AUDIO: porthole count / sharpness
+export var direction = 0.5;      // porthole drift dir (center guarded, auto-varies)
+export var level = 0.5;          // AUDIO PRIMARY: overall brightness gain
+export var kick = 0.5;           // AUDIO: porthole flare pop
+export var radius = 0.5;         // AUDIO: porthole travel / glow size
+export var detail = 0.5;         // AUDIO: porthole count / sharpness
 export var whiteLevel = 0.5;     // WHITE: porthole white-core amount
-export var whiteKick = 0.0;      // WHITE: kick-driven porthole white flare pop
-export var whiteSpread = 0.35;   // WHITE: how far the white spills across cores
+export var whiteKick = 0.5;      // WHITE: kick-driven porthole white flare pop
+export var whiteSpread = 0.5;    // WHITE: how far the white spills across cores
 
 export var cp1H = 0.60, cp1S = 1.0, cp1V = 1.0; // water (deep blue)
 export var cp2H = 0.10, cp2S = 0.9, cp2V = 1.0; // porthole (warm amber)
@@ -185,7 +185,7 @@ export function render3D(index, wx, wy, wz) {
 
   // PRIMARY audio: one level gain on the whole pixel. BASE_FLOOR keeps a calm
   // visible base in silence (mission-critical).
-  var gain = BASE_FLOOR + level * 0.95;
+  var gain = 0.10 + level * 0.90;
   var kickPop = kick * 0.8;
 
   // HD CONTRAST: the deep water trough carries the calm budget; the porthole

@@ -41,15 +41,15 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // master motion rate
 export var direction = 0.5;    // current travel direction (0.5 = guarded center)
-export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
-export var kick = 0.0;         // AUDIO: crest brightness pop
+export var level = 0.5;        // AUDIO: overall brightness (PRIMARY)
+export var kick = 0.5;         // AUDIO: crest brightness pop
 export var radius = 0.5;       // AUDIO: crest travel / spread distance
 export var detail = 0.5;       // AUDIO: crest sharpness / shimmer
-export var density = 0.4;      // spatial frequency of the swell
-export var uvIntensity = 0.6;  // additive UV undertow
-export var whiteLevel = 0.4;   // WHITE: overall white crest amount / keep (micLow)
-export var whiteKick = 0.0;    // WHITE: kick-driven crest-core white pop (micKick)
-export var whiteWarmth = 0.4;  // WHITE: warm amber(A) <-> cool/UV(U) tint of the white
+export var density = 0.5;      // spatial frequency of the swell
+export var uvIntensity = 0.5;  // additive UV undertow
+export var whiteLevel = 0.5;   // WHITE: overall white crest amount / keep (micLow)
+export var whiteKick = 0.5;    // WHITE: kick-driven crest-core white pop (micKick)
+export var whiteWarmth = 0.5;  // WHITE: warm amber(A) <-> cool/UV(U) tint of the white
 
 export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Ambient swell
 export var cp2H = 0.3, cp2S = 1.0, cp2V = 1.0; // Crest pop
@@ -161,9 +161,12 @@ export function render3D(index, x, y, z) {
   var dens = 1.0 + density * 5.0;
   var spread = 0.6 + radius * 1.6;   // AUDIO: crest spatial reach
 
-  // Slow ambient swell (cp1 dominates) — incommensurate sample frequencies.
-  var swell = wave(driftA * 0.18 + pct * dens + pcy * 0.31);
-  var swell2 = wave(driftB * 0.18 + pct * dens * 1.41421 + pcy * 0.17);
+  // Ambient swell (cp1 dominates) — incommensurate sample frequencies. The
+  // temporal drift weight (0.55) is brisk enough that the swell visibly breathes
+  // within a couple of seconds even with NO audio, so the silent wash always
+  // animates (never reads static) while the spatial frequency keeps the HD relief.
+  var swell = wave(driftA * 0.55 + pct * dens + pcy * 0.31);
+  var swell2 = wave(driftB * 0.55 + pct * dens * 1.41421 + pcy * 0.17);
   var combined = swell * 0.62 + swell2 * 0.38;
 
   // Crest sharpness: detail tightens the pow exponent for crisper cores.
@@ -171,26 +174,35 @@ export function render3D(index, x, y, z) {
   var blend = pow(combined, sharp);
 
   // Crest gate travels/spreads with radius (AUDIO movement RADIUS).
-  var crestField = wave(driftA * 0.18 * spread + pct * dens * spread + pcy * 0.23);
+  var crestField = wave(driftA * 0.55 * spread + pct * dens * spread + pcy * 0.23);
   var crest = (crestField > (0.92 - radius * 0.12)) ? 1.0 : 0.0;
   crest = crest * pow(combined, 2.0);
 
-  // Brightness: ambient breathes (floor), crest pops; kick adds a pop.
-  var bri = combined * 0.7;
+  // Brightness: ambient breathes, crest pops; kick adds a pop. The ambient is
+  // gently swelled by a slow, spatially-coherent "tide" on the always-forward UV
+  // drift clock so the whole field visibly rises & ebbs even with NO audio — the
+  // silent wash is never static. Low amplitude so it barely touches the
+  // level-driven PRIMARY brightness budget.
+  // NOTE: this VM treats the bare name `v` as a reserved global (HSV value), so
+  // assigning to a local `v` silently desyncs from the arithmetic chain — the
+  // brightness local is named `bval` here so the floor/level chain is honoured.
+  var bri = combined * 0.7 * (0.74 + 0.26 * wave(driftUV * 0.27 + 0.13));
   var crestBri = crest * (0.6 + kick * 0.8);
-  var v = max(bri, crestBri);
-  v = BASE_FLOOR + v * (1.0 - BASE_FLOOR);
-  v = v * level;   // AUDIO PRIMARY: overall brightness gain
+  var bval = max(bri, crestBri);
+  // Calm-but-lit visibility FLOOR (0.20 — every pixel clears black in silence,
+  // mission critical) and the AUDIO PRIMARY level gain mapped onto a USEFUL span
+  // (calm-but-lit at slider 0, full at 1, bright at the 0.5 centre).
+  bval = (0.20 + bval * 0.80) * (0.30 + level * 0.70);
 
   // Strict cp1->cp2 RGB lerp (crest pushes toward cp2).
   var tcol = clamp01(blend + crest * 0.5);
-  var r = (pr1 + (pr2 - pr1) * tcol) * v;
-  var g = (pg1 + (pg2 - pg1) * tcol) * v;
-  var b = (pb1 + (pb2 - pb1) * tcol) * v;
+  var r = (pr1 + (pr2 - pr1) * tcol) * bval;
+  var g = (pg1 + (pg2 - pg1) * tcol) * bval;
+  var b = (pb1 + (pb2 - pb1) * tcol) * bval;
 
   // Additive UV undertow — the signature blacklight glow (kept on its own knob).
-  var uvGlow = wave(driftUV * 0.18 - pct * 0.5 + pcy * 0.2);
-  var outU = uvGlow * uvIntensity * 0.6 * level;
+  var uvGlow = wave(driftUV * 0.55 - pct * 0.5 + pcy * 0.2);
+  var outU = uvGlow * uvIntensity * 0.6 * (0.30 + level * 0.70);
 
   // WHITE crest spark (gentle, additive on the crest peaks only). whiteLevel sets
   // the amount, whiteKick the kick pop; gated by level so it tracks the PRIMARY.
@@ -198,7 +210,7 @@ export function render3D(index, x, y, z) {
   var whiteBite = clamp01(whiteKick);
   var whiteTint = clamp01(whiteWarmth);
   var outW = crest * (0.18 + 0.55 * whiteKeep) * (0.5 + kick * 0.5 + whiteBite * 0.7)
-           * level;
+           * (0.30 + level * 0.70);
   outW = clamp01(outW);
   // Tint the white spark amber(A)<->cool/UV(U); the cool side reinforces the
   // blacklight feel, the warm side reads like a phosphorescent glow.
