@@ -13,21 +13,25 @@ is self-contained.
 
 ```bash
 cd marsin_engine
-node tools/gallery/server.mjs              # default port 7070
-node tools/gallery/server.mjs --port 7070  # explicit port
-GALLERY_PORT=7070 node tools/gallery/server.mjs
+node tools/gallery/server.mjs              # port from gallery_config.json (6765)
+node tools/gallery/server.mjs --port 6765  # explicit override
+GALLERY_PORT=6765 node tools/gallery/server.mjs
 ```
 
-Default **port 7070** (binds `0.0.0.0`). It deliberately stays off the
-engine/sim range 6967–6972. On startup it prints the port, the localhost URL,
-and every non-internal IPv4 address so you can pick your Tailscale one.
+The port lives in **`gallery_config.json`** (`{ "port": 6765 }`). Resolution
+order is `--port` arg > `GALLERY_PORT` env > `gallery_config.json` > built-in
+default `6765`. A present-but-malformed config is a hard error (we never
+silently fall back to a different port). **Port 6765** binds `0.0.0.0` and
+deliberately stays off the engine/sim range 6967–6972. On startup it prints the
+port, the localhost URL, and every non-internal IPv4 address so you can pick
+your Tailscale one.
 
 ## Phone access (Tailscale)
 
 With Tailscale up on both the laptop and the phone, open:
 
 ```text
-http://<your-tailscale-ip>:7070/
+http://<your-tailscale-ip>:6765/
 ```
 
 on the phone. The server prints the candidate addresses at startup — use the
@@ -78,6 +82,7 @@ trailing `<script>` animates it.
 ## Files
 
 - `server.mjs` — the http server (index, `/w/<name>`, `/api/list`, 404).
+- `gallery_config.json` — the served port (`{ "port": 6765 }`).
 - `publish.mjs` — CLI to publish/update a widget (both forms above).
 - `widgets/` — published `<name>.html` pages (scratch; gitignored).
 - `widgets/.gitignore` — ignores everything in the dir except itself.
