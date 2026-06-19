@@ -105,6 +105,8 @@ var lifePhase = 0.0;   // always-forward life-cycle clock (never stalls)
 var dirPhase = 0.0;
 var runSgn = 1.0;
 var dirSmooth = 1.0;   // eased run direction (-1..1) — avoids tail-flip seams
+var velMag = 1.0;      // |effective velocity| this frame (tail length factor)
+var velSgn = 1.0;      // sign of effective velocity (tail orientation)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -136,22 +138,29 @@ export function beforeRender(delta) {
   if (ease > 1.0) ease = 1.0;
   dirSmooth = dirSmooth + (runSgn - dirSmooth) * ease;
 
-  // Accumulate position with the SAME eased direction so motion + tail orientation
-  // stay consistent (no discontinuity through a reversal).
-  runPhase = runPhase + dt * rate * RUN_RATE * dirSmooth;
+  // Position advances by a SIGNED velocity = a constant forward base (so comets
+  // never fully stop -> no dead-static stretch and no seam) plus an eased
+  // direction term. The effective velocity changes sign smoothly through the
+  // reversal but its magnitude stays well above zero, so the look stays alive.
+  var vel = 0.45 + 0.55 * dirSmooth;   // range ~ -0.10 .. +1.0, passes 0 smoothly
+  velSgn = vel >= 0.0 ? 1.0 : -1.0;
+  velMag = vel >= 0.0 ? vel : -vel;
+  runPhase = runPhase + dt * rate * RUN_RATE * vel;
   if (runPhase >= PHASE_WRAP) runPhase = runPhase - PHASE_WRAP;
   else if (runPhase < 0.0) runPhase = runPhase + PHASE_WRAP;
+
+  lifePhase = lifePhase + dt * rate * RUN_RATE; // always forward, never stalls
+  if (lifePhase >= PHASE_WRAP) lifePhase = lifePhase - PHASE_WRAP;
 }
 
 export function render3D(index, wx, wy, wz) {
   var nx = wx; if (nx < 0.0) nx = 0.0; else if (nx > 1.0) nx = 1.0;
 
   // Tail length and head size scale with radius (AUDIO travel feel). Kept fairly
-  // short so the comets are crisp accents, not a brightness flood. The tail also
-  // shrinks toward zero as the run direction eases through a reversal (|dirSmooth|
-  // factor), so the tail re-grows on the new side smoothly — no flip seam.
-  var dirMag = dirSmooth >= 0.0 ? dirSmooth : -dirSmooth;
-  var tailLen = (0.03 + radius * 0.13) * (0.25 + 0.75 * dirMag);
+  // short so the comets are crisp accents, not a brightness flood. The tail
+  // shrinks as the effective velocity eases through a reversal (|vel| factor), so
+  // it re-grows on the new side smoothly — no flip seam.
+  var tailLen = (0.03 + radius * 0.13) * (0.30 + 0.70 * velMag);
 
   var gain = BASE_FLOOR + level * 0.95;
   var kickPop = kick * 0.9;
@@ -184,16 +193,15 @@ export function render3D(index, wx, wy, wz) {
     // Kept shallow (0.6..1.0) so a comet never blacks out — preserves the level
     // mapping while still giving each chaser its own breathing life.
     var lifeRate = 0.7 + (sin(seed * 17.1) * 0.5 + 0.5) * 1.3;
-    var life = 0.5 + 0.5 * sin((runPhase * lifeRate + p * 0.2617) * PI2);
+    var life = 0.5 + 0.5 * sin((lifePhase * lifeRate + p * 0.2617) * PI2);
     life = 0.6 + 0.4 * life;
 
     // Distance from this pixel to the head, wrapped to nearest, oriented so the
     // tail trails BEHIND the head along the EASED run direction (consistent with
     // the position accumulation -> reversals are seamless).
-    var tailSgn = dirSmooth >= 0.0 ? 1.0 : -1.0;
     var raw = headPos - nx;
     var wrapped = raw - floor(raw + 0.5);
-    var along = wrapped * tailSgn;
+    var along = wrapped * velSgn;
 
     var v = 0.0;
     var blend = 0.0;
@@ -201,6 +209,15 @@ export function render3D(index, wx, wy, wz) {
       var tb = along / tailLen;        // 0 at head, 1 at tail tip
       v = pow(1.0 - tb, 3.2);          // crisp head, fast-fading tail (sharp)
       blend = tb;                       // head=cp1, tail=cp2
+    }
+    // Head halo: always glow the pixels nearest the head (both sides), so a slow
+    // or momentarily-paused comet never falls invisibly between pixels (no dead-
+    // static stretch). Radius ~ one inter-pixel spacing on the 52-px ring.
+    var dHead = wrapped >= 0.0 ? wrapped : -wrapped;
+    var halo = 1.0 - dHead / 0.045;
+    if (halo > 0.0) {
+      var hv = pow(halo, 2.0);
+      if (hv > v) { v = hv; if (along < 0.0) blend = 0.0; }
     }
 
     v = v * life * partGate;
