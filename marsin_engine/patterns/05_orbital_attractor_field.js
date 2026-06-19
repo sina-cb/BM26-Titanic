@@ -48,7 +48,7 @@ AUDIO_MODULATION_V1:
   kick (whiteKick + the kick slider) for the punch. blinderBite shapes how
   snappy/hard the bite lands (pow on the kick envelope). The pars (sectionId==1)
   carry a gentler white core scaled by whiteLevel. White is ADDITIVE over the
-  cp1<->cp2 field (hueSpread stays >=0.10 — never washes the rig white).
+  cp1↔cp2 field (hueSpread stays >=0.10 — never washes the rig white).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

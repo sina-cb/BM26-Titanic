@@ -37,7 +37,7 @@
     - localSpeed : resting-glow breath rate + envelope decay trim.
     - kick       : PRIMARY pulse trigger (0..1). Rising edge fires the lub-dub.
     - low        : baseline body brightness (0..1), continuous 2nd dimension.
-    - colorPalette1/2 : strict cp1<->cp2 palette (deep red body -> warm shell).
+    - colorPalette1/2 : strict cp1↔cp2 palette (deep red body -> warm shell).
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

@@ -46,7 +46,7 @@
     - phaseShift   : slides the four plane phases (lattice position).
     - kickLock     : beat jolt to the drift phase (re-bloom on kick).
     - sharpBase    : resting HD sharpness of the node cores.
-    - colorPalette1/2 : strict cp1 (nave / cancellation) <-> cp2 (window / node).
+    - colorPalette1/2 : strict cp1 (nave / cancellation) ↔ cp2 (window / node).
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

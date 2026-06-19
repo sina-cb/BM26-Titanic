@@ -51,8 +51,8 @@
 
   CONTROLS (UI order = declaration order)
     - localSpeed : tunnel spin / fly-through rate (0 = frozen helix).
-    - level      : overall brightness master  (PRIMARY <- micLow).
-    - shimmer    : prism shimmer / detail amt (SECONDARY <- micHigh).
+    - level      : overall brightness master  (PRIMARY ← micLow).
+    - shimmer    : prism shimmer / detail amt (SECONDARY ← micHigh).
     - twist      : helical twist frequency along depth (the "screw" pitch).
     - contrast   : arm sharpen — high = tight bright arms, hard black gaps.
     - arms       : number of helical arms around the tunnel.
@@ -61,10 +61,10 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // tunnel spin / fly-through rate
-export var level = 0.6;        // overall brightness master (PRIMARY <- micLow). 0.6 (near
+export var level = 0.6;        // overall brightness master (PRIMARY ← micLow). 0.6 (near
                                //   mid): bright cores still snap to 255 at rest with good
                                //   dark-gap contrast, and the micLow corr is preserved.
-export var shimmerAmt = 0.25;  // prism shimmer / detail amt (SECONDARY <- micHigh)
+export var shimmerAmt = 0.25;  // prism shimmer / detail amt (SECONDARY ← micHigh)
 export var twist = 4.0;        // helical twist frequency along depth
 export var contrast = 2.2;     // arm sharpen (tight bright arms, hard black gaps)
 export var arms = 3.0;         // number of helical arms

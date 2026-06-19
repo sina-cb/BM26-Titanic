@@ -34,7 +34,7 @@
   always-on warm-white keep (whiteLevel) glows tungsten, driven HARD on the kick
   (the kick slider + whiteKick) for the punch. blinderBite shapes how snappy/hard
   the bite lands (pow on the kick envelope). The Pars surf crests (sectionId==1)
-  carry a white crest scaled by whiteLevel. White is ADDITIVE over the cp1<->cp2
+  carry a white crest scaled by whiteLevel. White is ADDITIVE over the cp1↔cp2
   amber/teal dunes (hueSpread stays high — never washes the rig white).
 */
 

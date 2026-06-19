@@ -46,7 +46,7 @@
   This is a GENTLE white pattern (no hard blinder, matching the candlelight feel):
   a soft white CORE rides the crisp shimmer glints (under the cp2 colour) and a
   warm-white keep glows on the vintage heads. whiteWarmth splits the white tint
-  amber(A)<->cool/UV(U). White is ADDITIVE over the cp1/cp2 wash (hueSpread stays
+  amber(A)↔cool/UV(U). White is ADDITIVE over the cp1/cp2 wash (hueSpread stays
   high — never washes the rig white), gated by the level gain so it doesn't
   decorrelate the PRIMARY.
 */
@@ -221,7 +221,7 @@ export function render3D(index, wx, wy, wz) {
   var outW = clamp01(whiteCore);
 
   // A whisper of warm-white keep on the vintage heads keeps the candlelight feel,
-  // raised by whiteLevel. whiteWarmth tilts the tint amber(A)<->cool/UV(U).
+  // raised by whiteLevel. whiteWarmth tilts the tint amber(A)↔cool/UV(U).
   var vintKeep = (sectionId == 2)
     ? clamp01(washV * (0.15 + 0.35 * whiteKeep)) : 0.0;
   outW = clamp01(outW + vintKeep);

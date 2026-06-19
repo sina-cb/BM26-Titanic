@@ -37,7 +37,7 @@
     - twinkle    : per-seed sparkle amount. 2nd audio handle (micHigh).
     - coreSize   : crispness of each seed core (small = sharp points).
     - floorLvl   : faint base floor so silence still reads (never fully black).
-    - colorPalette1/2 : strict cp1<->cp2 palette (inner warm core -> outer cool).
+    - colorPalette1/2 : strict cp1↔cp2 palette (inner warm core -> outer cool).
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

@@ -53,8 +53,8 @@ AUDIO_MODULATION_V1:
   The vintage heads (sectionId==2) are the headline audience BLINDER: a small
   always-on warm-white keep (whiteLevel) glows tungsten between hits, and on the
   kick the W channel is driven HARD (whiteKick) for the punch. whiteWarmth splits
-  the tint amber(A)<->cool/UV(U). The pars (sectionId==1) carry a subtler W flash
-  scaled by whiteLevel. White is ADDITIVE over the cp1<->cp2 helix (hueSpread
+  the tint amber(A)↔cool/UV(U). The pars (sectionId==1) carry a subtler W flash
+  scaled by whiteLevel. White is ADDITIVE over the cp1↔cp2 helix (hueSpread
   stays high). The beat `kick` slider still drives the body pulse; whiteKick is
   the dedicated white pop on top.
 */

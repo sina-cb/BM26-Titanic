@@ -38,7 +38,7 @@
     - shimmer     : highlight glint on ribbon crests (2nd dim). micHigh here.
     - ribbons     : how many ribbon bands cross the rig.
     - softness    : core falloff softness (low = crisp HD core, high = satin).
-    - colorPalette1/2 : strict cp1<->cp2 silk palette.
+    - colorPalette1/2 : strict cp1↔cp2 silk palette.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

@@ -52,7 +52,7 @@
     - level      : PRIMARY audio handle — scan rate + overall brightness.
     - kick       : KICK handle — fires the edge->center crush + collision flash.
     - trail      : scanner trail length (feedback decay).
-    - colorPalette1/2 : strict cp1<->cp2 palette; scanner blends by X.
+    - colorPalette1/2 : strict cp1↔cp2 palette; scanner blends by X.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

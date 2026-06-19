@@ -46,7 +46,7 @@
     - blinder    : vintage white-blinder pop level. Kick handle (micKick).
     - shimmer    : fine warm shimmer on the wash. Highs handle (micHigh).
     - noiseScale : spatial scale of the wash (how many warm bands across the rig).
-    - colorPalette1/2 : strict cp1<->cp2 palette (deep amber/red -> warm gold).
+    - colorPalette1/2 : strict cp1↔cp2 palette (deep amber/red -> warm gold).
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
