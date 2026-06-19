@@ -49,6 +49,7 @@ import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
 import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
 import { deriveAutoViews } from './lib/auto_views.js';
+import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
@@ -69,6 +70,33 @@ const __dirname = path.dirname(__filename);
 // old `npx kill-port` which needs the network.
 const require = createRequire(import.meta.url);
 const { freeStackPorts } = require('../tools/port_cleanup.cjs');
+
+// Build the 7-lane per-pixel meta array (the buffer WasmHost packs for the
+// VM's *_with_meta render exports). Lane 6 (`viewMaskHi`) carries Tier-C
+// high views. Centralized so the boot pack, the hot-reload pack, and the
+// inView-promotion RE-pack stay byte-for-byte identical (a drift here would
+// silently mis-map view membership). `localIndices` is the per-pixel
+// localIndex array (see derivePixelLocalIndices) computed by the caller.
+function buildMetaArray(pixels, localIndices) {
+  return pixels.map((px, i) => ({
+    controllerId: px.cId || 0,
+    sectionId: px.sId || 0,
+    fixtureId: px.fId || 0,
+    viewMask: px.vMask || 0,
+    fixtureTypeId: fixtureTypeId(px.fixtureType),
+    pixelLocalIndex: localIndices[i],
+    viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word (views 31..61)
+  }));
+}
+
+// Re-pack the host meta buffer when a compile promoted a bit-free view to
+// an in-VM bit (host.metaDirty), so the newly-set bit reaches the VM before
+// the next render. A no-op when nothing was promoted. Clears the flag.
+function repackMetaIfDirty(wasmHost, pixels) {
+  if (!wasmHost || !wasmHost.metaDirty) return;
+  wasmHost.setPixelMeta(buildMetaArray(pixels, derivePixelLocalIndices(pixels)));
+  wasmHost.metaDirty = false;
+}
 
 function loadConfig() {
   try {
@@ -549,9 +577,23 @@ async function loadModel(modelName, bustCache = false) {
   const maskConstants = buildMaskConstants({ groupBits, viewMasks });
   console.log(`[Model] Pattern constants: ${Object.keys(maskConstants).join(', ') || '(none)'}`);
 
+  // AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic
+  // (see lib/in_view_intrinsic.js). Every named in-VM view is included so an
+  // unknown name fails loudly and a bit-free (Tier-A) view is recognized as
+  // PROMOTABLE (bit:0) rather than unknown. Base groups are word-0 views;
+  // presets/auto-views carry their own bit+word. A later view name wins on a
+  // (legitimately impossible — names are unique) collision.
+  const viewTable = {};
+  for (const [group, bit] of Object.entries(groupBits)) {
+    viewTable[group] = { bit, word: 0 };
+  }
+  for (const vm of viewMasks) {
+    viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
+  }
+
   return {
     pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits,
-    maskConstants, fixtureConstants,
+    maskConstants, fixtureConstants, viewTable,
   };
 }
 
@@ -682,6 +724,12 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
   function tick() {
     if (!running) return;
+
+    // If a compile since the last frame promoted a bit-free view to an
+    // in-VM bit (inView("Name") on a Tier-A auto-view, e.g. from a newly
+    // added mixer channel or a live edit), re-pack the meta buffer so the
+    // newly-set bit reaches the VM. Cheap flag check; a no-op otherwise.
+    repackMetaIfDirty(mixer.wasmHost, model.pixels);
 
     const now = performance.now();
 
@@ -1008,9 +1056,13 @@ async function main() {
   }
 
   // Model-derived MASK_*/FIX_* constants must be registered before ANY
-  // compile (boot pattern, mixer channels, live edits, blends).
+  // compile (boot pattern, mixer channels, live edits, blends). The
+  // inView("Name") view table + the on-demand bit-free-view promoter are
+  // registered alongside them so the intrinsic folds against the same model.
   wasmHost.setMaskConstants(model.maskConstants);
   wasmHost.setFixtureConstants(model.fixtureConstants);
+  wasmHost.setViewTable(model.viewTable);
+  wasmHost.setBitFreeViewPromoter(createBitFreeViewPromoter(model, wasmHost));
 
   console.log(`  Compiling pattern...`);
   const result = wasmHost.compile(patternCode);
@@ -1085,19 +1137,18 @@ async function main() {
 
   // Set V2 metadata for batch rendering, mapping abbreviation keys.
   // Tier-B adds two lanes: fixtureTypeId (canonical FIX_* id from the
-  // string fixtureType) and pixelLocalIndex (0-based per-fixture ordinal,
-  // derived here because the sim exporter does not emit it).
+  // string fixtureType) and pixelLocalIndex (0-based per-fixture ordinal).
+  // derivePixelLocalIndices PREFERS the sim exporter's authoritative
+  // per-pixel `localIndex` (new models) and falls back to the (group,fId)
+  // heuristic only for legacy models that lack it (see pixel_local_index.js;
+  // a half-migrated model throws there rather than mis-derive).
   const bootLocalIndices = derivePixelLocalIndices(model.pixels);
-  const metaArray = model.pixels.map((px, i) => ({
-    controllerId: px.cId || 0,
-    sectionId: px.sId || 0,
-    fixtureId: px.fId || 0,
-    viewMask: px.vMask || 0,
-    fixtureTypeId: fixtureTypeId(px.fixtureType),
-    pixelLocalIndex: bootLocalIndices[i],
-    viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word (views 31..61)
-  }));
+  // The boot pattern compiled ABOVE; if it tested a bit-free view via
+  // inView(), the promoter already set that bit on model.pixels, so this
+  // first pack carries it. metaDirty is cleared here (the bit is now packed).
+  const metaArray = buildMetaArray(model.pixels, bootLocalIndices);
   wasmHost.setPixelMeta(metaArray);
+  wasmHost.metaDirty = false;
 
   // 4. Create global DMX mapper (reusing simulation architecture!)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
@@ -1339,20 +1390,21 @@ async function main() {
           model.groupBits = newModel.groupBits;
           model.maskConstants = newModel.maskConstants;
           model.fixtureConstants = newModel.fixtureConstants;
+          model.viewTable = newModel.viewTable;
           wasmHost.setMaskConstants(model.maskConstants);
           wasmHost.setFixtureConstants(model.fixtureConstants);
+          // Refresh the inView("Name") table + re-seed the bit-free-view
+          // promoter against the reloaded model (new bits/membership).
+          wasmHost.setViewTable(model.viewTable);
+          wasmHost.setBitFreeViewPromoter(createBitFreeViewPromoter(model, wasmHost));
 
           wasmHost.setCoords(model.pixels);
+          // Same precedence as boot: exporter `localIndex` when present
+          // (copied onto model.pixels by the Object.assign above), else the
+          // legacy (group,fId) heuristic — see pixel_local_index.js.
           const reloadLocalIndices = derivePixelLocalIndices(model.pixels);
-          wasmHost.setPixelMeta(model.pixels.map((px, i) => ({
-            controllerId: px.cId || 0,
-            sectionId: px.sId || 0,
-            fixtureId: px.fId || 0,
-            viewMask: px.vMask || 0,
-            fixtureTypeId: fixtureTypeId(px.fixtureType),
-            pixelLocalIndex: reloadLocalIndices[i],
-            viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word
-          })));
+          wasmHost.setPixelMeta(buildMetaArray(model.pixels, reloadLocalIndices));
+          wasmHost.metaDirty = false;
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);
 

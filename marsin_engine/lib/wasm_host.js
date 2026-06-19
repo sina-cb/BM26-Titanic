@@ -4,6 +4,7 @@ import path from 'path';
 
 import { injectMaskConstants } from './view_mask_constants.js';
 import { injectFixtureConstants } from './fixture_type_constants.js';
+import { injectInViewIntrinsic } from './in_view_intrinsic.js';
 import { META_LANES, VIEW_MASK_HI_ENABLED } from './meta_abi.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,6 +26,19 @@ export class WasmHost {
     // model's fixture-typing — see engine loadModel). Injected into
     // pattern source alongside maskConstants at compile time.
     this.fixtureConstants = {};
+
+    // Model-derived AUTHORED-name -> { bit, word } table for the
+    // `inView("Name")` compile-time intrinsic (see in_view_intrinsic.js).
+    // Set by the engine after loadModel and refreshed on model hot-reload.
+    this.viewTable = {};
+
+    // Optional host hook that allocates an in-VM bit for a bit-free
+    // (Tier-A) view ON DEMAND when `inView` first tests it, sets the bit
+    // on the view's member pixels, and returns { bit, word }. When a
+    // promotion mutates the pixel meta, `metaDirty` is raised so the
+    // caller re-packs the meta buffer (see setPixelMeta) before rendering.
+    this.bitFreeViewPromoter = null;
+    this.metaDirty = false;
 
     // Pointers and Views
     this.coordPtr = 0;
@@ -88,6 +102,19 @@ export class WasmHost {
     this.fixtureConstants = constants || {};
   }
 
+  // AUTHORED-name -> { bit, word } table for the inView("Name") intrinsic.
+  setViewTable(table) {
+    this.viewTable = table || {};
+  }
+
+  // Wire the on-demand bit-free-view promoter (engine.js owns the model
+  // pixels + allocator). `fn(name) -> { bit, word }`; it must set the bit
+  // on the view's member pixels and may flip metaDirty on the host so the
+  // caller re-packs meta. Pass null to clear (no promotion available).
+  setBitFreeViewPromoter(fn) {
+    this.bitFreeViewPromoter = typeof fn === 'function' ? fn : null;
+  }
+
   // Every compile path (boot pattern, mixer channels, live-edit API,
   // blends/transitions) funnels through here, so MASK_*/FIX_* name
   // resolution is uniform: referenced-but-undeclared constants are
@@ -97,7 +124,13 @@ export class WasmHost {
   compile(code) {
     let source;
     try {
-      source = injectMaskConstants(code, this.maskConstants);
+      // `inView("Name")` folds FIRST (it may promote a bit-free view to an
+      // in-VM bit on demand) so its emitted `(viewMask & <bit>)` /
+      // `(viewMaskHi & <literal>)` test rides the same compiler the MASK_*
+      // and FIX_* injections feed. An unknown name / un-promotable bit-free
+      // view throws here — caught below as a loud compile error (codex P0).
+      source = injectInViewIntrinsic(code, this.viewTable, this.bitFreeViewPromoter);
+      source = injectMaskConstants(source, this.maskConstants);
       source = injectFixtureConstants(source, this.fixtureConstants);
     } catch (err) {
       return { ok: false, error: err.message };
