@@ -22,8 +22,16 @@
       dense  = (0.42 + 0.58*flockEnergy) * Σ glow_k        // micLow drives this
       bri    = max(haze, dense, scatterGlints(micHigh))
       tcol   = velocity-direction weighted (cp1 leading edge <-> cp2 trailing)
-    Center orbits use SQRT2/SQRT3/PHI/GOLDEN-ANGLE time() bases (no integer
-    periods), e.g.  ax = 0.5 + reach*sin(orbA*SQRT2 + sin(orbB*PHI))
+    Center orbits use CONTINUOUS accumulating phases at SQRT2/SQRT3/PHI/
+    GOLDEN-ANGLE angular rates (no integer periods), e.g.
+        orbA += dt * localMult * BASE_RATE * SQRT2;   // never wraps a scaled value
+        ax = 0.5 + reach * sin(orbA + sin(orbB) * 0.6)
+    The phases are accumulated DIRECTLY at their irrational rates and wrapped only
+    at PHASE_WRAP = 10000*2PI (an exact 2PI multiple, so sin/cos are continuous
+    across the wrap). We deliberately do NOT do the old `time(scl)*2PI` then
+    `sin(orb*SQRT2)` — wrapping a sawtooth at 1.0 and then scaling it by an
+    irrational jumps the sine argument by 2PI*SQRT2 (not a 2PI multiple) every
+    cycle, which is exactly the 34_moire flash seam. Continuous phases remove it.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
   AUDIO_MODULATION_V1:
@@ -61,7 +69,8 @@ var SQRT2 = 1.41421356;  // orbit ratio
 var SQRT3 = 1.73205081;  // orbit ratio
 var PHI   = 1.61803399;  // golden ratio
 var GOLD  = 2.39996323;  // golden angle (radians)
-var BASE_SCALE = 0.16;   // base time() scale at localSpeed = 0.5
+var BASE_RATE = 0.40;    // base orbit angular rate (rad/s) at localSpeed = 0.5
+var PHASE_WRAP = 62831.853; // 10000 * 2PI — wrapping here is invisible (sin/cos 2PI-periodic)
 var REACH = 0.34;        // base flock orbit radius (nx/ny units)
 var FOCUS_MIN = 1.7;     // softest core falloff (broad, smooth flock body)
 var FOCUS_MAX = 3.6;     // tightest (HD) core falloff — still crisp, less spiky
@@ -116,25 +125,77 @@ var frameGain = 0.7;   // resolved whole-frame brightness gain (PRIMARY, tracks 
 var reachNow = 0.34;   // resolved orbit radius this frame (expands with build)
 var churn = 0.0;       // sparkle re-roll term for scatter glints
 
-// Irrational orbit phase bases (radians). Per-center prime-ish offsets keep the
-// four centers desynchronised; each uses its own irrational time() scale so no
-// two ever beat into a common period.
-var orbA = 0.0, orbB = 0.0, orbC = 0.0, orbD = 0.0;
-var orbA2 = 0.0, orbB2 = 0.0, orbC2 = 0.0, orbD2 = 0.0;
+// Irrational orbit phase angles (radians), ACCUMULATED CONTINUOUSLY (never a
+// wrapped-then-scaled time() sawtooth — that is the 34_moire flash seam). Each
+// is advanced by dt * its own irrational angular rate and wrapped only at
+// PHASE_WRAP (an exact 2PI multiple), so sin/cos stay continuous across the wrap.
+// Each distinct sine argument that appeared in the old code as `orb * <factor>`
+// now has its OWN accumulator with that factor baked into the rate, so no
+// consumer ever multiplies a wrapped phase by a non-integer factor.
+//   pA  <- old orbA*SQRT2     (center A position phase)
+//   pA2 <- old orbA2*PHI      (center A y phase)
+//   pAh <- old orbA*0.5       (slow A term feeding center C y)
+//   pB  <- old orbB           (center B base phase; also couples into others)
+//   pBp <- old orbB*PHI       (center B x phase)
+//   pB2 <- old orbB2*SQRT2    (center B y phase)
+//   pBs <- old orbB*0.3       (slow B term feeding center D y)
+//   pC  <- old orbC           (center C base phase; couples into B/D)
+//   pCs <- old orbC*SQRT3     (center C x phase)
+//   pC2 <- old orbC2          (center C y phase)
+//   pCq <- old orbC*0.4       (slow C term feeding center D x)
+//   pDs <- old orbD*SQRT2     (center D x phase)
+//   pD2 <- old orbD2*PHI      (center D y phase)
+//   hzP <- old orbA/6.2831853 (haze drift; one slow turn per A revolution)
+var pA = 0.0, pA2 = 0.0, pAh = 0.0;
+var pB = 0.0, pBp = 0.0, pB2 = 0.0, pBs = 0.0;
+var pC = 0.0, pCs = 0.0, pC2 = 0.0, pCq = 0.0;
+var pDs = 0.0, pD2 = 0.0;
+var hzP = 0.0;
 
 export function beforeRender(delta) {
+  var dt = delta / 1000.0;
+  if (dt < 0.0) dt = 0.0;
+  if (dt > 0.1) dt = 0.1;
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
-  var scl = BASE_SCALE / localMult;
+  // Unit angular rate (rad/s). localSpeed paces the whole flock through localMult;
+  // a small floor keeps the storm drifting even at localSpeed = 0 (never static).
+  var baseW = (0.04 + localMult) * BASE_RATE;
+  var dW = dt * baseW;
 
-  // Irrational, per-center time bases (each scale is the base / an irrational).
-  orbA  = time(scl)        * 6.2831853;
-  orbB  = time(scl / SQRT2) * 6.2831853;
-  orbC  = time(scl / SQRT3) * 6.2831853;
-  orbD  = time(scl / PHI)   * 6.2831853;
-  orbA2 = time(scl / 1.273) * 6.2831853;   // 1.273 ~ 4/PI, irrational
-  orbB2 = time(scl / 2.236) * 6.2831853;   // 2.236 ~ sqrt5
-  orbC2 = time(scl / 0.786) * 6.2831853;   // 0.786 ~ PI/4
-  orbD2 = time(scl / 1.902) * 6.2831853;   // 1.902 irrational
+  // CONTINUOUS phase accumulation (no time() sawtooth). Each accumulator advances
+  // at its own irrational angular rate — the per-center scale factors that USED to
+  // sit inside sin/cos (orb*SQRT2, orb*PHI, …) are baked into the rate here, so no
+  // consumer ever multiplies a wrapped phase by a non-integer factor. Wrap at
+  // PHASE_WRAP (= 10000*2PI, an exact 2PI multiple) so sin/cos are continuous
+  // across the wrap → no periodic flash seam (the 34_moire bug, §7).
+  pA  = pA  + dW * (SQRT2);            // old orbA*SQRT2
+  pA2 = pA2 + dW * (1.273 * PHI);     // old orbA2*PHI
+  pAh = pAh + dW * (0.5);             // old orbA*0.5
+  pB  = pB  + dW * (SQRT2);            // old orbB
+  pBp = pBp + dW * (SQRT2 * PHI);     // old orbB*PHI
+  pB2 = pB2 + dW * (2.236 * SQRT2);   // old orbB2*SQRT2
+  pBs = pBs + dW * (SQRT2 * 0.3);     // old orbB*0.3
+  pC  = pC  + dW * (SQRT3);            // old orbC
+  pCs = pCs + dW * (SQRT3 * SQRT3);   // old orbC*SQRT3
+  pC2 = pC2 + dW * (0.786);           // old orbC2
+  pCq = pCq + dW * (SQRT3 * 0.4);     // old orbC*0.4
+  pDs = pDs + dW * (PHI * SQRT2);     // old orbD*SQRT2
+  pD2 = pD2 + dW * (1.902 * PHI);     // old orbD2*PHI
+  hzP = hzP + dW * (1.0 / SQRT2);     // slow haze drift (~one turn per A revolution)
+  if (pA  >= PHASE_WRAP) pA  = pA  - PHASE_WRAP;
+  if (pA2 >= PHASE_WRAP) pA2 = pA2 - PHASE_WRAP;
+  if (pAh >= PHASE_WRAP) pAh = pAh - PHASE_WRAP;
+  if (pB  >= PHASE_WRAP) pB  = pB  - PHASE_WRAP;
+  if (pBp >= PHASE_WRAP) pBp = pBp - PHASE_WRAP;
+  if (pB2 >= PHASE_WRAP) pB2 = pB2 - PHASE_WRAP;
+  if (pBs >= PHASE_WRAP) pBs = pBs - PHASE_WRAP;
+  if (pC  >= PHASE_WRAP) pC  = pC  - PHASE_WRAP;
+  if (pCs >= PHASE_WRAP) pCs = pCs - PHASE_WRAP;
+  if (pC2 >= PHASE_WRAP) pC2 = pC2 - PHASE_WRAP;
+  if (pCq >= PHASE_WRAP) pCq = pCq - PHASE_WRAP;
+  if (pDs >= PHASE_WRAP) pDs = pDs - PHASE_WRAP;
+  if (pD2 >= PHASE_WRAP) pD2 = pD2 - PHASE_WRAP;
+  if (hzP >= PHASE_WRAP) hzP = hzP - PHASE_WRAP;
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -173,21 +234,21 @@ export function beforeRender(delta) {
   // Four density centers on irrational Lissajous orbits. Velocity proxy = the
   // cos of the dominant phase (leads the sin position by 90deg), used to lean
   // colour toward cp1 (incoming) or cp2 (outgoing) as the center banks.
-  ax = 0.5 + reachNow * sin(orbA * SQRT2 + sin(orbB) * 0.6) * 0.78;
-  ay = 0.5 + reachNow * cos(orbA2 * PHI - orbB) * 0.66;
-  avx = cos(orbA * SQRT2 + sin(orbB) * 0.6);
+  ax = 0.5 + reachNow * sin(pA + sin(pB) * 0.6) * 0.78;
+  ay = 0.5 + reachNow * cos(pA2 - pB) * 0.66;
+  avx = cos(pA + sin(pB) * 0.6);
 
-  bx = 0.5 + reachNow * cos(orbB * PHI + 2.2) * 0.84;
-  by = 0.5 + reachNow * sin(orbB2 * SQRT2 + orbC) * 0.6;
-  bvx = -sin(orbB * PHI + 2.2);
+  bx = 0.5 + reachNow * cos(pBp + 2.2) * 0.84;
+  by = 0.5 + reachNow * sin(pB2 + pC) * 0.6;
+  bvx = -sin(pBp + 2.2);
 
-  cx = 0.5 + reachNow * sin(orbC * SQRT3 - 1.1) * 0.7;
-  cy = 0.5 + reachNow * cos(orbC2 + orbA * 0.5) * 0.72;
-  cvx = cos(orbC * SQRT3 - 1.1);
+  cx = 0.5 + reachNow * sin(pCs - 1.1) * 0.7;
+  cy = 0.5 + reachNow * cos(pC2 + pAh) * 0.72;
+  cvx = cos(pCs - 1.1);
 
-  dx = 0.5 + reachNow * cos(orbD * SQRT2 + orbC * 0.4) * 0.72;
-  dy = 0.5 + reachNow * sin(orbD2 * PHI - orbB * 0.3) * 0.64;
-  dvx = -sin(orbD * SQRT2 + orbC * 0.4);
+  dx = 0.5 + reachNow * cos(pDs + pCq) * 0.72;
+  dy = 0.5 + reachNow * sin(pD2 - pBs) * 0.64;
+  dvx = -sin(pDs + pCq);
 
   // Sparkle re-roll term so scatter glints twinkle/move over time.
   churn = time(0.05 / (0.25 + localSpeed * 0.6));
@@ -254,7 +315,7 @@ export function render3D(index, x, y, z) {
   // Slow aperiodic haze drift on irrational phases. This is a SMOOTH, always-on
   // floor (NOT multiplied by frameGain) so silence stays calm-but-visible and
   // its stable per-frame level does not pollute the micLow brightness corr.
-  var hz = haze * (0.45 + 0.55 * wave(nx * SQRT2 * 0.5 + ny * 0.4 + orbA / 6.2831853));
+  var hz = haze * (0.45 + 0.55 * wave(nx * SQRT2 * 0.5 + ny * 0.4 + hzP / 6.2831853));
   hz = hz * 0.32;
 
   // PRIMARY: the dense flock body is multiplied by frameGain (micLow) so the
