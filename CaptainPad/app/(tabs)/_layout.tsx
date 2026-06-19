@@ -135,6 +135,13 @@ export default function TabLayout() {
             } as any}
           />
           <Tabs.Screen
+            name="timeline"
+            options={{
+              title: 'Timeline',
+              tabBarIconName: 'sun.max',
+            } as any}
+          />
+          <Tabs.Screen
             name="scheduler"
             options={{
               title: 'Scheduler',
