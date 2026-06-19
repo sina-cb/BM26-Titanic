@@ -83,6 +83,7 @@ engine/sim block 6967–6972 (no collision).
 | `/compare`  | Two clips side by side (`?a=<name>&b=<name>`; pickers if missing) |
 | `/w/<name>` | The standalone clip page, sticky `← gallery` bar + `‹ ›` prev/next |
 | `/api/list` | JSON `[{name, mtime, num, family, model}]`, newest first |
+| `/api/models` | JSON `{models:[...], default:"test_bench"}` — rigs for the global model picker (see the **MODEL PICKER** section below) |
 
 Names are restricted to `[A-Za-z0-9._-]` (no traversal); anything else 404s.
 A top nav (`List · Grid · Compare`) is on every chrome page.
@@ -201,3 +202,34 @@ node tools/gallery/publish.mjs --name NN_name --model titanic \
   --capture ~/tmp/genkit/out/NN_name__titanic.json --layout map --view top
 ```
 <!-- END clip-length-and-map (feat/highdef_patterns) -->
+
+<!-- BEGIN model-select (feat/highdef_patterns) — keep separate for merge -->
+## The global MODEL PICKER — "which rig am I viewing?"
+
+Every chrome page (`/`, `/grid`, `/compare`) has a **prominent Model picker in
+the header**: a labelled `Model` `<select>`, a `Viewing <rig>` readout, and a
+`Live ›` link. Pick a rig and the whole gallery re-renders for it — this is the
+obvious, global control (the old per-pattern `__model` chips were easy to miss).
+
+- **Rig list** comes from `GET /api/models` → `{ "models": [...], "default":
+  "test_bench" }`, read live from `marsin_engine/models/` (each bare `<rig>.js`;
+  `.effects.js` / `.viewmasks.js` / `.js.original` siblings are skipped).
+  `test_bench` is the default and is hoisted to the front.
+- **The active rig flows everywhere** as `?model=<rig>` and persists in
+  `localStorage` (`gallery.model`); an explicit `?model=` wins over storage, and
+  an unknown rig falls back to `test_bench` (no 404 on a hand-typed querystring).
+  All `/w/`, `/grid`, `/compare`, and the sibling **`/live?model=`** links carry
+  the rig, and the widget page shows it as a chip + carries it back.
+- **Variant fallback.** List + Grid surface the chosen rig's clip
+  (`<pattern>__<rig>.html`, or bare `<pattern>.html` for `test_bench`). When no
+  per-rig clip exists they fall back to the test_bench base and flag it
+  (`no <rig> clip — (test_bench)` on the card, `(test_bench)` on the grid tile),
+  so you always see something and know it's the base render.
+- Search / sort / group and the legacy per-model filter chips still work — the
+  picker is an added global layer. Offline as ever (Node built-ins + browser).
+
+```bash
+curl -s localhost:6965/api/models                 # the rig list + default
+curl -s 'localhost:6965/?model=titanic' | head    # gallery rendered for titanic
+```
+<!-- END model-select (feat/highdef_patterns) -->

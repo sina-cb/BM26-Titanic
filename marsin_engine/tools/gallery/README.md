@@ -59,6 +59,7 @@ Tailscale `100.x.y.z` one. No auth (local / Tailscale only).
 | `/compare`     | Two clips side by side. `?a=<name>&b=<name>`; pickers if either is missing |
 | `/w/<name>`    | The standalone widget page, with a sticky `← gallery` bar + prev/next nav |
 | `/api/list`    | JSON `[{ "name", "mtime", "num", "family", "model" }]`, newest first |
+| `/api/models`  | JSON `{ "models": [...], "default": "test_bench" }` — rigs for the picker (see the **MODEL PICKER** section below) |
 
 The widgets dir is re-read on **every** request, so newly published patterns
 appear without restarting the server. The top nav (`List · Grid · Compare`)
@@ -239,3 +240,46 @@ node tools/gallery/publish.mjs --name 27_swipe --model titanic \
   --capture ~/tmp/genkit/out/27_swipe__titanic.json --layout map --view top
 ```
 <!-- END clip-length-and-map (feat/highdef_patterns) -->
+
+<!-- BEGIN model-select (feat/highdef_patterns) — keep separate for merge -->
+## The global MODEL PICKER — choose which rig you're viewing
+
+Every chrome page (`/`, `/grid`, `/compare`) now has a **prominent Model picker
+in the header** — a labelled `Model` `<select>` plus a `Viewing <rig>` readout
+and a `Live ›` link. This is the obvious answer to "which rig am I looking at,
+and how do I switch?" — pick a rig and the whole gallery re-renders for it.
+
+**Where the rigs come from.** `GET /api/models` lists the real rigs in
+`marsin_engine/models/` (each bare `<rig>.js`; the `.effects.js` /
+`.viewmasks.js` / `.js.original` siblings are not rigs and are skipped):
+
+```json
+{ "models": ["test_bench", "summer_camp_dome", "summer_camp_logsville", "titanic"],
+  "default": "test_bench" }
+```
+
+`test_bench` is the **default** and is hoisted to the front of the list.
+
+**How the active rig flows through the UI.**
+
+- The picker sets `?model=<rig>` on the URL and the rest of the page renders for
+  that rig. The choice also persists to `localStorage` (`gallery.model`), so a
+  later visit with no querystring redirects once to your remembered rig. An
+  explicit `?model=` always wins over storage. An unknown/garbage `?model=`
+  falls back to `test_bench` (the picker only ever offers real rigs; a
+  hand-typed querystring should not 404 the page).
+- **List (`/`)** and **Grid (`/grid`)** surface, per pattern, the **chosen
+  rig's clip** (`<pattern>__<rig>.html`, or the bare `<pattern>.html` when the
+  rig is `test_bench`). When no per-rig clip exists, they fall back to the
+  test_bench base clip and flag it — a `no <rig> clip — (test_bench)` badge on
+  the list card and a `(test_bench)` tag on the grid tile — so you always see
+  *something* and know it's the base, not the rig's own render.
+- Every `/w/<name>` link, the `/grid` and `/compare` links, and the **sibling's
+  `/live?model=<rig>`** link all carry the active rig, so it stays selected as
+  you navigate. The widget page (`/w/<name>`) shows the active rig as a chip and
+  carries it back through `← gallery` and the `‹ ›` prev/next.
+- The legacy per-model **filter chips** on the list and the search/sort/group
+  toggles all still work unchanged — the picker is an additional, global layer.
+
+Offline/self-contained as ever: Node built-ins + browser only, no CDNs or deps.
+<!-- END model-select (feat/highdef_patterns) -->
