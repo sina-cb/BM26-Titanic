@@ -99,14 +99,23 @@
   // model index p.i IS the byte slot: pixel i occupies bytes [i*6 .. i*6+5]
   // (R,G,B,W,A,U). We render RGB (matching the offline clip, which also uses
   // the first three of each 6-byte group).
+  // The engine SUBSAMPLES the vis for big rigs: it sends `count` (= pixelCount in
+  // the frame) samples where sample slot i = model pixel floor(i*N/cap). Our
+  // layout has one cell per FULL model pixel (CFG.pixelCount = N). So when the
+  // frame is subsampled (count < N) we map each cell's model index back to its
+  // nearest sample slot; otherwise (test_bench, count===N) it's 1:1.
+  var FULL = CFG.pixelCount || 0;
   function paint(bytes, count) {
+    var sub = FULL > 0 && count < FULL;
     for (var g = 0; g < groups.length; g++) {
       var cells = groups[g];
       for (var j = 0; j < cells.length; j++) {
         var c = cells[j][0];
         var mi = cells[j][1];
-        if (mi >= count) { continue; }
-        var o = mi * 6;
+        var slot = sub ? Math.round(mi * count / FULL) : mi;
+        if (slot >= count) slot = count - 1;
+        if (slot < 0) continue;
+        var o = slot * 6;
         var r = bytes[o], gg = bytes[o + 1], b = bytes[o + 2];
         var hx = '#' + toHex(r) + toHex(gg) + toHex(b);
         c.style.background = hx;

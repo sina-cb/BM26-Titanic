@@ -1025,9 +1025,9 @@ ${THEME_CSS}
     Override the engine with <code>?host=ip:port</code>, the rig with <code>?model=titanic</code>.
   </p>
 
-  <!-- <!-- BEGIN deck-control --> DECK control surface: drives the running
-       engine via the same-origin /api/engine proxy. Secondary + collapsible so
-       the live vis above stays primary. ONLINE only — needs the engine up. -->
+  <!-- DECK control surface: drives the running engine via the same-origin
+       /api/engine proxy. Secondary + collapsible so the live vis above stays
+       primary. ONLINE only - needs the engine up. -->
   <details class="deck" id="deck" open>
     <summary>
       <span class="dk-title">Deck Control</span>
@@ -1067,13 +1067,13 @@ ${THEME_CSS}
       </div>
     </div>
   </details>
-  <!-- <!-- END deck-control --> -->
+  <!-- END deck-control -->
 </main>
 <script>window.__LIVE__ = ${cfgJson};</script>
 <script src="/live_client.js"></script>
-<!-- <!-- BEGIN deck-control --> -->
+<!-- BEGIN deck-control -->
 <script src="/deck_client.js"></script>
-<!-- <!-- END deck-control --> -->
+<!-- END deck-control -->
 </body></html>`;
 }
 // <!-- END live-vis -->
