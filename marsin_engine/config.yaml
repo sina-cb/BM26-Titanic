@@ -81,6 +81,14 @@ companion:
   engine:
     host: 127.0.0.1
     port: 6968
+# Additional companion sidecars supervised by the launcher (docs/38 §2). The
+# audio analyzer above keeps its legacy `companion:` block; non-audio companions
+# live here keyed by name. The launcher boots each after the engine.
+companions:
+  timeline:
+    enabled: true
+    port: 6965
+    engine: { host: 127.0.0.1, port: 6968 }
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★
