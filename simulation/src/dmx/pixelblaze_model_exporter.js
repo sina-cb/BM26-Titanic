@@ -4,7 +4,6 @@ import { getProfileDef } from "../core/profile_registry.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./view_registry.js";
 import { computeLedProjection, LED_CHANNEL_ORDERS, DMX_UNIVERSE_SIZE } from "./controller_registry.js";
-import { mixRgbwauToRgb } from "../core/sim_preview.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -284,11 +283,18 @@ export function generatePixelMap() {
           whiteMode: proj ? proj.whiteMode : 'native',
           unpatched: !proj,
         };
+        // The batch-render loop (animate.js) and the inbound sACN demap
+        // (sacn_mapper.js) BOTH write the rendered RGBWAU onto a CLONE of
+        // this pixel — not this closure's `px` — then call apply() with the
+        // already-mixed RGB. So the apply MUST consume its (r,g,b) args
+        // (exactly like the DMX-fixture apply above); reading px.* here read
+        // the stale clone-source and left every strand black under patched
+        // engine + sACN-in (the LED-parity output path). The RGBWAU→RGB mix
+        // already happened in the caller; route it straight to the bulb.
         px.apply = fixture
-          ? (() => {
+          ? ((r, g, b) => {
             if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-            fixture.setLedColorRGBWAU(
-              j, px.r || 0, px.g || 0, px.b || 0, px.w || 0, px.a || 0, px.u || 0);
+            fixture.setLedColorRGB(j, r || 0, g || 0, b || 0);
           })
           : (() => {});
         pixels.push(px);
