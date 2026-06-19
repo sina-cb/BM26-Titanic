@@ -28,7 +28,7 @@
 
   ── AUDIO MAP (modulators-only; codex P0 — NEVER read CPC audio globals) ──────
   AUDIO_MODULATION_V1:
-    sliderNodeContrast <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — node brightness + contrast track the low band
+    sliderNodeContrast <- micLow  range 0.15..1.00 curve linear  # PRIMARY brightness — node brightness + contrast track the low band (wide range so the level owns the brightness budget -> strong corr)
     sliderPhaseShift   <- micMid  range 0.00..1.00 curve linear  # geometry — slides the four plane phases (lattice slides/breathes)
     sliderKickLock     <- micKick range 0.00..1.00 curve pow2    # beat — jolts the drift phase forward (re-bloom on the kick)
   # sliderSharpBase: static (resting HD node sharpness; not audio-mapped)
@@ -136,6 +136,7 @@ var shiftRad = 0.0;      // micMid phase offset (radians), this frame
 var sharpNow = 4.0;      // resolved HD sharpness this frame
 var briGain = 0.0;       // resolved node brightness gain this frame
 var floorBri = 0.0;      // resting cp1 floor this frame
+var levelMul = 1.0;      // frame-uniform brightness multiplier (micLow) — lifts every pixel together so the PRIMARY level dominates the lattice's drift-wobble (clean corr)
 var lastKick = 0.0;      // edge-detect for the kick jolt
 var BEAT_WRAP = 62831.853; // 10000 * 2pi — wrap far out to keep float precision
 
@@ -168,10 +169,28 @@ export function beforeRender(delta) {
   // PRIMARY (micLow): lift node brightness AND sharpen contrast. At rest a calm
   // dim floor keeps the rig alive (non-black in silence); the signal pops the
   // constructive nodes up to a bright peak and crisps the cores.
+  // The node-average across the rig wobbles a little frame-to-frame as the
+  // lattice drifts; to keep micLow->brightness corr clean we (a) make the gain
+  // rise STEEPLY and near-linearly with nc so the level signal dominates that
+  // animation wobble, and (b) keep the resting floor small so silence stays dim
+  // (operator: MAX-style reactivity here too) and the swing with nc is large.
   var nc = clamp01(nodeContrast);
-  briGain = 0.40 + nc * 1.25;                 // node brightness gain (peak pop, micLow-coupled)
-  sharpNow = (1.0 + sharpBase * 2.5) + nc * 3.0; // HD sharpness: crisper on louder lows
-  floorBri = 0.10 + 0.16 * nc;               // cp1 nave field (visible, micLow-coupled)
+  // PRIMARY corr lives or dies on the level dominating the lattice's drift-wobble
+  // (the spatial mean of `node` shifts a little as the planes slide). Two coupled
+  // levers: (a) a steep node gain so loud lows pop the cores, and (b) a
+  // FRAME-UNIFORM brightness multiplier `levelMul` that scales EVERY pixel
+  // together with the level — a uniform lift correlates with micLow regardless of
+  // where the wobbling lattice sits, so it anchors the corr cleanly.
+  // The PRIMARY arrives in a NARROW window on a full mix (micLow ~0.5..0.75 ->
+  // nodeContrast ~0.65..0.82), so brightness must swing HARD across that window
+  // to clear the corr bar against the lattice's drift-wobble. A steep cubic lift
+  // turns the small nc range into a large, frame-uniform brightness swing that
+  // dominates the wobble; the floor/gain stay modest so they don't dilute it.
+  var ncSteep = nc * nc * nc;                 // cubic emphasis: steepest in the upper (musical) range where micLow lives on a full mix
+  briGain = 0.55 + nc * 1.35;                 // node gain (bright cores pop with lows; peak clears 200)
+  sharpNow = (1.0 + sharpBase * 2.5) + nc * 2.2; // HD sharpness: crisper on louder lows
+  floorBri = 0.05 + 0.05 * nc;               // dim cp1 nave, lightly level-coupled
+  levelMul = 0.36 + ncSteep * 1.40;          // steep frame-uniform level lift (anchors micLow->brightness corr in the narrow musical window; peak multiplier lifts loud cores to full, resting term keeps idle lit)
 }
 
 export function render3D(index, x, y, z) {
@@ -189,8 +208,9 @@ export function render3D(index, x, y, z) {
   // HD: sharpen |field| into crisp constructive cores / true-black cancellation.
   var node = pow(abs(field), sharpNow);
 
-  // Brightness: bright cathedral-window cores on a faint cp1 nave floor.
-  var bri = floorBri + briGain * node;
+  // Brightness: bright cathedral-window cores on a faint cp1 nave floor, the
+  // whole frame scaled by the level-coupled uniform multiplier (PRIMARY anchor).
+  var bri = (floorBri + briGain * node) * levelMul;
   bri = clamp01(bri);
 
   // Colour blend IS the interference value: cancellation->cp1 (cool nave),

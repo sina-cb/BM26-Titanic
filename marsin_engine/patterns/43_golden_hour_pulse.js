@@ -25,7 +25,7 @@
 
   AUDIO MAP (modulators-only — NEVER read CPC audio globals natively, codex P0):
   AUDIO_MODULATION_V1:
-    sliderSwell   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness/swell
+    sliderSwell   <- micLow  range 0.00..1.00 curve linear   # PRIMARY brightness/swell
     sliderBlinder <- micKick range 0.00..1.00 curve linear   # vintage white blinder pop
     sliderShimmer <- micHigh range 0.00..0.80 curve pow2     # fine warm shimmer/detail
   Static (unmapped) params: localSpeed, noiseScale, colorPalette1/2.
@@ -72,13 +72,16 @@ var SQRT2 = 1.41421356;   // x-axis spatial scale
 var INVPHI = 0.61803398;  // y-axis spatial scale (1/phi)
 var GA = 0.38196601;      // z-axis spatial scale (golden-angle fraction 1 - 1/phi)
 var DRIFT = 0.07639320;   // drift rate (2 - phi)/10 — slow, irrational, never loops
-var FLOOR = 0.20;         // resting wash brightness. Kept modest ON PURPOSE: this is
-                          //   the no-audio swell floor and the PRIMARY micLow->brightness
-                          //   corr collapses if it dominates total brightness. 0.20 is the
-                          //   knee — corr stays ~0.52 (REACTIVE) while the rig is clearly
-                          //   alive and warm at rest (never black). Peak at silence stays
-                          //   modest (~68); a loud swell drives cores to 255.
-var SWELL_GAIN = 1.1;     // how hard micLow swells the wash (linear, no clamp -> corr)
+var FLOOR = 0.125;        // resting wash brightness. OPERATOR DIRECTION: MAX REACTIVITY —
+                          //   the PRIMARY micLow->brightness corr collapses if the resting
+                          //   base dominates total brightness, so the floor is pushed LOW.
+                          //   A darker idle is accepted (the rig still ANIMATES at rest: the
+                          //   cubed wash drifts on tPhase and the warmFloor breathes with the
+                          //   wash phase). A loud swell drives the warm cores hard to 255.
+var SWELL_GAIN = 1.30;    // how hard micLow swells the wash. Tuned so the loud-swell cores
+                          //   reach full but the field mostly stays in the LINEAR region
+                          //   (heavy clamping/saturation flattens the response and kills the
+                          //   micLow->brightness correlation).
 var BLIND_DECAY = 7.0;    // blinder envelope decay (per second) — crisp flash
 var SHIM_HZ = 0.041666;   // shimmer churn time-scale (irrational-ish, fine grain)
 
@@ -173,7 +176,11 @@ export function render3D(index, x, y, z) {
   // A second, decorrelated wash phase drives the COLOR blend so cp1<->cp2 spread
   // evenly across the rig (irrational offset -> hues span the full palette line,
   // not clustered at one end). Brightness stays cubed for the HD contrast.
-  var cphase = nx * 1.3 - ny + nz * 0.7 + tPhase * 1.6180339;
+  // The color phase carries its OWN, larger spatial frequency (independent of
+  // noiseScale) so BOTH palette ends are always present across the rig even when
+  // the wash is dim at rest -> keeps the measured hueSpread up at silence without
+  // touching the brightness/reactivity path (colour-only).
+  var cphase = (x * SQRT2 - y * INVPHI + z * GA) * 1.7 + tPhase * 1.6180339;
   var craw = wave(cphase);
 
   // Fine warm shimmer (micHigh): a small deterministic per-pixel sparkle layered
@@ -189,12 +196,11 @@ export function render3D(index, x, y, z) {
 
   // Wash brightness: cubed field swelled by micLow, plus shimmer glints.
   var bri = noise * washGain + shim;
-  // COORD-DRIVEN non-black floor: the cubed wash drops to true black in its
-  // troughs, which on a rig with no section/fixture accents (titanic/dome/
-  // logsville have fixtureId 0) would leave those pixels dark. A small floor
-  // driven only by the wash field's smooth phase keeps EVERY pixel lit above
-  // the visibility threshold while the cubed cores still read HD-bright.
-  var warmFloor = 0.045 + 0.025 * raw;
+  // COORD-DRIVEN non-black floor, kept SMALL (operator: MAX reactivity, darker
+  // idle accepted): driven by the wash field's smooth phase so the rig still
+  // ANIMATES (and never goes fully black) at rest, but small enough that it
+  // barely dilutes the micLow->brightness correlation.
+  var warmFloor = 0.018 + 0.022 * raw;
   bri = bri + warmFloor;
   bri = clamp01(bri);
 
