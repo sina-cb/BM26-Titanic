@@ -52,9 +52,10 @@ export function resolveHold(hold, now, dayTimes) {
  * @param {{
  *   now: number,
  *   plan: object,                         // validated show plan (carries autopilot + cue kinds)
- *   state: object,                        // runtime state (autopilotEnabled, mode, activeProgram, manualHoldUntilMs)
+ *   state: object,                        // runtime state (autopilotEnabled, mode, activeProgram, pendingProgram, manualHoldUntilMs)
  *   fires: Array<{cueId:string, reason:string}>,   // from evaluateTick
  *   dayTimes: object,                     // from resolveDayTimes (carries tz + sunEvents for hold anchors)
+ *   leaseSec?: number,                    // pending-program lease window (docs/38 §16.5, default 30)
  * }} args
  * @returns {{
  *   actions: Array<{cueId:string, action:object, autopilotOff?:boolean}>,
@@ -62,7 +63,7 @@ export function resolveHold(hold, now, dayTimes) {
  *   controller: 'manual'|'program'|'autopilot',
  * }}
  */
-export function arbitrate({ now, plan, state, fires, dayTimes }) {
+export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
   const next = cloneState(state);
   const actions = [];
 
@@ -73,18 +74,46 @@ export function arbitrate({ now, plan, state, fires, dayTimes }) {
   const paused = next.mode === 'paused' || next.mode === 'overridden';
   const holding = typeof next.manualHoldUntilMs === 'number' && next.manualHoldUntilMs > now;
   const moodAllowed = !plan.autopilot || plan.autopilot.mood !== false;
+  const leaseWindowSec = typeof leaseSec === 'number' && leaseSec > 0 ? leaseSec : 30;
+
+  // ── "manual" = any operator-owned sub-state (docs/38 §16.1) ─────────────────
+  // PAUSED/OVERRIDDEN (mode), HOLDING (manualHoldUntilMs), or IDLE (autopilot
+  // disabled with no active program). A lease arms on top of ANY of these.
+  const manual = paused || holding || (!autopilotEnabled && !next.activeProgram);
+
+  // ── lease auto-expiry FIRST (docs/38 §16.5: lease-exp → PG auto-start) ──────
+  // The show goes on even when manual/paused (I2). Convert the lease into an
+  // active program NOW, disarm the baseline, and emit the program's action.
+  let leaseAutoStarted = false;
+  if (next.pendingProgram && typeof next.pendingProgram.expiresAtMs === 'number'
+      && now >= next.pendingProgram.expiresAtMs) {
+    const pend = next.pendingProgram;
+    const cue = cueById.get(pend.cueId);
+    const hold = cue ? cue.hold : undefined;
+    next.activeProgram = {
+      cueId: pend.cueId,
+      startedAtMs: now,
+      untilMs: resolveHold(hold, now, dayTimes),
+    };
+    next.pendingProgram = null;
+    actions.push({ cueId: pend.cueId, action: pend.action, autopilotOff: true });
+    leaseAutoStarted = true;
+  }
 
   // ── expire an active program whose hold window has elapsed ──────────────────
   let programEnded = false;
-  if (next.activeProgram && typeof next.activeProgram.untilMs === 'number'
+  if (!leaseAutoStarted && next.activeProgram && typeof next.activeProgram.untilMs === 'number'
       && now >= next.activeProgram.untilMs) {
     next.activeProgram = null;
     programEnded = true;
   }
 
   // ── base controller (before processing this tick's fires) ───────────────────
+  // A pending lease does NOT change the controller — the manual owner still
+  // drives until the lease resolves (docs/38 §16.1).
   let controller;
-  if (paused || holding) controller = 'manual';
+  if (leaseAutoStarted) controller = 'program';
+  else if (paused || holding) controller = 'manual';
   else if (next.activeProgram) controller = 'program';
   else if (autopilotEnabled) controller = 'autopilot';
   else controller = 'manual';
@@ -110,9 +139,27 @@ export function arbitrate({ now, plan, state, fires, dayTimes }) {
     const kind = cue.kind;
 
     if (kind === 'program') {
-      // A scheduled program preempts autopilot UNLESS the operator has hard
-      // takeover (paused/overridden) or a manual hold is keeping a look.
-      if (paused || holding) continue;  // operator's hands win — suppress
+      // A program just auto-started from a lease this tick — a freshly-due
+      // program is the one we just started; ignore further program fires.
+      if (leaseAutoStarted) continue;
+      // MANUAL (paused/holding/idle) → ARM a lease instead of firing (docs/38
+      // §16.4/§16.5, I2/I3). The operator gets a sign; if no action within the
+      // lease window the lease auto-starts the program. Only ONE pending at a
+      // time — a newer due program replaces an un-actioned one. We do NOT latch
+      // firedToday on ARM (only on fire/auto-start/dismiss) so the lease is the
+      // single record of the due program.
+      if (manual) {
+        next.pendingProgram = {
+          cueId: cue.id,
+          label: cue.label || cue.id,
+          action: cue.action,
+          armedAtMs: now,
+          expiresAtMs: now + leaseWindowSec * 1000,
+        };
+        // controller is unchanged (stays manual) — the lease layers on top.
+        continue;
+      }
+      // AUTOPILOT → preempt immediately. PROGRAM → replace the active program.
       next.activeProgram = {
         cueId: cue.id,
         startedAtMs: now,

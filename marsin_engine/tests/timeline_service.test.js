@@ -314,3 +314,161 @@ test('activatePlan clears recentFires / wouldFire / cueErrors (Fix 9)', async ()
   assert.ok(!svc.wouldFire.some((f) => f.cueId === 'stale'), 'wouldFire cleared');
   assert.equal(svc.cueErrors.stale, undefined, 'cueErrors cleared');
 });
+
+// ── docs/38 §16 pending-program lease (service-level coverage) ────────────────
+
+// Arm a lease directly on the running service's state (the arbiter's job is
+// covered in timeline_arbiter.test.js — here we exercise the operator actions).
+function armPendingLease(svc, { expiresAtMs } = {}) {
+  const now = svc.nowFn();
+  svc.state.pendingProgram = {
+    cueId: 'c_show',
+    label: 'Scheduled show',
+    action: { type: 'look', look: 'show' },
+    armedAtMs: now,
+    expiresAtMs: typeof expiresAtMs === 'number' ? expiresAtMs : now + 30000,
+  };
+}
+
+// V8 — enableProgram() starts the program immediately, clears the lease.
+test('V8: enableProgram → program starts now, pending cleared', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  await svc.setAutopilotEnabled(false); // go idle/manual
+  calls.loadPlaylist.length = 0;
+  calls.setAutopilot.length = 0;
+  armPendingLease(svc);
+
+  const r = await svc.enableProgram();
+  assert.equal(r.ok, true);
+  assert.equal(r.controller, 'program');
+  assert.equal(svc.state.pendingProgram, null, 'lease cleared');
+  assert.equal(svc.state.activeProgram.cueId, 'c_show');
+  // Program look loaded + baseline autopilot disarmed.
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'), 'show playlist loaded');
+  assert.ok(calls.setAutopilot.some((c) => c.state && c.state.active === false), 'baseline disarmed');
+  // firedToday latched so it does not re-arm today.
+  assert.ok(svc.state.firedToday.c_show, 'firedToday latched on enable');
+});
+
+test('enableProgram with no pending → {ok:false}', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  const r = await svc.enableProgram();
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'no pending program');
+});
+
+// V9 — a clock cue that comes due in MANUAL arms a lease via the tick; dismiss
+// cancels it, latches firedToday, and a re-tick does NOT re-arm the same day.
+test('V9: due program arms a lease, dismiss latches firedToday (no re-arm)', async () => {
+  // Boot BEFORE the cue time (11:59 PT) so catchUp does not latch c_show, then
+  // advance the clock to 12:00 PT so the cue comes due on the tick.
+  let nowMs = Date.UTC(2026, 7, 30, 18, 59, 0); // 11:59 PT
+  const { svc } = setup({ now: 0 });
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  await svc.setAutopilotEnabled(false); // manual/idle
+  nowMs = Date.UTC(2026, 7, 30, 19, 0, 0); // 12:00 PT — cue now due
+  await svc._tick();
+  assert.ok(svc.state.pendingProgram && svc.state.pendingProgram.cueId === 'c_show', 'lease armed by tick');
+
+  const r = svc.dismissProgram();
+  assert.equal(r.ok, true);
+  assert.equal(svc.state.pendingProgram, null, 'lease cleared');
+  assert.ok(svc.state.firedToday.c_show, 'firedToday latched on dismiss');
+
+  // Re-tick same day → must NOT re-arm.
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.state.pendingProgram, null, 'dismissed lease does not re-arm today');
+});
+
+test('dismissProgram with no pending → {ok:false}', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  const r = svc.dismissProgram();
+  assert.equal(r.ok, false);
+});
+
+// V11 — pending + setAutopilotEnabled(true) → program fires (not just baseline).
+test('V11: pending + ap-on → program fires', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  await svc.setAutopilotEnabled(false);
+  calls.loadPlaylist.length = 0;
+  calls.setAutopilot.length = 0;
+  armPendingLease(svc);
+
+  const r = await svc.setAutopilotEnabled(true);
+  assert.equal(r.controller, 'program');
+  assert.equal(svc.state.pendingProgram, null);
+  assert.equal(svc.state.activeProgram.cueId, 'c_show');
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'), 'program look loaded on ap-on');
+});
+
+// Lease auto-expiry through the tick → program auto-starts (V7 at service level).
+test('lease auto-expiry through tick → program auto-starts', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  await svc.setAutopilotEnabled(false);
+  calls.loadPlaylist.length = 0;
+  // Arm an already-expired lease, then tick.
+  armPendingLease(svc, { expiresAtMs: svc.nowFn() - 1000 });
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.state.pendingProgram, null, 'expired lease cleared');
+  assert.equal(svc.state.activeProgram.cueId, 'c_show');
+  assert.equal(svc.state.controller, 'program');
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'), 'auto-started program loaded its look');
+});
+
+// getState surfaces the pending lease as {cueId,label,expiresAtMs}.
+test('getState surfaces pendingProgram {cueId,label,expiresAtMs}', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  await svc.setAutopilotEnabled(false);
+  armPendingLease(svc);
+  const st = svc.getState();
+  assert.ok(st.pendingProgram, 'pendingProgram present');
+  assert.equal(st.pendingProgram.cueId, 'c_show');
+  assert.equal(st.pendingProgram.label, 'Scheduled show');
+  assert.equal(typeof st.pendingProgram.expiresAtMs, 'number');
+});
+
+// Boot drops a persisted pendingProgram (re-derive, §16.6/I6).
+test('boot drops a persisted pendingProgram', async () => {
+  const { svc, stateDir } = setup();
+  await svc.start();
+  svc.stop();
+  // Persist a stale lease into the state file.
+  svc.state.pendingProgram = {
+    cueId: 'c_show', label: 'Scheduled show', action: { type: 'look', look: 'show' },
+    armedAtMs: 0, expiresAtMs: 1,
+  };
+  svc._persistAndBroadcast();
+
+  // A fresh service over the SAME stateDir must drop the stale lease on boot.
+  const { deps } = makeDeps();
+  const svc2 = new TimelineService({
+    scene: 'summer_camp_dome',
+    sceneDir: svc.sceneDir,
+    stateDir,
+    getMood: () => ({ party: 0, value: 0 }),
+    deps,
+    broadcast: () => {},
+    config: {
+      enabled: true, activePlan: 'test_plan', tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => Date.UTC(2026, 7, 30, 2, 0, 0),
+  });
+  await svc2.start();
+  svc2.stop();
+  assert.equal(svc2.state.pendingProgram, null, 'persisted lease dropped on boot');
+});

@@ -68,6 +68,60 @@ function formatCountdown(sec: number | null): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// "starts in M:SS" for the pending-program sign (docs/38 §16.7). Always M:SS
+// (no hour rollup — leases are short, default 30 s), clamped at 0:00 so the
+// operator never sees a negative or em-dash on an armed lease.
+function formatMSS(sec: number | null): string {
+  const total = sec === null || !Number.isFinite(sec) ? 0 : Math.max(0, Math.round(sec));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// ── Pending-program sign (docs/38 §16.5/§16.7) ──────────────────────────
+// The "SCHEDULED SHOW PENDING" lease banner. High-attention amber/warning —
+// deliberately louder than the muted error red — so the operator clocks it
+// from across the deck. Renders nothing when no lease is armed (handled by the
+// caller). ENABLE NOW starts the show immediately; KEEP MANUAL dismisses it.
+function PendingProgramSign({
+  label, countdownSec, onEnable, onDismiss, styles,
+}: {
+  label: string;
+  countdownSec: number | null;
+  onEnable: () => void;
+  onDismiss: () => void;
+  styles: Styles;
+}) {
+  return (
+    <View style={styles.pendingBanner}>
+      <View style={styles.pendingTextCol}>
+        <Text style={styles.pendingTitle} numberOfLines={2}>
+          {`⚠ SCHEDULED SHOW PENDING — ${label}`}
+        </Text>
+        <Text style={styles.pendingCountdown}>
+          {`starts in ${formatMSS(countdownSec)}`}
+        </Text>
+      </View>
+      <View style={styles.pendingBtnRow}>
+        <TouchableOpacity
+          onPress={onEnable}
+          style={[styles.pendingBtn, styles.pendingBtnEnable]}
+          accessibilityLabel="Enable scheduled show now"
+        >
+          <Text style={styles.pendingBtnEnableText}>ENABLE NOW</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onDismiss}
+          style={[styles.pendingBtn, styles.pendingBtnDismiss]}
+          accessibilityLabel="Keep manual control, dismiss scheduled show"
+        >
+          <Text style={styles.pendingBtnDismissText}>KEEP MANUAL</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ── Controller pill (§14): AUTOPILOT green / PROGRAM amber / MANUAL grey ──
 function ControllerPill({ state, styles, C }: { state: TimelineState; styles: Styles; C: Palette }) {
   const map: Record<TimelineState['controller'], { label: string; color: string }> = {
@@ -97,7 +151,7 @@ export default function TimelineScreen() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
-  const { state, connected, error, setMode, setAutopilot, hold, resume, endProgram, fireCue, activatePlan } = useTimeline();
+  const { state, connected, error, setMode, setAutopilot, hold, resume, endProgram, enableProgram, dismissProgram, fireCue, activatePlan } = useTimeline();
 
   // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
@@ -132,7 +186,7 @@ export default function TimelineScreen() {
   const [cueSheetOpen, setCueSheetOpen] = useState(false);
   const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
 
-  const [, setNowTick] = useState(0);
+  const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setNowTick((n) => n + 1), 1000);
     return () => clearInterval(t);
@@ -345,6 +399,16 @@ export default function TimelineScreen() {
     return Math.max(0, Math.round((p.untilMs - Date.now()) / 1000));
   }, [state?.activeProgram]);
 
+  // Pending-program lease countdown (docs/38 §16.5/§16.7): seconds until the
+  // lease auto-starts the show, clamped at 0. Re-derived every 1 s tick so the
+  // sign counts down live. We read nowTick (via the shared ticker above) so
+  // this memo re-runs each second; clamp to >= 0 ("0:00" at expiry).
+  const pendingCountdown = useMemo(() => {
+    const p = state?.pendingProgram;
+    if (!p || !Number.isFinite(p.expiresAtMs)) return null;
+    return Math.max(0, Math.round((p.expiresAtMs - Date.now()) / 1000));
+  }, [state?.pendingProgram, nowTick]);
+
   // The selected day's overview object.
   const selectedDayOverview = useMemo(() => {
     if (selectedDay === null || !overview) return null;
@@ -354,6 +418,20 @@ export default function TimelineScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.surface}>
+        {/* ── Pending-program sign (docs/38 §16.5/§16.7) ──
+            Sits ABOVE everything else and is intentionally the loudest thing on
+            the tab so the operator sees it from across the deck. Null lease =>
+            nothing rendered (additive; the rest of the tab is unchanged). */}
+        {state?.pendingProgram ? (
+          <PendingProgramSign
+            label={state.pendingProgram.label}
+            countdownSec={pendingCountdown}
+            onEnable={() => enableProgram()}
+            onDismiss={() => dismissProgram()}
+            styles={styles}
+          />
+        ) : null}
+
         {/* ── A. Header / live status ── */}
         <View style={styles.headerRow}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
@@ -711,5 +789,44 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12,
     },
     actionErrorText: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12 },
+    // ── Pending-program sign (docs/38 §16.5/§16.7) ──
+    // Amber/warning, deliberately the loudest element on the tab: thick amber
+    // border + warm fill so it reads from across the deck. NOT the muted error
+    // red. Stacks text + big touch buttons; wraps on narrow widths.
+    pendingBanner: {
+      backgroundColor: 'rgba(245, 166, 35, 0.16)',
+      borderColor: '#f5a623',
+      borderWidth: 2.5,
+      borderRadius: 14,
+      paddingVertical: 16,
+      paddingHorizontal: 18,
+      marginBottom: 18,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 16,
+      flexWrap: 'wrap',
+    },
+    pendingTextCol: { flex: 1, minWidth: 200 },
+    pendingTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 20, color: '#f5a623',
+      letterSpacing: 0.6, textTransform: 'uppercase',
+    },
+    pendingCountdown: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, marginTop: 6, letterSpacing: 0.4,
+    },
+    pendingBtnRow: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+    pendingBtn: {
+      paddingHorizontal: 22, paddingVertical: 16, borderRadius: 10,
+      minHeight: 56, minWidth: 140, alignItems: 'center', justifyContent: 'center',
+    },
+    pendingBtnEnable: { backgroundColor: '#f5a623' },
+    pendingBtnEnableText: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: '#1a1100', letterSpacing: 0.8,
+    },
+    pendingBtnDismiss: { backgroundColor: 'transparent', borderWidth: 2, borderColor: '#f5a623' },
+    pendingBtnDismissText: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: '#f5a623', letterSpacing: 0.8,
+    },
   });
 }

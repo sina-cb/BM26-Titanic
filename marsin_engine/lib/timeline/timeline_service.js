@@ -192,6 +192,9 @@ export class TimelineService {
 
     this.activePlan = config.activePlan || 'playa_default';
     this.tickMs = config.tickMs || 1000;
+    // Pending-program lease window (docs/38 §16.5). Default 30 s.
+    this.programLeaseSec = typeof config.programLeaseSec === 'number' && config.programLeaseSec > 0
+      ? config.programLeaseSec : 30;
     // Palettes are resolved from the engine's colorPalettes config (ported from
     // the old actions.js resolvePalette). Injected so the service has no IO of
     // its own for palette lookup.
@@ -264,6 +267,7 @@ export class TimelineService {
     // state predates the §14 model. Once toggled, the runtime value wins.
     if (this.state.autopilotEnabled === undefined) this.state.autopilotEnabled = this.plan.autopilot.enabled;
     if (this.state.activeProgram === undefined) this.state.activeProgram = null;
+    if (this.state.pendingProgram === undefined) this.state.pendingProgram = null;
     if (this.state.controller === undefined) this.state.controller = 'autopilot';
   }
 
@@ -540,6 +544,10 @@ export class TimelineService {
     // permanently suppress mood. Clear it; catchUp below re-derives it from the
     // current time + plan.
     this.state.activeProgram = null;
+    // A pendingProgram lease is ALSO pure runtime state — drop any persisted one
+    // on boot/scene-switch and re-derive (docs/38 §16.6/I6). A stale lease whose
+    // expiry already passed would otherwise auto-start the wrong program.
+    this.state.pendingProgram = null;
 
     let best = null;
     for (const cue of dayPlan.cues) {
@@ -610,7 +618,9 @@ export class TimelineService {
       this.state.currentMood = mood.party ? 'party' : 'calm';
 
       const reasonByCue = new Map(fires.map((f) => [f.cueId, f.reason]));
-      const { actions, state: arbState } = arbitrate({ now, plan: dayPlan, state: this.state, fires, dayTimes });
+      const { actions, state: arbState } = arbitrate({
+        now, plan: dayPlan, state: this.state, fires, dayTimes, leaseSec: this.programLeaseSec,
+      });
       this.state = arbState;
 
       // Fires the arbiter dropped (e.g. a mood swap suppressed under a program)
@@ -660,6 +670,7 @@ export class TimelineService {
         type: 'timelineState',
         mode: 'armed', scene: this.scene, activePlan: this.activePlan,
         controller: 'autopilot', autopilotEnabled: true, activeProgram: null,
+        pendingProgram: null,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
         engineConnected: true,
         waiting: true, nextCue: null,
@@ -712,6 +723,17 @@ export class TimelineService {
     const holding = typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now;
     const mode = holding ? 'holding' : this.state.mode;
 
+    // Surface the pending-program lease as {cueId,label,expiresAtMs} (docs/38
+    // §16.7) so CaptainPad can render the "SCHEDULED SHOW PENDING" countdown.
+    let pendingProgram = null;
+    if (this.state.pendingProgram && this.state.pendingProgram.cueId) {
+      pendingProgram = {
+        cueId: this.state.pendingProgram.cueId,
+        label: this.state.pendingProgram.label || this.state.pendingProgram.cueId,
+        expiresAtMs: this.state.pendingProgram.expiresAtMs,
+      };
+    }
+
     let activeProgram = null;
     if (this.state.activeProgram && this.state.activeProgram.cueId) {
       activeProgram = {
@@ -729,6 +751,7 @@ export class TimelineService {
       controller: this.state.controller || 'autopilot',
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
+      pendingProgram,
       currentPhase: phaseNow,
       currentMood: mood.party ? 'party' : 'calm',
       party: mood.party,
@@ -844,6 +867,12 @@ export class TimelineService {
     this.state.autopilotEnabled = enabled;
     try {
       if (enabled) {
+        // §16.6 lease + ap-on: enabling autopilot while a lease is pending starts
+        // the (due) program rather than just resuming the baseline.
+        if (this.state.pendingProgram && this.state.pendingProgram.cueId) {
+          await this.enableProgram();
+          return { autopilotEnabled: this.state.autopilotEnabled, controller: this.state.controller };
+        }
         await this._establishBaselineIfActive('operator');
       } else {
         await this._disarmBaselineAutopilot();
@@ -877,6 +906,73 @@ export class TimelineService {
   }
 
   /**
+   * Start the PENDING program immediately (docs/38 §16.5 lease-enable). Clears
+   * pause/hold (exits manual), promotes pendingProgram → activeProgram, disarms
+   * the baseline on the program's target(s), applies the pending action through
+   * the same dispatch path, clears the lease, sets controller='program'. FAIL
+   * LOUD with a 400-style result when there is no pending lease.
+   *
+   * @returns {Promise<{ok:boolean, error?:string, controller?:string, activeProgram?:object}>}
+   */
+  async enableProgram() {
+    const pend = this.state.pendingProgram;
+    if (!pend || !pend.cueId) return { ok: false, error: 'no pending program' };
+    const now = this.nowFn();
+    const sunEvents = this._sunEventsFor(now);
+    const dayTimes = resolveDayTimes({ plan: this.plan, now, sunEvents });
+    const cue = this.plan.cues.find((c) => c.id === pend.cueId);
+    const hold = cue ? cue.hold : undefined;
+    // Exit manual — the operator chose to hand the deck to the program.
+    this.state.mode = 'armed';
+    this.state.manualHoldUntilMs = null;
+    this.state.activeProgram = {
+      cueId: pend.cueId,
+      startedAtMs: now,
+      untilMs: resolveHold(hold, now, dayTimes),
+    };
+    this.state.pendingProgram = null;
+    // Latch firedToday so the just-started program does not re-arm a lease today.
+    this._latchFiredToday(pend.cueId, now);
+    try {
+      // Same dispatch contract as the arbiter: disarm baseline + apply action.
+      await this._dispatchArbitratedAction({ cueId: pend.cueId, action: pend.action, autopilotOff: true }, 'lease-enable');
+      this.state.controller = 'program';
+      this.lastError = null;
+      this._persistAndBroadcast();
+      return { ok: true, controller: this.state.controller, activeProgram: this.state.activeProgram };
+    } catch (e) {
+      this.cueErrors[pend.cueId] = `${e && e.message}`;
+      this.lastError = `program/enable "${pend.cueId}": ${e && e.message}`;
+      this._broadcastState();
+      throw e;
+    }
+  }
+
+  /**
+   * Dismiss (cancel) the pending program (docs/38 §16.5 lease-dismiss). Stays
+   * manual; latches firedToday[cueId] for today so the cue does NOT re-arm a
+   * lease again today. FAIL LOUD when there is no pending lease.
+   *
+   * @returns {{ok:boolean, error?:string}}
+   */
+  dismissProgram() {
+    const pend = this.state.pendingProgram;
+    if (!pend || !pend.cueId) return { ok: false, error: 'no pending program' };
+    this._latchFiredToday(pend.cueId, this.nowFn());
+    this.state.pendingProgram = null;
+    this._persistAndBroadcast();
+    return { ok: true };
+  }
+
+  // Latch a cue as fired-today (docs/38 §16: a dismissed lease sticks for the
+  // day; an enabled/auto-started program does not re-arm). dayKey is the
+  // tz-local calendar day, matching evaluateTick's latch bookkeeping.
+  _latchFiredToday(cueId, now) {
+    if (!this.state.firedToday) this.state.firedToday = {};
+    this.state.firedToday[cueId] = dayKeyFor(now, this.plan.location.tz);
+  }
+
+  /**
    * Manual cue fire. Routes through the SAME arbiter path so a program cue
    * starts a program (sets activeProgram, turns baseline autopilot off) and a
    * mood cue respects the controller (docs/38 §14). Returns { steps, controller }.
@@ -889,6 +985,7 @@ export class TimelineService {
     const dayTimes = resolveDayTimes({ plan: this.plan, now, sunEvents });
     const { actions, state: arbState } = arbitrate({
       now, plan: this.plan, state: this.state, fires: [{ cueId: id, reason: 'manual' }], dayTimes,
+      leaseSec: this.programLeaseSec,
     });
     this.state = arbState;
     const steps = [];

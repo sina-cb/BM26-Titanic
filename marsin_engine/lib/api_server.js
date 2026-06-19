@@ -1950,6 +1950,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         enabled: true,
         activePlan: timelineConfigBlock.activePlan || 'playa_default',
         tickMs: timelineConfigBlock.tickMs || 1000,
+        programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
         mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
         colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
       },
@@ -2762,6 +2763,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       timelineService.endProgram()
         .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
         .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/enable' && req.method === 'POST') {
+      // Pending-program lease ENABLE (docs/38 §16.7): start the armed program now.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.enableProgram()
+        .then(r => {
+          if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...r }));
+        })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/dismiss' && req.method === 'POST') {
+      // Pending-program lease DISMISS (docs/38 §16.7): cancel + latch firedToday.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.dismissProgram();
+        if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...r }));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.url.match(/^\/timeline\/cues\/[^\/]+\/fire$/) && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       const id = decodeURIComponent(req.url.split('/')[3]);

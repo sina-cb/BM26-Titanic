@@ -25,6 +25,13 @@ export function defaultTimelineState() {
     autopilotEnabled: true,
     controller: 'autopilot',
     activeProgram: null,
+    // Pending-program lease (docs/38 §16.5): when a program comes due while the
+    // controller is in any MANUAL sub-state, a lease is ARMED instead of firing.
+    // null = no lease. Armed shape:
+    //   { cueId, label, action, armedAtMs, expiresAtMs }
+    // The lease auto-starts the program at expiresAtMs (show goes on, I2), or the
+    // operator ENABLEs (start now) / DISMISSes (cancel, latch firedToday) it.
+    pendingProgram: null,
     currentPhase: null,
     currentMood: 'calm',
     lastFiredCueId: null,
