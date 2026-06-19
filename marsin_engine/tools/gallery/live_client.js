@@ -26,7 +26,11 @@
     return;
   }
 
-  var host = CFG.host;
+  // Engine host: an explicit override (config/?host=) wins; otherwise connect
+  // to the SAME host the browser used to reach the gallery, with the engine
+  // port. This is what makes /live work from a phone over Tailscale — a
+  // hardcoded 127.0.0.1 would be the phone's own localhost, not the engine.
+  var host = CFG.host || (location.hostname + ':' + (CFG.enginePort || '6968'));
   var buffer = CFG.buffer;            // 'master' | 'rig'
   var layout = CFG.layout;            // { mode:'strip'|'map', ... }
 

@@ -126,6 +126,13 @@ function configEngineHost() {
 // DEFAULT_ENGINE_HOST. The config value is resolved once at startup; the query
 // override is applied per request in the /live handler.
 const ENGINE_HOST = configEngineHost() || DEFAULT_ENGINE_HOST;
+// The configured engine host is only an OVERRIDE. When it's loopback
+// (127.0.0.1 / localhost — the default), the live client must connect to the
+// host the BROWSER used to reach the gallery (so it works from a phone over
+// Tailscale, not just localhost), keeping only the engine PORT. A non-loopback
+// config value is an explicit remote-engine override.
+const ENGINE_PORT = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[1] : '6968';
+const ENGINE_HOST_IS_LOOPBACK = /^(127\.0\.0\.1|localhost|0\.0\.0\.0)(:|$)/.test(ENGINE_HOST);
 // <!-- END live-vis -->
 
 
@@ -431,6 +438,10 @@ ${THEME_CSS}
 <main id="list"><div class="empty">Loading&hellip;</div></main>
 <script>
   const DATA = ${payload};
+  // Client-side HTML escaper — the server-side esc() isn't defined in the
+  // browser; without this, cardHtml's fallback badge threw ReferenceError and
+  // left the list stuck on "Loading…" for any non-test_bench model.
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   // <!-- BEGIN model-select -->
   const ACTIVE_MODEL = ${JSON.stringify(activeModel)};
   const DEFAULT_MODEL = ${JSON.stringify(DEFAULT_MODEL)};
@@ -642,6 +653,10 @@ ${THEME_CSS}
 <main class="grid" id="grid"></main>
 <script>
   const DATA = ${payload};
+  // Client-side HTML escaper — the server-side esc() isn't defined in the
+  // browser; without this, cardHtml's fallback badge threw ReferenceError and
+  // left the list stuck on "Loading…" for any non-test_bench model.
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   // <!-- BEGIN model-select -->
   const ACTIVE_MODEL = ${JSON.stringify(activeModel)};
   const DEFAULT_MODEL = ${JSON.stringify(DEFAULT_MODEL)};
@@ -823,7 +838,9 @@ ${modelScript(activeModel)}
 // ---------------------------------------------------------------------------
 async function livePage(opts) {
   const model = opts.model;
-  const host = opts.host;
+  const host = opts.host;                       // explicit override, or null = auto
+  const enginePort = opts.enginePort || ENGINE_PORT;
+  const hostLabel = host || ('this device:' + enginePort);
   const buffer = opts.buffer === 'rig' ? 'rig' : 'master';
   const patternLabel = opts.patternLabel || '';
 
@@ -856,7 +873,7 @@ async function livePage(opts) {
   // The client config: the model-aware layout + connection params. Only the
   // serializable layout (no functions) goes over the wire.
   const cfg = {
-    host, buffer, model: spec.model, pixelCount: spec.pixelCount,
+    host, enginePort, buffer, model: spec.model, pixelCount: spec.pixelCount,
     layoutMode: spec.layoutMode, layout: spec.layout,
   };
   const cfgJson = JSON.stringify(cfg).replace(/</g, '\\u003c');
@@ -903,7 +920,7 @@ ${THEME_CSS}
       <button data-buf="rig"${buffer === 'rig' ? ' class="on"' : ''}>rig</button>
     </span>
     <button id="live-pp">Pause</button>
-    <span class="live-meta">model <b>${esc(spec.model)}</b> · ${esc(layoutNote)} · engine <span class="live-host">${esc(host)}</span>${patternLabel ? ' · ' + esc(patternLabel) : ''}</span>
+    <span class="live-meta">model <b>${esc(spec.model)}</b> · ${esc(layoutNote)} · engine <span class="live-host">${esc(hostLabel)}</span>${patternLabel ? ' · ' + esc(patternLabel) : ''}</span>
   </div>
 </header>
 <main>
@@ -1063,9 +1080,13 @@ function resolveHost(u) {
   const q = typeof u.query.host === 'string' ? u.query.host.trim() : '';
   if (q) {
     if (!SAFE_HOST.test(q)) return { error: 'Bad ?host= (want host:port): ' + q };
-    return { host: q };
+    return { host: q, port: q.includes(':') ? q.split(':')[1] : ENGINE_PORT };
   }
-  return { host: ENGINE_HOST };
+  // No explicit ?host=. A real (non-loopback) config host is an override; else
+  // return host:null so the client auto-targets the gallery's own hostname +
+  // engine port (so it's reachable from the phone, not just localhost).
+  if (!ENGINE_HOST_IS_LOOPBACK) return { host: ENGINE_HOST, port: ENGINE_PORT };
+  return { host: null, port: ENGINE_PORT };
 }
 
 function resolveLiveModel(u) {
@@ -1087,7 +1108,7 @@ async function handleLive(req, res, u, pathname) {
     if (patternLabel && !SAFE_NAME.test(patternLabel)) return notFound(res, 'Bad pattern name.');
   }
   try {
-    const page = await livePage({ model: mr.model, host: hr.host, buffer, patternLabel });
+    const page = await livePage({ model: mr.model, host: hr.host, enginePort: hr.port, buffer, patternLabel });
     return send(res, 200, 'text/html; charset=utf-8', page);
   } catch (e) {
     // FAIL LOUD: missing model file / bad meta is a 500 with the real reason.
