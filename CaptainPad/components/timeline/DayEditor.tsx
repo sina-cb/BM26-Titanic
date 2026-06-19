@@ -178,7 +178,6 @@ export function DayEditor({
   );
 }
 
-type Styles = ReturnType<typeof makeStyles>;
 
 function makeStyles(C: Palette) {
   return StyleSheet.create({

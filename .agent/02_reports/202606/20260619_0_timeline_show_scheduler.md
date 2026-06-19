@@ -283,4 +283,30 @@ Add to `.agent/00_gol/13_multi_agent.md` ports table when Phase 1 lands.
   engine. 95 engine tests green; CaptainPad tsc + web:build clean. Live in-engine
   precedence verified: program (catchUp) → `program/end` → **autopilot resumes** →
   autopilot-off → **manual** (controller transitions confirmed via /timeline/state).
-  Next: M2 8-day festival schema + M3 fluid maker UI.
+- **2026-06-19 — M2 DONE (8-day festival).** schema v2 (`festival{startDate,days}`
+  + per-cue `days`), `festival.js` helpers, tick filters to today's cues,
+  `buildOverview()` + `GET/POST /timeline/overview`. v1 back-compat. test_bench
+  seed regenerated to the v2 8-day default. 80 timeline tests. Live overview =
+  8 days, sun drift 19:34→19:23, burn-night(d6)/temple(d7) day-specific.
+- **2026-06-19 — M3 DONE (fluid maker UI).** CaptainPad timeline tab → viewer +
+  8-day maker: DayOverviewStrip (per-day sun arc + cue markers by kind), DayEditor
+  (sun events interleaved with cues), CueEditorSheet (kind/trigger/action/hold/days,
+  all pills+steppers), PlanPicker, draft→`POST /timeline/overview` preview→
+  `POST /timeline/plans` save. tsc + web:build + lint clean. **Screenshots
+  captured** against the live engine: 8-day overview, day editor (Sat w/ burn
+  night), ADD CUE sheet (`.agent_renders/cp_timeline_maker|cp_day_editor|
+  cp_cue_editor.png`).
+
+### 5.2 v2 final state (2026-06-19)
+**DONE & pushed:** timeline runs IN the engine; CaptainPad is the only UI (themed);
+precedence arbiter (program > autopilot > manual); 8-day festival model + fluid
+maker. **220+ tests** across timeline + engine regression, all green; CaptainPad
+tsc/web:build/lint clean; auto-checks (git diff --check, node --check, tsc, lint)
+pass. Live-validated end-to-end (engine + sim + audio companion): in-engine
+precedence transitions, mood-driven swaps from real synthetic audio, mixer
+per-channel autopilot, and the 8-day maker rendering the live plan.
+**Remaining / follow-ups:** (a) v1 plans aren't editable on the 8-day grid (loud
+message → duplicate from BRC template) — by design; add a "wrap in festival"
+affordance if wanted. (b) sim visuals are muted on test_bench (sparse patching) —
+full fidelity on the patched titanic model. (c) optional: HIL/local validation on
+real hardware (the hand-off step).
