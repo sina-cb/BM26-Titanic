@@ -31,7 +31,10 @@ import path from 'node:path';
 
 import { computeSunEvents, formatLocal } from './sun.js';
 import { loadShowPlan, saveShowPlan, defaultShowPlan, validateShowPlan } from './show_plan.js';
-import { resolveDayTimes, evaluateTick, activePhase, dayKeyFor } from './triggers.js';
+import {
+  resolveDayTimes, evaluateTick, activePhase, dayKeyFor, anchorToMs, dateClockToEpochMs,
+} from './triggers.js';
+import { applicableCues, festivalDayIndex, festivalDateFor } from './festival.js';
 import { loadTimelineState, saveTimelineState } from './timeline_state.js';
 import { arbitrate, resolveHold } from './arbiter.js';
 
@@ -58,6 +61,91 @@ function triggerSummary(t) {
     case 'manual': return 'manual';
     default: return t.type;
   }
+}
+
+// Sun events surfaced in the overview (docs/38 §15.2 overview shape).
+const OVERVIEW_SUN_EVENTS = [
+  'sunrise', 'sunset', 'solarNoon', 'civilDusk', 'goldenHourStart', 'goldenHourEnd',
+];
+
+// Short weekday name ('Sat') of a 'YYYY-MM-DD' calendar date in tz `tz`.
+function weekdayFor(dateKey, tz) {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  // Noon UTC keeps the date stable across any tz offset for weekday formatting.
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(dt);
+}
+
+/**
+ * Build the multi-day OVERVIEW for the UI (docs/38 §15.2). PURE-ish: no IO, the
+ * only impurity is `Date.now()` defaulting when nowMs is omitted. Returns one
+ * entry per festival day (or a single "today" entry when the plan has no
+ * festival), each with that date's sun events (HH:MM local or null) and the cues
+ * that apply that day with their resolved `atLocal` (clock/sun cues → 'HH:MM';
+ * mood/phase/manual → null).
+ *
+ * @param {object} plan   — a normalized (v2) plan
+ * @param {number} [nowMs]
+ */
+export function buildOverview(plan, nowMs) {
+  const now = typeof nowMs === 'number' ? nowMs : Date.now();
+  if (!plan || typeof plan !== 'object') {
+    return { plan: null, festival: null, location: null, days: [] };
+  }
+  const { lat, lon, tz } = plan.location;
+
+  // Days to render: every festival day, or a single "today" entry if no span.
+  const dayKeys = [];
+  if (plan.festival) {
+    for (let i = 0; i < plan.festival.days; i += 1) {
+      dayKeys.push({ index: i, date: festivalDateFor(plan.festival, i) });
+    }
+  } else {
+    dayKeys.push({ index: 0, date: dayKeyFor(now, tz) });
+  }
+
+  const days = dayKeys.map(({ index, date }) => {
+    // Anchor the day at local noon so sun math + clock resolution land on the
+    // intended calendar day in tz regardless of UTC offset.
+    const dayNoonMs = dateClockToEpochMs(date, '12:00', tz);
+    const sunEvents = computeSunEvents({ lat, lon, date: new Date(dayNoonMs) });
+
+    const sun = {};
+    for (const name of OVERVIEW_SUN_EVENTS) {
+      const ev = sunEvents[name];
+      sun[name] = ev instanceof Date ? formatLocal(ev, tz) : null;
+    }
+
+    // Cues applying on this day, with their resolved local fire time.
+    const applies = applicableCues(plan, dayNoonMs);
+    const cues = applies.map((cue) => {
+      let atLocal = null;
+      const t = cue.trigger;
+      if (t.type === 'clock') {
+        atLocal = formatLocal(new Date(anchorToMs({ clock: t.at }, dayNoonMs, tz, sunEvents)), tz);
+      } else if (t.type === 'sun') {
+        const ms = anchorToMs({ sun: t.event, offsetMin: t.offsetMin || 0 }, dayNoonMs, tz, sunEvents);
+        atLocal = ms !== null ? formatLocal(new Date(ms), tz) : null;
+      }
+      return {
+        id: cue.id,
+        label: cue.label || cue.id,
+        kind: cue.kind,
+        trigger: cue.trigger,
+        action: cue.action,
+        atLocal,
+      };
+    });
+
+    return { index, date, weekday: weekdayFor(date, tz), sun, cues };
+  });
+
+  return {
+    plan: plan.name || null,
+    festival: plan.festival || null,
+    location: plan.location,
+    days,
+  };
 }
 
 export class TimelineService {
@@ -421,13 +509,16 @@ export class TimelineService {
   async _catchUp() {
     const now = this.nowFn();
     const sunEvents = this._sunEventsFor(now);
-    const dayTimes = resolveDayTimes({ plan: this.plan, now, sunEvents });
+    // catchUp also restricts to TODAY's applicable cues (docs/38 §15.2) — a
+    // burn-night program must not "catch up" on a non-burn day.
+    const dayPlan = { ...this.plan, cues: applicableCues(this.plan, now) };
+    const dayTimes = resolveDayTimes({ plan: dayPlan, now, sunEvents });
     const dayKey = dayKeyFor(now, this.plan.location.tz);
     if (!this.state.firedToday) this.state.firedToday = {};
     this.state.dayKey = dayKey;
 
     let best = null;
-    for (const cue of this.plan.cues) {
+    for (const cue of dayPlan.cues) {
       if (cue.enabled === false) continue;
       const t = cue.trigger;
       if (t.type !== 'clock' && t.type !== 'sun') continue;
@@ -477,15 +568,21 @@ export class TimelineService {
     try {
       const now = this.nowFn();
       const sunEvents = this._sunEventsFor(now);
-      const dayTimes = resolveDayTimes({ plan: this.plan, now, sunEvents });
+      // The RUNTIME tick is always "today": build the day's working plan = the
+      // full plan with cues restricted to those applicable to today's festival
+      // day (docs/38 §15.2). resolveDayTimes / evaluateTick / arbitrate all see
+      // only today's cues, so only today's cues fire — multi-day lives in the
+      // plan + overview, never the tick.
+      const dayPlan = { ...this.plan, cues: applicableCues(this.plan, now) };
+      const dayTimes = resolveDayTimes({ plan: dayPlan, now, sunEvents });
       const mood = this.getMood();
 
-      const { fires, state: nextState } = evaluateTick({ now, plan: this.plan, state: this.state, mood, dayTimes });
+      const { fires, state: nextState } = evaluateTick({ now, plan: dayPlan, state: this.state, mood, dayTimes });
       this.state = nextState;
       this.state.currentMood = mood.party ? 'party' : 'calm';
 
       const reasonByCue = new Map(fires.map((f) => [f.cueId, f.reason]));
-      const { actions, state: arbState } = arbitrate({ now, plan: this.plan, state: this.state, fires, dayTimes });
+      const { actions, state: arbState } = arbitrate({ now, plan: dayPlan, state: this.state, fires, dayTimes });
       this.state = arbState;
 
       // Fires the arbiter dropped (e.g. a mood swap suppressed under a program)

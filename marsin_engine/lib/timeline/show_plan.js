@@ -27,6 +27,7 @@ export const SUN_EVENTS = Object.freeze([
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 const MOOD_VALUES = Object.freeze(['calm', 'party']);
 const TARGET_CHANNELS = Object.freeze(['deck', 'mixer', 'all']);
@@ -69,6 +70,23 @@ function assertBool(value, label) {
 function assertClock(value, label) {
   if (typeof value !== 'string' || !CLOCK_RE.test(value)) {
     throw new Error(`${label} must be a 24h "HH:MM" clock time, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/**
+ * A calendar-date string 'YYYY-MM-DD'. Validates not only the shape but that
+ * the fields form a real date (e.g. rejects '2026-02-30'). Returns the string.
+ */
+function assertDate(value, label) {
+  if (typeof value !== 'string' || !DATE_RE.test(value)) {
+    throw new Error(`${label} must be a 'YYYY-MM-DD' date, got ${JSON.stringify(value)}`);
+  }
+  const [y, mo, d] = value.split('-').map(Number);
+  // Round-trip through UTC to reject impossible dates (Feb 30 → Mar 2 etc.).
+  const probe = new Date(Date.UTC(y, mo - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) {
+    throw new Error(`${label} is not a valid calendar date, got ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -358,7 +376,53 @@ function validateHold(hold, label) {
   return { until: validateAnchor(hold.until, `${label}.until`) };
 }
 
-function validateCue(cue, index, phaseNames, lookNames, seenIds) {
+/**
+ * The optional FESTIVAL span block (docs/38 §15.2). Absent ⇒ null (a "nightly
+ * recurring" plan with no fixed span — every cue must be days:'all'). Present ⇒
+ * { startDate:'YYYY-MM-DD'(valid), days: Int 1..31 }. THROW-style.
+ */
+function validateFestival(festival, label) {
+  if (festival === undefined || festival === null) return null;
+  if (!isPlainObject(festival)) throw new Error(`${label} must be an object { startDate, days }`);
+  const startDate = assertDate(festival.startDate, `${label}.startDate`);
+  const days = assertInteger(festival.days, `${label}.days`);
+  if (days < 1 || days > 31) throw new Error(`${label}.days must be an integer in [1, 31], got ${days}`);
+  return { startDate, days };
+}
+
+/**
+ * A cue's `days` applicability (docs/38 §15.2). Default 'all'. Otherwise an
+ * array of either day INDICES (Int in [0, festival.days-1]) or calendar DATE
+ * strings ('YYYY-MM-DD'). Index/date forms require a festival block (mixing a
+ * day-targeted cue into a no-festival plan is an authoring error → throw). The
+ * array must be homogeneous (all ints OR all dates) and non-empty.
+ */
+function validateCueDays(days, label, festival) {
+  if (days === undefined || days === 'all') return 'all';
+  if (!Array.isArray(days)) {
+    throw new Error(`${label} must be 'all' or an array of day indices / dates, got ${JSON.stringify(days)}`);
+  }
+  if (days.length === 0) throw new Error(`${label} array must be non-empty`);
+  const allInts = days.every((v) => Number.isInteger(v));
+  const allDates = days.every((v) => typeof v === 'string');
+  if (!allInts && !allDates) {
+    throw new Error(`${label} must be all integer day-indices OR all 'YYYY-MM-DD' date strings, got ${JSON.stringify(days)}`);
+  }
+  if (!festival) {
+    throw new Error(`${label} uses day indices/dates but the plan has no festival block (add festival or use days:'all')`);
+  }
+  if (allInts) {
+    return days.map((v, i) => {
+      if (v < 0 || v > festival.days - 1) {
+        throw new Error(`${label}[${i}] day index ${v} out of range [0, ${festival.days - 1}]`);
+      }
+      return v;
+    });
+  }
+  return days.map((v, i) => assertDate(v, `${label}[${i}]`));
+}
+
+function validateCue(cue, index, phaseNames, lookNames, seenIds, festival) {
   const label = `plan.cues[${index}]`;
   if (!isPlainObject(cue)) throw new Error(`${label} must be an object`);
   const id = assertSlug(cue.id, `${label}.id`);
@@ -383,6 +447,8 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds) {
   }
   // hold: only meaningful for kind:'program'. Validate whenever present.
   if (cue.hold !== undefined) out.hold = validateHold(cue.hold, `${label}.hold`);
+  // days: festival-day applicability (docs/38 §15.2). Default 'all'.
+  out.days = validateCueDays(cue.days, `${label}.days`, festival);
   return out;
 }
 
@@ -394,9 +460,15 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds) {
  */
 export function validateShowPlan(plan) {
   if (!isPlainObject(plan)) throw new Error('show plan must be an object');
-  if (plan.schemaVersion !== 1) throw new Error(`plan.schemaVersion must === 1, got ${JSON.stringify(plan.schemaVersion)}`);
+  if (plan.schemaVersion !== 1 && plan.schemaVersion !== 2) {
+    throw new Error(`plan.schemaVersion must === 1 or 2, got ${JSON.stringify(plan.schemaVersion)}`);
+  }
   const name = assertSlug(plan.name, 'plan.name');
   const location = validateLocation(plan.location);
+  // v1 plans carry no festival and no cue.days — they normalize to the v2 shape
+  // with festival:null and every cue days:'all' (recurring nightly, exactly as
+  // before). v2 plans may carry an explicit festival span + per-cue days.
+  const festival = plan.schemaVersion === 2 ? validateFestival(plan.festival, 'plan.festival') : null;
   const phases = validatePhases(plan.phases !== undefined ? plan.phases : {});
   const looks = validateLooks(plan.looks !== undefined ? plan.looks : {});
 
@@ -406,9 +478,11 @@ export function validateShowPlan(plan) {
 
   if (!Array.isArray(plan.cues)) throw new Error('plan.cues must be an array');
   const seenIds = new Set();
-  const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds));
+  const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds, festival));
 
-  return { schemaVersion: 1, name, location, autopilot, phases, looks, cues };
+  // Always emit the v2 normalized shape (back-compat: a v1 input → v2 out with
+  // festival:null + days:'all'). loadShowPlan still loads old files unchanged.
+  return { schemaVersion: 2, name, location, festival, autopilot, phases, looks, cues };
 }
 
 /**
@@ -457,9 +531,12 @@ export function dumpShowPlan(plan) {
  */
 export function defaultShowPlan() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     name: 'playa_default',
     location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles', elevationM: 1190 },
+    // BRC 2026: an 8-day span from 2026-08-30 through 2026-09-06. Day indices
+    // 0..7; index 6 = burn night, index 7 = temple burn (docs/38 §15.2).
+    festival: { startDate: '2026-08-30', days: 8 },
     // The AUTOPILOT baseline (regular programming): engine autopilot cycles the
     // 'default' playlist on the deck, mood swaps allowed (docs/38 §14).
     autopilot: {
@@ -495,23 +572,33 @@ export function defaultShowPlan() {
         autopilot: { active: true, delay_s: 30, shuffle: true },
       },
       sunrise: { playlist: 'default', palette: 'aurora', globals: { master: 0.6 } },
+      // Day-specific looks for the special nights.
+      burn_night: { playlist: 'default', palette: 'bass_drop', globals: { master: 1 } },
+      temple: { playlist: 'default', palette: 'aurora', globals: { master: 0.4 } },
     },
     cues: [
+      // ── recurring (every festival day) ────────────────────────────────────
       {
         id: 'c_visibility_on',
         label: 'Exterior up at golden hour',
+        kind: 'program',
+        days: 'all',
         trigger: { type: 'sun', event: 'sunset', offsetMin: -45 },
         action: { type: 'look', look: 'philharmonic' },
       },
       {
         id: 'c_party_start',
         label: 'Party night ramp',
+        kind: 'program',
+        days: 'all',
         trigger: { type: 'phase', phase: 'party_night' },
         action: { type: 'look', look: 'party' },
       },
       {
         id: 'c_mood_to_party',
         label: 'Follow the DJ: calm -> party',
+        kind: 'mood',
+        days: 'all',
         trigger: {
           type: 'mood', from: 'calm', to: 'party',
           minDwellSec: 20, cooldownSec: 300, whenPhase: 'party_night',
@@ -525,9 +612,29 @@ export function defaultShowPlan() {
         id: 'c_sunrise',
         label: 'Sunrise wind-down',
         kind: 'program',
+        days: 'all',
         trigger: { type: 'sun', event: 'sunrise', offsetMin: -15 },
         action: { type: 'look', look: 'sunrise' },
         hold: { min: 90 },
+      },
+      // ── day-specific (the special nights) ─────────────────────────────────
+      {
+        id: 'c_burn_night',
+        label: 'Burn night spectacle',
+        kind: 'program',
+        days: [6],
+        trigger: { type: 'sun', event: 'sunset', offsetMin: 90 },
+        action: { type: 'look', look: 'burn_night' },
+        hold: { min: 120 },
+      },
+      {
+        id: 'c_temple',
+        label: 'Temple burn — reverent',
+        kind: 'program',
+        days: [7],
+        trigger: { type: 'sun', event: 'sunset', offsetMin: 60 },
+        action: { type: 'look', look: 'temple' },
+        hold: { min: 120 },
       },
     ],
   };

@@ -58,6 +58,21 @@ export function clockToEpochMs(hhmm, nowMs, tz) {
   return naiveUtc - offsetMin * MS_PER_MIN;
 }
 
+/**
+ * Convert a SPECIFIC calendar date 'YYYY-MM-DD' + wall-clock "HH:MM" in tz `tz`
+ * → epoch ms. Unlike clockToEpochMs (which uses the day of an injected nowMs),
+ * this targets an explicit date — used by the multi-day overview to anchor each
+ * festival day independently of the live clock. DST-correct via the same
+ * offset-at-the-instant correction.
+ */
+export function dateClockToEpochMs(dateKey, hhmm, tz) {
+  const [y, mo, d] = dateKey.split('-').map(Number);
+  const [hh, mm] = hhmm.split(':').map(Number);
+  const naiveUtc = Date.UTC(y, mo - 1, d, hh, mm, 0);
+  const offsetMin = tzOffsetMinutes(naiveUtc, tz);
+  return naiveUtc - offsetMin * MS_PER_MIN;
+}
+
 // ── day-time resolution ───────────────────────────────────────────────────────
 
 /**

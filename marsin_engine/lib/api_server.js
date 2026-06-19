@@ -19,7 +19,8 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
-import { TimelineService } from './timeline/timeline_service.js';
+import { TimelineService, buildOverview } from './timeline/timeline_service.js';
+import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -2589,6 +2590,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       } catch (e) {
         res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
       }
+    } else if (req.url === '/timeline/overview' && req.method === 'GET') {
+      // Multi-day overview of the ACTIVE plan for the UI (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(buildOverview(timelineService.plan, Date.now()));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/overview' && req.method === 'POST') {
+      // Overview of a POSTED (possibly UNSAVED) plan — live maker previews.
+      // Validate first so a malformed draft fails loud with 400 (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        let plan;
+        try {
+          plan = validateTimelineShowPlan(data);
+        } catch (e) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: e.message }));
+        }
+        try {
+          const payload = JSON.stringify(buildOverview(plan, Date.now()));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(payload);
+        } catch (e) {
+          res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else if (req.url === '/timeline/plans' && req.method === 'GET') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
