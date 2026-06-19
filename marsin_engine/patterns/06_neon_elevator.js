@@ -22,24 +22,34 @@
     - localSpeed : ride rate. 0 still creeps, 1 ~4x. pow(2,(v-0.5)*4) (§6).
     - direction  : <0.5 down, >0.5 up; center guarded; auto-varies on its own.
     - level      : AUDIO PRIMARY — overall brightness gain (level-driven).
-    - kick       : AUDIO — arrival/blinder white pop strength (kick-gated).
+    - kick       : AUDIO — arrival colour "ding" strength on the Par mezzanine.
     - radius     : AUDIO — floor thickness / how tall the car glows (travel feel).
     - steps      : number of floors in the stack.
+    - whiteLevel : WHITE — always-on white keep on the Vintage penthouse heads.
+    - whiteKick  : WHITE — kick-driven arrival BLINDER bite (vintage W pop).
+    - blinderBite: WHITE — attack/decay snap of the blinder (soft swell -> hard hit).
     - colorPalette1/2 : cp1 (bottom) -> cp2 (top), strict RGB blend.
 
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // arrival blinder pop
-      MODULATE sliderRadius (radius) <- micFlux   // car glow height / travel feel
+      MODULATE sliderLevel     (level)     <- micLow    // PRIMARY -> overall brightness
+      MODULATE sliderWhiteKick (whiteKick) <- micKick   // arrival vintage blinder pop
+      MODULATE sliderRadius    (radius)    <- micFlux   // car glow height / travel feel
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;
 export var direction = 0.75;     // >0.5 up, <0.5 down (center guarded)
 export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
-export var kick = 0.0;           // AUDIO: arrival blinder pop
+export var kick = 0.0;           // AUDIO: arrival colour "ding" on the Par row
 export var radius = 0.4;         // AUDIO: floor thickness / car glow height
 export var stepCount = 5.0;      // floors in the stack
+export var whiteLevel = 0.4;     // WHITE: vintage penthouse white keep
+export var whiteKick = 0.0;      // WHITE: kick-driven vintage blinder bite
+export var blinderBite = 0.6;    // WHITE: blinder attack/decay snap
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Bottom floor colour (cyan)
 export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // Top floor colour (magenta)
@@ -52,6 +62,9 @@ export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
 export function sliderSteps(v) { stepCount = 1.0 + floor(v * 20.0); }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var MAX_RATE = 0.22;        // car rides per second at localSpeed = 1.0
@@ -205,13 +218,29 @@ export function render3D(index, wx, wy, wz) {
   var g = (pg1 + (pg2 - pg1) * tColour) * combinedV;
   var b = (pb1 + (pb2 - pb1) * tColour) * combinedV;
 
-  // Arrival "ding" white blinder pop — kick-driven, fires on the Par row at the
-  // top of a stop so it reads as a beat impact. Scaled by the same level gain so
-  // it does not decorrelate the PRIMARY brightness mapping.
+  // VINTAGE BLINDER (sectionId == 2 penthouse heads): the arrival "ding" drives
+  // the W channel HARD as an audience blinder. whiteKick (micKick) supplies the
+  // kick bite; whiteLevel is the always-on warm-white keep; blinderBite shapes
+  // the arrival pulse from a soft swell (0) to a hard snap (1). White is ADDITIVE
+  // on top of the cp1<->cp2 climb — pars/bars stay coloured.
   var outW = 0.0;
-  if (isPar && arrivalPulse > 0.0) outW = clamp01(arrivalPulse * kick * 0.9 * gain);
-  // Vintage penthouse keeps a little amber warmth — additive, gain-scaled.
-  var outA = isVintage ? clamp01(combinedV * 0.25) : 0.0;
+  var outA = 0.0;
+  if (isVintage) {
+    // Sharpen the arrival pulse by blinderBite (attack/decay snap).
+    var biteExp = 1.0 + blinderBite * 5.0;
+    var snap = pow(arrivalPulse, biteExp);
+    var keepW = whiteLevel * (0.20 + 0.18 * visualY);   // always-on warm keep
+    // Bite harder when the car is actually riding high (carY near the penthouse),
+    // but keep a floor so the blinder still bites on every beat.
+    var nearTop = 0.5 + 0.5 * carY;
+    var hitW = whiteKick * snap * nearTop;              // kick-gated blinder bite
+    outW = clamp01((keepW + hitW * 1.6) * gain);
+    // Tungsten amber warmth on the keep so the penthouse reads warm, not stark.
+    outA = clamp01(keepW * 0.6 * gain);
+  }
+  // Arrival colour "ding" white spark on the Par mezzanine — kick-gated, the
+  // original mezzanine impact, kept as a smaller accent under the vintage blinder.
+  if (isPar && arrivalPulse > 0.0) outW = clamp01(arrivalPulse * kick * 0.6 * gain);
 
   rgbwau(clamp01(r), clamp01(g), clamp01(b), outW, outA, 0.0);
 }

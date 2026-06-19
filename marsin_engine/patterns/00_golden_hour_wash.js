@@ -21,24 +21,38 @@
     - direction  : drift direction. Slider-center freeze guard; effective sign
                    never exactly 0. Combined with autonomous auto-switching.
     - sliderLevel  : overall brightness (PRIMARY audio target).
-    - sliderKick   : kick brightness pop — drives vintage W hard (blinder).
+    - sliderKick   : kick brightness pop on the warm colour body.
     - sliderRadius : movement RADIUS / scale of the wash features.
     - sliderWarmth : warm glow lift (pushes value toward cp2 + warm floor).
+    - sliderWhiteLevel : overall WHITE amount / always-on warm-white keep on the
+                   vintage blinder heads (sectionId == 2).
+    - sliderWhiteKick  : kick-driven WHITE pop — the audience BLINDER bite on the
+                   vintage heads (drives the W channel hard).
+    - sliderWhiteWarmth: tint of the white: warm amber (A channel) at 0 ->
+                   cool / UV (U channel) at 1. Lets the blinder read tungsten-warm
+                   for golden-hour or punch cool-white for a hard hit.
     - colorPalette1/2 : strict cp1<->cp2 warm palette.
 
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // vintage W blinder pop
-      MODULATE sliderRadius (radius) <- micFlux  // wash feature scale / build
+      MODULATE sliderLevel      (level)      <- micLow   // PRIMARY -> overall brightness
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage W blinder pop
+      MODULATE sliderRadius     (radius)     <- micFlux  // wash feature scale / build
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // FIRST: wash drift rate
 export var direction  = 0.5;   // drift direction (0.5 center -> guarded freeze)
 export var level      = 1.0;   // overall brightness (PRIMARY)
-export var kick       = 0.0;   // kick brightness pop -> vintage W blinder
+export var kick       = 0.0;   // kick brightness pop on the warm colour body
 export var radius     = 0.5;   // movement radius / feature scale
 export var warmth     = 0.4;   // warm glow lift
+export var whiteLevel = 0.45;  // WHITE: overall white amount / vintage keep
+export var whiteKick  = 0.0;   // WHITE: kick-driven blinder bite (vintage W pop)
+export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the white
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red
 export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0;  // sunset amber-gold
@@ -58,6 +72,9 @@ export function sliderLevel(v)  { level = v; }
 export function sliderKick(v)   { kick = v; }
 export function sliderRadius(v) { radius = v; }
 export function sliderWarmth(v) { warmth = v; }
+export function sliderWhiteLevel(v)  { whiteLevel = v; }
+export function sliderWhiteKick(v)   { whiteKick = v; }
+export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var MAX_RATE = 0.55;          // drift turns/sec at localSpeed = 1.0
@@ -109,8 +126,11 @@ var dirOsc = 0.0;      // autonomous direction oscillator accumulator
 var autoSign = 1.0;    // current autonomous drift sign (occasionally flips)
 var levGain = 1.0;     // resolved overall brightness gain this frame
 var radScale = 0.5;    // resolved radius this frame
-var kickW = 0.0;       // resolved vintage W blinder amount this frame
+var kickBody = 0.0;    // resolved kick pop on the warm colour body this frame
 var warmLift = 0.0;    // resolved warm glow lift this frame
+var whiteKeep = 0.0;   // resolved always-on white keep this frame
+var whiteBite = 0.0;   // resolved kick-driven blinder bite this frame
+var whiteTint = 0.0;   // resolved white tint: 0 warm(A) -> 1 cool/UV(U)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -154,8 +174,11 @@ export function beforeRender(delta) {
   // wobble so the PRIMARY correlation stays high).
   levGain = 0.25 + 0.75 * clamp01(level);     // calm non-black floor at level=0
   radScale = 0.35 + clamp01(radius) * 1.3;    // feature scale
-  kickW = clamp01(kick);                       // vintage W blinder amount
+  kickBody = clamp01(kick);                    // kick pop on the warm colour body
   warmLift = clamp01(warmth);
+  whiteKeep = clamp01(whiteLevel);             // always-on white keep amount
+  whiteBite = clamp01(whiteKick);              // kick-driven blinder bite
+  whiteTint = clamp01(whiteWarmth);            // 0 warm(A) -> 1 cool/UV(U)
 }
 
 export function render3D(index, x, y, z) {
@@ -196,21 +219,34 @@ export function render3D(index, x, y, z) {
   g = g * bri;
   b = b * bri;
 
+  // Small kick pop on the warm colour body (keeps the wash alive on the beat
+  // without relying on white). Additive, gentle, gain-scaled.
+  r = r + kickBody * 0.10 * levGain;
+  g = g + kickBody * 0.04 * levGain;
+
   var w = 0.0;
   var a = 0.0;
+  var u = 0.0;
 
-  // VINTAGE BLINDER: sectionId == 2 heads. Drive W hard on the kick. Even with
-  // no kick there is a gentle warm W shimmer so the blinders read warm.
+  // VINTAGE BLINDER: sectionId == 2 heads carry the WHITE. Always-on warm-white
+  // keep (whiteLevel) gives the golden-hour glow; on the kick, whiteKick drives
+  // the W channel HARD for the audience blinder bite. whiteWarmth splits the
+  // white tint between amber (A) for tungsten warmth and UV (U) for a cool punch.
+  // White stays ADDITIVE on top of the cp1<->cp2 wash — pars/bars keep colour.
   if (sectionId == 2) {
-    var ambW = noise * 0.08;                    // calm warm white shimmer (subtle)
-    var hitW = kickW * (0.6 + 0.4 * noise);     // hard blinder pop on kick
-    w = ambW + hitW * 2.0;                       // drive W HARD on the kick
-    w = w * (0.35 + 0.65 * levGain);            // still gated by overall level
+    var ambW = whiteKeep * (0.18 + 0.20 * noise);   // calm warm white keep
+    var hitW = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick
+    w = ambW + hitW * 2.0;                           // drive W HARD on the kick
+    w = w * (0.35 + 0.65 * levGain);                // still gated by overall level
     if (w > 1.0) w = 1.0;
-    // Lift the warm core slightly so the heads glow warm, not just go white.
-    r = r + kickW * 0.12;
-    g = g + kickW * 0.05;
+    // Tint the white: warm amber A when whiteTint low, cool/UV U when high.
+    var wmag = w;
+    a = wmag * (1.0 - whiteTint) * 0.6;             // tungsten warmth
+    u = wmag * whiteTint * 0.5;                      // cool / UV bite
+    // Lift the warm colour core slightly so the heads glow warm, not just white.
+    r = r + whiteKeep * 0.10 + whiteBite * 0.10;
+    g = g + whiteKeep * 0.04 + whiteBite * 0.04;
   }
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(a), 0.0);
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(a), clamp01(u));
 }

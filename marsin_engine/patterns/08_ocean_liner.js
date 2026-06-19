@@ -25,13 +25,22 @@
     - kick       : AUDIO — porthole flare/brightness pop on the kick.
     - radius     : AUDIO — porthole travel reach / glow size.
     - detail     : AUDIO — porthole count / sharpness.
+    - whiteLevel : WHITE — how white the lit porthole cores read (incandescent
+                   flare on top of the warm amber porthole colour).
+    - whiteKick  : WHITE — kick-driven white flare pop in the porthole cores.
+    - whiteSpread: WHITE — how far the white reaches: just the brightest cores at 0
+                   -> a broader hot-white spill across more portholes at 1.
     - colorPalette1/2 : cp1 (water) -> cp2 (porthole), strict RGB blend.
 
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // porthole white flare pop
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall porthole white
+
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // porthole flare
-      MODULATE sliderRadius (radius) <- micFlux   // porthole travel / size
-      MODULATE sliderDetail (detail) <- micHigh   // porthole count / sparkle
+      MODULATE sliderLevel     (level)     <- micLow    // PRIMARY -> overall brightness
+      MODULATE sliderKick      (kick)      <- micKick   // porthole flare
+      MODULATE sliderRadius    (radius)    <- micFlux   // porthole travel / size
+      MODULATE sliderDetail    (detail)    <- micHigh   // porthole count / sparkle
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -41,6 +50,9 @@ export var level = 0.7;          // AUDIO PRIMARY: overall brightness gain
 export var kick = 0.0;           // AUDIO: porthole flare pop
 export var radius = 0.4;         // AUDIO: porthole travel / glow size
 export var detail = 0.4;         // AUDIO: porthole count / sharpness
+export var whiteLevel = 0.5;     // WHITE: porthole white-core amount
+export var whiteKick = 0.0;      // WHITE: kick-driven porthole white flare pop
+export var whiteSpread = 0.35;   // WHITE: how far the white spills across cores
 
 export var cp1H = 0.60, cp1S = 1.0, cp1V = 1.0; // water (deep blue)
 export var cp2H = 0.10, cp2S = 0.9, cp2V = 1.0; // porthole (warm amber)
@@ -53,6 +65,9 @@ export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
 export function sliderDetail(v) { detail = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteSpread(v) { whiteSpread = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var WATER_RATE = 0.10;      // hull drift per second at localSpeed = 1.0
@@ -169,5 +184,15 @@ export function render3D(index, wx, wy, wz) {
   var g = clamp01(pg1 * waterV + pg2 * portV);
   var b = clamp01(pb1 * waterV + pb2 * portV);
 
-  rgb(r, g, b);
+  // PORTHOLE WHITE FLARE: the lit porthole cores get an incandescent white core
+  // on top of the warm amber colour (gentle white cores under colour, ocean-liner
+  // cabin-light feel). whiteSpread sets how deep into the core the white reaches:
+  // at 0 only the hottest centres flare white; at 1 the white spills wider. The
+  // flare pops on the kick via whiteKick. White is ADDITIVE — the water stays
+  // cp1, the porthole bodies stay cp2; only the bright cores whiten.
+  var coreGate = pow(port, 3.0 - whiteSpread * 2.4);   // tighter at low spread
+  var flare = coreGate * (whiteLevel * 0.7 + whiteKick * 0.9);
+  var outW = clamp01(flare * gain * (0.9 + radius * 0.4));
+
+  rgbwau(r, g, b, outW, 0.0, 0.0);
 }

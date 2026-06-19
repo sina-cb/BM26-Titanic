@@ -25,6 +25,14 @@
       MODULATE sliderKick   (kick)   <- micKick     // kick brightness pop on the nodes
       MODULATE sliderRadius (radius) <- micFlux     // how far the corps bows (sway radius)
       MODULATE sliderDetail (detail) <- micHigh     // node sharpness / sparkle
+
+  WHITE (modulators-only):
+      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // white accent pop on the sway crests
+      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  White is ADDITIVE on the lattice nodes: a controllable white ACCENT lights the
+  brightest node cores as the corps reaches each sway CREST (peak |sway|), so the
+  bow tips flash white at the apex. whiteSpread biases the accent toward the
+  vintage heads (sectionId==2) vs. the whole rig. White never washes the rig.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -37,6 +45,9 @@ export var detail = 0.5;         // audio: node sharpness / sparkle (micHigh)
 export var latticeScale = 0.32;  // grid density (0..1; scaled in render)
 export var counterPhase = 0.6;   // how strongly field B opposes field A (0..1)
 export var floorLevel = 0.32;    // base glow floor (0..1; scaled in render)
+export var whiteLevel = 0.4;     // WHITE: overall white amount on crest accents (audio: micLow)
+export var whiteKick = 0.0;      // WHITE: white accent pop on the sway crests (audio: micKick)
+export var whiteSpread = 0.5;    // WHITE: bias toward vintage heads (0) vs. whole rig (1)
 
 export var cp1H = 0.55, cp1S = 0.92, cp1V = 1.0; // base lattice (teal/blue)
 export var cp2H = 0.84, cp2S = 0.92, cp2V = 1.0; // accent (violet/magenta)
@@ -56,6 +67,9 @@ export function sliderDetail(v) { detail = v; }
 export function sliderLatticeScale(v) { latticeScale = v; }
 export function sliderCounterPhase(v) { counterPhase = v; }
 export function sliderFloorLevel(v) { floorLevel = v; }
+export function sliderWhiteLevel(v) { whiteLevel = v; }
+export function sliderWhiteKick(v) { whiteKick = v; }
+export function sliderWhiteSpread(v) { whiteSpread = v; }
 
 var phaseA = 0.0;        // sway phase A (radians, accumulated)
 var phaseB = 0.0;        // sway phase B
@@ -71,6 +85,7 @@ var pivotY = 0.0;
 var liveScale = 6.0;
 var liveSoft = 2.4;
 var liveSway = 0.35;
+var crestEnv = 0.0;    // 0..1 envelope: how close the sway is to a CREST (peak |sway|)
 var PHASE_WRAP = 62831.853; // 10000*TAU
 
 // ── Palette RGB cache ─────────────────────────────────────────────────
@@ -137,6 +152,13 @@ export function beforeRender(delta) {
   swayY = sin(phaseB * 0.83) * liveSway * 0.65;
   pivotX = sin(pivotA) * 0.12;
   pivotY = cos(pivotB) * 0.10;
+
+  // Sway CREST envelope: peaks when the bow reaches its turning point (|sin| ~ 1
+  // on phaseA). sin^2 of the phase gives a smooth 0..1 that is high at each crest
+  // of the swing and low at mid-swing — the white accents ride this.
+  var sA = sin(phaseA);
+  crestEnv = sA * sA;        // 0..1, peaks at every sway extreme
+
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -188,5 +210,19 @@ export function render3D(index, x, y, z) {
   var g = (pg1 + (pg2 - pg1) * tVal) * bri;
   var b = (pb1 + (pb2 - pb1) * tVal) * bri;
 
-  rgb(r, g, b);
+  // WHITE ACCENT on the sway CREST — additive over the cp1/cp2 lattice. Only the
+  // brightest node CORES whiten, and only as the corps reaches a crest (crestEnv
+  // peaks at each swing extreme). whiteKick pops it on the beat; whiteLevel sets
+  // the amount; whiteSpread biases toward the vintage heads (sectionId==2) vs.
+  // the whole rig. Gated by lattice so negative space never whitens (no wash).
+  var nodeCore = max(0.0, min(1.0, lattice));
+  var wAmt = max(0.0, min(1.0, whiteLevel));
+  var wKick = max(0.0, min(1.0, whiteKick));
+  var crest = crestEnv * crestEnv;                   // tighten the crest window
+  var sect = 0.55 + 0.45 * (1.0 - whiteSpread);      // base reach over the rig
+  if (sectionId == 2) sect = 0.7 + 0.3 * (1.0 - whiteSpread); // vintage emphasis
+  var white = nodeCore * crest * (0.3 + 0.7 * wAmt) * (0.35 + wKick * 1.0) * sect * level;
+  white = max(0.0, min(1.0, white));
+
+  rgbwau(max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b)), white, 0.0, 0.0);
 }
