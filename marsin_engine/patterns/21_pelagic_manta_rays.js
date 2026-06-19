@@ -23,11 +23,15 @@
     the 1.0/0.47 temporal ratio are mutually irrational so the silhouette never
     re-locks. Phases wrap at PHASE_WRAP=10000 turns (far from any in-frame use).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // foam/brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // travel distance + wing span
-      MODULATE sliderDetail (detail) <- micHigh   // wing-ripple sparkle
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.40..1.00 curve linear # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # foam / brightness pop (beat)
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # travel + wing span (build)
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # wing-ripple sparkle
+  # sliderLevel range floor is 0.40 (not 0.30): below ~0.40 the dimmer manta
+  # bodies stop spanning cp2 and hueSpread falls under 0.10.
+  # Static (not audio-mapped): localSpeed, direction, whiteFoam, uvUndertow,
+  # colorPalette1/2 — operator-set, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────

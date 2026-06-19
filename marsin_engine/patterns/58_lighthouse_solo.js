@@ -19,22 +19,28 @@
       wedge fades toward cp2 (deep blue night). Un-lit night = near-black.
 
   CONTROLS (UI order = declaration order)
-    - localSpeed : rotation rate of the beam (0 = freeze).
-    - beam       : LEVEL → beam brightness + angular width.
+    - localSpeed : rotation rate of the beam (0 = slow drift, 1 = fast sweep).
+    - beam       : LEVEL → beam brightness + angular width (PRIMARY).
     - flash      : KICK → bright flash / double-pulse overlaid on the beam.
-    - width      : BASE angular half-width of the beam (independent of level).
+    - width      : BASE angular half-width of the beam; micFlux EXPANDS the
+                   sweep reach (the wedge widens on a build) — still one beam.
     - colorPalette1/2 : cp1 warm-white/amber beam core, cp2 deep-blue night.
 
+  SPARSE BY DESIGN: a single rotating beam on a near-black night. Audio only
+  brightens/flashes/widens the ONE beam — it never fragments into many sources.
+
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderBeam  (beam)  <- micLow
-      MODULATE sliderFlash (flash) <- micKick
+  AUDIO_MODULATION_V1:
+    sliderBeam  <- micLow  range 0.30..1.00 curve linear   # PRIMARY beam brightness + width
+    sliderFlash <- micKick range 0.00..1.00 curve linear   # KICK: bright flash / double-pulse
+    sliderWidth <- micFlux range 0.40..0.90 curve linear   # MOVEMENT: build expands the beam sweep reach
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.5;   // rotation rate (0 = freeze)
-export var beam = 0.5;         // level: beam brightness + width (resting = visible)
-export var flash = 0.0;        // kick: bright flash / double-pulse
-export var width = 0.5;        // base angular half-width of the beam
+export var localSpeed = 0.5;   // rotation rate (0 = slow drift .. 1 = fast sweep)
+export var beam = 0.5;         // PRIMARY: beam brightness + width (resting = visible)  <- micLow
+export var flash = 0.0;        // kick: bright flash / double-pulse  <- micKick
+export var width = 0.5;        // base half-width; build expands sweep reach  <- micFlux
 
 export var cp1H = 0.11, cp1S = 0.55, cp1V = 1.0; // beam core: warm white / amber
 export var cp2H = 0.62, cp2S = 1.0,  cp2V = 0.5; // night: deep blue
@@ -104,11 +110,15 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // Rotate the beam.
-  beamPhase = beamPhase + dt * localSpeed * MAX_RATE;
+  // Rotate the beam. localSpeed scales the rate on an exponential curve with a
+  // small floor, so the beam ALWAYS drifts (motion > 0 even at localSpeed = 0)
+  // and clearly sweeps faster as localSpeed -> 1 (visible across the whole range).
+  var rate = MAX_RATE * (0.10 + 0.90 * pow(2.0, (localSpeed - 0.5) * 4.0) * 0.25);
+  beamPhase = beamPhase + dt * rate;
   beamPhase = beamPhase - floor(beamPhase);
 
-  // Beam half-width grows with level on top of the operator base width.
+  // Beam half-width grows with level on top of the operator base width. `width`
+  // (micFlux) EXPANDS the sweep reach — a build widens the one wedge.
   halfW = 0.04 + width * 0.18 + beam * 0.12;   // turns (0..1)
   beamLvl = beam;
 
@@ -142,7 +152,11 @@ export function render3D(index, x, y, z) {
     // brightness scales with level, with a guaranteed dim base so it always reads.
     // The level maps with a >1 headroom so the beam CORE burns bright (peak >=200)
     // at the default level while still ramping monotonically with micLow (corr).
-    var lvl = BASE_GLOW + (1.7 - BASE_GLOW) * beamLvl;
+    // PRIMARY: beam level maps with a >1 headroom AND a mild quadratic emphasis
+    // so overall brightness tracks micLow steeply and monotonically (corr >= 0.5)
+    // while the bright core still burns past 200 at the default level.
+    var bl = clamp01(beamLvl);
+    var lvl = BASE_GLOW + (1.95 - BASE_GLOW) * (0.30 * bl + 0.70 * bl * bl);
     var wedge = BASE_GLOW + (1.0 - BASE_GLOW) * prof;
     bri = wedge * lvl;
     if (bri < BASE_GLOW) bri = BASE_GLOW;   // never black inside the wedge

@@ -40,14 +40,15 @@
     - blinderBite: WHITE — attack/decay snap of the blinder (soft swell -> hard hit).
     - colorPalette1/2 : cp1 (bottom) -> cp2 (top), strict RGB blend.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
-
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel     (level)     <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderWhiteKick (whiteKick) <- micKick   // arrival vintage blinder pop
-      MODULATE sliderRadius    (radius)    <- micFlux   // car glow height / travel feel
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel     <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderKick      <- micKick range 0.00..1.00 curve pow2    # Par-row arrival colour ding (kick pop)
+        sliderRadius    <- micFlux range 0.40..0.90 curve linear  # car glow height / travel reach (build)
+        sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # vintage-head arrival BLINDER bite (kick pop)
+        sliderWhiteLevel<- micLow  range 0.20..0.80 curve linear  # always-on warm white keep (bass)
+      # STATIC (not modulated): direction, steps, blinderBite — operator/scene set.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

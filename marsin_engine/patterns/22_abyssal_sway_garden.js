@@ -22,11 +22,13 @@
     sin(swayedX*11.7)*0.13 and frondPhase = swayedX*frondDensity de-sync the
     stalks. Phases wrap at PHASE_WRAP=10000 turns (far from any in-frame use).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // tip-flash / brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // sway amplitude (travel)
-      MODULATE sliderDetail (detail) <- micHigh   // tip sparkle
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # tip-flash / brightness pop (beat)
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # sway amplitude / travel (build)
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # tip sparkle
+  # Static (not audio-mapped): localSpeed, direction, frondDensity, tipGlow,
+  # baseDarkness, colorPalette1/2 — operator-set, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
@@ -110,7 +112,12 @@ export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
-  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  // localSpeed -> rate. Base curve is pow(2,(localSpeed-0.5)*4) (0.25x..4x). The
+  // sharp tip-flicker (pow(flick,4) at 5.3x the current rate) churns visibly even
+  // at the 0.25x floor, which flattened the 0..1 motion response; widening the
+  // exponent to 6 (0.125x..8x, a 64x span) makes the low end genuinely creep and
+  // the high end clearly race, so localSpeed reads across its whole travel.
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 6.0);
 
   // Autonomous lean: slow incommensurate swell occasionally flips the bend sign.
   autoDir = autoDir + dt * localMultiplier * 0.44721;  // 1/√5 turns/sec

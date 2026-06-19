@@ -38,14 +38,18 @@
                   at 1, so the blinder reads tungsten-warm or cool-punch.
     colorPalette1/2 : strict cp1<->cp2; blended in RGB space.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // beat pop + vintage W blinders
-      MODULATE sliderRadius (radius) <- micFlux   // tunnel speed / arm spread
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses for the deploy playlist.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+AUDIO_MODULATION_V1:
+  sliderLevel      <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick       <- micKick range 0.00..1.00 curve pow2    # beat pop + vintage W blinders
+  sliderRadius     <- micFlux range 0.40..0.90 curve linear  # tunnel speed / arm spread
+  sliderContrast   <- micMid  range 0.30..0.85 curve linear  # arm-crispness reshape (secondary)
+  sliderWhiteLevel <- micLow  range 0.30..0.80 curve linear  # overall white keep
+  sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # vintage-head blinder pop
+  # STATIC (omit from audio): localSpeed, sliderCount, twistFreq, direction, whiteWarmth, colorPalette1/2
+
   The vintage heads (sectionId==2) are the headline audience BLINDER: a small
   always-on warm-white keep (whiteLevel) glows tungsten between hits, and on the
   kick the W channel is driven HARD (whiteKick) for the punch. whiteWarmth splits

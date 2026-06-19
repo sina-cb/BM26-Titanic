@@ -33,10 +33,15 @@
     LARGE multiple of 2π (10000·2π) so float64 precision holds and any seam is
     pushed ~14 hours out. The autonomous-direction clock has its own large wrap.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // kick pop + vintage W blinder
-      MODULATE sliderRadius (radius) <- micFlux   // field expansion / radial travel
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses for the deploy playlist.
+
+AUDIO_MODULATION_V1:
+  sliderLevel     <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick      <- micKick range 0.00..1.00 curve pow2    # kick pop + vintage W blinder
+  sliderRadius    <- micFlux range 0.40..0.90 curve linear  # field expansion / radial travel
+  sliderSharpness <- micMid  range 0.30..0.80 curve linear  # node-crush reshape (secondary geometry)
+  # STATIC (omit from audio): localSpeed, sliderCount (radialDensity), direction, colorPalette1/2
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

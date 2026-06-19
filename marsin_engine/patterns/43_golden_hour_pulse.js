@@ -24,9 +24,11 @@
     flash with a short warm afterglow, not a smear.
 
   AUDIO MAP (modulators-only — NEVER read CPC audio globals natively, codex P0):
-      MODULATE sliderSwell   (swell)   <- micLow    PRIMARY: wash brightness/swell
-      MODULATE sliderBlinder (blinder) <- micKick   2nd dim: vintage white blinder pop
-      MODULATE sliderShimmer (shimmer) <- micHigh   fine warm shimmer on the wash
+  AUDIO_MODULATION_V1:
+    sliderSwell   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness/swell
+    sliderBlinder <- micKick range 0.00..1.00 curve linear   # vintage white blinder pop
+    sliderShimmer <- micHigh range 0.00..0.80 curve pow2     # fine warm shimmer/detail
+  Static (unmapped) params: localSpeed, noiseScale, colorPalette1/2.
     Sliders use the IDENTITY convention (store v directly, scale in render). At
     rest (no audio) the rig shows a calm, never-black warm wash (mission-critical
     visibility).

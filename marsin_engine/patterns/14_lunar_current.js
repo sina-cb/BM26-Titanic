@@ -22,10 +22,12 @@
     like a tide turning.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // caustic-crest brightness pop
-      MODULATE sliderRadius (radius) <- micFlux  // current swell / caustic reach
-      MODULATE sliderShimmer(shimmer)<- micMid   // caustic shimmer detail
+  AUDIO_MODULATION_V1:
+    sliderLevel   <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick    <- micKick range 0.00..1.00 curve pow2    # caustic-crest brightness pop
+    sliderRadius  <- micFlux range 0.40..0.90 curve linear  # current swell / caustic reach
+    sliderShimmer <- micMid  range 0.30..0.85 curve linear  # caustic shimmer detail (mids -> geometry)
+  # static (unmapped): direction, density, whiteLift, uvLift, palette pickers
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

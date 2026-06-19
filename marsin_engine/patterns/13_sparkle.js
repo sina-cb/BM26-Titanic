@@ -22,14 +22,15 @@
     autonomous incommensurate clock (~67s) occasionally reverses it on its own.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel   (level)   <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick    (kick)    <- micKick  // sparkle-burst brightness pop
-      MODULATE sliderRadius  (radius)  <- micFlux  // sparkle spread / bloom reach
-      MODULATE sliderDensity (density) <- micHigh  // how many sparkles fire (hats)
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // white-hot sparkle pop + vintage blinder
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white-glint amount
+  AUDIO_MODULATION_V1:
+    sliderLevel      <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick       <- micKick range 0.00..1.00 curve pow2    # sparkle-burst brightness pop
+    sliderRadius     <- micFlux range 0.40..0.90 curve linear  # sparkle bloom reach / spread
+    sliderDensity    <- micHigh range 0.20..0.90 curve linear  # how many sparkles fire (hats)
+    sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # white-hot sparkle pop + vintage blinder
+    sliderWhiteLevel <- micLow  range 0.30..0.90 curve linear  # overall white-glint amount
+  # static (unmapped): direction, sparkleIntensity, sparkleSize, backgroundLevel,
+  #   whiteGlint, amberGlint, uvGlint, whiteWarmth, palette pickers
     Sparkles throw a crisp W glint (white-hot on the kick); sliderWhiteWarmth
     tints that glint toward warm amber (a) vs cool UV (u). On the kick the VINTAGE
     heads (sectionId == 2) also fire a white blinder pop. White is ADDITIVE over
@@ -167,13 +168,23 @@ export function render3D(index, x, y, z) {
   var bgBlend = clamp01(fA * 0.42 + fB * 0.38 + fC * 0.20);
   var bgAlpha = wave(washDrift * 0.18 + sectionId * 0.2 + bgBlend * 0.35);
 
-  // Per-pixel deterministic sparkle (primes; re-seeded by the sparkle clock).
-  var seed = index * 73.137 + sparkleClock * 200.0;
-  var sp = sin(seed) * sin(seed * 3.7) * sin(seed * 7.3);
+  // Per-pixel deterministic sparkle. The SPATIAL scramble (primes on a static
+  // per-pixel seed) is decoupled from the CLOCK so localSpeed genuinely controls
+  // the flicker RATE: previously the clock was multiplied through the *7.3 prime
+  // (≈250×/turn) so the field fully re-rolled every frame at ANY speed and
+  // localSpeed had no visible effect. Now the clock advances the sparkle phase at
+  // a modest rate (×6) added inside ONE sine — a slow shimmer at speed 0, a brisk
+  // strobe at speed 1 (frame-to-frame change scales with the localSpeed rate).
+  var pseed = index * 73.137;
+  var ph = sparkleClock * 6.0;
+  var sp = sin(pseed + ph) * sin(pseed * 3.7) * sin(pseed * 7.3 + ph * 0.5);
   sp = sp * sp * sp * sp;
-  var bloom = sin(seed * 0.071 + x * 0.37 + y * 0.19 + z * 0.11);
+  var bloom = sin(pseed * 0.071 + ph * 0.2 + x * 0.37 + y * 0.19 + z * 0.11);
   bloom = bloom * bloom;
-  var threshold = 0.96 - (0.1 + density * 0.8) * 0.62;
+  // density sets how MANY sparkles fire (count); radius (micFlux) widens the
+  // bloom REACH — a distinct spatial-expansion dimension — and also softly lowers
+  // the fire threshold on a build so the sparkle field swells outward.
+  var threshold = 0.96 - (0.1 + density * 0.8) * 0.62 - radius * 0.06;
 
   // Background brightness (level-scaled). Kick also lifts the wash a little so
   // the burst reads across the whole rig, not just the few firing pixels.
@@ -183,7 +194,7 @@ export function render3D(index, x, y, z) {
   var sparkShaped = pow(clamp01(sparkRaw), 1.0 + (1.0 - sparkleSize) * 4.0);
   // radius widens the bloom reach; kick pops the burst brightness.
   var sparkV = fired * clamp01(sparkShaped * (0.55 + sparkleIntensity * 1.45)
-               + bloom * sparkleSize * sparkleIntensity * (0.35 + radius * 0.6))
+               + bloom * sparkleSize * sparkleIntensity * (0.35 + radius * 1.1))
                * (1.0 + kick * 0.7);
   sparkV = clamp01(sparkV);
 

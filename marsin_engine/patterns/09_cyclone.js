@@ -26,15 +26,16 @@
     - density    : AUDIO — how many specks are lit / sparkle amount.
     - colorPalette1/2 : cp1 <-> cp2 confetti, strict RGB blend.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel   (level)   <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick    (kick)    <- micKick   // confetti burst
-      MODULATE sliderRadius  (radius)  <- micFlux   // travel / speck size
-      MODULATE sliderDensity (density) <- micHigh   // speck count / sparkle
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // white burst flash + blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep/amount
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel     <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderKick      <- micKick range 0.00..1.00 curve pow2    # confetti burst pop (kick)
+        sliderRadius    <- micFlux range 0.40..0.90 curve linear  # speck travel / size (build)
+        sliderDensity   <- micHigh range 0.20..0.95 curve linear  # speck count / sparkle (highs)
+        sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # vintage white burst + blinder pop (kick)
+        sliderWhiteLevel<- micLow  range 0.20..0.80 curve linear  # overall white keep/amount (bass)
+      # STATIC (not modulated): direction, blinderBite — operator/scene set.
     On the KICK the confetti specks throw a crisp white catch-light glint, and the
     VINTAGE heads (sectionId == 2) fire HARD as audience BLINDERS via the W
     channel. sliderBlinderBite shapes how concentrated/snappy that vintage flash

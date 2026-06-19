@@ -26,12 +26,12 @@
     periods), e.g.  ax = 0.5 + reach*sin(orbA*SQRT2 + sin(orbB*PHI))
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderFlockEnergy (flockEnergy) <- micLow   PRIMARY: cohesion +
-                                                            overall brightness
-      MODULATE sliderScatter     (scatter)     <- micHigh  2nd dim: birds scatter
-                                                            into bright glints
-      MODULATE sliderBuild       (build)       <- micFlux  murmuration BUILD /
-                                                            flock expansion
+  AUDIO_MODULATION_V1:
+    sliderFlockEnergy <- micLow  range 0.30..1.00 curve linear   # PRIMARY cohesion + overall brightness
+    sliderScatter     <- micHigh range 0.00..1.00 curve linear   # SPARKLE: birds scatter into glints
+    sliderBuild       <- micFlux range 0.40..0.90 curve linear   # MOVEMENT: murmuration build / flock expansion
+    sliderFocus       <- micMid  range 0.30..0.80 curve linear   # GEOMETRY: mids tighten the flock cores
+    # sliderHaze static (night-sky floor — silence-visibility, not audio)
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -145,14 +145,21 @@ export function beforeRender(delta) {
   // size) so build doesn't steal the brightness budget from micLow.
   var bl = clamp01(build);
   reachNow = REACH * (0.86 + bl * 0.42);
-  coreFocus = FOCUS_MIN + (FOCUS_MAX - FOCUS_MIN) * clamp01(focus);
+  // micMid -> focus: a pure GEOMETRY dimension (core tightness / shape). Higher
+  // mids = tighter, crisper cluster cores; lower = a broad soft flock body.
+  var fo = clamp01(focus);
+  coreFocus = FOCUS_MIN + (FOCUS_MAX - FOCUS_MIN) * fo;
   coreFocus = coreFocus * (1.0 - bl * 0.12);   // build only slightly softens cores
 
   // micLow cohesion: flock brightness climbs with flockEnergy -> the PRIMARY
   // drive of overall brightness (more energy = brighter, denser flock). The
   // gain spans a wide range and multiplies the WHOLE frame (dense + haze) so
-  // total rig brightness tracks micLow monotonically (strong corr).
-  coreGain = 0.45 + clamp01(flockEnergy) * 0.85;
+  // total rig brightness tracks micLow monotonically (strong corr). We add a
+  // focus COMPENSATION term: a tighter core (higher focus) lights fewer pixels,
+  // so we lift the per-core gain to keep TOTAL flux ~flat as focus changes —
+  // that way micMid reshapes the flock WITHOUT stealing micLow's brightness
+  // budget (keeps the PRIMARY corr clean even when both bands are active).
+  coreGain = (0.45 + clamp01(flockEnergy) * 0.85) * (1.0 + fo * 0.55);
 
   // PRIMARY whole-frame gain: the flock layer is multiplied by frameGain, which
   // is driven almost ENTIRELY by flockEnergy (micLow) so TOTAL rig brightness

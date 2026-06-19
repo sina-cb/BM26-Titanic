@@ -38,8 +38,10 @@
     - colorPalette1/2 : cp1 deep blue water, cp2 teal/violet manta glow.
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderSwell (swell) <- micLow    // PRIMARY: water bri + count + speed
-      MODULATE sliderFoam  (foam)  <- micHigh   // 2nd dim: wing-tip foam sparkle
+  AUDIO_MODULATION_V1:
+    sliderSwell <- micLow  range 0.30..0.90 curve linear   # PRIMARY brightness + manta count + glide speed
+    sliderFoam  <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: wing-tip foam sparkle/detail
+  Static (unmapped) params: localSpeed, span, depth, colorPalette1/2.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

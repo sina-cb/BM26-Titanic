@@ -23,14 +23,14 @@
     occasionally reverses it on its own so it feels alive.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // breath-peak brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // how far the breath swells/travels
-      MODULATE sliderDepth  (depth)  <- micMid    // inhale depth (cp2 reach)
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // white spark on inhale + vintage blinder swell
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  AUDIO_MODULATION_V1:
+    sliderLevel      <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick       <- micKick range 0.00..1.00 curve pow2    # breath-peak brightness pop
+    sliderRadius     <- micFlux range 0.40..0.90 curve linear  # how far the breath swells/travels
+    sliderDepth      <- micMid  range 0.30..0.85 curve linear  # inhale depth (cp2 reach)
+    sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # white spark on inhale + vintage blinder
+    sliderWhiteLevel <- micLow  range 0.30..0.90 curve linear  # overall white amount / keep
+  # static (unmapped): direction, spatialOffset, sharpness, blinderBite, palette pickers
   White is ADDITIVE over the strict cp1/cp2 breath: a crisp white SPARK rides the
   inhale crest across the whole rig, and the vintage heads (sectionId==2) carry a
   gentle, kick-gated white BLINDER that swells on the inhale. blinderBite shapes
@@ -174,9 +174,13 @@ export function render3D(index, x, y, z) {
   // a near-constant rig sum as it travels. Kick adds a per-pixel pop; the level
   // gain (PRIMARY) scales the whole rig. Computed in ONE expression — repeated
   // `v = v * ...` reassignment of a single-letter local mis-compiles on the VM.
-  var crestBri = (0.14 + breathV * 1.25) * (1.0 + kick * 0.5);
+  // PRIMARY: level^2 gain (matching 16/17) makes micLow the DOMINANT total-
+  // brightness driver (corr>=0.5); the traveling breath is the spatial texture
+  // and kick only a small per-pixel pop, so neither swamps the bass correlation.
+  var crestBri = 0.40 + breathV * 0.62 + kick * 0.14;
   if (crestBri > 1.0) crestBri = 1.0;
-  var bri = (BASE_FLOOR + crestBri * (1.0 - BASE_FLOOR)) * level;
+  var levelGain = 0.12 + level * level * 2.2;
+  var bri = clamp01((BASE_FLOOR + crestBri * (1.0 - BASE_FLOOR)) * levelGain);
 
   // Inhale pushes toward cp2; a mostly-standing spatial gradient guarantees both
   // palette ends are present across the rig at once, kept nearly time-stable so
@@ -196,7 +200,7 @@ export function render3D(index, x, y, z) {
   var wAmt = clamp01(whiteLevel);
   var wKick = clamp01(whiteKick);
   var sparkCore = pow(breathV, 2.0);
-  var spark = sparkCore * (0.25 + 0.75 * wAmt) * (0.4 + wKick * 1.1) * level;
+  var spark = sparkCore * (0.25 + 0.75 * wAmt) * (0.4 + wKick * 1.1) * (0.10 + level * level * 0.95);
 
   var w = spark;
 
@@ -207,7 +211,7 @@ export function render3D(index, x, y, z) {
     var bite = clamp01(blinderBite);
     var swell = breathV * (1.0 - bite * 0.6);          // soft inhale swell
     var punch = wKick * (0.4 + 0.6 * bite) * (0.5 + 0.5 * breathV); // snappy kick bite
-    var blind = (swell * 0.5 + punch) * (0.3 + 0.7 * wAmt) * (0.4 + 0.6 * level);
+    var blind = (swell * 0.5 + punch) * (0.3 + 0.7 * wAmt) * (0.25 + 0.75 * level * level);
     w = w + blind;
     // keep the heads glowing warm, not just blank white
     r = r + wKick * 0.06 * bite;

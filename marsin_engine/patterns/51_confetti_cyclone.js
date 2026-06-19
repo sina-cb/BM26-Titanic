@@ -26,13 +26,15 @@
   Center drift:    cx,cy move on sqrt3 / sqrt5 Lissajous so the eye wanders.
 
   ── AUDIO (MODULATORS ONLY — never read CPC audio globals; codex P0) ──────────
-  PRIMARY:   MODULATE sliderLow  (low)  <- micLow   -> overall brightness + spin
-                                                        rate + spark density.
-  2nd dim:   MODULATE sliderHigh (high) <- micHigh  -> extra confetti SPARKLE
-                                                        (twinkle on top, crisper).
-  burst:     MODULATE sliderKick (kick) <- micKick  -> a confetti BURST: sparks
-                                                        flare bright + fatten.
-  Sliders store v directly (identity-slider convention); scaled only in render.
+  AUDIO_MODULATION_V1:
+    sliderLow  <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — overall level + spin rate + spark density track the low band
+    sliderHigh <- micHigh range 0.00..1.00 curve pow2    # sparkle/detail — extra confetti twinkle on the crests (highs->glint)
+    sliderKick <- micKick range 0.00..1.00 curve pow2    # beat/pop — a confetti BURST fattens + flares the sparks
+  # sliderSparkSize: static (base spark core radius / crispness; not audio-mapped)
+  # sliderLocalSpeed: static (overall swirl animation rate trim; not audio-mapped)
+  # micHigh/micKick are DISTINCT dimensions (sparkle / burst fatten) — they add
+  # detail without driving overall brightness, so micLow stays the PRIMARY.
+  # Sliders store v directly (identity-slider convention); scaled only in render.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

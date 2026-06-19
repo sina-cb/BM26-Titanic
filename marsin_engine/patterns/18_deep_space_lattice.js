@@ -19,11 +19,13 @@
     eases the drift through reversals on a slow incommensurate clock — not a hard
     sign flip — so motion is never one-way and never seams.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
-      MODULATE sliderKick   (kick)   <- micKick     // kick brightness pop on the lattice
-      MODULATE sliderRadius (radius) <- micFlux     // lattice scale / how far lines travel
-      MODULATE sliderDetail (detail) <- micHigh     // line sharpness / sparkle
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # beat pop on the lattice
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # drift travel / movement
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # line sharpness / sparkle
+  # Static (not audio-mapped): localSpeed, direction, latticeScale, lineSoftness,
+  # colorPalette1/2 — operator-set geometry/colour, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

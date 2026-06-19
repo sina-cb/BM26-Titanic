@@ -22,10 +22,12 @@
     own so the silk drifts back and forth organically.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // ribbon-crest brightness pop
-      MODULATE sliderRadius (radius) <- micFlux  // ribbon width / spread
-      MODULATE sliderShimmer(shimmer)<- micHigh  // satin sheen / fine detail
+  AUDIO_MODULATION_V1:
+    sliderLevel   <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick    <- micKick range 0.00..1.00 curve pow2    # ribbon-crest brightness pop
+    sliderRadius  <- micFlux range 0.40..0.90 curve linear  # ribbon width / spread (movement)
+    sliderShimmer <- micHigh range 0.20..0.90 curve linear  # satin sheen / fine detail (highs)
+  # static (unmapped): direction, ribbonCount, softness, palette pickers
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -136,7 +138,7 @@ export function beforeRender(delta) {
   // Gentle autonomous satin swell: the silk brightens and dims as a whole on a
   // slow incommensurate clock so the rig is never static in silence. REST motion
   // (independent of level); level still dominates the brightness budget.
-  silkBreath = 0.74 + 0.26 * wave(shadowPhase * 0.7 + autoClock * 0.009);
+  silkBreath = 0.84 + 0.16 * wave(shadowPhase * 0.7 + autoClock * 0.009);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -157,17 +159,22 @@ export function render3D(index, x, y, z) {
   var ribbon = ribA * 0.6 + ribB * 0.4;
   var shadow = wave((ny * count * 0.45) - (nx * 0.9) + shadowPhase * 0.18);
 
-  // Satin sheen: shimmer adds a fine high-frequency sparkle on the ribbon body.
-  var sheen = wave(nx * 9.0 + ny * 5.0 + shadowPhase * 0.4) * shimmer * 0.25;
+  // Satin sheen: shimmer (micHigh) adds a fine high-frequency sparkle on the
+  // ribbon body — the fine-detail dimension, a measurable sheen lift on highs.
+  var sheen = wave(nx * 9.0 + ny * 5.0 + shadowPhase * 0.4) * shimmer * 0.30;
 
   // Single-expression brightness (avoid repeated `v=v*x` VM mis-compile). Ribbon
   // cores get a crisp highlight so they reach a true 255 channel (high-def),
-  // with an extra kick-driven pop on top.
+  // with an extra kick-driven pop on top. Kick lifts BOTH the ribbon crests and a
+  // small whole-body amount, so the beat reads across the rig (distinct pop dim).
   var body = pow((ribbon * 0.8) + (shadow * 0.2), soft) + sheen;
   var crest = (ribbon > 0.74) ? (ribbon - 0.74) * 5.0 : 0.0;
-  // Gentle gain floor (0.18) so musical peaks keep crisp 255 cores even when the
-  // level signal sits mid-range, while level still dominates the brightness budget.
-  var bri = (BASE_FLOOR + clamp01(body + crest * (0.7 + kick * 0.9)) * (1.0 - BASE_FLOOR)) * (0.24 + level * 0.80) * silkBreath;
+  var lit = clamp01(body * (1.0 + kick * 0.35) + crest * (0.7 + kick * 1.1));
+  // PRIMARY: level^2 gain (matching 16/17) makes micLow the DOMINANT total-
+  // brightness driver (corr>=0.5); the silkBreath rest-swell is kept gentle so it
+  // does not swamp the bass correlation, and still keeps the rig alive in silence.
+  var levelGain = 0.18 + level * level * 1.9;
+  var bri = (BASE_FLOOR + lit * (1.0 - BASE_FLOOR)) * levelGain * silkBreath;
 
   // Travelling colour blend across the rig — strict cp1<->cp2 RGB lerp.
   var colourBlend = clamp01(wave(nx * 0.7 + ny * 0.35 + colourPhase * 0.18));

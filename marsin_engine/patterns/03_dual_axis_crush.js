@@ -18,10 +18,14 @@
   organically and never visibly loops. Accumulators wrap at a LARGE multiple
   of their period (PHASE_WRAP) so scaling them never produces a seam (§7).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // kick-driven flash pop
-      MODULATE sliderRadius (radius) <- micFlux  // beam reach / travel distance
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses for the deploy playlist.
+
+AUDIO_MODULATION_V1:
+  sliderLevel  <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick   <- micKick range 0.00..1.00 curve pow2    # beam-head + convergence flash pop
+  sliderRadius <- micFlux range 0.40..0.90 curve linear  # beam reach / travel distance
+  # STATIC (omit from audio): localSpeed, beamWidth, direction, colorPalette1/2
 
   CONTROLS (UI order = declaration order):
     localSpeed  : collapse rate, pow(2,(localSpeed-0.5)*4); 0 still creeps.
@@ -215,7 +219,17 @@ export function render3D(index, x, y, z) {
                                     // darkens with micLow -> tightest PRIMARY corr. The
                                     // mid-default dimness is compensated by the intrinsic
                                     // flash intensity (see flashIntensity) and BASE_FLOOR.
-  var v = brightness * gain;
+  // Head is driven slightly over unity so the crisp beam HEAD itself clears the
+  // peakMaxChan>=200 bar at musical peaks (cp2 amber's g channel ~0.6 needs the
+  // headroom), not only on the brief convergence flash. Still gated by level² so
+  // the PRIMARY correlation holds.
+  var v = brightness * gain * 1.45;
+  // KICK is a distinct visible dimension: a discrete pop concentrated on the
+  // bright head (where brightness is high). Gated by gain so it cannot light the
+  // dark negative space — it pops the BEAM on transients (micKick). This gives
+  // the kick a real, separate reactive channel beyond the narrow center flash.
+  var kickPop = brightness * brightness * kick * 0.9 * gain;
+  v = v + kickPop;
   // Flash tracks level too (so it adds NO uncorrelated brightness variance) but
   // is intrinsically intense, so at musical peaks (level high) the convergence
   // hits peakMaxChan >= 200 while staying correlated with level.

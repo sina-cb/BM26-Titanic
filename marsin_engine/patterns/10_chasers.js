@@ -28,11 +28,14 @@
     - count      : AUDIO — how many chasers are flying.
     - colorPalette1/2 : cp1 (head) -> cp2 (tail), strict RGB blend.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // head flare
-      MODULATE sliderRadius (radius) <- micFlux   // tail length / head size
-      MODULATE sliderCount  (count)  <- micHigh   // chaser count
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel  <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderKick   <- micKick range 0.00..1.00 curve pow2    # head flare pop (kick)
+        sliderRadius <- micFlux range 0.40..0.90 curve linear  # tail length / head size (build)
+        sliderCount  <- micHigh range 0.20..0.95 curve linear  # number of chasers flying (highs)
+      # STATIC (not modulated): direction — operator/scene set. (no white channel — rgb only.)
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

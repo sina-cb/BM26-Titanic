@@ -33,14 +33,18 @@
                    for golden-hour or punch cool-white for a hard hit.
     - colorPalette1/2 : strict cp1<->cp2 warm palette.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses to build the deploy
+  playlist; keep it in sync with the math.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel      (level)      <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage W blinder pop
-      MODULATE sliderRadius     (radius)     <- micFlux  // wash feature scale / build
+AUDIO_MODULATION_V1:
+  sliderLevel      <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick       <- micKick range 0.00..1.00 curve pow2    # warm-body kick pop
+  sliderRadius     <- micFlux range 0.40..0.90 curve linear  # wash feature scale / build
+  sliderWarmth     <- micMid  range 0.30..0.85 curve linear  # warm glow reshape (secondary)
+  sliderWhiteLevel <- micLow  range 0.30..0.80 curve linear  # vintage warm-white keep
+  sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # vintage W blinder bite
+  # STATIC (omit from audio): localSpeed, direction, whiteWarmth, colorPalette1/2
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

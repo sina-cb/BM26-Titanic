@@ -27,16 +27,19 @@
   HIGH-DEF: crisp pow-shaped eye core, near-black background (tiny floor only),
   hueSpread from cp1(red 0.0) vs cp2(blue 0.6).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // brightness pop on the eye
-      MODULATE sliderRadius (radius) <- micFlux  // sweep travel / eye-width amplitude
-      MODULATE sliderTrail  (trail)  <- micHigh  // soft glow / afterglow
-    PRIMARY is a clean level->gain (no phase wobble) so corr stays high.
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses for the deploy playlist.
+  PRIMARY is a clean level->gain (no phase wobble) so corr stays high.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep/amount
+AUDIO_MODULATION_V1:
+  sliderLevel      <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick       <- micKick range 0.00..1.00 curve pow2    # brightness pop on the eye
+  sliderRadius     <- micFlux range 0.40..0.90 curve linear  # sweep travel / eye-width amplitude
+  sliderTrail      <- micHigh range 0.20..0.80 curve linear  # afterglow / hats sparkle (secondary)
+  sliderWhiteLevel <- micLow  range 0.30..0.80 curve linear  # vintage warm-white keep
+  sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # vintage-head blinder pop
+  # STATIC (omit from audio): localSpeed, eyeWidth, backgroundGlow, direction, blinderBite, colorPalette1/2
+
     The VINTAGE heads (sectionId == 2) are audience BLINDERS: a soft warm-white
     keep glows there always, and when the eye PASSES under them (or the kick
     hits) the W channel snaps hard to a white punch. sliderBlinderBite shapes how

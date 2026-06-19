@@ -38,25 +38,31 @@
   CONTROLS (declaration order = UI order)
     - localSpeed : how fast the injection head wanders / blooms refresh.
     - ink        : injection amount + bloom brightness. MODULATE micHigh ->
-                   highs spawn more/brighter (magenta) ink (the audio hook).
-    - flow       : current strength — speeds the wander AND widens diffusion.
-                   MODULATE micLow -> bass stirs the water (2nd audio dimension).
-    - diffuse    : spread + decay rate — low = tight slow-fading drops,
-                   high = wide fast-dissolving clouds.
+                   highs spawn more/brighter (magenta) ink (SPARKLE/detail).
+    - flow       : current strength — bass stirs the water: lifts an overall
+                   blue water glow (PRIMARY brightness) AND speeds the wander /
+                   widens diffusion. MODULATE micLow -> the band that owns
+                   overall rig brightness (corr >= 0.5).
+    - diffuse    : spread + decay rate — low = tight slow-fading drops, high =
+                   wide fast-dissolving clouds. MODULATE micFlux -> a build
+                   EXPANDS the ink clouds (movement dimension).
     - base       : faint resting BLUE floor so still water never goes black.
     - colorPalette1/2 : cp1 deep blue (still / faint water), cp2 luminous
                    magenta-violet (hot fresh ink). Ink blends cp1<->cp2 by conc.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderInk  (ink)  <- micHigh   (primary: highs brighten ink)
-      MODULATE sliderFlow (flow) <- micLow    (2nd dim: bass stirs the current)
+  AUDIO_MODULATION_V1:
+    sliderFlow    <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness (bass stirs + lifts water glow)
+    sliderInk     <- micHigh range 0.00..1.00 curve linear   # SPARKLE: highs spawn fresh magenta blooms
+    sliderDiffuse <- micFlux range 0.40..0.90 curve linear   # MOVEMENT: build expands the diffusing clouds
+    # sliderBase static (resting blue floor — silence-visibility, not audio)
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // wander / refresh rate
-export var ink = 0.5;          // injection amount + bloom brightness (micHigh)
-export var flow = 0.5;         // current strength: wander + spread (micLow)
-export var diffuse = 0.5;      // spread + decay rate
+export var ink = 0.5;          // injection amount + bloom brightness (micHigh, SPARKLE)
+export var flow = 0.5;         // PRIMARY: bass stirs water + lifts overall glow (micLow)
+export var diffuse = 0.5;      // spread + decay rate; build EXPANDS clouds (micFlux)
 export var base = 0.09;        // faint resting BLUE floor (never fully black)
 
 export var cp1H = 0.62, cp1S = 1.00, cp1V = 1.0; // deep blue  (still / faint water)
@@ -139,6 +145,7 @@ var faintPhase = 0.0;       // slow phase for the silent-base shimmer
 // (52 on test_bench, 970 on titanic) instead of a fixed 52-cell window.
 var maxIdx = 51;            // grows to (realPixelCount - 1), clamped < N below
 var nextMaxIdx = 0;         // tracks the highest index across the current frame
+var waterGlow = 0.5;        // PRIMARY: flow(micLow)-driven overall water brightness this frame
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -153,10 +160,13 @@ export function beforeRender(delta) {
     bufInit = 1;
   }
 
-  var localMult = pow(2.0, (localSpeed - 0.5) * 2.0);
-  // `flow` (micLow) stirs the water: faster head wander + wider diffusion. This
-  // is the SECOND audio dimension — bass drives motion/spread, not brightness.
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);   // 0..1 -> 0.25x..4x wander/refresh
+  // `flow` (micLow) stirs the water: faster head wander + wider diffusion AND it
+  // is the PRIMARY brightness drive — a steep gain that lifts the whole blue
+  // water glow so TOTAL rig brightness tracks the low band hard (corr >= 0.5).
   var flowMult = 1.0 + flow * 2.0;
+  var fl = clamp01(flow);
+  waterGlow = 0.05 + fl * fl * 0.95;   // PRIMARY: overall water brightness 0.05..1.00 (steep)
 
   // Slow, organic wander of the injection head (irrational golden/sqrt2 phases).
   headPhase = headPhase + dt * 0.05 * localMult * flowMult;
@@ -261,14 +271,17 @@ export function render3D(index, x, y, z) {
   //    blue without swamping the ink. Kept low (and the sheen tighter) so that
   //    inked cells are clearly the brightest thing on the rig — that contrast
   //    is what lets the magenta ink dominate the colour mix (high hueSpread). ──
-  // Faint, slow resting shimmer so still water is never pure black (P0)...
+  // Faint, slow resting shimmer so still water is never pure black (P0). The
+  // `base` floor stays constant (silence-safe), but a PRIMARY flow(micLow) glow
+  // is layered on top so the whole blue water sheet brightens with the low band
+  // -> overall rig brightness tracks micLow hard (corr >= 0.5).
   var faint = base * (0.30 + 0.70 * wave(faintPhase + index * 0.013));
+  var primaryGlow = waterGlow * 0.55 * (0.45 + 0.55 * wave(faintPhase * 1.3 + index * 0.021));
   // ...plus a gentle "wet sheen" that tracks `ink` (micHigh) the same frame it
-  // changes, so total brightness rises/falls WITH the highs (lag-free coupling).
-  // Both ride strictly on cp1 so water stays blue; sheen is modest so it does
-  // not flood the rig with blue and bury the ink.
-  var sheen = ink * 0.24 * (0.25 + 0.75 * wave(faintPhase * 1.7 + index * 0.05));
-  var waterBri = faint + sheen;
+  // changes, so highs add a sparkle lift independent of the low-band glow.
+  // All ride strictly on cp1 so water stays blue.
+  var sheen = ink * 0.20 * (0.25 + 0.75 * wave(faintPhase * 1.7 + index * 0.05));
+  var waterBri = faint + primaryGlow + sheen;
 
   // ── INK layer (blends cp1 -> cp2 by concentration): vivid magenta clouds ──
   // tcol snaps to cp2 for ANY meaningful concentration, so the whole diffused
@@ -277,7 +290,7 @@ export function render3D(index, x, y, z) {
   // pushes hueSpread well over the gate. inkBri is lifted so blooms are the
   // brightest, most saturated thing on the rig.
   var tcol = clamp01(conc * 15.0);                // any ink edge -> magenta fast
-  var inkBri = conc * 1.30;                       // lifted core so peaks burn hot
+  var inkBri = conc * 1.70;                       // lifted core so magenta blooms out-punch the brighter water
 
   // Composite: take the brighter of water vs ink so the field is crisp, but
   // colour follows whichever is dominant (water=cp1, ink=cp1->cp2 by tcol).

@@ -16,15 +16,19 @@
     - localSpeed : overall swell + counter-wave rate.
     - swell      : swell amplitude + OVERALL BRIGHTNESS (PRIMARY audio dim).
     - sparkle    : bright crest plankton glints — count + brightness (2nd dim).
-    - kick       : a crest burst that briefly blooms every crest (3rd dim).
+    - kick       : a crest burst that briefly blooms/expands every crest (3rd dim).
     - uvGlow     : named UV blacklight glow amount on the slow counter-wave.
     - base       : calm ambient floor so silence still reads (never fully black).
     - colorPalette1/2 : cp1 deep blue/teal swell, cp2 cyan/green crest.
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderSwell   (swell)   <- micLow    (PRIMARY: amp+brightness)
-      MODULATE sliderSparkle (sparkle) <- micHigh   (plankton crest glints)
-      MODULATE sliderKick    (kick)    <- micKick   (crest burst)
+  AUDIO_MODULATION_V1:
+    sliderSwell   <- micLow  range 0.30..0.95 curve linear   # PRIMARY brightness + swell amplitude
+    sliderSparkle <- micHigh range 0.00..0.80 curve pow2     # plankton crest glints/detail
+    sliderKick    <- micFlux range 0.00..0.90 curve linear   # build blooms/expands every crest (swell)
+  Static (unmapped) params: localSpeed, uvGlow, base, colorPalette1/2.
+    micFlux (build->expansion) drives the crest-bloom dimension — the swell's
+    signature gesture; micLow stays the dominant brightness driver (PRIMARY corr).
 
   CORE EQUATION (irrational, never loops):
       swellF(nx,ny,t) = 0.5 + 0.5*sin( PI2*( t*SQRT2*0.5

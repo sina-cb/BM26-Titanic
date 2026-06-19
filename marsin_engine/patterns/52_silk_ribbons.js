@@ -23,14 +23,14 @@
     the meander quasi-periodic (no integer period) — the ribbons never repeat.
 
   ── AUDIO MAP (modulators-only — NEVER read CPC audio globals natively) ───────
-    MODULATE sliderAudioLevel (audioLevel) <- micLow
-        PRIMARY: ribbon WIDTH + ribbon BRIGHTNESS + overall brightness.
-        Bass swells fatten and brighten the silk; corr(micLow,brightness)>=0.5.
-    MODULATE sliderShimmer    (shimmer)    <- micHigh
-        2nd DIMENSION: silky high-frequency SHIMMER/highlight riding the ribbon
-        CRESTS (a fast irrational sparkle gated to the bright cores). Highs add
-        glint on the satin without changing the overall mass — a different
-        visual dimension from the low-driven brightness/width.
+  AUDIO_MODULATION_V1:
+    sliderAudioLevel <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — ribbon width + core brightness + overall track the low band
+    sliderShimmer    <- micHigh range 0.00..1.00 curve pow2    # sparkle/detail — high-freq glint riding the bright ribbon crests
+  # sliderRibbons: static (ribbon band count; not audio-mapped)
+  # sliderSoftness: static (core falloff softness, crisp<->satin; not audio-mapped)
+  # sliderLocalSpeed: static (ribbon glide rate; not audio-mapped)
+  # micHigh shimmer is a DISTINCT dimension (crest glint), gated to the bright
+  # cores so it adds detail without driving the low-band mass — micLow stays PRIMARY.
 
   CONTROLS (UI order = declaration order)
     - localSpeed  : ribbon glide rate.
@@ -125,11 +125,16 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // Glide the ribbons (accumulated so speed drags don't phase-jump).
-  phase = phase + dt * GLIDE * (0.25 + localSpeed * 1.75);
+  // Glide the ribbons (accumulated so speed drags don't phase-jump). localSpeed
+  // drives the canonical exponential rate pow(2,(localSpeed-0.5)*4): ~0.25x at 0,
+  // 1x at 0.5, ~4x at 1 — a genuinely effective 16x span across the slider.
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+  phase = phase + dt * GLIDE * 1.125 * localMult;
   if (phase > 100000.0) phase = phase - 100000.0;
 
-  // Fast irrational shimmer clock + slow base breathing clock.
+  // Fast irrational shimmer clock + slow base breathing clock. Kept on its own
+  // cadence (independent of localSpeed) so the micHigh glint doesn't add
+  // localSpeed-coupled brightness flicker that would dilute the PRIMARY corr.
   tShim = time(0.012 / (0.3 + localSpeed));
   tBase = time(0.07);
 

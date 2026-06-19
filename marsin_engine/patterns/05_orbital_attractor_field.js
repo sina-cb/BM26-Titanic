@@ -31,14 +31,18 @@
   auto-flip accumulator wraps at a LARGE multiple (PHASE_WRAP=10000) so a wrapped
   phase that is later multiplied never seams (skill §7).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow   // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick  // vintage W blinder pop (sec 2)
-      MODULATE sliderRadius (radius) <- micFlux  // how far attractors travel
+  AUDIO (modulators-only — never read CPC audio globals natively). The block
+  below is the STRICT source of truth a generator parses for the deploy playlist.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+AUDIO_MODULATION_V1:
+  sliderLevel          <- micLow  range 0.30..1.00 curve linear  # overall brightness (PRIMARY)
+  sliderKick           <- micKick range 0.00..1.00 curve pow2    # vintage W blinder pop (sec 2)
+  sliderRadius         <- micFlux range 0.40..0.90 curve linear  # how far attractors travel
+  sliderColorVariation <- micHigh range 0.30..0.85 curve linear  # colour shimmer / warm-arc spread (secondary)
+  sliderWhiteLevel     <- micLow  range 0.30..0.80 curve linear  # overall white keep
+  sliderWhiteKick      <- micKick range 0.00..1.00 curve pow2    # vintage-head blinder pop
+  # STATIC (omit from audio): localSpeed, direction, falloff, focus, blackoutTexture, blinderBite, colorPalette1/2
+
   The vintage heads (sectionId==2) are the headline audience BLINDER: a small
   always-on warm-white keep (whiteLevel) near attractor cores, driven HARD on the
   kick (whiteKick + the kick slider) for the punch. blinderBite shapes how

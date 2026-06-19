@@ -23,11 +23,16 @@
     seam). Auto-dir at 1/√3 ≈ 0.57735. Wells: ax = 0.5 + reach*sin(pA + sin(pB)),
     etc. — composed incommensurate sinusoids never re-lock. Wrap PHASE_WRAP=10000.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // core/brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // orbit reach (travel)
-      MODULATE sliderDetail (detail) <- micHigh   // filament density
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.40..1.00 curve linear # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # core / brightness pop (beat)
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # orbit reach / travel (build)
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # filament density / sparkle
+  # sliderLevel range floor is 0.40 (not 0.30): the dark-space identity caps the
+  # raw level<->brightness corr, so the level term needs a higher silence floor to
+  # keep PRIMARY corr>=0.5 (known dark-space-vs-corr tension; not re-litigated).
+  # Static (not audio-mapped): localSpeed, direction, chaos, contrast, whiteCore,
+  # uvGhost, colorSpread, colorPalette1/2 — operator-set, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
@@ -120,7 +125,13 @@ export function beforeRender(delta) {
   var dt = delta / 1000.0;
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
-  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
+  // localSpeed -> rate. Base curve is pow(2,(localSpeed-0.5)*4) (0.25x..4x), but
+  // the razor curl filaments (pow(curl,contrast), contrast~4.5) sweep many pixels
+  // for a tiny orbit step, so they churn visibly even at the 0.25x floor and the
+  // 0..1 motion response flattened. Widening the exponent to 6 (0.125x..8x, a 64x
+  // span) drops the low end to a genuine creep and races the high end, so
+  // localSpeed reads clearly across its whole travel.
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 6.0);
 
   // Autonomous orbit sense: slow incommensurate swell occasionally flips sign.
   autoDir = wrap(autoDir + dt * localMultiplier * 0.57735);   // 1/√3 turns/sec

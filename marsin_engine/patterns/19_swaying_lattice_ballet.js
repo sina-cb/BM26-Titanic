@@ -20,15 +20,15 @@
     eases the sway through reversals on a slow incommensurate clock — never a hard
     sign flip — so the bow is not one-way and never seams.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
-      MODULATE sliderKick   (kick)   <- micKick     // kick brightness pop on the nodes
-      MODULATE sliderRadius (radius) <- micFlux     // how far the corps bows (sway radius)
-      MODULATE sliderDetail (detail) <- micHigh     // node sharpness / sparkle
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick   // white accent pop on the sway crests
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow    // overall white amount / keep
+  AUDIO_MODULATION_V1:
+    sliderLevel      <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
+    sliderKick       <- micKick range 0.00..1.00 curve linear # beat pop on the nodes
+    sliderRadius     <- micFlux range 0.40..0.90 curve linear # sway radius / bow travel
+    sliderDetail     <- micHigh range 0.30..0.90 curve linear # node sharpness / sparkle
+    sliderWhiteLevel <- micLow  range 0.30..1.00 curve linear # white keep on crests (bass)
+    sliderWhiteKick  <- micKick range 0.00..1.00 curve linear # white accent pop (beat)
+  # Static (not audio-mapped): localSpeed, direction, latticeScale, counterPhase,
+  # floorLevel, whiteSpread, colorPalette1/2 — operator-set, not modulated.
   White is ADDITIVE on the lattice nodes: a controllable white ACCENT lights the
   brightest node cores as the corps reaches each sway CREST (peak |sway|), so the
   bow tips flash white at the apex. whiteSpread biases the accent toward the

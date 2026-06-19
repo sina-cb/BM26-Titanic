@@ -33,15 +33,16 @@
                    so the candle-glints can read tungsten-warm or moonlight-cool.
     - colorPalette1/2 : cp1 (wash) -> cp2 (glint), strict RGB blend.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderDetail (detail) <- micHigh   // shimmer sparkle
-      MODULATE sliderRadius (radius) <- micFlux   // glint reach / travel
-      MODULATE sliderKick   (kick)   <- micKick   // brightness pop
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // glint-core white pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel     <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderDetail    <- micHigh range 0.20..0.95 curve linear  # shimmer sparkle / sharpness (highs)
+        sliderRadius    <- micFlux range 0.40..0.90 curve linear  # glint travel reach (build)
+        sliderKick      <- micKick range 0.00..1.00 curve pow2    # brightness pop (kick)
+        sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # glint-core white pop (kick)
+        sliderWhiteLevel<- micLow  range 0.20..0.80 curve linear  # overall white keep (bass)
+      # STATIC (not modulated): direction, whiteWarmth — operator/scene set.
   This is a GENTLE white pattern (no hard blinder, matching the candlelight feel):
   a soft white CORE rides the crisp shimmer glints (under the cp2 colour) and a
   warm-white keep glows on the vintage heads. whiteWarmth splits the white tint

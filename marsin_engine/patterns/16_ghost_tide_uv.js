@@ -20,10 +20,12 @@
     sign flip — so the tide is not one-way and the turn is gradual.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
-      MODULATE sliderKick   (kick)   <- micKick     // kick -> foam/white crest pop
-      MODULATE sliderRadius (radius) <- micFlux     // foam crest width / how far it surges
-      MODULATE sliderUvLevel(uvLevel)<- micHigh     // UV undertow glow (sparkle band)
+  AUDIO_MODULATION_V1:
+    sliderLevel   <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick    <- micKick range 0.00..1.00 curve pow2    # foam / white crest pop
+    sliderRadius  <- micFlux range 0.40..0.90 curve linear  # foam crest width / how far it surges
+    sliderUvLevel <- micHigh range 0.20..0.90 curve linear  # UV undertow glow (highs / sparkle band)
+  # static (unmapped): direction, tideWidth, whiteLevel, palette pickers
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

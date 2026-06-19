@@ -30,13 +30,14 @@
   loop. Trail/edge offsets use SQRT2 and the GOLDEN ANGLE so nothing re-phases.
 
   ── AUDIO MAP (modulators-only — NEVER read CPC audio globals natively) ───────
-      MODULATE sliderLevel (level) <- micLow    PRIMARY: bar brightness + scan
-                                                rate  (corr(micLow,bri) >= 0.5)
-      MODULATE sliderKick  (kick)  <- micKick   discrete 2nd dimension: triggers
-                                                the edge->center CRUSH + flash
-  Both sliders use the IDENTITY-SLIDER convention: store v directly, scale in
-  render/beforeRender. At rest (level=default, kick=0) the pattern is a calm,
-  non-black idle scan — codex P0, no fallback, no blackout.
+  AUDIO_MODULATION_V1:
+    sliderLevel <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — overall level + scan rate track the low band
+    sliderKick  <- micKick range 0.00..1.00 curve pow2    # beat/pop — fires the edge->center CRUSH + collision flash
+  # sliderTrail: static (scanner trail/feedback decay length; not audio-mapped)
+  # sliderLocalSpeed: static (base scan-rate trim; not audio-mapped)
+  # Both audio sliders use the IDENTITY-SLIDER convention: store v directly, scale in
+  # render/beforeRender. At rest (level=default, kick=0) the pattern is a calm,
+  # non-black idle scan — codex P0, no fallback, no blackout.
 
   RIG-AGNOSTIC: every visual is driven off the normalized x coord (0..1), so the
   pattern lights on EVERY rig (test_bench 52, titanic 970, dome 266, logsville

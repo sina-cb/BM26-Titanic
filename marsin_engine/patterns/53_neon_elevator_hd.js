@@ -41,13 +41,16 @@
     - localSpeed : base scroll rate trim.
     - level      : floor brightness + scroll speed + overall brightness (PRIMARY).
     - kick       : discrete floor STEP + top-floor vintage W blinder (2nd dim).
-    - sharp      : band crispness (higher = thinner, harder-edged floors).
+    - sharp      : band crispness (higher = thinner, harder-edged floors) — GEOMETRY.
     - floorCount : number of floors in the shaft (irrational base, +PHI).
     - colorPalette1/2 : strict cp1<->cp2 (alternate floors carry cp1 vs cp2).
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderLevel (level) <- micLow    PRIMARY: brightness + speed
-      MODULATE sliderKick  (kick)  <- micKick   floor STEP + vintage blinder
+  AUDIO_MODULATION_V1:
+    sliderLevel <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness + scroll speed
+    sliderKick  <- micKick range 0.00..1.00 curve linear   # discrete floor STEP + vintage W blinder
+    sliderSharp <- micMid  range 0.30..0.85 curve linear   # GEOMETRY: mids thin/crisp the floor bands
+    # sliderFloorCount static (shaft floor count — operator geometry, not audio)
 
   RIG-AGNOSTIC: the floor-coordinate fc is driven off the normalized Y coord
   (0..1) as a base, so the shaft lights on EVERY rig (test_bench 52, titanic 970,
@@ -138,7 +141,7 @@ export function beforeRender(delta) {
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
-  var localMult = pow(2.0, (localSpeed - 0.5) * 3.0);
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);   // localSpeed 0..1 -> 0.25x..4x scroll rate
 
   // Resolve irrational floor count: 5 + PHI base, knob nudges +/- a few floors.
   nFloors = 5.0 + PHI + floor(floorCount * 6.0); // 6.618 .. ~12.618, never integer

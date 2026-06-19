@@ -27,15 +27,14 @@
           a_k,b_k from the golden-angle fan (incommensurate crossing planes)
 
   ── AUDIO MAP (modulators-only; codex P0 — NEVER read CPC audio globals) ──────
-      MODULATE sliderNodeContrast (nodeContrast) <- micLow   PRIMARY:
-          micLow lifts node brightness + sharpens contrast => overall brightness
-          tracks the low band (continuous corr >= 0.5).
-      MODULATE sliderPhaseShift   (phaseShift)   <- micMid
-          micMid slides the four plane phases (R_k·shift) => the window lattice
-          slides/breathes — a DIFFERENT dimension from brightness.
-      MODULATE sliderKickLock     (kickLock)     <- micKick
-          a kick jolts the drift phase forward (beat-locked re-bloom of the
-          lattice) — supports kick_4floor phase-lock.
+  AUDIO_MODULATION_V1:
+    sliderNodeContrast <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — node brightness + contrast track the low band
+    sliderPhaseShift   <- micMid  range 0.00..1.00 curve linear  # geometry — slides the four plane phases (lattice slides/breathes)
+    sliderKickLock     <- micKick range 0.00..1.00 curve pow2    # beat — jolts the drift phase forward (re-bloom on the kick)
+  # sliderSharpBase: static (resting HD node sharpness; not audio-mapped)
+  # sliderLocalSpeed: static (base lattice drift rate; not audio-mapped)
+  # phaseShift/kickLock are DISTINCT dimensions from brightness (geometry / beat
+  # re-bloom), so they reshape the lattice without correlating to overall level.
 
   Calm, non-black field in silence: at slider rest a slow drift keeps the lattice
   gently breathing with a dim cp1 floor — the rig always reads (mission critical),

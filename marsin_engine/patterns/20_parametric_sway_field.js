@@ -19,11 +19,13 @@
     instant sign flip (which would seam a wrapped phase), and the attractors
     never reverse in lockstep.
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
-      MODULATE sliderKick   (kick)   <- micKick     // kick-driven brightness pop
-      MODULATE sliderRadius (radius) <- micFlux     // how far attractors travel (movement radius)
-      MODULATE sliderDetail (detail) <- micHigh     // glow sharpness / sparkle
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # beat brightness pop
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # attractor travel / movement
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # glow sharpness / sparkle
+  # Static (not audio-mapped): localSpeed, direction, focus, trailBlend,
+  # colorPalette1/2 — operator-set geometry/colour, not modulated.
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────

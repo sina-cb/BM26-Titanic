@@ -23,8 +23,10 @@
   colours appear interleaved across the bloom (hueSpread well clear of 0.10).
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderBloom  (bloom)  <- micLow    // PRIMARY: radius + overall brightness
-      MODULATE sliderTwinkle(twinkle)<- micHigh   // 2nd dimension: seed sparkle/twinkle
+  AUDIO_MODULATION_V1:
+    sliderBloom   <- micLow  range 0.40..0.90 curve linear   # PRIMARY brightness + bloom radius
+    sliderTwinkle <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: per-seed sparkle/detail
+  Static (unmapped) params: localSpeed, coreSize, floorLvl, colorPalette1/2.
 
   At rest (no audio) the bloom sits at a calm mid radius and gently breathes /
   rotates — alive, never fully black (mission-critical visibility).

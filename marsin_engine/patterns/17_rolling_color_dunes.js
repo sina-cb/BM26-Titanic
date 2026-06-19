@@ -22,14 +22,14 @@
     hard sign flip.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow      // PRIMARY -> overall brightness, corr>=0.5
-      MODULATE sliderKick   (kick)   <- micKick     // kick -> surf crest + Vintage white blinder pop
-      MODULATE sliderRadius (radius) <- micFlux     // dune fold depth / how far sand shifts
-      MODULATE sliderDetail (detail) <- micHigh     // dune contrast / surf sharpness
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // vintage-head blinder pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  AUDIO_MODULATION_V1:
+    sliderLevel      <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+    sliderKick       <- micKick range 0.00..1.00 curve pow2    # surf crest + Vintage blinder pop
+    sliderRadius     <- micFlux range 0.40..0.90 curve linear  # dune fold depth / sand shift
+    sliderDetail     <- micHigh range 0.20..0.90 curve linear  # dune contrast / surf sharpness (highs)
+    sliderWhiteKick  <- micKick range 0.00..1.00 curve pow2    # vintage-head blinder pop
+    sliderWhiteLevel <- micLow  range 0.30..0.90 curve linear  # overall white keep
+  # static (unmapped): direction, duneScale, stageSurf, amberWarmth, blinderBite, palette pickers
   The Vintage heads (sectionId==2) are the headline audience BLINDER: a small
   always-on warm-white keep (whiteLevel) glows tungsten, driven HARD on the kick
   (the kick slider + whiteKick) for the punch. blinderBite shapes how snappy/hard

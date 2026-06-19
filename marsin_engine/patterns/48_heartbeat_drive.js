@@ -18,12 +18,14 @@
   exact, punchy expansion — high contrast + high definition.
 
   ── AUDIO (modulators-only; codex P0 — pattern NEVER reads CPC audio globals) ──
-    MODULATE sliderKick (kick) <- micKick   PRIMARY: re-arms the lub-dub pulse +
-                                             the expanding shell + vintage blinder.
-    MODULATE sliderLow  (low)  <- micLow    2nd dimension: baseline BODY gradient
-                                             brightness (continuous breathing).
-  Each slider stores v directly (identity-slider convention); all scaling is in
-  render. At rest (no audio) a calm non-black glow breathes — never blacks out.
+  AUDIO_MODULATION_V1:
+    sliderLow  <- micLow  range 0.30..1.00 curve linear  # PRIMARY brightness — body level tracks the low band
+    sliderKick <- micKick range 0.00..1.00 curve pow2    # beat/pop — rising edge fires lub-dub + shell + vintage blinder
+  # sliderLocalSpeed: static (resting breath rate + envelope decay trim; not audio-mapped)
+  # NOTE: 48 is KICK-GATED (the shell/blinder fire on micKick), but micLow keeps a
+  # band->brightness PRIMARY so overall level still tracks the low band (corr>=0.5).
+  # Each slider stores v directly (identity-slider convention); all scaling is in
+  # render. At rest (no audio) a calm non-black glow breathes — never blacks out.
 
   ── IRRATIONAL INTER-BEAT DRIFT (no integer periods, never loops) ─────────────
     gradient phase:  gPhase += dt * (GOLD_ANGLE / PI2)      GOLD_ANGLE = PI*(3-sqrt5)

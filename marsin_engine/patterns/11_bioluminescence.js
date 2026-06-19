@@ -21,15 +21,16 @@
   KICK-GATED PRIMARY: validate the micLow PRIMARY corr on --synth kick_4floor
   (full_track's low band is near-constant so corr reads lower there).
 
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel  (level)  <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick   (kick)   <- micKick   // crest brightness pop
-      MODULATE sliderRadius (radius) <- micFlux   // how far crests travel / spread
-      MODULATE sliderDetail (detail) <- micHigh   // fine crest sharpness / shimmer
-
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // crest-core white pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall white keep
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel     <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderKick      <- micKick range 0.00..1.00 curve pow2    # crest brightness pop (kick)
+        sliderRadius    <- micFlux range 0.40..0.90 curve linear  # crest travel / spread (build)
+        sliderDetail    <- micHigh range 0.20..0.95 curve linear  # fine crest sharpness / shimmer (highs)
+        sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # crest-core white pop (kick)
+        sliderWhiteLevel<- micLow  range 0.20..0.80 curve linear  # overall white crest keep (bass)
+      # STATIC (not modulated): direction, density, uvGlow, whiteWarmth — operator/scene set.
   GENTLE white pattern (no hard blinder — matches the soft blacklight feel): a
   crisp white SPARK rides only the crest peaks (additive under the cp1/cp2 colour),
   controlled by whiteLevel (amount) and whiteKick (kick pop). whiteWarmth tilts the
@@ -125,7 +126,10 @@ export function beforeRender(delta) {
   if (dt < 0.0) dt = 0.0;
   if (dt > 0.1) dt = 0.1;
 
-  localMul = pow(2.0, (localSpeed - 0.5) * 4.0);
+  // localSpeed: pow(2,(v-0.5)*4) gives 0.5=normal (factor 1.0), 1≈4x. A small
+  // additive creep floor keeps v=0 CLEARLY slow-but-moving (not a near-freeze on
+  // this dim pattern) while preserving factor 1.0 at the 0.5 default (0.06+0.94=1).
+  localMul = 0.06 + 0.94 * pow(2.0, (localSpeed - 0.5) * 4.0);
 
   // Guard the slider center so the manual direction sign never sits at 0.
   var manDir = (direction * 2.0) - 1.0;

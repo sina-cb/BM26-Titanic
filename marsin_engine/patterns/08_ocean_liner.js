@@ -32,15 +32,16 @@
                    -> a broader hot-white spill across more portholes at 1.
     - colorPalette1/2 : cp1 (water) -> cp2 (porthole), strict RGB blend.
 
-  WHITE (modulators-only):
-      MODULATE sliderWhiteKick  (whiteKick)  <- micKick  // porthole white flare pop
-      MODULATE sliderWhiteLevel (whiteLevel) <- micLow   // overall porthole white
-
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel     (level)     <- micLow    // PRIMARY -> overall brightness
-      MODULATE sliderKick      (kick)      <- micKick   // porthole flare
-      MODULATE sliderRadius    (radius)    <- micFlux   // porthole travel / size
-      MODULATE sliderDetail    (detail)    <- micHigh   // porthole count / sparkle
+  AUDIO (modulators-only — never read CPC audio globals natively; the block below
+  is the STRICT source of truth for the deploy-playlist generator):
+      AUDIO_MODULATION_V1:
+        sliderLevel     <- micLow  range 0.30..1.00 curve linear  # PRIMARY overall brightness (bass)
+        sliderKick      <- micKick range 0.00..1.00 curve pow2    # porthole flare pop (kick)
+        sliderRadius    <- micFlux range 0.40..0.90 curve linear  # porthole travel / glow size (build)
+        sliderDetail    <- micHigh range 0.20..0.95 curve linear  # porthole count / sharpness (highs)
+        sliderWhiteKick <- micKick range 0.00..1.00 curve pow2    # porthole white flare pop (kick)
+        sliderWhiteLevel<- micLow  range 0.20..0.80 curve linear  # overall porthole white keep (bass)
+      # STATIC (not modulated): direction, whiteSpread — operator/scene set.
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────

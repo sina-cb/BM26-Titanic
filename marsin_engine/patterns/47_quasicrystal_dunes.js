@@ -20,8 +20,10 @@
   TROUGH = cp1 (cool), CREST = cp2 (warm), so both palette colours show.
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderDuneHeight (duneHeight) <- micLow   (PRIMARY: brightness/height)
-      MODULATE sliderSurf       (surf)       <- micHigh   (2nd dim: crest sharpness/shimmer)
+  AUDIO_MODULATION_V1:
+    sliderDuneHeight <- micLow  range 0.30..0.95 curve linear   # PRIMARY brightness/dune height
+    sliderSurf       <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: crest sharpness/surf shimmer
+  Static (unmapped) params: localSpeed, duneScale, floor, colorPalette1/2.
   At slider rest the rig shows calm, never-black dunes (mission-critical glow).
 
   CONTROLS (UI order = declaration order)

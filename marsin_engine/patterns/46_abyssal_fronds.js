@@ -25,10 +25,10 @@
       GOLDEN=11.0905 (golden-angle * 1000-ish irrational), density=irr float.
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderCurrent (current) <- micLow   (PRIMARY: sway amp + overall
-                                                     brightness; corr >= 0.5)
-      MODULATE sliderGlints  (glints)  <- micHigh  (tip phosphorescence / glints,
-                                                     a DIFFERENT dimension)
+  AUDIO_MODULATION_V1:
+    sliderCurrent <- micLow  range 0.30..0.95 curve linear   # PRIMARY brightness + sway amplitude
+    sliderGlints  <- micHigh range 0.00..0.85 curve pow2     # 2nd dim: tip phosphorescence/glints
+  Static (unmapped) params: localSpeed, frondDensity, baseGlow, colorPalette1/2.
   Identity-slider convention: each slider stores v directly; scaling happens in
   render. At rest (silence) the garden glows a calm, non-black blue/green sway.
 
