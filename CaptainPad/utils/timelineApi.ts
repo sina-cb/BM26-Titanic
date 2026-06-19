@@ -64,6 +64,16 @@ export interface TimelineActiveProgram {
   untilMs: number | null;
 }
 
+// Pending-program lease (docs/38 §16.5 / §16.7): a program cue is due while the
+// deck is in MANUAL; the engine arms a lease and CaptainPad shows the
+// "SCHEDULED SHOW PENDING" sign with a countdown until `expiresAtMs` (when the
+// lease auto-starts the program). One lease at a time; null when none is armed.
+export interface TimelinePendingProgram {
+  cueId: string;
+  label: string;
+  expiresAtMs: number;
+}
+
 export type TimelineMode = 'armed' | 'paused' | 'holding' | 'overridden';
 export type TimelineController = 'autopilot' | 'program' | 'manual';
 
@@ -75,6 +85,8 @@ export interface TimelineState {
   controller: TimelineController;
   autopilotEnabled: boolean;
   activeProgram: TimelineActiveProgram | null;
+  // The armed pending-program lease (docs/38 §16.5), or null when none is due.
+  pendingProgram: TimelinePendingProgram | null;
   currentPhase: string | null;
   currentMood: string | null;
   party: number | boolean;
@@ -319,6 +331,16 @@ export function resumeTimeline(): Promise<ApiResult<unknown>> {
 
 export function endTimelineProgram(): Promise<ApiResult<unknown>> {
   return timelineSend('POST', '/timeline/program/end');
+}
+
+// Pending-program lease actions (docs/38 §16.5 / §16.7). No body; the engine
+// returns the {ok} / {ok:false,error} envelope like the other program routes.
+export function enableTimelineProgram(): Promise<ApiResult<unknown>> {
+  return timelineSend('POST', '/timeline/program/enable');
+}
+
+export function dismissTimelineProgram(): Promise<ApiResult<unknown>> {
+  return timelineSend('POST', '/timeline/program/dismiss');
 }
 
 export function fireTimelineCue(id: string): Promise<ApiResult<unknown>> {

@@ -133,14 +133,15 @@ test('program expiry with autopilot disabled → manual, no resume', () => {
   assert.equal(r.actions.length, 0);
 });
 
-test('autopilot disabled → controller manual, but a program cue still fires', () => {
+// Post-§16: ap-off + idle is a MANUAL sub-state, so a due program ARMS a lease
+// instead of firing immediately (covered in detail by V6 below).
+test('autopilot disabled (idle) → program cue arms a lease, does NOT fire', () => {
   const plan = makePlan();
   const state = baseState({ autopilotEnabled: false, controller: 'manual' });
   const r = arbitrate({ now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'manual' }], dayTimes: DAY_TIMES });
-  assert.equal(r.controller, 'program');
-  assert.equal(r.actions.length, 1);
-  assert.equal(r.actions[0].cueId, 'c_program');
-  assert.equal(r.actions[0].autopilotOff, true);
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program');
 });
 
 test('autopilot disabled → mood fire is suppressed (no autopilot layer)', () => {
@@ -223,4 +224,142 @@ test('resolveHold: min, until clock anchor, and omitted', () => {
   assert.equal(resolveHold(null, NOW, DAY_TIMES), null);
   const untilMs = resolveHold({ until: { clock: '06:30' } }, NOW, DAY_TIMES);
   assert.equal(typeof untilMs, 'number');
+});
+
+// ── docs/38 §16 pending-program lease (arbiter pure-core coverage) ────────────
+
+// V6 — MANUAL(idle, ap-off) + program due → lease ARMED, NOT fired, controller
+// stays manual. The lease carries cueId/label/action + armed/expires stamps.
+test('V6: MANUAL(idle) + program due → pendingProgram armed, not fired', () => {
+  const plan = makePlan();
+  const state = baseState({ autopilotEnabled: false, controller: 'manual' });
+  const r = arbitrate({
+    now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'sun' }],
+    dayTimes: DAY_TIMES, leaseSec: 30,
+  });
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0, 'nothing fires while a lease is armed');
+  assert.equal(r.state.activeProgram, null);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program');
+  assert.equal(r.state.pendingProgram.armedAtMs, NOW);
+  assert.equal(r.state.pendingProgram.expiresAtMs, NOW + 30 * 1000);
+  assert.deepEqual(r.state.pendingProgram.action, { type: 'look', look: 'sunrise' });
+});
+
+// V6 variants — PAUSED and HOLDING also arm a lease (any manual sub-state).
+test('V6b: PAUSED + program due → lease armed (not fired)', () => {
+  const plan = makePlan();
+  const state = baseState({ mode: 'paused' });
+  const r = arbitrate({
+    now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'sun' }],
+    dayTimes: DAY_TIMES, leaseSec: 30,
+  });
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program');
+});
+
+test('V6c: HOLDING + program due → lease armed (not fired)', () => {
+  const plan = makePlan();
+  const state = baseState({ mode: 'armed', manualHoldUntilMs: NOW + 600000 });
+  const r = arbitrate({
+    now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'sun' }],
+    dayTimes: DAY_TIMES, leaseSec: 30,
+  });
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program');
+});
+
+// V7 — lease past expiry (now ≥ expiresAtMs) → auto-start: activeProgram set,
+// pending cleared, controller=program, autopilotOff emitted (show goes on, I2).
+test('V7: pending + now≥expiresAtMs → auto-start program', () => {
+  const plan = makePlan();
+  const state = baseState({
+    autopilotEnabled: false, controller: 'manual',
+    pendingProgram: {
+      cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
+      armedAtMs: NOW - 31000, expiresAtMs: NOW - 1000,
+    },
+  });
+  const r = arbitrate({ now: NOW, plan, state, fires: [], dayTimes: DAY_TIMES, leaseSec: 30 });
+  assert.equal(r.controller, 'program');
+  assert.equal(r.state.pendingProgram, null);
+  assert.equal(r.state.activeProgram.cueId, 'c_program');
+  assert.equal(r.state.activeProgram.startedAtMs, NOW);
+  assert.equal(r.state.activeProgram.untilMs, NOW + 90 * 60000); // hold {min:90}
+  assert.equal(r.actions.length, 1);
+  assert.equal(r.actions[0].cueId, 'c_program');
+  assert.equal(r.actions[0].autopilotOff, true);
+});
+
+// V10 — PAUSED + lease past expiry still auto-starts (show goes on even paused).
+test('V10: PAUSED pending + lease-exp → auto-start (show goes on)', () => {
+  const plan = makePlan();
+  const state = baseState({
+    mode: 'paused',
+    pendingProgram: {
+      cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
+      armedAtMs: NOW - 31000, expiresAtMs: NOW - 1000,
+    },
+  });
+  const r = arbitrate({ now: NOW, plan, state, fires: [], dayTimes: DAY_TIMES, leaseSec: 30 });
+  assert.equal(r.controller, 'program');
+  assert.equal(r.state.pendingProgram, null);
+  assert.equal(r.state.activeProgram.cueId, 'c_program');
+  assert.equal(r.actions[0].autopilotOff, true);
+});
+
+// A newer due program replaces an un-actioned pending lease (one at a time).
+test('newer program due replaces an un-actioned pending lease', () => {
+  const plan = makePlan({
+    looks: { sunrise: { playlist: 'default' }, party: { playlist: 'default' }, dusk: { playlist: 'default' } },
+    cues: [
+      { id: 'c_program', kind: 'program', trigger: { type: 'manual' }, action: { type: 'look', look: 'sunrise' }, hold: { min: 90 } },
+      { id: 'c_program2', kind: 'program', trigger: { type: 'manual' }, action: { type: 'look', look: 'dusk' }, hold: { min: 30 } },
+    ],
+  });
+  const state = baseState({
+    mode: 'paused',
+    pendingProgram: {
+      cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
+      armedAtMs: NOW - 5000, expiresAtMs: NOW + 25000,
+    },
+  });
+  const r = arbitrate({
+    now: NOW, plan, state, fires: [{ cueId: 'c_program2', reason: 'sun' }],
+    dayTimes: DAY_TIMES, leaseSec: 30,
+  });
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program2');
+  assert.equal(r.state.pendingProgram.expiresAtMs, NOW + 30 * 1000);
+});
+
+// Mood never arms a lease — still suppressed in manual (no pending created).
+test('mood in MANUAL is suppressed and arms NO lease', () => {
+  const plan = makePlan();
+  const state = baseState({ mode: 'paused' });
+  const r = arbitrate({
+    now: NOW, plan, state, fires: [{ cueId: 'c_mood', reason: 'mood' }],
+    dayTimes: DAY_TIMES, leaseSec: 30,
+  });
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram, null);
+});
+
+// A pending lease that has NOT yet expired survives an idle tick unchanged.
+test('un-expired pending survives a quiet tick (no fire, stays pending)', () => {
+  const plan = makePlan();
+  const state = baseState({
+    mode: 'paused',
+    pendingProgram: {
+      cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
+      armedAtMs: NOW - 5000, expiresAtMs: NOW + 25000,
+    },
+  });
+  const r = arbitrate({ now: NOW, plan, state, fires: [], dayTimes: DAY_TIMES, leaseSec: 30 });
+  assert.equal(r.controller, 'manual');
+  assert.equal(r.actions.length, 0);
+  assert.equal(r.state.pendingProgram.cueId, 'c_program');
 });

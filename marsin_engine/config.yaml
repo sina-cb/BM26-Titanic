@@ -90,11 +90,15 @@ companions: {}
 #   enabled        — gate the service on/off at boot
 #   activePlan     — which plan in simulation/scenes/<scene>/timeline/ to run
 #   tickMs         — the 1 s evaluation cadence
+#   programLeaseSec — pending-program lease window (docs/38 §16.5): in MANUAL a
+#                     due program ARMS a lease for the operator; after this many
+#                     seconds with no action the lease auto-starts the show (I2)
 #   mood           — which CPC key carries music mood + the party threshold
 timeline:
   enabled: true
   activePlan: playa_default
   tickMs: 1000
+  programLeaseSec: 30
   mood:
     key: audioParty
     partyThreshold: 0.5

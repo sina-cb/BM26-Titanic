@@ -29,6 +29,8 @@ import {
   holdTimeline,
   resumeTimeline,
   endTimelineProgram,
+  enableTimelineProgram,
+  dismissTimelineProgram,
   fireTimelineCue,
   TimelineState,
   TimelineMode,
@@ -48,6 +50,10 @@ export interface TimelineActions {
   hold: (minutes: number) => Promise<boolean>;
   resume: () => Promise<boolean>;
   endProgram: () => Promise<boolean>;
+  /** Start the pending-program lease NOW (docs/38 §16.5 lease-enable). */
+  enableProgram: () => Promise<boolean>;
+  /** Dismiss the pending-program lease; stay manual (docs/38 §16.5 lease-dismiss). */
+  dismissProgram: () => Promise<boolean>;
   fireCue: (id: string) => Promise<boolean>;
 }
 
@@ -194,6 +200,26 @@ async function _endProgram(): Promise<boolean> {
   return true;
 }
 
+async function _enableProgram(): Promise<boolean> {
+  const r = await enableTimelineProgram();
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to enable program' });
+    return false;
+  }
+  await _reseedAfterAction();
+  return true;
+}
+
+async function _dismissProgram(): Promise<boolean> {
+  const r = await dismissTimelineProgram();
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to dismiss program' });
+    return false;
+  }
+  await _reseedAfterAction();
+  return true;
+}
+
 async function _fireCue(id: string): Promise<boolean> {
   const r = await fireTimelineCue(id);
   if (!r.ok) {
@@ -222,6 +248,8 @@ export function useTimeline(): UseTimelineResult {
     hold: _hold,
     resume: _resume,
     endProgram: _endProgram,
+    enableProgram: _enableProgram,
+    dismissProgram: _dismissProgram,
     fireCue: _fireCue,
   };
 }
