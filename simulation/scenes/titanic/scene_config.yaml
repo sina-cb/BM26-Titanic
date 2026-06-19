@@ -53,7 +53,9 @@ parLights:
     value: true
     label: Master Enabled
   masterExposure:
-    value: 0.05
+    # Preview-only (does NOT affect DMX output). Was 0.05, which made
+    # validation renders nearly black; 0.7 reads well without blowing out.
+    value: 0.7
     label: Sim Exposure (Preview Only)
     min: 0
     max: 2
