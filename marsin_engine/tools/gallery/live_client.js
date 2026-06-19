@@ -164,6 +164,7 @@
   var ws = null;
   var reconnectTimer = null;
   var sawFrame = false;
+  var darkFrames = 0;
 
   function connect() {
     setStatus('connecting', '○ connecting to engine at ' + host + '…');
@@ -189,6 +190,18 @@
       if (!sawFrame) {
         sawFrame = true;
         setStatus('up', '● connected to engine · ' + buffer + ' · ' + count + 'px live');
+      }
+      // Connected but the engine's composition is all-black for a while: the
+      // gallery is fine — the engine just isn't compositing a lit pattern to
+      // `master`/`rig`. Guide the operator instead of showing a silent black box.
+      var anyLit = false;
+      for (var bi = 0; bi < bytes.length; bi += 6) {
+        if (bytes[bi] || bytes[bi + 1] || bytes[bi + 2] || bytes[bi + 3]) { anyLit = true; break; }
+      }
+      if (anyLit) { darkFrames = 0; }
+      else if (++darkFrames === 8) {
+        setStatus('up', '● connected · ' + buffer + ' is DARK — load a pattern in Deck Control below'
+          + (buffer === 'master' ? '' : ' (or check master fader / blackout)'));
       }
     };
     ws.onerror = function () {
