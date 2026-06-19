@@ -89,6 +89,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // when a row state-machines), so /ws/control is the right home next
   // to the GEM messages it semantically relates to.
   scheduledTasks:              TOPICS.CONTROL,
+  // docs/38 §15: the Timeline runs IN the engine now (no separate :6965
+  // companion). Its runtime snapshot is broadcast on every tick + state
+  // change (mode/autopilot/program/cue fire). Low volume, operator-facing
+  // — rides /ws/control next to scheduledTasks, replayed on connect.
+  timelineState:               TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,

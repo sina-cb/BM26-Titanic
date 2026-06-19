@@ -253,7 +253,7 @@ export default function TimelineScreen() {
   // reflects what the companion actually has.
   const refreshPlans = useCallback(() => {
     fetchTimelinePlans().then((r) => {
-      if (r.ok && Array.isArray(r.data)) setPlans(r.data);
+      if (r.ok && r.data && Array.isArray(r.data.plans)) setPlans(r.data.plans);
     });
   }, []);
   useEffect(() => { refreshPlans(); }, [refreshPlans]);
@@ -300,7 +300,7 @@ export default function TimelineScreen() {
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {state ? <ModePill mode={state.mode} styles={styles} C={C} /> : null}
-            {state ? <MoodPill party={state.party} mood={state.currentMood} styles={styles} C={C} /> : null}
+            {state ? <MoodPill party={!!state.party} mood={state.currentMood} styles={styles} C={C} /> : null}
             <View style={styles.engineDotWrap}>
               <View style={[styles.engineDot, { backgroundColor: state?.engineConnected ? C.tertiary : C.error }]} />
               <Text style={styles.engineDotLabel}>{state?.engineConnected ? 'ENGINE' : 'NO ENGINE'}</Text>

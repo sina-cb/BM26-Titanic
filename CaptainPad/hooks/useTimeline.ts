@@ -1,35 +1,34 @@
-// useTimeline — live mirror of the Timeline Companion's runtime state.
+// useTimeline — live mirror of the in-engine Timeline service.
 //
-// The Timeline Companion (docs/38) is a server-side, engine-supervised
-// process on its OWN port (6965). It pushes a `timelineState` message on
-// its `/ws` topic on connect and on every state change (mode flip, phase
-// boundary, cue fire, error). This hook owns the ONE WebSocket to that
-// companion for the app's lifetime and exposes the latest state plus the
-// action functions the TIMELINE tab drives.
+// docs/38 §15: the Timeline runs IN the engine now (no separate :6965
+// companion). The engine broadcasts a `timelineState` message on its
+// `/ws/control` topic on connect and on every state change (tick, mode flip,
+// autopilot toggle, program start/end, cue fire, error). This hook reads that
+// off the SHARED control-plane bus (engineEvents) — the same socket every
+// other control hook uses — and seeds the first paint from GET /timeline/state.
 //
-// Why a bespoke WS (not engineBus): the shared buses in engineBus.ts
-// derive their URL straight from `api_base` (the engine, :6968). The
-// companion lives on the SAME host but a DIFFERENT port (:6965), so it
-// needs its own socket. We reuse the bus's proven recipe — lazy connect,
-// exponential backoff, AppState-resume — scoped to the timeline URL.
+// Why the shared bus (not a bespoke WS): pre-§15 the timeline lived on its own
+// port (:6965) and needed its own socket. Now it's the engine on :6968, so it
+// rides /ws/control next to scheduledTasks / mixer / deck — one parse, many
+// listeners (same recipe as useScheduledTasks / useEngineState).
 //
-// Module-level cache + listener set, exactly like useEngineState /
-// useScheduledTasks, so tab switches don't tear down the socket or
-// re-fetch on every focus.
+// Module-level cache + listener set so tab switches don't tear down the
+// subscription or re-fetch on every focus.
 //
-// Codex P0 — fail loud: when the WS is down AND the `/state` seed is
-// unreachable, `connected` is false and `state` is null. The tab renders a
-// "timeline companion offline" banner from that — never stale data.
+// Codex P0 — fail loud: when the control WS is down AND the `/timeline/state`
+// seed is unreachable, `connected` is false and `state` is null. The tab
+// renders an offline banner from that — never stale data.
 
 import { useEffect, useState } from 'react';
-import { AppState, Platform } from 'react-native';
+import { engineEvents } from '@/utils/engineEvents';
 import {
   fetchTimelineState,
-  getTimelineWsUrlAsync,
   activateTimelinePlan,
   setTimelineMode,
+  setTimelineAutopilot,
   holdTimeline,
   resumeTimeline,
+  endTimelineProgram,
   fireTimelineCue,
   TimelineState,
   TimelineMode,
@@ -45,8 +44,10 @@ export interface TimelineHookState {
 export interface TimelineActions {
   activatePlan: (name: string) => Promise<boolean>;
   setMode: (mode: 'armed' | 'paused') => Promise<boolean>;
+  setAutopilot: (enabled: boolean) => Promise<boolean>;
   hold: (minutes: number) => Promise<boolean>;
   resume: () => Promise<boolean>;
+  endProgram: () => Promise<boolean>;
   fireCue: (id: string) => Promise<boolean>;
 }
 
@@ -65,143 +66,52 @@ function _emit(next: TimelineHookState) {
   });
 }
 
-// ── Dedicated timeline WebSocket (the createBus recipe, timeline URL) ───
-let _ws: WebSocket | null = null;
-let _alive = true;
-let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let _backoffMs = 250;
-const MAX_BACKOFF_MS = 5_000;
-
-function _clearReconnectTimer() {
-  if (_reconnectTimer) {
-    clearTimeout(_reconnectTimer);
-    _reconnectTimer = null;
-  }
-}
-
-function _scheduleReconnect() {
-  _clearReconnectTimer();
-  if (!_alive) return;
-  const wait = _backoffMs;
-  _backoffMs = Math.min(_backoffMs * 2, MAX_BACKOFF_MS);
-  _reconnectTimer = setTimeout(_connect, wait);
-}
-
-function _detachAndClose(socket: WebSocket | null) {
-  if (!socket) return;
-  try {
-    socket.onopen = null;
-    socket.onclose = null;
-    socket.onerror = null;
-    socket.onmessage = null;
-  } catch { /* ignore */ }
-  try { socket.close(); } catch { /* ignore */ }
-}
-
 function _isTimelineState(v: unknown): v is TimelineState {
   return !!v && typeof v === 'object' && typeof (v as { mode?: unknown }).mode === 'string';
-}
-
-function _onMessage(raw: string) {
-  let msg: { type?: string; [k: string]: unknown } | null = null;
-  try {
-    msg = JSON.parse(raw);
-  } catch {
-    return;
-  }
-  if (!msg || msg.type !== 'timelineState') return;
-  // The companion sends the full state document on `timelineState`. It
-  // may wrap it under `state` or send the fields inline; accept either.
-  const candidate = _isTimelineState(msg.state) ? (msg.state as TimelineState) : (msg as unknown);
-  if (!_isTimelineState(candidate)) return;
-  _emit({ state: candidate, connected: true, error: null });
-}
-
-function _connect() {
-  _clearReconnectTimer();
-  if (!_alive) return;
-  if (_ws && (_ws.readyState === 0 /* CONNECTING */ || _ws.readyState === 1 /* OPEN */)) {
-    return;
-  }
-  getTimelineWsUrlAsync()
-    .then((wsUrl) => {
-      if (!_alive) return;
-      _detachAndClose(_ws);
-      try {
-        _ws = new WebSocket(wsUrl);
-      } catch {
-        _scheduleReconnect();
-        return;
-      }
-      _ws.onopen = () => {
-        _backoffMs = 250;
-        // Don't claim `connected` until the first `timelineState` lands —
-        // the companion pushes one on connect, and that message carries
-        // the engine-connected flag we need. Until then keep whatever we
-        // have but mark the socket alive so the banner can clear quickly.
-        _emit({ ..._cached, connected: true });
-      };
-      _ws.onclose = () => {
-        _emit({ ..._cached, connected: false });
-        _scheduleReconnect();
-      };
-      _ws.onerror = (e: WebSocketMessageEvent | Event) => {
-        _emit({
-          ..._cached,
-          connected: false,
-          error: (e && (e as { message?: string }).message) || 'timeline ws error',
-        });
-        // onclose follows and schedules the reconnect.
-      };
-      _ws.onmessage = (e: WebSocketMessageEvent) => {
-        _onMessage(typeof e.data === 'string' ? e.data : '');
-      };
-    })
-    .catch(() => _scheduleReconnect());
 }
 
 function _ensureInitialized() {
   if (_initialized) return;
   _initialized = true;
 
-  // Open the socket and seed the first paint from REST — the WS pushes a
-  // snapshot on connect, but the seed makes a cold mount correct even if
-  // the socket is still establishing.
-  _connect();
+  // Subscribe to /ws/control for live `timelineState` broadcasts. The engine
+  // replays the current state on connect (api_server control connect handler)
+  // and pushes a fresh one on every tick / state change.
+  engineEvents.subscribe((msg) => {
+    if (!msg || msg.type !== 'timelineState') return;
+    // The engine sends the full state document inline on `timelineState`.
+    const candidate = msg as unknown;
+    if (!_isTimelineState(candidate)) return;
+    _emit({ state: candidate as TimelineState, connected: true, error: null });
+  });
+
+  // Mirror the bus connection status onto our banner. The control WS is shared
+  // with every other tab; we reflect its connected flag so the timeline tab's
+  // offline banner matches the rest of the app.
+  engineEvents.subscribeStatus((s) => {
+    _emit({ ..._cached, connected: s.connected, error: s.lastError ?? _cached.error });
+  });
+
+  // REST seed — the WS replay covers connect, but a cold mount before the
+  // socket lands still needs the initial snapshot.
   fetchTimelineState()
     .then((r) => {
       if (r.ok && r.data) {
         _emit({ state: r.data, connected: _cached.connected, error: null });
-      } else {
-        // Don't overwrite a good WS snapshot that may have raced in; only
-        // record the seed error if we still have nothing. Codex P0:
-        // surface the companion's error verbatim, never a fallback.
-        if (!_cached.state) {
-          _emit({ ..._cached, error: r.error || 'Timeline companion unreachable' });
-        }
+      } else if (!_cached.state) {
+        // Codex P0: surface the engine error verbatim, never a fallback.
+        _emit({ ..._cached, error: r.error || 'Timeline unreachable' });
       }
     })
     .catch((err: any) => {
       if (!_cached.state) {
-        _emit({ ..._cached, error: err?.message || 'Timeline companion unreachable' });
+        _emit({ ..._cached, error: err?.message || 'Timeline unreachable' });
       }
     });
-
-  // Reconnect on app foreground (same posture as engineBus).
-  if (Platform.OS !== 'web') {
-    AppState.addEventListener('change', (next) => {
-      if (next === 'active') {
-        if (!_ws || _ws.readyState >= 2 /* CLOSING|CLOSED */) {
-          _backoffMs = 250;
-          _connect();
-        }
-      }
-    });
-  }
 }
 
-// ── Action functions (REST; re-seed on success so the UI converges even
-// if the WS broadcast is delayed) ──────────────────────────────────────
+// ── Action functions (REST; re-seed on success so the UI converges even if
+// the WS broadcast is delayed) ──────────────────────────────────────────
 
 async function _reseedAfterAction() {
   const r = await fetchTimelineState();
@@ -221,14 +131,25 @@ async function _activatePlan(name: string): Promise<boolean> {
 }
 
 async function _setMode(mode: 'armed' | 'paused'): Promise<boolean> {
-  // Optimistic mode flip — the pill reads correctly the instant the
-  // operator taps; the WS broadcast / re-seed reconciles within a tick.
+  // Optimistic mode flip — the pill reads correctly the instant the operator
+  // taps; the WS broadcast / re-seed reconciles within a tick.
   if (_cached.state) {
     _emit({ ..._cached, state: { ..._cached.state, mode: mode as TimelineMode } });
   }
   const r = await setTimelineMode(mode);
   if (!r.ok) {
     _emit({ ..._cached, error: r.error || 'Failed to set mode' });
+    await _reseedAfterAction();
+    return false;
+  }
+  await _reseedAfterAction();
+  return true;
+}
+
+async function _setAutopilot(enabled: boolean): Promise<boolean> {
+  const r = await setTimelineAutopilot(enabled);
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to toggle autopilot' });
     await _reseedAfterAction();
     return false;
   }
@@ -256,6 +177,16 @@ async function _resume(): Promise<boolean> {
   return true;
 }
 
+async function _endProgram(): Promise<boolean> {
+  const r = await endTimelineProgram();
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to end program' });
+    return false;
+  }
+  await _reseedAfterAction();
+  return true;
+}
+
 async function _fireCue(id: string): Promise<boolean> {
   const r = await fireTimelineCue(id);
   if (!r.ok) {
@@ -271,8 +202,8 @@ export function useTimeline(): UseTimelineResult {
   const [state, setState] = useState<TimelineHookState>(_cached);
   useEffect(() => {
     _listeners.add(setState);
-    // Resync to whatever's current in case an update landed between mount
-    // and effect run (same pattern as useEngineState).
+    // Resync to whatever's current in case an update landed between mount and
+    // effect run (same pattern as useEngineState).
     setState(_cached);
     return () => { _listeners.delete(setState); };
   }, []);
@@ -280,8 +211,10 @@ export function useTimeline(): UseTimelineResult {
     ...state,
     activatePlan: _activatePlan,
     setMode: _setMode,
+    setAutopilot: _setAutopilot,
     hold: _hold,
     resume: _resume,
+    endProgram: _endProgram,
     fireCue: _fireCue,
   };
 }

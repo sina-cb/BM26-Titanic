@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { validateShowPlan } from '../companions/timeline/show_plan.js';
-import { defaultTimelineState } from '../companions/timeline/timeline_state.js';
+import { validateShowPlan } from '../lib/timeline/show_plan.js';
+import { defaultTimelineState } from '../lib/timeline/timeline_state.js';
 import {
   resolveDayTimes, evaluateTick, activePhase, clockToEpochMs, dayKeyFor,
-} from '../companions/timeline/triggers.js';
+} from '../lib/timeline/triggers.js';
 
 const TZ = 'America/Los_Angeles';
 const LOC = { lat: 40.7864, lon: -119.2065, tz: TZ, elevationM: 1190 };

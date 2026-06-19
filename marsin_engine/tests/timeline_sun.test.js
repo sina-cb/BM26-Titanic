@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeSunEvents, formatLocal } from '../companions/timeline/sun.js';
+import { computeSunEvents, formatLocal } from '../lib/timeline/sun.js';
 
 const BRC = { lat: 40.7864, lon: -119.2065 };
 const TZ = 'America/Los_Angeles';
