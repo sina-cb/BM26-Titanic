@@ -100,7 +100,20 @@ const frameData = await new Promise(res => {
     let m; try { m = JSON.parse(d.toString()); } catch { return; }
     if (m.type !== 'vis' || !m.vis || !m.vis[buffer]) return;
     const buf = Buffer.from(m.vis[buffer], 'base64');
-    const fr = []; for (let i = 0; i < buf.length / 6; i++) { const o = i * 6; fr.push([buf[o], buf[o + 1], buf[o + 2]]); }
+    // Fold White/Amber/UV into the displayed RGB the SAME way the offline harness
+    // does (pattern_audio_harness.mjs fold), so a W/A/U-heavy pattern (e.g.
+    // 16_ghost_tide_uv) captures with matching brightness/hue live vs offline —
+    // not darker because the extra channels were dropped. 6ch order: R,G,B,W,Am,U.
+    const fr = [];
+    for (let i = 0; i < buf.length / 6; i++) {
+      const o = i * 6;
+      const R = buf[o], G = buf[o + 1], B = buf[o + 2], W = buf[o + 3], Am = buf[o + 4], U = buf[o + 5];
+      fr.push([
+        Math.min(255, Math.round(R + W + Am * 0.8 + U * 0.1)),
+        Math.min(255, Math.round(G + W + Am * 0.4)),
+        Math.min(255, Math.round(B + W + U * 0.5)),
+      ]);
+    }
     acc.push(fr);
     if (acc.length >= frames) { ws.close(); res(acc); }
   });
