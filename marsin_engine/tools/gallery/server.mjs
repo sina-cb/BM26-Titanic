@@ -25,6 +25,7 @@
     GET /compare         side-by-side: ?a=<name>&b=<name> (pickers if absent)
     GET /w/<name>        standalone widget HTML with sticky bar + prev/next nav
     GET /api/list        JSON [{name, mtime, num, family, model}] newest first
+    GET /api/models      JSON {models:[...], default} — rig list for the picker
     GET /live            LIVE visualizer of the running engine's vis WS
     GET /live/<name>     same, with the pattern name as a caption
     GET /live_client.js  the live renderer (browser module)
@@ -35,6 +36,10 @@
   pre-rendered clips and need no engine. /live is ONLINE — it streams the
   running engine's per-pixel vis over ws://<engineHost>/ws/viz. engineHost
   resolves: /live?host= > gallery_config.json "engineHost" > 127.0.0.1:6968.
+
+  All chrome pages carry a global MODEL PICKER (header). The active rig flows
+  through every link as ?model=<rig> (persisted in the querystring + localStorage)
+  so list/grid/compare and /live?model= all agree on the rig.
 */
 import http from 'http';
 import fs from 'fs';
@@ -55,6 +60,15 @@ const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const WIDGETS_DIR = path.join(HERE, 'widgets');
 const CONFIG_PATH = path.join(HERE, 'gallery_config.json');
 const DEFAULT_PORT = 6965;
+
+// <!-- BEGIN model-select -->
+// Rig models live in marsin_engine/models/<model>.js (the gallery sits two
+// levels down at marsin_engine/tools/gallery/). The default rig is
+// test_bench — clips for it are published bare (<pattern>.html, no __model
+// suffix); other rigs publish <pattern>__<model>.html.
+const MODELS_DIR = path.join(HERE, '..', '..', 'models');
+const DEFAULT_MODEL = 'test_bench';
+// <!-- END model-select -->
 
 // Port resolution: --port arg > GALLERY_PORT env > gallery_config.json port >
 // DEFAULT_PORT. A present-but-malformed config is fatal — we never quietly fall
@@ -159,6 +173,47 @@ function listWidgets() {
   return out;
 }
 
+// <!-- BEGIN model-select -->
+// List rig model names from marsin_engine/models/. A model is a bare
+// "<name>.js" file (PixelMap definition); the parallel ".effects.js",
+// ".viewmasks.js", and ".js.original" siblings are NOT rigs, so we only take
+// files whose name is exactly "<name>.js" with no inner dots in <name>.
+// test_bench is always present and is the default; it is hoisted to the front.
+function listModels() {
+  let entries;
+  try {
+    entries = fs.readdirSync(MODELS_DIR, { withFileTypes: true });
+  } catch {
+    // No models dir reachable: still offer the default so the picker works.
+    return [DEFAULT_MODEL];
+  }
+  const out = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    if (!e.name.endsWith('.js')) continue;          // skips ".js.original"
+    const base = e.name.slice(0, -'.js'.length);    // "test_bench", "test_bench.effects", ...
+    if (base.includes('.')) continue;               // skips ".effects"/".viewmasks" siblings
+    if (!SAFE_NAME.test(base)) continue;
+    out.push(base);
+  }
+  out.sort();
+  // Hoist the default rig to the front so it reads as the obvious starting point.
+  const i = out.indexOf(DEFAULT_MODEL);
+  if (i > 0) { out.splice(i, 1); out.unshift(DEFAULT_MODEL); }
+  else if (i === -1) out.unshift(DEFAULT_MODEL);
+  return out;
+}
+
+// Resolve the requested ?model= against the real rig list. Unknown/garbage
+// falls back to the default (the picker only ever offers real models, but a
+// hand-typed querystring shouldn't 404 the whole page).
+function resolveModel(req) {
+  const list = listModels();
+  if (req && SAFE_NAME.test(req) && list.includes(req)) return req;
+  return DEFAULT_MODEL;
+}
+// <!-- END model-select -->
+
 // Stable ordering by number then name (for prev/next + default index sort).
 function byNumber(a, b) {
   const an = a.num === '' ? Infinity : parseInt(a.num, 10);
@@ -210,6 +265,25 @@ const THEME_CSS = `
   .nav a { text-decoration:none; color:#9bd; background:#12121a; border:1px solid #1d1d26;
     border-radius:999px; padding:6px 14px; font-size:13px; }
   .nav a.on { background:#173026; border-color:#2f6a4f; color:#bfeede; }
+  /* <!-- BEGIN model-select --> Prominent global rig picker in the header. */
+  .modelbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    margin:2px 2px 12px; padding:10px 12px; background:#101820;
+    border:1px solid #234; border-radius:14px; }
+  .modelbar .mb-lbl { font-size:12px; letter-spacing:1px; text-transform:uppercase;
+    color:#8fb; font-weight:700; }
+  .modelbar .mb-sel-wrap { position:relative; flex:1 1 200px; min-width:0; }
+  .modelbar select { width:100%; appearance:none; -webkit-appearance:none;
+    padding:11px 38px 11px 14px; font-size:16px; font-weight:600; border-radius:10px;
+    border:1px solid #2f6a4f; background:#0d1f17; color:#bfeede; outline:none; }
+  .modelbar select:focus { border-color:#3a6; }
+  .modelbar .mb-sel-wrap::after { content:'\\25be'; position:absolute; right:14px; top:50%;
+    transform:translateY(-50%); color:#8fb; pointer-events:none; font-size:14px; }
+  .modelbar .mb-active { font-size:12px; color:#9bd; white-space:nowrap; }
+  .modelbar .mb-active b { color:#bfeede; }
+  .modelbar .mb-live { text-decoration:none; font-size:13px; color:#bfeede;
+    background:#173026; border:1px solid #2f6a4f; border-radius:999px; padding:7px 14px;
+    white-space:nowrap; }
+  /* <!-- END model-select --> */
 `;
 
 function navStrip(active) {
@@ -225,12 +299,73 @@ function navStrip(active) {
     `<a href="${href}"${href === active ? ' class="on"' : ''}>${lbl}</a>`).join('') + '</nav>';
 }
 
+// <!-- BEGIN model-select -->
+// Prominent, global MODEL PICKER for the header. Server-renders the <select>
+// with the active rig preselected and shows "Viewing <model>" so the operator
+// always sees which rig the gallery is showing. The sibling agent owns the
+// /live route; we only LINK to /live?model=<active> so the choice carries over.
+function modelBar(activeModel) {
+  const models = listModels();
+  const opts = models.map((m) =>
+    `<option value="${esc(m)}"${m === activeModel ? ' selected' : ''}>` +
+    `${esc(m)}${m === DEFAULT_MODEL ? ' (default)' : ''}</option>`).join('');
+  return '<div class="modelbar">' +
+    '<span class="mb-lbl">Model</span>' +
+    '<span class="mb-sel-wrap">' +
+      `<select id="model-pick" aria-label="Active rig model">${opts}</select>` +
+    '</span>' +
+    `<span class="mb-active">Viewing <b id="model-active">${esc(activeModel)}</b></span>` +
+    `<a class="mb-live" id="model-live" href="/live?model=${encodeURIComponent(activeModel)}">Live &rsaquo;</a>` +
+    '</div>';
+}
+
+// Client-side glue shared by every chrome page: persists the chosen model to
+// the querystring + localStorage and re-navigates the current route with the
+// new ?model= so list/grid/compare all stay model-aware. Self-contained, no
+// deps. ACTIVE is the server-resolved model; on first load we honour an
+// explicit ?model= over storage, else fall back to a remembered model.
+function modelScript(activeModel) {
+  return `<script>
+(function () {
+  var KEY = 'gallery.model';
+  var ACTIVE = ${JSON.stringify(activeModel)};
+  var DEFAULT = ${JSON.stringify(DEFAULT_MODEL)};
+  var sel = document.getElementById('model-pick');
+  if (!sel) return;
+  var url = new URL(window.location.href);
+  var qpModel = url.searchParams.get('model');
+  // If the URL has no ?model= but we remember one (and it's a real option),
+  // redirect once so the rest of the page renders for the remembered rig.
+  if (!qpModel) {
+    var stored = null;
+    try { stored = localStorage.getItem(KEY); } catch (e) {}
+    var known = Array.prototype.some.call(sel.options, function (o) { return o.value === stored; });
+    if (stored && known && stored !== ACTIVE) {
+      url.searchParams.set('model', stored);
+      window.location.replace(url.toString());
+      return;
+    }
+  }
+  // Remember whatever the server resolved so future no-querystring visits stick.
+  try { localStorage.setItem(KEY, ACTIVE); } catch (e) {}
+  sel.addEventListener('change', function () {
+    var m = sel.value;
+    try { localStorage.setItem(KEY, m); } catch (e) {}
+    var u = new URL(window.location.href);
+    u.searchParams.set('model', m);
+    window.location.assign(u.toString());
+  });
+})();
+</script>`;
+}
+// <!-- END model-select -->
+
 // ---------------------------------------------------------------------------
 // Index page: grouped/sorted cards with search + family/model filter chips.
 // Sorting and grouping happen client-side over a JSON payload so toggles are
 // instant and no extra round-trips are needed on the phone.
 // ---------------------------------------------------------------------------
-function indexPage() {
+function indexPage(activeModel) {
   const items = listWidgets();
   const data = items.map((it) => ({
     name: it.name, t: fmtTime(it.mtime), mtime: it.mtime,
@@ -266,6 +401,7 @@ ${THEME_CSS}
   .nm { font-size:17px; font-weight:600; word-break:break-word; }
   .meta { color:#778; font-size:12px; margin-top:3px; display:flex; gap:8px; flex-wrap:wrap; }
   .badge { background:#1a1a24; border:1px solid #262633; border-radius:6px; padding:1px 7px; color:#9bd; }
+  .badge.fb { background:#231a12; border-color:#5a3; color:#e9c87a; }
   .variants { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
   .variants a { text-decoration:none; font-size:12px; background:#15151d; border:1px solid #24242f;
     border-radius:8px; padding:3px 9px; color:#bfeede; }
@@ -275,6 +411,7 @@ ${THEME_CSS}
 <header>
   <h1>Titanic Pattern Gallery <span class="sub">OFFLINE REVIEW</span></h1>
   ${navStrip('/')}
+  ${modelBar(activeModel)}
   <input id="q" type="search" placeholder="Search patterns&hellip;" autocomplete="off" autocapitalize="off">
   <div class="controls">
     <span class="lbl">Sort</span>
@@ -294,6 +431,12 @@ ${THEME_CSS}
 <main id="list"><div class="empty">Loading&hellip;</div></main>
 <script>
   const DATA = ${payload};
+  // <!-- BEGIN model-select -->
+  const ACTIVE_MODEL = ${JSON.stringify(activeModel)};
+  const DEFAULT_MODEL = ${JSON.stringify(DEFAULT_MODEL)};
+  // Querystring suffix to carry the active rig onto every /w/ link.
+  const MODEL_QS = '?model=' + encodeURIComponent(ACTIVE_MODEL);
+  // <!-- END model-select -->
   const q = document.getElementById('q');
   const list = document.getElementById('list');
   const count = document.getElementById('count');
@@ -338,20 +481,44 @@ ${THEME_CSS}
     return fam.variants.some(v => v.model === activeModel);
   }
 
-  function cardHtml(fam) {
-    // Default link: the base variant (no model) if present, else first.
+  // <!-- BEGIN model-select -->
+  // For the active rig, the variant we want is: the one whose model matches
+  // ACTIVE_MODEL, or (when ACTIVE_MODEL is test_bench) the bare base clip.
+  // If that exact clip is missing we fall back to the base (test_bench) clip so
+  // the operator still sees SOMETHING, and flag it as a fallback so the card
+  // can note "(test_bench)".
+  function pickVariant(fam) {
+    const wantBase = ACTIVE_MODEL === DEFAULT_MODEL;
+    const exact = wantBase
+      ? fam.variants.find(v => !v.model)
+      : fam.variants.find(v => v.model === ACTIVE_MODEL);
+    if (exact) return { clip: exact, fallback: false };
     const base = fam.variants.find(v => !v.model) || fam.variants[0];
+    return { clip: base, fallback: true };
+  }
+  // <!-- END model-select -->
+
+  function cardHtml(fam) {
+    // <!-- BEGIN model-select -->
+    // Lead the card with the chosen model's clip (falling back to test_bench).
+    const pick = pickVariant(fam);
+    const lead = pick.clip;
+    const wHref = '/w/' + encodeURIComponent(lead.name) + MODEL_QS;
+    const fallbackNote = pick.fallback
+      ? '<span class="badge fb">no ' + esc(ACTIVE_MODEL) + ' clip \\u2014 (test_bench)</span>'
+      : '';
+    // <!-- END model-select -->
     const variantLinks = fam.variants.length > 1
       ? '<div class="variants">' + fam.variants.slice().sort((a, b) => a.name.localeCompare(b.name)).map(v =>
-          '<a href="/w/' + encodeURIComponent(v.name) + '">' + (v.model ? v.model : 'base') + '</a>').join('') + '</div>'
+          '<a href="/w/' + encodeURIComponent(v.name) + MODEL_QS + '">' + (v.model ? v.model : 'base') + '</a>').join('') + '</div>'
       : '';
     const numBadge = fam.num ? '<span class="badge">#' + fam.num + '</span>' : '';
     const t = new Date(fam.mtime);
     const pad = n => String(n).padStart(2, '0');
     const ts = t.getFullYear() + '-' + pad(t.getMonth() + 1) + '-' + pad(t.getDate());
-    return '<a class="card" href="/w/' + encodeURIComponent(base.name) + '">' +
+    return '<a class="card" href="' + wHref + '">' +
       '<span class="cl"><span class="nm">' + fam.label + '</span>' +
-      '<span class="meta">' + numBadge +
+      '<span class="meta">' + numBadge + fallbackNote +
       (fam.variants.length > 1 ? '<span class="badge">' + fam.variants.length + ' variants</span>' : '') +
       '</span>' + variantLinks + '</span>' +
       '<span class="t">' + ts + '</span></a>';
@@ -423,6 +590,7 @@ ${THEME_CSS}
   buildChips();
   render();
 </script>
+${modelScript(activeModel)}
 </body></html>`;
 }
 
@@ -432,9 +600,11 @@ ${THEME_CSS}
 // (IntersectionObserver) and blank it again when it leaves, so a phone never
 // runs dozens of rAF loops at once. Built-ins only — no libraries.
 // ---------------------------------------------------------------------------
-function gridPage() {
+function gridPage(activeModel) {
   const items = listWidgets().slice().sort(byNumber);
-  const data = items.map((it) => ({ name: it.name, label: it.label, num: it.num, model: it.model }));
+  const data = items.map((it) => ({
+    name: it.name, label: it.label, num: it.num, model: it.model, family: it.family,
+  }));
   const payload = JSON.stringify(data).replace(/</g, '\\u003c');
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
@@ -457,6 +627,7 @@ ${THEME_CSS}
     font-size:12px; align-items:center; }
   .tile .cap .nm { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .tile .cap .md { color:#9bd; font-size:11px; white-space:nowrap; }
+  .tile .cap .md.fb { color:#e9c87a; }
   .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:#445; font-size:12px; }
   .empty { color:#778; padding:24px 6px; }
@@ -464,12 +635,41 @@ ${THEME_CSS}
 <header>
   <h1>Pattern Grid <span class="sub">CONTACT SHEET</span></h1>
   ${navStrip('/grid')}
+  ${modelBar(activeModel)}
   <input id="q" type="search" placeholder="Filter&hellip;" autocomplete="off" autocapitalize="off">
   <div id="count"></div>
 </header>
 <main class="grid" id="grid"></main>
 <script>
   const DATA = ${payload};
+  // <!-- BEGIN model-select -->
+  const ACTIVE_MODEL = ${JSON.stringify(activeModel)};
+  const DEFAULT_MODEL = ${JSON.stringify(DEFAULT_MODEL)};
+  const MODEL_QS = '?model=' + encodeURIComponent(ACTIVE_MODEL);
+
+  // Collapse the flat clip list into one tile PER FAMILY, showing the active
+  // rig's clip (or the test_bench base as a flagged fallback). This keeps the
+  // contact sheet showing "what this rig looks like" rather than every variant.
+  function gridTiles() {
+    const map = new Map();
+    for (const it of DATA) {
+      let g = map.get(it.family);
+      if (!g) { g = { family: it.family, label: it.label, num: it.num, variants: [] }; map.set(it.family, g); }
+      g.variants.push(it);
+    }
+    const wantBase = ACTIVE_MODEL === DEFAULT_MODEL;
+    const tiles = [];
+    for (const g of map.values()) {
+      const exact = wantBase
+        ? g.variants.find(v => !v.model)
+        : g.variants.find(v => v.model === ACTIVE_MODEL);
+      const clip = exact || g.variants.find(v => !v.model) || g.variants[0];
+      tiles.push({ name: clip.name, label: g.label, num: g.num, model: ACTIVE_MODEL, fallback: !exact });
+    }
+    return tiles;
+  }
+  const TILES = gridTiles();
+  // <!-- END model-select -->
   const grid = document.getElementById('grid');
   const q = document.getElementById('q');
   const count = document.getElementById('count');
@@ -493,11 +693,14 @@ ${THEME_CSS}
   function tile(it) {
     const a = document.createElement('a');
     a.className = 'tile';
-    a.href = '/w/' + encodeURIComponent(it.name);
-    const md = it.model ? '<span class="md">' + it.model + '</span>' : '';
+    a.href = '/w/' + encodeURIComponent(it.name) + MODEL_QS;
+    const md = it.fallback
+      ? '<span class="md fb">(test_bench)</span>'
+      : (it.model ? '<span class="md">' + it.model + '</span>' : '');
+    const src = '/w/' + encodeURIComponent(it.name) + MODEL_QS;
     a.innerHTML =
       '<div class="frame">' +
-        '<iframe loading="lazy" data-src="/w/' + encodeURIComponent(it.name) + '" title="' + it.label + '"></iframe>' +
+        '<iframe loading="lazy" data-src="' + src + '" title="' + it.label + '"></iframe>' +
         '<div class="placeholder">' + (it.num ? '#' + it.num + ' ' : '') + 'tap to open</div>' +
         '<span class="tap"></span>' +
       '</div>' +
@@ -515,7 +718,7 @@ ${THEME_CSS}
     io.disconnect();
     grid.innerHTML = '';
     let shown = 0;
-    for (const it of DATA) {
+    for (const it of TILES) {
       if (v && !(it.name + ' ' + it.label + ' ' + (it.model || '')).toLowerCase().includes(v)) continue;
       const t = tile(it);
       grid.appendChild(t);
@@ -523,7 +726,7 @@ ${THEME_CSS}
       shown++;
     }
     if (!shown) grid.innerHTML = '<div class="empty">No matching patterns.</div>';
-    count.textContent = shown + ' clip' + (shown === 1 ? '' : 's');
+    count.textContent = shown + ' pattern' + (shown === 1 ? '' : 's') + ' on ' + ACTIVE_MODEL;
   }
 
   q.addEventListener('input', render);
@@ -533,17 +736,21 @@ ${THEME_CSS}
     render();
   }
 </script>
+${modelScript(activeModel)}
 </body></html>`;
 }
 
 // ---------------------------------------------------------------------------
 // Compare: two clips side by side. Pickers when a/b not both given.
 // ---------------------------------------------------------------------------
-function comparePage(a, b) {
+function comparePage(a, b, activeModel) {
   const items = listWidgets().slice().sort(byNumber);
   const names = new Set(items.map((it) => it.name));
   const validA = a && names.has(a) ? a : '';
   const validB = b && names.has(b) ? b : '';
+  // <!-- BEGIN model-select --> Carry the active rig onto every /w/ link.
+  const mqs = '?model=' + encodeURIComponent(activeModel);
+  // <!-- END model-select -->
   const opts = (sel) => '<option value=""' + (sel ? '' : ' selected') + '>— pick —</option>' +
     items.map((it) =>
       `<option value="${esc(it.name)}"${it.name === sel ? ' selected' : ''}>${esc(it.name)}</option>`).join('');
@@ -554,7 +761,7 @@ function comparePage(a, b) {
     }
     return `<div class="pane">` +
       `<div class="ph">${esc(name)}</div>` +
-      `<iframe src="/w/${encodeURIComponent(name)}" title="${esc(name)}"></iframe></div>`;
+      `<iframe src="/w/${encodeURIComponent(name)}${mqs}" title="${esc(name)}"></iframe></div>`;
   };
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
@@ -577,7 +784,9 @@ ${THEME_CSS}
 <header>
   <h1>Compare <span class="sub">SIDE BY SIDE</span></h1>
   ${navStrip('/compare')}
+  ${modelBar(activeModel)}
   <form class="pickers" method="get" action="/compare" id="f">
+    <input type="hidden" name="model" value="${esc(activeModel)}">
     <select name="a" id="a">${opts(validA)}</select>
     <select name="b" id="b">${opts(validB)}</select>
   </form>
@@ -591,6 +800,7 @@ ${THEME_CSS}
   document.getElementById('a').addEventListener('change', () => f.submit());
   document.getElementById('b').addEventListener('change', () => f.submit());
 </script>
+${modelScript(activeModel)}
 </body></html>`;
 }
 
@@ -715,7 +925,7 @@ ${THEME_CSS}
 // ---------------------------------------------------------------------------
 // Widget page: the published clip with a sticky bar + prev/next nav.
 // ---------------------------------------------------------------------------
-function widgetPage(name) {
+function widgetPage(name, activeModel) {
   const file = path.join(WIDGETS_DIR, name + '.html');
   let body;
   try {
@@ -728,8 +938,16 @@ function widgetPage(name) {
   const idx = items.findIndex((it) => it.name === name);
   const prev = idx > 0 ? items[idx - 1].name : '';
   const next = idx >= 0 && idx < items.length - 1 ? items[idx + 1].name : '';
+  // <!-- BEGIN model-select -->
+  // Keep the operator's chosen rig as they walk clips and return to the gallery.
+  const mqs = activeModel ? '?model=' + encodeURIComponent(activeModel) : '';
+  const modelTag = activeModel
+    ? `<span style="font-size:11px;color:#bfeede;background:#173026;border:1px solid #2f6a4f;` +
+      `border-radius:999px;padding:2px 8px;white-space:nowrap;">${esc(activeModel)}</span>`
+    : '';
+  // <!-- END model-select -->
   const navBtn = (target, sym, title) => target
-    ? `<a href="/w/${encodeURIComponent(target)}" title="${esc(title)}" ` +
+    ? `<a href="/w/${encodeURIComponent(target)}${mqs}" title="${esc(title)}" ` +
       `style="color:#9bd;text-decoration:none;font-size:18px;padding:0 6px;">${sym}</a>`
     : `<span style="color:#33333c;font-size:18px;padding:0 6px;">${sym}</span>`;
   // The published page is already a full self-contained document. Inject a
@@ -737,8 +955,9 @@ function widgetPage(name) {
   const bar = `<div style="position:sticky;top:0;z-index:9999;display:flex;align-items:center;gap:10px;` +
     `padding:10px 14px;background:#08080cE6;backdrop-filter:blur(8px);` +
     `border-bottom:1px solid #1d1d26;font:14px/1 -apple-system,system-ui,sans-serif;color:#e6e9ee;">` +
-    `<a href="/" style="color:#7cc;text-decoration:none;font-size:14px;">&larr; gallery</a>` +
+    `<a href="/${mqs}" style="color:#7cc;text-decoration:none;font-size:14px;">&larr; gallery</a>` +
     `<span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>` +
+    modelTag +
     navBtn(prev, '&#8249;', prev ? 'Prev: ' + prev : 'No previous') +
     navBtn(next, '&#8250;', next ? 'Next: ' + next : 'No next') +
     `</div>`;
@@ -758,12 +977,20 @@ const server = http.createServer((req, res) => {
     return notFound(res, 'Only GET is supported.');
   }
 
+  // <!-- BEGIN model-select -->
+  // Resolve the active rig once per request from ?model= (validated against
+  // the real models dir; unknown -> default). Threaded into every page so the
+  // picker, links, and variant fallback all agree on the active rig.
+  const reqModel = typeof u.query.model === 'string' ? u.query.model : '';
+  const activeModel = resolveModel(reqModel);
+  // <!-- END model-select -->
+
   if (pathname === '/') {
-    return send(res, 200, 'text/html; charset=utf-8', indexPage());
+    return send(res, 200, 'text/html; charset=utf-8', indexPage(activeModel));
   }
 
   if (pathname === '/grid') {
-    return send(res, 200, 'text/html; charset=utf-8', gridPage());
+    return send(res, 200, 'text/html; charset=utf-8', gridPage(activeModel));
   }
 
   if (pathname === '/compare') {
@@ -772,7 +999,7 @@ const server = http.createServer((req, res) => {
     if ((a && !SAFE_NAME.test(a)) || (b && !SAFE_NAME.test(b))) {
       return notFound(res, 'Bad pattern name.');
     }
-    return send(res, 200, 'text/html; charset=utf-8', comparePage(a, b));
+    return send(res, 200, 'text/html; charset=utf-8', comparePage(a, b, activeModel));
   }
 
   if (pathname === '/api/list') {
@@ -782,10 +1009,19 @@ const server = http.createServer((req, res) => {
       }))));
   }
 
+  // <!-- BEGIN model-select -->
+  // Rig list for the model picker. The UI reads this to populate the <select>;
+  // `default` is the rig the gallery starts on when no ?model= is given.
+  if (pathname === '/api/models') {
+    return send(res, 200, 'application/json; charset=utf-8',
+      JSON.stringify({ models: listModels(), default: DEFAULT_MODEL }));
+  }
+  // <!-- END model-select -->
+
   if (pathname.startsWith('/w/')) {
     const name = pathname.slice('/w/'.length);
     if (!SAFE_NAME.test(name)) return notFound(res, 'Bad pattern name.');
-    const page = widgetPage(name);
+    const page = widgetPage(name, activeModel);
     if (page == null) return notFound(res, 'No such pattern: ' + name);
     return send(res, 200, 'text/html; charset=utf-8', page);
   }
@@ -832,7 +1068,7 @@ function resolveHost(u) {
   return { host: ENGINE_HOST };
 }
 
-function resolveModel(u) {
+function resolveLiveModel(u) {
   const m = typeof u.query.model === 'string' && u.query.model ? u.query.model : 'test_bench';
   if (!SAFE_NAME.test(m)) return { error: 'Bad ?model= name: ' + m };
   return { model: m };
@@ -841,7 +1077,7 @@ function resolveModel(u) {
 async function handleLive(req, res, u, pathname) {
   const hr = resolveHost(u);
   if (hr.error) return notFound(res, hr.error);
-  const mr = resolveModel(u);
+  const mr = resolveLiveModel(u);
   if (mr.error) return notFound(res, mr.error);
   const buffer = u.query.buffer === 'rig' ? 'rig' : 'master';
   // /live/<name>: caption only.
@@ -865,7 +1101,7 @@ async function handleLive(req, res, u, pathname) {
 }
 
 async function handleLiveLayout(req, res, u) {
-  const mr = resolveModel(u);
+  const mr = resolveLiveModel(u);
   if (mr.error) return notFound(res, mr.error);
   const buffer = u.query.buffer === 'rig' ? 'rig' : 'master';
   try {
@@ -899,7 +1135,8 @@ server.listen(PORT, '0.0.0.0', () => {
   } else {
     lines.push('  (no external IPv4 found — only reachable on localhost)');
   }
-  lines.push('  routes: /  /grid  /compare  /live  /w/<name>  /api/list  /api/live-layout');
+  lines.push('  routes: /  /grid  /compare  /live  /w/<name>  /api/list  /api/models  /api/live-layout');
+  lines.push('  models: ' + listModels().join(', ') + '  (default ' + DEFAULT_MODEL + ')');
   lines.push('  engine host (live vis): ' + ENGINE_HOST + '  (override with /live?host=ip:port)');
   lines.push('  widgets dir: ' + WIDGETS_DIR);
   lines.push('');
