@@ -143,3 +143,6 @@ simulation/scenes/*/playlists/hil_*.yaml
 
 # Claude Code local settings + agent worktrees (machine-local / transient)
 .claude/
+
+# Timeline companion runtime state (regenerated on boot)
+marsin_engine/states/*/timeline_state.yaml
