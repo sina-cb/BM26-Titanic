@@ -132,6 +132,34 @@ async function applyLook(look, name, engineLink, configPath, steps) {
 }
 
 /**
+ * Establish the AUTOPILOT baseline (docs/38 §14): load the plan-level autopilot
+ * playlist on its target and turn engine autopilot ON with the configured
+ * delay/shuffle. This is the "regular programming" layer the server re-applies
+ * on boot, on POST /autopilot {enabled:true}, and when a program ends. Returns
+ * { steps:[...] }; THROWS (fail loud) if any engine call rejects. A baseline
+ * with no playlist still flips autopilot on (skips the missing load).
+ *
+ * @param {object} plan validated show plan (carries plan.autopilot)
+ * @param {object} engineLink
+ */
+export async function applyAutopilotBaseline(plan, engineLink) {
+  const ap = plan && plan.autopilot ? plan.autopilot : null;
+  if (!ap) throw new Error('applyAutopilotBaseline: plan.autopilot missing');
+  const steps = [];
+  const targets = await resolveTargets(ap.target, engineLink);
+  if (ap.playlist) {
+    for (const target of targets) {
+      steps.push(await loadPlaylistOnTarget(target, ap.playlist, engineLink));
+    }
+  }
+  const autopilot = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
+  for (const target of targets) {
+    steps.push(await setAutopilotOnTarget(target, autopilot, engineLink));
+  }
+  return { steps };
+}
+
+/**
  * Execute one cue action. Returns { steps:[...] }. THROWS (fail loud) if any
  * engine call rejects.
  *

@@ -25,7 +25,8 @@ import { resolveDayTimes, evaluateTick, activePhase, dayKeyFor } from './trigger
 import { loadTimelineConfig } from './timeline_config.js';
 import { loadTimelineState, saveTimelineState } from './timeline_state.js';
 import { EngineLink } from './engine_link.js';
-import { applyAction } from './actions.js';
+import { applyAction, applyAutopilotBaseline } from './actions.js';
+import { arbitrate, resolveHold } from './arbiter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
@@ -121,6 +122,7 @@ function buildTimelineState() {
     return {
       type: 'timelineState',
       mode: 'armed', scene: scene, activePlan: cfg.activePlan,
+      controller: 'autopilot', autopilotEnabled: true, activeProgram: null,
       currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
       engineConnected: engineLink.connected,
       waiting: true, nextCue: null,
@@ -176,11 +178,24 @@ function buildTimelineState() {
   const holding = typeof state.manualHoldUntilMs === 'number' && state.manualHoldUntilMs > now;
   const mode = holding ? 'holding' : state.mode;
 
+  // activeProgram for the UI: include untilMs so the tab can count down.
+  let activeProgram = null;
+  if (state.activeProgram && state.activeProgram.cueId) {
+    activeProgram = {
+      cueId: state.activeProgram.cueId,
+      startedAtMs: state.activeProgram.startedAtMs,
+      untilMs: state.activeProgram.untilMs !== undefined ? state.activeProgram.untilMs : null,
+    };
+  }
+
   return {
     type: 'timelineState',
     mode,
     scene,
     activePlan: state.activePlan || cfg.activePlan,
+    controller: state.controller || 'autopilot',
+    autopilotEnabled: state.autopilotEnabled !== false,
+    activeProgram,
     currentPhase: phaseNow,
     currentMood: mood.party ? 'party' : 'calm',
     party: mood.party,
@@ -213,6 +228,62 @@ async function dispatchCue(cueId, reason) {
   return result;
 }
 
+// Establish the AUTOPILOT baseline on the engine (playlist + autopilot ON).
+async function establishAutopilotBaseline(reason) {
+  const result = await applyAutopilotBaseline(plan, engineLink);
+  console.log(`  🛟 autopilot baseline (${reason}): ${result.steps.join('; ')}`);
+  return result;
+}
+
+// Establish the baseline + set controller='autopilot' IFF the baseline layer is
+// enabled and the operator has not taken over (paused/overridden/holding). A
+// missing engine just records the failure — boot never crashes (codex P0).
+async function establishBaselineIfActive(reason) {
+  const now = Date.now();
+  const holding = typeof state.manualHoldUntilMs === 'number' && state.manualHoldUntilMs > now;
+  const paused = state.mode === 'paused' || state.mode === 'overridden';
+  if (state.autopilotEnabled === false) {
+    // Baseline off → manual; the operator drives, programs still preempt.
+    state.controller = 'manual';
+    return;
+  }
+  if (paused || holding) { state.controller = 'manual'; return; }
+  try {
+    await establishAutopilotBaseline(reason);
+    state.controller = 'autopilot';
+  } catch (e) {
+    bootError = `autopilot baseline (${reason}): ${e && e.message}`;
+    console.warn(`  ⚠ autopilot baseline (${reason}) failed: ${e && e.message}`);
+  }
+}
+
+// ── dispatch one arbiter action ─────────────────────────────────────────────
+// Honors the §14 contract: an action carrying autopilotOff first turns the
+// baseline engine autopilot OFF (a program takes over); the synthetic
+// __resume_autopilot__ re-establishes the baseline; everything else is a normal
+// cue action via applyAction. Records the fire in the recent-fires ring.
+async function dispatchArbitratedAction(act, reason) {
+  if (act.autopilotOff) {
+    await engineLink.setDeckAutopilot({ active: false });
+  }
+  if (act.action && act.action.type === '__resume_autopilot__') {
+    const result = await establishAutopilotBaseline('program ended');
+    recentFires.push({ cueId: act.cueId, atMs: Date.now(), reason: 'resume' });
+    if (recentFires.length > RECENT_MAX) recentFires.shift();
+    return result;
+  }
+  const cue = plan.cues.find((c) => c.id === act.cueId);
+  if (!cue) throw new Error(`cue "${act.cueId}" not in active plan`);
+  const result = await applyAction({ action: act.action, plan, engineLink, configPath: CONFIG_PATH });
+  delete cueErrors[act.cueId];
+  state.lastFiredCueId = act.cueId;
+  state.lastFiredAtMs = Date.now();
+  recentFires.push({ cueId: act.cueId, atMs: Date.now(), reason });
+  if (recentFires.length > RECENT_MAX) recentFires.shift();
+  console.log(`  ▶ fired "${act.cueId}" (${reason}): ${result.steps.join('; ')}`);
+  return result;
+}
+
 // ── catchUp on boot ───────────────────────────────────────────────────────────
 // Among enabled clock/sun cues whose resolved time today already passed and
 // whose action is look/playlist and catchUp !== false, fire the one with the
@@ -242,16 +313,38 @@ async function catchUp() {
     }
   }
 
+  // A restored program cue still owns priority if its hold window has not yet
+  // elapsed — re-establish activeProgram + program controller so the tick loop
+  // keeps mood suppressed until the program expires (docs/38 §14).
+  let programCaughtUp = false;
+  if (best && best.cue.kind === 'program') {
+    const untilMs = resolveHold(best.cue.hold, best.fireMs, dayTimes);
+    if (untilMs === null || untilMs > now) {
+      state.activeProgram = { cueId: best.cue.id, startedAtMs: best.fireMs, untilMs };
+      state.controller = 'manual';   // refined below by establishBaseline/program
+      programCaughtUp = true;
+    }
+  }
+
   if (best) {
     try {
       const result = await dispatchCue(best.cue.id, 'catchUp');
       console.log(`  ⏪ catchUp restored "${best.cue.id}": ${result.steps.join('; ')}`);
+      if (programCaughtUp) {
+        // A program owns the deck — turn the baseline autopilot off.
+        await engineLink.setDeckAutopilot({ active: false });
+        state.controller = 'program';
+      }
     } catch (e) {
       cueErrors[best.cue.id] = `catchUp failed: ${e && e.message}`;
       bootError = `catchUp "${best.cue.id}": ${e && e.message}`;
       console.warn(`  ⚠ catchUp "${best.cue.id}" failed: ${e && e.message}`);
     }
   }
+
+  // No program caught up → establish the AUTOPILOT baseline if enabled and the
+  // operator has not taken over.
+  if (!programCaughtUp) await establishBaselineIfActive('boot');
   saveTimelineState(state, stateDir);
   lastStateJson = JSON.stringify(state);
 }
@@ -287,6 +380,12 @@ function loadSceneFiles(name) {
   plan = loadShowPlan(planPath);
   state = loadTimelineState(stateDir);
   if (!state.activePlan) state.activePlan = cfg.activePlan;
+  // Seed the runtime autopilot toggle from the plan's baseline only when the
+  // state predates the §14 model (no persisted autopilotEnabled). Once the
+  // operator has toggled it, the runtime value is authoritative.
+  if (state.autopilotEnabled === undefined) state.autopilotEnabled = plan.autopilot.enabled;
+  if (state.activeProgram === undefined) state.activeProgram = null;
+  if (state.controller === undefined) state.controller = 'autopilot';
 }
 
 // Switch to a different plan name in the scene dir (reload + re-run catchUp).
@@ -320,23 +419,31 @@ async function tick() {
   state = nextState;
   state.currentMood = mood.party ? 'party' : 'calm';
 
-  const holding = typeof state.manualHoldUntilMs === 'number' && state.manualHoldUntilMs > now;
-  const suppressed = state.mode === 'paused' || state.mode === 'overridden' || holding;
+  // Arbitrate the raw fires through the control-precedence model (docs/38 §14):
+  // programs preempt autopilot, mood swaps only land under autopilot, a program
+  // ending falls back to autopilot. The arbiter is pure — it tells us exactly
+  // which actions to drive and returns the new controller/program state.
+  const reasonByCue = new Map(fires.map((f) => [f.cueId, f.reason]));
+  const { actions, state: arbState } = arbitrate({ now, plan, state, fires, dayTimes });
+  state = arbState;
 
+  // Fires the arbiter dropped (e.g. a mood swap suppressed under a program) are
+  // surfaced as "wouldFire" so the operator can see the intent, never silent.
+  const dispatchedCues = new Set(actions.map((a) => a.cueId));
   for (const fire of fires) {
-    if (suppressed) {
-      // Record as "would fire" — visible, never silently dispatched.
-      broadcast({ type: 'wouldFire', cueId: fire.cueId, reason: fire.reason, mode: state.mode, holding });
-      continue;
+    if (!dispatchedCues.has(fire.cueId)) {
+      broadcast({ type: 'wouldFire', cueId: fire.cueId, reason: fire.reason, controller: state.controller });
     }
+  }
+
+  for (const act of actions) {
     try {
-      const result = await dispatchCue(fire.cueId, fire.reason);
+      await dispatchArbitratedAction(act, reasonByCue.get(act.cueId) || 'auto');
       lastError = null;
-      console.log(`  ▶ fired "${fire.cueId}" (${fire.reason}): ${result.steps.join('; ')}`);
     } catch (e) {
-      cueErrors[fire.cueId] = `${e && e.message}`;
-      lastError = `cue "${fire.cueId}": ${e && e.message}`;
-      console.warn(`  ⚠ cue "${fire.cueId}" failed: ${e && e.message}`);
+      cueErrors[act.cueId] = `${e && e.message}`;
+      lastError = `cue "${act.cueId}": ${e && e.message}`;
+      console.warn(`  ⚠ cue "${act.cueId}" failed: ${e && e.message}`);
       // Never crash the loop on a dispatch failure (codex P0 fail loud, but
       // keep ticking — the failure is surfaced, not fatal).
     }
@@ -449,17 +556,80 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (p === '/autopilot' && method === 'POST') {
+    const body = await readBody(req);
+    if (!body || typeof body.enabled !== 'boolean') {
+      sendJson(res, 400, { error: 'body { enabled: Bool } required' });
+      return true;
+    }
+    state.autopilotEnabled = body.enabled;
+    try {
+      if (body.enabled) {
+        // Enabling → establish the baseline (load playlist + engine autopilot on).
+        await establishBaselineIfActive('operator');
+      } else {
+        // Disabling → turn engine autopilot off, hand the deck to the operator.
+        await engineLink.setDeckAutopilot({ active: false });
+        if (!state.activeProgram) state.controller = 'manual';
+        lastError = null;
+      }
+    } catch (e) {
+      lastError = `autopilot toggle: ${e && e.message}`;
+    }
+    saveTimelineState(state, stateDir);
+    lastStateJson = JSON.stringify(state);
+    broadcastState();
+    sendJson(res, 200, { ok: true, autopilotEnabled: state.autopilotEnabled, controller: state.controller });
+    return true;
+  }
+
+  if (p === '/program/end' && method === 'POST') {
+    // End the active program early → fall back to autopilot if enabled.
+    if (!state.activeProgram) { sendJson(res, 200, { ok: true, activeProgram: null, controller: state.controller }); return true; }
+    state.activeProgram = null;
+    try {
+      if (state.autopilotEnabled !== false && state.mode !== 'paused' && state.mode !== 'overridden') {
+        await establishBaselineIfActive('program/end');
+      } else {
+        state.controller = 'manual';
+      }
+      lastError = null;
+    } catch (e) {
+      lastError = `program/end: ${e && e.message}`;
+    }
+    saveTimelineState(state, stateDir);
+    lastStateJson = JSON.stringify(state);
+    broadcastState();
+    sendJson(res, 200, { ok: true, activeProgram: null, controller: state.controller });
+    return true;
+  }
+
   const fireMatch = /^\/cues\/([a-z0-9][a-z0-9_-]*)\/fire$/.exec(p);
   if (fireMatch && method === 'POST') {
     const cueId = fireMatch[1];
-    if (!plan || !plan.cues.some((c) => c.id === cueId)) { sendJson(res, 404, { error: `cue "${cueId}" not found` }); return true; }
+    const cue = plan && plan.cues.find((c) => c.id === cueId);
+    if (!cue) { sendJson(res, 404, { error: `cue "${cueId}" not found` }); return true; }
+    // Route the manual fire through the SAME arbiter path so a program cue
+    // starts a program (sets activeProgram, turns baseline autopilot off) and a
+    // mood cue respects the controller (docs/38 §14).
     try {
-      const result = await dispatchCue(cueId, 'manual');
+      const now = Date.now();
+      const sunEvents = sunEventsFor(now);
+      const dayTimes = resolveDayTimes({ plan, now, sunEvents });
+      const { actions, state: arbState } = arbitrate({
+        now, plan, state, fires: [{ cueId, reason: 'manual' }], dayTimes,
+      });
+      state = arbState;
+      const steps = [];
+      for (const act of actions) {
+        const r = await dispatchArbitratedAction(act, 'manual');
+        if (r && r.steps) steps.push(...r.steps);
+      }
       lastError = null;
       saveTimelineState(state, stateDir);
       lastStateJson = JSON.stringify(state);
       broadcastState();
-      sendJson(res, 200, { ok: true, steps: result.steps });
+      sendJson(res, 200, { ok: true, steps, controller: state.controller });
     } catch (e) {
       cueErrors[cueId] = `${e && e.message}`;
       lastError = `manual fire "${cueId}": ${e && e.message}`;

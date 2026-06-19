@@ -20,6 +20,11 @@ export function defaultTimelineState() {
   return {
     activePlan: null,
     mode: 'armed',
+    // Control-precedence layer (docs/38 §14): autopilot is the baseline,
+    // controller is the derived active layer, activeProgram is the running show.
+    autopilotEnabled: true,
+    controller: 'autopilot',
+    activeProgram: null,
     currentPhase: null,
     currentMood: 'calm',
     lastFiredCueId: null,
