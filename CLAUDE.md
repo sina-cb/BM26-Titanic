@@ -62,6 +62,12 @@ new work; file follow-ups there as `Backlog` cards.
   and `worktree-agent-<hash>` branches are scratch. Promote a session branch
   to `feat/` by **GitHub rename** (never delete+recreate a branch with an
   open PR). Delete temp/merged branches only after verifying their work landed.
+- **Never name a branch random gibberish.** No auto-codenames like
+  `slug-shit-1377` or `happy-dud-6je$$`. When you create a branch for durable
+  work, give it a proper descriptive `feat/<snake_case>` name; if you can't
+  pick a good one, **ask Sina for the name** instead of inventing junk. (Random
+  `claude/<auto_name>` branches a web session creates for you must still be
+  promoted to a real `feat/` name or deleted — they are not acceptable to keep.)
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.
