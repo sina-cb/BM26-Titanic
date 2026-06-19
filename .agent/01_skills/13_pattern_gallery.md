@@ -78,12 +78,16 @@ engine/sim block 6967–6972 (no collision).
 ## URL scheme
 | Path        | Serves |
 |-------------|--------|
-| `/`         | Phone index: grouped/sorted cards, search box + family/model filter chips |
+| `/`         | Phone index: grouped/sorted cards, search box + family/model filter chips, **Static\|Sound** toggle, global model picker |
 | `/grid`     | Contact-sheet of live clip thumbnails (lazy-loaded), tap to open |
 | `/compare`  | Two clips side by side (`?a=<name>&b=<name>`; pickers if missing) |
 | `/w/<name>` | The standalone clip page, sticky `← gallery` bar + `‹ ›` prev/next |
-| `/api/list` | JSON `[{name, mtime, num, family, model}]`, newest first |
+| `/api/list` | JSON `[{name, mtime, num, family, model, variation}]`, newest first |
 | `/api/models` | JSON `{models:[...], default:"test_bench"}` — rigs for the global model picker (see the **MODEL PICKER** section below) |
+| **OFFLINE views above need no engine.** The routes below are **LIVE / ONLINE** — they talk to the running engine: ||
+| `/live` `/live/<name>` | Live per-pixel view of the running engine + **Deck Control** panel (see **LIVE mode** + **DECK CONTROL** below) |
+| `/live_client.js` `/api/live-layout` | The live renderer + the model-aware layout JSON |
+| `/api/engine/<path>` | Same-origin **allowlisted proxy** to the engine REST API (deck control; see **DECK CONTROL** below) |
 
 Names are restricted to `[A-Za-z0-9._-]` (no traversal); anything else 404s.
 A top nav (`List · Grid · Compare`) is on every chrome page.
@@ -122,9 +126,17 @@ node tools/gallery/gallery_launcher.mjs
 
 ## Files & hygiene
 - `gallery_launcher.mjs` — launch + serve (Tailscale-aware; spawns `server.mjs`).
-- `server.mjs` — http server (index, `/w/<name>`, `/api/list`, 404).
-- `gallery_config.json` — the served port.
+- `server.mjs` — http server (index, `/grid`, `/compare`, `/w/<name>`, `/live`,
+  `/api/*`, the `/api/engine/` proxy + allowlist, 404).
+- `gallery_config.json` — the served port (`port`) + the engine host
+  (`engineHost`, default `127.0.0.1:6968`) the live view + deck proxy target.
 - `publish.mjs` — CLI to publish/update a widget.
+- `gen_variations.mjs` — generate the Static + Sound variation clips per pattern.
+- `../audio_mod_spec.mjs` — parse a pattern's `AUDIO_MODULATION_V1` block →
+  `{mappings, modString, synth}` (shared by `gen_variations`).
+- `live_layout.mjs` — server-side model-aware layout for the live view.
+- `live_client.js` — browser live renderer (WS → per-pixel paint).
+- `deck_client.js` — browser deck-control panel on `/live`.
 - `widgets/` — published `<name>.html` pages. **Gitignored scratch** — the
   generated clips are NOT committed; regenerate them anytime from captures.
 - After any engine boot to capture live, restore runtime residue:
