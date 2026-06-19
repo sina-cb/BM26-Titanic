@@ -211,6 +211,11 @@ export class TimelineService {
     this.sunCache = { dayKey: null, events: null };
     this._tickHandle = null;
     this._ticking = false;      // re-entrancy guard for the async tick
+    // Tracks whether the engine's BASELINE autopilot is currently armed, so the
+    // per-tick reconcile (_reconcileBaselineArm) only flips it on a controller
+    // transition. Flipping every tick would reset the autopilot delay timer and
+    // the deck would never advance.
+    this._baselineArmed = false;
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -391,6 +396,7 @@ export class TimelineService {
     }
     const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
     for (const target of targets) await this._setAutopilotOnTarget(target, state, steps);
+    this._baselineArmed = true;
     return { steps };
   }
 
@@ -477,6 +483,36 @@ export class TimelineService {
     for (const target of targets) {
       await this.deps.setAutopilot({ target, state: { active: false } });
     }
+    this._baselineArmed = false;
+  }
+
+  // Re-arm the baseline autopilot WITHOUT reloading the playlist — so resuming
+  // from a pause/hold continues cycling from the CURRENT entry rather than
+  // jumping back to the first. (_applyAutopilotBaseline reloads; this doesn't.)
+  async _rearmBaselineAutopilot() {
+    const ap = this.plan && this.plan.autopilot ? this.plan.autopilot : null;
+    if (!ap) return;
+    const targets = await this._resolveTargets(ap.target);
+    const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
+    for (const target of targets) await this.deps.setAutopilot({ target, state });
+    this._baselineArmed = true;
+  }
+
+  // Keep the engine baseline autopilot armed IFF the controller is 'autopilot'.
+  // This is what makes pause/hold actually FREEZE deck cycling and resume /
+  // hold-expiry resume it — uniformly, in one place. Acts only on a transition
+  // (the _baselineArmed flag), never every tick (which would reset the autopilot
+  // delay). Touches only the baseline's target(s); independent operator-armed
+  // overlays on other channels are left alone (docs/38 §16 I5, per-channel).
+  async _reconcileBaselineArm() {
+    const ap = this.plan && this.plan.autopilot ? this.plan.autopilot : null;
+    if (!ap) return;   // no baseline target to act on
+    // `controller` already encodes the runtime autopilot toggle + pause/hold/
+    // program, so it is the single source of truth for "should the baseline run".
+    const want = this.state.controller === 'autopilot';
+    if (want === this._baselineArmed) return;
+    if (want) await this._rearmBaselineAutopilot();
+    else await this._disarmBaselineAutopilot();
   }
 
   async _dispatchArbitratedAction(act, reason) {
@@ -648,6 +684,20 @@ export class TimelineService {
           // keep ticking — the failure is surfaced, not fatal).
         }
       }
+
+      // Sync the engine baseline autopilot to the final controller (freeze on
+      // pause/hold/program, resume on autopilot) — transition-gated.
+      try {
+        await this._reconcileBaselineArm();
+      } catch (e) {
+        this.lastError = `autopilot reconcile: ${e && e.message}`;
+        console.warn(`  ⚠ [timeline] autopilot reconcile failed: ${e && e.message}`);
+      }
+
+      // A `scene` action (requestScene → engine exit-75) tears this service down
+      // mid-tick via stop(); if that happened during the awaits above, don't
+      // persist/broadcast against a stopping engine.
+      if (this._tickHandle === null) return;
 
       const json = JSON.stringify(this.state);
       if (json !== this.lastStateJson) {

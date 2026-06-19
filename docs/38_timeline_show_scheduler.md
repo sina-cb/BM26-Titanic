@@ -874,6 +874,16 @@ arm a lease); on `boot` a stale `pendingProgram` is dropped and re-derived.
   mood action so the mood look wins, not the baseline (no clobber). [fixed]
 - **Day rollover mid-program** — a program with `untilMs` on the next day keeps
   running; `firedToday` resets so the next day's cues arm.
+- **pause / hold actually FREEZE the deck** — the service reconciles the engine
+  baseline autopilot to the controller every tick (armed iff `controller ===
+  'autopilot'`), transition-gated so it never resets the autopilot timer. So
+  `pause`/`hold` disarm the baseline (deck stops cycling), and `resume` /
+  hold-expiry re-arm it and **continue from the current entry** (no jump to the
+  first). Independent operator-armed overlays on other channels are untouched
+  (I5 per-channel).
+- **scene-switch race** — a `scene` action triggers an engine restart (exit-75)
+  that stops the service mid-tick; the tick checks for that after its awaits and
+  skips the trailing persist/broadcast against a stopping engine.
 - **Operator `fire` always wins** — a manual cue fire applies immediately
   regardless of mode/lease (it is an explicit operator act).
 - **Lease + `ap-on`** — enabling autopilot while a lease is pending starts the
