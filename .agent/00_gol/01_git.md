@@ -23,6 +23,15 @@ right namespace for the work; do not invent new top-level prefixes.
 
 Rules:
 
+- **Keep `origin` clean — only `feat/*` (and `main`) belong there long-term.**
+  The transient namespaces (`dev/claude/<slug>`, `worktree-agent-<hash>`, and
+  scratch `claude/<auto_name>` work) must **NOT** be pushed to `origin`; they
+  stay local until promoted. Every extra branch on `origin` is noise that the
+  next agent has to audit, so a steady-state `origin` holds only `main`, the
+  durable `feat/*` branches, and whatever PR branches are actively in flight.
+  `claude/<auto_name>` branches that a Claude Code web session unavoidably
+  creates on `origin` are not a license to accumulate — promote them to
+  `feat/<snake_case>` or delete them promptly; do not let them pile up.
 - **Durable work → `feat/<snake_case>`.** The slug is `snake_case` (matches
   the codex filename rule), short and descriptive: `feat/views_rehaul`,
   `feat/timeline_support`, `feat/wiring_diagram`. Do not leave long-lived work
