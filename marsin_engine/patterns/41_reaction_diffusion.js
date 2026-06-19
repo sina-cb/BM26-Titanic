@@ -72,6 +72,7 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLevel(v) { level = v; }   // micLow maps here (PRIMARY)
 export function sliderFeed(v) { feed = v; }     // micMid maps here
 export function sliderSeed(v) { seed = v; }     // micKick maps here
+export function sliderBase(v) { base = v; }     // faint resting cp1 floor
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 // RIG-AGNOSTIC: the reaction runs on a fixed N=128-cell lane along the normalized
@@ -87,7 +88,8 @@ var SQRT2 = 1.41421;        // irrational base advance
 var WU = 0.70711;           // 1/sqrt2 — substrate diffusion weight (irrational)
 var WV = 0.57735;           // 1/sqrt3 — catalyst diffusion weight (irrational)
 var KILL = 0.062;           // Gray-Scott kill rate (fixed; feed is the audio knob)
-var STEP_RATE = 14.0;       // reaction sub-steps per second at localSpeed = 1.0
+var STEP_RATE = 20.0;       // reaction sub-steps per second at localSpeed = 1.0 (crawls
+                            //   visibly at rest so the chemistry reads ALIVE, not frozen)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -173,7 +175,7 @@ export function beforeRender(delta) {
   // Slow irrational wander of the seed sites + the silent-base shimmer.
   seedPhase = seedPhase + dt * 0.07 * localMult;
   seedPhase = seedPhase - floor(seedPhase);
-  faintPhase = faintPhase + dt * 0.08;
+  faintPhase = faintPhase + dt * 0.18;
   faintPhase = faintPhase - floor(faintPhase);
 
   // ── micKick -> seed: a beat drops a fresh catalyst nucleus at a wandering
@@ -240,7 +242,7 @@ export function render3D(index, x, y, z) {
   //    changes (lag-free) on EVERY pixel — this uniform component is what makes
   //    the rig's total brightness track micLow tightly (the PRIMARY corr). It
   //    rides strictly on cp1 so it does not pollute the reaction's coral hue. ──
-  var faint = (base + level * 0.34) * (0.30 + 0.70 * wave(faintPhase + x * 1.7));
+  var faint = (base + level * 0.34) * (0.10 + 0.90 * wave(faintPhase + x * 1.7));
 
   // ── Reaction layer: catalyst concentration -> brightness, also gained by
   //    `level` so a live front during loud bass burns a channel hot (peak>200)

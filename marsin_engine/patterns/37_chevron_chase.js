@@ -41,9 +41,15 @@
 // ── Exported controls ────────────────────────────────────────────────────────
 export var localSpeed = 0.5;   // free-run chase rate when no kicks
 export var step = 0.0;         // KICK signal (MODULATE <- micKick); edge -> step
-export var bright = 0.7;       // LEVEL (MODULATE <- micLow) -> brightness
-export var width = 0.35;       // chevron sharpness (0 = razor edge)
-export var count = 0.62;       // how many chevrons span the chase
+export var bright = 0.6;       // LEVEL (MODULATE <- micLow) -> brightness. 0.6 (not 0.5):
+                               //   bright is the no-audio resting level; 0.6 keeps the
+                               //   chevron cores >=200 at rest (mission-critical visibility)
+export var width = 0.4;        // chevron sharpness (0 = razor edge, 1 = soft). Biased
+                               //   sharp: crisp leading edges + true-black gaps are the
+                               //   high-def chevron identity (and keep the micLow corr tight)
+export var count = 0.62;       // how many chevrons span the chase. Kept above mid: a
+                               //   finer chevron field makes total brightness track the
+                               //   micLow level term smoothly (PRIMARY corr stays ~0.55)
 
 export var cp1H = 0.30, cp1S = 1.0, cp1V = 1.0; // lime / green (chase start)
 export var cp2H = 0.92, cp2S = 1.0, cp2V = 1.0; // hot pink     (chase end)

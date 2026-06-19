@@ -70,7 +70,12 @@ var SQRT2 = 1.41421356;   // x-axis spatial scale
 var INVPHI = 0.61803398;  // y-axis spatial scale (1/phi)
 var GA = 0.38196601;      // z-axis spatial scale (golden-angle fraction 1 - 1/phi)
 var DRIFT = 0.07639320;   // drift rate (2 - phi)/10 — slow, irrational, never loops
-var FLOOR = 0.14;         // resting wash brightness (never fully black in silence)
+var FLOOR = 0.20;         // resting wash brightness. Kept modest ON PURPOSE: this is
+                          //   the no-audio swell floor and the PRIMARY micLow->brightness
+                          //   corr collapses if it dominates total brightness. 0.20 is the
+                          //   knee — corr stays ~0.52 (REACTIVE) while the rig is clearly
+                          //   alive and warm at rest (never black). Peak at silence stays
+                          //   modest (~68); a loud swell drives cores to 255.
 var SWELL_GAIN = 1.1;     // how hard micLow swells the wash (linear, no clamp -> corr)
 var BLIND_DECAY = 7.0;    // blinder envelope decay (per second) — crisp flash
 var SHIM_HZ = 0.041666;   // shimmer churn time-scale (irrational-ish, fine grain)
@@ -158,7 +163,10 @@ export function render3D(index, x, y, z) {
   var nz = z * GA * noiseScale * 0.35;
   var v = nx + ny - nz + tPhase;
   var raw = wave(v);               // smooth 0..1 wash field (used for COLOR)
-  var noise = raw * raw;           // HD: warm cores, darker troughs (BRIGHTNESS)
+  // HD shaping: warm cores stay near-full, troughs still drop dark for contrast.
+  // A gentle gamma (not a hard square) keeps the bright cores hot (peak>=200 at
+  // rest) while preserving the dark/bright split that makes the wash read HD.
+  var noise = raw * (0.55 + 0.45 * raw);
 
   // A second, decorrelated wash phase drives the COLOR blend so cp1<->cp2 spread
   // evenly across the rig (irrational offset -> hues span the full palette line,

@@ -165,8 +165,9 @@ export function render3D(index, x, y, z) {
   var base = floorLvl * (0.45 + 0.55 * wave(breathe / PI2 + x * 0.6 + y * 0.4)) * 0.6;
 
   // Core radius (crispness): smaller coreSize -> sharper, more isolated points.
-  // Kept generous enough that seeds reliably reach the rig's sparse LED bands.
-  var coreR = 0.08 + coreSize * 0.22;
+  // Range 0.13..0.33 so even coreSize=0 keeps the seeds reaching the rig's sparse
+  // LED bands (non-dead extreme) while coreSize=1 fills into broad glowing blooms.
+  var coreR = 0.13 + coreSize * 0.20;
 
   // Find the nearest seed to this pixel.
   var bestD = 1000000.0;
@@ -186,7 +187,10 @@ export function render3D(index, x, y, z) {
   // Overall brightness scales with bloom (micLow) -> PRIMARY correlation.
   // Peak driven hard toward full scale so seed cores burn bright (>=200/255).
   var bl = clamp01(bloom);
-  var seedBri = prox * seedB[bestK] * (0.45 + bl * 1.4);
+  // Core gain: the bl (micLow) term stays dominant so PRIMARY corr is preserved
+  // (~0.66), while the larger slope lifts default-bloom seed cores to peak>=200
+  // (mission-critical visibility) without flattening the dark inter-seed space.
+  var seedBri = prox * seedB[bestK] * (0.42 + bl * 2.0);
 
   var bri = base;
   if (seedBri > bri) bri = seedBri;

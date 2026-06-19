@@ -40,7 +40,7 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // weave drift / precession rate
-export var level = 0.45;       // PRIMARY: curve amplitude + overall brightness (micLow)
+export var level = 0.5;        // PRIMARY: curve amplitude + overall brightness (micLow)
 export var detail = 0.4;       // core sharpness + sparkle along the curve (micHigh)
 export var kick = 0.0;         // discrete phase-jump of the weave (micKick)
 export var spread = 0.6;       // how many lobes the figure draws (frequency scale)

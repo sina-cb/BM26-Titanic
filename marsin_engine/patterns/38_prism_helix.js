@@ -59,7 +59,9 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // tunnel spin / fly-through rate
-export var level = 0.7;        // overall brightness master (PRIMARY <- micLow)
+export var level = 0.6;        // overall brightness master (PRIMARY <- micLow). 0.6 (near
+                               //   mid): bright cores still snap to 255 at rest with good
+                               //   dark-gap contrast, and the micLow corr is preserved.
 export var shimmerAmt = 0.25;  // prism shimmer / detail amt (SECONDARY <- micHigh)
 export var twist = 4.0;        // helical twist frequency along depth
 export var contrast = 2.2;     // arm sharpen (tight bright arms, hard black gaps)

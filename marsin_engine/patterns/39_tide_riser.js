@@ -46,7 +46,9 @@
 export var localSpeed = 0.5;   // surface shimmer / drift rate
 export var rise = 0.25;        // water level height 0..1 (flux climbs this)
 export var spray = 0.0;        // crest spray height above the waterline (kick)
-export var foam = 0.7;         // crest-line sharpness (1 = razor, 0 = soft surf)
+export var foam = 0.5;         // crest-line sharpness (1 = razor, 0 = soft surf).
+                               //   0.5 (mid) gives a crest band broad enough that BOTH
+                               //   the cool body and warm crest read at rest (hueSpread up)
 export var base = 0.06;        // minimum floor under the water
 
 // cp1 = deep ocean blue (BODY). cp2 = warm amber-white FOAM/CREST.
