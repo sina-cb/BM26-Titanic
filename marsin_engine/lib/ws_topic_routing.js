@@ -66,6 +66,10 @@ const TOPIC_BY_TYPE = Object.freeze({
   deck:                        TOPICS.CONTROL,
   pattern:                     TOPICS.CONTROL,
   autopilot:                   TOPICS.CONTROL,
+  // docs/19 §13 (Phase 2.3): per-mixer-channel autopilot toggle.
+  // Operator-driven, low volume — rides /ws/control next to the deck's
+  // `autopilot` event.
+  mixerAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,

@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import { Autopilot } from './autopilot.js';
+import { AutopilotPool } from './autopilot.js';
 import { StateManager } from './state_manager.js';
 import { PlaylistManager } from './playlist_manager.js';
 import {
@@ -1518,14 +1518,112 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // WS event type so subscribers (CaptainPad's deck tab, future PortWatch
   // mirror, etc.) can wire `if (msg.type === 'autopilot') …` without
   // having to scrape the larger mixer broadcast.
+  function deckAutopilotState() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return ap || { active: false, delay_s: 30, shuffle: false };
+  }
   function broadcastAutopilot() {
-    const st = autopilot.state || {};
+    const st = deckAutopilotState();
     broadcastWs({
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
     });
+  }
+
+  // ── Per-channel autopilot advance + state plumbing (docs/19 §11/§13) ──
+  //
+  // Each pool loop reads its OWN channel's playlist.autopilot and
+  // advances its OWN entry. The DECK channel keeps the existing
+  // transition path (loadPlaylistEntryWithTransition); MIXER channels use
+  // the instant loadPlaylistEntry path. Both reuse the same next-entry
+  // selection (shuffle = random other entry; sequential = next non-missing
+  // entry with wrap).
+  function readChannelAutopilotState(channelId) {
+    const ch = mixer.getChannel(channelId);
+    const ap = ch && ch.playlist ? ch.playlist.autopilot : null;
+    return ap || { active: false, delay_s: 30, shuffle: false };
+  }
+
+  // Pick the next entry to advance to for a channel, honouring its
+  // shuffle flag and skipping _missing entries. Returns null when the
+  // channel has no usable playlist (the loop then does nothing — not an
+  // error, per codex P0).
+  function pickNextEntry(ch) {
+    if (!ch || !ch.playlist || !ch.playlist.name) return null;
+    const pl = playlistManager.load(ch.playlist.name);
+    if (!pl || pl.entries.length === 0) return null;
+    const usable = pl.entries.filter(e => !e._missing);
+    if (usable.length === 0) return null;
+    const cur = ch.playlist.activeEntryId;
+    const shuffle = ch.playlist.autopilot && ch.playlist.autopilot.shuffle;
+    if (shuffle) {
+      const others = usable.filter(e => e.id !== cur);
+      return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
+    }
+    const idx = pl.entries.findIndex(e => e.id === cur);
+    let nextIdx = (idx + 1) % pl.entries.length;
+    for (let i = 0; i < pl.entries.length; i++) {
+      if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
+      nextIdx = (nextIdx + 1) % pl.entries.length;
+    }
+    return null;
+  }
+
+  // Deck advance — keeps the existing soft-swap transition behaviour
+  // (identical to pre-2.3). Returns the load result so the pool loop can
+  // await `done` and keep its inter-pattern timer decoupled from the
+  // transition duration.
+  async function advanceDeckAutopilot() {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) return;
+    const nextEntry = pickNextEntry(baseCh);
+    if (!nextEntry) return;
+    try {
+      const r = loadPlaylistEntryWithTransition(
+        baseCh, baseCh.playlist.name, nextEntry.id, deckTransitionConfig,
+      );
+      if (r && r.done && typeof r.done.then === 'function') {
+        await r.done;
+      }
+    } catch (e) {
+      if (e && e.code === 'EBUSY') {
+        // A manual operator tap landed first and is still animating —
+        // skip this beat; the next setTimeout cycle picks up the new
+        // active entry as its baseline.
+        console.warn('[Autopilot] deck tick skipped: swap already in flight');
+      } else {
+        console.warn('Autopilot deck playlist swap failed:', e.message);
+      }
+    }
+  }
+
+  // Mixer-channel advance — instant load, no deck transition machinery.
+  function advanceMixerAutopilot(channelId) {
+    const ch = mixer.getMixerChannel(channelId);
+    if (!ch) return;
+    const nextEntry = pickNextEntry(ch);
+    if (!nextEntry) return;
+    try {
+      loadPlaylistEntry(ch, ch.playlist.name, nextEntry.id);
+      saveAllState();
+      broadcastMixerState();
+    } catch (e) {
+      console.warn(`[Autopilot:${channelId}] mixer playlist swap failed:`, e.message);
+    }
+  }
+
+  // Register a mixer channel's loop in the pool and arm it from its
+  // current autopilot state. Safe to call on add, restore, and whenever
+  // the channel's autopilot block changes.
+  function armMixerChannelAutopilot(channelId) {
+    autopilotPool.arm(
+      channelId,
+      () => readChannelAutopilotState(channelId),
+      () => advanceMixerAutopilot(channelId),
+    );
   }
 
   // The "view override" pins the engine output to the deck regardless of
@@ -1681,69 +1779,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     armControlLockLease();
   }
 
-  // Initialize Autopilot Daemon. We are always in playlist mode, so the
-  // "current key" is the active entry id and the swap target is the next
-  // entry in the deck channel's playlist.
-  const autopilot = new Autopilot(
-    listPatterns,
-    patternsDir,
-    () => {
-      const baseCh = mixer.getDeckChannel();
-      return baseCh && baseCh.playlist ? baseCh.playlist.activeEntryId : null;
-    },
-    async () => {
-      const baseCh = mixer.getDeckChannel();
-      if (!baseCh || !baseCh.playlist || !baseCh.playlist.name) return;
-      try {
-        const pl = playlistManager.load(baseCh.playlist.name);
-        if (!pl || pl.entries.length === 0) return;
-        const usable = pl.entries.filter(e => !e._missing);
-        if (usable.length === 0) return;
-
-        const cur = baseCh.playlist.activeEntryId;
-        let nextEntry;
-        if (baseCh.playlist.autopilot && baseCh.playlist.autopilot.shuffle) {
-          const others = usable.filter(e => e.id !== cur);
-          nextEntry = others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-        } else {
-          const idx = pl.entries.findIndex(e => e.id === cur);
-          // Walk forward until we hit a non-missing entry.
-          let nextIdx = (idx + 1) % pl.entries.length;
-          for (let i = 0; i < pl.entries.length; i++) {
-            if (!pl.entries[nextIdx]._missing) { nextEntry = pl.entries[nextIdx]; break; }
-            nextIdx = (nextIdx + 1) % pl.entries.length;
-          }
-        }
-        if (!nextEntry) return;
-        // Route through the deck-transition path: if the operator has
-        // enabled transitions, the load runs as a smooth double-buffer
-        // swap; otherwise it falls back to the instant load that
-        // `loadPlaylistEntryWithTransition` does internally. We AWAIT
-        // the `done` Promise so the autopilot daemon can keep its
-        // inter-pattern timer decoupled from the transition duration:
-        //
-        //   - With delay=1s + transition=5s the cycle is
-        //     "show pattern 1s → run transition 5s → wait 1s → swap again"
-        //   - The autopilot's self-rescheduling setTimeout only schedules
-        //     the next tick AFTER this awaits resolves.
-        const r = loadPlaylistEntryWithTransition(
-          baseCh, baseCh.playlist.name, nextEntry.id, deckTransitionConfig,
-        );
-        if (r && r.done && typeof r.done.then === 'function') {
-          await r.done;
-        }
-      } catch (e) {
-        if (e && e.code === 'EBUSY') {
-          // A manual operator tap landed first and is still animating —
-          // skip this autopilot beat, the next setTimeout cycle will
-          // pick up the new active entry as its baseline.
-          console.warn('[Autopilot] tick skipped: swap already in flight');
-        } else {
-          console.warn('Autopilot playlist swap failed:', e.message);
-        }
-      }
-    }
-  );
+  // ── Per-channel autopilot pool (docs/19 §13 — Phase 2.3) ────────────
+  // Holds one self-rescheduling loop PER channel (deck + each mixer
+  // overlay), each reading its OWN channel's playlist.autopilot and
+  // advancing its OWN entry. The deck is just the loop whose id is the
+  // deck base id; its advance keeps the existing transition path.
+  // Registered here; armed below (after WS sockets exist) and on
+  // channel add/remove + autopilot-route writes.
+  const autopilotPool = new AutopilotPool();
 
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -2392,19 +2435,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(autopilot.state));
+      res.end(JSON.stringify(deckAutopilotState()));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
-        autopilot.updateState(data);
-        // ── Mirror into deck base channel's per-playlist autopilot ──
-        // The actual "advance to next entry" runner in the autopilot
-        // callback (see `new Autopilot(...)` above) reads
-        // `baseCh.playlist.autopilot.shuffle` to decide between
-        // shuffle and sequential. Without this mirror, the iPad would
-        // toggle the SHUFFLE pill, the Autopilot daemon would store
-        // it in its own config.yaml, but the runner would still see
-        // `baseCh.playlist.autopilot.shuffle === false` and keep
-        // walking the playlist sequentially. Fixed May 2026.
+        // Legacy deck autopilot route (PortWatch over LoRa, scripts, the
+        // pre-2.3 iPad). Post-2.3 the DECK channel's playlist.autopilot is
+        // the single source of truth and the pool drives the loop — this
+        // route writes that block and re-arms only the deck's loop.
         try {
           const baseCh = mixer.getDeckChannel();
           if (baseCh) {
@@ -2414,13 +2451,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
             if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
             saveAllState();
+            autopilotPool.rearm(baseCh.id);
             broadcastMixerState();
           }
         } catch (e) {
-          console.warn('[Autopilot] mirror-to-deck failed:', e.message);
+          console.warn('[Autopilot] deck autopilot write failed:', e.message);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(autopilot.state));
+        res.end(JSON.stringify(deckAutopilotState()));
         // External writers (PortWatch over LoRa, scripts, etc.) need the
         // CaptainPad UI to reflect their flips immediately. Broadcast on
         // every transition so the existing `engineEvents` bus on the iPad
@@ -2588,6 +2626,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
         finalizeCpcValues(channel);
         saveAllState();
+        // Register + arm this overlay's autopilot loop in the pool. A
+        // freshly-added channel's autopilot is inactive by default, so
+        // arm() is effectively a no-op timer-wise, but it ensures the
+        // loop exists for a later POST /mixer/channels/:id/autopilot.
+        armMixerChannelAutopilot(channel.id);
         // Emit playlist content on WS BEFORE the mixer broadcast so
         // every client primes its playlist cache before mounting the
         // new PlaylistPanel off the mixer event. See
@@ -2718,6 +2761,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       if (paramCenter) paramCenter.unregisterChannel(id);
+      // Clear + drop this channel's autopilot loop so no orphan timer
+      // keeps firing against a removed channel.
+      autopilotPool.drop(id);
       mixer.removeMixerChannel(id);
       saveAllState();
       broadcastMixerState();
@@ -3614,7 +3660,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
         if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
         saveAllState();
-        autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
+        // Re-arm ONLY the deck's loop in the pool from its now-updated
+        // autopilot block (active/delay/shuffle).
+        autopilotPool.rearm(baseCh.id);
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
         broadcastAutopilot();
@@ -3725,6 +3773,40 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
       });
+    } else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Return the channel's autopilot block (docs/19 §8.3 / §13).
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
+      if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+      const ap = (ch.playlist && ch.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(ap));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Independently control a mixer channel's autopilot (Phase 2.3).
+      // Updates the channel's playlist.autopilot, persists mixer state,
+      // re-arms that channel's loop in the pool (instant advance path),
+      // and broadcasts a dedicated mixerAutopilot event.
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        const ch = mixer.getMixerChannel(id);
+        if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+        ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+        const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+        if (data.active !== undefined) ap.active = !!data.active;
+        if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
+        if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        saveAllState();
+        // The loop is registered on channel add; re-arm it (or arm fresh
+        // if a restore path missed it) from the now-updated block.
+        armMixerChannelAutopilot(id);
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: id, autopilot: ap }));
+        broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+        broadcastMixerState();
+      });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
@@ -3817,8 +3899,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Expose the map BEFORE we wire any handlers — broadcastWs() reads
   // global.wssByTopic on every call and will no-op until this assignment
   // runs. Done early so any synchronous broadcasts during the WS
-  // connect handlers (e.g. autopilot.start emitting a state event) find
-  // the right socket already registered.
+  // connect handlers (e.g. an autopilot state replay) find the right
+  // socket already registered.
   global.wssByTopic = wssByTopic;
   // Back-compat shim — exported tests + a couple of legacy call sites
   // still reach for `global.wss`. Point it at the control socket so any
@@ -3880,7 +3962,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
-  autopilot.start();
+  // ── Boot arming of the per-channel autopilot pool ───────────────────
+  // Register the deck loop (keeps the existing transition advance path)
+  // and one loop per mixer overlay (instant advance). Each loop arms
+  // itself from its channel's restored playlist.autopilot, so ANY channel
+  // whose autopilot.active === true resumes cycling on boot.
+  const bootDeck = mixer.getDeckChannel();
+  if (bootDeck) {
+    autopilotPool.arm(
+      bootDeck.id,
+      () => readChannelAutopilotState(bootDeck.id),
+      () => advanceDeckAutopilot(),
+    );
+  }
+  for (const overlay of mixer.getMixerChannels()) {
+    armMixerChannelAutopilot(overlay.id);
+  }
 
   // ── Per-topic replay-on-connect ──────────────────────────────────────
   // Each socket only replays the cached payloads it owns. A fresh
@@ -3901,7 +3998,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = autopilot.state || {};
+      const st = deckAutopilotState();
       ws.send(JSON.stringify({
         type: 'autopilot',
         active: !!st.active,
