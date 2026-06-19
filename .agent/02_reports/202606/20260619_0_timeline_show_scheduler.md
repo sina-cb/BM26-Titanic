@@ -266,5 +266,14 @@ Add to `.agent/00_gol/13_multi_agent.md` ports table when Phase 1 lands.
   server + monitor UI; engine per-channel autopilot pool + mixer route; audio
   companion mood emit; launcher companions registry. ~110 tests green across the
   slices. Full live E2E validated in-container (see §5.1) with screenshots.
-  Remaining: Phase 4 (CaptainPad TIMELINE tab) + pre-merge auto-checks + UI tz
-  polish.
+- **2026-06-19** — Added control-precedence arbitration model (`docs/38 §14`):
+  MANUAL > PROGRAM (scheduled shows override autopilot) > AUTOPILOT (regular
+  programming + mood). CaptainPad TIMELINE base tab built (tsc + web:build clean).
+- **2026-06-19 — v2 PIVOT (operator).** Move the timeline **into the engine** (no
+  standalone companion / no :6965), **CaptainPad = the only UI**, themed, with a
+  **super-fluid 8-day festival MAKER** (BRC-optimized). See `docs/38 §15`. Pure
+  cores relocate into `marsin_engine/lib/timeline/`; companion server/engine_link/
+  actions/ui/config + launcher child are removed; plan schema → v2
+  (`festival{startDate,days}` + per-cue `days` applicability). Behavioral model
+  (§1–§14) and tests carry forward. **In progress** — superseding the standalone
+  Phase 4 tab with the in-engine + maker build.

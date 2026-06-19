@@ -678,7 +678,88 @@ inside CaptainPad or be folded into the engine with no semantic change.
 
 ---
 
-## 15. What this deliberately is **not** (v1)
+## 15. v2 architecture — timeline IN the engine + 8-day festival maker (operator 2026-06-19)
+
+> Operator decision: *"Move the timeline companion into the engine, have
+> CaptainPad be the only UI for it (keep in theme), and make a super-fluid
+> timeline maker. Optimized for Burning Man — an 8-day plan must be easily
+> viewable on the UI."* This **supersedes** the standalone-companion transport of
+> §2/§7 (the **behavioral** model — cues, looks, sun math, mood, precedence
+> §14 — is unchanged). The companion's `companions/timeline/*` pure cores
+> (`sun.js`, `triggers.js`, `arbiter.js`, `show_plan.js`) move verbatim into the
+> engine; they were written IO-free precisely so this is a relocation, not a
+> rewrite (foreshadowed §14.6).
+
+### 16.1 Timeline as an engine service
+- `marsin_engine/lib/timeline/` holds the relocated pure cores + a new
+  **`timeline_service.js`** modeled on `scheduled_tasks.js`: owns the plan
+  library (`simulation/scenes/<scene>/timeline/*.yaml`), runtime state
+  (`states/<scene>/timeline_state.yaml`), and a **single in-engine tick** (1 s).
+- It reads mood **directly from CPC** (`paramCenter.get('audioParty')`) — no WS
+  subscription, no `engine_link`. The audio companion already populates that key.
+- It applies actions by calling the engine's **internal** functions
+  (`loadPlaylistEntry`, the `AutopilotPool`, `paramCenter` writes, scene switch)
+  — no HTTP self-calls. `actions.js`/`engine_link.js` from the companion are
+  **deleted**; their intent becomes direct calls.
+- **Removed:** `companions/timeline/timeline_server.js`, `engine_link.js`,
+  `actions.js`, `ui/`, `timeline_config.js`, the `:6965` port, and the launcher
+  timeline child (`companions` registry keeps only `audio`). Timeline config
+  moves to a `timeline:` block in `marsin_engine/config.yaml`.
+- **Engine API** (on the existing :6968 + control WS): `GET /timeline/state`,
+  `GET/POST /timeline/plans`, `GET/PUT/DELETE /timeline/plans/:name`,
+  `POST /timeline/plan/activate`, `POST /timeline/mode`, `POST /timeline/autopilot`,
+  `POST /timeline/hold|resume|program/end`, `POST /timeline/cues/:id/fire`, and a
+  `timelineState` broadcast on the control topic. Plan-CRUD endpoints back the
+  **maker**.
+
+### 16.2 8-day festival model (`schemaVersion: 2`)
+A plan spans the festival, not one night:
+```yaml
+schemaVersion: 2
+name: brc_2026
+location: { lat, lon, tz, elevationM }
+festival: { startDate: '2026-08-30', days: 8 }   # the span the UI lays out
+autopilot: { enabled, playlist, delay_s, shuffle, mood }   # baseline, all days
+looks: { ... }
+phases: { ... }                                   # sun-anchored, recomputed per date
+cues:
+  - id, label, kind, trigger, action, hold
+    days: 'all' | [0,2,5] | ['2026-09-05']        # recurring daily, day-indices, or dates
+```
+- **Runtime stays simple:** each tick the service selects the cues whose `days`
+  match **today's** festival day, resolves that date's sun/clock times, and runs
+  `evaluateTick` + the §14 arbiter. Multi-day lives in the *plan + UI*; the tick
+  is always "today."
+- **Recurring** (`days:'all'`) = the bulk (sunrise show, sunset visibility,
+  autopilot/mood). **Day-specific** = the special nights (Burn, Temple).
+- Sun events are computed **per date** (already supported by `sun.js`), so each
+  of the 8 days shows its own (drifting) sunrise/sunset.
+
+### 16.3 CaptainPad = the only UI, and a fluid *maker*
+- The existing timeline tab's `timelineApi` repoints from `:6965` to the **engine
+  base** (`api_base`) — simpler, one origin.
+- **Viewer + Maker in one themed tab:**
+  - **8-day overview:** a horizontally-scannable strip of 8 day-cards, each with
+    its sun arc (sunrise→sunset shading) and its cue markers at their times; the
+    current day/now highlighted.
+  - **Day editor:** tap a day → its vertical timeline; **add/move/edit/delete
+    cues** fluidly (pick trigger = clock time or sun-anchor±offset; action = look/
+    playlist/scene/program; `kind`; `days` applicability recurring-vs-this-day);
+    pill/stepper inputs, no keyboard walls — matches the deck/scheduler idiom.
+  - Live **controller** banner (PROGRAM / AUTOPILOT / MANUAL §14), autopilot
+    toggle, mood pill, active-program countdown.
+  - Save → `POST /timeline/plans` (authored show content, versioned in the scene
+    tree). Best-practice **starter template** prefilled for BRC (sunrise shows +
+    nightly autopilot + party-night) so the operator edits rather than starts blank.
+
+### 16.4 Migration note
+This is a feature-branch refactor; the §1–§15 behavioral spec and all tests
+carry forward. Net simplification: one process, one API surface, direct CPC/
+mixer access, and the only UI is CaptainPad.
+
+---
+
+## 16. What this deliberately is **not** (v1)
 
 - **Not** a second analyzer — mood comes from the Audio Companion via CPC.
 - **Not** a replacement for `docs/31` interval tasks — it can *enable* them.
