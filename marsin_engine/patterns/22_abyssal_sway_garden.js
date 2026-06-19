@@ -153,12 +153,16 @@ export function render3D(index, x, y, z) {
   var bendSlow = sin(tCurrent * 0.41 + nx * 2.3) * swayAmp * nyEff * 0.5;
   var swayedX = nx + bend + bendSlow;
 
-  // Vertical fronds: a phase pattern in x produces tall thin stalks.
+  // Vertical fronds: a phase pattern in x produces tall thin stalks. A SHARPER
+  // pow exponent + a contrast stretch crisps each spine to a bright moving core
+  // and deepens the gaps between stalks into darker troughs -- this is the HD
+  // contrast: crisp bright fronds over a deeper wash, not a flat field.
   var frondPhase = swayedX * frondDensity + sin(swayedX * 11.7) * 0.13;
   var frond = wave(frondPhase);
-  frond = pow(frond, 1.8);                 // crisp spine, soft sides (wider stalk)
+  frond = pow(frond, 2.6);                 // crisper spine, deeper trough sides
+  frond = frond * (0.55 + frond * 0.45);   // contrast stretch (bright/dark ratio up)
 
-  var heightWeight = 0.35 + pow(nyEff, 1.2) * 0.65;
+  var heightWeight = 0.3 + pow(nyEff, 1.35) * 0.7;
   var body = frond * heightWeight;
 
   // Phosphorescent tip flicker — top band only, jittered per frond. Tip sparkle
@@ -172,15 +176,18 @@ export function render3D(index, x, y, z) {
   // Long slow tide breath of the whole garden.
   var tideBreath = 0.8 + sin(tTide * 6.2831853) * 0.2;
 
-  // Non-black bioluminescent floor so silence is calm-but-visible.
-  var glowFloor = (0.06 + baseDarkness * 0.10) * (0.6 + 0.4 * heightWeight);
+  // Non-black bioluminescent floor so silence is calm-but-visible. Kept small so
+  // the inter-frond troughs stay dark (HD contrast) while never going black.
+  var glowFloor = (0.04 + baseDarkness * 0.08) * (0.55 + 0.45 * heightWeight);
   var shimmer = 0.5 + 0.5 * sin(tCurrent * 0.7 + nx * 5.0 + ny * 3.0);
-  var v = body * 0.85 + tipFlicker;
+  var v = body * 0.95 + tipFlicker;
   v = v * tideBreath + glowFloor * (0.7 + 0.3 * shimmer);
 
-  // PRIMARY brightness gain (audio: micLow -> level). Level-driven gain that
-  // does NOT wobble with animation phase -> high corr. Kick adds a small pop.
-  v = v * (0.22 + level * 1.25) + body * kick * 0.25;
+  // PRIMARY brightness gain (audio: micLow -> level). The bright frond BODY is the
+  // level-correlated signal; a level-driven gain whose slope dominates the small
+  // phase-only floor/tide terms keeps the PRIMARY corr high and steady (validated
+  // on bassline, where micLow actually varies). Kick adds a small pop.
+  v = v * (0.2 + level * 1.3) + body * kick * 0.25;
   v = max(0.0, min(1.4, v));
 
   // Palette spans the rig: a slow nx sweep (full 0..1 across the bars) sets the

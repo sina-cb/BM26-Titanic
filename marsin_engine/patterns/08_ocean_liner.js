@@ -70,7 +70,9 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderWhiteSpread(v) { whiteSpread = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var WATER_RATE = 0.10;      // hull drift per second at localSpeed = 1.0
+var WATER_RATE = 0.055;     // slow hull drift; near-static relief keeps the rig
+                            // mean steady (clean PRIMARY corr) while the deep
+                            // spatial trough still reads high-def
 var PORT_RATE = 0.30;       // porthole travel per second at localSpeed = 1.0
 var PHASE_WRAP = 10000.0;
 var BASE_FLOOR = 0.05;      // calm non-black base in silence
@@ -156,8 +158,18 @@ export function render3D(index, wx, wy, wz) {
   // Calm water wash (cp1), near-uniform per frame so total brightness tracks
   // `level`. A high-frequency travelling ripple gives life that averages out
   // across the rig (no rig-wide brightness pulse → clean PRIMARY correlation).
-  var ripple = 0.5 + 0.5 * sin((waterPhase + nx * 3.1 + ny * 1.7) * PI2);
-  var waterStruct = 0.32 + 0.28 * ripple; // dark water; dim in silence via gain
+  // HD CONTRAST: the ripple is gamma-shaped (pow 1.8) so the dark-water troughs
+  // sit DEEPER (high-def, not a flat midtone wash) while the crests still catch
+  // light — a sharper water relief. A small floor keeps the deep water visible,
+  // never an artificial black hole (silence stays calm-but-visible).
+  // HD CONTRAST without temporal wobble: deepen the spatial trough using a
+  // gamma on a HIGH SPATIAL-FREQUENCY ripple (many cycles across the rig) so the
+  // rig-wide MEAN stays ~constant frame to frame (clean PRIMARY corr) while the
+  // pixel-to-pixel relief reads deep & high-def. A small floor keeps the deep
+  // water visible — never an artificial black hole.
+  var ripple = 0.5 + 0.5 * sin((waterPhase + nx * 5.7 + ny * 3.3) * PI2);
+  var rippleHD = pow(ripple, 1.7);        // deepen troughs, keep crests bright
+  var waterStruct = 0.20 + 0.40 * rippleHD; // deep dark water, brighter crests
 
   // Portholes (cp2): each pixel twinkles on its own golden-ratio schedule that
   // also drifts with portPhase (radius = travel reach). A per-pixel eligibility
@@ -166,7 +178,7 @@ export function render3D(index, wx, wy, wz) {
   hashp = hashp - floor(hashp);
   var glow = portPhase * (0.6 + radius * 2.4) + hashp;
   var pw = 0.5 + 0.5 * sin(glow * PI2);
-  var sharp = 8.0 + detail * 16.0;        // crisp porthole cores
+  var sharp = 12.0 + detail * 20.0;       // crisper porthole cores (HD contrast)
   var port = pow(pw, sharp);
   var elig = 0.5 + 0.5 * sin((hashp * 13.0 + 0.21) * PI2);
   if (elig < (1.0 - (0.25 + detail * 0.5))) port = port * 0.05;
@@ -176,8 +188,14 @@ export function render3D(index, wx, wy, wz) {
   var gain = BASE_FLOOR + level * 0.95;
   var kickPop = kick * 0.8;
 
-  var waterV = waterStruct * gain * 0.45 * (0.92 + kickPop * 0.3);
-  var portV = port * (0.9 + radius * 0.4) * gain * (1.0 + kickPop);
+  // HD CONTRAST: the deep water trough carries the calm budget; the porthole
+  // cores ride HOTTER on top so the bright/dark ratio reads high-def rather than
+  // flat. Water gain is trimmed slightly (deeper trough) and the porthole cores
+  // are lifted, widening the contrast without carving black holes.
+  var waterV = waterStruct * gain * 0.46 * (0.94 + kickPop * 0.2);
+  // Porthole cores ride hotter for HD contrast; the kick flare is kept modest so
+  // the core brightness budget still tracks `level` (clean PRIMARY correlation).
+  var portV = port * (1.15 + radius * 0.5) * gain * (1.0 + kickPop * 0.55);
 
   // Two-colour: water = cp1, portholes = cp2, summed channel-wise (RGB blend).
   var r = clamp01(pr1 * waterV + pr2 * portV);

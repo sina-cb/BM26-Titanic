@@ -148,14 +148,19 @@ export function render3D(index, x, y, z) {
 
   // Wing ripple sparkle (audio: micHigh -> detail).
   var wingRipple = wave(nx * 3.2 + sin(swimBng + ny * 4.0) * 0.35);
+  // Rolling ocean swell: a pow curve sharpens it into bright crests over deeper
+  // troughs so the wash reads HIGH-DEF (crisp moving light over darker water),
+  // not a flat field -- while it still sweeps the WHOLE rig (wash identity kept).
   var rollingLight = wave(ny * 2.0 - nx * 0.7 + colAng * 0.62 / 6.2831853);
-  // Bright ambient ocean (so sea-blue regions are clearly lit, not just the
-  // manta body) + crisp body crest. Both palette ends carry real brightness.
-  var ocean = 0.18 + rollingLight * 0.30 + body * (0.55 + wingRipple * (0.12 + detail * 0.5));
+  rollingLight = pow(rollingLight, 2.2);
+  // A low non-black ambient floor (calm-but-visible in silence) + the swell crests
+  // + a crisp manta body crest. The bright cores ride well above the deep troughs
+  // so the bright/dark ratio is high (HD), without losing the lit wash.
+  var ocean = 0.06 + rollingLight * 0.5 + body * (0.6 + wingRipple * (0.12 + detail * 0.5));
 
   // PRIMARY brightness gain (audio: micLow -> level). Level-driven gain does NOT
   // wobble with animation phase -> high corr. Small floor keeps silence visible.
-  var gain = 0.18 + level * 1.25 + kick * 0.5;
+  var gain = 0.16 + level * 1.3 + kick * 0.5;
   ocean = ocean * gain;
   ocean = max(0.0, min(1.4, ocean));
 

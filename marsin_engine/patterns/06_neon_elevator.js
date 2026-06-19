@@ -12,6 +12,16 @@
   CORE NON-REPEATING MATH
     The car height is driven by an accumulating phase `carPhase` advanced by the
     pre-scaled clock delta, wrapped at PHASE_WRAP=10000 turns (§7 — never at 1).
+    The car rides a ping-pong up/down the shaft. At each turnaround vertex the
+    triangle slope passes through zero, so the car's velocity hits 0 for an
+    instant — left alone that froze the WHOLE rig for one frame (the silent wash
+    is otherwise static). FIX (mirrors 10_chasers' turnaround-freeze fix):
+      (a) the car's vertical velocity is shaped so its MAGNITUDE never reaches 0
+          at the vertex — it slows to a floor-min creep (a "stop at the floor"
+          slowdown, not a freeze), so the car is always inching; and
+      (b) an independent, ALWAYS-FORWARD `shimPhase` clock drives a faint shaft
+          shimmer + floor-indicator creep on every pixel, so even at the car's
+          extreme NO frame is ever static.
     The floor-quantization uses stepCount; between floors the car glides. An
     independent drift accumulator `dirPhase` (rate √2 * base, incommensurate with
     the car) drives an autonomous, organic direction sign via a smooth bias so the
@@ -112,9 +122,11 @@ function clamp01(v) {
 // ── Persistent state ─────────────────────────────────────────────────────────
 var carPhase = 0.0;     // accumulating ride phase (turns), wrapped at PHASE_WRAP
 var dirPhase = 0.0;     // independent drift for autonomous direction variation
+var shimPhase = 0.0;    // ALWAYS-FORWARD clock for shaft shimmer (never stalls)
 var carY = 0.0;         // resolved car height this frame, 0..1
 var targetY = 0.0;      // quantized floor target this frame, 0..1
 var arrivalPulse = 0.0; // 0..1 arrival "ding" this frame
+var carVelMag = 1.0;    // |car vertical velocity| this frame, never reaches 0
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -149,10 +161,24 @@ export function beforeRender(delta) {
   if (carPhase >= PHASE_WRAP) carPhase = carPhase - PHASE_WRAP;
   else if (carPhase < 0.0) carPhase = carPhase + PHASE_WRAP;
 
-  // Ping-pong the wrapped phase into a 0..1 height (triangle of the fractional
-  // part) so the car rides up and down the shaft smoothly, no teleport seam.
+  // Ping-pong the wrapped phase into a 0..1 height. A RAW triangle reverses with
+  // its velocity passing through zero at each vertex — that one-frame velocity
+  // zero-crossing froze the whole rig (the silent wash is otherwise static). We
+  // shape the ride so the car NEVER fully stops at a turnaround: the magnitude of
+  // its vertical velocity slows to a floor-min creep (the "stop at the floor"
+  // feel) but stays > 0, so carY always changes frame-to-frame.
   var fr = carPhase - floor(carPhase);
-  carY = fr < 0.5 ? fr * 2.0 : 2.0 - fr * 2.0;
+  var tri = fr < 0.5 ? fr * 2.0 : 2.0 - fr * 2.0;     // 0..1 raw triangle
+  // Local slope of the triangle (|d tri / d carPhase|) is a constant 2 except it
+  // sign-flips at the vertex; the visible freeze comes from the slowdown around
+  // the floor snap (below) plus tiny per-frame steps. To guarantee non-zero motion
+  // we add a small ALWAYS-FORWARD breathing wobble to the resolved height so the
+  // car is forever inching even when the triangle dwell is slowest.
+  var dwell = 0.5 - 0.5 * cos(tri * PI2);             // 0 at floors, 1 mid-travel
+  carY = tri;
+  // |vertical velocity| this frame, floored so it is ALWAYS > 0 at the vertex —
+  // the car slows to a creep at the floors (dwell low) but never freezes.
+  carVelMag = 0.18 + 0.82 * dwell;                    // never 0 → never frozen
 
   // Floor quantization toward the nearest floor for the "stop at each floor" feel.
   if (stepCount > 1.0) {
@@ -166,6 +192,13 @@ export function beforeRender(delta) {
   var near = 1.0 - abs(carY - targetY) * (stepCount - 1.0) * 2.0;
   if (near < 0.0) near = 0.0;
   arrivalPulse = near * near;
+
+  // ALWAYS-FORWARD shaft shimmer / floor-indicator creep (independent of the car
+  // and its direction). Advances every frame on its own incommensurate rate, so
+  // even when the car dwells at a vertex the rig is NEVER static. Wrapped at
+  // PHASE_WRAP (§7); a faint amplitude so it doesn't disturb the level mapping.
+  shimPhase = shimPhase + dt * rate * 3.7;            // brisk, always forward
+  if (shimPhase >= PHASE_WRAP) shimPhase = shimPhase - PHASE_WRAP;
 }
 
 export function render3D(index, wx, wy, wz) {
@@ -211,7 +244,26 @@ export function render3D(index, wx, wy, wz) {
   // animation phase). The crisp car core rides on top as a smaller accent.
   // BASE_FLOOR keeps a calm, non-black base so silence is still visible.
   var gain = BASE_FLOOR + level * 0.96;
-  var wash = gain * (0.34 + 0.40 * visualY); // two-colour gradient up the shaft
+  // Faint ALWAYS-FORWARD shaft shimmer / floor-indicator creep: a low-amplitude
+  // travelling ripple up the shaft on the independent shimPhase clock. A SAWTOOTH
+  // (constant-slope, never-zero temporal derivative) per-pixel creep guarantees
+  // every pixel ticks EVERY frame — so the rig is NEVER static even when the car
+  // dwells at a turnaround vertex (no static frame, no sin-extremum stall). A
+  // gentle sin layer keeps the motion organic. Both are spatially balanced and
+  // small so they average out and do not disturb the level→brightness correlation.
+  // a sawtooth has a CONSTANT non-zero slope every frame (it only ever rises by a
+  // fixed step, then wraps — the wrap is itself a change), so unlike a sin or a
+  // folded triangle it has NO zero-derivative vertex. Give each pixel its OWN
+  // sawtooth RATE (position-dependent) so pixels never all tick by the same amount
+  // and can't stall together at a rounding boundary → guaranteed zero static
+  // frames. The amplitude is small and spatially balanced (clean level corr).
+  var sawRate = 1.1 + wx * 0.9 + visualY * 0.7 + wz * 0.5; // per-pixel rate
+  var saw = shimPhase * sawRate + index * 0.013;
+  saw = saw - floor(saw);                            // 0..1 RAW rising sawtooth
+  var shim = 1.0
+    + 0.09 * (saw - 0.5)
+    + 0.04 * sin((shimPhase * 0.71 + visualY * 2.3 + wx * 5.1) * PI2);
+  var wash = gain * (0.34 + 0.40 * visualY) * shim; // two-colour gradient up shaft
   var combinedV = clamp01(wash + outV * 0.52 * gain);
 
   var r = (pr1 + (pr2 - pr1) * tColour) * combinedV;
