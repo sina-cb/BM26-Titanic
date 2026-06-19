@@ -795,9 +795,13 @@ UI; `pendingProgram` and the manual sub-state are surfaced alongside it.
   with ENABLE / KEEP-MANUAL; a dismiss sticks for the day.
 - **I4 — fail loud.** A handoff that cannot complete (missing playlist entries,
   invalid tz) records a loud `cueError`/`lastError` — never a silent wrong look.
-- **I5 — single driver.** Exactly one owner drives a channel; preempting first
-  **disarms the previous owner's autopilot on its configured target(s)**
-  (deck | mixer | all) — no two loops fighting.
+- **I5 — single driver *per channel*.** Exactly one owner drives a given channel.
+  A preempting program disarms the previous owner's autopilot **on the channels
+  the program actually drives** (its target: deck | mixer | all). An *independent*
+  operator-armed autopilot loop on a **different** channel (e.g. a room-light
+  mixer overlay running while a program owns the deck) is intentionally left
+  alone — separate channels, separate drivers, no conflict. "Single driver"
+  is per-channel, not rig-wide.
 - **I6 — restart-safe.** Across engine restart / scene switch, runtime owner state
   (`activeProgram`, `pendingProgram`) is **re-derived** from plan + wall-clock,
   never resumed stale; already-passed cues are latched (no replay).
