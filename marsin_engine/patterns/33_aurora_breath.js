@@ -52,9 +52,10 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // drift / undulation rate
-export var swell = 0.0;        // LOW level -> brightness + extent (the breath)
-export var shimmer = 0.0;      // HIGH level -> fine crisp sparkle (detail)
-export var ribbons = 0.45;     // ribbon count / density
+export var swell = 0.5;        // LOW level -> brightness + extent (the breath); 0.5 =
+                               // a bright, blooming aurora with NO audio (Phase-1 default)
+export var shimmer = 0.4;      // HIGH level -> fine crisp sparkle (detail)
+export var ribbons = 0.5;      // ribbon count / density
 export var soft = 0.5;         // edge softness (0 = crisp, 1 = wide soft glow)
 export var base = 0.18;        // calm time-based floor (silence still reads)
 
@@ -184,7 +185,7 @@ export function render3D(index, x, y, z) {
 
   // Brightness: shaped curtains gained hard by the breath, over the calm floor.
   // Gain pushes the musical peak past 200 on the dominant channel.
-  var gain = 0.85 + swell * 0.75;     // breath also lifts overall brightness
+  var gain = 0.95 + swell * 0.80;     // breath also lifts overall brightness
   var bri = shaped * gain;
 
   // ── High-band SHIMMER (a SECOND dimension: fine crisp detail) ──────────────

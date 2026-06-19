@@ -32,7 +32,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // overall animation rate
-export var density = 0.4;      // glint count 0..1 (highs -> more). Modulatable.
+export var density = 0.5;      // glint count 0..1 (highs -> more). Modulatable.
 export var fall = 0.5;         // downward fall speed
 export var intensity = 0.85;   // glint brightness
 export var base = 0.12;        // faint base floor (never fully black)
@@ -134,7 +134,7 @@ export function render3D(index, x, y, z) {
   if (spk > threshold) {
     var amt = (spk - threshold) / (1.0 - threshold + 0.0001);
     amt = clamp01(amt);
-    glint = amt * (0.4 + intensity * 0.6) * (0.3 + density * 0.7);
+    glint = amt * (0.55 + intensity * 0.7) * (0.45 + density * 0.7);
     glint = clamp01(glint);
   }
 

@@ -51,7 +51,7 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // caustic flow rate
-export var shimmer = 0.35;     // glint density + brightness (highs)
+export var shimmer = 0.5;      // glint density + brightness (highs); 0.5 = bright lively default
 export var ripple = 0.0;       // kick brightness-pulse amount
 export var depth = 0.6;        // caustic contrast (vein sharpness)
 export var base = 0.12;        // minimum floor brightness

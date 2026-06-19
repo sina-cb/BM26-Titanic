@@ -51,9 +51,11 @@
 
 // ── Exported controls ────────────────────────────────────────────────────────
 export var localSpeed = 0.5;   // grid drift rate (0 = frozen)
-export var ratio = 0.18;       // detune between grid A and B
-export var level = 0.85;       // overall brightness (audio headline)
-export var contrast = 3.2;     // pow() band sharpness
+export var ratio = 0.19;       // detune between grid A and B (= sliderRatio v=0.5)
+export var level = 0.65;       // overall brightness (audio headline). NON-0.5: the moiré
+                               // bands are sparse/crisp, so a mid-high level keeps the peak
+                               // channel >=200 with NO audio while dark gaps stay crisp.
+export var contrast = 3.9;     // pow() band sharpness (= sliderContrast v=0.5)
 export var pulse = 0.0;        // kick flash (0..1)
 
 export var cp1H = 0.50, cp1S = 1.0, cp1V = 1.0;  // palette 1 — cyan    (grid A)

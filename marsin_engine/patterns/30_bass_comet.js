@@ -46,7 +46,12 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // auto-animate base rate (0 = slowest crawl)
-export var bass = 0.0;         // 0..1 bass drive (speed + tail + head) — modulatable
+export var bass = 0.7;         // 0..1 bass drive (speed + tail + head) — modulatable.
+                               // NON-0.5: the head remap window [BASS_LO,BASS_HI] is built
+                               // around micLow's ELEVATED resting band (~0.46..0.74) so a
+                               // static 0.5 lands at the dark bottom of that window. 0.7
+                               // puts the NO-audio comet at a bright, lively head while the
+                               // remap window (unchanged) preserves the micLow corr.
 export var tail = 0.5;         // base tail length (decay); bass extends it further
 export var headBright = 1.0;   // base head brightness; bass scales it
 
@@ -71,12 +76,16 @@ var MIN_RATE = 0.1241;  // lane-cells/sec floor (silence: a slow faint comet) �
 var MAX_RATE = 27.7128; // lane-cells/sec at full speed + full bass (= 16*sqrt3, irrational)
 var DECAY_SLOW = 0.62;  // per-frame keep factor at shortest tail (fast fade)
 var DECAY_FAST = 0.93;  // per-frame keep factor at longest tail (slow fade)
-var EMBER = 0.12;       // minimal head floor in silence (never fully black)
+var EMBER = 0.16;       // minimal head floor (bass=0 extreme still reads, never dead-black)
 var HEAD_CELLS = 2.5;   // head half-width in lane cells (~the 52-px 1-2 px core)
 
-// HEAD GAIN — remap micLow's narrow musical range to a full 0..1 head drive.
-var BASS_LO = 0.46;        // micLow value treated as "no bass" (silence baseline)
-var BASS_HI = 0.73;        // micLow value treated as a full musical bass peak
+// HEAD GAIN — remap micLow's narrow musical range to a full 0..1 head drive so a
+// real bass peak drives the head to saturation while quiet stretches stay low —
+// the wide linear span keeps a strong corr(micLow, brightness). The window is set
+// around micLow's elevated resting band (the default slider 0.7 sits high in it,
+// giving a bright NO-audio head; see the `bass` default note).
+var BASS_LO = 0.44;        // drive value treated as "no head" (silence baseline)
+var BASS_HI = 0.74;        // drive value that drives the head to a full peak
 var HEAD_GAMMA = 1.0;      // response shape of the remapped head drive (1 = linear)
 var HEAD_OVERDRIVE = 1.0;  // no extra core boost — the remap alone saturates at peak
 var SQRT3 = 1.73205;       // irrational ratio for the bounce-phase wobble (bar 3)
@@ -163,7 +172,7 @@ export function beforeRender(delta) {
   if (headPos <= 0.0)     { headPos = 0.0;     dir = 1.0;  }
 
   // BASS drives tail: louder bass → slower decay → longer tail.
-  var keep = DECAY_SLOW + (DECAY_FAST - DECAY_SLOW) * clamp01(clamp01(tail) * 0.55 + bass * 0.45);
+  var keep = DECAY_SLOW + (DECAY_FAST - DECAY_SLOW) * clamp01(clamp01(tail) * 0.72 + bass * 0.28);
 
   // Decay the whole buffer once per frame (O(N), in beforeRender — §9.1).
   for (var kk = 0; kk < N; kk++) {

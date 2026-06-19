@@ -44,10 +44,14 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // lattice drift rate (0 = frozen grid)
-export var flash = 0.0;        // kick blast 0..1 (micKick); slams all nodes to full
-export var level = 0.45;       // steady node brightness 0..1 (micLow)
+export var flash = 0.0;        // kick blast 0..1 (micKick); slams all nodes to full.
+                               // 0 default: flash is the kick TRANSIENT dimension — a
+                               // non-zero static value permanently blooms the cores and
+                               // erases the pinpoint identity, so it rests at 0 (the
+                               // level/sharp defaults already give a bright, lively grid).
+export var level = 0.55;       // steady node brightness 0..1 (micLow)
 export var scale = 0.5;        // grid density 0..1
-export var sharp = 0.6;        // node tightness 0..1 (high = pinpoint)
+export var sharp = 0.55;       // node tightness 0..1 (high = pinpoint)
 
 export var cp1H = 0.58, cp1S = 1.0, cp1V = 1.0; // palette 1 (electric blue)
 export var cp2H = 0.92, cp2S = 1.0, cp2V = 1.0; // palette 2 (hot pink)
@@ -67,7 +71,7 @@ var MIN_SHARP = 2.0;    // node power exponent at sharp=0 (soft)
 var MAX_SHARP = 9.0;    // node power exponent at sharp=1 (pinpoint)
 var NODE_BASE = 0.10;   // always-on node glow so a calm lattice shows in silence
 var SHIMMER_AMP = 0.04; // breathing depth on top of NODE_BASE
-var PEAK_GAIN = 1.25;   // gentle uniform output overdrive; with the endpoint
+var PEAK_GAIN = 1.55;   // gentle uniform output overdrive; with the endpoint
                         // colour-bias it lifts node cores to 255 at a peak
 var INVSQRT2 = 0.70711; // 1/sqrt2 — irrational drift ratio (no integer period)
 var SQRT3 = 1.73205;    // sqrt3 — irrational z-axis skew (no integer period)
