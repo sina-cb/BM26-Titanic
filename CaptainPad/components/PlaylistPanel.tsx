@@ -7,7 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
   fetchChannelPlaylist, setChannelPlaylist, setChannelPlaylistEntry,
-  fetchPatterns,
+  fetchPatterns, fetchPatternDirs, fetchPatternsInDir,
   getApiBaseAsync,
   invalidatePlaylistCache, invalidatePlaylistsCache, primePlaylistCache,
   PlaylistData, PlaylistEntry, PlaylistAssignment,
@@ -117,6 +117,15 @@ function sanitizeName(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 64);
 }
 
+// Display name for an entry's pattern: strip the directory prefix so a
+// folder-loaded pattern reads as "trans_crossfade", not
+// "transitions/trans_crossfade". The stored `pattern` keeps the full
+// `<dir>/<name>` slug — the engine needs it to locate the .js file.
+function patternDisplayName(pattern: string): string {
+  const i = pattern.lastIndexOf('/');
+  return i >= 0 ? pattern.slice(i + 1) : pattern;
+}
+
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
   const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
@@ -136,8 +145,19 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // and the panel never has to depend on refresh()'s GETs landing in time.
   const [playlist, setPlaylist] = useState<PlaylistData | null>(initialPlaylist ?? null);
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
+  // "Load directory" support: the patterns/ sub-folders the operator can
+  // bulk-add from. Fetched lazily the first time the picker opens so the
+  // panel's hot path (mount + refresh under burst channel adds) doesn't
+  // pay an extra GET it rarely needs.
+  const [patternDirs, setPatternDirs] = useState<string[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
+  const [showLoadDir, setShowLoadDir] = useState(false);
+  // "New playlist from folder" name prompt. `pendingNewDir` holds the
+  // folder whose patterns will seed the playlist while the operator names
+  // it; the name modal is open whenever it's non-null.
+  const [pendingNewDir, setPendingNewDir] = useState<string | null>(null);
+  const [newDirPlaylistName, setNewDirPlaylistName] = useState('');
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -719,6 +739,85 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [flashSaved, refresh]);
 
+  // Open the "load directory" picker, fetching the available patterns/
+  // sub-folders lazily on first open.
+  const openLoadDir = useCallback(async () => {
+    setShowLoadDir(true);
+    const res = await fetchPatternDirs();
+    if (res.ok && res.data) setPatternDirs(res.data);
+  }, []);
+
+  // Build playlist entries from a directory's patterns. Shared by both
+  // the "new playlist" and "append" actions. Returns null (after surfacing
+  // an alert) when the fetch fails or the folder is empty.
+  const fetchDirEntries = useCallback(async (dir: string): Promise<PlaylistEntry[] | null> => {
+    const res = await fetchPatternsInDir(dir);
+    if (!res.ok || !res.data) {
+      Alert.alert('Load directory failed', res.error || 'Unknown error');
+      return null;
+    }
+    if (res.data.length === 0) {
+      Alert.alert('Empty directory', `No patterns found in "${dir}".`);
+      return null;
+    }
+    return res.data.map((pattern) => ({
+      id: genEntryId(),
+      pattern,
+      label: null,
+      defaults: {},
+    }));
+  }, []);
+
+  // "New playlist" action: open a name prompt seeded with the folder
+  // name. We DON'T auto-create — the operator confirms (and can rename)
+  // first. This avoids silently clobbering an existing playlist (e.g.
+  // "default") and works on web, where Alert.alert button callbacks don't
+  // fire (so a confirm-via-Alert never resolved).
+  const handleDirNewPlaylist = useCallback((dir: string) => {
+    setShowLoadDir(false);
+    setNewDirPlaylistName(sanitizeName(dir));
+    setPendingNewDir(dir);
+  }, []);
+
+  // Confirm the name prompt: build entries from the pending folder, save
+  // under the chosen name, and load the new playlist onto this channel.
+  const confirmDirNewPlaylist = useCallback(async () => {
+    const dir = pendingNewDir;
+    if (!dir) return;
+    const name = sanitizeName(newDirPlaylistName);
+    if (!name) return; // Create is disabled when empty; guard anyway.
+    const entries = await fetchDirEntries(dir);
+    if (!entries) { setPendingNewDir(null); return; }
+    const save = await savePlaylist({ name, entries });
+    if (!save.ok) {
+      Alert.alert('Create failed', save.error || 'Unknown error');
+      return;
+    }
+    setPendingNewDir(null);
+    await handleLoadPlaylist(name);
+  }, [pendingNewDir, newDirPlaylistName, fetchDirEntries, handleLoadPlaylist]);
+
+  // "Append" action: bulk-add every pattern in a directory to the
+  // currently-loaded playlist, then persist — same auto-save model as
+  // handleAddPattern, just for a whole folder at once.
+  const handleDirAppend = useCallback(async (dir: string) => {
+    const cur = playlistRef.current;
+    if (!cur) return;
+    const newEntries = await fetchDirEntries(dir);
+    if (!newEntries) return;
+    setShowLoadDir(false);
+    const nextEntries = [...cur.entries, ...newEntries];
+    // Optimistic UI: show the new rows instantly.
+    setPlaylist({ ...cur, entries: nextEntries });
+    const save = await savePlaylist({ name: cur.name, entries: nextEntries });
+    if (!save.ok) {
+      Alert.alert('Load directory failed', save.error || 'Unknown error');
+      await refresh();
+      return;
+    }
+    flashSaved();
+  }, [fetchDirEntries, flashSaved, refresh]);
+
   // Remove + persist in one step.
   const handleRemoveEntry = useCallback(async (entryId: string) => {
     const cur = playlistRef.current;
@@ -982,6 +1081,32 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           </View>
         )}
 
+        {/* Load-directory button — opens the directory picker where a
+            folder can be loaded as a NEW playlist or appended to the
+            current one. Always enabled (the "new playlist" action needs
+            no loaded playlist). Same visibility rules as the + button:
+            hidden when the channel is locked (read-only show mode) and,
+            on the deck, when the operator has engaged the playlist-edits
+            lock. On the mixer this rides the `compact` sizing so it
+            renders as the requested small button. */}
+        {editable && !(role === 'deck' && playlistEditsLocked) && (
+          <TouchableOpacity
+            onPress={openLoadDir}
+            style={{
+              width: sz.btnH,
+              height: sz.btnH,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.primary,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            accessibilityLabel="Load a directory of patterns into playlist"
+          >
+            <IconSymbol name="folder.fill" size={sz.btnFont + 2} color={C.primary} />
+          </TouchableOpacity>
+        )}
+
         {editable && !(role === 'deck' && playlistEditsLocked) && (
           <TouchableOpacity
             onPress={() => setShowAddPattern(true)}
@@ -1124,7 +1249,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       }}
                       numberOfLines={1}
                     >
-                      {e.label || e.pattern}
+                      {e.label || patternDisplayName(e.pattern)}
                       {missing ? '  ⚠' : ''}
                     </Text>
                     {(e.label || paramCount > 0) && (
@@ -1136,7 +1261,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         }}
                         numberOfLines={1}
                       >
-                        {e.label ? e.pattern : ''}
+                        {e.label ? patternDisplayName(e.pattern) : ''}
                         {e.label && paramCount > 0 ? '  · ' : ''}
                         {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
                       </Text>
@@ -1186,6 +1311,25 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         playlistName={playlist?.name || null}
         allPatterns={allPatterns}
         onPick={handleAddPattern}
+      />
+
+      <LoadDirectoryModal
+        visible={showLoadDir}
+        onClose={() => setShowLoadDir(false)}
+        playlistName={playlist?.name || null}
+        dirs={patternDirs}
+        onNewPlaylist={handleDirNewPlaylist}
+        onAppend={handleDirAppend}
+      />
+
+      <NewPlaylistNameModal
+        visible={pendingNewDir !== null}
+        dir={pendingNewDir}
+        name={newDirPlaylistName}
+        setName={setNewDirPlaylistName}
+        exists={playlists.includes(sanitizeName(newDirPlaylistName))}
+        onCancel={() => setPendingNewDir(null)}
+        onCreate={confirmDirNewPlaylist}
       />
     </View>
   );
@@ -1317,6 +1461,160 @@ const AddPatternModal: React.FC<AddPatternModalProps> = ({
               </TouchableOpacity>
             ))}
           </ScrollView>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface LoadDirectoryModalProps {
+  visible: boolean;
+  onClose: () => void;
+  playlistName: string | null;
+  dirs: string[];
+  onNewPlaylist: (dir: string) => void;
+  onAppend: (dir: string) => void;
+}
+
+// Picker for the "load directory" action. Lists `default` (the top-level
+// patterns/ folder) plus every sub-folder the engine reports. Each folder
+// offers two actions:
+//   • New playlist — create a playlist named after the folder and open it
+//   • Append       — add the folder's patterns to the current playlist
+// Append is disabled when no playlist is loaded (nothing to append to).
+const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
+  visible, onClose, playlistName, dirs, onNewPlaylist, onAppend,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const canAppend = !!playlistName;
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onClose}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close load-directory picker"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={[modalStyles.card, { maxHeight: '90%', minWidth: 420 }]}>
+          <Text style={modalStyles.title}>LOAD DIRECTORY</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            <Text style={{ color: C.primary, fontFamily: 'SpaceGrotesk_700Bold' }}>New playlist</Text>
+            {' creates a playlist named after the folder. '}
+            <Text style={{ color: C.text, fontFamily: 'SpaceGrotesk_700Bold' }}>Append</Text>
+            {playlistName ? ` adds its patterns to "${playlistName}".` : ' adds its patterns to the loaded playlist.'}
+          </Text>
+          {/* Taller scroll area so the folder list + dual actions breathe. */}
+          <ScrollView style={{ maxHeight: 520 }}>
+            {dirs.length === 0 && (
+              <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                No pattern directories found.
+              </Text>
+            )}
+            {dirs.map((d) => (
+              <View
+                key={d}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 9, marginBottom: 5, borderRadius: 8, backgroundColor: C.surfaceContainerHigh }}
+              >
+                <IconSymbol name="folder.fill" size={15} color={C.primary} />
+                <Text style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }} numberOfLines={1}>
+                  {d}
+                </Text>
+                {/* Primary action (filled) — create + open a new playlist. */}
+                <TouchableOpacity
+                  onPress={() => onNewPlaylist(d)}
+                  style={{ paddingHorizontal: 12, height: 30, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' }}
+                  accessibilityLabel={`Create new playlist from ${d}`}
+                >
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: '#FFF' }}>New playlist</Text>
+                </TouchableOpacity>
+                {/* Secondary action (outline) — append to current playlist. */}
+                <TouchableOpacity
+                  onPress={canAppend ? () => onAppend(d) : undefined}
+                  disabled={!canAppend}
+                  style={{ paddingHorizontal: 12, height: 30, borderRadius: 6, borderWidth: 1, borderColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: canAppend ? 1 : 0.35 }}
+                  accessibilityLabel={`Append ${d} to current playlist`}
+                >
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary }}>Append</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface NewPlaylistNameModalProps {
+  visible: boolean;
+  dir: string | null;
+  name: string;
+  setName: (s: string) => void;
+  exists: boolean;
+  onCancel: () => void;
+  onCreate: () => void;
+}
+
+// Name prompt for "new playlist from folder". Pre-filled with the folder
+// name but editable, so the operator can avoid overwriting an existing
+// playlist. An in-app modal (not Alert.alert) because RN-web drops
+// Alert button callbacks.
+const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
+  visible, dir, name, setName, exists, onCancel, onCreate,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const clean = sanitizeName(name);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onCancel}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close new-playlist name prompt"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={modalStyles.card}>
+          <Text style={modalStyles.title}>NEW PLAYLIST FROM {dir?.toUpperCase() || 'FOLDER'}</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            {"Name the new playlist. It will be filled with this folder's patterns and loaded onto the channel."}
+          </Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="playlist name"
+            placeholderTextColor={C.icon}
+            autoFocus
+            onSubmitEditing={() => { if (clean) onCreate(); }}
+            returnKeyType="done"
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
+          />
+          {exists && clean ? (
+            <Text style={{ color: C.error, fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 6 }}>
+              {`⚠ "${clean}" already exists — creating will overwrite it.`}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              onPress={onCancel}
+              accessibilityLabel="Cancel new playlist"
+              style={{ paddingHorizontal: 14, height: 34, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { if (clean) onCreate(); }}
+              disabled={!clean}
+              accessibilityLabel="Create new playlist"
+              style={{ paddingHorizontal: 18, height: 34, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: clean ? 1 : 0.4 }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#FFF' }}>Create</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </TouchableOpacity>
     </TouchableOpacity>

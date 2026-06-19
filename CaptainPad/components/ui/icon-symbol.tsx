@@ -58,6 +58,8 @@ const MAPPING = {
   'checkmark.circle.fill': 'check-circle',
   'wifi.slash': 'wifi-off',
   'shuffle': 'shuffle',
+  // "Load directory" (bulk-add a patterns/ sub-folder into a playlist).
+  'folder.fill': 'folder',
 } as IconMapping;
 
 /**
