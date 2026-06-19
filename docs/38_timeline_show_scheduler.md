@@ -759,7 +759,60 @@ mixer access, and the only UI is CaptainPad.
 
 ---
 
-## 16. What this deliberately is **not** (v1)
+## 16. Handoff guarantee & manual pending-program lease (operator 2026-06-19)
+
+> Operator: *"I don't want the rig stuck on a pattern after a scheduled program
+> runs. And in manual mode, if a scheduled program is due, show a sign for the
+> operator to enable it; if no action in 30 s, expire the lease and start the
+> program."*
+
+### 16.1 Handoff guarantee — never stuck on the program's last pattern
+When a program's window ends (hold expires, next program preempts, or operator
+`/program/end`), control **must hand back cleanly**:
+- **autopilot enabled** → the arbiter emits `__autopilot_resume__` which re-loads
+  the baseline `plan.autopilot.playlist` and **re-arms engine autopilot**, so the
+  deck immediately resumes cycling — it never freezes on the program's last
+  pattern. (The §14 program-expiry path; the resume action is emitted *before* any
+  same-tick mood/ambient action so the look isn't clobbered — bug fixed
+  2026-06-19.)
+- **autopilot disabled** → control returns to **manual**; the rig intentionally
+  holds the last look (manual means the operator owns it). This is not "stuck" —
+  it is deliberate; the operator drives. If they want motion, they re-enable
+  autopilot (or the next program's lease, below, prompts them).
+
+This is explicitly validated (handoff eval): fire a program → end it → assert the
+deck pattern advances again within one autopilot delay; assert it is NOT the
+program's pattern frozen.
+
+### 16.2 Manual mode: pending-program lease (30 s, auto-start)
+When the controller is **manual** (paused / overridden / autopilot-disabled) and a
+**program** cue comes due, the timeline does **not** silently override the
+operator, and does **not** silently skip the show. It **arms a lease**:
+
+```
+pendingProgram = { cueId, label, action, armedAtMs, expiresAtMs: armedAtMs + leaseSec*1000 }
+```
+- Surfaced in `timelineState.pendingProgram`; CaptainPad shows a prominent
+  **"⚠ SCHEDULED SHOW PENDING — <label> · starts in M:SS"** banner with
+  **[ENABLE NOW]** and **[KEEP MANUAL]**.
+- `POST /timeline/program/enable` → start it immediately (exit manual: clear
+  pause/override, set the program active, controller=program).
+- `POST /timeline/program/dismiss` → cancel the lease, stay manual; the cue is
+  latched `firedToday` so it does not re-arm today (operator's "no" sticks).
+- **No operator action by `expiresAtMs`** → the lease **expires and the program
+  auto-starts** (the show goes on): exit manual, start the program,
+  controller=program.
+- Applies to **program** cues only (mood cues stay suppressed in manual — no
+  lease). One pending lease at a time (a newer due program replaces an
+  un-actioned older one). Lease window = `config.timeline.programLeaseSec`
+  (default 30).
+
+State additions: `pendingProgram` (above) | null. Routes:
+`POST /timeline/program/enable`, `POST /timeline/program/dismiss`.
+
+---
+
+## 17. What this deliberately is **not** (v1)
 
 - **Not** a second analyzer — mood comes from the Audio Companion via CPC.
 - **Not** a replacement for `docs/31` interval tasks — it can *enable* them.
