@@ -368,105 +368,339 @@ entries:
           - 0.4
         curve: easeOut
     notes: null
-  - id: e_1781749070342_441
-    pattern: 27_par_dancers
-    label: null
-    defaults: {}
-    modulations: []
-    notes: null
-  - id: e_1781749058691_2059
-    pattern: 28_vintage_dancers
-    label: null
-    defaults:
-      sliderLocalSpeed: 0
-      sliderBaseGlow: 0
-      sliderDancerSize: 0
-      sliderDancerGlow: 0
-      sliderChevronSpeedup: 0
-      sliderBall1X: 0
-      sliderBall1Energy: 0
-      sliderBall2X: 0.26
-      sliderBall2Energy: 0.34
-    modulations:
-      - id: mod_sliderBall2X_micLow
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy2
-        target:
-          scope: pattern
-          parameter: sliderBall2X
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
-      - id: mod_sliderBall2Energy_micDomEnergy1
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy1
-        target:
-          scope: pattern
-          parameter: sliderBall2Energy
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
-    notes: null
-  - id: e_1781748878700_5868
-    pattern: 29_bar_dancers
-    label: null
-    defaults:
-      sliderLocalSpeed: 0
-      sliderBaseGlow: 0
-      sliderDancerSize: 0
-      sliderDancerGlow: 0.66
-      sliderChevronSpeedup: 0
-      sliderBall1X: 0.56
-      sliderBall1Energy: 0.21
-      sliderBall2X: 0.25
-      sliderBall2Energy: 0.32
-    modulations:
-      - id: mod_sliderBall2X_micDomEnergy1
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy1
-        target:
-          scope: pattern
-          parameter: sliderBall2X
-        mode: override
-        polarity: unipolar
-        range:
-          - 0.2
-          - 0.8
-        curve: linear
-      - id: mod_sliderBall2Energy_micDomEnergy2
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy2
-        target:
-          scope: pattern
-          parameter: sliderBall2Energy
-        mode: offset
-        polarity: unipolar
-        range:
-          - 0
-          - 0.35
-        curve: linear
-    notes: null
   - id: e_default_58_rainbow
     pattern: rainbow
     label: null
     defaults: {}
     modulations: []
+    notes: null
+  - id: e_1781814289959_1677
+    pattern: 28_spectrum_bloom
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderLow: 0.25
+      sliderMid: 0
+      sliderHigh: 0
+      sliderFloor: 0.64
+    modulations:
+      - id: mod_sliderLow_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLow
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_sliderMid_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderMid
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_sliderHigh_micHigh
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micHigh
+        target:
+          scope: pattern
+          parameter: sliderHigh
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781814380742_5872
+    pattern: 29_kick_shockwave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.46
+      sliderKick: 0.44
+      sliderLevel: 0.28
+      sliderDecay: 0.11
+      sliderRingWidth: 0.92
+    modulations:
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_sliderLevel_micMid
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micMid
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781814384871_7633
+    pattern: 30_bass_comet
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderBass: 0.37
+      sliderTail: 0.37
+      sliderHeadBright: 0.88
+    modulations:
+      - id: mod_sliderBass_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBass
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781814388425_3530
+    pattern: 31_strobe_lattice
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.88
+      sliderFlash: 0
+      sliderLevel: 0.92
+      sliderScale: 0
+      sliderSharp: 0
+    modulations: []
+    notes: null
+  - id: e_1781814603757_5600
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderShimmer: 0
+      sliderRipple: 0.35
+      sliderDepth: 0.3
+      sliderBase: 0
+    modulations:
+      - id: mod_sliderRipple_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderRipple
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+      - id: mod_sliderDepth_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderDepth
+        mode: offset
+        polarity: unipolar
+        range:
+          - -0.2
+          - 0.4
+        curve: linear
+    notes: null
+  - id: e_1781818512417_4971
+    pattern: 33_aurora_breath
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.8
+      sliderSwell: 0.21
+      sliderShimmer: 0.81
+      sliderRibbons: 0.21
+      sliderSoft: 0.27
+      sliderBase: 0.11
+    modulations:
+      - id: mod_sliderBase_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBase
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.1
+        curve: easeIn
+    notes: null
+  - id: e_1781818516232_636
+    pattern: 34_moire_interference
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderRatio: 0
+      sliderLevel: 0
+      sliderContrast: 0.86
+      sliderPulse: 0.29
+    modulations:
+      - id: mod_sliderPulse_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderPulse
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781818519453_9498
+    pattern: 35_sparkle_rain
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.35
+      sliderDensity: 0.62
+      sliderFall: 0.19
+      sliderIntensity: 0.27
+      sliderBase: 0
+    modulations:
+      - id: mod_sliderFall_micDomFreq1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomFreq1
+        target:
+          scope: pattern
+          parameter: sliderFall
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0.2
+          - 0.5
+        curve: easeIn
+      - id: mod_sliderBase_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBase
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
+    notes: null
+  - id: e_1781818523376_7175
+    pattern: 36_orbital_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_1781818903803_5066
+    pattern: 37_chevron_chase
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderStep: 0.94
+      sliderBright: 0.22
+      sliderWidth: 0
+      sliderCount: 0
+    modulations: []
+    notes: null
+  - id: e_1781818974092_2409
+    pattern: 38_prism_helix
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderLevel: 0
+      sliderShimmer: 0
+      sliderTwist: 0
+      sliderContrast: 0.83
+      sliderArms: 0
+    modulations: []
+    notes: null
+  - id: e_1781818978052_756
+    pattern: 39_tide_riser
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_1781818981643_4306
+    pattern: 40_lissajous_weave
+    label: null
+    defaults:
+      sliderLocalSpeed: 0
+      sliderLevel: 0
+      sliderDetail: 0
+      sliderKick: 0
+      sliderSpread: 0.78
+      sliderBase: 0.22
+    modulations:
+      - id: mod_sliderBase_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderBase
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
     notes: null

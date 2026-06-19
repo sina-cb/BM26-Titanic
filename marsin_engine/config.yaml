@@ -70,14 +70,6 @@ companion:
     port: 10000
   source: mic
   device: null
-  # Engine API endpoint the Companion live-syncs its SHARED audio TUNING
-  # against (input gain / source smoothing / capture device). The engine
-  # config is the single source of truth: the Companion subscribes to the
-  # engine's /ws/control for `audioConfig` broadcasts and writes its own
-  # UI changes back via PATCH /audio/config. OPTIONAL — analysis never
-  # blocks on the engine; if unreachable the Companion keeps its last
-  # known tuning and reconnects in the background. Defaults to the engine
-  # server.port above on loopback.
   engine:
     host: 127.0.0.1
     port: 6968
