@@ -341,3 +341,67 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:6965/api/engine/mixer     # 4
 Files: `server.mjs` (proxy route + allowlist + deck panel markup) and the new
 `deck_client.js`. **No** engine / `lib/` files are touched — existing HTTP API only.
 <!-- END deck-control (feat/highdef_patterns) -->
+
+<!-- BEGIN variation-axis (NEW — feat/highdef_patterns) -->
+## NEW — Static ↔ Sound variations
+
+Each pattern can carry **two** clips the operator switches between on one card:
+a **Static** (no-audio, `--synth silence`) recording and a **Sound** (synthetic
+audio-reactive) recording. The sound clip drives the pattern's sliders through
+the **real DSP** from a musical synth, applying the pattern's
+`AUDIO_MODULATION_V1` block as the engine's OVERRIDE modulation
+(`param = lerp(min, max, curve(signal))`), so it looks like the deployed
+sound-reactive output. These sit on a **VARIATION axis** next to the existing
+**MODEL** (rig) axis.
+
+### Generate them
+
+```bash
+cd marsin_engine
+node tools/gallery/gen_variations.mjs                  # all patterns/[0-9]*_*.js
+node tools/gallery/gen_variations.mjs --pattern 24,25,27
+node tools/gallery/gen_variations.mjs --model titanic --seconds 10 --fps 14
+```
+
+For each pattern it renders the static clip and (when the pattern has an
+`AUDIO_MODULATION_V1` block) the sound clip, publishes both as variation
+widgets, and prints a per-pattern summary. No block → only the static clip,
+reported as `no-block`. A compile/render error **stops the run** (codex P0).
+
+### Naming / parse scheme (backward-compatible)
+
+Widget = `<pattern>[__<seg>...]`; each `__`-segment after the pattern is
+classified: `static`/`sound` → **variation**, a known rig name → **model**,
+legacy/unknown → **model** (so old `<pattern>__<oldrig>` clips never vanish). A
+clip with no variation segment counts as `static`, so the pre-existing bare
+`<pattern>` and `<pattern>__<model>` clips slot onto the Static side. Names:
+
+```
+<pattern>__static            <pattern>__sound
+<pattern>__<model>__static   <pattern>__<model>__sound
+```
+
+### Gallery UX
+
+One card per pattern (as before) with a small **Static | Sound** toggle; the
+card's main tap defaults to **Sound** when present, else Static, else the bare
+clip. List/grid still scope to the active rig first, then pick the variation.
+`/api/list` additionally exposes `variation` per clip (additive).
+
+### Spec parser — `tools/audio_mod_spec.mjs`
+
+`parseAudioModSpec(src[, name])` → `{ mappings:[{slider,signal,min,max,curve}],
+modString, synth }` or `null` (no block). Malformed mapping line = hard error
+(never silently dropped). `synth` = `full_track` by default, `kick_4floor` for
+kick-gated/beat patterns (heartbeat/kick/shockwave/strobe). `modString` is the
+range-aware harness `--mod` string, e.g.
+`micLow:sliderLevel:0.30:1.00:linear,micKick:sliderKick:0.00:1.00:pow2`.
+
+### Harness `--mod` range grammar — `tools/pattern_audio_harness.mjs`
+
+`--mod sig:slider[:min:max[:curve]]` (comma-separated). Bare `sig:slider` =
+`0..1` linear (identity, legacy). With a range, each frame
+`slider = lerp(min, max, curve(signalNorm))` — matching the engine's OVERRIDE
+modulation. `curve ∈ linear | pow2 (x²) | ease (1−(1−x)²)`, default `linear`. Bad
+range/curve fails loud (`MOD_FAIL`).
+<!-- END variation-axis (NEW — feat/highdef_patterns) -->

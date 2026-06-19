@@ -18,8 +18,13 @@
  *        [--set sliderLocalSpeed=0.6] [--out ~/tmp/vis.json]
  *
  *   --synth   one of audio/synth/test_synths.js SYNTHS (default full_track)
- *   --mod     comma list of <signal>:<sliderExport>; signal ∈
- *             micLow|micMid|micHigh|micKick|micFlux
+ *   --mod     comma list of <signal>:<sliderExport>[:<min>:<max>[:<curve>]];
+ *             signal ∈ micLow|micMid|micHigh|micKick|micFlux. The optional
+ *             range+curve make the offline reactive capture match the engine's
+ *             OVERRIDE modulation: each frame the slider = lerp(min, max,
+ *             curve(signalNorm)), curve ∈ linear|pow2(x²)|ease(1-(1-x)²).
+ *             Backward-compatible: a bare `signal:slider` token = range 0..1
+ *             linear (identity), i.e. slider := signal as before.
  *   --set     static control presets (export=value)
  *   --frames  render frames at 40 fps (default 80 ≈ 2 s). Ignored if --seconds.
  *   --seconds real-time clip length in seconds (wins over --frames). The audio
@@ -73,10 +78,35 @@ const maxCells = (A['max-cells'] !== undefined && A['max-cells'] !== 'true') ? p
 if (!(maxCells > 0)) { console.log('MAXCELLS_FAIL: --max-cells must be > 0, got ' + A['max-cells']); process.exit(2); }
 const SIG_FIELD = { micLow: 'low', micMid: 'mid', micHigh: 'high', micKick: 'kick', micFlux: 'flux' };
 
+// ── --mod grammar (RANGE-AWARE) ───────────────────────────────────────────────
+// Token: `sig:slider[:min:max[:curve]]`. Bare `sig:slider` = range 0..1 linear
+// (identity — slider := signal, the legacy behaviour). With a range, the slider
+// each frame = lerp(min, max, curve(signalNorm)), matching the engine's OVERRIDE
+// modulation so the offline reactive capture looks like the deployed pattern.
+// curve ∈ linear | pow2(x²) | ease(easeOut = 1-(1-x)²). Default curve = linear.
+const CURVES = {
+  linear: (x) => x,
+  pow2: (x) => x * x,
+  ease: (x) => 1 - (1 - x) * (1 - x),
+};
 const mods = [];
-if (A.mod) for (const m of A.mod.split(',')) { const [sig, target] = m.split(':');
+if (A.mod) for (const m of A.mod.split(',')) {
+  const parts = m.split(':');
+  const sig = parts[0];
+  const target = parts[1];
   if (!SIG_FIELD[sig]) { console.log('MOD_FAIL: unknown signal ' + sig); process.exit(2); }
-  mods.push({ sig, target }); }
+  if (!target) { console.log('MOD_FAIL: --mod token missing slider target: ' + m); process.exit(2); }
+  let min = 0, max = 1, curveName = 'linear';
+  if (parts.length >= 4) {
+    min = parseFloat(parts[2]); max = parseFloat(parts[3]);
+    if (!isFinite(min) || !isFinite(max)) { console.log('MOD_FAIL: bad range in --mod token: ' + m); process.exit(2); }
+    if (parts[4] !== undefined && parts[4] !== '') curveName = parts[4];
+  } else if (parts.length === 3) {
+    console.log('MOD_FAIL: --mod range needs both min and max (sig:slider:min:max[:curve]): ' + m); process.exit(2);
+  }
+  if (!CURVES[curveName]) { console.log('MOD_FAIL: unknown curve "' + curveName + '" in --mod token: ' + m + ' (valid: linear, pow2, ease)'); process.exit(2); }
+  mods.push({ sig, target, min, max, curve: CURVES[curveName], curveName });
+}
 
 // ── model + VM ───────────────────────────────────────────────────────────────
 // Load models/<modelName>.js. FAIL LOUDLY if the file is missing or its
@@ -198,7 +228,13 @@ const frameData = []; const totals = []; const sigLog = []; const everLit = new 
 let internalT = 0;
 for (let step = 0; step < internalSteps; step++) {
   advanceAudio();
-  for (const m of mods) { const id = idOf(m.target); if (id != null) rt.setControl(id, sig[SIG_FIELD[m.sig]]); }
+  // Apply each modulation as the engine's OVERRIDE: slider = lerp(min, max,
+  // curve(signal)). Bare tokens default to min=0,max=1,linear => identity (the
+  // legacy slider := signal behaviour).
+  for (const m of mods) { const id = idOf(m.target); if (id != null) {
+    const s = sig[SIG_FIELD[m.sig]];
+    rt.setControl(id, m.min + (m.max - m.min) * m.curve(s));
+  } }
   rt.beginFrame(internalT * DT);
   const rgb = fold(rt.renderAll6ch());
   internalT++;

@@ -425,3 +425,109 @@ Files added/changed: `server.mjs` (proxy route + allowlist + deck panel markup),
 `deck_client.js` (the browser-side control surface). **No** engine / `lib/` files
 are touched — the deck uses only the engine's existing HTTP API.
 <!-- END deck-control (feat/highdef_patterns) -->
+
+<!-- BEGIN variation-axis (NEW — feat/highdef_patterns) -->
+## NEW — Static ↔ Sound variations (per pattern)
+
+Each pattern can now carry **two** clips that the operator switches between on
+one card:
+
+- **Static** — a no-audio recording (`--synth silence`, no modulation): what the
+  pattern looks like at rest with operator-set sliders.
+- **Sound** — a synthetic audio-reactive recording: the harness drives the
+  pattern's sliders from a musical synth through the **real DSP**, applying the
+  pattern's `AUDIO_MODULATION_V1` block as the engine's OVERRIDE modulation
+  (`param = lerp(min, max, curve(signal))`). This mirrors the deployed
+  sound-reactive output.
+
+These sit on a **VARIATION axis** alongside the existing **MODEL** (rig) axis.
+
+### Naming / parse scheme (backward-compatible)
+
+A widget filename is `<pattern>[__<seg>...]`. The server (`server.mjs`
+`parseName`) classifies **each** `__`-segment after the pattern independently:
+
+| Segment           | Classified as |
+|-------------------|---------------|
+| `static` / `sound`| **variation** |
+| a known rig name (in `models/`) | **model** |
+| legacy/unknown text | **model** (so old `<pattern>__<oldrig>` clips never disappear) |
+
+A clip with **no** variation segment is treated as `static` (the pre-existing
+bare `<pattern>` and `<pattern>__<model>` clips are the no-audio look, so they
+slot onto the Static side automatically). Resulting widget names:
+
+```
+<pattern>                       base clip          (model='',  variation=static)
+<pattern>__<model>              model variant      (model=rig, variation=static)
+<pattern>__static               static variation   (model='',  variation=static)
+<pattern>__sound                sound variation    (model='',  variation=sound)
+<pattern>__<model>__static      static on a rig
+<pattern>__<model>__sound       sound on a rig
+```
+
+### Gallery UX
+
+- All variations + models of a pattern collapse onto **one card** (as before).
+- Each card carries a small **Static | Sound** toggle (`.varpick`); a missing
+  side is disabled. The card's **main tap** defaults to the **Sound** variation
+  when present, else **Static**, else the bare clip.
+- The list/grid still scope to the active **rig** first (model picker + chips),
+  then pick the variation. The grid contact sheet shows the Sound clip by
+  default and tags each tile with its variation.
+- `/api/list` now also exposes `variation` per clip (additive — `name`, `mtime`,
+  `num`, `family`, `model` are unchanged).
+
+### Generate the variations
+
+`tools/gallery/gen_variations.mjs` renders both clips for each pattern offline
+(no engine, Node built-ins + the in-repo tools):
+
+```bash
+cd marsin_engine
+node tools/gallery/gen_variations.mjs                  # all patterns/[0-9]*_*.js
+node tools/gallery/gen_variations.mjs --pattern 27     # just NN_* (e.g. 27_swipe)
+node tools/gallery/gen_variations.mjs --pattern 24,25,27
+node tools/gallery/gen_variations.mjs --model titanic  # render on a non-default rig
+node tools/gallery/gen_variations.mjs --seconds 10 --fps 14
+```
+
+For each pattern it runs the **static** clip (`--synth silence`) and, when the
+pattern has an `AUDIO_MODULATION_V1` block, the **sound** clip (`--synth
+<spec.synth> --mod <spec.modString>`), then publishes both as variation widgets.
+A pattern with no block gets only the static clip and is reported as `no-block`.
+A compile/render error **stops the run** (codex P0 — never skip silently). It
+prints a per-pattern summary (static / sound / no-block).
+
+### The spec parser — `tools/audio_mod_spec.mjs`
+
+`parseAudioModSpec(patternSource[, patternName])` →
+`{ mappings, modString, synth }` (or `null` when there is no block):
+
+- `mappings`: `[{ slider, signal, min, max, curve }]` in declaration order,
+  parsed from each `slider<Name> <- mic<Sig> range a..b curve linear|pow2|ease`
+  line. Blank / comment-only / parenthetical prose lines are ignored; a
+  malformed mapping line is a **hard error** (never silently dropped).
+- `modString`: the harness `--mod` string **with ranges**, e.g.
+  `micLow:sliderLevel:0.30:1.00:linear,micKick:sliderKick:0.00:1.00:pow2`.
+- `synth`: a musical synth that exercises the PRIMARY mapping — default
+  `full_track`; `kick_4floor` when the PRIMARY is kick-gated (a `# PRIMARY`
+  micKick mapping, or no micLow→level PRIMARY) or the pattern name suggests a
+  beat (`heartbeat` / `kick` / `shockwave` / `strobe`). Positional/swipe
+  patterns (e.g. `27_swipe`) keep `full_track`.
+
+### Harness `--mod` range grammar (`tools/pattern_audio_harness.mjs`)
+
+The `--mod` token grammar is now **range-aware** (purely additive; bare tokens
+unchanged):
+
+```
+--mod  sig:slider[:min:max[:curve]]   (comma-separated for multiple)
+```
+
+- Bare `sig:slider` = range `0..1` linear (identity — `slider := signal`, the
+  legacy behaviour).
+- With a range, each frame `slider = lerp(min, max, curve(signalNorm))`, matching
+  the engine's OVERRIDE modulation. `curve ∈ linear | pow2 (x²) | ease (easeOut,
+  1−(1−x)²)`; default `linear`. A bad range or curve **fails loud** (`MOD_FAIL`).
+<!-- END variation-axis (NEW — feat/highdef_patterns) -->

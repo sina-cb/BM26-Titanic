@@ -190,26 +190,63 @@ function engineAllowed(method, enginePath) {
 
 
 // ---------------------------------------------------------------------------
-// Naming convention: NN_name or NN_name__<model>.
-//   num    : leading number ("01") or '' if none.
-//   model  : text after "__", or '' if no model suffix.
-//   family : the pattern identity WITHOUT the model suffix (e.g. "01_cylon_sweep").
-//            This is the grouping key — a pattern + all its model variants share it.
-//   label  : human label of the family minus the number ("cylon sweep").
+// Naming convention: <pattern>[__<seg>...] where each "__"-separated segment
+// AFTER the pattern is classified independently into a MODEL or a VARIATION:
+//
+//   <pattern>                          base (model='', variation='static')
+//   <pattern>__<model>                 model variant (legacy, e.g. __titanic)
+//   <pattern>__static | __sound        variation of the base/default rig
+//   <pattern>__<model>__static|__sound variation on a non-default rig
+//
+// VARIATION axis (NEW): 'static' (no-audio recording) | 'sound' (synthetic
+// audio-reactive recording). MODEL axis (existing): the rig name. Classification
+// per segment:
+//   - 'static' / 'sound'   -> variation
+//   - a known model name   -> model
+//   - legacy unknown text  -> model (backward-compat: an old <pattern>__<model>
+//                             whose model isn't in the live models dir still
+//                             groups as a model variant, never lost)
+//
+//   num      : leading number ("01") or '' if none.
+//   model    : the rig segment, or '' for the default rig.
+//   variation: 'static' | 'sound'. A clip with NO variation segment is treated
+//              as 'static' (the pre-existing bare/model clips are the no-audio
+//              look), so old clips slot into the Static side cleanly.
+//   family   : the pattern identity WITHOUT model/variation suffixes
+//              (e.g. "01_cylon_sweep") — the card grouping key.
+//   label    : human label of the family minus the number ("cylon sweep").
 // ---------------------------------------------------------------------------
-function parseName(name) {
-  let family = name;
+const VARIATION_TOKENS = new Set(['static', 'sound']);
+
+// Lazily-cached set of real rig names so segment classification can tell a
+// model from legacy text. Re-resolved per listing pass (cheap, dir read).
+function modelNameSet() {
+  return new Set(listModels());
+}
+
+function parseName(name, knownModels) {
+  const parts = name.split('__');
+  const family = parts[0];
+  const segs = parts.slice(1);
   let model = '';
-  const sep = name.indexOf('__');
-  if (sep !== -1) {
-    family = name.slice(0, sep);
-    model = name.slice(sep + 2);
+  let variation = '';
+  for (const seg of segs) {
+    if (VARIATION_TOKENS.has(seg)) {
+      variation = seg;                       // explicit static/sound segment
+    } else if (knownModels && knownModels.has(seg)) {
+      model = seg;                           // a real rig name
+    } else {
+      // Legacy / unknown segment: treat as a model so old <pattern>__<model>
+      // clips (whose rig file may be gone) never disappear from the gallery.
+      model = seg;
+    }
   }
+  if (!variation) variation = 'static';      // no variation segment => static
   const m = /^(\d+)_(.*)$/.exec(family);
   const num = m ? m[1] : '';
   const rest = m ? m[2] : family;
   const label = rest.replace(/_/g, ' ');
-  return { num, model, family, label };
+  return { num, model, variation, family, label };
 }
 
 function listWidgets() {
@@ -220,14 +257,16 @@ function listWidgets() {
     return [];
   }
   const out = [];
+  const known = modelNameSet();
   for (const e of entries) {
     if (!e.isFile()) continue;
     if (!e.name.endsWith('.html')) continue;
     const name = e.name.slice(0, -'.html'.length);
     if (!SAFE_NAME.test(name)) continue;
     const st = fs.statSync(path.join(WIDGETS_DIR, e.name));
-    const meta = parseName(name);
-    out.push({ name, mtime: st.mtimeMs, num: meta.num, model: meta.model, family: meta.family, label: meta.label });
+    const meta = parseName(name, known);
+    out.push({ name, mtime: st.mtimeMs, num: meta.num, model: meta.model,
+      variation: meta.variation, family: meta.family, label: meta.label });
   }
   out.sort((a, b) => b.mtime - a.mtime);
   return out;
@@ -429,7 +468,7 @@ function indexPage(activeModel) {
   const items = listWidgets();
   const data = items.map((it) => ({
     name: it.name, t: fmtTime(it.mtime), mtime: it.mtime,
-    num: it.num, model: it.model, family: it.family, label: it.label,
+    num: it.num, model: it.model, variation: it.variation, family: it.family, label: it.label,
   }));
   const payload = JSON.stringify(data).replace(/</g, '\\u003c');
   return `<!DOCTYPE html><html lang="en"><head>
@@ -454,9 +493,12 @@ ${THEME_CSS}
   .group-h { color:#7a8; font-size:12px; letter-spacing:1px; text-transform:uppercase;
     margin:18px 4px 8px; border-bottom:1px solid #16161e; padding-bottom:6px; }
   .card { display:flex; justify-content:space-between; align-items:center; gap:10px;
-    text-decoration:none; color:#e6e9ee; background:#12121a; border:1px solid #1d1d26;
+    color:#e6e9ee; background:#12121a; border:1px solid #1d1d26;
     border-radius:14px; padding:16px; margin-bottom:10px; }
   .card:active { background:#1a1a26; }
+  /* The card's main tap is now an inner link (the label area), so the Static/
+     Sound toggle + variant links can be real <a>s without illegal nesting. */
+  .card .maintap { text-decoration:none; color:inherit; min-width:0; flex:1; display:block; }
   .cl { min-width:0; }
   .nm { font-size:17px; font-weight:600; word-break:break-word; }
   .meta { color:#778; font-size:12px; margin-top:3px; display:flex; gap:8px; flex-wrap:wrap; }
@@ -465,6 +507,12 @@ ${THEME_CSS}
   .variants { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
   .variants a { text-decoration:none; font-size:12px; background:#15151d; border:1px solid #24242f;
     border-radius:8px; padding:3px 9px; color:#bfeede; }
+  /* <!-- BEGIN variation-axis --> Static <-> Sound toggle on each card. */
+  .varpick { display:inline-flex; border:1px solid #2f6a4f; border-radius:999px; overflow:hidden; margin-top:7px; }
+  .varpick a { text-decoration:none; font-size:12px; padding:4px 12px; color:#9bd; background:#10141a; }
+  .varpick a.on { background:#173026; color:#bfeede; }
+  .varpick a.dis { color:#445; pointer-events:none; background:#0d0d12; }
+  /* <!-- END variation-axis --> */
   .t { color:#778; font-size:12px; white-space:nowrap; }
   .empty { color:#778; padding:24px 6px; }
 </style></head><body>
@@ -545,47 +593,77 @@ ${THEME_CSS}
     return fam.variants.some(v => v.model === activeModel);
   }
 
-  // <!-- BEGIN model-select -->
-  // For the active rig, the variant we want is: the one whose model matches
-  // ACTIVE_MODEL, or (when ACTIVE_MODEL is test_bench) the bare base clip.
-  // If that exact clip is missing we fall back to the base (test_bench) clip so
-  // the operator still sees SOMETHING, and flag it as a fallback so the card
-  // can note "(test_bench)".
-  function pickVariant(fam) {
+  // <!-- BEGIN model-select + variation-axis -->
+  // Two axes now: MODEL (rig) and VARIATION (static|sound). For a family we
+  // first scope to the active rig, then pick the VARIATION clip:
+  //   default to SOUND (sound-reactive) when present, else STATIC, else the
+  //   first available clip. Model fallback to the base/test_bench clip is kept
+  //   (flagged) so a non-default rig with no clip still shows SOMETHING.
+  //
+  // clipsForModel(fam): the clips whose model matches the active rig (bare
+  // clips count as the default rig). Returns { clips, fallback } — fallback=true
+  // when we had to drop back to the base/test_bench clips.
+  function clipsForModel(fam) {
     const wantBase = ACTIVE_MODEL === DEFAULT_MODEL;
     const exact = wantBase
-      ? fam.variants.find(v => !v.model)
-      : fam.variants.find(v => v.model === ACTIVE_MODEL);
-    if (exact) return { clip: exact, fallback: false };
-    const base = fam.variants.find(v => !v.model) || fam.variants[0];
-    return { clip: base, fallback: true };
+      ? fam.variants.filter(v => !v.model)
+      : fam.variants.filter(v => v.model === ACTIVE_MODEL);
+    if (exact.length) return { clips: exact, fallback: false };
+    const base = fam.variants.filter(v => !v.model);
+    if (base.length) return { clips: base, fallback: true };
+    return { clips: fam.variants.slice(), fallback: true };
   }
-  // <!-- END model-select -->
+
+  // Pick the lead clip from a model-scoped clip list: SOUND first, else STATIC,
+  // else whatever exists.
+  function pickByVariation(clips) {
+    return clips.find(v => v.variation === 'sound')
+      || clips.find(v => v.variation === 'static')
+      || clips[0];
+  }
+  // <!-- END model-select + variation-axis -->
 
   function cardHtml(fam) {
-    // <!-- BEGIN model-select -->
-    // Lead the card with the chosen model's clip (falling back to test_bench).
-    const pick = pickVariant(fam);
-    const lead = pick.clip;
+    // <!-- BEGIN model-select + variation-axis -->
+    const scope = clipsForModel(fam);
+    const lead = pickByVariation(scope.clips);
     const wHref = '/w/' + encodeURIComponent(lead.name) + MODEL_QS;
-    const fallbackNote = pick.fallback
+    const fallbackNote = scope.fallback
       ? '<span class="badge fb">no ' + esc(ACTIVE_MODEL) + ' clip \\u2014 (test_bench)</span>'
       : '';
-    // <!-- END model-select -->
+    // Static <-> Sound toggle over the model-scoped clips. Each side links to
+    // its clip; a missing side is disabled. The currently-led side is 'on'.
+    const staticClip = scope.clips.find(v => v.variation === 'static');
+    const soundClip = scope.clips.find(v => v.variation === 'sound');
+    function varBtn(clip, label) {
+      if (!clip) return '<a class="dis">' + label + '</a>';
+      const on = clip.name === lead.name ? ' on' : '';
+      return '<a class="' + (on ? 'on' : '') + '" href="/w/' + encodeURIComponent(clip.name) + MODEL_QS + '">' + label + '</a>';
+    }
+    const varPick = (staticClip || soundClip)
+      ? '<div class="varpick">' + varBtn(staticClip, 'Static') + varBtn(soundClip, 'Sound') + '</div>'
+      : '';
+    // <!-- END model-select + variation-axis -->
     const variantLinks = fam.variants.length > 1
       ? '<div class="variants">' + fam.variants.slice().sort((a, b) => a.name.localeCompare(b.name)).map(v =>
-          '<a href="/w/' + encodeURIComponent(v.name) + MODEL_QS + '">' + (v.model ? v.model : 'base') + '</a>').join('') + '</div>'
+          '<a href="/w/' + encodeURIComponent(v.name) + MODEL_QS + '">' + (v.model ? v.model : 'base') + (v.variation ? '·' + v.variation : '') + '</a>').join('') + '</div>'
       : '';
     const numBadge = fam.num ? '<span class="badge">#' + fam.num + '</span>' : '';
     const t = new Date(fam.mtime);
     const pad = n => String(n).padStart(2, '0');
     const ts = t.getFullYear() + '-' + pad(t.getMonth() + 1) + '-' + pad(t.getDate());
-    return '<a class="card" href="' + wHref + '">' +
-      '<span class="cl"><span class="nm">' + fam.label + '</span>' +
-      '<span class="meta">' + numBadge + fallbackNote +
-      (fam.variants.length > 1 ? '<span class="badge">' + fam.variants.length + ' variants</span>' : '') +
-      '</span>' + variantLinks + '</span>' +
-      '<span class="t">' + ts + '</span></a>';
+    // Card = div container; main tap is the label link, with the Static/Sound
+    // toggle + per-variant links as sibling <a>s (no illegal anchor nesting).
+    return '<div class="card">' +
+      '<span class="cl">' +
+        '<a class="maintap" href="' + wHref + '">' +
+          '<span class="nm">' + fam.label + '</span>' +
+          '<span class="meta">' + numBadge + fallbackNote +
+          (fam.variants.length > 1 ? '<span class="badge">' + fam.variants.length + ' clips</span>' : '') +
+          '</span>' +
+        '</a>' + varPick + variantLinks +
+      '</span>' +
+      '<span class="t">' + ts + '</span></div>';
   }
 
   function sortFams(fams) {
@@ -667,7 +745,7 @@ ${modelScript(activeModel)}
 function gridPage(activeModel) {
   const items = listWidgets().slice().sort(byNumber);
   const data = items.map((it) => ({
-    name: it.name, label: it.label, num: it.num, model: it.model, family: it.family,
+    name: it.name, label: it.label, num: it.num, model: it.model, variation: it.variation, family: it.family,
   }));
   const payload = JSON.stringify(data).replace(/</g, '\\u003c');
   return `<!DOCTYPE html><html lang="en"><head>
@@ -728,11 +806,16 @@ ${THEME_CSS}
     const wantBase = ACTIVE_MODEL === DEFAULT_MODEL;
     const tiles = [];
     for (const g of map.values()) {
-      const exact = wantBase
-        ? g.variants.find(v => !v.model)
-        : g.variants.find(v => v.model === ACTIVE_MODEL);
-      const clip = exact || g.variants.find(v => !v.model) || g.variants[0];
-      tiles.push({ name: clip.name, label: g.label, num: g.num, model: ACTIVE_MODEL, fallback: !exact });
+      // Scope to the active rig, then default to the SOUND-reactive variation
+      // (else static, else anything) so the contact sheet shows the sound clip.
+      const scoped = wantBase
+        ? g.variants.filter(v => !v.model)
+        : g.variants.filter(v => v.model === ACTIVE_MODEL);
+      const pool = scoped.length ? scoped : (g.variants.filter(v => !v.model).length ? g.variants.filter(v => !v.model) : g.variants);
+      const clip = pool.find(v => v.variation === 'sound')
+        || pool.find(v => v.variation === 'static') || pool[0];
+      tiles.push({ name: clip.name, label: g.label, num: g.num, model: ACTIVE_MODEL,
+        variation: clip.variation, fallback: !scoped.length });
     }
     return tiles;
   }
@@ -762,9 +845,10 @@ ${THEME_CSS}
     const a = document.createElement('a');
     a.className = 'tile';
     a.href = '/w/' + encodeURIComponent(it.name) + MODEL_QS;
-    const md = it.fallback
+    const vtag = it.variation ? '<span class="md">' + it.variation + '</span>' : '';
+    const md = (it.fallback
       ? '<span class="md fb">(test_bench)</span>'
-      : (it.model ? '<span class="md">' + it.model + '</span>' : '');
+      : (it.model ? '<span class="md">' + it.model + '</span>' : '')) + vtag;
     const src = '/w/' + encodeURIComponent(it.name) + MODEL_QS;
     a.innerHTML =
       '<div class="frame">' +
@@ -1170,7 +1254,8 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/list') {
     return send(res, 200, 'application/json; charset=utf-8',
       JSON.stringify(listWidgets().map((it) => ({
-        name: it.name, mtime: it.mtime, num: it.num, family: it.family, model: it.model,
+        name: it.name, mtime: it.mtime, num: it.num, family: it.family,
+        model: it.model, variation: it.variation,
       }))));
   }
 
