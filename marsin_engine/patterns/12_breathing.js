@@ -44,8 +44,10 @@ export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
 export var kick = 0.0;         // AUDIO: breath-peak brightness pop
 export var radius = 0.5;       // AUDIO: breath swell / travel distance
 export var depth = 0.5;        // AUDIO: inhale depth (how far toward cp2)
-export var spatialOffset = 0.3;// breath ripple spread across the rig
-export var sharpness = 0.3;    // breath crest sharpness
+export var spatialOffset = 0.5;// breath ripple spread across the rig
+export var sharpness = 0.4;    // breath crest sharpness (lower = fuller, softer
+                               // breath = the calm meditative identity; high
+                               // values crush the crest, so default sits below 0.5)
 export var whiteLevel = 0.45;  // WHITE: overall white amount / keep (audio: micLow)
 export var whiteKick = 0.0;    // WHITE: white spark on inhale + blinder pop (audio: micKick)
 export var blinderBite = 0.6;  // WHITE: how snappy the vintage-head blinder swell hits

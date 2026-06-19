@@ -35,7 +35,7 @@ export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
 export var kick = 0.0;         // AUDIO: caustic-crest brightness pop
 export var radius = 0.5;       // AUDIO: current swell / caustic reach
 export var shimmer = 0.5;      // AUDIO: caustic shimmer detail
-export var density = 0.4;      // current spatial frequency
+export var density = 0.5;      // current spatial frequency
 export var whiteLift = 0.5;    // upper-crown white emitter
 export var uvLift = 0.5;       // upper-crown UV emitter
 
@@ -105,6 +105,7 @@ var shimmerPhase = 0.0;
 var autoClock = 0.0;
 var effDir = 1.0;
 var localMul = 1.0;
+var tideBreath = 1.0;   // gentle autonomous tidal swell (rest motion, not level)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -130,6 +131,11 @@ export function beforeRender(delta) {
   if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
   else if (driftB <= -PHASE_WRAP) driftB = driftB + PHASE_WRAP;
   if (shimmerPhase >= PHASE_WRAP) shimmerPhase = shimmerPhase - PHASE_WRAP;
+
+  // Gentle autonomous tidal swell: the whole current rises and ebbs on a slow
+  // incommensurate clock. This is a REST-motion breath (independent of level) so
+  // the rig is never static in silence; level still dominates total brightness.
+  tideBreath = 0.70 + 0.30 * wave(shimmerPhase * 0.8 + autoClock * 0.011);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -159,13 +165,15 @@ export function render3D(index, x, y, z) {
 
   // Single-expression brightness (avoid repeated `v=v*x` VM mis-compile).
   var swell = current * (0.6 + 0.4 * crown) + crest * (0.5 + kick * 0.8);
-  var bri = (BASE_FLOOR + clamp01(swell) * (1.0 - BASE_FLOOR)) * level;
+  var bri = (BASE_FLOOR + clamp01(swell) * (1.0 - BASE_FLOOR)) * level * tideBreath;
 
   // Strict cp1<->cp2 RGB lerp driven by the caustic; a contrasted curve spreads
   // pixels toward BOTH palette ends (caustic peaks -> cp2, troughs -> cp1) so
   // the rig genuinely shows two hues; crest fully pushes toward cp2.
   var spread2 = wave(crossWave * 1.3 + ny * 0.5 - driftB * 0.06);
-  var tColour = clamp01(pow(spread2, 0.6) * 0.85 + crest * 0.6);
+  // Contrast curve centred so the rig genuinely shows BOTH palette ends at once
+  // (troughs sit at cp1, crests reach cp2) rather than skewing all-caustic.
+  var tColour = clamp01(pow(spread2, 1.15) * 1.05 + crest * 0.55);
   var r = (pr1 + (pr2 - pr1) * tColour) * bri;
   var g = (pg1 + (pg2 - pg1) * tColour) * bri;
   var b = (pb1 + (pb2 - pb1) * tColour) * bri;

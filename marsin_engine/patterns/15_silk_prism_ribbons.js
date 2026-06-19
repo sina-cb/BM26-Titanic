@@ -35,8 +35,8 @@ export var level = 1.0;        // AUDIO: overall brightness (PRIMARY)
 export var kick = 0.0;         // AUDIO: ribbon-crest brightness pop
 export var radius = 0.5;       // AUDIO: ribbon width / spread
 export var shimmer = 0.5;      // AUDIO: satin sheen / fine detail
-export var ribbonCount = 0.35; // number of ribbons across the rig
-export var softness = 0.3;     // ribbon edge softness
+export var ribbonCount = 0.5;  // number of ribbons across the rig
+export var softness = 0.4;     // ribbon edge softness
 
 export var cp1H = 0.52, cp1S = 1.0, cp1V = 1.0; // Ribbon A (cyan default)
 export var cp2H = 0.86, cp2S = 1.0, cp2V = 1.0; // Ribbon B (magenta default)
@@ -104,6 +104,7 @@ var colourPhase = 0.0;
 var autoClock = 0.0;
 var effDir = 1.0;
 var localMul = 1.0;
+var silkBreath = 1.0;   // gentle autonomous satin swell (rest motion, not level)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -131,6 +132,11 @@ export function beforeRender(delta) {
   else if (phaseB <= -PHASE_WRAP) phaseB = phaseB + PHASE_WRAP;
   if (shadowPhase >= PHASE_WRAP) shadowPhase = shadowPhase - PHASE_WRAP;
   if (colourPhase >= PHASE_WRAP) colourPhase = colourPhase - PHASE_WRAP;
+
+  // Gentle autonomous satin swell: the silk brightens and dims as a whole on a
+  // slow incommensurate clock so the rig is never static in silence. REST motion
+  // (independent of level); level still dominates the brightness budget.
+  silkBreath = 0.74 + 0.26 * wave(shadowPhase * 0.7 + autoClock * 0.009);
 
   _hsv2rgb1();
   _hsv2rgb2();
@@ -161,7 +167,7 @@ export function render3D(index, x, y, z) {
   var crest = (ribbon > 0.74) ? (ribbon - 0.74) * 5.0 : 0.0;
   // Gentle gain floor (0.18) so musical peaks keep crisp 255 cores even when the
   // level signal sits mid-range, while level still dominates the brightness budget.
-  var bri = (BASE_FLOOR + clamp01(body + crest * (0.7 + kick * 0.9)) * (1.0 - BASE_FLOOR)) * (0.24 + level * 0.80);
+  var bri = (BASE_FLOOR + clamp01(body + crest * (0.7 + kick * 0.9)) * (1.0 - BASE_FLOOR)) * (0.24 + level * 0.80) * silkBreath;
 
   // Travelling colour blend across the rig — strict cp1<->cp2 RGB lerp.
   var colourBlend = clamp01(wave(nx * 0.7 + ny * 0.35 + colourPhase * 0.18));

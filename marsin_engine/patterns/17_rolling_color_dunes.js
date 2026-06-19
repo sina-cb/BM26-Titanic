@@ -43,10 +43,10 @@ export var localSpeed = 0.5;     // drift rate (0 still creeps, 1 ~4x faster)
 export var direction = 0.5;      // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
 export var level = 1.0;          // PRIMARY audio: overall brightness (micLow)
 export var kick = 0.0;           // audio: kick -> surf + Vintage blinder pop (micKick)
-export var radius = 0.45;        // audio: dune fold depth / sand shift (micFlux)
+export var radius = 0.5;         // audio: dune fold depth / sand shift (micFlux)
 export var detail = 0.5;         // audio: dune contrast / surf sharpness (micHigh)
-export var duneScale = 0.42;     // dune density (0..1)
-export var stageSurf = 0.6;      // surf-line strength on the Pars (0..1)
+export var duneScale = 0.5;      // dune density (0..1)
+export var stageSurf = 0.5;      // surf-line strength on the Pars (0..1)
 export var amberWarmth = 0.55;   // Vintage amber warmth (0..1)
 export var whiteLevel = 0.5;     // WHITE: overall white amount / vintage keep (micLow)
 export var whiteKick = 0.0;      // WHITE: kick-driven blinder bite (micKick)
@@ -137,11 +137,16 @@ export function beforeRender(delta) {
   // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
   autoClock = autoClock + dt * 0.053 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var rate = (0.4 + 0.6 * cos(autoClock)) * dirSign * localMultiplier;
+  // A baseline drift magnitude (sign from direction) keeps the dunes visibly
+  // rolling even at the guarded-center default; direction still steers the bias
+  // and the autonomous clock still eases the roll through reversals.
+  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
+  var sweepRate = dirSign + dirMag * 0.7;   // never near-zero at center
+  var rate = (0.4 + 0.6 * cos(autoClock)) * sweepRate * localMultiplier;
 
   rollPhase  = rollPhase  + dt * 0.34 * rate;        if (rollPhase  >= PHASE_WRAP) rollPhase  -= PHASE_WRAP; else if (rollPhase  <= -PHASE_WRAP) rollPhase  += PHASE_WRAP;
   driftPhase = driftPhase + dt * 0.34 * 0.41 * rate; if (driftPhase >= PHASE_WRAP) driftPhase -= PHASE_WRAP; else if (driftPhase <= -PHASE_WRAP) driftPhase += PHASE_WRAP;
-  surfPhase  = surfPhase  + dt * 0.62 * localMultiplier * dirSign; if (surfPhase >= PHASE_WRAP) surfPhase -= PHASE_WRAP; else if (surfPhase <= -PHASE_WRAP) surfPhase += PHASE_WRAP;
+  surfPhase  = surfPhase  + dt * 0.62 * localMultiplier * sweepRate; if (surfPhase >= PHASE_WRAP) surfPhase -= PHASE_WRAP; else if (surfPhase <= -PHASE_WRAP) surfPhase += PHASE_WRAP;
 
   liveScale = 3.0 + duneScale * 8.0;          // 0..1 -> 3..11
   foldDepth = 0.08 + radius * 0.30;           // micFlux: dune fold depth

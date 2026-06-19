@@ -31,10 +31,10 @@ export var localSpeed = 0.5;   // tide rate (0 still creeps, 1 ~4x faster)
 export var direction = 0.5;    // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
 export var level = 1.0;        // PRIMARY audio: overall brightness (micLow)
 export var kick = 0.0;         // audio: kick -> foam/white crest pop (micKick)
-export var radius = 0.45;      // audio: foam crest width / surge (micFlux)
-export var tideWidth = 0.42;   // base foam width (0..1; scaled in render)
-export var whiteLevel = 0.7;   // foam white-channel level
-export var uvLevel = 0.7;      // UV undertow glow (audio: micHigh)
+export var radius = 0.5;       // audio: foam crest width / surge (micFlux)
+export var tideWidth = 0.5;    // base foam width (0..1; scaled in render)
+export var whiteLevel = 0.6;   // foam white-channel level
+export var uvLevel = 0.6;      // UV undertow glow (audio: micHigh)
 
 export var cp1H = 0.70, cp1S = 1.0, cp1V = 1.0; // mist colour (blue/indigo)
 export var cp2H = 0.45, cp2S = 1.0, cp2V = 1.0; // undertow colour (cyan/green)
@@ -106,7 +106,13 @@ export function beforeRender(delta) {
   // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
   autoClock = autoClock + dt * 0.049 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var rate = (0.4 + 0.6 * cos(autoClock)) * dirSign * localMultiplier;
+  // A baseline sweep magnitude (sign from direction) keeps the tide visibly
+  // sweeping even at the guarded-center default; direction still steers the bias
+  // and the autonomous clock still eases it through reversals.
+  var dirBias = dirSign;
+  var dirMag = (dirBias < 0.0) ? -1.0 : 1.0;
+  var sweepRate = dirBias + dirMag * 0.7;   // never near-zero at center
+  var rate = (0.4 + 0.6 * cos(autoClock)) * sweepRate * localMultiplier;
 
   // Two phases at an irrational ratio (1 : 0.58) so the look never re-locks.
   tide = tide + dt * 0.50 * rate;          if (tide >= PHASE_WRAP) tide -= PHASE_WRAP; else if (tide <= -PHASE_WRAP) tide += PHASE_WRAP;
@@ -137,7 +143,9 @@ export function render3D(index, x, y, z) {
   // Kick pops the foam crest (white + mist), only where there is foam.
   var crest = foam * (1.0 + kick * 1.4);
 
-  var tColour = lowRoll;
+  // Contrast the mist blend so both palette ends read at once (troughs sit at
+  // cp1, crests reach cp2) instead of hovering around a single mid hue.
+  var tColour = max(0.0, min(1.0, (lowRoll - 0.5) * 1.5 + 0.5));
   var rBase = (pr1 + (pr2 - pr1) * tColour) * (mist + crest * 0.25);
   var gBase = (pg1 + (pg2 - pg1) * tColour) * (mist + crest * 0.25);
   var bBase = (pb1 + (pb2 - pb1) * tColour) * (mist + crest * 0.25);

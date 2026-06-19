@@ -44,16 +44,16 @@ export var direction = 0.5;      // wash travel direction (0.5 = guarded center)
 export var level = 1.0;          // AUDIO: overall brightness (PRIMARY)
 export var kick = 0.0;           // AUDIO: sparkle-burst brightness pop
 export var radius = 0.5;         // AUDIO: sparkle spread / bloom reach
-export var density = 0.4;        // AUDIO: how many sparkles fire
-export var sparkleIntensity = 0.85;
-export var sparkleSize = 0.35;
-export var backgroundLevel = 0.2;
-export var whiteGlint = 0.42;
-export var amberGlint = 0.18;
-export var uvGlint = 0.12;
-export var whiteLevel = 0.6;   // WHITE: overall white-glint amount (scales the glint mix)
+export var density = 0.5;        // AUDIO: how many sparkles fire
+export var sparkleIntensity = 0.7;
+export var sparkleSize = 0.5;
+export var backgroundLevel = 0.3;
+export var whiteGlint = 0.5;
+export var amberGlint = 0.3;
+export var uvGlint = 0.3;
+export var whiteLevel = 0.5;   // WHITE: overall white-glint amount (scales the glint mix)
 export var whiteKick = 0.0;    // WHITE: kick-driven white-hot sparkle pop + blinder (audio target)
-export var whiteWarmth = 0.45; // WHITE: glint tint, 0=cool/UV .. 1=warm/amber
+export var whiteWarmth = 0.5;  // WHITE: glint tint, 0=cool/UV .. 1=warm/amber
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Left / "A" colour (cyan)
 export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // Right / "B" colour (amber)
