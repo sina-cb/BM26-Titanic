@@ -46,16 +46,18 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // FIRST control; scales sweep rate
-export var level = 1.0;        // overall brightness gain (PRIMARY audio target)
-export var kick = 0.0;         // kick-driven brightness pop on the eye
+export var level = 0.5;        // overall brightness gain (PRIMARY) — mid; audio swings up
+export var kick = 0.5;         // kick-driven brightness pop on the eye
 export var radius = 0.5;       // sweep travel / eye-width amplitude (audio target)
-export var trail = 0.3;        // soft afterglow / glow (audio target)
-export var eyeWidth = 0.15;    // eye core half-width knob (identity)
-export var backgroundGlow = 0.05; // faint background glow knob (identity)
-export var direction = 0.55;   // sweep direction (guarded; never freezes)
-export var whiteLevel = 0.35;  // WHITE: overall vintage-head white amount/keep
-export var whiteKick = 0.0;    // WHITE: kick-driven blinder pop (audio target)
-export var blinderBite = 0.55; // WHITE: how snappy/concentrated the blinder hit
+export var trail = 0.5;        // soft afterglow / glow (audio target)
+export var eyeWidth = 0.5;     // eye core half-width knob (identity) — medium eye
+export var backgroundGlow = 0.15; // faint background glow knob (identity) — low so the
+                               // near-black scanner contrast survives; 0.5+ floods bg.
+export var direction = 0.5;    // sweep direction (guarded; never freezes)
+export var whiteLevel = 0.5;   // WHITE: overall vintage-head white amount/keep
+export var whiteKick = 0.3;    // WHITE: kick-driven blinder pop (transient; low static
+                               // default so the steady white does not wash the hue)
+export var blinderBite = 0.5;  // WHITE: how snappy/concentrated the blinder hit
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Classic Red eye
 export var cp2H = 0.6, cp2S = 1.0, cp2V = 0.5; // Blue background
@@ -174,7 +176,8 @@ export function beforeRender(delta) {
 
   // PRIMARY: clean level -> overall brightness gain (NO phase wobble).
   // level default 1.0; micLow drives it. Floor keeps silence non-black.
-  briGain = 0.18 + 1.05 * clamp01(level);
+  briGain = 0.22 + 1.25 * clamp01(level);   // mid default ~0.84 keeps the eye core
+                                            // bright (peakMaxChan); level=1 -> 1.47 push
 }
 
 export function render3D(index, x, y, z) {

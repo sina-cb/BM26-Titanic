@@ -46,13 +46,19 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // FIRST: wash drift rate
 export var direction  = 0.5;   // drift direction (0.5 center -> guarded freeze)
-export var level      = 1.0;   // overall brightness (PRIMARY)
-export var kick       = 0.0;   // kick brightness pop on the warm colour body
+export var level      = 0.5;   // overall brightness (PRIMARY) — mid, audio swings up
+export var kick       = 0.0;   // kick brightness pop on the warm colour body —
+                               // transient target; a steady lift floods red and
+                               // collapses the analogous hueSpread below spec.
 export var radius     = 0.5;   // movement radius / feature scale
-export var warmth     = 0.4;   // warm glow lift
+export var warmth     = 0.5;   // warm glow lift
 export var whiteLevel = 0.45;  // WHITE: overall white amount / vintage keep
-export var whiteKick  = 0.0;   // WHITE: kick-driven blinder bite (vintage W pop)
-export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the white
+export var whiteKick  = 0.2;   // WHITE: kick-driven blinder bite (vintage W pop) —
+                               // low static default: it is a transient blinder; a
+                               // steady 0.5 washes the warm hue below spec (hueSpread).
+export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the white —
+                               // low default keeps golden-hour tungsten-warm; UV at
+                               // 1 cools it. (0.5 introduces blue that breaks identity.)
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red
 export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0;  // sunset amber-gold
@@ -172,7 +178,8 @@ export function beforeRender(delta) {
 
   // Resolve audio-driven controls once per frame (clean level->gain; no phase
   // wobble so the PRIMARY correlation stays high).
-  levGain = 0.25 + 0.75 * clamp01(level);     // calm non-black floor at level=0
+  levGain = 0.20 + 1.00 * clamp01(level);     // calm non-black floor at level=0;
+                                              // mid default ~0.70, level=1 -> 1.20 push
   radScale = 0.35 + clamp01(radius) * 1.3;    // feature scale
   kickBody = clamp01(kick);                    // kick pop on the warm colour body
   warmLift = clamp01(warmth);

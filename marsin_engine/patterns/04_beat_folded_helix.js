@@ -58,15 +58,18 @@
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // tunnel travel + spin rate (0 still creeps)
 export var radius = 0.5;        // movement RADIUS (audio: micFlux)
-export var kick = 0.0;          // brightness KICK (audio: micKick)
-export var level = 1.0;         // overall brightness PRIMARY (audio: micLow)
-export var count = 0.18;        // armCount selector
-export var twistFreqN = 0.625;  // twistFreq selector (maps to -10..30)
-export var contrast = 1.5;      // arm crispness
-export var direction = 0.75;    // tunnel/spin heading (0.5 = center)
+export var kick = 0.0;          // brightness KICK (audio: micKick) — transient; steady
+                                // lift flattens the beat pulse + dilutes PRIMARY corr.
+export var level = 0.5;         // overall brightness PRIMARY (audio: micLow) — mid; swings up
+export var count = 0.5;         // armCount selector (identity; scaled in beforeRender)
+export var twistFreqN = 0.5;    // twistFreq selector (maps to -10..30)
+export var contrast = 0.5;      // arm crispness (identity slider; scaled in beforeRender)
+export var direction = 0.5;     // tunnel/spin heading (0.5 = center, guarded in setter)
 export var whiteLevel = 0.5;    // WHITE: overall white amount / vintage keep (audio: micLow)
-export var whiteKick = 0.0;     // WHITE: kick-driven blinder bite (audio: micKick)
-export var whiteWarmth = 0.3;   // WHITE: warm amber(A) <-> cool/UV(U) tint of the white
+export var whiteKick = 0.3;     // WHITE: kick-driven blinder bite (transient; low static
+                                // default so steady white does not wash the hue)
+export var whiteWarmth = 0.3;   // WHITE: warm amber(A) <-> cool/UV(U) tint — low keeps the
+                                // blinder tungsten-warm by default; UV at 1 cools it
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Cyan default (cp1)
 export var cp2H = 0.0, cp2S = 1.0, cp2V = 1.0; // Red default  (cp2)
@@ -79,7 +82,7 @@ export function sliderKick(v) { kick = v; }
 export function sliderLevel(v) { level = v; }
 export function sliderCount(v) { count = v; }
 export function sliderTwistFreq(v) { twistFreqN = v; }
-export function sliderContrast(v) { contrast = 0.5 + v * 9.0; }
+export function sliderContrast(v) { contrast = v; }   // store directly; scale in beforeRender
 export function sliderDirection(v) {
   var d = (v * 2.0) - 1.0;                       // -1..1
   if (d >= 0.0 && d < 0.06) d = 0.06;            // never sit at exactly 0
@@ -147,6 +150,7 @@ var beatPulse = 0.0;       // 0..1 beat pulse this frame
 var headingNow = 1.0;      // resolved heading this frame (manual x auto-flip)
 var armCount = 3.0;        // resolved arm count this frame
 var twistFreq = 4.0;       // resolved twist freq this frame
+var contrastPow = 5.0;     // resolved arm-crispness power this frame
 var whiteKeep = 0.0;       // resolved overall white amount this frame
 var whiteBite = 0.0;       // resolved kick-driven blinder bite this frame
 var whiteTint = 0.0;       // resolved white tint: 0 warm(A) -> 1 cool/UV(U)
@@ -199,8 +203,9 @@ export function beforeRender(delta) {
   beatPulse = clamp01(clockBeat * 0.16 + kick * 0.95);
 
   // Resolved controls.
-  armCount = 1.0 + floor(count * 12.0);        // 1..13 arms
-  twistFreq = -10.0 + twistFreqN * 40.0;       // -10..30
+  armCount = 1.0 + floor(count * 12.0);        // 1..13 arms (mid 0.5 -> 7)
+  twistFreq = -10.0 + twistFreqN * 40.0;       // -10..30 (mid 0.5 -> 10)
+  contrastPow = 0.5 + contrast * 9.0;          // arm crispness 0.5..9.5 (mid 0.5 -> 5.0)
 
   // White controls resolved once per frame (clamped). whiteKeep = always-on
   // amount, whiteBite = kick-driven blinder pop, whiteTint = amber<->UV split.
@@ -246,8 +251,11 @@ export function render3D(index, x, y, z) {
 
   // Crisp arms with true-black-ish negative space; contrast sharpens the cores.
   var v = field > 0.0 ? field : 0.0;
-  v = pow(v, contrast);
-  var floorv = 0.012;                           // small non-black floor (visibility)
+  v = pow(v, contrastPow);
+  var floorv = 0.05;                            // non-black floor: lifts the dark tunnel
+                                                // pixels above the visibility threshold so
+                                                // the whole rig reads lit (mission-critical),
+                                                // while the bright arms keep the contrast.
 
   var outV = floorv;
   var outW = 0.0;
@@ -289,7 +297,7 @@ export function render3D(index, x, y, z) {
 
   // PRIMARY: level is a clean overall gain, applied uniformly (no animation-phase
   // term) so total brightness tracks micLow rather than the spin/beat wobble.
-  var gain = level;
+  var gain = 0.25 + 1.25 * level;   // mid default ~0.875; level=1 -> 1.50 push
   outV = clamp01(outV);
   r = clamp01(r * outV * gain);
   g = clamp01(g * outV * gain);

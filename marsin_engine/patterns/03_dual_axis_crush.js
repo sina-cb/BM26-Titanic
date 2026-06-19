@@ -35,11 +35,19 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // collapse rate
-export var level = 1.0;        // PRIMARY overall brightness (micLow)
-export var kick = 0.0;         // brightness kick on the center flash (micKick)
-export var radius = 0.55;      // movement radius / beam reach (micFlux)
+export var level = 0.75;       // PRIMARY overall brightness (micLow). NOT 0.5: the gain
+                               // is level² (so the rig fully darkens with micLow -> tight
+                               // PRIMARY corr); at 0.5 that² = 0.25 reads broken-dim
+                               // (peak~96). 0.75² = 0.56 is the perceptual middle —
+                               // bright collapse at default, micLow still swings it.
+export var kick = 0.0;         // brightness kick on the center flash (micKick) —
+                               // transient; a steady lift inflates the autonomous flash
+                               // and dilutes the micLow PRIMARY correlation.
+export var radius = 0.5;       // movement radius / beam reach (micFlux)
 export var beamWidth = 0.5;    // head/tail falloff width
-export var direction = 1.0;    // <0.5 expand outward, >=0.5 collapse inward
+export var direction = 1.0;    // <0.5 expand outward, >=0.5 collapse inward —
+                               // 1.0 (full inward) is the signature collapse identity;
+                               // slider-center would near-freeze the attack.
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Tail colour (cyan)
 export var cp2H = 0.1,  cp2S = 1.0, cp2V = 1.0; // Beam-head colour (amber)
@@ -68,7 +76,9 @@ var CREEP_RATE = 0.05;     // floor rate so it still moves at localSpeed = 0
 var PHASE_WRAP = 10000.0;  // wrap accumulators far from any in-frame use
 var SQRT2 = 1.41421356;
 var SQRT3 = 1.73205081;
-var BASE_FLOOR = 0.02;     // tiny non-black floor (silence-safe / visibility)
+var BASE_FLOOR = 0.07;     // non-black floor: keeps the rig lit even at level=0 (the
+                           // level² gain otherwise blacks out the whole slider-0 extreme).
+                           // Small enough that it barely dilutes the PRIMARY corr.
 
 // ── Persistent state ─────────────────────────────────────────────────────────
 var attackPos = 0.0;       // collapse phase, accumulator (wrapped at PHASE_WRAP)
@@ -201,7 +211,10 @@ export function render3D(index, x, y, z) {
   // with level but keeps a strong floor so the convergence peak stays CRISP and
   // BRIGHT (peakMaxChan >= 200) at musical peaks (level high) without diluting
   // the correlation at low level.
-  var gain = level * level;
+  var gain = level * level;         // pure level²: gain->0 as level->0 so the whole rig
+                                    // darkens with micLow -> tightest PRIMARY corr. The
+                                    // mid-default dimness is compensated by the intrinsic
+                                    // flash intensity (see flashIntensity) and BASE_FLOOR.
   var v = brightness * gain;
   // Flash tracks level too (so it adds NO uncorrelated brightness variance) but
   // is intrinsically intense, so at musical peaks (level high) the convergence

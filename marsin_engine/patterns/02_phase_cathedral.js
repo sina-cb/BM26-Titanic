@@ -41,12 +41,13 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;     // FIRST control: drift rate (still creeps at 0)
-export var level = 1.0;          // PRIMARY audio: overall brightness gain
-export var kick = 0.0;           // audio: kick brightness pop + vintage blinder
-export var radius = 0.0;         // audio: field expansion / radial travel
-export var sharpness = 2.5;      // node crush power
-export var radialDensity = 15.0; // radial ring density (sliderCount)
-export var globalDir = 1.0;      // base drift direction (guarded)
+export var level = 0.5;          // PRIMARY audio: overall brightness — mid; swings up
+export var kick = 0.0;           // audio: kick pop + vintage blinder — transient; a
+                                 // steady lift flattens the pulse (kills ANIMATING).
+export var radius = 0.5;         // audio: field expansion / radial travel
+export var sharpness = 0.5;      // node crush power (identity slider; scaled in render3D)
+export var radialDensity = 0.5;  // radial ring density (identity slider; scaled in render3D)
+export var globalDir = 0.5;      // base drift direction (identity slider; guarded in setter)
 
 export var cp1H = 0.6, cp1S = 1.0, cp1V = 1.0; // Deep Blue
 export var cp2H = 0.8, cp2S = 1.0, cp2V = 1.0; // Pink / Magenta
@@ -57,8 +58,8 @@ export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderLevel(v) { level = v; }        // store v directly
 export function sliderKick(v) { kick = v; }          // store v directly
 export function sliderRadius(v) { radius = v; }       // store v directly
-export function sliderSharpness(v) { sharpness = 1 + v * 9; }
-export function sliderCount(v) { radialDensity = 2 + v * 20; }
+export function sliderSharpness(v) { sharpness = v; }       // store directly; scale in render3D
+export function sliderCount(v) { radialDensity = v; }        // store directly; scale in render3D
 export function sliderDirection(v) {
   // Dead-zone guard: slider-center would give globalDir=0 (frozen field). Keep the
   // interference always drifting — slightly forward at/above center, slightly reverse below.
@@ -157,10 +158,15 @@ export function render3D(index, x, y, z) {
   var nx = clamp01(x);
   var ny = clamp01(y);
 
+  // Identity-slider scaling: map the stored 0..1 controls to their working spans.
+  var sharpPow = 1.0 + sharpness * 7.0;       // node crush power 1..8 (mid 0.5 -> 4.5);
+                                              // capped at 8 so the crush extreme stays lit
+  var ringDens = 2.0 + radialDensity * 18.0;  // radial ring density 2..20 (mid -> 11)
+
   // radius (micFlux) expands the field: planes shift outward and the radial ring
   // density travels. Travel is additive so it never zeroes the geometry.
   var expand = radius * 6.0;            // 0..6 cycles of plane shift
-  var dens = radialDensity + radius * 18.0;  // radial rings travel outward
+  var dens = ringDens + radius * 18.0;  // radial rings travel outward
 
   var f1 = sin((nx * 10.0) * PI2 + beatPhase + expand);
   var f2 = sin((ny * 10.0) * PI2 - beatPhase * 0.5 - expand);
@@ -172,7 +178,7 @@ export function render3D(index, x, y, z) {
   var f4 = sin((dist * dens) * PI2 - beatPhase * INVGOLDEN);
 
   var field = (f1 + f2 + f3 + f4) * 0.25;
-  var magnitude = pow(abs(field), sharpness);
+  var magnitude = pow(abs(field), sharpPow);
   // Small brightness floor: the field crushes to ~0 at nodes and all planes can
   // hit a zero-crossing at once. Keep a faint glow so the cathedral is NEVER
   // fully black (mission-critical visibility).
@@ -181,7 +187,7 @@ export function render3D(index, x, y, z) {
   // PRIMARY: overall brightness gain from level (micLow). A clean level->gain,
   // no animation-phase wobble, so corr stays high. Range biased so peaks reach
   // full channel and level dominates the brightness budget.
-  var gain = 0.22 + 1.05 * level;
+  var gain = 0.25 + 1.45 * level;   // mid default ~0.97; level=1 -> 1.70 push
   // Kick (micKick) pops brightness across the rig.
   var kickPop = 1.0 + kick * 0.9;
   magnitude = magnitude * gain * kickPop;
@@ -192,7 +198,7 @@ export function render3D(index, x, y, z) {
   // pushes toward the saturated end so the rig spans both palette ends.
   // Push toward the palette ENDS (not the desaturated midpoint) so the rig
   // decisively spans both cp1 and cp2 -> healthy hueSpread.
-  var tcol = clamp01(0.5 - field * 1.4);   // -1 -> cp2 end (1), +1 -> cp1 end (0)
+  var tcol = clamp01(0.5 - field * 1.8);   // -1 -> cp2 end (1), +1 -> cp1 end (0)
   var baseR = pr1 + (pr2 - pr1) * tcol;
   var baseG = pg1 + (pg2 - pg1) * tcol;
   var baseB = pb1 + (pb2 - pb1) * tcol;
@@ -211,7 +217,7 @@ export function render3D(index, x, y, z) {
     // Pars: zero-crossing cored — bright at the nodes. zc^(sharpness*2) crushes
     // hard away from nodes; keep a faint floor so all 4 pars stay lit.
     var zc = 1.0 - abs(field);
-    zc = pow(zc, sharpness * 2.0);
+    zc = pow(zc, sharpPow * 2.0);
     var coreBri = (magnitude * 0.35) + (zc * 0.85 * gain * kickPop);
     if (coreBri > 1.0) coreBri = 1.0;
     outR = baseR * coreBri;

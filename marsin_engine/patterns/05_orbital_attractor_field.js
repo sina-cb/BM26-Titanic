@@ -49,23 +49,27 @@
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;       // FIRST — drives orbit motion rate
-export var level = 1.0;            // PRIMARY overall brightness (micLow)
-export var kick = 0.0;            // kick brightness pop / vintage blinder (micKick)
-export var radius = 0.0;           // movement RADIUS boost (micFlux)
-export var direction = 0.5;        // overall orbit sense (0.5 = neutral)
-export var orbit1 = 0.40;
+export var level = 0.5;            // PRIMARY overall brightness (micLow) — mid; swings up
+export var kick = 0.0;            // kick brightness pop / vintage blinder (micKick) —
+                                  // transient; steady lift dilutes the PRIMARY corr.
+export var radius = 0.5;           // movement RADIUS boost (micFlux)
+export var direction = 0.5;        // overall orbit sense (0.5 = neutral, guarded)
+export var orbit1 = 0.40;          // internal config (no slider) — per-orbit radius
 export var orbit2 = 0.50;
 export var orbit3 = 0.30;
-export var r1 = 1.0;               // signed per-orbit rate (sign = direction)
+export var r1 = 1.0;               // internal config (no slider) — signed per-orbit rate
 export var r2 = -1.5;
 export var r3 = 2.0;
-export var falloff = 2.5;
-export var focus = 1.5;
-export var colorVariation = 0.35;
-export var blackoutTexture = 0.0;
+export var falloff = 0.5;          // core falloff (identity slider; scaled in render3D)
+export var focus = 0.5;            // core focus power (identity slider; scaled in render3D)
+export var colorVariation = 0.5;   // colour drift / warm-arc spread
+export var blackoutTexture = 0.0;  // moving dark-cell mask — destructive; 0 default keeps
+                                   // the field whole (mid-default punches mission-critical
+                                   // visibility holes). Full 0..1 range still available.
 export var whiteLevel = 0.5;       // WHITE: overall white amount / keep (micLow)
-export var whiteKick = 0.0;        // WHITE: kick-driven blinder bite (micKick)
-export var blinderBite = 0.6;      // WHITE: how snappy/hard the blinder attack lands
+export var whiteKick = 0.3;        // WHITE: kick-driven blinder bite (transient; low static
+                                   // default so steady white does not wash the hue)
+export var blinderBite = 0.5;      // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.92, cp1S = 1.0, cp1V = 1.0; // Classic Red (deep crimson-red)
 export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0; // Yellow/Orange (gold->yellow)
@@ -252,7 +256,8 @@ export function render3D(index, x, y, z) {
   var cb = pb1 + (pb2 - pb1) * tWide;
 
   // Overall brightness gain (PRIMARY, clean level->gain, no phase wobble).
-  var gain = 0.30 + level * 0.85;
+  // Lower floor + steeper slope -> level dominates the brightness budget (tighter corr).
+  var gain = 0.20 + level * 1.05;
 
   var bri = v * gain;
 
