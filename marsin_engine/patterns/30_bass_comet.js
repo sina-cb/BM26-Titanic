@@ -1,6 +1,6 @@
 /*
   30_bass_comet.js — a single high-def COMET that streaks the whole rig and
-  leaves a fading tail via a per-pixel feedback buffer (LANG_SPEC §9.5(B)).
+  leaves a fading tail via a coordinate trail-lane (LANG_SPEC §9.5(B)).
 
   CONCEPT (amalgamates 01_cylon_sweep + 10_chasers + 27_swipe trail):
     A persistent brightness lane `buf` of N=128 cells laid along the normalized X
@@ -15,49 +15,54 @@
   streak across titanic 970 / dome 266 / logsville 216. Every lane access is
   guarded 0..N-1.
 
-    Everything scales with BASS (sliderBass, fed by micLow):
-      - SPEED : more bass → the comet flies faster (more sweeps/sec).
-      - TAIL  : more bass → slower decay → a LONGER tail (more cells lit).
-      - HEAD  : more bass → a BRIGHTER head.
-    So louder bass = a longer, brighter comet ⇒ higher TOTAL brightness, a
-    strong measurable corr(micLow, brightness).
+  ── AUDIO IDENTITY: bass drives MOTION (the headline), not brightness ──────────
+  The operator's chosen design: BASS is mapped to the comet's SPEED. Sweeping the
+  low band visibly DRIVES the comet — quiet = a slow drifting ember, a bass hit =
+  the comet FLIES across the whole rig. This is a POSITIONAL/MOTION reactivity
+  (like 27_swipe), so the usual band->brightness correlation deliberately does NOT
+  apply — the headline is the comet's velocity tracking the bass, measured as a
+  large frame-to-frame MOTION delta on the sound clip vs near-silence.
 
-  HIGH-DEF / VISIBILITY: BASE_FLOOR = 0 → un-painted pixels are TRUE BLACK and
-  the head is a tight 1–2 px core. But a minimal time-based "ember" floor keeps
-  the head crawling and faintly lit even in silence — never fully dark
-  (mission-critical), never a crash.
+    PRIMARY  (motion)    : micLow -> sliderBass     -> comet SPEED  (rate)
+    secondary(brightness): micHigh-> sliderHeadKick -> head/tail brightness pop
 
-  HEAD GAIN (peak brightness): micLow at a musical peak only reaches ~0.74, so a
-  raw-bass head would top out dim (peakMaxChan ~190). We REMAP the bass drive onto
-  the actual musical window [BASS_LO, BASS_HI] -> 0..1 (`bassHead`), so a real bass
-  peak drives the head all the way to 1.0 (peak channel saturates >= 210) while
-  quiet stretches stay low — the wide linear span keeps a strong corr(micLow,
-  brightness). The tail and negative space stay dark for contrast.
-  Core equation (head intensity):
-      bassHead = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO))^HEAD_GAMMA
-      hb       = EMBER + (1 - EMBER) * bassHead     (HEAD_GAMMA = 1, linear)
+  The bass->speed coupling is the headline; the high-band brightness kick is a
+  separate, secondary visual axis so a brightness response still exists without
+  being the PRIMARY. Bass intentionally leaves overall brightness ~flat so the
+  motion read stays clean (a brightness-coupled speed would confound the two).
 
-  COLOR: cp1 = cyan head, cp2 = magenta tail; each pixel blends head→tail by how
-  fresh its energy is (bright = head color, faded = tail color).
+  HIGH-DEF / VISIBILITY: the head is a tight crisp core; un-painted pixels read
+  near-black for contrast. The comet is ALWAYS well-lit and animating at rest
+  (no audio, default controls): a strong constant head gain plus a time-based
+  ember keep the head crawling and bright (peakMaxChan >= 200) in silence —
+  never near-dark (mission-critical), never static, never a crash.
+  Core speed equation (bass -> rate):
+      bassSpeed = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO))^SPEED_GAMMA
+      rate      = (MIN_RATE + (MAX_RATE - MIN_RATE) * localGain * bassSpeed * wob) * RATE_SCALE
+  bass spans the rate from a slow crawl (MIN_RATE) to a full streak (MAX_RATE),
+  so the comet's velocity is dominated by the low band.
+
+  COLOR: cp1 = cyan head, cp2 = magenta tail; each pixel blends head->tail by how
+  fresh its energy is (bright = head color, faded = tail color), and a dim shaped
+  wash spans cp1<->cp2 across X so BOTH palette colours read on every rig.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
 AUDIO_MODULATION_V1:
-  sliderBass   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass drives the comet head/tail/speed
-  # sliderTail        static 0.50  # base tail length (bass already extends it; no separate signal)
-  # sliderHeadBright  static 1.00  # base head gain (bass scales it; not separately modulated)
+  sliderBass     <- micLow   range 0.20..1.00 curve linear   # PRIMARY (motion): bass drives the comet SPEED (rate), not brightness
+  sliderHeadKick <- micHigh  range 0.00..1.00 curve linear   # secondary (brightness): high band pops the head/tail brightness
+  # sliderTail        static 0.55  # base tail length (operator-set, not audio-driven)
   # sliderLocalSpeed  static 0.50  # operator auto-rate, not an audio target
+  # sliderDirection   static 0.50  # operator heading bias, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
-export var localSpeed = 0.5;   // auto-animate base rate (0 = slowest crawl)
-export var bass = 0.7;         // 0..1 bass drive (speed + tail + head) — modulatable.
-                               // NON-0.5: the head remap window [BASS_LO,BASS_HI] is built
-                               // around micLow's ELEVATED resting band (~0.46..0.74) so a
-                               // static 0.5 lands at the dark bottom of that window. 0.7
-                               // puts the NO-audio comet at a bright, lively head while the
-                               // remap window (unchanged) preserves the micLow corr.
-export var tail = 0.5;         // base tail length (decay); bass extends it further
-export var headBright = 1.0;   // base head brightness; bass scales it
+export var localSpeed = 0.5;   // auto-animate base rate (pow2 law ~0.25x..4x)
+export var bass = 0.5;         // 0..1 bass drive -> comet SPEED (PRIMARY/motion). Modulatable.
+                               // Default 0.5 lands the no-audio comet at a lively
+                               // mid speed; a bass sweep clearly accelerates it.
+export var headKick = 0.0;     // 0..1 high-band brightness pop on the head/tail (secondary). Modulatable.
+export var tail = 0.55;        // base tail length (decay). Operator-set.
+export var direction = 0.5;    // <0.5 bias reverse, >=0.5 bias forward; centre = auto only
 
 export var cp1H = 0.50, cp1S = 1.0, cp1V = 1.0; // palette 1 — cyan head
 export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // palette 2 — magenta tail
@@ -66,8 +71,9 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderBass(v) { bass = v; }
+export function sliderHeadKick(v) { headKick = v; }
 export function sliderTail(v) { tail = v; }
-export function sliderHeadBright(v) { headBright = v; }
+export function sliderDirection(v) { direction = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 // RIG-AGNOSTIC: the trail is a fixed N=128-cell lane along the normalized X axis,
@@ -76,23 +82,24 @@ export function sliderHeadBright(v) { headBright = v; }
 // NEVER 52. 128 < the array cap so the lane is real, and a 128-cell lane gives a
 // crisp comet on the 52-px test_bench while still covering the 970-px titanic.
 var N = 128;            // trail-lane resolution along X (under the VM array cap)
-var MIN_RATE = 0.1241;  // lane-cells/sec floor (silence: a slow faint comet) — irrational
-var MAX_RATE = 27.7128; // lane-cells/sec at full speed + full bass (= 16*sqrt3, irrational)
+var MIN_RATE = 3.1241;  // lane-cells/sec floor (silence: a slow drifting comet) — irrational
+var MAX_RATE = 96.7128; // lane-cells/sec at full speed + full bass (a fast streak) — irrational
 var DECAY_SLOW = 0.62;  // per-frame keep factor at shortest tail (fast fade)
 var DECAY_FAST = 0.93;  // per-frame keep factor at longest tail (slow fade)
-var EMBER = 0.16;       // minimal head floor (bass=0 extreme still reads, never dead-black)
+var EMBER = 0.18;       // minimal time-based head floor (bass=0 still reads, never dead-black)
 var HEAD_CELLS = 2.5;   // head half-width in lane cells (~the 52-px 1-2 px core)
+var HEAD_BASE = 0.86;   // constant head brightness at rest (NOT bass-coupled) -> always bright
 
-// HEAD GAIN — remap micLow's narrow musical range to a full 0..1 head drive so a
-// real bass peak drives the head to saturation while quiet stretches stay low —
-// the wide linear span keeps a strong corr(micLow, brightness). The window is set
-// around micLow's elevated resting band (the default slider 0.7 sits high in it,
-// giving a bright NO-audio head; see the `bass` default note).
-var BASS_LO = 0.44;        // drive value treated as "no head" (silence baseline)
-var BASS_HI = 0.74;        // drive value that drives the head to a full peak
-var HEAD_GAMMA = 1.0;      // response shape of the remapped head drive (1 = linear)
-var HEAD_OVERDRIVE = 1.0;  // no extra core boost — the remap alone saturates at peak
-var SQRT3 = 1.73205;       // irrational ratio for the bounce-phase wobble (bar 3)
+// BASS -> SPEED remap: micLow's musical low band sits in a narrow elevated window;
+// we remap that window to a full 0..1 SPEED drive so a real bass peak drives the
+// comet to its top streak speed while quiet stretches crawl. This is the PRIMARY
+// (motion) coupling — bass dominates the rate, NOT the brightness.
+var BASS_LO = 0.20;        // drive value treated as "crawl" (silence baseline speed)
+var BASS_HI = 0.74;        // drive value that drives the comet to full streak speed
+var SPEED_GAMMA = 0.80;    // response shape of the remapped speed drive (<1 = snappy low-end)
+var SQRT3 = 1.73205;       // irrational ratio for the bounce-phase wobble
+var PHI = 1.6180339;       // golden ratio for the autonomous direction cadence
+var PHASE_WRAP = 10000.0;  // large wrap for accumulating phases (§7, avoids seams)
 
 // ── Palette RGB cache (strict cp1<->cp2 blending; PATTERNS.md §7) ─────────────
 var pr1 = 0, pg1 = 1, pb1 = 1;
@@ -137,11 +144,13 @@ var buf = array(128);   // trail lane along normalized X (size = N), under VM ca
 var headPos = 0.0;      // comet head position in continuous lane-cell space [0,N)
 var dir = 1.0;          // sweep direction (+1 / -1) — bounces at the lane ends
 var inited = 0;
+var autoFlip = 0.0;     // slow accumulator for autonomous direction variation (§6 #2)
+var prevAutoDir = 1.0;  // last autonomous heading sign — flip is EDGE-triggered
 // The original rates were tuned for a 52-cell sweep (the test_bench rig length).
 // The lane is now 128 cells, so scale rates by 128/52 to keep the comet's visual
 // speed (sweeps of the whole rig per second) identical to the test_bench look.
 var RATE_SCALE = 2.4615;  // 128/52 — preserves the test_bench sweep cadence
-var bassDrive = 0.0;      // gamma-remapped bass drive (resolved each frame, used in render3D)
+var bassSpeed = 0.0;      // remapped bass SPEED drive (resolved each frame)
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -156,27 +165,57 @@ export function beforeRender(delta) {
     inited = 1;
   }
 
-  // Remap the narrow micLow musical range to a full 0..1 head drive (gamma-shaped
-  // so a strong-but-sub-1.0 bass value still drives the head toward saturation).
-  var bassHead = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO));
-  bassHead = pow(bassHead, HEAD_GAMMA);
-  bassDrive = bassHead;   // expose to render3D for the bass-glow floor (PRIMARY corr)
+  // localSpeed exponential law (§6 canonical): 0.5 -> 1x, 1 -> 4x, 0 -> 0.25x.
+  var localGain = pow(2.0, (clamp01(localSpeed) - 0.5) * 4.0);
 
-  // BASS drives speed: louder bass → faster comet. An irrational SQRT3 phase term
+  // PRIMARY (motion): remap the narrow micLow musical window to a full 0..1 SPEED
+  // drive (gamma-shaped, <1 so the low-end snaps). bass dominates the rate.
+  bassSpeed = clamp01((bass - BASS_LO) / (BASS_HI - BASS_LO));
+  bassSpeed = pow(bassSpeed, SPEED_GAMMA);
+
+  // BASS drives SPEED: louder bass -> faster comet. An irrational SQRT3 phase term
   // gives the sweep a non-repeating wobble so it never locks to an integer period.
   var wob = 0.92 + 0.08 * wave(time(0.37) * SQRT3);
   // Rate is in lane-cells/sec, scaled by 128/52 so the comet sweeps the whole rig
-  // at the same visual cadence as the original 52-cell test_bench look.
-  var rate = (MIN_RATE + (MAX_RATE - MIN_RATE) * clamp01(localSpeed) * clamp01(0.18 + 0.82 * bass) * wob) * RATE_SCALE;
+  // at the same visual cadence as the original 52-cell test_bench look. The span
+  // from MIN_RATE (crawl) to MAX_RATE (streak) is opened entirely by bassSpeed,
+  // so sweeping the bass clearly accelerates the comet across the whole rig.
+  var rate = (MIN_RATE + (MAX_RATE - MIN_RATE) * localGain * bassSpeed * wob) * RATE_SCALE;
+
+  // Autonomous direction variation (§6 #2): a slow golden-ratio cadence yields a
+  // heading sign that flips on its own occasionally. We apply it EDGE-TRIGGERED
+  // (only when the sign CHANGES) as a one-shot mid-lane turnaround, so the comet
+  // varies heading organically WITHOUT continuously fighting the end bounces
+  // (a steady override would pin the head against a wall). The operator's
+  // `direction` control biases the resting heading; the bounce always reverses
+  // at the lane ends so the comet streaks the whole rig regardless.
+  autoFlip = autoFlip + dt * localGain * 0.013;
+  if (autoFlip >= PHASE_WRAP) autoFlip = autoFlip - PHASE_WRAP;
+  var autoDir = wave(autoFlip * PHI) < 0.5 ? -1.0 : 1.0;
+  var travel = rate * dt;
 
   // Advance the head and bounce at the lane ends so it streaks the whole X axis
   // (= the whole rig, on every model, since pixels sample the lane by their x).
-  headPos = headPos + dir * rate * dt;
-  if (headPos >= N - 1.0) { headPos = N - 1.0; dir = -1.0; }
-  if (headPos <= 0.0)     { headPos = 0.0;     dir = 1.0;  }
+  headPos = headPos + dir * travel;
+  if (headPos >= N - 1.0) { headPos = N - 1.0; dir = -1.0; }  // bounce off far end
+  if (headPos <= 0.0)     { headPos = 0.0;     dir = 1.0;  }  // bounce off near end
 
-  // BASS drives tail: louder bass → slower decay → longer tail.
-  var keep = DECAY_SLOW + (DECAY_FAST - DECAY_SLOW) * clamp01(clamp01(tail) * 0.72 + bass * 0.28);
+  // EDGE-triggered autonomous turnaround: when the auto cadence flips sign, turn
+  // the comet around once if it is well clear of both ends (never pins a wall).
+  if (autoDir != prevAutoDir && headPos > 4.0 && headPos < N - 5.0) {
+    dir = autoDir;
+  }
+  prevAutoDir = autoDir;
+
+  // Operator heading bias: a clear off-centre push forces the resting heading
+  // (left/right), guarded so it never sits exactly at 0 (§6 #5). Near centre it
+  // leaves heading to the bounce + autonomous cadence.
+  if (clamp01(direction) >= 0.62 && dir < 0.0 && headPos > 4.0 && headPos < N - 5.0) dir = 1.0;
+  if (clamp01(direction) <= 0.38 && dir > 0.0 && headPos > 4.0 && headPos < N - 5.0) dir = -1.0;
+
+  // TAIL length (decay) — operator-set, NOT bass-coupled (keeps brightness off the
+  // bass axis so the motion read stays clean). A small high-band kick can extend it.
+  var keep = DECAY_SLOW + (DECAY_FAST - DECAY_SLOW) * clamp01(clamp01(tail) + clamp01(headKick) * 0.10);
 
   // Decay the whole buffer once per frame (O(N), in beforeRender — §9.1).
   for (var kk = 0; kk < N; kk++) {
@@ -184,30 +223,28 @@ export function beforeRender(delta) {
     if (buf[kk] < 0.002) buf[kk] = 0.0;
   }
 
-  // BASS drives head brightness: louder bass → brighter head (+ an ember floor
-  // so silence still shows a faint crawling comet, never fully black). bassHead is
-  // the gamma-remapped drive, so a musical peak lands the head near 1.0.
-  var hb = clamp01(headBright) * (EMBER + (1.0 - EMBER) * bassHead);
+  // HEAD brightness: a strong CONSTANT base (always bright at rest, peak >= 200),
+  // plus a time-based EMBER so even an extreme keeps crawling, plus a SECONDARY
+  // high-band brightness POP (headKick). Bass deliberately does NOT brighten the
+  // head — bass is the SPEED (PRIMARY/motion) axis, brightness is the high band.
+  var hb = clamp01(HEAD_BASE + (1.0 - HEAD_BASE) * clamp01(headKick));
   if (hb < EMBER) hb = EMBER;
 
   // Paint the head as a small bright cluster in the 128-cell lane. On the coarse
   // 52-px test_bench this was a 1–2 px core; on the fine lane it is ~HEAD_CELLS
-  // wide so every rig's per-pixel sampling reliably catches the head (a 1-cell
-  // head in a 128-lane would be missed by a 52-px sampling, decorrelating the
-  // bass→brightness coupling). The cluster widens slightly with bass so louder
-  // bass lights MORE pixels along the head — reinforcing corr(micLow, brightness).
+  // wide so every rig's per-pixel sampling reliably catches the head.
   var ci = floor(headPos + 0.5);
   if (ci < 0) ci = 0;
   if (ci > N - 1) ci = N - 1;        // hard lane guard (never OOB)
-  var core = clamp01(hb * HEAD_OVERDRIVE);
-  var halfW = floor(HEAD_CELLS * (0.7 + 0.6 * clamp01(bass)) + 0.5);  // ~2..4 cells
+  var core = clamp01(hb);
+  var halfW = floor(HEAD_CELLS + 0.5);
   if (halfW < 1) halfW = 1;
   for (var hk = ci - halfW; hk <= ci + halfW; hk++) {
     if (hk >= 0 && hk <= N - 1) {
       var dh = hk - ci; if (dh < 0) dh = 0 - dh;
       var prof = 1.0 - dh / (halfW + 1.0);   // linear falloff -> crisp head
-      var hv = core * prof;
-      if (hv > buf[hk]) buf[hk] = hv;
+      var hvv = core * prof;
+      if (hvv > buf[hk]) buf[hk] = hvv;
     }
   }
 }
@@ -222,28 +259,26 @@ export function render3D(index, x, y, z) {
 
   var cometBri = buf[ix];
 
-  // ── Bass glow floor (PRIMARY corr): a faint, spatially-structured wash whose
-  //    level tracks bass on EVERY pixel the SAME frame the bass changes. This is
-  //    the clean micLow->brightness coupling the comet's moving head can't give on
-  //    its own (the head's lit-pixel count is noisy under per-pixel x sampling).
-  //    It is kept dim and shaped (dark troughs) so the comet head/tail still read
-  //    crisp on near-black and the negative space stays dark. bassDrive is the
-  //    gamma-remapped musical drive, so the wash lifts cleanly with the low band. ──
+  // ── Ambient wash: a faint, spatially-structured cp1<->cp2 floor that keeps the
+  //    rig calm-but-visible in silence and reads BOTH palette colours across X.
+  //    A small high-band (headKick) term lifts it slightly — the SECONDARY
+  //    brightness axis. Bass is intentionally absent here (motion, not brightness).
+  //    Kept dim + shaped (dark troughs) so the comet head/tail still read crisp. ──
   var washShape = wave(x * 1.7);
   washShape = washShape * washShape;          // sharpen -> keep troughs dark
-  var glow = (0.012 + bassDrive * 0.20) * washShape;
+  var glow = (0.018 + clamp01(headKick) * 0.10) * washShape;
 
   // Colour: the COMET keeps its identity (fresh = cp1 head, faded = cp2 tail);
-  // the GLOW spans cp1<->cp2 by X so BOTH palette colours read across the whole
+  // the WASH spans cp1<->cp2 by X so BOTH palette colours read across the whole
   // rig (preserves the two-colour spread the head-only comet would lose).
   var bri = cometBri;
   var tcol = clamp01(1.0 - cometBri);         // comet: fresh->cp1, faded->cp2
   if (glow > bri) {
     bri = glow;
-    tcol = clamp01(x);                        // glow: cp1 at left -> cp2 at right
+    tcol = clamp01(x);                        // wash: cp1 at left -> cp2 at right
   }
 
-  if (bri <= 0.0) { rgb(0, 0, 0); return; }   // true black where un-painted
+  if (bri <= 0.0) { rgb(0, 0, 0); return; }   // near-black where un-painted
 
   var r = (pr1 + (pr2 - pr1) * tcol) * bri;
   var g = (pg1 + (pg2 - pg1) * tcol) * bri;
