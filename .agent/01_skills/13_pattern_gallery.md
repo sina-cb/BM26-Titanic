@@ -282,3 +282,62 @@ curl -s localhost:6965/api/models                 # the rig list + default
 curl -s 'localhost:6965/?model=titanic' | head    # gallery rendered for titanic
 ```
 <!-- END model-select (feat/highdef_patterns) -->
+<!-- BEGIN deck-control (feat/highdef_patterns) — keep separate for merge -->
+
+## NEW — DECK CONTROL on `/live` (drive the running engine)
+
+The `/live` page now has a **collapsible DECK CONTROL panel** under the live
+visualizer that drives the **running engine** from the gallery: load patterns,
+control the deck playlist, ride the master fader — from a phone over Tailscale.
+
+This is the gallery's only **ONLINE write** surface. The offline clip views
+(`/ /grid /compare /w/<name>`) stay **engine-independent**; only `/live` talks to
+the engine, and the deck acts **only on an explicit operator tap** — the gallery
+never drives the engine on its own.
+
+### The CORS proxy — `/api/engine/<path>`
+The phone browser and the engine REST API are different origins, so a direct
+browser→engine call is **blocked by CORS** (and we must NOT add CORS to the
+engine). The gallery SERVER is co-located with the engine, so the browser calls
+the gallery **same-origin** and the server forwards over loopback:
+
+```text
+phone → (same-origin) gallery /api/engine/<path> → (loopback) engine REST API
+```
+
+- Target is the **configured `ENGINE_HOST`** (default `127.0.0.1:6968`,
+  server-side) — NOT the browser auto-host the live WS uses.
+- **Strict allowlist** (method + path/prefix); anything else → **403** (no SSRF).
+  Allowed: `GET /patterns`, `POST /pattern`, `GET|PATCH /deck/channel`,
+  `POST /deck/channel/control`, `GET /exports`, `GET /playlists`,
+  `GET /playlists/<name>`, `GET|POST /deck/playlist`, `POST /deck/playlist/entry`,
+  `POST /deck/playlist/autopilot`.
+- **~4s timeout**; timeout → 504, connection-refused → 502, both with a clean
+  `{"error":"engine not reachable"}` — never a hang (codex P0).
+
+### The panel (`deck_client.js`, browser built-ins only)
+Deck state (active pattern / fader / blackout) from `GET /deck/channel` on load +
+a light ~2 s read-only poll. Patterns list + tap-to-load. Playlists list + load +
+tappable entries + **Next/Prev** (computed from the entry list, wrapping) +
+**Autopilot** toggle. **Master fader** (debounced) → `PATCH /deck/channel`.
+**Engine offline** → controls disabled + "engine offline — controls unavailable";
+re-enables on a later good poll. Per-action success/failure feedback inline.
+A `409 EBUSY` mid-transition is a no-op, not an error.
+
+### Use it
+```bash
+cd marsin_engine
+node engine.js --model test_bench --pattern 27_swipe   # the engine the deck drives
+node tools/gallery/server.mjs --port 6965              # (other shell) the gallery
+#   http://localhost:6965/live  → expand "Deck Control"
+
+# proxy smoke (engine + gallery up):
+curl -s localhost:6965/api/engine/patterns                                   # list
+curl -s -XPOST -H 'Content-Type: application/json' \
+  -d '{"pattern":"01_cylon_sweep"}' localhost:6965/api/engine/pattern        # load
+curl -s -o /dev/null -w '%{http_code}\n' localhost:6965/api/engine/mixer     # 403 (not allowed)
+```
+
+Files: `server.mjs` (proxy route + allowlist + deck panel markup) and the new
+`deck_client.js`. **No** engine / `lib/` files are touched — existing HTTP API only.
+<!-- END deck-control (feat/highdef_patterns) -->

@@ -353,3 +353,75 @@ and how do I switch?" — pick a rig and the whole gallery re-renders for it.
 
 Offline/self-contained as ever: Node built-ins + browser only, no CDNs or deps.
 <!-- END model-select (feat/highdef_patterns) -->
+<!-- BEGIN deck-control (feat/highdef_patterns) — keep separate for merge -->
+## NEW — DECK CONTROL surface on `/live` (drives the running engine)
+
+The `/live` page now carries a **collapsible DECK CONTROL panel** below the live
+visualizer, so the operator can drive the **running engine** — load patterns and
+control the deck playlist — straight from the gallery on a phone over Tailscale.
+The live vis stays primary; the deck panel is a secondary `<details>` section.
+
+This is the gallery's first **ONLINE write** surface: every other view is
+read-only / offline. The offline clip views (`/ /grid /compare /w/<name>`) remain
+**engine-independent**; only `/live` (vis + deck) talks to the engine, and the
+deck only ever acts on an **explicit operator tap** — the gallery never drives
+the engine on its own.
+
+### Why a proxy (CORS) — `/api/engine/<path>`
+The gallery page runs in a phone browser; the engine REST API is on a different
+origin/port, so a **direct browser → engine fetch is blocked by CORS** (and we
+may NOT add CORS to the engine). The gallery **server** is co-located with the
+engine and reaches it over loopback, so:
+
+```text
+phone browser → (same-origin) gallery /api/engine/<path> → (loopback) engine REST API
+```
+
+`server.mjs` adds an `ALL /api/engine/<path>` route that forwards the request to
+`http://<ENGINE_HOST><path>` SERVER-side and relays the engine's status + JSON
+body verbatim. The target is the **configured `ENGINE_HOST`** (`gallery_config.json`
+`engineHost` / `ENGINE_HOST`, default `127.0.0.1:6968`) — fixed server-side, NOT
+the browser auto-host the live WS uses. The phone cannot redirect it elsewhere.
+
+- **Strict allowlist** (method + exact path / prefix). Anything else → **403**
+  (no arbitrary forwarding / SSRF). Allowed: `GET /patterns`, `POST /pattern`,
+  `GET|PATCH /deck/channel`, `POST /deck/channel/control`, `GET /exports`,
+  `GET /playlists`, `GET /playlists/<name>`, `GET|POST /deck/playlist`,
+  `POST /deck/playlist/entry`, `POST /deck/playlist/autopilot`.
+- **~4s timeout**; on timeout → 504, on connection-refused → 502, both with a
+  clean `{ "error": "engine not reachable" }` JSON body. It **never hangs** the
+  gallery (codex P0: fail loud, never spin forever, never fake success).
+
+### The deck panel (`deck_client.js`)
+Browser built-ins only (`fetch`, DOM), served statically at `/deck_client.js`.
+
+- **Deck state** (active pattern, master fader, blackout) from
+  `GET /api/engine/deck/channel`, on load + a light ~2 s poll (reads only).
+- **Patterns**: list (`GET /patterns`), tap to load (`POST /pattern`); the active
+  pattern chip is highlighted.
+- **Playlists**: list (`GET /playlists`), load one (`POST /deck/playlist`), tap an
+  entry (`POST /deck/playlist/entry`), **Next / Prev** (computed from the entry
+  list + active entry, wrapping), and an **Autopilot** toggle
+  (`POST /deck/playlist/autopilot`). A `409 EBUSY` mid-transition is treated as a
+  no-op, not an error.
+- **Master fader** (0..1) → `PATCH /deck/channel { fader }`, debounced during the
+  drag.
+- **Engine offline**: when the proxy returns the not-reachable error, the panel
+  disables every control and shows **“engine offline — controls unavailable”**;
+  a later successful poll re-enables it. Per-action success/failure feedback is
+  shown inline.
+
+### Use it
+Run the engine, start the gallery, open `/live`:
+
+```bash
+cd marsin_engine
+node engine.js --model test_bench --pattern 27_swipe      # the engine the deck drives
+node tools/gallery/server.mjs --port 6965                  # (other shell) the gallery
+#   http://localhost:6965/live   → expand "Deck Control"
+```
+
+Files added/changed: `server.mjs` (proxy route + allowlist + deck panel markup),
+`deck_client.js` (the browser-side control surface). **No** engine / `lib/` files
+are touched — the deck uses only the engine's existing HTTP API.
+<!-- END deck-control (feat/highdef_patterns) -->

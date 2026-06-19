@@ -102,6 +102,9 @@ const ENGINE_DIR = path.resolve(HERE, '..', '..');
 const HERE_DIR = HERE; // for serving live_client.js statically
 const DEFAULT_ENGINE_HOST = '127.0.0.1:6968';
 const LIVE_CLIENT_PATH = path.join(HERE, 'live_client.js');
+// <!-- BEGIN deck-control --> browser-side deck control surface for /live.
+const DECK_CLIENT_PATH = path.join(HERE, 'deck_client.js');
+// <!-- END deck-control -->
 // host:port for the running engine's vis WS. A present-but-malformed config
 // value is fatal (codex P0: no silent fallback). host:port must be a bare
 // authority — no scheme, no path.
@@ -134,6 +137,56 @@ const ENGINE_HOST = configEngineHost() || DEFAULT_ENGINE_HOST;
 const ENGINE_PORT = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[1] : '6968';
 const ENGINE_HOST_IS_LOOPBACK = /^(127\.0\.0\.1|localhost|0\.0\.0\.0)(:|$)/.test(ENGINE_HOST);
 // <!-- END live-vis -->
+
+// <!-- BEGIN deck-control -->
+// ENGINE PROXY for the DECK CONTROL surface (/live deck panel).
+//
+// The gallery page runs in a phone browser over Tailscale; the engine REST API
+// is on a different origin/port, so direct browser->engine calls are blocked by
+// CORS (and we may NOT add CORS to the engine). The gallery SERVER, however, is
+// co-located with the engine and reaches it over loopback. So the browser calls
+// the gallery same-origin at /api/engine/<path>, and we forward SERVER-side to
+// the engine using the configured ENGINE_HOST (NOT the browser auto-host the
+// live WS uses) — proxying its status + JSON body verbatim.
+//
+// Strict ALLOWLIST (method + exact path or prefix) — anything else is 403. No
+// arbitrary forwarding / SSRF. ~4s timeout: on timeout / connection-refused we
+// return a clean JSON error, never hang the gallery (codex P0: fail loud, no
+// silent fallback, but never spin forever).
+const ENGINE_PROXY_TIMEOUT_MS = 4000;
+
+// Each entry: { method, path } for an exact match, or { method, prefix } for a
+// path-prefix match (used by /playlists/<name>). The engine host is fixed
+// SERVER-side; the browser cannot pick a different target.
+const ENGINE_ALLOWLIST = [
+  { method: 'GET', path: '/patterns' },
+  { method: 'POST', path: '/pattern' },
+  { method: 'GET', path: '/deck/channel' },
+  { method: 'PATCH', path: '/deck/channel' },
+  { method: 'POST', path: '/deck/channel/control' },
+  { method: 'GET', path: '/exports' },
+  { method: 'GET', path: '/playlists' },
+  { method: 'GET', prefix: '/playlists/' },
+  { method: 'GET', path: '/deck/playlist' },
+  { method: 'POST', path: '/deck/playlist' },
+  { method: 'POST', path: '/deck/playlist/entry' },
+  { method: 'POST', path: '/deck/playlist/autopilot' },
+];
+
+// Match a (method, enginePath) against the allowlist. enginePath has no query
+// string. Returns true only for an explicitly-allowed method+path/prefix.
+function engineAllowed(method, enginePath) {
+  for (const rule of ENGINE_ALLOWLIST) {
+    if (rule.method !== method) continue;
+    if (rule.path !== undefined && rule.path === enginePath) return true;
+    if (rule.prefix !== undefined && enginePath.startsWith(rule.prefix) &&
+        enginePath.length > rule.prefix.length) {
+      return true;
+    }
+  }
+  return false;
+}
+// <!-- END deck-control -->
 
 
 // ---------------------------------------------------------------------------
@@ -909,6 +962,45 @@ ${THEME_CSS}
   .live-stage { background:#06060a; border-radius:var(--border-radius-lg); padding:18px 20px;
     border:0.5px solid var(--color-border-tertiary); overflow:auto; }
   .live-host { color:#9bd; }
+  /* <!-- BEGIN deck-control --> DECK control surface — a SECONDARY, collapsible
+     section so the live vis stays primary. */
+  .deck { margin:18px 0 0; background:#0a0a10; border:1px solid #1d1d26;
+    border-radius:var(--border-radius-lg); overflow:hidden; }
+  .deck > summary { list-style:none; cursor:pointer; padding:14px 18px; display:flex;
+    align-items:center; gap:12px; flex-wrap:wrap; user-select:none; }
+  .deck > summary::-webkit-details-marker { display:none; }
+  .deck > summary::before { content:'\\25b8'; color:#8fb; font-size:13px; transition:transform .15s; }
+  .deck[open] > summary::before { transform:rotate(90deg); }
+  .deck .dk-title { font-size:14px; letter-spacing:1px; text-transform:uppercase;
+    color:#8fb; font-weight:700; }
+  .deck .dk-state { font-size:12px; color:#9bd; }
+  .deck .dk-state b { color:#bfeede; }
+  .deck-body { padding:0 18px 18px; }
+  .dk-feedback { font-size:12px; min-height:16px; margin:4px 2px 10px; }
+  .dk-feedback.ok { color:#bfeede; }
+  .dk-feedback.err { color:#f7a7a7; }
+  .dk-offline { color:#f7a7a7; font-size:13px; padding:10px 12px; border:1px solid #6a2f2f;
+    background:#2a1010; border-radius:10px; margin:6px 0 12px; }
+  .dk-sec { margin:14px 0 0; }
+  .dk-sec h3 { font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#9aa;
+    margin:0 0 8px; }
+  .dk-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0; }
+  .dk-master { width:100%; max-width:360px; accent-color:#3a6; }
+  .dk-fader-val { font-size:12px; color:#9bd; min-width:46px; }
+  .dk-list { display:flex; gap:6px; flex-wrap:wrap; max-height:200px; overflow:auto;
+    padding:2px; }
+  .dk-chip { background:#12121a; color:#9aa; border:1px solid #1d1d26; border-radius:999px;
+    padding:6px 12px; font-size:13px; cursor:pointer; white-space:nowrap; }
+  .dk-chip.on { background:#173026; color:#bfeede; border-color:#2f6a4f; }
+  .dk-chip:disabled { opacity:.4; cursor:default; }
+  .dk-btn { background:#12121a; color:#bfeede; border:1px solid #2f6a4f; border-radius:10px;
+    padding:8px 14px; font-size:13px; cursor:pointer; }
+  .dk-btn:disabled { opacity:.4; cursor:default; }
+  .dk-btn.tgl.on { background:#173026; }
+  .dk-sel { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid #23232c;
+    background:#12121a; color:#e6e9ee; }
+  .dk-muted { color:#667; font-size:12px; }
+  /* <!-- END deck-control --> */
 </style></head><body>
 <header>
   <h1>Live Visualizer <span class="sub">LIVE ENGINE</span></h1>
@@ -932,9 +1024,56 @@ ${THEME_CSS}
     The gallery never drives the engine — load a pattern in the engine, this view mirrors its vis.
     Override the engine with <code>?host=ip:port</code>, the rig with <code>?model=titanic</code>.
   </p>
+
+  <!-- <!-- BEGIN deck-control --> DECK control surface: drives the running
+       engine via the same-origin /api/engine proxy. Secondary + collapsible so
+       the live vis above stays primary. ONLINE only — needs the engine up. -->
+  <details class="deck" id="deck" open>
+    <summary>
+      <span class="dk-title">Deck Control</span>
+      <span class="dk-state" id="dk-state">loading…</span>
+    </summary>
+    <div class="deck-body">
+      <div class="dk-feedback" id="dk-feedback"></div>
+      <div class="dk-offline" id="dk-offline" style="display:none;">
+        engine offline — controls unavailable
+      </div>
+      <div id="dk-controls">
+        <div class="dk-sec">
+          <h3>Master Fader</h3>
+          <div class="dk-row">
+            <input class="dk-master" id="dk-fader" type="range" min="0" max="1" step="0.01" value="1">
+            <span class="dk-fader-val" id="dk-fader-val">1.00</span>
+            <span class="dk-muted" id="dk-blackout"></span>
+          </div>
+        </div>
+        <div class="dk-sec">
+          <h3>Patterns</h3>
+          <div class="dk-list" id="dk-patterns"><span class="dk-muted">loading…</span></div>
+        </div>
+        <div class="dk-sec">
+          <h3>Playlists</h3>
+          <div class="dk-row">
+            <select class="dk-sel" id="dk-playlist-sel"><option value="">— pick playlist —</option></select>
+            <button class="dk-btn" id="dk-playlist-clear">Clear</button>
+          </div>
+          <div class="dk-row" id="dk-playlist-nav" style="display:none;">
+            <button class="dk-btn" id="dk-prev">‹ Prev</button>
+            <button class="dk-btn" id="dk-next">Next ›</button>
+            <button class="dk-btn tgl" id="dk-autopilot">Autopilot</button>
+          </div>
+          <div class="dk-list" id="dk-entries"></div>
+        </div>
+      </div>
+    </div>
+  </details>
+  <!-- <!-- END deck-control --> -->
 </main>
 <script>window.__LIVE__ = ${cfgJson};</script>
 <script src="/live_client.js"></script>
+<!-- <!-- BEGIN deck-control --> -->
+<script src="/deck_client.js"></script>
+<!-- <!-- END deck-control --> -->
 </body></html>`;
 }
 // <!-- END live-vis -->
@@ -989,6 +1128,15 @@ function widgetPage(name, activeModel) {
 const server = http.createServer((req, res) => {
   const u = url.parse(req.url, true);
   const pathname = decodeURIComponent(u.pathname || '/');
+
+  // <!-- BEGIN deck-control -->
+  // Engine proxy for the deck-control surface. This is the ONLY route that
+  // accepts non-GET methods (POST/PATCH for deck writes) — every other gallery
+  // route is GET-only. Handle it before the GET-only guard below.
+  if (pathname === '/api/engine' || pathname.startsWith('/api/engine/')) {
+    return handleEngineProxy(req, res, u, pathname);
+  }
+  // <!-- END deck-control -->
 
   if (req.method !== 'GET') {
     return notFound(res, 'Only GET is supported.');
@@ -1054,6 +1202,19 @@ const server = http.createServer((req, res) => {
     }
     return send(res, 200, 'application/javascript; charset=utf-8', js);
   }
+
+  // <!-- BEGIN deck-control -->
+  // Static client module for the deck control surface (served from this dir).
+  if (pathname === '/deck_client.js') {
+    let js;
+    try {
+      js = fs.readFileSync(DECK_CLIENT_PATH, 'utf8');
+    } catch (e) {
+      return notFound(res, 'deck_client.js missing: ' + e.message);
+    }
+    return send(res, 200, 'application/javascript; charset=utf-8', js);
+  }
+  // <!-- END deck-control -->
 
   // /live and /live/<name>: the LIVE visualizer page. <name> is just a caption
   // (the gallery never drives the engine). Resolves model/host/buffer from the
@@ -1135,6 +1296,101 @@ async function handleLiveLayout(req, res, u) {
 }
 // <!-- END live-vis -->
 
+// <!-- BEGIN deck-control -->
+// Reply with a clean JSON body + status, no-store. Used for the proxy's own
+// error envelopes (the engine's own responses are relayed verbatim instead).
+function sendJson(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+// Proxy an allowlisted request to the engine over loopback (ENGINE_HOST) and
+// relay its status + body verbatim. The browser target is FIXED server-side —
+// the phone cannot redirect this anywhere else.
+//
+// /api/engine/<path>  → forwards method + body + content-type to
+// http://<ENGINE_HOST>/<path>. Disallowed method/path → 403. On timeout or
+// connection-refused → clean JSON error with a 502/504 (never hang).
+function handleEngineProxy(req, res, u, pathname) {
+  // Derive the engine path. We forward the path + ORIGINAL query string (the
+  // allowlist matches on the path only; none of the allowed endpoints need a
+  // query, but relaying it verbatim keeps the proxy transparent).
+  let enginePath;
+  if (pathname === '/api/engine') {
+    enginePath = '/';
+  } else {
+    enginePath = pathname.slice('/api/engine'.length); // includes leading '/'
+  }
+
+  if (!engineAllowed(req.method, enginePath)) {
+    return sendJson(res, 403, { error: 'engine endpoint not allowed', method: req.method, path: enginePath });
+  }
+
+  const search = u.search || '';
+  const enginePort = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[1] : '6968';
+  const engineHostname = ENGINE_HOST.includes(':') ? ENGINE_HOST.split(':')[0] : ENGINE_HOST;
+
+  const headers = {};
+  const ct = req.headers['content-type'];
+  if (ct) headers['content-type'] = ct;
+
+  // Collect the request body for POST/PATCH, then forward. We buffer (bodies
+  // here are tiny JSON) so we can set content-length and fail cleanly.
+  const chunks = [];
+  let aborted = false;
+  req.on('data', (c) => { if (!aborted) chunks.push(c); });
+  req.on('end', () => {
+    if (aborted) return;
+    const body = Buffer.concat(chunks);
+    if (body.length) headers['content-length'] = String(body.length);
+
+    const proxyReq = http.request({
+      host: engineHostname,
+      port: enginePort,
+      method: req.method,
+      path: enginePath + search,
+      headers,
+    }, (proxyRes) => {
+      const outChunks = [];
+      proxyRes.on('data', (c) => outChunks.push(c));
+      proxyRes.on('end', () => {
+        const out = Buffer.concat(outChunks);
+        // Relay the engine's status + body verbatim; force no-store + JSON
+        // content-type (the engine sets it on most routes anyway).
+        res.writeHead(proxyRes.statusCode || 502, {
+          'Content-Type': proxyRes.headers['content-type'] || 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(out);
+      });
+    });
+
+    let settled = false;
+    const fail = (status) => {
+      if (settled) return;
+      settled = true;
+      try { proxyReq.destroy(); } catch (e) { /* already gone */ }
+      sendJson(res, status, { error: 'engine not reachable' });
+    };
+
+    proxyReq.setTimeout(ENGINE_PROXY_TIMEOUT_MS, () => fail(504));
+    proxyReq.on('error', () => fail(502));
+    proxyReq.on('response', () => { settled = true; });
+
+    if (body.length) proxyReq.write(body);
+    proxyReq.end();
+  });
+  req.on('error', () => {
+    aborted = true;
+    if (!res.headersSent) sendJson(res, 400, { error: 'bad request body' });
+  });
+}
+// <!-- END deck-control -->
+
 
 server.listen(PORT, '0.0.0.0', () => {
   const lines = [];
@@ -1156,7 +1412,7 @@ server.listen(PORT, '0.0.0.0', () => {
   } else {
     lines.push('  (no external IPv4 found — only reachable on localhost)');
   }
-  lines.push('  routes: /  /grid  /compare  /live  /w/<name>  /api/list  /api/models  /api/live-layout');
+  lines.push('  routes: /  /grid  /compare  /live  /w/<name>  /api/list  /api/models  /api/live-layout  /api/engine/<path>');
   lines.push('  models: ' + listModels().join(', ') + '  (default ' + DEFAULT_MODEL + ')');
   lines.push('  engine host (live vis): ' + ENGINE_HOST + '  (override with /live?host=ip:port)');
   lines.push('  widgets dir: ' + WIDGETS_DIR);
