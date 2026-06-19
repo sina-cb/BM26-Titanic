@@ -4039,6 +4039,13 @@ function setupGUI() {
       (window.ledStrandFixtures || []).forEach(f => f.setVisibility(v));
     });
 
+    // Guides toggle — hide the connector wires + endpoint handles so only the
+    // LED pixels render (clean "pixels only" view). On by default.
+    if (params.ledGuidesVisible === undefined) params.ledGuidesVisible = true;
+    strandFolder.add(params, 'ledGuidesVisible').name('Show Guides').onChange(v => {
+      (window.ledStrandFixtures || []).forEach(f => f.setGuidesVisible(v));
+    });
+
     window.ledStrandFixtures = [];
 
     function rebuildLedStrands() {
@@ -4049,6 +4056,7 @@ function setupGUI() {
       params.ledStrands.forEach((config, index) => {
         const fixture = new LedStrand(config, index, scene, interactiveObjects);
         fixture.setVisibility(params.strandsEnabled !== false);
+        fixture.setGuidesVisible(params.ledGuidesVisible !== false);
         window.ledStrandFixtures.push(fixture);
       });
     }
