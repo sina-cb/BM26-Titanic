@@ -13,6 +13,9 @@ export class LedStrand {
     this.scene = scene;
     this.interactiveObjects = interactiveObjects;
     this._selected = false;
+    this._visible = true;
+    // Editing guides (connector wire + endpoint handles) shown by default.
+    this._guidesVisible = true;
 
     // Visual group holds wire + LEDs + tube (tube hidden by default)
     this.group = new THREE.Group();
@@ -156,6 +159,10 @@ export class LedStrand {
     // Sync handle positions
     this.startHandle.position.copy(start);
     this.endHandle.position.copy(end);
+
+    // The wire is recreated above — re-apply the current visibility flags so
+    // a "pixels only" (guides hidden) state survives a rebuild.
+    this._applyVisibility();
   }
 
   writeTransformToConfig(handleType) {
@@ -245,8 +252,31 @@ export class LedStrand {
   }
 
   setVisibility(visible) {
-    this.group.visible = visible;
-    this.startHandle.visible = visible;
-    this.endHandle.visible = visible;
+    this._visible = visible;
+    this._applyVisibility();
+  }
+
+  /**
+   * Toggle the editing guides: the gray connector wire between the endpoints
+   * and the two draggable endpoint handles. When off, only the LED pixels
+   * (housing + bulb + halo) render — a clean "pixels only" view. The glow
+   * tube is selection-driven and unaffected; pixels always stay visible.
+   * @param {boolean} visible
+   */
+  setGuidesVisible(visible) {
+    this._guidesVisible = visible;
+    this._applyVisibility();
+  }
+
+  // Apply the current visible / guides flags to the group children + handles.
+  // The pixel meshes are left visible; only the wire + handles follow guides.
+  _applyVisibility() {
+    this.group.visible = this._visible;
+    for (const child of this.group.children) {
+      if (child.userData._strandPart === 'wire') child.visible = this._guidesVisible;
+    }
+    const handlesOn = this._visible && this._guidesVisible;
+    this.startHandle.visible = handlesOn;
+    this.endHandle.visible = handlesOn;
   }
 }
