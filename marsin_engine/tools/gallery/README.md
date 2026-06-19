@@ -54,12 +54,57 @@ Tailscale `100.x.y.z` one. No auth (local / Tailscale only).
 
 | Path           | What it serves                                              |
 |----------------|------------------------------------------------------------|
-| `/`            | Phone-friendly index: search box + tap list of all widgets (newest first, with publish time) |
-| `/w/<name>`    | The standalone widget page, with a sticky `← gallery` top bar |
-| `/api/list`    | JSON `[{ "name":…, "mtime":… }]`, newest first             |
+| `/`            | Phone index: grouped/sorted cards, search box + family/model filter chips |
+| `/grid`        | Contact-sheet: many live clip thumbnails at once (lazy-loaded), tap to open |
+| `/compare`     | Two clips side by side. `?a=<name>&b=<name>`; pickers if either is missing |
+| `/w/<name>`    | The standalone widget page, with a sticky `← gallery` bar + prev/next nav |
+| `/api/list`    | JSON `[{ "name", "mtime", "num", "family", "model" }]`, newest first |
 
 The widgets dir is re-read on **every** request, so newly published patterns
-appear without restarting the server.
+appear without restarting the server. The top nav (`List · Grid · Compare`)
+appears on every chrome page.
+
+## Navigation & exploration
+
+**Naming convention.** Patterns are `NN_name`; per-model variants are
+`NN_name__<model>` (e.g. `12_phase_cathedral__titanic`). The gallery splits on
+`__`: everything before it is the **family** (the grouping key) and everything
+after is the **model**. All variants of a pattern collapse onto **one card**,
+with a small link per variant (`base`, `titanic`, …); the card's main tap opens
+the `base` variant (the one with no `__model`), or the first variant if there is
+no bare one. `/api/list` exposes the parsed `num` / `family` / `model` for each
+clip (the legacy `name` + `mtime` fields are unchanged, so existing consumers
+keep working).
+
+**List view (`/`).**
+- **Sort** toggle: `Number` (default, parsed from the `NN_` prefix), `Name`
+  (alphabetical by label), or `Recent` (newest publish first).
+- **Group** toggle: `Grouped` bands the cards into number ranges
+  (`00–09`, `10–19`, … and a trailing `Unnumbered`) — only when sorting by
+  Number; `Flat` is one continuous list. Bandless patterns land in
+  `Unnumbered`.
+- **Filter chips**: one chip per model found in the library, plus `All`. Tapping
+  a model chip narrows the list to families that have a variant for that model.
+- **Search** matches family name, human label, full clip name, and model — so
+  typing a model name also filters. All of this runs client-side over a JSON
+  payload embedded in the page, so toggles are instant and need no round-trips.
+
+**Grid view (`/grid`).** A contact sheet of every clip rendered as a scaled-down
+`<iframe>` of its `/w/<name>` page, so the LEDs actually animate. To keep a
+phone light, each tile mounts its iframe **only when it scrolls near the
+viewport** (an `IntersectionObserver` with a one-screen `rootMargin`) and blanks
+it again when it scrolls far away — so off-screen clips stop their animation
+loop and a 50-clip library never runs 50 `requestAnimationFrame` loops at once.
+The search box filters tiles live. Built-ins only — no libraries.
+
+**Compare view (`/compare`).** Two `<select>` pickers; choosing either reloads
+with `?a=&b=` and shows the two clips side by side (stacked on a phone, two
+columns ≥ 680px). Deep-linkable, e.g.
+`/compare?a=01_cylon_sweep&b=53_neon_elevator_hd`.
+
+**Widget page (`/w/<name>`).** Adds `‹` / `›` prev/next links in the sticky bar
+that step through the number-sorted library (disabled at the ends), so you can
+walk a band without bouncing back to the list.
 
 ## Publish a pattern
 

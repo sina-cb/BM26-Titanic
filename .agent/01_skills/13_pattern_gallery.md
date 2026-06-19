@@ -78,11 +78,31 @@ engine/sim block 6967–6972 (no collision).
 ## URL scheme
 | Path        | Serves |
 |-------------|--------|
-| `/`         | Phone-friendly index: search box + tap list (newest first, publish time) |
-| `/w/<name>` | The standalone clip page, with a sticky `← gallery` top bar |
-| `/api/list` | JSON `[{name, mtime}]`, newest first |
+| `/`         | Phone index: grouped/sorted cards, search box + family/model filter chips |
+| `/grid`     | Contact-sheet of live clip thumbnails (lazy-loaded), tap to open |
+| `/compare`  | Two clips side by side (`?a=<name>&b=<name>`; pickers if missing) |
+| `/w/<name>` | The standalone clip page, sticky `← gallery` bar + `‹ ›` prev/next |
+| `/api/list` | JSON `[{name, mtime, num, family, model}]`, newest first |
 
 Names are restricted to `[A-Za-z0-9._-]` (no traversal); anything else 404s.
+A top nav (`List · Grid · Compare`) is on every chrome page.
+
+## Navigate & explore
+- **Naming convention.** `NN_name`, with optional per-model variants
+  `NN_name__<model>`. The gallery splits on `__`: the part before is the
+  **family** (grouping key), the part after is the **model**. All variants of a
+  pattern collapse onto **one card** with a per-variant link (`base`,
+  `titanic`, …); the main tap opens the `base` (no-`__`) variant.
+- **List `/`**: `Sort` by Number / Name / Recent; `Group` by number band
+  (`00–09`, `10–19`, … `Unnumbered`) or Flat (banding applies when sorting by
+  Number). Model filter chips + a search that also matches model names. All
+  client-side over a JSON payload — instant, no round-trips.
+- **Grid `/grid`**: every clip as a scaled live `<iframe>`; tiles mount their
+  iframe only when near the viewport (`IntersectionObserver`) and blank when
+  far, so off-screen clips stop animating — a phone never runs every loop at
+  once. Built-ins only.
+- **Compare `/compare`**: two `<select>` pickers → side-by-side, deep-linkable.
+- **`/w/<name>`**: `‹ ›` step through the number-sorted library.
 
 ## Publishing a whole batch
 Loop the harness + publish over `marsin_engine/patterns/*.js`. Publish
