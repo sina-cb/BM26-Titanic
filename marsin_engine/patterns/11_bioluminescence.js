@@ -175,7 +175,7 @@ export function render3D(index, x, y, z) {
 
   // Crest gate travels/spreads with radius (AUDIO movement RADIUS).
   var crestField = wave(driftA * 0.55 * spread + pct * dens * spread + pcy * 0.23);
-  var crest = (crestField > (0.92 - radius * 0.12)) ? 1.0 : 0.0;
+  var crest = (crestField > (0.84 - radius * 0.14)) ? 1.0 : 0.0;
   crest = crest * pow(combined, 2.0);
 
   // Brightness: ambient breathes, crest pops; kick adds a pop. The ambient is
@@ -186,13 +186,18 @@ export function render3D(index, x, y, z) {
   // NOTE: this VM treats the bare name `v` as a reserved global (HSV value), so
   // assigning to a local `v` silently desyncs from the arithmetic chain — the
   // brightness local is named `bval` here so the floor/level chain is honoured.
-  var bri = combined * 0.7 * (0.74 + 0.26 * wave(driftUV * 0.27 + 0.13));
+  var bri = combined * 0.7;
   var crestBri = crest * (0.6 + kick * 0.8);
   var bval = max(bri, crestBri);
-  // Calm-but-lit visibility FLOOR (0.20 — every pixel clears black in silence,
-  // mission critical) and the AUDIO PRIMARY level gain mapped onto a USEFUL span
-  // (calm-but-lit at slider 0, full at 1, bright at the 0.5 centre).
-  bval = (0.20 + bval * 0.80) * (0.30 + level * 0.70);
+  // Calm-but-lit visibility FLOOR (0.11 — every pixel clears black in silence,
+  // mission critical, but low enough to keep the deep two-colour HD relief) and
+  // the AUDIO PRIMARY level gain mapped onto a USEFUL span (calm-but-lit at
+  // slider 0, full at 1, bright at the 0.5 centre).
+  bval = (0.11 + bval * 0.89) * (0.30 + level * 0.70);
+  // Whole-rig "tide": a slow, spatially-coherent breath on the always-forward UV
+  // drift clock so the field visibly swells & ebbs even with NO audio (never
+  // static). Low amplitude so it barely touches the level-driven PRIMARY budget.
+  bval = bval * (0.78 + 0.22 * wave(driftUV * 1.9 + 0.13));
 
   // Strict cp1->cp2 RGB lerp (crest pushes toward cp2).
   var tcol = clamp01(blend + crest * 0.5);
