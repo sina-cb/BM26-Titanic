@@ -34,6 +34,11 @@ import {
   CONTROLLER_TYPE_LED,
   isLedController,
   setControllerType,
+  CONTROLLER_PROTOCOL_SACN,
+  CONTROLLER_PROTOCOL_ARTNET,
+  DEFAULT_CONTROLLER_PROTOCOL,
+  isArtnetController,
+  setControllerProtocol,
   normalizeLedConfig,
   computeLedProjection,
   testAutoPatch,
@@ -893,4 +898,55 @@ test('clearAllPatches on an empty/inactive registry is a no-op', () => {
   const { entriesCleared, freed } = clearAllPatches(r);
   assert.equal(entriesCleared, 0);
   assert.equal(freed.length, 0);
+});
+
+// ── Output transport: per-controller protocol (sACN | Art-Net) ──────────
+
+test('protocol: un-protocolled controller migrates to sACN (loud, not silent)', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', ports: [] }] });
+  assert.equal(r.controllers[0].protocol, DEFAULT_CONTROLLER_PROTOCOL);
+  assert.equal(r.controllers[0].protocol, CONTROLLER_PROTOCOL_SACN);
+  assert.ok(r._unprotocolledControllers.has(1));
+});
+
+test('protocol: explicit artnet loads and is reported via isArtnetController', () => {
+  const r = reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', protocol: 'artnet', ports: [] }],
+  });
+  const c = r.controllers[0];
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_ARTNET);
+  assert.ok(isArtnetController(c));
+  assert.ok(!r._unprotocolledControllers.has(1));
+});
+
+test('protocol: invalid protocol hard-stops the boot (structural)', () => {
+  assert.throws(() => reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', protocol: 'ddp', ports: [] }],
+  }), /invalid protocol 'ddp'/);
+});
+
+test('protocol: addController defaults to sACN, honors explicit artnet', () => {
+  const r = reg({});
+  const a = addController(r, { name: 'A', ip: '10.1.1.10' });
+  assert.equal(a.protocol, CONTROLLER_PROTOCOL_SACN);
+  const b = addController(r, { name: 'B', ip: '10.1.1.20', protocol: CONTROLLER_PROTOCOL_ARTNET });
+  assert.ok(isArtnetController(b));
+});
+
+test('protocol: setControllerProtocol toggles in place; invalid throws', () => {
+  const r = reg({});
+  const c = addController(r, { name: 'C', ip: '10.1.1.30' });
+  setControllerProtocol(c, CONTROLLER_PROTOCOL_ARTNET);
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_ARTNET);
+  setControllerProtocol(c, CONTROLLER_PROTOCOL_SACN);
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_SACN);
+  assert.throws(() => setControllerProtocol(c, 'wled'), /invalid protocol/);
+});
+
+test('protocol: round-trips through createControllerRegistry (serializes)', () => {
+  const r = reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', protocol: 'artnet', ports: [] }],
+  });
+  const r2 = reg(JSON.parse(JSON.stringify(r)));
+  assert.equal(r2.controllers[0].protocol, CONTROLLER_PROTOCOL_ARTNET);
 });

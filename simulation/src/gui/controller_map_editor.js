@@ -36,6 +36,10 @@ import {
   CONTROLLER_TYPE_LED,
   isLedController,
   setControllerType,
+  CONTROLLER_PROTOCOL_SACN,
+  CONTROLLER_PROTOCOL_ARTNET,
+  isArtnetController,
+  setControllerProtocol,
   normalizeLedConfig,
   LED_CHANNEL_ORDERS,
   LED_WHITE_MODES,
@@ -498,6 +502,26 @@ function renderController(controller, proj) {
     });
   };
 
+  // ── sACN / Art-Net transport toggle ─────────────────────────────────
+  // Independent of the DMX/LED type: selects the network transport this
+  // controller's universes stream over. The DMX channel data is identical
+  // on either wire — only packet framing + UDP port differ (sACN :5568 /
+  // Art-Net :6454). Transport tops out here (operator decision 2026-06-19:
+  // no DDP / WLED-native).
+  const protoBtn = document.createElement('button');
+  const isArtnet = isArtnetController(controller);
+  protoBtn.className = 'cm-btn cm-proto-toggle' + (isArtnet ? ' cm-proto-artnet' : ' cm-proto-sacn');
+  protoBtn.textContent = isArtnet ? 'Art-Net' : 'sACN';
+  protoBtn.title = isArtnet
+    ? 'Art-Net transport (ArtDMX → UDP :6454). Click to switch to sACN.'
+    : 'sACN/E1.31 transport (UDP :5568). Click to switch to Art-Net.';
+  protoBtn.onclick = () => {
+    const next = isArtnet ? CONTROLLER_PROTOCOL_SACN : CONTROLLER_PROTOCOL_ARTNET;
+    mutate(`Set '${controller.name}' transport to ${next}`, () => {
+      setControllerProtocol(controller, next);
+    });
+  };
+
   const addPortBtn = document.createElement('button');
   addPortBtn.className = 'cm-btn';
   addPortBtn.textContent = '+port';
@@ -536,6 +560,7 @@ function renderController(controller, proj) {
   head.appendChild(nameInp);
   head.appendChild(ipInp);
   head.appendChild(typeBtn);
+  head.appendChild(protoBtn);
   head.appendChild(addPortBtn);
   head.appendChild(delBtn);
   card.appendChild(head);
