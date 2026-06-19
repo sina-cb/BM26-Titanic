@@ -39,9 +39,9 @@
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // base shimmer / glint animation rate
-export var low = 0.0;          // LOW band level  -> bars block (X, from center)
-export var mid = 0.0;          // MID band level  -> vintage columns (Y, bottom->top)
-export var high = 0.0;         // HIGH band level -> par glints
+export var low = 0.5;          // LOW band level  -> bars block (X, from center)
+export var mid = 0.5;          // MID band level  -> vintage columns (Y, bottom->top)
+export var high = 0.5;         // HIGH band level -> par glints
 export var floor_ = 0.06;      // minimum time-based base brightness (0..~0.15)
 
 export var cp1H = 0.58, cp1S = 1.0, cp1V = 1.0; // palette 1 — cool blue
@@ -123,13 +123,20 @@ export function beforeRender(delta) {
   tBase = time(0.06 / rate);
   tGlint = time(0.013 / rate);
 
+  // Gentle autonomous breathing so the spectrum is never perfectly still in
+  // silence (a live analyzer always shimmers). Small, incommensurate phases so
+  // bars/columns drift independently — keeps the frame ANIMATING at rest while
+  // the band levels still dominate the look.
+  var br1 = 0.5 + 0.5 * wave(tBase * 0.6);          // bars breath  0..1
+  var br2 = 0.5 + 0.5 * wave(tBase * 0.41 + 0.37);  // column breath 0..1
+
   // Map band sliders -> spatial extent + brightness. A little base extent so the
   // very center stays seeded; the rest scales hard with the signal.
-  lowExtent = 0.06 + clamp01(low) * 0.44;     // half-width 0.06..0.50
-  midFill = 0.05 + clamp01(mid) * 0.95;       // fill 0.05..1.0 of the column
-  lowBri = 0.35 + clamp01(low) * 0.65;        // bars brightness
-  midBri = 0.30 + clamp01(mid) * 0.70;        // vintage brightness
-  highBri = 0.25 + clamp01(high) * 0.75;      // par glint brightness
+  lowExtent = 0.06 + clamp01(low) * 0.44 * (0.82 + 0.18 * br1); // half-width ~0.06..0.50
+  midFill = 0.05 + clamp01(mid) * 0.95 * (0.82 + 0.18 * br2);   // fill ~0.05..1.0 of the column
+  lowBri = 0.64 + clamp01(low) * 0.36 * (0.78 + 0.22 * br1);    // bars brightness (lifted)
+  midBri = 0.45 + clamp01(mid) * 0.55 * (0.78 + 0.22 * br2);    // vintage brightness (lifted)
+  highBri = 0.30 + clamp01(high) * 0.70;      // par glint brightness
 }
 
 export function render3D(index, x, y, z) {

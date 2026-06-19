@@ -62,17 +62,17 @@ export var localSpeed = 0.5;          // standard first local slider (global mot
 
 // Background dancers
 export var ball1_x = 0.34;            // 0..1 dancer-1 X target  (MODULATE <- micDomEnergy1)
-export var ball1_energy = 0.6;        // 0..1 dancer-1 brightness/size
+export var ball1_energy = 0.5;        // 0..1 dancer-1 brightness/size
 export var ball2_x = 0.66;            // 0..1 dancer-2 X target  (MODULATE <- micDomEnergy2)
-export var ball2_energy = 0.6;        // 0..1 dancer-2 brightness/size
+export var ball2_energy = 0.5;        // 0..1 dancer-2 brightness/size
 
-export var baseGlow = 0.12;           // soft palette wash floor (never dark — P0)
-export var dancerSize = 0.30;         // base halo half-width (X units)
-export var dancerGlow = 1.0;          // peak halo brightness
+export var baseGlow = 0.15;           // soft palette wash floor (never dark — P0)
+export var dancerSize = 0.34;         // base halo half-width (X units)
+export var dancerGlow = 0.7;          // peak halo brightness
 
 // Spiral filigree (foreground) speed-up. chevronSpeedup keeps its historical
 // name and acts as the global motion/speed drive (MODULATE <- micLow).
-export var chevronSpeedup = 0.0;
+export var chevronSpeedup = 0.4;
 
 // Palette pickers (strict cp1<->cp2 RGB-space blending; spirals use the bright
 // complement of the cp midpoint so they always read high-contrast).

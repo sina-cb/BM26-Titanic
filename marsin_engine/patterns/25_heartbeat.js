@@ -52,16 +52,16 @@
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;     // 0..1; 0.5 center (guarded), <0.5 reverse sweep
-export var level = 0.6;         // PRIMARY: overall brightness budget (audio: micLow)
+export var direction = 0.06;    // 0..1; 0.5 center (guarded), <0.5 reverse sweep
+export var level = 0.5;         // PRIMARY: overall brightness budget (audio: micLow)
 export var kick = 0.0;          // beat amplitude + blinder pop (audio: micKick)
-export var radius = 0.45;       // ripple spread / travel (audio: micFlux)
-export var detail = 0.45;       // lub/dub crispness (audio: micHigh)
-export var minBright = 0.05;    // dormant glow between beats
-export var blinder = 0.7;       // vintage-head white-blinder strength (structural)
-export var whiteLevel = 0.55;   // WHITE: overall white amount / keep (audio: micLow)
+export var radius = 0.5;        // ripple spread / travel (audio: micFlux)
+export var detail = 0.5;        // lub/dub crispness (audio: micHigh)
+export var minBright = 0.075;   // dormant glow between beats
+export var blinder = 0.5;       // vintage-head white-blinder strength (structural)
+export var whiteLevel = 0.5;    // WHITE: overall white amount / keep (audio: micLow)
 export var whiteKick = 0.0;     // WHITE: beat-driven white pop / blinder bite (audio: micKick)
-export var blinderBite = 0.7;   // WHITE: how snappy/hard the blinder attack lands
+export var blinderBite = 0.5;   // WHITE: how snappy/hard the blinder attack lands
 
 export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0; // Pulse core (red)
 export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // Pulse accent (green, wide sep)
@@ -176,7 +176,7 @@ export function render3D(index, x, y, z) {
   //      low-band energy (high PRIMARY corr; kick-gated as documented).
   var autoBeat = lub;                         // silence pulse
   var audioBeat = kick * (0.7 + 0.3 * lub);   // audio pound (slightly beat-shaped)
-  var beatBri = max(autoBeat * 0.55, audioBeat);
+  var beatBri = max(autoBeat * 0.62, audioBeat);
 
   // PRIMARY brightness budget (audio: micLow -> level): level scales the whole
   // beat so the rig rises/falls WITH the low band. Dormant glow keeps it

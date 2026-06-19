@@ -41,9 +41,9 @@
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // base-ring breathing rate (0 = freeze)
 export var kick = 0.0;         // 0..1 trigger; crossing ~0.5 fires a shockwave
-export var level = 0.25;       // 0..1 base brightness floor (ambient ring/glow)
+export var level = 0.5;        // 0..1 base brightness floor (ambient ring/glow)
 export var decay = 0.5;        // shockwave envelope decay rate
-export var ringWidth = 0.4;    // expanding-ring thickness (tight = max def)
+export var ringWidth = 0.5;    // expanding-ring thickness (tight = max def)
 
 export var cp1H = 0.11, cp1S = 0.45, cp1V = 1.0; // palette 1 (hot white-amber core)
 export var cp2H = 0.62, cp2S = 1.0,  cp2V = 1.0; // palette 2 (deep blue outer)
@@ -111,6 +111,7 @@ var prevKick = 0.0;     // previous kick value (edge detection)
 var ringRad = 1.0;      // resolved ring radius this frame (1.0 = off-screen / done)
 var ringW = 0.06;       // resolved ring half-width this frame
 var basePhase = 0.0;    // base-ring breathing phase 0..1
+var autoClock = 0.0;    // autonomous self-fire phase (turns); fires a wave each wrap
 
 export function beforeRender(delta) {
   var dt = delta / 1000.0;
@@ -123,6 +124,17 @@ export function beforeRender(delta) {
   // Edge-detect the kick control: a rising crossing of KICK_ARM arms a wave.
   if (kick >= KICK_ARM && prevKick < KICK_ARM) env = 1.0;
   prevKick = kick;
+
+  // Autonomous self-fire so the rig PULSES on its own with NO audio mapped
+  // (same family behaviour as 25_heartbeat). An irrational period (1/√7 turns/sec
+  // scaled by localSpeed) wraps to throw a fresh shockwave; an audio kick still
+  // fires independently on top. Skipped while a fresh audio wave is hot so the
+  // audio kicks read cleanly.
+  autoClock = autoClock + dt * (0.55 + localSpeed * 0.70) * 0.7071068;
+  if (autoClock >= 1.0) {
+    autoClock = autoClock - floor(autoClock);
+    if (env < 0.25) env = 1.0;   // re-arm only once the previous wave has faded
+  }
 
   // Decay the envelope toward 0. Rate spans an irrational range (1/phi .. sqrt3
   // scaled) so the wave never locks to an integer period.

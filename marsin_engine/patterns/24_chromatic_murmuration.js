@@ -33,14 +33,14 @@
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;     // 0..1; 0.5 center (guarded), <0.5 reverse wheel
-export var level = 0.7;         // PRIMARY: overall brightness (audio: micLow)
+export var direction = 0.06;    // 0..1; 0.5 center (guarded), <0.5 reverse wheel
+export var level = 0.5;         // PRIMARY: overall brightness (audio: micLow)
 export var kick = 0.0;          // brightness pop (audio: micKick)
-export var radius = 0.45;       // flock reach / travel (audio: micFlux)
-export var detail = 0.45;       // filament density (audio: micHigh)
-export var flockFocus = 1.8;
-export var contrast = 1.5;
-export var afterglow = 0.06;
+export var radius = 0.34;       // flock reach / travel (audio: micFlux)
+export var detail = 0.5;        // filament density (audio: micHigh)
+export var flockFocus = 3.0;
+export var contrast = 3.0;
+export var afterglow = 0.135;
 
 export var cp1H = 0.62, cp1S = 0.94, cp1V = 1.0; // cool blue
 export var cp2H = 0.03, cp2S = 0.94, cp2V = 1.0; // warm red (wide hue sep)
@@ -55,11 +55,11 @@ export function sliderDirection(v) {
 }
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = 0.22 + v * 0.32; }
+export function sliderRadius(v) { radius = 0.20 + v * 0.28; }   // 0.20..0.48 reach
 export function sliderDetail(v) { detail = v; }
-export function sliderFlockFocus(v) { flockFocus = 1.5 + v * 7.0; }
-export function sliderContrast(v) { contrast = 0.8 + v * 5.5; }
-export function sliderAfterglow(v) { afterglow = v * 0.45; }
+export function sliderFlockFocus(v) { flockFocus = 1.4 + v * 3.2; } // 1.4..4.6
+export function sliderContrast(v) { contrast = 1.2 + v * 3.6; }     // 1.2..4.8
+export function sliderAfterglow(v) { afterglow = v * 0.27; }        // 0..0.27 floor
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
 var BASE_RATE = 0.18;   // orbit turns/sec at localSpeed = 1

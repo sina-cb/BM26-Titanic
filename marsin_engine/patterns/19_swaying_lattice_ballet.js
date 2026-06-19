@@ -38,14 +38,14 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;     // sway rate (0 still creeps, 1 ~4x faster)
 export var direction = 0.5;      // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
-export var level = 1.0;          // PRIMARY audio: overall brightness (micLow)
-export var kick = 0.0;           // audio: kick brightness pop (micKick)
+export var level = 0.5;          // PRIMARY audio: overall brightness (micLow); mid = calm-but-lit
+export var kick = 0.0;           // audio: kick brightness pop (micKick); 0 = no pop until beat
 export var radius = 0.5;         // audio: sway radius / how far the corps bows (micFlux)
 export var detail = 0.5;         // audio: node sharpness / sparkle (micHigh)
-export var latticeScale = 0.32;  // grid density (0..1; scaled in render)
-export var counterPhase = 0.6;   // how strongly field B opposes field A (0..1)
-export var floorLevel = 0.32;    // base glow floor (0..1; scaled in render)
-export var whiteLevel = 0.4;     // WHITE: overall white amount on crest accents (audio: micLow)
+export var latticeScale = 0.5;   // grid density (0..1; scaled in render)
+export var counterPhase = 0.5;   // how strongly field B opposes field A (0..1)
+export var floorLevel = 0.5;     // base glow floor (0..1; scaled in render)
+export var whiteLevel = 0.5;     // WHITE: overall white amount on crest accents (audio: micLow)
 export var whiteKick = 0.0;      // WHITE: white accent pop on the sway crests (audio: micKick)
 export var whiteSpread = 0.5;    // WHITE: bias toward vintage heads (0) vs. whole rig (1)
 
@@ -192,12 +192,14 @@ export function render3D(index, x, y, z) {
 
   // Base floor keeps silence calm-but-visible; nodes sit on top. Kept small so
   // the negative space between nodes reads near-black (high-def contrast).
-  var floorK = floorLevel * 0.06;
+  var floorK = floorLevel * 0.14;
   var bri = floorK + lattice * 1.05 * breath;
 
   // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
   // brightness driver (corr>=0.5); the lattice shapes WHERE, the bass HOW BRIGHT.
-  var levelGain = 0.18 + level * level * 2.4;
+  // level^2 keeps micLow the dominant brightness driver (PRIMARY corr) while the
+  // lifted curve makes the mid default read well-lit: 0 -> dim, 0.5 -> bright, 1 -> full.
+  var levelGain = 0.45 + level * (1.9 + level * 1.7); // 0:0.45 0.5:1.83 1:4.05
   var pop = kick * 0.55 * lattice;     // kick pop only on lit nodes
   bri = min(1.0, (bri + pop) * levelGain);
 

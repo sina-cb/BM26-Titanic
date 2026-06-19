@@ -32,16 +32,19 @@
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;     // 0..1; 0.5 center (guarded), <0.5 reverse orbit
-export var level = 0.7;         // PRIMARY: overall brightness (audio: micLow)
-export var kick = 0.0;          // core / brightness pop (audio: micKick)
-export var radius = 0.45;       // orbit reach / travel (audio: micFlux)
-export var detail = 0.45;       // filament density (audio: micHigh)
-export var chaos = 4.5;
-export var contrast = 3.0;
-export var whiteCore = 0.45;
-export var uvGhost = 0.32;
-export var colorSpread = 1.0;
+export var direction = 0.6;     // 0..1; 0.5 center (guarded). >0.5 = orbit one way;
+                                // a gentle orbit sense is the identity (not 0.5).
+export var level = 0.7;         // PRIMARY: overall brightness (audio: micLow). 0.7 not 0.5:
+                                // the small uniform level-floor that anchors PRIMARY corr
+                                // (dark-space identity caps raw corr) needs the higher bias.
+export var kick = 0.0;          // core / brightness pop (audio: micKick); 0 = no pop until beat
+export var radius = 0.39;       // orbit reach / travel (resolved; slider 0..1 -> 0.14..0.64, mid)
+export var detail = 0.5;        // filament density (audio: micHigh)
+export var chaos = 6.0;         // resolved curl complexity (slider 0..1 -> 1..11; mid = 6)
+export var contrast = 4.5;      // resolved filament/core sharpness (slider 0..1 -> 1..8; mid = 4.5)
+export var whiteCore = 0.5;
+export var uvGhost = 0.4;
+export var colorSpread = 0.95;  // resolved cp1<->cp2 spread (slider 0..1 -> 0.45..1.5; ~mid)
 
 export var cp1H = 0.55, cp1S = 0.95, cp1V = 1.0; // cyan
 export var cp2H = 0.84, cp2S = 0.95, cp2V = 1.0; // violet (wide hue sep)
@@ -62,7 +65,9 @@ export function sliderChaos(v) { chaos = 1.0 + v * 10.0; }
 export function sliderContrast(v) { contrast = 1.0 + v * 7.0; }
 export function sliderWhiteCore(v) { whiteCore = v; }
 export function sliderUvGhost(v) { uvGhost = v; }
-export function sliderColorSpread(v) { colorSpread = 0.2 + v * 1.4; }
+// Floor raised from 0.2 to 0.45 so even at v=0 the cp1<->cp2 sweep keeps a
+// visible two-colour spread (at 0.2 the rig collapsed toward one hue).
+export function sliderColorSpread(v) { colorSpread = 0.45 + v * 1.05; }
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
 var BASE_RATE = 0.16;   // orbit turns/sec at localSpeed = 1

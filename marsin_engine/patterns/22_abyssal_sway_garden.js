@@ -31,14 +31,15 @@
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.7;     // 0..1; 0.5 center (guarded), <0.5 lean reverse
-export var level = 0.7;         // PRIMARY: overall brightness (audio: micLow)
-export var kick = 0.0;          // tip-flash / brightness pop (audio: micKick)
+export var direction = 0.6;     // 0..1; 0.5 center (guarded). >0.5 = lean one way;
+                                // a gentle current lean is the garden identity.
+export var level = 0.5;         // PRIMARY: overall brightness (audio: micLow); mid = calm-but-lit
+export var kick = 0.0;          // tip-flash / brightness pop (audio: micKick); 0 = no pop until beat
 export var radius = 0.5;        // sway amplitude / travel (audio: micFlux)
-export var detail = 0.45;       // tip sparkle (audio: micHigh)
-export var frondDensity = 7.0;
-export var tipGlow = 0.55;
-export var baseDarkness = 0.55;
+export var detail = 0.5;        // tip sparkle (audio: micHigh)
+export var frondDensity = 10.0; // resolved stalk count (slider 0..1 -> 3..17; mid = 10)
+export var tipGlow = 0.5;
+export var baseDarkness = 0.5;
 
 export var cp1H = 0.60, cp1S = 0.95, cp1V = 1.0; // deep abyssal blue
 export var cp2H = 0.33, cp2S = 0.95, cp2V = 1.0; // bioluminescent green (wide sep)

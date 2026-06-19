@@ -29,12 +29,12 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // motion rate (0 still creeps, 1 ~4x faster)
 export var direction = 0.5;    // 0.5 = balanced; <0.5 reverse, >0.5 forward (guarded)
-export var level = 1.0;        // PRIMARY audio: overall brightness gain (micLow)
-export var kick = 0.0;         // audio: kick brightness pop (micKick)
-export var radius = 0.42;      // audio: movement radius / attractor travel (micFlux)
+export var level = 0.5;        // PRIMARY audio: overall brightness gain (micLow); mid = calm-but-lit
+export var kick = 0.0;         // audio: kick brightness pop (micKick); 0 = no pop until beat
+export var radius = 0.5;       // audio: movement radius / attractor travel (micFlux)
 export var detail = 0.5;       // audio: glow sharpness / sparkle (micHigh)
-export var focus = 0.4;        // base glow tightness 0..1 (scaled in render)
-export var trailBlend = 0.55;  // colour-trail strength between attractors
+export var focus = 0.5;        // base glow tightness 0..1 (scaled in render)
+export var trailBlend = 0.5;   // colour-trail strength between attractors
 
 export var cp1H = 0.55, cp1S = 0.92, cp1V = 1.0; // cyan
 export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // violet/magenta
@@ -179,8 +179,8 @@ export function render3D(index, x, y, z) {
   // Ambient floor is gated by proximity to an attractor so true voids stay dark
   // (high-def negative space) while lit regions track the bass.
   var prox = max(0.0, 1.0 - nearest * 1.6);
-  var ambient = level * 0.16 * prox;
-  var gain = 0.10 + level * 1.05;
+  var ambient = level * 0.18 * prox;
+  var gain = 0.12 + level * 1.30;
   // Kick pop: a clean additive brightness lift from micKick (kept secondary so
   // micLow stays the dominant brightness driver for PRIMARY corr).
   var pop = kick * 0.38;

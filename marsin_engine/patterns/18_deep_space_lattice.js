@@ -29,12 +29,12 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // drift rate (0 still creeps, 1 ~4x faster)
 export var direction = 0.5;    // 0.5 balanced; <0.5 reverse, >0.5 forward (guarded)
-export var level = 1.0;        // PRIMARY audio: overall brightness (micLow)
-export var kick = 0.0;         // audio: kick brightness pop (micKick)
-export var radius = 0.4;       // audio: lattice scale / travel (micFlux)
-export var detail = 0.45;      // audio: line sharpness / sparkle (micHigh)
-export var latticeScale = 0.35; // base grid density (0..1; scaled in render)
-export var lineSoftness = 0.18; // base line crispness (0..1; scaled in render)
+export var level = 0.5;        // PRIMARY audio: overall brightness (micLow); mid = calm-but-lit
+export var kick = 0.0;         // audio: kick brightness pop (micKick); 0 = no pop until beat
+export var radius = 0.5;       // audio: lattice scale / travel (micFlux)
+export var detail = 0.5;       // audio: line sharpness / sparkle (micHigh)
+export var latticeScale = 0.5; // base grid density (0..1; scaled in render)
+export var lineSoftness = 0.5; // base line crispness (0..1; scaled in render)
 
 export var cp1H = 0.62, cp1S = 0.95, cp1V = 1.0; // base (blue)
 export var cp2H = 0.90, cp2S = 0.95, cp2V = 1.0; // accent (pink/magenta)
@@ -130,8 +130,9 @@ export function beforeRender(delta) {
   // radius drives how FAR the lattice lines travel per frame (movement), via a
   // drift-rate boost — it does NOT change the lit-area budget, so it doesn't
   // fight the level->brightness coupling. detail adds a touch of sharpness.
-  liveScale = 2.0 + latticeScale * 12.0;        // 0..1 -> 2..14
-  liveSoft = 1.0 + lineSoftness * 5.0 + detail * 1.2;
+  liveScale = 2.0 + latticeScale * 12.0;        // 0..1 -> 2..14 (density)
+  // line crispness: 0 -> broad glow bands, 0.5 -> balanced lattice, 1 -> razor lines.
+  liveSoft = 1.0 + lineSoftness * 2.0 + detail * 0.7; // 0..1 -> ~1..3.7 (+detail)
   _hsv2rgb1();
   _hsv2rgb2();
 }
@@ -163,7 +164,10 @@ export function render3D(index, x, y, z) {
   // PRIMARY: overall brightness from micLow. Brightness is dominated by a strong
   // level term so total brightness tracks micLow (corr>=0.5); the lattice shapes
   // WHERE the light is, the bass sets HOW BRIGHT. Voids stay near-black.
-  var levelGain = 0.20 + level * level * 2.6;     // level^2 makes bass dominate
+  // level^2 keeps micLow dominant (PRIMARY corr) but the curve is lifted so the
+  // mid default reads well-lit: 0 -> dim wash (not black), 0.5 -> bright lattice,
+  // 1 -> full punch.
+  var levelGain = 0.5 + level * (2.0 + level * 1.7); // 0:0.5 0.5:1.93 1:4.2
   var pop = kick * 0.55 * lattice;               // kick pop only on the lattice
   bri = min(1.0, (bri + pop) * levelGain);
 

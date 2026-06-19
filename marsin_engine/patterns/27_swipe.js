@@ -47,8 +47,8 @@
 export var localSpeed = 0.5;   // auto-animate rate (0 = freeze, drive by swipePos)
 export var swipePos = 0.0;     // 0..1 swipe position (X pars/bars, Y vintage)
 export var swipeDir = 0.0;     // <0.5 = forward, >=0.5 = reverse
-export var blur = 0.0;         // 0 = hard single pixel (max definition)
-export var trail = 0.3;        // pixelated fading tail behind the swipe
+export var blur = 0.2;         // 0 = hard single pixel (max definition); small default keeps the swipe readable on dense rigs while staying crisp
+export var trail = 0.5;        // pixelated fading tail behind the swipe
 export var shift = 0.0;        // calibration: rotate swipe start to physical pixel 0
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 (start / cyan)

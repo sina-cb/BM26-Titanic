@@ -32,13 +32,17 @@
 
 // ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var direction = 0.75;   // 0..1; 0.5 center (guarded), <0.5 reverse glide
-export var level = 0.7;        // PRIMARY: overall brightness (audio: micLow)
-export var kick = 0.0;         // brightness/foam pop (audio: micKick)
-export var radius = 0.45;      // travel distance + wing span (audio: micFlux)
-export var detail = 0.4;       // wing-ripple sparkle (audio: micHigh)
-export var whiteFoam = 0.22;
-export var uvUndertow = 0.28;
+export var direction = 0.75;   // 0..1; 0.5 center (guarded). >0.5 = forward glide;
+                               // a directional glide is the oceanic identity (not 0.5).
+export var level = 0.7;        // PRIMARY: overall brightness (audio: micLow). 0.7 not
+                               // 0.5: below ~0.6 the dimmer manta bodies stop spanning
+                               // cp2 and hueSpread falls under 0.10. 0.7 = lit + 2-colour.
+export var kick = 0.0;         // brightness/foam pop (audio: micKick); 0 = no pop until beat
+export var radius = 0.5;       // travel distance + wing span (audio: micFlux)
+export var detail = 0.5;       // wing-ripple sparkle (audio: micHigh)
+export var whiteFoam = 0.3;    // white foam crest amount (kept modest so foam accents,
+                               // never washes the rig or decorrelates PRIMARY brightness)
+export var uvUndertow = 0.3;   // UV undertow amount
 
 export var cp1H = 0.60, cp1S = 1.0, cp1V = 1.0; // Sea (deep blue)
 export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // Reef (green, wide hue sep)
@@ -172,7 +176,10 @@ export function render3D(index, x, y, z) {
   // bars): left = cp1 sea-blue, right = cp2 reef-green. A slow drift slides the
   // boundary; the manta body pushes its pixels toward cp2. Both ends always lit.
   var sweep = nx + 0.18 * sin(colAng * 0.31 + ny * 2.0);
-  var colorMix = sweep * (1.0 - body * 0.6) + body * 0.6;
+  // The nx sweep (full 0..1 across the bars) guarantees BOTH palette ends are lit;
+  // the manta body only nudges its pixels toward cp2 (reef) so wide wings (radius
+  // high) don't collapse the rig onto one hue -- keeps hueSpread up at all radii.
+  var colorMix = sweep * (1.0 - body * 0.4) + body * 0.45;
   colorMix = max(0.0, min(1.0, colorMix));
   // Gentle S-curve pushes pixels toward the two palette ENDS (more two-colour,
   // fewer washed mid-hues) while keeping a smooth gradient.
