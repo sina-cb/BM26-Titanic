@@ -27,7 +27,12 @@
     - colorPalette1/2 : cp1 cool white/blue, cp2 pale gold.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderDensity (density) <- micHigh
+AUDIO_MODULATION_V1:
+  sliderDensity <- micHigh range 0.30..1.00 curve linear   # PRIMARY brightness: highs drive glint count + brightness (sparkle/detail)
+  # sliderFall      static 0.50  # rain fall speed (motion, not audio-driven)
+  # sliderIntensity static 0.85  # glint peak brightness (static)
+  # sliderBase      static 0.12  # silence visibility floor (static)
+  # sliderLocalSpeed static 0.50  # operator rain pace, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -104,12 +109,22 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  // Rain scrolls so cells appear to move DOWN (y decreasing) over time.
-  fallPhase = fallPhase + dt * (0.15 + fall * FALL_MAX) * localSpeed;
+  // localSpeed: exponential rate trim (pow(2,(localSpeed-0.5)*4)) so the fader
+  // spans a WIDE, visibly-different rain rate — a slow trickle at 0, a downpour
+  // at 1. A small floor keeps the rain always faintly falling/twinkling at 0
+  // (motion stays > 0 at the bottom — never a frozen field).
+  var rateMult = 0.10 + pow(2.0, (localSpeed - 0.5) * 4.0);
+
+  // Rain scrolls so cells appear to move DOWN (y decreasing) over time. Both the
+  // fall speed AND the sparkle churn ride rateMult so localSpeed clearly changes
+  // the whole rain's pace.
+  fallPhase = fallPhase + dt * (0.15 + fall * FALL_MAX) * rateMult;
   if (fallPhase > 100000.0) fallPhase = fallPhase - 100000.0; // bound growth
 
-  tChurn = time(0.05 / (0.25 + localSpeed * CHURN_MAX));
-  tBase = time(0.4);
+  tChurn = time(0.05 / (0.25 + rateMult * CHURN_MAX));
+  // Base breathing ALSO rides rateMult so localSpeed paces the WHOLE field (base
+  // shimmer + glint churn + fall together) — clearly slower at 0, faster at 1.
+  tBase = time(0.4 / (0.20 + rateMult * 0.9));
 }
 
 export function render3D(index, x, y, z) {
@@ -134,7 +149,11 @@ export function render3D(index, x, y, z) {
   if (spk > threshold) {
     var amt = (spk - threshold) / (1.0 - threshold + 0.0001);
     amt = clamp01(amt);
-    glint = amt * (0.55 + intensity * 0.7) * (0.45 + density * 0.7);
+    // Glint brightness scales HARD with density (micHigh) — more highs => not
+    // just more glints, but each one markedly brighter — so the highs are the
+    // dominant brightness correlate (PRIMARY). Quadratic density term widens the
+    // bright/quiet swing for a clean micHigh->brightness coupling.
+    glint = amt * (0.45 + intensity * 0.6) * (0.20 + density * 1.10 + density * density * 0.40);
     glint = clamp01(glint);
   }
 
@@ -142,21 +161,36 @@ export function render3D(index, x, y, z) {
   // COORD-DRIVEN (y only) so EVERY pixel on ANY rig lights from coordinates
   // alone — sectionId is an OPTIONAL ADDITIVE accent on top, never a gate (it
   // is 0 on titanic/dome/logsville so the base must stand on its own there).
-  // Floor lifted enough to clear the LIT threshold across the whole rig.
-  var baseV = base * (0.55 + 0.45 * wave(tBase + y * 0.3)) * 0.55;
+  // Kept LOW (a dim trickle) so the rain field has TRUE-DARK negative space
+  // between drops (high contrast) and the base's constant brightness does not
+  // dilute the micHigh->brightness correlation.
+  var baseV = base * (0.55 + 0.45 * wave(tBase + y * 0.3)) * 0.48;
   // Section accent: a faint per-section tint shift, ADDITIVE (test_bench only —
   // sectionId is 0 elsewhere so this contributes 0 there, base still lights all).
   if (sectionId > 0) {
     baseV = baseV + base * 0.10 * (0.5 + 0.5 * wave(tBase + sectionId * 0.13));
   }
 
-  // Per-pixel palette blend: a second deterministic draw biases each glint
-  // toward cp1 (cool white) or cp2 (pale gold).
+  // Per-pixel palette blend: a deterministic draw biases each pixel toward cp1
+  // (cool white) or cp2 (pale gold). A FULL-TRAVEL spread (pushed toward both
+  // endpoints) keeps BOTH hues strongly present across the rig so the two-colour
+  // identity holds even though the palette is low-saturation (hueSpread).
   var tColRaw = sin(seed * 0.531 + index * 0.27);
   var tCol = clamp01(tColRaw * 0.5 + 0.5);
+  // Push toward the nearer endpoint so few pixels sit on the washed-out midpoint.
+  if (tCol < 0.5) tCol = tCol * tCol * 2.0;
+  else            tCol = 1.0 - (1.0 - tCol) * (1.0 - tCol) * 2.0;
+  tCol = clamp01(tCol);
+
+  // The dim base spans cp1<->cp2 across the rig on a multi-cycle coord field that
+  // REACHES both endpoints (triangle), so the negative space alternates cool and
+  // gold bands — a robust two-colour spread independent of the sparse near-white
+  // glints (keeps hueSpread up without needing a bright flooded base).
+  var baseCol = clamp01(triangle(x * 2.3 + y * 0.6 + tBase * 0.4));
 
   var v = baseV;
   if (glint > v) v = glint;
+  else           tCol = baseCol;
 
   var rr = (pr1 + (pr2 - pr1) * tCol) * v;
   var gg = (pg1 + (pg2 - pg1) * tCol) * v;
