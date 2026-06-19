@@ -61,7 +61,7 @@ const EXPECTED_AUDIO_ENTRIES = [
   GAIN('micHighGain', 'Mic High Gain'),
   GAIN('micKickGain', 'Mic Kick Gain'),
   GAIN('micFluxGain', 'Mic Flux Gain'),
-  { key: 'audioStructure', label: 'Audio · Structure', ...LIVE({ default: 0.0, range: [0, 2], broadcastHz: 10, sharedFnName: 'audioStructure' }) },
+  { key: 'audioStructure', label: 'Audio · Structure', ...LIVE({ default: 0.0, range: [0, 2], broadcastHz: 10, oscAddress: '/marsin/audio/structure', sharedFnName: 'audioStructure' }) },
   { key: 'audioBuildScore', label: 'Audio · Build Score', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/build', sharedFnName: 'audioBuildScore' }) },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/energy', sharedFnName: 'audioEnergyRatio' }) },
   { key: 'audioVocalsHot', label: 'Audio · Vocals Hot', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioVocalsHot' }) },
