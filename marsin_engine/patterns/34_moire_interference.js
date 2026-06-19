@@ -111,8 +111,15 @@ function clamp01(v) {
 }
 
 // ── Persistent state ──────────────────────────────────────────────────────────
-var driftA = 0.0;     // phase drift of grid A (turns, 0..1)
-var driftB = 0.0;     // phase drift of grid B (turns, 0..1)
+// Phases ACCUMULATE freely and wrap only at a LARGE multiple of their period
+// (PHASE_WRAP turns), never at 1.0. Wrapping at 1.0 was the seam: a phase that
+// is wrapped to 0..1 but then multiplied by a non-integer factor elsewhere
+// (e.g. the wash's driftA*0.5) jumps half a cycle at the wrap, flashing the rig.
+var PHASE_WRAP = 10000.0;  // wrap point in turns; far from any in-frame use
+var driftA = 0.0;     // phase drift of grid A (turns, free-accumulating)
+var driftB = 0.0;     // phase drift of grid B (turns, free-accumulating)
+var washDrift = 0.0;  // wash phase — its OWN accumulator at half driftA's rate
+                      // (was driftA*0.5, which jumped when driftA wrapped at 1)
 var freqB = 0.0;      // grid B frequency (resolved each frame)
 var pulseEnv = 0.0;   // smoothed kick flash envelope
 var colSpin = 0.0;    // slow colour-axis rotation (sqrt3 leg) so the two-colour
@@ -127,15 +134,24 @@ export function beforeRender(delta) {
   _hsv2rgb2();
 
   // Two grids drift at an irrational ratio (sqrt2) so the moiré never re-locks.
+  // Each phase accumulates freely and wraps only at PHASE_WRAP (a large integer
+  // number of turns) so every periodic consumer (wave/triangle, period 1) sees a
+  // continuous wrap — and so do consumers that scale the phase (the wash uses its
+  // own accumulator below; nothing multiplies a wrapped 0..1 phase any more).
   driftA = driftA + dt * localSpeed * MAX_RATE;
-  driftA = driftA - floor(driftA);
+  if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
   driftB = driftB + dt * localSpeed * MAX_RATE * 1.41421;
-  driftB = driftB - floor(driftB);
+  if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
+
+  // Wash drifts at half grid A's rate, on its OWN accumulator (replaces the old
+  // driftA*0.5, which jumped by half a wave cycle whenever driftA wrapped).
+  washDrift = washDrift + dt * localSpeed * MAX_RATE * 0.5;
+  if (washDrift >= PHASE_WRAP) washDrift = washDrift - PHASE_WRAP;
 
   // Colour axis spins on a third incommensurate leg (sqrt3) — the two-colour
   // hand-off between cp1 and cp2 slowly precesses across the rig.
   colSpin = colSpin + dt * localSpeed * MAX_RATE * 0.13 * 1.73205;
-  colSpin = colSpin - floor(colSpin);
+  if (colSpin >= PHASE_WRAP) colSpin = colSpin - PHASE_WRAP;
 
   // Grid B is grid A, detuned — the source of the beat.
   freqB = BASE_FREQ * (1.0 + ratio);
@@ -179,7 +195,7 @@ export function render3D(index, x, y, z) {
   // HARD-GATED (only its upper lobe lights) so the dark background stays crisp
   // and high-def; the sharpened `moire` bands ride on top for the two-colour
   // fringe detail.
-  var washPat = wave(u * 3.5 + driftA * 0.5);         // 0..1, slow, ratio-free
+  var washPat = wave(u * 3.5 + washDrift);             // 0..1, slow, ratio-free
   var washIn = washPat - 0.45;
   var fill = 0.0;
   if (washIn > 0.0) fill = washIn * washIn * 1.7;
