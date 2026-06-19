@@ -57,17 +57,19 @@ new work; file follow-ups there as `Backlog` cards.
   `git reset --hard` / `git checkout --` to hide test side effects. Before
   claiming merge-ready, run the touched subsystems' auto-check specs.
 - **Follow the GoL branch-naming convention** (`.agent/00_gol/01_git.md` →
-  Branch Naming and Lifecycle): durable work lives on `feat/<snake_case>`;
-  multi-agent worktrees on `dev/claude/<slug>`; auto-named `claude/<name>`
-  and `worktree-agent-<hash>` branches are scratch. Promote a session branch
-  to `feat/` by **GitHub rename** (never delete+recreate a branch with an
-  open PR). Delete temp/merged branches only after verifying their work landed.
-- **Never name a branch random gibberish.** No auto-codenames like
-  `slug-shit-1377` or `happy-dud-6je$$`. When you create a branch for durable
-  work, give it a proper descriptive `feat/<snake_case>` name; if you can't
-  pick a good one, **ask Sina for the name** instead of inventing junk. (Random
-  `claude/<auto_name>` branches a web session creates for you must still be
-  promoted to a real `feat/` name or deleted — they are not acceptable to keep.)
+  Branch Naming and Lifecycle): this is an **agent-agnostic** repo, so no agent
+  name goes in a branch. Durable work lives on `feat/<snake_case>`; multi-agent
+  worktrees on `dev/<slug>` (**local only — never pushed to `origin`**);
+  `worktree-agent-<hash>` and auto-named session branches are scratch. Promote
+  a session branch to `feat/` by **GitHub rename** (never delete+recreate a
+  branch with an open PR). Delete temp/merged branches only after verifying
+  their work landed.
+- **Never name a branch random gibberish.** No throwaway auto-codenames. When
+  you create a branch for durable work, give it a proper descriptive
+  `feat/<snake_case>` name that says what the work is; if you can't pick a good
+  one, **ask the user for the name** instead of inventing junk. (Auto-named
+  session branches must still be promoted to a real `feat/` name or deleted —
+  they are not acceptable to keep.)
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.

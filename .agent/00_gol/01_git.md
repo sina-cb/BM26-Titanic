@@ -13,31 +13,34 @@
 Every branch on `origin` falls into one of the namespaces below. Use the
 right namespace for the work; do not invent new top-level prefixes.
 
-| Namespace | Purpose | Lifetime | Typical author |
+This repo is **agent-agnostic** — no branch namespace is tied to a particular
+agent. Do not bake an agent's name (`claude`, etc.) into a branch you create.
+
+| Namespace | Purpose | Lifetime | Pushed to origin? |
 | --- | --- | --- | --- |
-| `main` | Production / integration trunk. All work lands here via squash-merged PRs. | Permanent | Human op (merges) |
-| `feat/<snake_case>` | **Durable feature branches** that outlive a single agent session — long-running work, deploy hosts, anything an open PR tracks. This is the only namespace for work meant to stick around. | Long-lived, until merged | Promoted from a session branch, or created intentionally |
-| `dev/claude/<slug>` | Multi-agent worktree sub-agent branches. Governed by `.agent/00_gol/13_multi_agent.md`. | Transient, one per multi-agent run | Instigator / sub-agents |
-| `claude/<auto_name>` | Auto-named branches created by **Claude Code on the web / cloud sessions** (random codenames like `nice-cerf-bl2jnk`). Treat as scratch until promoted. | Ephemeral | Claude Code web sessions |
-| `worktree-agent-<hash>` | **Temporary local worktree** scratch branches. Never durable work. | Ephemeral, delete after use | Local worktree agents |
+| `main` | Production / integration trunk. All work lands here via squash-merged PRs. | Permanent | Yes |
+| `feat/<snake_case>` | **Durable feature branches** that outlive a single agent session — long-running work, deploy hosts, anything an open PR tracks. This is the only namespace for work meant to stick around. | Long-lived, until merged | Yes |
+| `dev/<slug>` | Multi-agent worktree sub-agent branches. Governed by `.agent/00_gol/13_multi_agent.md`. **Local only.** | Transient, one per multi-agent run | **No — stays local** |
+| `worktree-agent-<hash>` | **Temporary local worktree** scratch branches. Never durable work. | Ephemeral, delete after use | **No — stays local** |
+| `<agent>/<auto_name>` | Auto-named branches an agent's web / cloud session creates for itself (random codenames like `nice-cerf-bl2jnk`). Treat as scratch until promoted. | Ephemeral | Only the originating session's own branch |
 
 Rules:
 
 - **Keep `origin` clean — only `feat/*` (and `main`) belong there long-term.**
-  The transient namespaces (`dev/claude/<slug>`, `worktree-agent-<hash>`, and
-  scratch `claude/<auto_name>` work) must **NOT** be pushed to `origin`; they
-  stay local until promoted. Every extra branch on `origin` is noise that the
+  Multi-agent and worktree branches (`dev/<slug>`, `worktree-agent-<hash>`) are
+  **local only — never push them to `origin`**; they stay on the machine that
+  created them until promoted. Every extra branch on `origin` is noise that the
   next agent has to audit, so a steady-state `origin` holds only `main`, the
   durable `feat/*` branches, and whatever PR branches are actively in flight.
-  `claude/<auto_name>` branches that a Claude Code web session unavoidably
-  creates on `origin` are not a license to accumulate — promote them to
-  `feat/<snake_case>` or delete them promptly; do not let them pile up.
+  An `<agent>/<auto_name>` branch that a web/cloud session unavoidably creates
+  on `origin` for itself is not a license to accumulate — promote it to
+  `feat/<snake_case>` or delete it promptly; do not let them pile up.
 - **Durable work → `feat/<snake_case>`.** The slug is `snake_case` (matches
   the codex filename rule), short and descriptive: `feat/views_rehaul`,
   `feat/timeline_support`, `feat/wiring_diagram`. Do not leave long-lived work
-  on an auto-named `claude/<auto_name>` branch — promote it.
-- **Promote by renaming, not re-creating.** When a `claude/<auto_name>` or
-  `dev/claude/<slug>` branch becomes durable, rename it to `feat/<snake_case>`
+  on an auto-named `<agent>/<auto_name>` branch — promote it.
+- **Promote by renaming, not re-creating.** When an `<agent>/<auto_name>` or
+  `dev/<slug>` branch becomes durable, rename it to `feat/<snake_case>`
   using GitHub's branch-rename (UI: repo → Branches → rename; or
   `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>`).
   GitHub rename **retargets any open PR and preserves its history**. NEVER do a
@@ -46,7 +49,7 @@ Rules:
 - **Never delete the head branch of an open PR** unless you intend to close
   that PR. (Deleting it auto-closes the PR.)
 - **Temp branches are cleanup candidates.** `worktree-agent-*`,
-  `dev/claude/*`, and merged or superseded `claude/<auto_name>` branches should
+  `dev/*`, and merged or superseded `<agent>/<auto_name>` branches should
   be deleted from `origin` once their work has landed — i.e. merged via PR, or
   absorbed into a `feat/` host. **Verify the content actually landed before
   deleting** (diff against `origin/main` or the absorbing `feat/` branch); a
