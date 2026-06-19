@@ -165,6 +165,27 @@
     }
   }
 
+  // ── show the deck on the master output ──────────────────────────────────────
+  // The engine's `master`/`rig` vis (what /live renders) is a crossfade between
+  // the DECK and the MIXER, governed by the engine's viewFader. That fader BOOTS
+  // at 1.0 = "mixer view", and the mixer overlay stack is empty on a fresh
+  // gallery boot, so master stays BLACK even after a pattern is loaded onto the
+  // deck — the loaded pattern lives in the deck buffer, which the master isn't
+  // showing. Dropping the view to the deck side (viewFader→0) is what actually
+  // surfaces the pattern live. We fire this after every operator action that
+  // changes the deck pattern. It is a no-op if the engine is already deck-side,
+  // and it NEVER fabricates success — a failed POST is surfaced to the operator.
+  function showDeckOnMaster() {
+    return engine('POST', '/mixer/view', { view: 'deck' }).then(function (r) {
+      if (!r.ok) {
+        var msg = (r.body && r.body.error) ? r.body.error : ('HTTP ' + r.status);
+        setFeedback('err', 'live view switch failed: ' + msg
+          + ' — pattern is on the deck but master may stay dark');
+      }
+      return r;
+    });
+  }
+
   patternsEl.addEventListener('click', function (e) {
     var btn = e.target.closest ? e.target.closest('.dk-chip') : null;
     if (!btn || btn.disabled) return;
@@ -176,6 +197,8 @@
         renderActivePatternChip();
         renderState();
         setFeedback('ok', 'loaded ' + name);
+        // Make the loaded pattern actually visible on the LIVE master output.
+        showDeckOnMaster();
         // The deck pattern changed — refresh to pick up the truth.
         refreshChannel();
       } else {
@@ -281,6 +304,7 @@
       if (r.ok) {
         setFeedback('ok', 'loaded playlist ' + name);
         syncPlaylist(r.body && r.body.playlist ? r.body.playlist : { name: name });
+        showDeckOnMaster();
         refreshChannel();
       } else {
         var msg = (r.body && r.body.error) ? r.body.error : ('HTTP ' + r.status);
@@ -317,6 +341,7 @@
         if (r.body && r.body.playlist) syncPlaylist(r.body.playlist);
         if (r.body && r.body.pattern) { activePattern = r.body.pattern; renderActivePatternChip(); }
         setFeedback('ok', 'switched entry');
+        showDeckOnMaster();
         refreshChannel();
       } else if (r.status === 409) {
         // EBUSY mid-transition: not an error — the tap is intentionally ignored.

@@ -171,6 +171,15 @@ const ENGINE_ALLOWLIST = [
   { method: 'POST', path: '/deck/playlist' },
   { method: 'POST', path: '/deck/playlist/entry' },
   { method: 'POST', path: '/deck/playlist/autopilot' },
+  // The engine's `master`/`rig` vis buffers (what /live shows) are a crossfade
+  // between the DECK and the MIXER governed by the engine's viewFader, which
+  // BOOTS at 1.0 = "mixer view". With nothing on the mixer, master is black even
+  // after a pattern is loaded onto the DECK. POST /mixer/view {view:'deck'} drops
+  // viewFader to 0 so the master output shows the deck pattern — this is what
+  // makes a freshly-loaded gallery pattern actually appear live. GET
+  // /mixer/view-override lets the panel read the current view side honestly.
+  { method: 'POST', path: '/mixer/view' },
+  { method: 'GET', path: '/mixer/view-override' },
 ];
 
 // Match a (method, enginePath) against the allowlist. enginePath has no query
