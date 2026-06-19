@@ -59,6 +59,10 @@ export function cueAppliesOn(cue, plan, nowMs) {
   const days = cue.days === undefined ? 'all' : cue.days;
   if (days === 'all') return true;
   if (!Array.isArray(days) || days.length === 0) return false;
+  // A day/date-targeted cue requires a festival span (matches the validator +
+  // docs §15.2). Without one, BOTH index and date forms must NOT apply —
+  // short-circuit here so the date form can't slip through asymmetrically.
+  if (!plan || !plan.festival) return false;
   if (typeof days[0] === 'number') {
     const idx = festivalDayIndex(plan, nowMs);
     return idx !== null && days.includes(idx);

@@ -89,6 +89,19 @@ export function arbitrate({ now, plan, state, fires, dayTimes }) {
   else if (autopilotEnabled) controller = 'autopilot';
   else controller = 'manual';
 
+  // ── program ended → re-establish autopilot FIRST (before this tick's fires) ──
+  // The resume action must precede any mood/ambient action so a server applying
+  // actions in order re-arms the baseline, then the mood/ambient swap lands ON
+  // TOP and wins. Emitting resume last would let the baseline playlist clobber
+  // the mood swap on the same tick a program expires.
+  let resumedThisTick = false;
+  if (programEnded && autopilotEnabled && !paused && !holding) {
+    actions.push({ cueId: '__autopilot_resume__', action: { type: '__resume_autopilot__' } });
+    next.activeProgram = null;
+    controller = 'autopilot';
+    resumedThisTick = true;
+  }
+
   // ── process fires in plan/fire order ────────────────────────────────────────
   let programStartedThisTick = false;
   for (const fire of fires) {
@@ -123,11 +136,13 @@ export function arbitrate({ now, plan, state, fires, dayTimes }) {
     }
   }
 
-  // ── program ended → fall back to autopilot if enabled ───────────────────────
-  if (programEnded && !programStartedThisTick && autopilotEnabled && !paused && !holding) {
-    actions.push({ cueId: '__autopilot_resume__', action: { type: '__resume_autopilot__' } });
-    next.activeProgram = null;
-    controller = 'autopilot';
+  // If a NEW program started this same tick, it re-seized control. The resume we
+  // pushed before the loop is now redundant (the program turns autopilot off and
+  // loads its own look) — drop it to avoid a needless baseline flicker. controller
+  // is already 'program' (set in the loop).
+  if (resumedThisTick && programStartedThisTick) {
+    const idx = actions.findIndex((a) => a.cueId === '__autopilot_resume__');
+    if (idx !== -1) actions.splice(idx, 1);
   }
 
   next.controller = controller;

@@ -73,11 +73,28 @@ export function DayEditor({
     return m;
   }, [day]);
 
-  // The DRAFT cues that apply on this day (the overview tells us which by id).
+  // The DRAFT cues that apply on this day. The overview (server truth) tells
+  // us which cues it resolved for this day by id — but a cue JUST added/edited
+  // in the draft won't be in the overview until the debounced preview returns
+  // (and never if that preview 400s). So we UNION the overview's ids with a
+  // client-side day-applicability check over the draft, so new/edited cues
+  // appear immediately ("pending" until the overview resolves their time).
   const dayCueIds = useMemo(() => new Set((day?.cues ?? []).map((c) => c.id)), [day]);
+
+  const appliesToDay = (cue: PlanCue): boolean => {
+    const d = cue.days;
+    if (d === undefined || d === 'all') return true;
+    if (!Array.isArray(d)) return false;
+    if (!day) return false;
+    // Numeric day-index array vs. explicit date-string array.
+    if (d.some((v) => typeof v === 'number')) return (d as number[]).includes(day.index);
+    return (d as string[]).includes(day.date);
+  };
+
   const draftCuesForDay = useMemo(
-    () => plan.cues.filter((c) => dayCueIds.has(c.id)),
-    [plan.cues, dayCueIds],
+    () => plan.cues.filter((c) => dayCueIds.has(c.id) || appliesToDay(c)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plan.cues, dayCueIds, day],
   );
 
   // Merge sun rows + cue rows, time-ordered. Time-less cues sink to bottom.
@@ -138,6 +155,9 @@ export function DayEditor({
                   }
                   const cue = it.cue;
                   const at = atLocalById.get(cue.id) ?? null;
+                  // A cue in the draft but not yet in the overview is "pending":
+                  // the debounced preview hasn't resolved its time yet.
+                  const pending = !dayCueIds.has(cue.id);
                   const kind = cue.kind || (cue.trigger.type === 'mood' ? 'mood' : 'program');
                   const col = kindColor(kind, C);
                   return (
@@ -145,15 +165,17 @@ export function DayEditor({
                       key={it.key}
                       onPress={() => onEditCue(cue)}
                       activeOpacity={0.85}
-                      style={[styles.cueRow, { borderLeftColor: col }]}
+                      style={[styles.cueRow, { borderLeftColor: col }, pending && { opacity: 0.7 }]}
                       accessibilityLabel={`Edit cue ${cue.label || cue.id}`}
                     >
                       <View style={styles.cueTimeCol}>
-                        <Text style={styles.cueTime}>{at || '—'}</Text>
+                        <Text style={styles.cueTime}>{at || (pending ? '···' : '—')}</Text>
                         <View style={[styles.kindDot, { backgroundColor: col }]} />
                       </View>
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.cueLabel} numberOfLines={1}>{cue.label || cue.id}</Text>
+                        <Text style={styles.cueLabel} numberOfLines={1}>
+                          {cue.label || cue.id}{pending ? '  · pending…' : ''}
+                        </Text>
                         <Text style={styles.cueMeta} numberOfLines={1}>
                           {`${KIND_LABEL[kind]} · ${triggerSummary(cue.trigger)} · ${actionSummary(cue.action)}`}
                         </Text>

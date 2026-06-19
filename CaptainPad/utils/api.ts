@@ -30,10 +30,19 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  // Honor a caller-supplied AbortSignal (e.g. to cancel a superseded request)
+  // by chaining it onto our timeout controller.
+  const caller = init.signal;
+  const onCallerAbort = () => ctrl.abort();
+  if (caller) {
+    if (caller.aborted) ctrl.abort();
+    else caller.addEventListener('abort', onCallerAbort);
+  }
   try {
     return await fetch(url, { ...init, signal: ctrl.signal });
   } finally {
     clearTimeout(t);
+    if (caller) caller.removeEventListener('abort', onCallerAbort);
   }
 }
 
@@ -114,6 +123,8 @@ export interface ApiResult<T> {
   ok: boolean;
   data?: T;
   error?: string;
+  /** HTTP status when the response was received (absent on transport failures). */
+  status?: number;
 }
 
 export async function sendControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {

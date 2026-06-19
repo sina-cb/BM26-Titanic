@@ -1836,8 +1836,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (!baseCh) throw new Error('no deck channel');
     const pl = playlistManager.load(name);
     if (!pl) throw new Error(`playlist not found: ${name}`);
-    const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+    // An empty playlist is a legitimate "nothing loaded" state, but a playlist
+    // whose entries are ALL missing pattern files must FAIL LOUD (codex P0) — the
+    // deck must never silently load a broken `_missing` entry. The timeline's
+    // per-cue try/catch surfaces this as a loud cueError.
+    const firstEntry = pl.entries.find(e => !e._missing);
     if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
       baseCh.playlist = {
         name: pl.name, activeEntryId: null, cursor: 0,
         autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false },
@@ -1857,8 +1864,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (!ch) throw new Error(`mixer channel not found: ${id}`);
     const pl = playlistManager.load(name);
     if (!pl) throw new Error(`playlist not found: ${name}`);
-    const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+    // Same fail-loud contract as the deck loader: never silently load a broken
+    // `_missing` entry. An all-missing playlist throws; a truly empty one is the
+    // legitimate "nothing loaded" state.
+    const firstEntry = pl.entries.find(e => !e._missing);
     if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
       ch.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
       saveAllState();
       broadcastMixerState();
@@ -1954,10 +1967,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // Body parsing helper
+    // Cap request bodies at ~1 MB. An unbounded body (e.g. a 10k-cue timeline
+    // plan POST) buffers into memory and then stalls the event loop in
+    // validation/overview — reject it BEFORE we finish buffering or parse.
+    const MAX_BODY_BYTES = 1024 * 1024;
     const readBody = (callback) => {
       let body = '';
-      req.on('data', chunk => body += chunk.toString());
+      let size = 0;
+      let aborted = false;
+      req.on('data', chunk => {
+        if (aborted) return;
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) {
+          aborted = true;
+          res.writeHead(413); res.end(JSON.stringify({ error: 'Request body too large (max 1 MB)' }));
+          req.destroy();
+          return;
+        }
+        body += chunk.toString();
+      });
       req.on('end', () => {
+        if (aborted) return;
         try {
           callback(JSON.parse(body || '{}'));
         } catch (e) {

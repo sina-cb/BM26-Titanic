@@ -133,12 +133,19 @@ async function _activatePlan(name: string): Promise<boolean> {
 async function _setMode(mode: 'armed' | 'paused'): Promise<boolean> {
   // Optimistic mode flip — the pill reads correctly the instant the operator
   // taps; the WS broadcast / re-seed reconciles within a tick.
+  const priorMode = _cached.state?.mode ?? null;
   if (_cached.state) {
     _emit({ ..._cached, state: { ..._cached.state, mode: mode as TimelineMode } });
   }
   const r = await setTimelineMode(mode);
   if (!r.ok) {
-    _emit({ ..._cached, error: r.error || 'Failed to set mode' });
+    // Restore the prior mode explicitly — the re-seed no-ops when the engine
+    // is unreachable, which would otherwise leave the pill showing a lie.
+    if (priorMode !== null && _cached.state) {
+      _emit({ ..._cached, state: { ..._cached.state, mode: priorMode }, error: r.error || 'Failed to set mode' });
+    } else {
+      _emit({ ..._cached, error: r.error || 'Failed to set mode' });
+    }
     await _reseedAfterAction();
     return false;
   }

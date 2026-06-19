@@ -99,9 +99,10 @@ async function timelineGet<T>(path: string): Promise<ApiResult<T>> {
     const base = await getApiBaseAsync();
     const res = await fetchWithTimeout(`${base}${path}`);
     const data = await res.json();
-    if (!res.ok) return { ok: false, error: (data && data.error) || `HTTP ${res.status}`, data };
-    return { ok: true, data };
+    if (!res.ok) return { ok: false, error: (data && data.error) || `HTTP ${res.status}`, data, status: res.status };
+    return { ok: true, data, status: res.status };
   } catch (err: any) {
+    // Transport failure: no HTTP status (offline / timeout / DNS).
     return { ok: false, error: err?.message || 'Engine unreachable' };
   }
 }
@@ -110,6 +111,7 @@ async function timelineSend<T>(
   method: 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<ApiResult<T>> {
   try {
     const base = await getApiBaseAsync();
@@ -117,14 +119,16 @@ async function timelineSend<T>(
       method,
       headers: { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
     // Some responses may be empty; tolerate that without faking success on a
     // non-2xx.
     const text = await res.text();
     const data = text ? JSON.parse(text) : undefined;
-    if (!res.ok) return { ok: false, error: (data && data.error) || `HTTP ${res.status}`, data };
-    return { ok: true, data };
+    if (!res.ok) return { ok: false, error: (data && data.error) || `HTTP ${res.status}`, data, status: res.status };
+    return { ok: true, data, status: res.status };
   } catch (err: any) {
+    // Transport failure: no HTTP status (offline / timeout / DNS).
     return { ok: false, error: err?.message || 'Engine unreachable' };
   }
 }
@@ -266,8 +270,11 @@ export function fetchTimelineOverview(): Promise<ApiResult<TimelineOverview>> {
 // Overview of an UNSAVED draft plan — live maker preview. The engine
 // validates first and returns 400 {error} on a malformed draft; we surface
 // that verbatim so the operator sees the error loudly (Codex P0).
-export function previewTimelineOverview(plan: ShowPlan): Promise<ApiResult<TimelineOverview>> {
-  return timelineSend<TimelineOverview>('POST', '/timeline/overview', plan);
+export function previewTimelineOverview(
+  plan: ShowPlan,
+  signal?: AbortSignal,
+): Promise<ApiResult<TimelineOverview>> {
+  return timelineSend<TimelineOverview>('POST', '/timeline/overview', plan, signal);
 }
 
 export function fetchTimelinePlans(): Promise<ApiResult<{ plans: string[] }>> {

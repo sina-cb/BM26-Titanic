@@ -95,14 +95,59 @@ function getSetJ(h, lw, phi, dec, n, m, l) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
+ * The 'YYYY-MM-DD' calendar day of `date` in IANA timezone `tz`.
+ */
+function localDayKey(date, tz) {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  return fmt.format(date); // en-CA → "YYYY-MM-DD"
+}
+
+/**
+ * Anchor `date` to NOON of its local calendar day in `tz`, returned as a UTC
+ * Date. Anchoring at local noon makes the solar-day index (julianCycle/toDays)
+ * identical for ANY instant on a given local calendar day, so events computed
+ * just after local midnight in a western timezone land on the right day rather
+ * than the previous UTC day. We resolve the tz offset for that local day and
+ * subtract it from the naive (treated-as-UTC) local-noon instant.
+ */
+function localNoonAnchor(date, tz) {
+  const dayKey = localDayKey(date, tz);
+  const [y, mo, d] = dayKey.split('-').map(Number);
+  const naiveUtc = Date.UTC(y, mo - 1, d, 12, 0, 0);
+  // Offset (minutes, east-positive) of `tz` at that local-noon instant.
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const parts = fmt.formatToParts(new Date(naiveUtc));
+  const get = (type) => Number(parts.find((p) => p.type === type).value);
+  let hour = get('hour');
+  if (hour === 24) hour = 0;
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second'));
+  const offsetMin = Math.round((asUtc - naiveUtc) / (1000 * 60));
+  return new Date(naiveUtc - offsetMin * 60 * 1000);
+}
+
+/**
  * Compute the day's solar events as UTC Date instants (or null when the event
  * does not occur that day). `date` is any instant on the target calendar day.
  *
- * @param {{ lat:number, lon:number, date:Date }} args
+ * When `tz` (IANA) is given, the calendar day is the LOCAL day in `tz`: the
+ * computation is anchored to noon of that local day, so ANY instant on a given
+ * local calendar day yields identical events (fixes the western-longitude
+ * after-local-midnight off-by-one-day bug). When `tz` is OMITTED we fall back
+ * to the legacy behavior: the solar day is derived from the raw UTC instant,
+ * which can disagree with the local calendar day for instants near midnight in
+ * timezones far from UTC. Always pass `tz` for plan-anchored use.
+ *
+ * @param {{ lat:number, lon:number, date:Date, tz?:string }} args
  * @returns {{ sunrise, sunset, solarNoon, civilDawn, civilDusk,
  *             nauticalDawn, nauticalDusk, goldenHourEnd, goldenHourStart }}
  */
-export function computeSunEvents({ lat, lon, date }) {
+export function computeSunEvents({ lat, lon, date, tz }) {
   if (typeof lat !== 'number' || Number.isNaN(lat) || lat < -90 || lat > 90) {
     throw new Error(`computeSunEvents: lat must be a number in [-90, 90], got ${lat}`);
   }
@@ -112,10 +157,17 @@ export function computeSunEvents({ lat, lon, date }) {
   if (!(date instanceof Date) || Number.isNaN(date.valueOf())) {
     throw new Error('computeSunEvents: date must be a valid Date');
   }
+  if (tz !== undefined && (typeof tz !== 'string' || !tz.trim())) {
+    throw new Error('computeSunEvents: tz, when given, must be a non-empty IANA timezone string');
+  }
+
+  // Anchor to noon of the local calendar day so the solar-day index is the same
+  // for any instant on that local day (back-compat: no tz → raw instant).
+  const anchored = tz ? localNoonAnchor(date, tz) : date;
 
   const lw = RAD * -lon;
   const phi = RAD * lat;
-  const d = toDays(date);
+  const d = toDays(anchored);
   const n = julianCycle(d, lw);
   const ds = approxTransit(0, lw, n);
   const m = solarMeanAnomaly(ds);

@@ -240,3 +240,47 @@ test('default day-specific cues: burn night days:[6], temple days:[7]', () => {
   assert.deepEqual(byId.c_temple.days, [7]);
   assert.equal(byId.c_sunrise.days, 'all');
 });
+
+// ── tz IANA validation (Fix 2) ────────────────────────────────────────────────
+
+test('invalid IANA tz throws a clear error', () => {
+  const plan = defaultShowPlan();
+  plan.location.tz = 'Not/AZone';
+  assert.throws(() => validateShowPlan(plan), /location\.tz "Not\/AZone" is not a valid IANA time zone/);
+});
+
+test('valid IANA tz passes', () => {
+  const plan = defaultShowPlan();
+  plan.location.tz = 'America/New_York';
+  assert.equal(validateShowPlan(plan).location.tz, 'America/New_York');
+});
+
+// ── effect action presetId/params (Fix 6) ─────────────────────────────────────
+
+test('effect with just effectId validates (presetId optional)', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].action = { type: 'effect', effectId: 'strobe' };
+  const v = validateShowPlan(plan);
+  assert.deepEqual(v.cues[0].action, { type: 'effect', effectId: 'strobe' });
+});
+
+test('effect with params throws (not supported in v1)', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].action = { type: 'effect', effectId: 'strobe', params: { speed: 2 } };
+  assert.throws(() => validateShowPlan(plan), /params is not supported in v1/);
+});
+
+// ── cue-count cap (Fix 7a) ────────────────────────────────────────────────────
+
+test('plan with > 512 cues throws', () => {
+  const plan = defaultShowPlan();
+  plan.cues = [];
+  for (let i = 0; i < 513; i += 1) {
+    plan.cues.push({
+      id: `c_${i}`, days: 'all',
+      trigger: { type: 'clock', at: '20:00' },
+      action: { type: 'scene', scene: 'aurora' },
+    });
+  }
+  assert.throws(() => validateShowPlan(plan), /plan has too many cues \(max 512\)/);
+});
