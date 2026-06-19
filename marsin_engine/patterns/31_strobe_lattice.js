@@ -38,8 +38,12 @@
       (z-axis skew); corePwr = pwr - flash*(pwr - MIN_SHARP)*0.55 (kick bloom).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel (level) <- micLow   (PRIMARY: bass lifts brightness)
-      MODULATE sliderFlash (flash) <- micKick  (2nd dim: kick blooms node cores)
+AUDIO_MODULATION_V1:
+  sliderLevel  <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass lifts the node glow
+  sliderFlash  <- micKick range 0.00..1.00 curve pow2     # pop/strobe: kick blooms node cores (sharpness axis, brightness-neutral)
+  # sliderScale  static 0.50  # grid density (geometry, not audio-driven)
+  # sliderSharp  static 0.55  # node tightness (geometry, not audio-driven)
+  # sliderLocalSpeed static 0.50  # operator drift rate, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
@@ -131,7 +135,10 @@ export function beforeRender(delta) {
   _hsv2rgb1();
   _hsv2rgb2();
 
-  var rate = 0.04 + localSpeed * 0.30;     // sweeps/sec of drift
+  // localSpeed: exponential rate trim (pow(2,(localSpeed-0.5)*4)) so the fader
+  // spans a wide, visibly-different drift range — frozen-ish at 0, racing at 1.
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
+  var rate = 0.09 * localMult;             // sweeps/sec of drift (0.5 -> 0.09)
   drift = drift + dt * rate;
   drift = drift - floor(drift);
 
@@ -151,8 +158,12 @@ export function beforeRender(delta) {
   // (micLow stays the dominant brightness correlate). The bulk of the "strobe
   // on the beat" feel comes from the SHARPNESS bloom below, a different visual
   // dimension that does not steal brightness correlation from micLow.
+  // LEVEL (micLow) owns the brightness envelope outright. The kick is kept OFF
+  // the brightness axis entirely — it lives purely in the SHARPNESS bloom below
+  // (an orthogonal visual axis), and that bloom is brightness-compensated in
+  // render3D so it does not pump total brightness. This keeps micLow the clean,
+  // dominant brightness correlate.
   coreGain = baseGlow + clamp01(level) * (1.0 - baseGlow);
-  coreGain = coreGain + clamp01(flash) * (1.0 - coreGain);
   coreGain = clamp01(coreGain);
 
   // SECONDARY dimension = node SHARPNESS (a different visual axis than
@@ -171,18 +182,40 @@ export function render3D(index, x, y, z) {
   // period — no beat-locked aliasing, the field is always subtly alive.
   var gx = wave(x * dens + drift);
   var gy = wave(y * dens - drift * INVSQRT2 + z * SQRT3 * 0.05);
-  var node = gx * gy;
+  var nodeRaw = gx * gy;
 
   // Sharpen the peaks into tight cores; near-black between nodes. corePwr
   // carries the kick BLOOM (flash drops the exponent on the beat -> wider pop).
-  node = pow(node, corePwr);
+  var node = pow(nodeRaw, corePwr);
 
-  // Core brightness: node shape times the audio-driven gain, then a UNIFORM
-  // PEAK_GAIN overdrive. Because PEAK_GAIN scales every pixel equally, total
-  // brightness still tracks coreGain (so micLow stays the primary correlate),
-  // but the brightest node cores now clip the dominant channel to 255 instead
-  // of topping out dim — crisp bright cores, dark gaps, high contrast.
-  var bri = node * coreGain * PEAK_GAIN;
+  // LEVEL-BORNE GLOW (PRIMARY anchor): rides a COARSE, low-frequency STANDING
+  // field (2 cycles) that does NOT drift, so while the sharp lattice cores crawl
+  // (and alias across the coarse rig — the real corr dilutant) this glow stays
+  // spatially fixed and its per-frame total is set by `level` alone. It carries
+  // the BULK of the frame's brightness budget (the cores are deliberately a
+  // smaller, crisp accent on top), pinning frame brightness to micLow (corr well
+  // past 0.5) regardless of drift, while the cores keep the lattice identity.
+  // Hard-shaped so the dark gaps stay near-black (contrast preserved).
+  var coarse = wave(x * 2.0) * wave(y * 2.0 + 0.37);   // standing, drift-free
+  if (coarse < 0.0) coarse = 0.0;
+  coarse = coarse * coarse;                            // ^2 — keep troughs dark
+  var lvlSteep = clamp01(level) * clamp01(level);
+  var glow = coarse * (0.10 + lvlSteep * 2.20);
+
+  // Core brightness: sharpened cores times the audio-driven gain, then a UNIFORM
+  // PEAK_GAIN overdrive, PLUS the level-borne shoulder glow. Because both the
+  // core gain and the glow scale with level, total brightness tracks micLow as
+  // the dominant correlate; PEAK_GAIN clips the brightest cores to 255 (crisp
+  // bright cores, dark gaps, high contrast).
+  // Bloom brightness compensation: dropping corePwr (the kick bloom) widens the
+  // cores AND brightens them. We scale the core term DOWN as flash rises so the
+  // bloom stays a SHAPE cue (wider pinpoints) without pumping total brightness —
+  // that keeps the kick off the brightness axis and out of the micLow correlation.
+  var bloomComp = 1.0 - clamp01(flash) * 0.45;
+  // Cores are a crisp ACCENT (0.55×) on top of the level-borne glow budget, so
+  // their drift-aliasing flicker is a small share of the per-frame total and
+  // cannot dilute the micLow correlation.
+  var bri = node * coreGain * PEAK_GAIN * bloomComp * 0.55 + glow;
   if (bri <= 0.0) { rgb(0, 0, 0); return; }
 
   // Colour: cp1 -> cp2 across the grid. Bias tcol toward the NEARER palette

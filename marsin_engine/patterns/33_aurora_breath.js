@@ -46,8 +46,13 @@
                         blended across height.
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderSwell   (swell)   <- micLow
-      MODULATE sliderShimmer (shimmer) <- micHigh
+AUDIO_MODULATION_V1:
+  sliderSwell   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass blooms the aurora brighter + wider
+  sliderShimmer <- micHigh range 0.00..0.85 curve pow2     # detail: highs add fine crisp crest sparkle (distinct axis)
+  # sliderRibbons static 0.50  # ribbon density (geometry, not audio-driven)
+  # sliderSoft    static 0.50  # edge softness (geometry, not audio-driven)
+  # sliderBase    static 0.18  # silence visibility floor (static)
+  # sliderLocalSpeed static 0.50  # operator drift rate, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -138,8 +143,8 @@ export function beforeRender(delta) {
   // Local-speed trim, exponential so the fader feels even (matches template).
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
 
-  drift    = drift    + dt * 0.060 * localMult; drift    = drift    - floor(drift);
-  undulate = undulate + dt * 0.023 * localMult; undulate = undulate - floor(undulate);
+  drift    = drift    + dt * 0.090 * localMult; drift    = drift    - floor(drift);
+  undulate = undulate + dt * 0.034 * localMult; undulate = undulate - floor(undulate);
   slowShim = slowShim + dt * 0.011 * localMult; slowShim = slowShim - floor(slowShim);
   // Shimmer churn runs fast so the high-band glints twinkle crisply.
   shimT    = shimT    + dt * 0.900 * localMult; shimT    = shimT    - floor(shimT);
@@ -204,7 +209,13 @@ export function render3D(index, x, y, z) {
   }
   bri = bri + glint;
 
-  if (bri < floorV) bri = floorV;     // calm time-based base so it always reads
+  // Calm base floor that RIDES THE DRIFTING CURTAIN (not a flat uniform wash), so
+  // even in silence the rig shows a living aurora glow that visibly DRIFTS with
+  // localSpeed — faster fader = the calm curtains slide across the rig faster.
+  // `lum` carries the drift phase, so this floor moves with localSpeed and keeps
+  // the rig alive (mission-critical) without ever going flat-static.
+  var curtainFloor = floorV * (0.45 + 0.85 * lum);
+  if (bri < curtainFloor) bri = curtainFloor;
   bri = clamp01(bri);
 
   // Colour spans cp1<->cp2 ACROSS HEIGHT: green near the horizon (ny=0) rising

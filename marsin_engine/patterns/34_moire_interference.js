@@ -35,9 +35,12 @@
     - colorPalette1/2 : cp1 cyan (grid A), cp2 deep blue / indigo (grid B).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderLevel (level) <- micLow     (primary: brightness pumps on bass)
-      MODULATE sliderRatio (ratio) <- micMid     (2nd dim: detune morphs the beat)
-      MODULATE sliderPulse (pulse) <- micKick    (kick: sharpen + brighten flash)
+AUDIO_MODULATION_V1:
+  sliderLevel <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass pumps the wash budget
+  sliderRatio <- micMid  range 0.20..0.80 curve linear   # geometry: mids detune the moiré beat (brightness-neutral)
+  sliderPulse <- micKick range 0.00..1.00 curve pow2     # kick: brief sharpen + brighten flash
+  # sliderContrast static 0.50  # band sharpness (geometry, not audio-driven)
+  # sliderLocalSpeed static 0.50  # operator drift rate, not an audio target
 
   IRRATIONAL RATIOS (no integer periods, never re-locks):
     grid B drift = grid A drift * 1.41421 (sqrt2); colour spin axis * 1.73205
@@ -64,7 +67,7 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderRatio(v) { ratio = 0.04 + v * 0.30; }   // detune span (geometry, ~brightness-neutral)
+export function sliderRatio(v) { ratio = 0.10 + v * 0.18; }   // detune span (geometry; v=0.5 -> 0.19 default preserved, narrowed so micMid reshapes the beat without setting brightness)
 export function sliderLevel(v) { level = v; }
 export function sliderContrast(v) { contrast = 1.4 + v * 5.0; }
 export function sliderPulse(v) { pulse = v; }
@@ -140,19 +143,24 @@ export function beforeRender(delta) {
   // number of turns) so every periodic consumer (wave/triangle, period 1) sees a
   // continuous wrap — and so do consumers that scale the phase (the wash uses its
   // own accumulator below; nothing multiplies a wrapped 0..1 phase any more).
-  driftA = driftA + dt * localSpeed * MAX_RATE;
+  // localSpeed: exponential rate trim (pow(2,(localSpeed-0.5)*4)) so the fader
+  // spans a WIDE, visibly-different drift range — near-frozen at 0, racing at 1.
+  // A small irrational FLOOR keeps the grids always faintly crawling even at
+  // localSpeed=0 (never a dead-static lattice — motion stays > 0 at the bottom).
+  var rate = MAX_RATE * (0.045 + pow(2.0, (localSpeed - 0.5) * 4.0));
+  driftA = driftA + dt * rate;
   if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
-  driftB = driftB + dt * localSpeed * MAX_RATE * 1.41421;
+  driftB = driftB + dt * rate * 1.41421;
   if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
 
   // Wash drifts at half grid A's rate, on its OWN accumulator (replaces the old
   // driftA*0.5, which jumped by half a wave cycle whenever driftA wrapped).
-  washDrift = washDrift + dt * localSpeed * MAX_RATE * 0.5;
+  washDrift = washDrift + dt * rate * 0.5;
   if (washDrift >= PHASE_WRAP) washDrift = washDrift - PHASE_WRAP;
 
   // Colour axis spins on a third incommensurate leg (sqrt3) — the two-colour
   // hand-off between cp1 and cp2 slowly precesses across the rig.
-  colSpin = colSpin + dt * localSpeed * MAX_RATE * 0.13 * 1.73205;
+  colSpin = colSpin + dt * rate * 0.13 * 1.73205;
   if (colSpin >= PHASE_WRAP) colSpin = colSpin - PHASE_WRAP;
 
   // Grid B is grid A, detuned — the source of the beat.
@@ -189,7 +197,7 @@ export function render3D(index, x, y, z) {
   // keeps it crisp/high-def — peaks tower over the wash. ratio/pulse only
   // re-shape the fringes; they do not set the budget, so they cannot dilute the
   // low-band correlation.
-  var lgain = 0.35 + level * (0.65 + level * 0.5);   // monotonic in level
+  var lgain = 0.22 + level * (0.78 + level * 0.7);   // monotonic, steeper in level (micLow dominance)
   // LEVEL-BORNE WASH on a SLOW, RATIO-INDEPENDENT spatial term. `washPat` is a
   // low-frequency standing pattern (3.5 cycles, irrational drift) that the
   // detune `ratio` never touches, so its per-frame total is set by `level`
@@ -200,8 +208,12 @@ export function render3D(index, x, y, z) {
   var washPat = wave(u * 3.5 + washDrift);             // 0..1, slow, ratio-free
   var washIn = washPat - 0.45;
   var fill = 0.0;
-  if (washIn > 0.0) fill = washIn * washIn * 1.7;
-  var bri = BASE_FLOOR * (0.5 + 0.5 * waveA) + (fill + moire) * lgain;
+  if (washIn > 0.0) fill = washIn * washIn * 2.6;
+  // The LEVEL-borne wash carries the BULK of the brightness budget; the detune-
+  // shaped moiré bands are a crisp DETAIL on top (0.6×) so micMid/ratio re-shapes
+  // the fringes WITHOUT setting the per-frame total — keeping micLow the dominant
+  // brightness correlate and micMid a (near-)brightness-neutral GEOMETRY axis.
+  var bri = BASE_FLOOR * (0.5 + 0.5 * waveA) + (fill + moire * 0.55) * lgain;
   bri = bri * (1.0 + pulseEnv * 0.18);               // tiny kick lift (keeps peak crisp)
   bri = clamp01(bri);
 

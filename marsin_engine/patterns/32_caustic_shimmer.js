@@ -45,8 +45,12 @@
     - colorPalette1/2 : cp1 deep teal (troughs) <-> cp2 warm gold (crests).
 
   AUDIO (modulators-only — NEVER read CPC audio globals natively):
-      MODULATE sliderShimmer (shimmer) <- micHigh   (primary: body gain + glints)
-      MODULATE sliderRipple  (ripple)  <- micKick   (kick brightness swell)
+AUDIO_MODULATION_V1:
+  sliderShimmer <- micHigh range 0.30..1.00 curve linear   # PRIMARY brightness: highs drive body gain + glints
+  sliderRipple  <- micKick range 0.00..1.00 curve pow2     # kick: transient expanding brightness swell
+  # sliderDepth static 0.60  # caustic contrast (geometry, not audio-driven)
+  # sliderBase  static 0.12  # silence visibility floor (static)
+  # sliderLocalSpeed static 0.50  # operator flow rate, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
@@ -168,8 +172,11 @@ export function render3D(index, x, y, z) {
   // ── Time-based base floor so it's never fully black when silent ──────────
   var floorPulse = base * (0.5 + 0.5 * wave(ny * 0.6 + flowB));
 
-  // ── Ripple swell on kick: lifts the whole caustic field ──────────────────
-  var swell = 1.0 + rippleEnv * 1.4 * (0.5 + 0.5 * caustic);
+  // ── Ripple swell on kick: lifts the whole caustic field (SECONDARY dim =
+  //    a transient expanding brightness swell, distinct from the shimmer body
+  //    gain). Riding the caustic shape keeps it an EXPANDING vein-swell, not a
+  //    flat flash. ─────────────────────────────────────────────────────────────
+  var swell = 1.0 + rippleEnv * 1.9 * (0.5 + 0.5 * caustic);
 
   // Body of light from the caustic field + base floor. Kept modest (peak ~0.7)
   // so the shimmer gain below multiplies it without saturating everywhere —

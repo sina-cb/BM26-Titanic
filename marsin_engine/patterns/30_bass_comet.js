@@ -41,7 +41,11 @@
   fresh its energy is (bright = head color, faded = tail color).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderBass (bass) <- micLow
+AUDIO_MODULATION_V1:
+  sliderBass   <- micLow  range 0.30..1.00 curve linear   # PRIMARY brightness: bass drives the comet head/tail/speed
+  # sliderTail        static 0.50  # base tail length (bass already extends it; no separate signal)
+  # sliderHeadBright  static 1.00  # base head gain (bass scales it; not separately modulated)
+  # sliderLocalSpeed  static 0.50  # operator auto-rate, not an audio target
 */
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
