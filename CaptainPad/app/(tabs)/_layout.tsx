@@ -9,6 +9,7 @@ import { shadow } from '@/styles/globalStyles';
 import { RigProvider } from '@/components/RigGlobals';
 import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
+import { PendingProgramOverlay } from '@/components/timeline/PendingProgramOverlay';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   const palette = usePalette();
@@ -170,6 +171,10 @@ export default function TabLayout() {
             stays tappable while everything else is curtained off. */}
         <EngineLockoutOverlay />
         <ViewOverrideBanner />
+        {/* Global, non-disruptive "scheduled show pending" strip. Lives
+            outside <Tabs> so it floats over every tab; box-none lets taps
+            fall through to the deck/mixer underneath (see component header). */}
+        <PendingProgramOverlay />
       </SafeAreaView>
     </RigProvider>
   );
