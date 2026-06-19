@@ -24,6 +24,17 @@
 // view-mask bit for masks, a fixtureTypeId for fixture types. The
 // substrate does not care which — it only guarantees deterministic,
 // collision-checked, reference-driven injection with loud failures.
+//
+// Tier-C (viewMaskHi) adds an INLINE injection mode. A table value may be
+// a bare number (the legacy `var PREFIX_X = <n>;` declaration form) OR an
+// object `{ value, inline: true }`. An inline entry is NOT declared as a
+// `var`; instead every `PREFIX_X` token in the source is textually
+// replaced by the literal `value`. This exists for high-word view masks:
+// the MarsinScript compiler requires the mask in `(viewMaskHi & MASK)` to
+// be a COMPILE-TIME-CONSTANT single-bit literal, so a `var MASK_X = (1<<k)`
+// (a runtime value) is rejected — the literal must be inlined directly,
+// e.g. `(viewMaskHi & 1073741824)`. Low-word masks and FIX_* ids keep the
+// `var` form unchanged (back-compat, byte-identical injection).
 
 // PREFIX_ + name, camelCase boundaries split, runs of non-alphanumerics
 // collapsed to a single underscore, leading/trailing underscores
@@ -50,9 +61,16 @@ export function sanitizeName(prefix, name) {
  * carry DIFFERENT values throw — that would make pattern code
  * ambiguous. Same name + same value is idempotent (deduped).
  *
+ * An entry may set `inline: true` to mark the constant for inline literal
+ * substitution at injection time (see injectConstants) instead of a `var`
+ * declaration. The table then stores `{ value, inline: true }` for that
+ * name; bare-number entries are stored as plain numbers (legacy). Two
+ * entries that sanitize to the same name must agree on BOTH value and
+ * inline mode.
+ *
  * @param {string} prefix    e.g. 'MASK' or 'FIX'
- * @param {Array<{name: string, value: number, origin?: string}>} entries
- * @returns {Object<string, number>}
+ * @param {Array<{name: string, value: number, inline?: boolean, origin?: string}>} entries
+ * @returns {Object<string, (number|{value: number, inline: true})>}
  */
 export function buildConstantTable(prefix, entries) {
   const table = {};
@@ -61,14 +79,31 @@ export function buildConstantTable(prefix, entries) {
     if (!entry || typeof entry.name !== 'string' || !Number.isInteger(entry.value)) continue;
     const constName = sanitizeName(prefix, entry.name);
     const origin = entry.origin ? `${entry.origin} '${entry.name}'` : `'${entry.name}'`;
-    if (table[constName] !== undefined && table[constName] !== entry.value) {
-      throw new Error(`${prefix}_ constant collision: ${origin} and ${origins[constName]} ` +
-        `both sanitize to ${constName} with different values`);
+    const existing = table[constName];
+    if (existing !== undefined) {
+      const existingValue = constantValue(existing);
+      const existingInline = constantIsInline(existing);
+      if (existingValue !== entry.value || existingInline !== Boolean(entry.inline)) {
+        throw new Error(`${prefix}_ constant collision: ${origin} and ${origins[constName]} ` +
+          `both sanitize to ${constName} with different values`);
+      }
     }
-    table[constName] = entry.value;
+    table[constName] = entry.inline ? { value: entry.value, inline: true } : entry.value;
     origins[constName] = origin;
   }
   return table;
+}
+
+// A table value is either a bare number (legacy `var` form) or
+// `{ value, inline: true }` (inline literal substitution). These two
+// helpers normalize access so injectConstants and callers never branch
+// on the shape inline.
+export function constantValue(entry) {
+  return (entry && typeof entry === 'object') ? entry.value : entry;
+}
+
+export function constantIsInline(entry) {
+  return Boolean(entry && typeof entry === 'object' && entry.inline);
 }
 
 // MarsinScript comment stripper (// line and /* block */). Reference
@@ -80,21 +115,28 @@ function stripComments(source) {
 }
 
 /**
- * Prepend `var PREFIX_X = <value>;` for every PREFIX_* identifier the
- * source references and the table knows. Returns the source unchanged
- * when nothing is injected (so compile-error line numbers only shift by
- * one line for patterns that opt in).
+ * Resolve referenced PREFIX_* identifiers against the model's table.
  *
- * Table names are injected UNCONDITIONALLY: duplicate `var` declarations
- * are legal in MarsinScript and the later one wins, so a pattern's own
- * `var PREFIX_X = ...` still overrides the injected value.
+ * Two injection modes per the table value's shape:
+ *   - LEGACY (bare number): prepend `var PREFIX_X = <value>;`. Duplicate
+ *     `var` declarations are legal in MarsinScript and the later one
+ *     wins, so a pattern's own `var PREFIX_X = ...` still overrides the
+ *     injected value.
+ *   - INLINE (`{ value, inline: true }`): textually replace every
+ *     PREFIX_X token with the literal `value` — NO `var` is emitted. This
+ *     is the high-word view-mask path: `(viewMaskHi & MASK_X)` must carry
+ *     a compile-time-constant single-bit LITERAL, so the name is inlined
+ *     to e.g. `(viewMaskHi & 1073741824)`. A pattern that self-declares
+ *     `var PREFIX_X` for an inline name keeps its own declaration (it is
+ *     not substituted) and the compiler rejects the var-mask use loudly —
+ *     never silently mis-substituted.
  *
- * Throws on a referenced PREFIX_* name that is neither in the table nor
- * declared by the pattern, naming the known constants so a typo is a
- * one-glance fix (codex P0 — never a silent zero).
+ * Returns the source unchanged when nothing is injected. Throws on a
+ * referenced PREFIX_* name that is neither in the table nor declared by
+ * the pattern, naming the known constants (codex P0 — never a silent zero).
  *
  * @param {string} source
- * @param {Object<string, number>} table   { PREFIX_NAME: value }
+ * @param {Object<string, (number|{value: number, inline: true})>} table
  * @param {string} prefix                   e.g. 'MASK' or 'FIX'
  */
 export function injectConstants(source, table, prefix) {
@@ -107,11 +149,22 @@ export function injectConstants(source, table, prefix) {
   if (referenced.size === 0) return source;
 
   const decls = [];
+  const inlineNames = [];
   const unknown = [];
   for (const name of referenced) {
-    if (table && table[name] !== undefined) {
-      decls.push(`var ${name} = ${table[name]};`);
-    } else if (!new RegExp(`\\bvar\\s[^;{}]*\\b${name}\\b`).test(code)) {
+    const entry = table ? table[name] : undefined;
+    // A name is "self-declared" only when it is a DECLARATION TARGET in a
+    // `var` statement — i.e. preceded by `var ` or a `,` (var-list) AND
+    // followed by `=`, `,` or `;`. The looser "appears anywhere after var"
+    // form false-positives on a name used in another declarator's
+    // initializer (`var on = (viewMaskHi & MASK_X)`), which would wrongly
+    // suppress inline substitution. (codex P0: never silently mis-resolve.)
+    const selfDeclared = new RegExp(`(?:\\bvar\\s+|,\\s*)${name}\\s*(?:=|,|;)`).test(code);
+    if (entry !== undefined && constantIsInline(entry) && !selfDeclared) {
+      inlineNames.push(name);
+    } else if (entry !== undefined) {
+      decls.push(`var ${name} = ${constantValue(entry)};`);
+    } else if (!selfDeclared) {
       unknown.push(name);
     }
   }
@@ -120,6 +173,13 @@ export function injectConstants(source, table, prefix) {
     throw new Error(`Pattern references unknown ${prefix}_ constant(s): ${unknown.join(', ')}. ` +
       `Known ${prefix}_ constants for this model: ${known.length > 0 ? known.join(', ') : '(none)'}`);
   }
-  if (decls.length === 0) return source;
-  return `${decls.join(' ')}\n${source}`;
+
+  // Inline substitution rewrites the source body in place (whole-token,
+  // longest-name-first so PREFIX_A never clobbers PREFIX_AB).
+  let out = source;
+  for (const name of inlineNames.sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(`\\b${name}\\b`, 'g'), String(constantValue(table[name])));
+  }
+  if (decls.length === 0) return out;
+  return `${decls.join(' ')}\n${out}`;
 }

@@ -39,6 +39,16 @@ export function maskConstantName(name) {
  * group bits and resolved view-mask presets. Sanitized-name collisions
  * throw — two sources mapping to the same constant would make pattern
  * code ambiguous.
+ *
+ * Tier-C two-word routing: an entry may carry `word` (0 or 1). Word-0
+ * masks (the legacy 31-bit `viewMask`) inject as `var MASK_X = <bit>;`
+ * and a pattern tests `(viewMask & MASK_X)`. Word-1 masks (the new
+ * `viewMaskHi`) inject INLINE — the table value becomes
+ * `{ value: <bit>, inline: true }` so `MASK_X` is replaced by the literal
+ * bit, and a pattern tests `(viewMaskHi & MASK_X)` which compiles to
+ * `(viewMaskHi & <literal>)` (the firmware requires a compile-time-constant
+ * single-bit literal there). Groups and bit-less / undefined-word entries
+ * default to word 0 (back-compat).
  */
 export function buildMaskConstants({ groupBits = {}, viewMasks = [] }) {
   const entries = [];
@@ -47,7 +57,8 @@ export function buildMaskConstants({ groupBits = {}, viewMasks = [] }) {
   }
   for (const vm of viewMasks) {
     if (vm && typeof vm.name === 'string' && Number.isInteger(vm.bit)) {
-      entries.push({ name: vm.name, value: vm.bit, origin: 'preset' });
+      const inline = vm.word === 1;
+      entries.push({ name: vm.name, value: vm.bit, inline, origin: 'preset' });
     }
   }
   return buildConstantTable(MASK_PREFIX, entries);

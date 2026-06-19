@@ -21,10 +21,19 @@
  * fixture's `viewMask` field in patches.yaml carries custom-view bits).
  *
  * vMask is Int32 across the WASM boundary — bit 30 (0x40000000) is the
- * highest safe bit, 31 bits total. Running out throws (no fallbacks).
+ * highest safe bit, 31 bits per word. Tier-C (ABI 20260619_1) adds a
+ * SECOND view word `viewMaskHi`, lifting the ceiling 31 → 62: views 0..30
+ * live in word 0 (`viewMask`, bit 1<<view), views 31..61 in word 1
+ * (`viewMaskHi`, bit 1<<(view-31)). Base group bits stay word 0 (the
+ * legacy contract); custom views fill word 0 first then spill into word 1.
+ * Running out of all 62 slots throws (no fallbacks — codex P0).
  */
 
 export const MAX_BIT = 0x40000000;
+
+// Two-word scheme: 31 usable bits per word (bits 0..30), 62 total.
+export const SLOTS_PER_WORD = 31;
+export const MAX_VIEW_SLOTS = SLOTS_PER_WORD * 2; // 62
 
 /**
  * Effects-only fixture types (foggers/hazers/horns/fire) never become
@@ -69,9 +78,16 @@ export function createViewRegistry(viewsTree) {
         throw new Error(`[Views] Invalid custom view in views.yaml: ${JSON.stringify(v)} — ` +
           `needs a non-empty name and a power-of-two bit ≤ 0x${MAX_BIT.toString(16)}`);
       }
+      // word: 0 (legacy `viewMask`) or 1 (`viewMaskHi`). Absent ⇒ 0 for
+      // back-compat with pre-Tier-C views.yaml files.
+      if (v.word !== undefined && v.word !== 0 && v.word !== 1) {
+        throw new Error(`[Views] Invalid custom view '${v.name}' in views.yaml: word must be 0 or 1, ` +
+          `got ${v.word}`);
+      }
       registry.custom.push({
         name: v.name,
         bit: v.bit,
+        word: v.word === 1 ? 1 : 0,
         groups: Array.isArray(v.groups) ? v.groups.filter(g => typeof g === 'string' && g.length > 0) : [],
       });
     }
@@ -79,21 +95,52 @@ export function createViewRegistry(viewsTree) {
   return registry;
 }
 
-/** Every bit currently taken (groups + custom views). */
-export function usedBitsMask(registry) {
+/** The view word a custom view lives in (default 0 — legacy). */
+function viewWord(v) {
+  return v && v.word === 1 ? 1 : 0;
+}
+
+/**
+ * Bits taken in a given word: word 0 = group bits + word-0 custom views;
+ * word 1 = word-1 custom views only (groups are always word 0).
+ */
+export function usedBitsMask(registry, word = 0) {
   let mask = 0;
-  for (const bit of Object.values(registry.groupBits)) mask |= bit;
-  for (const v of registry.custom) mask |= v.bit;
+  if (word === 0) {
+    for (const bit of Object.values(registry.groupBits)) mask |= bit;
+  }
+  for (const v of registry.custom) {
+    if (viewWord(v) === word) mask |= v.bit;
+  }
   return mask;
 }
 
-/** Lowest free power-of-two bit, or 0 when all 31 are taken. */
+/**
+ * Lowest free power-of-two bit in word 0, or 0 when all 31 are taken.
+ * Kept for back-compat (group reconciliation and word-0 callers).
+ */
 export function nextFreeBit(registry) {
-  const used = usedBitsMask(registry);
+  const used = usedBitsMask(registry, 0);
   for (let bit = 1; bit <= MAX_BIT; bit *= 2) {
     if ((used & bit) === 0) return bit;
   }
   return 0;
+}
+
+/**
+ * Lowest free (word, bit) slot across BOTH words — fills word 0 (legacy
+ * `viewMask`) before word 1 (`viewMaskHi`) so the first 31 views stay
+ * byte-identical to the single-word layout. Returns null when all 62
+ * slots are taken (caller throws loudly).
+ */
+export function nextFreeSlot(registry) {
+  for (let word = 0; word <= 1; word++) {
+    const used = usedBitsMask(registry, word);
+    for (let bit = 1; bit <= MAX_BIT; bit *= 2) {
+      if ((used & bit) === 0) return { word, bit };
+    }
+  }
+  return null;
 }
 
 /**
@@ -217,19 +264,21 @@ export function validateViewName(registry, name, excludeView = null) {
 }
 
 /**
- * Create a custom view with the lowest free bit. Throws on an invalid
- * or colliding name and on bit exhaustion — a view that can't get a
- * bit must not be half-created.
+ * Create a custom view with the lowest free (word, bit) slot, filling
+ * word 0 (`viewMask`) before word 1 (`viewMaskHi`). Throws on an invalid
+ * or colliding name and on slot exhaustion (all 62 taken) — a view that
+ * can't get a slot must not be half-created.
  */
 export function addCustomView(registry, name) {
   const trimmed = String(name || '').trim();
   if (trimmed.length === 0) throw new Error('[Views] View name must not be empty');
   validateViewName(registry, trimmed);
-  const bit = nextFreeBit(registry);
-  if (bit === 0) {
-    throw new Error('[Views] Out of view-mask bits — a scene supports at most 31 distinct group/view bits');
+  const slot = nextFreeSlot(registry);
+  if (slot === null) {
+    throw new Error(`[Views] Out of view-mask slots — a scene supports at most ${MAX_VIEW_SLOTS} ` +
+      `distinct group/view slots across both words (viewMask + viewMaskHi)`);
   }
-  const view = { name: trimmed, bit, groups: [] };
+  const view = { name: trimmed, bit: slot.bit, word: slot.word, groups: [] };
   registry.custom.push(view);
   return view;
 }
@@ -244,7 +293,9 @@ export function setCustomViewBit(registry, view, newBit) {
   }
   const oldBit = view.bit;
   if (newBit === oldBit) return oldBit;
-  if ((usedBitsMask(registry) & ~oldBit & newBit) !== 0) {
+  // Collision is checked WITHIN the view's own word (word 0 and word 1 are
+  // independent bit spaces).
+  if ((usedBitsMask(registry, viewWord(view)) & ~oldBit & newBit) !== 0) {
     throw new Error(`[Views] Bit 0x${newBit.toString(16)} is already taken by another group or view`);
   }
   view.bit = newBit;
@@ -295,6 +346,11 @@ export function buildViewmasksSidecarJS(registry, pixels, sceneName) {
 
   for (const view of registry.custom) {
     const safeName = jsStr(view.name);
+    // word:1 views land in `viewMaskHi`; emit `word: 1` so the engine
+    // routes the bit into the high word (lane 6) and the named-mask
+    // injector inlines it as `(viewMaskHi & <literal>)`. word:0 stays the
+    // legacy form (no `word` key) so pre-Tier-C sidecars are byte-identical.
+    const wordField = view.word === 1 ? ', word: 1' : '';
     if (view.groups.length > 0) {
       for (const g of view.groups) {
         if (registry.groupBits[g] === undefined) {
@@ -304,19 +360,20 @@ export function buildViewmasksSidecarJS(registry, pixels, sceneName) {
         }
       }
       const groupList = view.groups.map(g => `'${jsStr(g)}'`).join(', ');
-      lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}, groups: [${groupList}] },`);
+      lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, groups: [${groupList}] },`);
       continue;
     }
     const memberIndices = [];
+    const memberField = view.word === 1 ? 'vMaskHi' : 'vMask';
     (pixels || []).forEach((p, i) => {
-      if (p && ((p.vMask || 0) & view.bit) !== 0) memberIndices.push(i);
+      if (p && ((p[memberField] || 0) & view.bit) !== 0) memberIndices.push(i);
     });
     if (memberIndices.length === 0) {
       console.warn(`[Views] Custom view '${view.name}' has no members — skipped in sidecar export. ` +
         'Assign fixtures or groups to it in the Views panel.');
       continue;
     }
-    lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}, pixelIndices: [${memberIndices.join(', ')}] },`);
+    lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, pixelIndices: [${memberIndices.join(', ')}] },`);
   }
 
   lines.push('];');
