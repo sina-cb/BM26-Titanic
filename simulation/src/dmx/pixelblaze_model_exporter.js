@@ -86,6 +86,14 @@ export function generatePixelMap() {
               cId: light.controllerId || 0,
               sId: light.sectionId || 0,
               fId: light.fixtureId || 0,
+              // localIndex: TRUE 0-based ordinal of this pixel WITHIN its own
+              // fixture, straight from the loop index `j` over the fixture's
+              // own pixel list (the exporter knows the real grouping; the
+              // engine no longer has to re-derive it from (group,fId)). A
+              // multi-pixel fixture (e.g. a bar) numbers its pixels 0..N-1 in
+              // physical order, so a sweep keyed on localIndex runs ALONG the
+              // bar. See marsin_engine/lib/pixel_local_index.js (consumer).
+              localIndex: j,
               vMask: light.viewMask || 0,
               _prePatched: true,
               patch: patchObj,
@@ -136,6 +144,9 @@ export function generatePixelMap() {
             cId: light.controllerId || 0,
             sId: resolveSectionId(light),
             fId: light.fixtureId || 0,
+            // localIndex: a simple/single-pixel DMX fixture is its own fixture
+            // with exactly one pixel, so its within-fixture ordinal is 0.
+            localIndex: 0,
             vMask: light.viewMask || 0,
             _prePatched: true, // We polyfill dynamically, so they are practically patched
             patch: patchObj,
@@ -277,6 +288,12 @@ export function generatePixelMap() {
           cId: (proj ? proj.controllerId : strand.controllerId) || 0,
           sId: strand.sectionId || 0,
           fId: strand.fixtureId || 0,
+          // localIndex: TRUE 0-based ordinal of this pixel WITHIN its own
+          // strand — the loop index `j` over the strand's own LED count. A
+          // strand IS one fixture (FIX_RAW_LED), so a sweep keyed on
+          // localIndex runs ALONG the strand in true pixel order. The engine
+          // consumes this directly instead of re-deriving from (group,fId).
+          localIndex: j,
           vMask: strand.viewMask || 0,
           patch: pxPatch,
           channels: pxChannels,
@@ -334,7 +351,9 @@ export function saveModelJS() {
     '// the companion .effects.js model.',
     '//',
     '// Each pixel has: index, type, name, group, world coords (x,y,z),',
-    '// normalized coords (nx,ny,nz) in [0..1], and optional V2 metadata maps',
+    '// normalized coords (nx,ny,nz) in [0..1], a 0-based within-fixture',
+    '// `localIndex` (per-fixture/per-strand pixel ordinal), and optional V2',
+    '// metadata maps',
     '',
     'export const pixelCount = ' + pixels.length + ';',
     '',
@@ -356,7 +375,11 @@ export function saveModelJS() {
     const extra = (p.type === 'led')
       ? `, whiteMode: '${p.whiteMode || 'native'}'${p.unpatched ? ', unpatched: true' : ''}`
       : '';
-    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
+    // localIndex is the exporter-emitted 0-based within-fixture ordinal
+    // (DMX: per-fixture pixel order; LED: per-strand pixel order). The
+    // engine prefers it over its (group,fId) heuristic; a NEW export always
+    // carries it on every pixel, so it is serialized unconditionally.
+    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
   });
 
   lines.push('];');
