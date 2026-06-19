@@ -41,6 +41,8 @@ import {
   LED_WHITE_MODES,
   ledStrideForOrder,
   computeLedProjection,
+  testAutoPatch,
+  clearAllPatches,
 } from '../dmx/controller_registry.js';
 import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
@@ -375,6 +377,33 @@ function render() {
   addBtn.textContent = '+ Add Controller';
   addBtn.onclick = showAddControllerModal;
   main.appendChild(addBtn);
+
+  // ── TEST patch tools (operator quick-patch, report 20260619_2) ───────
+  // One click to patch (or wipe) the WHOLE rig with a simple deterministic
+  // TEST mapping — so the rig streams/visualizes without hand patching.
+  // This is a smoke utility, NOT production hardware addressing; real
+  // addressing stays the per-fixture flow above.
+  const testRow = document.createElement('div');
+  testRow.className = 'cm-test-tools';
+
+  const autoBtn = document.createElement('button');
+  autoBtn.className = 'cm-btn cm-test-autopatch';
+  autoBtn.textContent = '⚡ Test Auto-Patch';
+  autoBtn.title = 'TEST utility: assign controllers to ALL fixtures and patch the whole rig ' +
+    'with a simple sequential mapping (creates a default DMX + LED controller if none exist). ' +
+    'For sim/engine smoke — not production hardware addressing.';
+  autoBtn.onclick = runTestAutoPatch;
+  testRow.appendChild(autoBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'cm-btn cm-danger cm-test-clear';
+  clearBtn.textContent = '🧹 Clear All Patches';
+  clearBtn.title = 'Remove EVERY patch assignment across all controllers — fixtures return to ' +
+    'the unpatched state. Controllers and ports are kept; only the bindings are wiped.';
+  clearBtn.onclick = runClearAllPatches;
+  testRow.appendChild(clearBtn);
+
+  main.appendChild(testRow);
 
   for (const controller of reg.controllers) {
     main.appendChild(renderController(controller, proj));
@@ -1221,6 +1250,76 @@ function addNamesToPort(controller, port, names) {
     showToast(`Added ${added.length} to ${controller.name} · Port ${port.port}`,
       { undoSnapshot: snapshot });
   }
+}
+
+// ── TEST patch tools (whole-rig quick patch / wipe) ─────────────────────
+
+/**
+ * Test Auto-Patch: snapshot → patch EVERYTHING via the registry helper →
+ * reproject → save. Loud toast naming what it created and how much it
+ * patched. Any failure (a fixture that can't be patched) THROWS out of
+ * testAutoPatch and surfaces as a loud error toast — never a silent
+ * partial patch (codex P0).
+ */
+function runTestAutoPatch() {
+  const snapshot = snapshotRegistry();
+  let result;
+  try {
+    result = testAutoPatch(registry(), configsByName(), strandLedCounts(), pins());
+  } catch (err) {
+    console.error('[Controllers] Test Auto-Patch failed:', err);
+    showToast(`Test Auto-Patch failed: ${err.message}`, { error: true, ttl: 12000 });
+    return;
+  }
+  recomputeAndMark();
+  renderIfOpen();
+  if (result.created.length > 0) {
+    console.warn('[Controllers] Test Auto-Patch created:', result.created.join(' · '));
+  }
+  const parts = [];
+  if (result.dmxPatched > 0) parts.push(`${result.dmxPatched} DMX`);
+  if (result.effectsPatched > 0) parts.push(`${result.effectsPatched} effect(s)`);
+  if (result.strandsPatched > 0) parts.push(`${result.strandsPatched} strand(s)`);
+  const createdMsg = result.created.length > 0
+    ? ` · created ${result.created.join(', ')}` : '';
+  const total = result.dmxPatched + result.effectsPatched + result.strandsPatched;
+  if (total === 0) {
+    showToast('Test Auto-Patch: nothing to patch (every fixture already mapped)',
+      { undoSnapshot: snapshot, ttl: 8000 });
+    return;
+  }
+  showToast(`⚡ Test Auto-Patch: ${parts.join(' + ')} across U${result.universesUsed.join(',U')}` +
+    `${createdMsg}`, { undoSnapshot: snapshot, ttl: 12000 });
+}
+
+/**
+ * Clear All Patches: snapshot → wipe every chain entry via the registry
+ * helper → reproject → save. Loud confirmation of how many bindings were
+ * cleared. After this the rig is fully unpatched (the loud unpatched
+ * markers apply); controllers and ports remain.
+ */
+function runClearAllPatches() {
+  const totalMapped = mappedFixtures(registry()).size;
+  if (totalMapped === 0) {
+    showToast('Clear All Patches: nothing is patched', { error: true, ttl: 5000 });
+    return;
+  }
+  const doClear = () => {
+    const snapshot = snapshotRegistry();
+    const { entriesCleared, freed } = clearAllPatches(registry());
+    console.warn(`[Controllers] Clear All Patches: removed ${entriesCleared} chain entry(ies); ` +
+      `${freed.length} fixture(s)/strand(s) returned to Unmapped:`, freed);
+    recomputeAndMark();
+    renderIfOpen();
+    showToast(`🧹 Cleared ${entriesCleared} patch(es) — ${freed.length} fixture(s) now unpatched`,
+      { undoSnapshot: snapshot, ttl: 12000 });
+  };
+  showCustomConfirm({
+    title: 'Clear All Patches',
+    text: `Remove ALL patch assignments? ${totalMapped} mapped fixture(s)/strand(s) return to ` +
+      'Unmapped and project unpatched. Controllers and ports are kept.',
+    onConfirm: doClear,
+  });
 }
 
 // ── Unmapped tray ───────────────────────────────────────────────────────

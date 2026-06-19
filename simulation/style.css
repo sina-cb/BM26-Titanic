@@ -2727,6 +2727,29 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--error) 24%, transparent);
 }
 
+/* ── TEST patch tools (whole-rig quick patch / wipe) ──────────────────── */
+.cm-main > .cm-test-tools {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+
+.cm-test-tools > .cm-btn {
+  flex: 1 1 0;
+  padding: 4px;
+}
+
+.cm-btn.cm-test-autopatch {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+
+.cm-btn.cm-test-autopatch:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
 .cm-error-chip {
   display: inline-block;
   background: color-mix(in srgb, var(--error) 12%, transparent);

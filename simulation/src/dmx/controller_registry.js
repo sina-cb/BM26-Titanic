@@ -436,6 +436,223 @@ export function setControllerType(controller, type) {
   return controller;
 }
 
+// ── Test auto-patch / clear-all (operator TEST utilities) ───────────────
+// These two are the panel's "patch the whole rig in one click" and "wipe
+// every patch" actions. They are deliberately SIMPLE and DETERMINISTIC —
+// a smoke utility to get the rig streaming/visualizing without hand
+// patching, NOT a production hardware-accurate addressing scheme
+// (operator request 2026-06-19, report 20260619_2). Real production
+// addressing stays the per-fixture panel flow.
+
+const TEST_DMX_CONTROLLER_NAME = 'TEST DMX';
+const TEST_LED_CONTROLLER_NAME = 'TEST LEDs';
+const TEST_DMX_CONTROLLER_IP = '10.0.0.1';
+const TEST_LED_CONTROLLER_IP = '10.0.0.2';
+
+/** First controller of `type` whose IP is valid, or null. */
+function firstUsableController(registry, type) {
+  for (const controller of registry.controllers) {
+    if (controller.type === type && isValidIp(controller.ip)) return controller;
+  }
+  return null;
+}
+
+/** A single empty port on `controller`, creating one if every port has a chain. */
+function firstEmptyOrNewPort(registry, controller) {
+  for (const port of controller.ports) {
+    if (port.chain.length === 0) return port;
+  }
+  return addPort(registry, controller);
+}
+
+/**
+ * TEST auto-patch: assign controllers to EVERY fixture and patch the whole
+ * rig with a simple, deterministic, sequential mapping. Mutates the
+ * registry in place; every fixture/strand ends up mapped (zero unpatched)
+ * or the call THROWS loudly (codex P0 — no silent skip).
+ *
+ * Scheme (TEST, not production):
+ *  - DMX fixtures (pars/bars/vintage/special, NON-effect): packed in the
+ *    order given, footprint after footprint, starting at U2:ch1. When the
+ *    next fixture's footprint would run past channel 512 the cursor wraps
+ *    to the next universe at ch1 — so a fixture never straddles a universe.
+ *    Each universe becomes its own port on the test DMX controller (ports
+ *    are pure cable topology; the port carries the universe).
+ *  - Global effects (foggers/hazers/horns/fire): pinned at their
+ *    config.yaml global_effects address on the effects universe (U1),
+ *    exactly like the panel's "+ effects" flow. A type with no pin lands
+ *    at at:0 and the projection flags it loudly (never silently dropped).
+ *  - LED strands: bound in order to one port of the test LED controller;
+ *    computeLedProjection lays them out as sequential per-pixel patches.
+ *
+ * Controllers are REUSED when a usable (valid-IP) one of the right type
+ * already exists; otherwise a default test controller is CREATED (loudly,
+ * via the returned `created` list). Fixtures already mapped anywhere are
+ * left where they are (their chain entries stand) and re-patched into the
+ * test layout only if currently unmapped — re-running is idempotent-ish:
+ * it tops up whatever is unmapped.
+ *
+ * @param {Object} registry
+ * @param {Map<string,Object>|Array<Object>} dmxConfigs - DMX fixture configs
+ *        (by name → config, or an array of configs with `.name`).
+ * @param {Map<string,number>|Array<{name,ledCount}>} strands - LED strands.
+ * @param {Object} pins - config.yaml global_effects pin table.
+ * @returns {{ created: string[], dmxPatched: number, effectsPatched: number,
+ *             strandsPatched: number, universesUsed: number[] }}
+ */
+export function testAutoPatch(registry, dmxConfigs, strands, pins) {
+  const configsByName = dmxConfigs instanceof Map
+    ? dmxConfigs
+    : new Map((dmxConfigs || [])
+      .filter(c => c && typeof c.name === 'string' && c.name.length > 0)
+      .map(c => [c.name, c]));
+  const strandCounts = strands instanceof Map
+    ? strands
+    : new Map((strands || [])
+      .filter(s => s && typeof s.name === 'string' && s.name.length > 0)
+      .map(s => [s.name, s.ledCount || 10]));
+  const pinTable = pins || {};
+
+  const created = [];
+  const alreadyMapped = mappedFixtures(registry);
+  const universesUsed = new Set();
+
+  // ── DMX fixtures ──────────────────────────────────────────────────────
+  const dmxNames = [...configsByName.keys()].filter(n => !alreadyMapped.has(n));
+  let dmxPatched = 0;
+  let effectsPatched = 0;
+  if (dmxNames.length > 0) {
+    let dmxController = firstUsableController(registry, CONTROLLER_TYPE_DMX);
+    if (!dmxController) {
+      dmxController = addController(registry,
+        { name: TEST_DMX_CONTROLLER_NAME, ip: TEST_DMX_CONTROLLER_IP, type: CONTROLLER_TYPE_DMX });
+      created.push(`DMX controller '${dmxController.name}' (${dmxController.ip})`);
+    }
+
+    // Effects pin onto an effects (U1) port; normal fixtures pack
+    // sequentially onto per-universe ports. Both live on the same test
+    // controller — the effects universe is just another port there.
+    let effectsPort = dmxController.ports.find(p => p.universe === EFFECTS_UNIVERSE) || null;
+    const ensureEffectsPort = () => {
+      if (!effectsPort) {
+        effectsPort = firstEmptyOrNewPort(registry, dmxController);
+        effectsPort.universe = EFFECTS_UNIVERSE;
+      }
+      return effectsPort;
+    };
+
+    // Sequential DMX cursor: pack footprint-after-footprint, wrap at 512.
+    // Each universe is one port. We grab the port FIRST and take its
+    // universe (reusing the controller's pre-made empty ports — universes
+    // 2,3,4,…); a new port allocates the next free universe itself. A
+    // never-effects port carries the pack.
+    let packPort = null;
+    let cursor = 1; // next free channel in packPort's universe
+    const nextPackPort = () => {
+      const port = firstEmptyOrNewPort(registry, dmxController);
+      if (port.universe === EFFECTS_UNIVERSE) {
+        // The effects universe is pins-only — never pack normal fixtures
+        // there. Re-home this port to the next free universe.
+        port.universe = nextFreeUniverse(registry);
+        noteUniverseUsed(registry, port.universe);
+      }
+      packPort = port;
+      cursor = 1;
+      return port;
+    };
+
+    for (const name of dmxNames) {
+      const config = configsByName.get(name);
+      const fixtureType = (config && (config.fixtureType || config.type)) || '';
+      if (isGlobalEffect(fixtureType)) {
+        const pin = pinTable[fixtureType];
+        ensureEffectsPort().chain.push({ fixture: name, at: pin ? pin.address : 0 });
+        universesUsed.add(EFFECTS_UNIVERSE);
+        effectsPatched += 1;
+        continue;
+      }
+      const footprint = getFootprint(config || { fixtureType });
+      if (footprint > DMX_UNIVERSE_SIZE) {
+        throw new Error(`[Controllers] testAutoPatch: fixture '${name}' footprint ${footprint} ` +
+          `exceeds a full universe (${DMX_UNIVERSE_SIZE}) — cannot patch it on one universe`);
+      }
+      // First fixture, or this footprint runs past 512 → open a new port
+      // (its own universe). A fixture never straddles a universe.
+      if (!packPort || cursor + footprint - 1 > DMX_UNIVERSE_SIZE) nextPackPort();
+      const at = cursor;
+      packPort.chain.push({ fixture: name, at });
+      universesUsed.add(packPort.universe);
+      cursor += footprint;
+      dmxPatched += 1;
+    }
+  }
+
+  // ── LED strands ───────────────────────────────────────────────────────
+  const strandNames = [...strandCounts.keys()].filter(n => !alreadyMapped.has(n));
+  let strandsPatched = 0;
+  if (strandNames.length > 0) {
+    let ledController = firstUsableController(registry, CONTROLLER_TYPE_LED);
+    if (!ledController) {
+      ledController = addController(registry,
+        { name: TEST_LED_CONTROLLER_NAME, ip: TEST_LED_CONTROLLER_IP, type: CONTROLLER_TYPE_LED });
+      created.push(`LED controller '${ledController.name}' (${ledController.ip})`);
+    }
+    const ledPort = firstEmptyOrNewPort(registry, ledController);
+    for (const name of strandNames) {
+      ledPort.chain.push(name);
+      strandsPatched += 1;
+    }
+    universesUsed.add(ledPort.universe);
+  }
+
+  // ── Loud completeness check (codex P0): NOTHING may be left unmapped ──
+  const mappedAfter = mappedFixtures(registry);
+  const stillUnmapped = [];
+  for (const name of configsByName.keys()) if (!mappedAfter.has(name)) stillUnmapped.push(name);
+  for (const name of strandCounts.keys()) if (!mappedAfter.has(name)) stillUnmapped.push(name);
+  if (stillUnmapped.length > 0) {
+    throw new Error(`[Controllers] testAutoPatch left ${stillUnmapped.length} fixture(s) unmapped — ` +
+      `this is a bug, not a fallback: ${stillUnmapped.slice(0, 10).join(', ')}` +
+      (stillUnmapped.length > 10 ? ` …(+${stillUnmapped.length - 10})` : ''));
+  }
+
+  return {
+    created,
+    dmxPatched,
+    effectsPatched,
+    strandsPatched,
+    universesUsed: [...universesUsed].sort((a, b) => a - b),
+  };
+}
+
+/**
+ * Clear EVERY patch assignment: strip all chain entries (fixtures, strands,
+ * gaps) from every port of every controller, returning the rig to the
+ * fully-unpatched state. Controllers and their ports are KEPT (the
+ * topology stands); only the bindings are wiped. Returns the count of
+ * removed chain entries plus the named fixtures/strands that became
+ * unmapped, for a loud confirmation (codex P0 — no silent wipe).
+ *
+ * @param {Object} registry
+ * @returns {{ entriesCleared: number, freed: string[] }}
+ */
+export function clearAllPatches(registry) {
+  let entriesCleared = 0;
+  const freed = [];
+  if (!registry || !Array.isArray(registry.controllers)) return { entriesCleared, freed };
+  for (const controller of registry.controllers) {
+    for (const port of controller.ports) {
+      for (const entry of port.chain) {
+        entriesCleared += 1;
+        const name = entryFixtureName(entry);
+        if (name !== null) freed.push(name);
+      }
+      port.chain.length = 0;
+    }
+  }
+  return { entriesCleared, freed };
+}
+
 export function addPort(registry, controller) {
   const portNum = controller.ports.reduce((m, p) => Math.max(m, p.port), 0) + 1;
   const universe = nextFreeUniverse(registry);
