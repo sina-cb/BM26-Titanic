@@ -1628,6 +1628,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     );
   }
 
+  // Register (+ arm) the DECK channel's autopilot loop (transition advance path).
+  // Must run BOTH at boot AND whenever the deck channel is first created at
+  // runtime (a fresh/deckless boot + POST /pattern). If it only ran at boot, a
+  // deck created later would never be in the pool, every rearm() would be
+  // ignored, and the deck would never cycle — masking the handoff "never stuck"
+  // guarantee (docs/38 §16 I1). Idempotent via autopilotPool.has.
+  function registerDeckAutopilot(channelId) {
+    if (autopilotPool.has(channelId)) return;
+    autopilotPool.arm(
+      channelId,
+      () => readChannelAutopilotState(channelId),
+      () => advanceDeckAutopilot(),
+    );
+  }
+
   // The "view override" pins the engine output to the deck regardless of
   // any subsequent /mixer/view writes from another panel. When cleared,
   // we restore whatever target the user last picked. Implemented on the
@@ -2182,6 +2197,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               fader: 1.0,
               enabled: true,
             });
+            // A deck created at runtime (fresh/deckless boot) must be registered
+            // with the autopilot pool here — boot-time arming already ran and
+            // would otherwise never see this channel (handoff §16 I1).
+            registerDeckAutopilot(newChannel.id);
           }
           if (oldPlaylist) {
             // Re-attach the playlist, but pick the first entry whose
@@ -4339,13 +4358,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // itself from its channel's restored playlist.autopilot, so ANY channel
   // whose autopilot.active === true resumes cycling on boot.
   const bootDeck = mixer.getDeckChannel();
-  if (bootDeck) {
-    autopilotPool.arm(
-      bootDeck.id,
-      () => readChannelAutopilotState(bootDeck.id),
-      () => advanceDeckAutopilot(),
-    );
-  }
+  if (bootDeck) registerDeckAutopilot(bootDeck.id);
   for (const overlay of mixer.getMixerChannels()) {
     armMixerChannelAutopilot(overlay.id);
   }
