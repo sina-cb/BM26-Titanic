@@ -14,7 +14,12 @@
     Wrap an existing make_vis_clip fragment:
       node tools/gallery/publish.mjs --name <pattern> --in <fragmentHtml>
 
-  Prints the served path /w/<name> on success.
+  Model (--model <name>, default = whatever the capture says, else test_bench):
+    The default model publishes the bare <pattern>.html. A non-default model
+    publishes <pattern>__<model>.html so several models for one pattern coexist
+    in the gallery (the index groups by splitting the filename on "__").
+
+  Prints the served path /w/<widget> on success.
 */
 import fs from 'fs';
 import path from 'path';
@@ -35,10 +40,12 @@ const WIDGETS_DIR = path.join(HERE, 'widgets');
 const ENGINE_DIR = path.resolve(HERE, '..', '..'); // marsin_engine/
 const MAKE_VIS = path.join(ENGINE_DIR, 'tools', 'make_vis_clip.mjs');
 
+const DEFAULT_MODEL = 'test_bench';
 const name = arg('name');
 const capture = expand(arg('capture'));
 const inFrag = expand(arg('in'));
 const fps = arg('fps', '14');
+const modelArg = arg('model');
 
 if (!name) {
   console.error('error: --name <pattern> is required');
@@ -48,17 +55,29 @@ if (!/^[A-Za-z0-9._-]+$/.test(name)) {
   console.error('error: --name must be a bare pattern name (letters, digits, . _ -), got: ' + name);
   process.exit(1);
 }
+// "__" is the reserved <pattern>__<model> separator the gallery index splits on,
+// so neither the pattern name nor the model name may contain it.
+if (name.includes('__')) {
+  console.error('error: --name must not contain "__" (reserved as the model separator), got: ' + name);
+  process.exit(1);
+}
+if (modelArg !== undefined && (!/^[A-Za-z0-9._-]+$/.test(modelArg) || modelArg.includes('__'))) {
+  console.error('error: --model must be a bare model name (letters, digits, . _ -), no "__", got: ' + modelArg);
+  process.exit(1);
+}
 if (!capture && !inFrag) {
   console.error('error: provide either --capture <captureJson> or --in <fragmentHtml>');
   process.exit(1);
 }
 
 let fragment;
+let captureModel; // model recorded in the capture JSON, if any
 if (capture) {
   if (!fs.existsSync(capture)) {
     console.error('error: capture not found: ' + capture);
     process.exit(1);
   }
+  captureModel = JSON.parse(fs.readFileSync(capture, 'utf8')).model;
   const tmpDir = path.join(home, 'tmp');
   fs.mkdirSync(tmpDir, { recursive: true });
   const tmpFrag = path.join(tmpDir, 'gallery_' + name + '.html');
@@ -74,6 +93,13 @@ if (capture) {
   fragment = fs.readFileSync(inFrag, 'utf8');
 }
 
+// Resolve the model: explicit --model wins, else whatever the capture recorded,
+// else the default. The default model keeps the bare <pattern>.html; any other
+// model publishes <pattern>__<model>.html so multiple models for one pattern
+// coexist (the gallery index groups by splitting the filename on "__").
+const model = modelArg !== undefined ? modelArg : (captureModel || DEFAULT_MODEL);
+const widget = model === DEFAULT_MODEL ? name : (name + '__' + model);
+
 // Self-contained page. Defines the CSS variables the fragment relies on, a dark
 // background so the LEDs read, and a mobile viewport. The fragment carries its
 // own trailing <script> that animates it.
@@ -82,7 +108,7 @@ const page = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>${name.replace(/[<>&"]/g, '')}</title>
+<title>${widget.replace(/[<>&"]/g, '')}</title>
 <style>
   :root {
     color-scheme: dark;
@@ -120,7 +146,7 @@ ${fragment}
 `;
 
 fs.mkdirSync(WIDGETS_DIR, { recursive: true });
-const out = path.join(WIDGETS_DIR, name + '.html');
+const out = path.join(WIDGETS_DIR, widget + '.html');
 fs.writeFileSync(out, page);
-console.log('published -> ' + out);
-console.log('served at  -> /w/' + name);
+console.log('published -> ' + out + ' (model: ' + model + ')');
+console.log('served at  -> /w/' + widget);

@@ -111,3 +111,36 @@ node tools/gallery/gallery_launcher.mjs
 
 See `marsin_engine/tools/gallery/README.md` for the same details from the
 tool's side.
+
+<!-- BEGIN model-switching (feat/highdef_patterns) — keep separate for merge -->
+## Reviewing a pattern on a different rig model (`--model`)
+
+The clip pipeline defaults to the **test_bench** rig, but you can render and
+publish the same pattern on any rig in `marsin_engine/models/` (e.g.
+`summer_camp_dome`, `summer_camp_logsville`, `titanic`) so they show up
+side-by-side in the gallery.
+
+```bash
+cd marsin_engine
+# 1. capture offline against the chosen rig (model is stamped into the JSON):
+node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
+  --model summer_camp_dome --synth full_track --frames 96 \
+  --out ~/tmp/genkit/out/NN_name__dome.json
+# 2. publish (omit --model to let publish read it from the capture JSON):
+node tools/gallery/publish.mjs --name NN_name --model summer_camp_dome \
+  --capture ~/tmp/genkit/out/NN_name__dome.json
+# -> widgets/NN_name__summer_camp_dome.html, served at /w/NN_name__summer_camp_dome
+```
+
+**Naming convention.** The default model (`test_bench`) keeps the bare
+`<pattern>.html`; any other model publishes `<pattern>__<model>.html`. `__` is
+the reserved separator the gallery index splits on to group a pattern's model
+variants, so neither `--name` nor `--model` may contain `__`.
+
+**Fail-loud (codex P0).** The harness `--model` never silently falls back to
+test_bench: a missing model file, or one whose `pixels[]` lack the required
+`i/fId/sId/nx/ny/nz` fields, exits non-zero with a clear `MODEL_FAIL:` message
+and writes no capture. `make_vis_clip.mjs` stays model-agnostic — it
+auto-detects each section's axis from the coord spread and only labels sections
+`Pars/Vintage/Bars` for test_bench (other rigs get neutral `Section N`).
+<!-- END model-switching (feat/highdef_patterns) -->

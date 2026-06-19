@@ -101,3 +101,35 @@ trailing `<script>` animates it.
 - `widgets/` — published `<name>.html` pages (scratch; gitignored).
 - `widgets/.gitignore` — ignores everything in the dir except itself.
 - `README.md` — this file.
+
+<!-- BEGIN model-switching (feat/highdef_patterns) — keep separate for merge -->
+## Publishing for a non-default rig model (`--model`)
+
+By default the gallery shows clips rendered on the **test_bench** rig. To review
+the same pattern on another rig (e.g. `summer_camp_dome`, `summer_camp_logsville`,
+`titanic`), capture against that model and publish with `--model`:
+
+```bash
+cd marsin_engine
+# capture offline against the dome rig (the harness stamps the model into the JSON):
+node tools/pattern_audio_harness.mjs --pattern patterns/27_swipe.js \
+  --model summer_camp_dome --synth full_track --frames 96 \
+  --out ~/tmp/genkit/out/27_swipe__dome.json
+# publish it (or omit --model and let publish read it from the capture JSON):
+node tools/gallery/publish.mjs --name 27_swipe --model summer_camp_dome \
+  --capture ~/tmp/genkit/out/27_swipe__dome.json
+# -> writes widgets/27_swipe__summer_camp_dome.html, serves /w/27_swipe__summer_camp_dome
+```
+
+**Naming convention.** The default model (`test_bench`) keeps the bare
+`<pattern>.html`. Any other model publishes `<pattern>__<model>.html` so several
+models for one pattern coexist in the gallery. `__` is the reserved separator —
+the gallery index groups variants by splitting the filename on `__`, so neither
+`--name` nor `--model` may contain `__`.
+
+Model resolution for `publish.mjs`: explicit `--model` wins, else the `model`
+field recorded in the `--capture` JSON, else `test_bench`. The `--capture` and
+`--in` forms both still work. A missing/foreign model is **never** silently
+swapped for test_bench — the harness fails loudly (non-zero exit) if the model
+file is missing or its `pixels[]` lack the required `i/fId/sId/nx/ny/nz` fields.
+<!-- END model-switching (feat/highdef_patterns) -->
