@@ -585,11 +585,16 @@ export function defaultShowPlan() {
         days: 'all',
         trigger: { type: 'sun', event: 'sunset', offsetMin: -45 },
         action: { type: 'look', look: 'philharmonic' },
+        hold: { min: 90 },
       },
       {
         id: 'c_party_start',
         label: 'Party night ramp',
-        kind: 'program',
+        // ambient (NOT program): sets the party look at party_night start but does
+        // NOT take priority — so the night runs on AUTOPILOT and the mood cue
+        // below can auto-fire calm->party from the audio analysis. A blocking
+        // program here would suppress mood for the whole window.
+        kind: 'ambient',
         days: 'all',
         trigger: { type: 'phase', phase: 'party_night' },
         action: { type: 'look', look: 'party' },

@@ -101,13 +101,27 @@ test('autopilot.delay_s <= 0 throws', () => {
   assert.throws(() => validateShowPlan(plan), /delay_s must be a number > 0/);
 });
 
-test('cue kind inference: mood-trigger -> mood, else program', () => {
+test('default plan cue kinds (party_start is ambient so mood can auto-fire)', () => {
   const plan = validateShowPlan(defaultShowPlan());
   const byId = Object.fromEntries(plan.cues.map((c) => [c.id, c]));
   assert.equal(byId.c_visibility_on.kind, 'program');
-  assert.equal(byId.c_party_start.kind, 'program');
+  assert.equal(byId.c_party_start.kind, 'ambient');   // NOT a blocking program
   assert.equal(byId.c_mood_to_party.kind, 'mood');
   assert.equal(byId.c_sunrise.kind, 'program');
+});
+
+test('cue kind inference: mood-trigger -> mood, else program (when kind omitted)', () => {
+  const base = validateShowPlan(defaultShowPlan());
+  // Strip explicit kinds from two cues and re-validate to exercise inference.
+  const draft = JSON.parse(JSON.stringify(base));
+  const sun = draft.cues.find((c) => c.id === 'c_visibility_on');
+  const mood = draft.cues.find((c) => c.id === 'c_mood_to_party');
+  delete sun.kind;
+  delete mood.kind;
+  const re = validateShowPlan(draft);
+  const byId = Object.fromEntries(re.cues.map((c) => [c.id, c]));
+  assert.equal(byId.c_visibility_on.kind, 'program');  // non-mood trigger -> program
+  assert.equal(byId.c_mood_to_party.kind, 'mood');     // mood trigger -> mood
 });
 
 test('default sunrise cue is a program with hold:{min:90}', () => {

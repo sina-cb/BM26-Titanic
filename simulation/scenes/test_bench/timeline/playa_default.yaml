@@ -105,6 +105,8 @@ cues:
       type: look
       look: philharmonic
     kind: program
+    hold:
+      min: 90
     days: all
   - id: c_party_start
     label: Party night ramp
@@ -116,7 +118,7 @@ cues:
     action:
       type: look
       look: party
-    kind: program
+    kind: ambient
     days: all
   - id: c_mood_to_party
     label: 'Follow the DJ: calm -> party'

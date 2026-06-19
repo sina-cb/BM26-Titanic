@@ -516,6 +516,12 @@ export class TimelineService {
     const dayKey = dayKeyFor(now, this.plan.location.tz);
     if (!this.state.firedToday) this.state.firedToday = {};
     this.state.dayKey = dayKey;
+    // activeProgram is RUNTIME state — never resume a persisted one across a
+    // restart (docs/31 "never resume an interrupted window"). A stale program
+    // (esp. an untilMs:null one) would hang as the controller forever and
+    // permanently suppress mood. Clear it; catchUp below re-derives it from the
+    // current time + plan.
+    this.state.activeProgram = null;
 
     let best = null;
     for (const cue of dayPlan.cues) {
@@ -532,7 +538,11 @@ export class TimelineService {
     let programCaughtUp = false;
     if (best && best.cue.kind === 'program') {
       const untilMs = resolveHold(best.cue.hold, best.fireMs, dayTimes);
-      if (untilMs === null || untilMs > now) {
+      // Only re-arm as an ACTIVE program if it is genuinely still inside a real
+      // (future) hold window. A no-hold (untilMs===null) or already-expired
+      // program from earlier today restores its LOOK (dispatched below) but must
+      // NOT seize the controller forever — otherwise autopilot + mood never run.
+      if (typeof untilMs === 'number' && untilMs > now) {
         this.state.activeProgram = { cueId: best.cue.id, startedAtMs: best.fireMs, untilMs };
         this.state.controller = 'manual';
         programCaughtUp = true;
