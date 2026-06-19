@@ -30,6 +30,7 @@ const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const MOOD_VALUES = Object.freeze(['calm', 'party']);
 const TARGET_CHANNELS = Object.freeze(['deck', 'mixer', 'all']);
+const CUE_KINDS = Object.freeze(['program', 'mood', 'ambient']);
 
 // ── small validators (all throw-style; first arg is a context label) ──────────
 
@@ -122,6 +123,33 @@ function validateTarget(target, label) {
     id = assertString(target.id, `${label}.id`);
   }
   return { channel: target.channel, id };
+}
+
+/**
+ * Plan-level AUTOPILOT baseline block (docs/38 §14.3) — the regular-programming
+ * layer. All fields optional; missing → documented defaults. THROW-style.
+ *   { enabled, playlist?, delay_s, shuffle, target, mood }
+ */
+function validatePlanAutopilot(ap, label) {
+  if (ap === undefined) {
+    return { enabled: true, delay_s: 45, shuffle: true, target: { channel: 'deck', id: null }, mood: true };
+  }
+  if (!isPlainObject(ap)) throw new Error(`${label} must be an object`);
+  const out = {};
+  out.enabled = ap.enabled !== undefined ? assertBool(ap.enabled, `${label}.enabled`) : true;
+  if (ap.playlist !== undefined) out.playlist = assertSlug(ap.playlist, `${label}.playlist`);
+  if (ap.delay_s !== undefined) {
+    if (typeof ap.delay_s !== 'number' || Number.isNaN(ap.delay_s) || ap.delay_s <= 0) {
+      throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ap.delay_s)}`);
+    }
+    out.delay_s = ap.delay_s;
+  } else {
+    out.delay_s = 45;
+  }
+  out.shuffle = ap.shuffle !== undefined ? assertBool(ap.shuffle, `${label}.shuffle`) : true;
+  out.target = validateTarget(ap.target, `${label}.target`);
+  out.mood = ap.mood !== undefined ? assertBool(ap.mood, `${label}.mood`) : true;
+  return out;
 }
 
 function validateAutopilot(ap, label) {
@@ -308,6 +336,28 @@ function validateAction(action, label, lookNames) {
   }
 }
 
+/**
+ * A cue's HOLD window (docs/38 §14.3) — only meaningful for kind:'program'.
+ *   { min: Number>0 }   → program owns priority for that many minutes
+ *   { until: <anchor> } → program owns priority until that clock/sun anchor
+ * Exactly one of the two; omitted → null (holds until the next program cue).
+ */
+function validateHold(hold, label) {
+  if (!isPlainObject(hold)) throw new Error(`${label} must be an object { min } or { until }`);
+  const hasMin = hold.min !== undefined;
+  const hasUntil = hold.until !== undefined;
+  if (hasMin === hasUntil) {
+    throw new Error(`${label} must have exactly one of { min } or { until }`);
+  }
+  if (hasMin) {
+    if (typeof hold.min !== 'number' || Number.isNaN(hold.min) || hold.min <= 0) {
+      throw new Error(`${label}.min must be a number > 0, got ${JSON.stringify(hold.min)}`);
+    }
+    return { min: hold.min };
+  }
+  return { until: validateAnchor(hold.until, `${label}.until`) };
+}
+
 function validateCue(cue, index, phaseNames, lookNames, seenIds) {
   const label = `plan.cues[${index}]`;
   if (!isPlainObject(cue)) throw new Error(`${label} must be an object`);
@@ -320,6 +370,19 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds) {
   out.catchUp = cue.catchUp !== undefined ? assertBool(cue.catchUp, `${label}.catchUp`) : true;
   out.trigger = validateTrigger(cue.trigger, `${label}.trigger`, phaseNames);
   out.action = validateAction(cue.action, `${label}.action`, lookNames);
+  // kind: explicit must be one of program | mood | ambient; default inference is
+  // mood-trigger→'mood', everything else→'program' (docs/38 §14.3). We normalize
+  // the default here so downstream (arbiter) always sees an explicit kind.
+  if (cue.kind !== undefined) {
+    if (!CUE_KINDS.includes(cue.kind)) {
+      throw new Error(`${label}.kind must be one of ${CUE_KINDS.join(', ')}, got ${JSON.stringify(cue.kind)}`);
+    }
+    out.kind = cue.kind;
+  } else {
+    out.kind = out.trigger.type === 'mood' ? 'mood' : 'program';
+  }
+  // hold: only meaningful for kind:'program'. Validate whenever present.
+  if (cue.hold !== undefined) out.hold = validateHold(cue.hold, `${label}.hold`);
   return out;
 }
 
@@ -339,12 +402,13 @@ export function validateShowPlan(plan) {
 
   const phaseNames = new Set(Object.keys(phases));
   const lookNames = new Set(Object.keys(looks));
+  const autopilot = validatePlanAutopilot(plan.autopilot, 'plan.autopilot');
 
   if (!Array.isArray(plan.cues)) throw new Error('plan.cues must be an array');
   const seenIds = new Set();
   const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds));
 
-  return { schemaVersion: 1, name, location, phases, looks, cues };
+  return { schemaVersion: 1, name, location, autopilot, phases, looks, cues };
 }
 
 /**
@@ -396,6 +460,16 @@ export function defaultShowPlan() {
     schemaVersion: 1,
     name: 'playa_default',
     location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles', elevationM: 1190 },
+    // The AUTOPILOT baseline (regular programming): engine autopilot cycles the
+    // 'default' playlist on the deck, mood swaps allowed (docs/38 §14).
+    autopilot: {
+      enabled: true,
+      playlist: 'default',
+      delay_s: 45,
+      shuffle: true,
+      target: { channel: 'deck', id: null },
+      mood: true,
+    },
     phases: {
       philharmonic: {
         start: { sun: 'sunset', offsetMin: -30 },
@@ -450,8 +524,10 @@ export function defaultShowPlan() {
       {
         id: 'c_sunrise',
         label: 'Sunrise wind-down',
+        kind: 'program',
         trigger: { type: 'sun', event: 'sunrise', offsetMin: -15 },
         action: { type: 'look', look: 'sunrise' },
+        hold: { min: 90 },
       },
     ],
   };

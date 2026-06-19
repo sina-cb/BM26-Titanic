@@ -60,7 +60,13 @@ export function clockToEpochMs(hhmm, nowMs, tz) {
 
 // ── day-time resolution ───────────────────────────────────────────────────────
 
-function anchorToMs(anchor, nowMs, tz, sunEvents) {
+/**
+ * Resolve an anchor ({clock:'HH:MM'} | {sun:<event>, offsetMin}) → epoch ms on
+ * the calendar day of `nowMs` in tz `tz`. Returns null for a polar/missing sun
+ * event. Exported so the arbiter's hold resolution can reuse the same
+ * clock/sun math rather than duplicating it.
+ */
+export function anchorToMs(anchor, nowMs, tz, sunEvents) {
   if (anchor.clock !== undefined) {
     return clockToEpochMs(anchor.clock, nowMs, tz);
   }
@@ -98,7 +104,9 @@ export function resolveDayTimes({ plan, now, sunEvents }) {
         : null;
     }
   }
-  return { phases, cueTimes };
+  // Carry tz + the raw sun events so downstream pure consumers (the arbiter's
+  // hold resolution) can resolve arbitrary anchors without re-plumbing them.
+  return { phases, cueTimes, tz, sunEvents };
 }
 
 /**
