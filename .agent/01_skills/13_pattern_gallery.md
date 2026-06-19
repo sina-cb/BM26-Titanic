@@ -57,14 +57,19 @@ Port **6765** binds `0.0.0.0` and deliberately stays off the engine/sim range
    node tools/gallery/publish.mjs --name NN_name --in ~/tmp/frag.html
    ```
 
-3. **Serve** (start once — it re-reads the widgets dir on **every** request, so
-   re-publishing appears without a restart):
+3. **Launch + serve** with the dedicated **gallery launcher** (start once — the
+   server re-reads the widgets dir on **every** request, so re-publishing
+   appears without a restart):
    ```bash
    cd marsin_engine
-   node tools/gallery/server.mjs        # port from gallery_config.json (6765)
+   node tools/gallery/gallery_launcher.mjs   # port from gallery_config.json (6765)
    ```
-   It prints the localhost URL and every non-internal IPv4 — pick the Tailscale
-   `100.x.y.z` one.
+   The launcher resolves the port (same contract as the server), prints the
+   **Tailscale phone URL** (`http://100.x.y.z:6765/`) up front, then spawns
+   `server.mjs` pinned to that port. It is standalone — NOT the production stack
+   launcher (`launcher.js`) and shares no code with it. (You can still run
+   `node tools/gallery/server.mjs` directly if you don't want the Tailscale
+   highlight.)
 
 4. **Phone** (Tailscale up on both machine and phone): open
    `http://<your-tailscale-ip>:6765/`, use the search box, tap a pattern, watch
@@ -91,10 +96,11 @@ for f in patterns/[0-9]*_*.js; do
     --frames 96 --out ~/tmp/genkit/out/$name.json || { echo "FAILED: $name"; break; }
   node tools/gallery/publish.mjs --name "$name" --capture ~/tmp/genkit/out/$name.json || { echo "FAILED publish: $name"; break; }
 done
-node tools/gallery/server.mjs
+node tools/gallery/gallery_launcher.mjs
 ```
 
 ## Files & hygiene
+- `gallery_launcher.mjs` — launch + serve (Tailscale-aware; spawns `server.mjs`).
 - `server.mjs` — http server (index, `/w/<name>`, `/api/list`, 404).
 - `gallery_config.json` — the served port.
 - `publish.mjs` — CLI to publish/update a widget.

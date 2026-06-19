@@ -11,9 +11,22 @@ is self-contained.
 
 ## Start the server
 
+Preferred — the **gallery launcher** (resolves the port, prints the Tailscale
+phone URL up front, then spawns the server):
+
 ```bash
 cd marsin_engine
-node tools/gallery/server.mjs              # port from gallery_config.json (6765)
+node tools/gallery/gallery_launcher.mjs              # port from gallery_config.json (6765)
+node tools/gallery/gallery_launcher.mjs --port 6765  # explicit override
+GALLERY_PORT=6765 node tools/gallery/gallery_launcher.mjs
+```
+
+It is standalone — NOT the production stack launcher (`launcher.js`) and shares
+no code with it. To start the bare server without the Tailscale highlight:
+
+```bash
+cd marsin_engine
+node tools/gallery/server.mjs              # same port contract
 node tools/gallery/server.mjs --port 6765  # explicit override
 GALLERY_PORT=6765 node tools/gallery/server.mjs
 ```
@@ -81,6 +94,7 @@ trailing `<script>` animates it.
 
 ## Files
 
+- `gallery_launcher.mjs` — launch + serve: Tailscale-aware wrapper that spawns `server.mjs` on the resolved port.
 - `server.mjs` — the http server (index, `/w/<name>`, `/api/list`, 404).
 - `gallery_config.json` — the served port (`{ "port": 6765 }`).
 - `publish.mjs` — CLI to publish/update a widget (both forms above).
