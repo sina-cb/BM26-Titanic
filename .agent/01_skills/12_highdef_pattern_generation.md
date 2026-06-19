@@ -276,6 +276,51 @@ all pre-scaled by the global SPEED fader.** Therefore:
   via `rgbwau(r,g,b, w, a, u)`. Clamp every channel 0..1.
 - Keep a **small additive non-black floor** so silence is calm-but-visible.
 
+### 8.1 White control (the W channel + vintage blinders)
+The fixtures have a dedicated **white emitter** (the `w` arg of `rgbwau`). White
+is its own design dimension — not just `min(r,g,b)`. Reference patterns:
+`00_golden_hour_wash` (kick-driven vintage-blinder W) and `11_bioluminescence`
+(gentle white cores under colour). Aim for **~30% of the library to use white**,
+with the strongest effect being the **vintage heads as audience blinders**.
+
+- **Emit white explicitly**: `rgbwau(r, g, b, w, a, u)` with `w` computed
+  separately from the RGB colour. Plain `rgb()` leaves W=0 (white emitter off);
+  if `entry.w` is undefined the mapper backfills `W = min(r,g,b)` — so to *control*
+  white you must set `w` yourself. Clamp `w` to 0..1.
+- **Vintage blinder is the headline use**: drive `w` hard on `sectionId == 2`
+  (the upper vintage heads, fixtureId 5–6), gated by the kick, so the audience
+  gets a white punch on the beat. Keep the pars/bars (sections 1/3) coloured and
+  let the vintage heads carry the white bite. A small always-on warm-white keep
+  on the vintage heads is fine (golden-hour feel); the *pop* is audio-driven.
+- **A white pattern still obeys the ground rules**: white is additive on top of
+  the strict `cp1`/`cp2` geometry — it must not flatten the two-colour spread
+  (don't wash the whole rig white) and must not break silence-safety or the
+  no-static rule.
+
+**`white_*` control conventions** (identity sliders, §3; declare what the
+pattern needs, modulate the audio-reactive ones, §5):
+
+| Control | Meaning | Typical audio source |
+|---|---|---|
+| `whiteLevel` | overall white amount / base keep (raise/lower the white) | `micLow` or static |
+| `whiteKick` | kick-driven white *pop* (blinder bite on the beat) | `micKick` |
+| `whiteWarmth` | tint of the white toward warm (amber `a`) vs cool/UV (`u`) | static or `micMid` |
+| `blinderBite` | how hard/snappy the vintage-head blinder hits (attack/decay) | `micKick` / static |
+| `whiteSpread` | how far the white reaches across the rig / which sections | `micFlux` or static |
+
+Pick a sensible subset per pattern (most need `whiteLevel` + `whiteKick`; a true
+blinder pattern adds `blinderBite`/`whiteWarmth`). Store `v` directly, scale
+inside `render3D`. Document the white mapping in the header like any other:
+```text
+WHITE (modulators-only):
+    MODULATE sliderWhiteKick (whiteKick) <- micKick   // vintage-head blinder pop
+    MODULATE sliderWhiteLevel(whiteLevel)<- micLow    // overall white keep
+```
+Validate white the same way as colour: it must read on the gallery clip
+(white pixels are visibly whiter than the palette) and, on `--buffer rig`, the
+vintage heads' W channel must actually rise on the kick — judge it on the
+`rig`/DMX bytes, not just the dark vis UI.
+
 ---
 
 ## 9. Verify — the offline harness loop (this is the gate)

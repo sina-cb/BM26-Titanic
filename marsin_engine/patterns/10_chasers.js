@@ -56,7 +56,7 @@ export function sliderRadius(v) { radius = v; }
 export function sliderCount(v) { count = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var RUN_RATE = 0.30;        // laps per second at localSpeed = 1.0
+var RUN_RATE = 0.42;        // laps per second at localSpeed = 1.0
 var MAX_PARTS = 14;         // maximum chasers (count scales how many are lit)
 var PHASE_WRAP = 10000.0;
 var BASE_FLOOR = 0.04;      // calm non-black base in silence
@@ -142,7 +142,7 @@ export function beforeRender(delta) {
   // never fully stop -> no dead-static stretch and no seam) plus an eased
   // direction term. The effective velocity changes sign smoothly through the
   // reversal but its magnitude stays well above zero, so the look stays alive.
-  var vel = 0.45 + 0.55 * dirSmooth;   // range ~ -0.10 .. +1.0, passes 0 smoothly
+  var vel = 0.30 + 0.70 * dirSmooth;   // signed velocity; reverses on auto-switch
   velSgn = vel >= 0.0 ? 1.0 : -1.0;
   velMag = vel >= 0.0 ? vel : -vel;
   runPhase = runPhase + dt * rate * RUN_RATE * vel;
@@ -214,9 +214,9 @@ export function render3D(index, wx, wy, wz) {
     // or momentarily-paused comet never falls invisibly between pixels (no dead-
     // static stretch). Radius ~ one inter-pixel spacing on the 52-px ring.
     var dHead = wrapped >= 0.0 ? wrapped : -wrapped;
-    var halo = 1.0 - dHead / 0.045;
+    var halo = 1.0 - dHead / 0.075;
     if (halo > 0.0) {
-      var hv = pow(halo, 2.0);
+      var hv = pow(halo, 1.6);
       if (hv > v) { v = hv; if (along < 0.0) blend = 0.0; }
     }
 
@@ -224,21 +224,21 @@ export function render3D(index, wx, wy, wz) {
     if (v > bestV) { bestV = v; bestBlend = blend; }
   }
 
-  // PRIMARY carrier: a dim, time-STEADY level-driven atmosphere glow on every
-  // pixel. Because it does not animate, total brightness tracks `level` directly
-  // (clean PRIMARY correlation) while staying dark enough for crisp comet contrast.
-  // A static per-pixel hue sprinkle keeps both palette ends present across the rig.
+  // PRIMARY carrier: a near-STEADY level-driven star field carries the brightness
+  // budget — most pixels glow at a fixed, level-scaled brightness, so the rig
+  // total tracks `level` directly (clean corr). A smaller dark subset keeps
+  // negative space for the comets to streak across.
   var hashp = (index * 0.61803 + nx * 6.0);
   hashp = hashp - floor(hashp);
-  // PRIMARY carrier: a STEADY (non-animating) level-driven star field carries the
-  // brightness budget — most pixels glow at a fixed, level-scaled brightness, so
-  // the rig total tracks `level` directly (clean corr). A smaller dark subset
-  // keeps negative space for the comets to streak across.
   var starGate = 0.5 + 0.5 * sin((hashp * 23.0 + 0.17) * PI2);
   var star = starGate > 0.25 ? (0.35 + 0.65 * pow(starGate, 1.6)) : 0.08;
-  // A kick pop lifts the WHOLE star field uniformly (a clearly kick-reactive,
-  // rig-wide brightness pulse) — folded into the level-driven carrier.
-  var atmo = star * gain * (1.0 + kickPop * 0.55);    // dominant level+kick field
+  // A faint per-star twinkle on the always-forward life clock guarantees the rig
+  // is never dead-static (even when a comet momentarily pauses at a reversal),
+  // and averages out across the field so it barely affects the PRIMARY corr.
+  var tw = 0.88 + 0.12 * sin((lifePhase * 1.7 + hashp * 19.0) * PI2);
+  // A kick pop lifts the WHOLE star field uniformly (clearly kick-reactive),
+  // folded into the level-driven carrier.
+  var atmo = star * tw * gain * (1.0 + kickPop * 0.55); // dominant level+kick field
   var atmoBlend = hashp;                              // sprinkle both palette ends
 
   // Crisp comet highlight on top — a sharp moving pinpoint that flares on the
