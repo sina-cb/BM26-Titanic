@@ -148,5 +148,5 @@ node tools/gallery/server.mjs            # port 7070, binds 0.0.0.0 — prints t
 ```
 Then open `http://<your-tailscale-ip>:7070/` on the phone, search, tap the name.
 The gallery is a standalone offline tool (not wired to the launcher). Full pipeline
-+ details: `.agent/01_skills/12_highdef_pattern_geneneration.md` §11 and
++ details: `.agent/01_skills/12_highdef_pattern_generation.md` §11 and
 `marsin_engine/tools/gallery/README.md`.
