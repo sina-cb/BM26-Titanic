@@ -72,6 +72,21 @@ export const CONTROLLER_TYPE_DMX = 'DMX';
 export const CONTROLLER_TYPE_LED = 'LED';
 export const CONTROLLER_TYPES = [CONTROLLER_TYPE_DMX, CONTROLLER_TYPE_LED];
 
+// ── Output transport (sACN vs Art-Net) ──────────────────────────────────
+// Independent of `type` (DMX/LED): both controller types stream their DMX
+// universes over a network transport, and that transport is selectable per
+// controller. The DMX channel data is IDENTICAL on either wire — only the
+// packet framing and UDP port differ (sACN/E1.31 → :5568, Art-Net ArtDMX
+// opcode 0x5000 → :6454). Transport tops out at these two (operator
+// decision 2026-06-19: NO DDP / WLED-native). The protocol is EXPLICIT —
+// un-protocol'd legacy files default to sACN at load with a one-time loud
+// log (a schema-migration default, never a runtime fallback; codex P0); an
+// unrecognized protocol is structural corruption and hard-stops the boot.
+export const CONTROLLER_PROTOCOL_SACN = 'sACN';
+export const CONTROLLER_PROTOCOL_ARTNET = 'artnet';
+export const CONTROLLER_PROTOCOLS = [CONTROLLER_PROTOCOL_SACN, CONTROLLER_PROTOCOL_ARTNET];
+export const DEFAULT_CONTROLLER_PROTOCOL = CONTROLLER_PROTOCOL_SACN;
+
 // LED channel-order presets → per-pixel channel offset maps (1-based,
 // relative to the pixel's start). `stride` is bytes-per-pixel. White
 // lanes carry the rendered W byte raw (native pass-through). Used by the
@@ -185,6 +200,16 @@ export function createControllerRegistry(tree) {
     writable: true,
     configurable: true,
   });
+  // Same contract as _untypedControllers, for controllers that loaded with
+  // no explicit `protocol` and were schema-migrated to sACN. Surfaced (not
+  // swallowed) so the caller logs the migration once — codex P0: no silent
+  // defaults. NON-ENUMERABLE so it never serializes into controllers.yaml.
+  Object.defineProperty(registry, '_unprotocolledControllers', {
+    value: new Set(),
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 
   const rawControllers = src.controllers;
   if (rawControllers !== undefined && !Array.isArray(rawControllers)) {
@@ -222,11 +247,26 @@ export function createControllerRegistry(tree) {
         `'${type}' — must be one of ${CONTROLLER_TYPES.join(', ')}`);
     }
 
+    // Output transport is EXPLICIT, exactly like `type`. An un-protocol'd
+    // legacy controller loads as sACN (a one-time schema-migration default,
+    // logged loudly by the caller via `_unprotocolledControllers`) — never a
+    // silent runtime fallback (codex P0). An unrecognized protocol is
+    // structural corruption and hard-stops the boot, like a malformed port.
+    let protocol = rawCtl.protocol;
+    if (protocol === undefined || protocol === null) {
+      protocol = DEFAULT_CONTROLLER_PROTOCOL;
+      registry._unprotocolledControllers.add(id);
+    } else if (!CONTROLLER_PROTOCOLS.includes(protocol)) {
+      throw new Error(`[Controllers] Controller '${rawCtl.name || id}' has invalid protocol ` +
+        `'${protocol}' — must be one of ${CONTROLLER_PROTOCOLS.join(', ')}`);
+    }
+
     const controller = {
       id,
       name: typeof rawCtl.name === 'string' ? rawCtl.name : `Controller ${id}`,
       ip: typeof rawCtl.ip === 'string' ? rawCtl.ip : '',
       type,
+      protocol,
       ports: [],
     };
     if (type === CONTROLLER_TYPE_LED) {
@@ -393,13 +433,16 @@ export function noteUniverseUsed(registry, universe) {
 
 // ── Mutations (panel operations) ────────────────────────────────────────
 
-export function addController(registry, { name, ip, type }) {
+export function addController(registry, { name, ip, type, protocol }) {
   const ctlType = CONTROLLER_TYPES.includes(type) ? type : CONTROLLER_TYPE_DMX;
+  const ctlProtocol = CONTROLLER_PROTOCOLS.includes(protocol)
+    ? protocol : DEFAULT_CONTROLLER_PROTOCOL;
   const controller = {
     id: registry.nextControllerId,
     name: String(name || `Controller ${registry.nextControllerId}`),
     ip: String(ip || ''),
     type: ctlType,
+    protocol: ctlProtocol,
     ports: [],
   };
   if (ctlType === CONTROLLER_TYPE_LED) {
@@ -433,6 +476,26 @@ export function setControllerType(controller, type) {
   } else {
     delete controller.led;
   }
+  return controller;
+}
+
+/** True when the controller streams its universes over Art-Net (vs sACN). */
+export function isArtnetController(controller) {
+  return !!controller && controller.protocol === CONTROLLER_PROTOCOL_ARTNET;
+}
+
+/**
+ * Switch a controller's output transport in place (sACN ⇄ Art-Net). The
+ * DMX universe data is identical on either wire — only packet framing and
+ * UDP port change — so nothing else about the controller is touched. An
+ * invalid protocol THROWS loudly (codex P0 — never a silent fallback).
+ */
+export function setControllerProtocol(controller, protocol) {
+  if (!CONTROLLER_PROTOCOLS.includes(protocol)) {
+    throw new Error(`[Controllers] setControllerProtocol: invalid protocol '${protocol}' — ` +
+      `must be one of ${CONTROLLER_PROTOCOLS.join(', ')}`);
+  }
+  controller.protocol = protocol;
   return controller;
 }
 

@@ -2689,6 +2689,17 @@ body.edit-mode-active #engine-params-panel {
   cursor: default;
 }
 
+/* Transport toggle: Art-Net stands out (amber) from the default sACN. */
+.cm-btn.cm-proto-artnet {
+  background: color-mix(in srgb, var(--warning, #e0a030) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #e0a030) 36%, transparent);
+  color: var(--warning, #e0a030);
+}
+
+.cm-btn.cm-proto-artnet:hover {
+  background: color-mix(in srgb, var(--warning, #e0a030) 26%, transparent);
+}
+
 .cm-btn.cm-danger {
   background: color-mix(in srgb, var(--error) 8%, transparent);
   border-color: color-mix(in srgb, var(--error) 30%, transparent);

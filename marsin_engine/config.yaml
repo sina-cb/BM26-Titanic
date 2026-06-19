@@ -4,6 +4,24 @@ sacn:
   destinations:
     - 127.0.0.1
   multicast: false
+# Per-controller output routing (sACN vs Art-Net), per lib/output_dispatch.js.
+# OPTIONAL — with no `controllers:` block every universe streams sACN to the
+# `sacn.destinations` above (the long-standing default). A declared
+# controller picks its transport (`protocol: sACN` or `artnet`), its `host`,
+# and the `universes` it owns. Universes not listed under any controller keep
+# the flat-destinations sACN default. A declared controller with a missing or
+# unrecognized protocol/host hard-stops the engine (codex P0 — fail loud).
+# Art-Net = ArtDMX opcode 0x5000 → UDP :6454; sACN/E1.31 → :5568.
+#
+# controllers:
+#   - name: Bow DMX
+#     host: 10.1.1.10
+#     protocol: sACN
+#     universes: [2, 3]
+#   - name: Stern Art-Net
+#     host: 10.1.1.20
+#     protocol: artnet
+#     universes: [4, 5]
 engine:
   fps: 40
 mixer:

@@ -48,12 +48,12 @@ import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
 import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
-import { deriveStrandViews } from './lib/strand_views.js';
+import { deriveAutoViews } from './lib/auto_views.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
-import { createSacnOutput } from './lib/sacn_output.js';
+import { createOutputDispatch } from './lib/output_dispatch.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
@@ -99,6 +99,11 @@ function parseArgs() {
     list: false,
     destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
+    // Per-controller output routing (sACN vs Art-Net). Optional: with no
+    // `controllers:` block every universe streams sACN to `destinations`
+    // (the long-standing default). A declared controller picks its
+    // transport + host; see lib/output_dispatch.js.
+    controllers: Array.isArray(config.controllers) ? config.controllers : null,
     // Fail loud (below) if neither config nor --port supplies a valid port —
     // never silently guess one.
     port: Number.isInteger(cServer.port) ? cServer.port : null,
@@ -471,26 +476,32 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
-  // ── Strand views (Tier-A, ZERO bit cost) — LED parity §D.5 ──────────
-  // Auto-register one host-side mask per LED-strand `group` plus LEFT /
-  // RIGHT composites derived from the strand group-name prefixes. These
-  // ride the SAME viewMasks array the mixer's MaskRegistry consumes, but
-  // with bit:0 — pure per-pixel membership, no viewMask bit consumed, so
-  // they never pressure titanic's already-heavy 28/31 group-bit budget.
-  // Names already owned by a base group / declared preset are skipped (the
-  // base group already provides that view).
+  // ── Auto views (Tier-A, ZERO bit cost) — whole-ship view catalog ────
+  // Generalizes the old strand-view derivation (report 20260619_1 §5):
+  // per-strand groups + LED LEFT/RIGHT (unchanged), PLUS whole-ship
+  // PORT/STARBOARD/FORE/AFT, structural WALLS/DECKS/CHIMNEYS/AUDITORIUM,
+  // typed @PAR/@BAR/@VINTAGE/@RAW, vertical BAND_LOW/MID/HIGH, symmetric
+  // <base>_BOTH composites, and per-controller CTRL_<cId> (once patched).
+  // Every entry rides the SAME viewMasks array the mixer's MaskRegistry
+  // consumes, but with bit:0 — pure per-pixel membership, NO viewMask bit
+  // consumed, so they never pressure titanic's already-heavy 28/31
+  // group-bit budget. Names already owned by a base group / declared
+  // preset are skipped (the base group already provides that view).
   const existingMaskNames = new Set([
     ...Object.keys(groupBits),
     ...viewMasks.map(vm => vm.name),
   ]);
-  const strandViews = deriveStrandViews(mod.pixels, existingMaskNames);
-  for (const w of strandViews.warnings) console.warn(`[Model] strand-view: ${w}`);
-  if (strandViews.entries.length > 0) {
-    for (const e of strandViews.entries) viewMasks.push(e);
-    console.log(`[Model] Strand views (Tier-A, no bit cost): ` +
-      `${strandViews.perStrand.length} per-strand` +
-      `${strandViews.left.length ? ', LEFT' : ''}${strandViews.right.length ? ', RIGHT' : ''} ` +
-      `(${strandViews.entries.map(e => e.name).join(', ')})`);
+  const autoViews = deriveAutoViews(mod.pixels, existingMaskNames);
+  for (const w of autoViews.warnings) console.warn(`[Model] auto-view: ${w}`);
+  if (autoViews.entries.length > 0) {
+    for (const e of autoViews.entries) viewMasks.push(e);
+    const fam = autoViews.families;
+    const summary = Object.entries(fam)
+      .filter(([, names]) => names.length > 0)
+      .map(([family, names]) => `${family}:${names.length}`)
+      .join(', ');
+    console.log(`[Model] Auto views (Tier-A, no bit cost): ${autoViews.entries.length} total ` +
+      `(${summary}) [${autoViews.entries.map(e => e.name).join(', ')}]`);
   }
 
   // ── Unpatched LED strands: LOUD, never silent (codex P0) ────────────
@@ -1142,9 +1153,14 @@ async function main() {
     process.exit(0);
   }
 
-  // 6. Create sACN output
-  const sacnOut = createSacnOutput({
+  // 6. Create network output (sACN and/or Art-Net, routed per controller)
+  // `sacnOut` keeps its name — the dispatch exposes the identical sender
+  // interface (start/stop/sendFrame/addUniverse/frameCount) so every call
+  // site below is unchanged. With no `controllers:` config block this is a
+  // single flat-destinations sACN sender, byte-identical to before.
+  const sacnOut = createOutputDispatch({
     universes: universeIds,
+    controllers: opts.controllers,
     priority: opts.priority,
     destinations: opts.destinations,
     sourceName: opts.sourceName,
