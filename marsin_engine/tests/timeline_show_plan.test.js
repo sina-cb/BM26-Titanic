@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import {
   defaultShowPlan, validateShowPlan, loadShowPlan, saveShowPlan, dumpShowPlan,
-} from '../companions/timeline/show_plan.js';
+} from '../lib/timeline/show_plan.js';
 
 test('defaultShowPlan validates', () => {
   const plan = validateShowPlan(defaultShowPlan());

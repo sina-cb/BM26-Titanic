@@ -101,21 +101,21 @@ const STACK_PROCESS_SIGNATURES = [
 //   dev-lite  sim + engine + CaptainPad   · emissive lighting, no spotlights
 const PROFILES = {
   prod: {
-    description: 'Show stack: sim + engine + companions (audio + timeline), lightest sim rendering',
+    description: 'Show stack: sim + engine + audio companion, lightest sim rendering (timeline runs in-engine)',
     processes: ['sim', 'engine'],
-    companions: ['audio', 'timeline'],
+    companions: ['audio'],
     simParams: { profile: 'edit', spotlights: 0 },
   },
   dev: {
-    description: 'Full dev stack: sim + engine + companions (audio + timeline) + CaptainPad Expo, full analytic lighting, 60 spotlights',
+    description: 'Full dev stack: sim + engine + audio companion + CaptainPad Expo, full analytic lighting, 60 spotlights (timeline runs in-engine)',
     processes: ['sim', 'engine', 'captainpad'],
-    companions: ['audio', 'timeline'],
+    companions: ['audio'],
     simParams: { profile: 'full', spotlights: 60 },
   },
   'dev-lite': {
-    description: 'Dev stack without fancy lighting: sim + engine + companions (audio + timeline) + CaptainPad Expo, emissive only',
+    description: 'Dev stack without fancy lighting: sim + engine + audio companion + CaptainPad Expo, emissive only (timeline runs in-engine)',
     processes: ['sim', 'engine', 'captainpad'],
-    companions: ['audio', 'timeline'],
+    companions: ['audio'],
     simParams: { profile: 'emissive', spotlights: 0 },
   },
 };
@@ -130,6 +130,8 @@ const PROFILES = {
 //   waitMs    — readiness timeout for waitForHttp
 //   healthPath— HTTP path that returns 200 once ready (default '/')
 //   extraArgs — optional (opts) => string[] of extra CLI args
+// NOTE: the Timeline is no longer a companion process — it runs IN the engine
+// (docs/38 §15). Only the audio analyzer remains a supervised sidecar.
 const COMPANIONS = {
   audio: {
     port: 6966,
@@ -137,14 +139,6 @@ const COMPANIONS = {
     label: 'Audio Companion',
     waitMs: 60000,
     healthPath: '/',
-  },
-  timeline: {
-    port: 6965,
-    script: 'companions/timeline/timeline_server.js',
-    label: 'Timeline Companion',
-    waitMs: 60000,
-    healthPath: '/health',
-    extraArgs: (opts) => ['--scene', opts.scene],
   },
 };
 

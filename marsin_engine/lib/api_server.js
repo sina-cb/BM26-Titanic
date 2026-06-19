@@ -19,6 +19,7 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { TimelineService } from './timeline/timeline_service.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -1788,6 +1789,159 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // channel add/remove + autopilot-route writes.
   const autopilotPool = new AutopilotPool();
 
+  // ── Timeline service (docs/38 §15) ──────────────────────────────────
+  // The Timeline (show director) runs IN the engine now — no separate
+  // :6965 companion process. It owns a 1 s tick, reads mood DIRECTLY off
+  // the CPC, and applies actions by calling the same INTERNAL helpers the
+  // /deck/playlist, /mixer autopilot, /param-center, /scene, and
+  // /scheduled-tasks routes use — no HTTP self-calls. Gated on
+  // config.timeline.enabled. Constructed here (after autopilotPool +
+  // playlistManager + paramCenter are ready); started below once the
+  // server is listening, and stopped on engine shutdown via
+  // server.stopTimeline.
+  //
+  // The deps below are thin wrappers over the existing route code paths so
+  // a timeline-driven playlist/autopilot/CPC/scene/task change is
+  // indistinguishable from the operator doing it from CaptainPad (same
+  // broadcasts, same persistence).
+  function timelineSetAutopilotOnDeck(state) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    saveAllState();
+    autopilotPool.rearm(baseCh.id);
+    broadcastMixerState();
+    broadcastAutopilot();
+  }
+  function timelineSetAutopilotOnMixer(id, state) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    saveAllState();
+    armMixerChannelAutopilot(id);
+    broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+    broadcastMixerState();
+  }
+  function timelineLoadPlaylistOnDeck(name) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+    if (!firstEntry) {
+      baseCh.playlist = {
+        name: pl.name, activeEntryId: null, cursor: 0,
+        autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
+    saveAllState();
+    opts.pattern = baseCh.pattern;
+    broadcastWs({ type: 'pattern', name: baseCh.pattern });
+    broadcastMixerState();
+  }
+  function timelineLoadPlaylistOnMixer(id, name) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+    if (!firstEntry) {
+      ch.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    loadPlaylistEntry(ch, pl.name, firstEntry.id);
+    saveAllState();
+    broadcastChannelPlaylistData(ch);
+    broadcastMixerState();
+  }
+
+  const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
+  // Gate the in-engine Timeline on config.timeline.enabled. The env escape
+  // hatch BM26_DISABLE_TIMELINE=1 lets deck/playlist-focused tests boot the
+  // engine WITHOUT the show director touching the deck baseline on boot
+  // (the timeline's whole job is to drive the deck, which would otherwise
+  // override a test's restored deck state).
+  const timelineEnabled = timelineConfigBlock.enabled === true
+    && process.env.BM26_DISABLE_TIMELINE !== '1';
+  const timelineMoodCfg = timelineConfigBlock.mood || {};
+  const timelineMoodKey = timelineMoodCfg.key || 'audioParty';
+  const timelinePartyThreshold = typeof timelineMoodCfg.partyThreshold === 'number'
+    ? timelineMoodCfg.partyThreshold : 0.5;
+
+  let timelineService = null;
+  if (timelineEnabled) {
+    const sceneName = opts.modelName || 'default';
+    const timelineSceneDir = path.join(
+      patternsDir, '..', '..', 'simulation', 'scenes', sceneName, 'timeline',
+    );
+    timelineService = new TimelineService({
+      scene: sceneName,
+      sceneDir: timelineSceneDir,
+      stateDir,
+      getMood: () => {
+        // Read the mood key DIRECTLY off the CPC (docs/38 §15). The audio
+        // companion populates audioParty; default CALM (0) when unknown so a
+        // mood cue never spuriously fires before the first analyser frame.
+        let value = 0;
+        try {
+          if (paramCenter) {
+            const v = paramCenter.get(timelineMoodKey);
+            value = typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : 0);
+          }
+        } catch (_) {
+          value = 0; // key not registered yet → calm
+        }
+        return { party: value >= timelinePartyThreshold ? 1 : 0, value };
+      },
+      deps: {
+        loadPlaylist: ({ target, name }) => {
+          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name);
+          return timelineLoadPlaylistOnMixer(target.id, name);
+        },
+        setAutopilot: ({ target, state }) => {
+          if (target.kind === 'deck') return timelineSetAutopilotOnDeck(state);
+          return timelineSetAutopilotOnMixer(target.id, state);
+        },
+        setParams: (obj) => {
+          if (!paramCenter) throw new Error('paramCenter not available');
+          for (const k in obj) paramCenter.set(k, obj[k], 'timeline');
+        },
+        requestScene: (name) => {
+          if (typeof engineCore.requestSceneSwitch !== 'function') {
+            throw new Error('engine does not support scene switching (no requestSceneSwitch hook)');
+          }
+          return engineCore.requestSceneSwitch(name);
+        },
+        patchScheduledTask: (id, patch) => scheduledTaskService.patch(id, patch),
+        fireScheduledTask: (id) => scheduledTaskService.fireNow(id),
+        listMixerChannelIds: () => mixer.getMixerChannels().map(c => c.id),
+        listPlaylists: () => playlistManager.list(),
+      },
+      broadcast: broadcastWs,
+      config: {
+        enabled: true,
+        activePlan: timelineConfigBlock.activePlan || 'playa_default',
+        tickMs: timelineConfigBlock.tickMs || 1000,
+        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
+        colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
+      },
+    });
+  }
+
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, PUT, POST, PATCH, DELETE');
@@ -2419,6 +2573,141 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const code = e instanceof ScheduledTaskValidationError ? 400 : 500;
         res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
       }
+
+    // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
+    // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
+    // /timeline/plans/:name · POST /timeline/plan/activate · /mode ·
+    // /autopilot · /hold · /resume · /program/end · /cues/:id/fire.
+    // All JSON, fail loud (400/404 + {error}). The service is null when
+    // config.timeline.enabled is false → 503 so the UI knows it's off.
+    } else if (req.url === '/timeline/state' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(timelineService.getState());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/plans' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify({ plans: timelineService.listPlans() });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/plans' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        try {
+          const plan = timelineService.savePlan(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, name: plan.name }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url.match(/^\/timeline\/plans\/[^\/]+$/)) {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      if (req.method === 'GET') {
+        try {
+          // Resolve the plan BEFORE writing any header — getPlan throws on a
+          // missing/broken plan, and writing 200 first would make the 404
+          // path crash with ERR_HTTP_HEADERS_SENT.
+          const plan = timelineService.getPlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(plan));
+        } catch (e) {
+          res.writeHead(404); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else if (req.method === 'PUT') {
+        readBody(data => {
+          try {
+            // The plan body's own `name` is authoritative; the URL name must
+            // match so a PUT can't silently rename (fail loud on mismatch).
+            if (data && data.name !== undefined && data.name !== name) {
+              res.writeHead(400);
+              return res.end(JSON.stringify({ error: `plan name mismatch: url "${name}" vs body "${data.name}"` }));
+            }
+            const plan = timelineService.savePlan({ ...data, name });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, name: plan.name }));
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+      } else if (req.method === 'DELETE') {
+        try {
+          timelineService.deletePlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else {
+        res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+      }
+    } else if (req.url === '/timeline/plan/activate' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.name !== 'string') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { name } required' }));
+        }
+        timelineService.activatePlan(data.name)
+          .then(name => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, activePlan: name })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/mode' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        try {
+          const r = timelineService.setMode(data && data.mode);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...r }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/autopilot' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.enabled !== 'boolean') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { enabled: Bool } required' }));
+        }
+        timelineService.setAutopilotEnabled(data.enabled)
+          .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/hold' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        try {
+          const r = timelineService.hold(data && data.minutes);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...r }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/resume' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const r = timelineService.resume();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ...r }));
+    } else if (req.url === '/timeline/program/end' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.endProgram()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url.match(/^\/timeline\/cues\/[^\/]+\/fire$/) && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      timelineService.fireCue(id)
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
 
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
@@ -4063,6 +4352,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay the current timelineState (docs/38 §15) so a fresh CaptainPad
+    // paints the controller banner / cue list / sun ribbon immediately
+    // instead of waiting up to one tick. Same posture as the scheduledTasks
+    // / autopilot replays above.
+    try {
+      if (timelineService) ws.send(JSON.stringify(timelineService.getState()));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
@@ -4261,6 +4560,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     for (const url of reachableUrls(opts.port)) {
       console.log(`       ${url}`);
     }
+    // Start the in-engine Timeline service (docs/38 §15) once the WS
+    // sockets exist so its tick broadcasts reach connected clients. boot
+    // never crashes the engine — start() records boot errors into the
+    // timelineState instead of throwing.
+    if (timelineService) {
+      timelineService.start()
+        .then(() => console.log(`  ⏱ Timeline service started (scene "${opts.modelName}", plan "${timelineService.activePlan}")`))
+        .catch((err) => console.warn(`  ⚠ Timeline service start failed: ${err && err.message}`));
+    }
   });
 
   publishStatsRef.publish = (data) => {
@@ -4311,11 +4619,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the live model object and is therefore fresh on the next reload.)
   server.broadcastMixerState = broadcastMixerState;
 
+  // Stop the in-engine Timeline tick on shutdown / scene-switch restart.
+  server.stopTimeline = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
+  };
+
   // Forceful close for the scene-switch restart path: terminate every live
   // WS client (they hold the connection open, which would otherwise delay
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
     try {
       for (const wssInst of Object.values(wssByTopic)) {
         for (const client of wssInst.clients) {

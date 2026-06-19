@@ -84,11 +84,20 @@ companion:
 # Additional companion sidecars supervised by the launcher (docs/38 §2). The
 # audio analyzer above keeps its legacy `companion:` block; non-audio companions
 # live here keyed by name. The launcher boots each after the engine.
-companions:
-  timeline:
-    enabled: true
-    port: 6965
-    engine: { host: 127.0.0.1, port: 6968 }
+companions: {}
+# The Timeline (show director) runs IN the engine now (docs/38 §15) — no separate
+# :6965 companion process. This block configures the in-engine TimelineService:
+#   enabled        — gate the service on/off at boot
+#   activePlan     — which plan in simulation/scenes/<scene>/timeline/ to run
+#   tickMs         — the 1 s evaluation cadence
+#   mood           — which CPC key carries music mood + the party threshold
+timeline:
+  enabled: true
+  activePlan: playa_default
+  tickMs: 1000
+  mood:
+    key: audioParty
+    partyThreshold: 0.5
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★
