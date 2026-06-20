@@ -134,3 +134,12 @@ Proof entry template:
   - Final full audio sweep `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/switch_color_note.test.js tests/party_mode.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/derived_signals_perf_finiteness.test.js tests/note_estimator_synthetic.test.js tests/companion_*.test.js tests/integration/detection_metrics.test.mjs` → **279 pass / 0 fail**.
 - Agent proof (report `20260620_10`): WCAG ratios, 70/70 companion ×3 consecutive, behavioral node checks for items 7/8, live `/osc_accounting` curl. No screenshots (no chromium) — CSS-var theme test + WCAG numbers + grep-confirmed no native dialogs.
 - Verdict: C-fix-companion crossed off. ✅ — **ALL adversarial implement-now items (signals + companion/CaptainPad + test-gaps) landed.**
+
+### C-fix-quality — safe quality pass (scoring honesty / dom2 smoothing / docs)  [PASS]  2026-06-20T07:45Z
+- Branch / commit: `dev/audio_safe_quality` @ `dfe7580` → merged into `feat/audio_analysis_2` (--no-ff, clean).
+- Items (all SAFE, no FFT/dt/genre-tuning touched): (1) `detection_eval.mjs` ADDITIVE `falseFiresPerMin` + `guardedPrecision` (existing P/R/F1 unchanged); `detection_sweep` ranks on the honest metric. (2) dom2 retarget low-pass (`retargetBlend=0.5`) — discontinuous `micDomFreq2` jump smoothed; note/genre/analyzer 55/55 green. (3) doc fixes (useKalman comment, genre header).
+- Command(s) run BY INSTIGATOR on the MERGED tip:
+  - `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/note_estimator_synthetic.test.js tests/dominant_freq_tracker_retarget.test.js tests/detector_eval.test.mjs tests/companion_*.test.js tests/derived_signals_perf_finiteness.test.js` → **261 pass / 0 fail**.
+  - `node engine.js ... --dry-run` → **exit 0**.
+- Metric proof (agent): shipped `default` UNCHANGED (`P=1.00 R=0.56 F1=0.71` → `guardedP=1.00 falseFiresPerMin=0.00`); the new metric exposes hidden phantom drops on a false-firing `level` config (`guardedP=0.58 falseFiresPerMin=0.83`, 3 phantoms the old precision hid). Sweep winner unchanged.
+- Verdict: C-fix-quality crossed off. ✅
