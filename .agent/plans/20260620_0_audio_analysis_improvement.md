@@ -188,6 +188,16 @@ Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCK
 - 📋 I3 doc fixes: dom `useKalman` comment, audioBpm `[0,180]` range (P3)
 - 📋 I4 (DEFERRED, follow-up) FFT 1024→2048 + fixed-`dt`: re-tune genre/dom/note + HIL
 
+### Wave C — adversarial (5 agents, DONE → `20260620_9`)
+- ✅ C-find: 5 adversarial auditors ran; consolidated findings `20260620_9`.
+- ✅ C-fix-signals: P1 batch (dead startup guard, party warmup, genre conf, dead BPM params)
+  MERGED on feat @ `a775398` (271 tests green; confirmed by 2 auditors).
+- ⏳ C-fix-companion: companion/CaptainPad/test-gap safe fixes (items 5–10 of `20260620_9`)
+  — `dev/companion_captainpad_fixes`.
+- 🔭 C-backlog (coordinated follow-ups, documented in `20260620_9`): FFT 1024→2048 +
+  sub-window overlap; fixed-dt; genre v2 robustness (needs real audio); detector scoring
+  honesty + mic-gain + 2nd-drop recall; P3 cleanups.
+
 ### Backlog (refill source — from `20260620_2`, pull P1-first)
 - 📋 riser/build anticipation + drop ETA · 📋 track-change/silence · 📋 phrase/8-16-bar
   · 📋 drop countdown · 📋 climax/hands-up · 📋 advisory AGC (opt-in) · 📋 key/scale (HARD)
