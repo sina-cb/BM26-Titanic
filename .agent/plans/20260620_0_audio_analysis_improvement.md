@@ -8,6 +8,7 @@ the project from it. Companion file: `20260620_1_audio_analysis_verification.md`
 - **Deliverable branch:** `feat/audio_analysis_2` (everything merges here; NO PR
   unless the operator asks).
 - **T0:** 2026-06-20 ~02:43Z · **Deadline:** ~2026-06-20 12:43Z (T0 + 10h).
+  **EXTENDED (operator, ~07:50Z): +10h → new deadline ~2026-06-20 17:50Z.**
 - **Operator:** Sina (OUT OF SERVICE — full autonomous authority granted, incl.
   merge authority. Do NOT block waiting for approval.)
 
@@ -250,3 +251,13 @@ summary report, push `feat/audio_analysis_2`.
   fixed-dt, genre v2 real-audio, detector recall) — needs real audio / HIL / browser
   not available here; NOT landed piecemeal to protect the green "just works" state.
   Instigator now in MAINTAIN mode (cron backstop) until the 12:43Z deadline.
+
+## WAVE D (operator extended +10h, ~07:50Z — "continue on different directions; when blocked find another avenue; don't stop")
+KEY UNBLOCK: real CC audio fetch WORKS now (Wikimedia + archive.org verified) → real-audio tuning is back on the table. Mic confirmed OK by operator (will test later).
+- ⏳ D6 real CC genre corpus + genre_eval harness + baseline accuracy — `dev/audio_corpus_real` (slot4)
+- ⏳ D1 FFT 1024→2048 + re-tune dom/note/sub/genre — `dev/fft2048_retune` (slot0)
+- ⏳ D2 new derived signals (riser/anticipation, track-change/silence, climax, phrase, drop-countdown) — `dev/new_derived_signals` (slot1)
+- ⏳ D3 reactive patterns (per-band chase, chest-hit thump, riser charge-up, genre palette, note→colour) — `dev/reactive_patterns` (slot2)
+- ⏳ D4 detector RECALL + adversarial scenarios + mic-gain-relative gate — `dev/detector_recall` (slot3)
+Disjoint file ownership (analyzer+genre / new-signal-files+derived_signals hub / patterns / detector+scenarios / datasets+harness). Merge order: D3 patterns + D6 corpus (additive) → D2 (derived hub) → D4 (detector) → D1 (analyzer+genre, re-tune last on the corpus if ready). Resource cap ≤2-3 engines (most validate offline).
+Protocol unchanged: don't stop when blocked — pivot to another avenue. Keep refilling; adversarial re-wave when queue empties.
