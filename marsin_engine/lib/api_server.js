@@ -1611,6 +1611,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // color null). The PatternChannel constructor clamps/types both.
       faderMax: typeof saved.faderMax === 'number' ? saved.faderMax : 1.0,
       color: typeof saved.color === 'string' ? saved.color : null,
+      // WAVE 15 restore. An old state file without these restores to the
+      // documented defaults (mixGroupId null = no group; soloSafe false).
+      // The group it points at is restored separately (mixGroups, below) so
+      // membership resolves. The PatternChannel ctor types both defensively.
+      mixGroupId: typeof saved.mixGroupId === 'string' ? saved.mixGroupId : null,
+      soloSafe: !!saved.soloSafe,
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -1720,9 +1726,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     const base = mixer.getDeckChannel();
     if (base) opts.pattern = base.pattern;
+    // WAVE 15: restore the gang-fader group registry so member channels'
+    // mixGroupId pointers resolve. Done after channels (membership is a
+    // channel→group pointer the channels already carry). Defensive — skip
+    // malformed entries rather than abort the whole boot.
+    restoreMixGroups();
   } else {
     if (mixer.getDeckChannel()) finalizeCpcValues(mixer.getDeckChannel());
     for (const ch of mixer.getMixerChannels()) finalizeCpcValues(ch);
+    // WAVE 15: a state file with a group registry but no surviving channels
+    // is still worth restoring (the operator may re-add members). Idempotent.
+    restoreMixGroups();
   }
 
   // ── Named mixer snapshots / look recall (F-A) ─────────────────────────
@@ -1741,7 +1755,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       master: mixer.master,
       deck: deck ? serializeChannelForState(deck) : null,
       channels: mixer.getMixerChannels().map(c => serializeChannelForState(c)),
+      // WAVE 15: groups ride in the look so a recall reproduces the gang
+      // faders + membership exactly (members' mixGroupId is in `channels`).
+      mixGroups: mixer.getMixGroups().map(g => ({
+        id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
+      })),
     };
+  }
+
+  // WAVE 15: rebuild the gang-fader group registry from saved/snapshot state.
+  // Validates each entry defensively — a malformed group is skipped + warned
+  // rather than aborting boot. The mixer's createMixGroup mints fresh ids, so
+  // we install groups directly to PRESERVE the saved id (member pointers
+  // reference it). Called at boot and on look recall.
+  function restoreMixGroups(savedGroups) {
+    const groups = Array.isArray(savedGroups)
+      ? savedGroups
+      : (Array.isArray(mixerState.mixGroups) ? mixerState.mixGroups : []);
+    mixer.mixGroups = [];
+    let maxCounter = 0;
+    for (const g of groups) {
+      if (!g || typeof g.id !== 'string' || g.id.length === 0) {
+        console.warn('[Restore] skipping malformed mix group (missing id):', g);
+        continue;
+      }
+      mixer.mixGroups.push({
+        id: g.id,
+        name: (typeof g.name === 'string') ? g.name : g.id,
+        fader: (typeof g.fader === 'number' && Number.isFinite(g.fader)) ? Math.max(0, Math.min(1, g.fader)) : 1.0,
+        muted: !!g.muted,
+        color: (typeof g.color === 'string') ? g.color : null,
+      });
+      // Keep the counter ahead of any restored id of the form mg_<n>_<ts> so
+      // a freshly-created group can't collide with a restored one.
+      const m = /^mg_(\d+)_/.exec(g.id);
+      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxCounter) maxCounter = n; }
+    }
+    if (maxCounter > mixer._mixGroupCounter) mixer._mixGroupCounter = maxCounter;
   }
 
   // Apply a loaded snapshot to the live mixer. Throws on a structurally
@@ -1781,6 +1831,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (saved && saved.id && saved.id.startsWith('ch_base')) continue;
       restoreChannel(saved, 'mixer');
     }
+    // WAVE 15: restore the look's group registry (members' mixGroupId came
+    // back with the overlay rebuild above). A look without mixGroups (older
+    // snapshot) clears the registry to [] — the recalled overlays carry no
+    // membership in that case either, so nothing dangles.
+    restoreMixGroups(Array.isArray(look.mixGroups) ? look.mixGroups : []);
     // Master last (setMaster cancels any in-flight fade — a recall is a hard
     // set of the whole look, not an animation).
     if (typeof look.master === 'number' && Number.isFinite(look.master)) {
@@ -1827,6 +1882,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // clamp slider + color chip. See docs/39 §F-C/§F-D.
       faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
       color: typeof c.color === 'string' ? c.color : null,
+      // WAVE 15: gang-fader group membership pointer (null = no group) +
+      // solo-safe rig flag. Surfaced so CaptainPad can render the group rail
+      // chip + the solo-safe toggle. See docs/39 §F-group/§F-solo.
+      mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
+      soloSafe: !!c.soloSafe,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -1919,6 +1979,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // serializeChannel above for semantics.
         faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
         color: typeof c.color === 'string' ? c.color : null,
+        // WAVE 15: gang-fader group membership + solo-safe flag. See
+        // serializeChannel above for semantics. docs/39 §F-group/§F-solo.
+        mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
+        soloSafe: !!c.soloSafe,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -1941,7 +2005,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             }
             return e;
           }))
-      }))
+      })),
+      // WAVE 15: the gang-fader group registry and the server-authoritative
+      // solo set. soloedChannelIds is an ARRAY snapshot of the transient Set
+      // (the client reconciles its display-only dim/active state from this on
+      // every broadcast; it survives reconnect because it lives server-side).
+      mixGroups: mixer.getMixGroups().map(g => ({
+        id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
+      })),
+      soloedChannelIds: [...mixer.soloedChannelIds],
     };
   }
 
@@ -3107,6 +3179,141 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }));
       });
     }
+    // ── MIXER CHANNEL GROUPS (gang-faders) + SOLO (WAVE 15) ──────────────
+    //
+    // These routes use DISTINCT url prefixes (`/mixer/groups`, `/mixer/solo`)
+    // from `/mixer/channels/...` and `/mixer/snapshots/...`, so the existing
+    // channel/snapshot regexes can't shadow them. Within this block the more
+    // specific `.../members/...` and `.../members` routes are armed BEFORE
+    // the bare `/mixer/groups/:gid` route so the `[^\/]+$` regex doesn't
+    // swallow a members path. All mutations are validate→mutate→saveAllState
+    // →broadcastMixerState; bad input fails loud (400/404), never silently.
+    else if (req.method === 'GET' && req.url === '/mixer/groups') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ mixGroups: mixer.getMixGroups() }));
+    } else if (req.method === 'POST' && req.url === '/mixer/groups') {
+      // Create a group. name/color optional; fader=1, muted=false to start.
+      readBody(data => {
+        if (data.name !== undefined && data.name !== null && typeof data.name !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `name must be a string or null, got ${typeof data.name}` }));
+        }
+        if (data.color !== undefined && data.color !== null && typeof data.color !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+        }
+        const group = mixer.createMixGroup({ name: data.name, color: data.color });
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', group }));
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members$/)) {
+      // Add a mixer channel to this group (single membership).
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (typeof data.channelId !== 'string' || data.channelId.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'channelId (non-empty string) required' }));
+        }
+        // A deck channel can never be in a mixer group — reuse the role guard.
+        const reject = rejectIfWrongRole(data.channelId, 'mixer');
+        if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+        const r = mixer.addChannelToGroup(gid, data.channelId);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members\/[^\/]+$/)) {
+      // Remove a channel from this group.
+      const parts = req.url.split('/');
+      const gid = decodeURIComponent(parts[3]);
+      const channelId = decodeURIComponent(parts[5]);
+      const r = mixer.removeChannelFromGroup(gid, channelId);
+      if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      // Update a group's name / fader / muted / color.
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (!mixer.getMixGroup(gid)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `group '${gid}' not found` }));
+        }
+        const patch = {};
+        if (data.name !== undefined) {
+          if (data.name !== null && typeof data.name !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `name must be a string or null, got ${typeof data.name}` }));
+          }
+          patch.name = data.name;
+        }
+        if (data.fader !== undefined) {
+          const fv = validateFader(data.fader);
+          if (!fv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fv.error })); }
+          patch.fader = fv.value;
+        }
+        if (data.muted !== undefined) patch.muted = !!data.muted;
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          patch.color = data.color;
+        }
+        const group = mixer.updateMixGroup(gid, patch);
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', group }));
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      // Delete a group (clears every member's mixGroupId first).
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      const removed = mixer.deleteMixGroup(gid);
+      if (!removed) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `group '${gid}' not found` }));
+      }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    }
+    // ── SERVER-AUTHORITATIVE SOLO (WAVE 15) ──────────────────────────────
+    else if (req.method === 'POST' && req.url === '/mixer/solo') {
+      // Solo a channel. additive=true adds to the set; false (default)
+      // replaces it. The render gate reads soloedChannelIds; siblings'
+      // enabled/fader are NEVER mutated (parked levels survive).
+      readBody(data => {
+        if (typeof data.channelId !== 'string' || data.channelId.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'channelId (non-empty string) required' }));
+        }
+        const reject = rejectIfWrongRole(data.channelId, 'mixer');
+        if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+        const r = mixer.setSolo(data.channelId, !!data.additive);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [...mixer.soloedChannelIds] }));
+      });
+    } else if (req.method === 'DELETE' && req.url === '/mixer/solo') {
+      // Clear ALL solos.
+      mixer.clearSolo();
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [] }));
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/solo\/[^\/]+$/)) {
+      // Un-solo a single channel.
+      const channelId = decodeURIComponent(req.url.split('/')[3]);
+      const r = mixer.clearSolo(channelId);
+      if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [...mixer.soloedChannelIds] }));
+    }
     // ── MIXER SNAPSHOTS / LOOK RECALL (F-A) ──────────────────────────────
     else if (req.method === 'GET' && req.url === '/mixer/snapshots') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -3389,6 +3596,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
           }
           channel.color = data.color === null ? null : data.color;
+        }
+        // WAVE 15: solo-safe toggle — pure boolean rig-config (never gated
+        // off by another channel's solo). Orthogonal to faderLocked/enabled.
+        // A non-boolean-ish value is coerced via !! (the field is a simple
+        // flag, like faderLocked above).
+        if (data.soloSafe !== undefined) {
+          channel.soloSafe = !!data.soloSafe;
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
@@ -5148,6 +5362,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               broadcastMixerState();
             }
           }
+        } else if (d.type === 'setSolo' && d.channelId) {
+          // Server-authoritative solo over WS (low-latency mirror of POST
+          // /mixer/solo). Same dual-path as setChannelFader. additive=true
+          // adds; false replaces. A bad / non-mixer id is pushed back as a
+          // typed rejection (no res to 4xx on a socket); siblings are never
+          // mutated. Always broadcast so every client reconciles its
+          // display-only solo state from the canonical soloedChannelIds.
+          const r = mixer.setSolo(d.channelId, !!d.additive);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'soloRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          saveAllState();
+          broadcastMixerState();
+        } else if (d.type === 'clearSolo') {
+          // Clear one channel's solo (d.channelId present) or ALL (absent).
+          const r = mixer.clearSolo(d.channelId !== undefined ? d.channelId : null);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'soloRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          saveAllState();
+          broadcastMixerState();
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);

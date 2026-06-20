@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -42,6 +42,31 @@ export class PatternChannel {
     // `locked` (playlist/pattern lock) is unrelated and can be on/off
     // independently of `faderLocked`.
     this.faderLocked = faderLocked;
+
+    // ── Channel-group membership (WAVE 15, gang-faders) ──────────────────
+    // A single-membership pointer to a MixGroup id (`mg_*`) on the
+    // PatternMixer, or null = "not in any group". The group applies a gang
+    // fader / mute that SCALES this channel's contribution at composite time
+    // (see PatternMixer._effFader). Persisted so the operator's grouping
+    // survives an engine restart. Membership is modelled as a channel→group
+    // POINTER (not a group→members array) so removing a channel can never
+    // leave a dangling member reference. Default null = no group (an old
+    // state file without this field restores to null — documented schema
+    // default, not a silent fallback).
+    this.mixGroupId = (typeof mixGroupId === 'string' && mixGroupId.length > 0)
+      ? mixGroupId
+      : null;
+
+    // ── Solo-safe (WAVE 15) ──────────────────────────────────────────────
+    // Rig-config flag: when true this channel is NEVER gated off by ANOTHER
+    // channel's solo. It protects the mission-critical exterior — soloing an
+    // interior layer must not drop the exterior into darkness. soloSafe
+    // survives a solo, but it does NOT escape an explicit mute (enabled=false)
+    // or a group-mute (structural kills win). Persisted like faderLocked.
+    // Default false (an old state file restores to false — documented
+    // schema default).
+    this.soloSafe = !!soloSafe;
+
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
 

@@ -542,6 +542,123 @@ live in `docs/19_playlists.md` §2.5; this section is the channels-side summary.
 
 ---
 
+## 10. Channel groups (gang-faders) + server-authoritative solo (WAVE 15, 2026-06-20, engine-side)
+
+Two additive, composable mixer features. The UI (CaptainPad group rail +
+solo-safe toggle) is a **separate later wave** — this wave is engine-only.
+
+### 10.1 Concepts
+
+- **Channel group (gang-fader).** A named group (`mixGroups[]`, ids `mg_*`)
+  with a `fader` (0..1) and a `muted` flag that **scales** every member
+  channel's contribution at composite time. Membership is a **single-membership
+  channel→group pointer** (`channel.mixGroupId`, default `null`) — members are
+  *derived* (`mixerChannels.filter(c => c.mixGroupId === g.id)`), never stored
+  on the group, so removing a channel can never dangle a member reference. A
+  group has optional `name`/`color` metadata.
+- **Solo (server-authoritative).** `PatternMixer.soloedChannelIds` (a `Set`) is
+  the **sole** source of truth. When non-empty, only soloed / solo-safe /
+  fader-locked channels contribute. The render gate reads the Set; sibling
+  `enabled`/`fader` are **never** mutated by solo (parked levels survive). The
+  Set is **TRANSIENT** — never persisted; cleared on engine restart and at the
+  start of a scripted mixer transition.
+- **Solo-safe (`soloSafe`, default `false`).** Rig-config flag: this channel is
+  never gated off by *another* channel's solo. It protects the mission-critical
+  exterior. Persisted like `faderLocked`.
+
+### 10.2 Precedence (`PatternMixer._effFader`, per channel, per frame)
+
+```
+groupScale = group ? (group.muted ? 0 : group.fader) : 1
+soloActive = soloedChannelIds.size > 0
+soloGate   = !soloActive ? 1 : (soloSafe || faderLocked || soloed) ? 1 : 0
+enabledGate= enabled ? 1 : 0
+effFader   = clamp(fader, 0, (faderMax ?? 1)) * groupScale * soloGate * enabledGate
+```
+
+Then the existing blend → view crossfade → **master(t) LAST** (F-B) chain runs
+unchanged. The composite skip is one check: `if (!isScriptedTarget && eff <= 0.001) continue;`.
+Rules: explicit mute (`enabled=false`) **wins** over solo; `soloSafe` survives a
+solo but **not** a group-mute; **group-mute beats a member's solo**; fader-lock
+**implies** solo-safe AND a group fader still scales a locked channel (gang
+scale ≠ a fader write); `faderMax` clamp is applied to the channel's own level
+**before** the group scale; master-fade-to-0 darkens even soloed/safe channels
+(grand kill — a different, later stage). Solo affects the mixer composite only;
+deck / PFL are untouched. Hot path is allocation-free: group scales are
+precomputed once per frame into a reused `_groupScaleCache` Map (`clear()`+`set()`),
+`soloActive` is an O(1) size check, and `_effFader` is pure arithmetic.
+
+### 10.3 API surface (NEW — for the follow-on UI wave)
+
+All mutations are validate→mutate→`saveAllState()`→`broadcastMixerState()`.
+Bad input fails loud (`400` malformed / `404` missing) — no silent fallback.
+
+Groups:
+
+| Method + path | Body | Result |
+|---|---|---|
+| `GET /mixer/groups` | — | `{ mixGroups: [...] }` |
+| `POST /mixer/groups` | `{ name?, color? }` | `201 { status, group }` (group id is `mg_*`, `fader:1`, `muted:false`) |
+| `PATCH /mixer/groups/:gid` | `{ name?, fader?, muted?, color? }` | `200 { status, group }`; `fader` via `validateFader` (NaN→400); unknown gid→404 |
+| `DELETE /mixer/groups/:gid` | — | `200`; **clears every member's `mixGroupId` first**; unknown gid→404 |
+| `POST /mixer/groups/:gid/members` | `{ channelId }` | `200`; `400` if missing `channelId`, the channel is the deck (`WRONG_ROLE`), or it's already in a *different* group (single membership); `404` on unknown gid/channel; re-add to the *same* group is an idempotent `200` |
+| `DELETE /mixer/groups/:gid/members/:channelId` | — | `200` (idempotent clear); `404` on unknown gid/channel |
+
+Solo:
+
+| Method + path | Body | Result |
+|---|---|---|
+| `POST /mixer/solo` | `{ channelId, additive?:false }` | `200 { status, soloedChannelIds }`; `additive` adds, else replaces the set; `404` unknown / `400` deck id |
+| `DELETE /mixer/solo/:channelId` | — | un-solo one; `200 { soloedChannelIds }`; `404` unknown |
+| `DELETE /mixer/solo` | — | clear ALL; `200 { soloedChannelIds: [] }` |
+
+`PATCH /mixer/channels/:id` gains a `soloSafe` boolean toggle.
+
+WS (low-latency mirrors on `/ws/control`, same dual-path as mute):
+`{ type:'setSolo', channelId, additive? }`, `{ type:'clearSolo', channelId? }`
+(channelId absent = clear all). A bad id pushes back `{ type:'soloRejected', channelId, reason }`.
+
+Broadcast / serializers: both `serializeChannel` and the inline `serializeMixerState`
+channel map gain `mixGroupId` + `soloSafe`. `serializeMixerState` additionally
+carries top-level `mixGroups: [...]` and `soloedChannelIds: [...]` (an array
+snapshot of the Set — the client reconciles its **display-only** dim/active
+state from this on every broadcast; it survives reconnect because it lives
+server-side).
+
+### 10.4 Persistence
+
+`mixGroupId` + `soloSafe` are appended to `serializeChannel` (after
+`faderMax`/`color`) → persisted in both `deck_state.yaml` and
+`mixer_state.yaml`. The group registry persists as a new top-level
+`mixGroups: []` in `mixer_state.yaml` (group ids/faders/mutes survive restart so
+member pointers resolve). `soloedChannelIds` is deliberately **NOT** persisted —
+solo is transient and the set is empty after a restart. Snapshots (look
+capture/recall) carry groups + membership + `soloSafe` too. All additive: an old
+state file without the new keys loads and restores to the documented defaults
+(`mixGroupId: null`, `soloSafe: false`, `mixGroups: []`).
+
+### 10.5 Implementation map (this wave)
+
+| Site | What |
+|---|---|
+| `lib/pattern_channel.js` | `mixGroupId` (null) + `soloSafe` (false) ctor fields, typed/coerced defensively |
+| `lib/pattern_mixer.js` | `mixGroups[]` + `soloedChannelIds` Set + `_groupScaleCache`; group CRUD (`createMixGroup`/`updateMixGroup`/`deleteMixGroup`/`addChannelToGroup`/`removeChannelFromGroup`); solo (`setSolo`/`clearSolo`); `_effFader` precedence; per-frame precompute + composite-gate rewrite; `removeMixerChannel` drops solo + membership (no phantom-solo); `triggerMixerTransition` clears solo; teardown clears registry |
+| `lib/api_server.js` | group + solo routes (armed before the `/mixer/channels/:id` regexes, members routes before bare `/:gid`); `soloSafe` in PATCH; both serializers gain `mixGroupId`/`soloSafe`; `serializeMixerState` gains `mixGroups[]`/`soloedChannelIds[]`; `buildChannelFromSaved` plumbs the fields; `restoreMixGroups` at boot + recall; `captureLook` carries groups; WS `setSolo`/`clearSolo` |
+| `lib/state_manager.js` | `serializeChannel` appends `mixGroupId`/`soloSafe`; new `serializeMixGroup`; `saveMixerState` persists `mixGroups[]`; `loadMixerState` defaults `mixGroups: []` |
+| `tests/groups_solo_precedence.test.js` | Unit: every precedence row (18 tests) incl. soloSafe-survives, group-mute-beats-solo, faderMax-before-gang, lock-implies-safe, additive solo, allocation-free cache |
+| `tests/groups_solo_state.test.js` | Unit: ctor defaults, serialize round-trip, group CRUD + single-membership 400, removeMixerChannel solo/membership cleanup, transition clears solo (16 tests) |
+| `tests/hil/hil_groups_solo_test.mjs` | HIL: group CRUD, single-membership/deck 400, **mission-critical soloSafe-stays-lit**, group-mute-beats-solo dark, reconnect keeps solo, transition clears solo, validation 400/404 (18 assertions) |
+
+### 10.6 Deferred to the UI wave (not in scope here)
+
+CaptainPad `mixer.tsx` group rail + `soloSafe` toggle; replacing the
+client-side `handleSoloToggle` / destructive `preSoloStateRef` save-restore with
+optimistic WS `setSolo` + REST mirror + reconcile-from-broadcast; `api.ts`
+group/solo clients. The engine is the authority; the client render dim/active is
+display-only.
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

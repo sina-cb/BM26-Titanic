@@ -39,6 +39,33 @@ export function serializeChannel(ch) {
       ? Math.max(0, Math.min(1, ch.faderMax))
       : 1.0,
     color: (typeof ch.color === 'string') ? ch.color : null,
+    // ── Additive fields (groups + solo wave, WAVE 15, 2026-06) ────────
+    // Appended AFTER faderMax/color so earlier on-disk key order is
+    // unchanged — an old state file (no mixGroupId/soloSafe) loads and
+    // restores to the documented defaults (null / false). mixGroupId:
+    // gang-fader group membership pointer (F-group). soloSafe: rig-config
+    // never-gated-by-others flag (F-solo). soloedChannelIds is TRANSIENT
+    // and deliberately NOT persisted on the channel — it lives on the
+    // mixer and is cleared on restart.
+    mixGroupId: (typeof ch.mixGroupId === 'string' && ch.mixGroupId.length > 0) ? ch.mixGroupId : null,
+    soloSafe: !!ch.soloSafe,
+  };
+}
+
+// ── MixGroup serialization (WAVE 15) ────────────────────────────────────
+// Persists a gang-fader group definition. Group fader/mute/color/name must
+// survive an engine restart or every member's mixGroupId pointer would
+// dangle on reload. Defensive clamps mirror the runtime setters. Exported
+// for the same shape-pinning reason as serializeChannel.
+export function serializeMixGroup(g) {
+  return {
+    id: g.id,
+    name: (typeof g.name === 'string') ? g.name : null,
+    fader: (typeof g.fader === 'number' && Number.isFinite(g.fader))
+      ? Math.max(0, Math.min(1, g.fader))
+      : 1.0,
+    muted: !!g.muted,
+    color: (typeof g.color === 'string') ? g.color : null,
   };
 }
 
@@ -143,7 +170,7 @@ export class StateManager {
    * the already-split files don't trigger it.
    */
   loadMixerState() {
-    const raw = this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {} });
+    const raw = this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {}, mixGroups: [] });
     if (!Array.isArray(raw.channels) || raw.channels.length === 0) return raw;
 
     // Heuristic: in the legacy combined format the first channel was
@@ -271,8 +298,19 @@ export class StateManager {
           // already clamped/typed these — reuse its values verbatim.
           faderMax: core.faderMax,
           color: core.color,
+          // Additive (WAVE 15 groups+solo): group membership + solo-safe
+          // round-trip so a restart restores the operator's grouping and
+          // rig-config. Solo itself is transient (mixer-level, not persisted).
+          mixGroupId: core.mixGroupId,
+          soloSafe: core.soloSafe,
         };
       }),
+      // Group registry (WAVE 15). Persisted alongside master so member
+      // pointers (mixGroupId) resolve on reload. Empty array on a rig with
+      // no groups — an old file without this key loads to [] (default).
+      mixGroups: Array.isArray(mixer.getMixGroups && mixer.getMixGroups())
+        ? mixer.getMixGroups().map(serializeMixGroup)
+        : [],
     };
     this.save('mixer_state.yaml', state);
   }
