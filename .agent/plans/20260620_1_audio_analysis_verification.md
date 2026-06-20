@@ -69,3 +69,17 @@ Proof entry template:
 - Process: dry-run merge showed no conflicts (three-way merge-base preserved B4 + plan files); ran the audio suite + boot before committing; verified no state files staged.
 - Verdict: B3 crossed off in plan §6. ✅
   - Note for A0 merge: A0 (genre/note) also edits `derived_signals.js` + `audio_signals.js` registration → expect a small union conflict; resolve by keeping BOTH commented blocks.
+
+### B2 — detector super-tuning (drop/slow/build) + scoring/eval harness  [PASS]  2026-06-20T04:00Z
+- Branch / commit: `dev/detector_tuning` → merged into `feat/audio_analysis_2` @ `8ac1b6d` (--no-ff, auto-merged with B3's audio_config.js cleanly — no conflicts).
+- Deliverables: `tools/detection_eval.mjs` (+ `detection_sweep.mjs`, `tests/integration/detector_scenarios.mjs`) — a real precision/recall/F1 + latency scoring harness; tuned `audio_structure_detector.js` + `audio_config.js`; new range-validated config `dropMinLevel`(0.06), `dropLevelAssist`(false), `slowZoneWidth`(0.04), `slowFluxFloor`(0.10); changed defaults `dropEnergyJump` 1.5→1.8, `slowZoneRef` 0.5→0.07. No new CPC live keys.
+- Before→After (labeled scenarios, all 3 mic tiers): **Drop F1 0.29→0.71**, **precision 0.40→1.00**, recall 0.22→0.56, **phantom drops 2→0**; **slow-zone margin/acc 0.12/0.46→0.65/0.91**; build corr 0.97 / peak err −6ms (validated+locked). Frozen synth set: windowed edge P 0.43→1.00, R 0.33→0.78, negFP 4→0.
+- Command(s) run BY INSTIGATOR on the MERGED tip:
+  - `node --test tests/audio_*.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/note_estimator_synthetic.test.js tests/companion_*.test.js` → **# tests 250 · pass 250 · fail 0**.
+  - `node --test tests/integration/detection_metrics.test.mjs tests/integration/audio_analysis_validation.test.mjs` → **40/40 pass** (validation not regressed).
+  - `node engine.js ... --dry-run` → **exit 0**, "Pattern loads and compiles OK".
+  - Verified B2+B3 coexist: `audio_config.js` has BOTH `dropMinLevel/slowZoneWidth/slowFluxFloor` (B2) AND `sub.minHz/maxHz` (B3); analyzer `onsetLow/micSub` (B3) preserved.
+- Capture(s): SVG detector-vs-label overlays `~/tmp/detection_eval/overlays/default.html` (no chromium in datacenter → self-contained HTML is the viewable artifact; agent inspected). Hard re-runnable proof = the F1 numbers via `node tools/detection_eval.mjs` + 250/40 green.
+- Process: root-caused bad drop precision (mic-compressed BUILD ratio spike off noise floor) → added absolute `dropMinLevel` floor + raised `dropEnergyJump`; reworked slow-zone to smoothstep soft-knee; shipped `dropLevelAssist` OFF (a phantom drop on calm music is worse than a miss). Dry-run merge showed no conflicts; ran suites + boot before commit; no state files staged.
+- Verdict: B2 crossed off in plan §6. ✅
+  - Known: `audio_analysis_validation` tick-p99 perf assertion is a pre-existing flake under concurrent CI load (passed here 40/40 run alone) — not introduced by this work.
