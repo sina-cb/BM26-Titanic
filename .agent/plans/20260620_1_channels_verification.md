@@ -53,6 +53,30 @@ Ran skill 05 chain on default ports (engine 6968 / sim 6969-6972 / CaptainPad 69
 
 ## Merge proofs
 
+### MERGE 10 — dev/health_pill (WAVE 9, N3/F1) — VERIFIED ON MERGED TIP
+Boundary: api.ts, useEngineState.ts, DeckTopBar.tsx, mixer.tsx (header) + new
+HealthChip.tsx + report. CaptainPad-only. Verified:
+```
+$ git diff --check -- CaptainPad → clean
+$ npx tsc --noEmit → exit 0
+$ npm run lint → 0 err / 12 warn (baseline, none new)
+$ npm run web:build → exit 0, 21 routes
+$ predicate sanity (deriveEngineHealth) → 7/7 incl. all healthy paths false
+```
+Content: /status renderHealth + deckRestoreDegraded surfaced (additive optional
+types in api.ts; engineHealth on useEngineState seeded by the same /status probe
+as the model chip; deriveEngineHealth predicate). New HealthChip amber "⚠ DEGRADED"
+(min 44pt, Alert+a11y) rendered next to the pill on BOTH views; renders null when
+healthy (renderHealth.ok && deckRestoreDegraded==null). absence==healthy default
+documented (a degraded engine reports it explicitly — not a silent fallback).
+Closes the last audit nit. Merge commit: see git log.
+
+## CAMPAIGN CLOSED — deliverable feat/optimize_channels handoff-ready.
+10 dev/* slices merged, each verified on the merged tip. Final state: engine
+829 unit tests / 0 fail; CaptainPad tsc 0 / lint 0 err·12 warn baseline /
+web:build 21 routes; offline-clean; codex P0 clean; full-stack smoke + screenshots
+green. Audit verdict ship-with-nits → all nits closed (N3 landed).
+
 ### MERGE 8 — dev/channels_docs (WAVE 7b) — docs/39_channels_deck_mixer.md (renumbered
 38->39 to avoid feat/timeline_support collision). Markdown-only, diff-check clean.
 Merge commit 8b20697.

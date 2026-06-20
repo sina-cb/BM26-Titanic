@@ -23,6 +23,7 @@ import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 import { MiniFader } from '@/components/ui/MiniFader';
+import { HealthChip } from '@/components/ui/HealthChip';
 import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
@@ -1444,6 +1445,10 @@ export default function MixerScreen() {
               <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
             </View>
           ) : null}
+          {/* Engine-health warning — renders NOTHING when healthy (no layout
+              shift); shows an amber "⚠ DEGRADED" chip only when the engine
+              reports a degrade on /status. See HealthChip / useEngineHealth. */}
+          <HealthChip compact={isPortrait} />
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
           {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
