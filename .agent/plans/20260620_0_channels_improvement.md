@@ -121,8 +121,20 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [ ] WAVE 4: dev/engine_hardening_timeline (slot 2) — RUNNING (engine validation+perf+timeline-additive+tests)
 - [x] WAVE 5: dev/captainpad_qol — DONE + MERGED (71bd908, pushed)
 - [x] Full-stack smoke + screenshots (operator request) — DONE: deck+mixer CONNECTED w/ hot-swap SWAP, lit animated sim; proof in verification log + .agent_renders/
-- [ ] Merge WAVE 4 → verify on tip → push
-- [ ] When queue empties again: 2nd adversarial pass or wind down near deadline
+- [x] WAVE 4: dev/engine_hardening_timeline — DONE + MERGED (25f355c, pushed)
+      823 unit pass/0 fail, deck-swap-param HIL all-pass.
+- [x] ALL PLANNED WAVES MERGED. Deliverable feat/optimize_channels @ 25f355c.
+- [ ] Queue empty → 2nd pass: focused regression review on NEW surface (hot-swap
+      e2e + fail-loud/validation + parametric swap/queue). Implement safe finds.
+
+## STATUS LOG (cont. 2)
+
+- 2026-06-20 T6: Full-stack smoke + screenshots delivered (operator request).
+  WAVE 5 merged (71bd908). WAVE 4 merged (25f355c): fader fail-loud+clamp, boot
+  fail-loud deck restore, vis-pool perf, parametric /deck/playlist/swap +
+  /deck/playlist/queue, 823 tests. ALL planned waves landed. Engine suite 823/0,
+  CaptainPad tsc 0 / lint baseline / web:build 21 routes. Launching focused 2nd
+  regression pass on the new surface; cron re-armed.
 
 ## Adversarial findings (accumulating; verify each against real code before trusting)
 
