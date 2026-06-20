@@ -179,7 +179,7 @@ Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCK
 
 ### Wave B (launching)
 - ⏳ B2 detector super-tuning + scoring/eval (drop/slow/build) — `dev/detector_tuning`
-- ⏳ B3 analyzer features: per-band onsets + sub-bass chest-hit — `dev/analyzer_features`
+- ✅ B3 analyzer features: per-band onsets + sub-bass chest-hit — `dev/analyzer_features` MERGED @ `1aa12f4` (242 tests green + dry-run exit 0; proof in `_verification` 03:20Z)
 - ✅ B4 CaptainPad audio UI improvements — `dev/captainpad_audio_ui` MERGED @ `bd0fc34` (proof in `_verification` 03:00Z; tsc+lint exit 0 on merged tip)
 
 ### Instigator-owned (apply post-merge, from `20260620_3`)
