@@ -218,3 +218,10 @@ Proof entry template:
 - Fail-loud: per-module `_runModule` isolates a throwing signal (others keep publishing), loud once, surfaced via getStatus().moduleErrors + engine audioStatus broadcast; `_fatal` only on CPC-publish failure. Alloc: hoisted derived+engine setMany payloads → 0 obj/s (was ~3800). Perf tests: full-chain vs 11.6ms deadline, hard mean+p50, soft p99 (hard under PERF_GATE=1). genre harness fft 1024→2048. hypot→sqrt in flux loop.
 - Command(s) BY INSTIGATOR: full audio suite **270 pass x2 (deterministic)**; dry-run exit 0. Agent: 3× suite 228/228/228, full-chain mean 0.39ms/p99 0.94ms vs 11.6ms, injected-throw test → degraded=true/fatal=false/party+bpm keep publishing.
 - Verdict: E3 crossed off. ✅ — flaky perf gate fixed; codex fail-loud + allocation-free restored.
+
+### E2 — signals real-audio fixes  [PASS]  2026-06-20T15:15Z
+- Branch `dev/e2_signals_realaudio` @ `6a5a43c` → merged (--no-ff, clean; derived_signals.js untouched → union-clean with E3).
+- Real-corpus before→after (60 tracks/309k hops): climax ≥0.5 hops **47.6%→2.5%**, countdown pulses **338→128**, buildEta >0 hops **68.9%→20.0%**, track-change fires **17→10** (residual = legit gap-reonsets on a spoken-word clip), genre cold-start melodic_house section-start **13.9%→4.9%**.
+- Command(s) BY INSTIGATOR: `node tools/genre_eval.mjs --corpus ~/tmp/genre_corpus` → **63.9% (unchanged)**; `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/new_derived_signals.test.js` → **191 pass**.
+- Fixes (all internal to the 5 modules): climax long-history top-decile + rise gate; countdown monotonic-climb; eta riserConf+BUILD gate; track-change drop cue-c; genre first-commit kick-ring gate; conf documented as decision-margin.
+- Verdict: E2 crossed off. ✅ — the over-firing signals are now quiet on real continuous music; genre cold-start fixed.
