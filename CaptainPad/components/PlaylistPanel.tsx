@@ -1132,7 +1132,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     rowPadY: compact ? 4 : 5,
     rowPadX: compact ? 6 : 8,
     rowGap: compact ? 1 : 2,
-    fontPrimary: compact ? 12 : 13,
+    fontPrimary: compact ? 13 : 13,
     fontSecondary: compact ? 9 : 10,
     fontMicro: compact ? 8 : 9,
     indexWidth: compact ? 16 : 20,
@@ -1484,9 +1484,15 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     rowOffsetsRef.current.set(e.id, { y, h: height });
                   }}
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 6,
+                    // 2-line layout (2026-06-20, mixer readability): line 1 is
+                    // the index badge + full-width name; line 2 is the compact
+                    // control sub-row (reorder chevrons + H/L + remove). In a
+                    // cramped mixer channel-strip the name column used to
+                    // collapse to ~60pt and truncate long pattern names to
+                    // "tran…"/"0…"; stacking the controls underneath gives the
+                    // name the full strip width with no strip-width change.
+                    flexDirection: 'column',
+                    gap: 2,
                     paddingHorizontal: sz.rowPadX,
                     paddingVertical: sz.rowPadY,
                     borderRadius: 6,
@@ -1497,25 +1503,67 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     opacity: missing ? 0.4 : 1,
                   }}
                 >
-                  <Text
-                    style={{
-                      fontFamily: 'SpaceGrotesk_700Bold',
-                      fontSize: sz.fontMicro,
-                      color: isActive ? 'rgba(255,255,255,0.75)' : C.icon,
-                      width: sz.indexWidth,
-                    }}
-                  >
-                    {(idx + 1).toString().padStart(2, '0')}
-                  </Text>
+                  {/* Line 1: index badge + full-width name (≥44pt tap row). */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text
+                      style={{
+                        fontFamily: 'SpaceGrotesk_700Bold',
+                        fontSize: sz.fontMicro,
+                        color: isActive ? 'rgba(255,255,255,0.75)' : C.icon,
+                        width: sz.indexWidth,
+                      }}
+                    >
+                      {(idx + 1).toString().padStart(2, '0')}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => handleEntryTap(e.id)}
+                      disabled={missing || disabled}
+                      style={{ flex: 1 }}
+                    >
+                      <Text
+                        style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: sz.fontPrimary,
+                          color: isActive ? '#FFF' : C.text,
+                        }}
+                        numberOfLines={2}
+                        ellipsizeMode="middle"
+                      >
+                        {e.label || patternDisplayName(e.pattern)}
+                        {missing ? '  ⚠' : ''}
+                      </Text>
+                      {(e.label || paramCount > 0) && (
+                        <Text
+                          style={{
+                            fontFamily: 'Inter_400Regular',
+                            fontSize: sz.fontMicro,
+                            color: isActive ? 'rgba(255,255,255,0.7)' : C.icon,
+                          }}
+                          numberOfLines={1}
+                          ellipsizeMode="middle"
+                        >
+                          {e.label ? patternDisplayName(e.pattern) : ''}
+                          {e.label && paramCount > 0 ? '  · ' : ''}
+                          {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                  {/* Line 2: compact control sub-row — reorder chevrons + H/L
+                      toggles + remove. Only rendered when there is at least one
+                      control to show (i.e. editable & not deck-edit-locked), so
+                      read-only / show-mode rows stay single-line. */}
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
-                    <View style={{ flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                    {(
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginRight: 'auto' }}>
                       <TouchableOpacity
                         onPress={canMoveUp ? () => handleMoveEntry(e.id, -1) : undefined}
                         disabled={!canMoveUp}
-                        hitSlop={{ top: 4, bottom: 0, left: 4, right: 4 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH / 2 - 1,
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
                           alignItems: 'center',
                           justifyContent: 'center',
                           opacity: canMoveUp ? 1 : 0.2,
@@ -1532,10 +1580,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       <TouchableOpacity
                         onPress={canMoveDown ? () => handleMoveEntry(e.id, 1) : undefined}
                         disabled={!canMoveDown}
-                        hitSlop={{ top: 0, bottom: 4, left: 4, right: 4 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH / 2 - 1,
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
                           alignItems: 'center',
                           justifyContent: 'center',
                           opacity: canMoveDown ? 1 : 0.2,
@@ -1550,38 +1598,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         />
                       </TouchableOpacity>
                     </View>
-                  )}
-                  <TouchableOpacity
-                    onPress={() => handleEntryTap(e.id)}
-                    disabled={missing || disabled}
-                    style={{ flex: 1 }}
-                  >
-                    <Text
-                      style={{
-                        fontFamily: 'SpaceGrotesk_700Bold',
-                        fontSize: sz.fontPrimary,
-                        color: isActive ? '#FFF' : C.text,
-                      }}
-                      numberOfLines={1}
-                    >
-                      {e.label || patternDisplayName(e.pattern)}
-                      {missing ? '  ⚠' : ''}
-                    </Text>
-                    {(e.label || paramCount > 0) && (
-                      <Text
-                        style={{
-                          fontFamily: 'Inter_400Regular',
-                          fontSize: sz.fontMicro,
-                          color: isActive ? 'rgba(255,255,255,0.7)' : C.icon,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {e.label ? patternDisplayName(e.pattern) : ''}
-                        {e.label && paramCount > 0 ? '  · ' : ''}
-                        {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
-                      </Text>
                     )}
-                  </TouchableOpacity>
                   {/* Per-entry HOLD / LOOP toggles (#12). Same editable +
                       playlist-edits-lock guard as the reorder chevrons.
                       hold = park autopilot on this entry until released by
@@ -1589,7 +1606,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       shuffle). Compact "H"/"L" chrome, >= 44pt tap target
                       via hitSlop. Honored by the DECK autopilot only —
                       inert (but persisted) on mixer overlays. */}
-                  {editable && !(role === 'deck' && playlistEditsLocked) && (
+                  {(
                     <>
                       <TouchableOpacity
                         onPress={() => handleToggleEntryFlag(e.id, 'hold')}
@@ -1637,7 +1654,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </TouchableOpacity>
                     </>
                   )}
-                  {editable && !(role === 'deck' && playlistEditsLocked) && (
+                  {(
                     <TouchableOpacity
                       onPress={() => requestRemoveEntry(e.id)}
                       // Compact (−) chrome but >= 44pt tap area via
@@ -1656,6 +1673,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     >
                       <Text style={{ color: isActive ? '#FFF' : C.error, fontWeight: 'bold', fontSize: sz.fontPrimary }}>−</Text>
                     </TouchableOpacity>
+                  )}
+                  </View>
                   )}
                 </View>
               );
