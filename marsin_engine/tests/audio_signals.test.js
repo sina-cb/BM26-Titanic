@@ -81,6 +81,16 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioBeatInBar', label: 'Audio · Beat In Bar', ...LIVE({ range: [0, 4], broadcastHz: 30, sharedFnName: 'audioBeatInBar' }) },
   { key: 'audioBarPhase', label: 'Audio · Bar Phase', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioBarPhase' }) },
   { key: 'audioDownbeat', label: 'Audio · Downbeat', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioDownbeat' }) },
+  // analyzer_features (slot 3): per-band onset RAW mirrors + shaped pulses,
+  // then sub-bass raw + chest-hit pulse. All live, [0,1], no OSC inbound.
+  { key: 'micOnsetLowRaw', label: 'Mic · Onset Low (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetLowRaw' }) },
+  { key: 'micOnsetMidRaw', label: 'Mic · Onset Mid (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetMidRaw' }) },
+  { key: 'micOnsetHighRaw', label: 'Mic · Onset High (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetHighRaw' }) },
+  { key: 'micSubRaw', label: 'Mic · Sub (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micSubRaw' }) },
+  { key: 'micOnsetLow', label: 'Mic · Onset Low', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetLow' }) },
+  { key: 'micOnsetMid', label: 'Mic · Onset Mid', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetMid' }) },
+  { key: 'micOnsetHigh', label: 'Mic · Onset High', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetHigh' }) },
+  { key: 'audioChestHit', label: 'Audio · Chest Hit', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioChestHit' }) },
 ];
 
 // Normalize: sort object keys so deep-equal ignores literal key ORDER (the

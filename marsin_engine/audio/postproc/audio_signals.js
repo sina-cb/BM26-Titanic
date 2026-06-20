@@ -117,6 +117,34 @@ const DERIVED = [
   { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30 },
 ];
 
+// analyzer_features (slot 3): per-band onset → spatial-chase pulses + sub-bass
+// chest hit. RAW analyzer mirrors (micOnset*Raw, micSubRaw) carry the analyzer's
+// rising-flux-per-band / sub-energy each hop; the band_onsets/sub_bass shapers
+// (derivedSignals) read them and publish the PULSE keys (micOnset*, audioChestHit).
+// All live, [0,1], engine-internal (no OSC inbound), not chain-processed.
+const ONSET_RAW = [
+  { key: 'micOnsetLowRaw',  label: 'Mic · Onset Low (raw)' },
+  { key: 'micOnsetMidRaw',  label: 'Mic · Onset Mid (raw)' },
+  { key: 'micOnsetHighRaw', label: 'Mic · Onset High (raw)' },
+  { key: 'micSubRaw',       label: 'Mic · Sub (raw)' },
+];
+const ONSET_PULSE = [
+  { key: 'micOnsetLow',  label: 'Mic · Onset Low',  hz: 30 },
+  { key: 'micOnsetMid',  label: 'Mic · Onset Mid',  hz: 30 },
+  { key: 'micOnsetHigh', label: 'Mic · Onset High', hz: 30 },
+  { key: 'audioChestHit', label: 'Audio · Chest Hit', hz: 30 },
+];
+
+function onsetPulseDescriptor(d) {
+  return {
+    key: d.key, label: d.label, type: 'float',
+    range: [0, 1], default: 0.0, clamp: true,
+    persist: false, live: true, broadcastHz: d.hz, portWatch: false,
+    oscAddress: undefined, sharedFnName: d.key,
+    processed: false, hasRawMirror: false, gainKey: null, defaultChainKind: null,
+  };
+}
+
 function gainDescriptor(key, label) {
   return {
     key, label, type: 'float',
@@ -227,6 +255,16 @@ function buildDescriptors() {
   // 10) Derived signals (BPM / beat / party / note / switch cues).
   for (const d of DERIVED) {
     out.push(detectorDescriptor(d));
+  }
+
+  // 11) analyzer_features (slot 3): per-band onset RAW mirrors + their shaped
+  //     pulses, then the sub-bass chest hit (raw + pulse). Raw mirrors first
+  //     (analyzer outputs), then the pulses (derivedSignals outputs).
+  for (const d of ONSET_RAW) {
+    out.push(rawMirrorDescriptor(d.key, d.label, 30));
+  }
+  for (const d of ONSET_PULSE) {
+    out.push(onsetPulseDescriptor(d));
   }
 
   return out;

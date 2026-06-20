@@ -168,12 +168,26 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
     bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz).
+    sub:     ['minHz', 'maxHz'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
       'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
+});
+
+test('validateLivePatch accepts a valid sub window, rejects bad edges (analyzer_features slot 3)', () => {
+  const ok = validateLivePatch({ sub: { minHz: 30, maxHz: 60 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.sub.minHz, 30);
+  assert.equal(ok.live.sub.maxHz, 60);
+  // Out-of-range edges 400 at the field validator (≤ 0 / above Nyquist).
+  assert.equal(validateLivePatch({ sub: { minHz: 0 } }).ok, false);
+  assert.equal(validateLivePatch({ sub: { maxHz: 30000 } }).ok, false);
+  // Unknown sub field is rejected (no silent acceptance).
+  assert.equal(validateLivePatch({ sub: { threshold: 1.2 } }).ok, false);
 });
 
 test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects bad values', () => {
