@@ -41,7 +41,13 @@
 const DETECTOR_DEFAULTS = Object.freeze({
   enabled:           false,
   buildThreshold:    0.35,   // buildScore must clear this to enter BUILD
-  dropEnergyJump:    1.5,    // short-energy ×-jump that signals a drop
+  // short-energy ×-jump that signals a drop. Raised 1.5→1.8 in the 2026-06-20
+  // detector super-tuning pass: with the new dropMinLevel floor, 1.8 drives
+  // spurious drops on calm/ambient/build passages to ZERO across all mic tiers
+  // (detection_sweep) while keeping precision at 1.00 — a phantom drop on a
+  // calm Burning Man passage is far worse than missing one, so we tune for
+  // zero false positives first. F1 0.29→0.71 on the labeled scenarios.
+  dropEnergyJump:    1.8,
   // Drop-edge discriminator:
   //   'level'    — short/long LEVEL ratio > dropEnergyJump (the original
   //                behavior; re-fires in a loud body because the slow long
@@ -61,10 +67,39 @@ const DETECTOR_DEFAULTS = Object.freeze({
   //                exposed for the pending re-tune; until that lands + passes
   //                the corpus regression, the product default stays 'windowed'.
   dropEdgeMode:      'windowed', // 'level' | 'windowed' | 'kalman'(opt-in, see above)
+  // Absolute sub-energy floor a drop must reach. A REAL drop slams the sub
+  // (micLow short-envelope) to a SUSTAINED high level; a build's rising sub
+  // sits near zero (especially through the playa mic, which compresses the
+  // build's small sub away — measured: build micLow ≈ 0.00–0.02, drop micLow
+  // ≈ 0.10–0.65 across SNR tiers). Requiring shortEnv ≥ dropMinLevel kills the
+  // windowed/level edge's biggest false-positive source: a tiny-over-tinier
+  // RATIO spike during a near-silent build (0.004 / 0.002 = 2× but it is
+  // noise, not a drop). This is the single change that recovered drop recall +
+  // precision on the labeled scenarios (detection_eval). Tuned to sit above the
+  // moderate/heavy build floor and below the drop level. 0 disables the gate.
+  dropMinLevel:      0.06,
+  // Windowed-edge LEVEL ASSIST: also fire when the steady short/long level
+  // ratio clears dropEnergyJump (catches post-breakdown second drops + heavy-
+  // mic-compressed slams the pure rate-of-change edge under-shoots). It DOES
+  // lift recall (0.56→0.78 on the labeled scenarios) but at the cost of
+  // spurious drops on calm/build passages (negFP 0→3) — unacceptable on a
+  // dance floor, where a phantom drop is worse than a miss. So it ships OFF;
+  // an operator who wants the higher-recall arm can enable it per-scene via
+  // PATCH /audio/config {structureDetector:{dropLevelAssist:true}}.
+  dropLevelAssist:   false,
   dropNisThreshold:  6.63,   // χ²₁ 99% gate for the kalman edge (lower → more sensitive)
   dropKalmanQ:       0.001,  // kalman-edge process noise (was a hardcoded 0.01 that floored NIS)
   dropCoWindowMs:    60,     // kalman-edge: low & flux NIS may clear within this window (not same-hop)
-  slowZoneRef:       0.5,    // activity (max micLow/micFlux) at/below which → slow zone
+  // Slow-zone soft-knee center + half-width on activity = max(micLow, micFlux).
+  // slowZoneRef was 0.5 (calibrated for clean line-in); through the playa mic
+  // that left BOTH calm and active passages reading ~0.75 (no separation). The
+  // measured knee that splits calm (activity ≈ 0.04) from active (≈ 0.10–0.6)
+  // sits near 0.12 with a ±0.06 half-width — verified by the detection_eval
+  // slow-zone separation margin (0.26 → ~0.6+). A wider width tolerates the
+  // moderate/heavy mic floor; a tighter one sharpens the calm/party boundary.
+  slowZoneRef:       0.07,   // activity (max micLow, micFlux−floor) knee center → slow zone
+  slowZoneWidth:     0.04,   // soft-knee half-width around slowZoneRef
+  slowFluxFloor:     0.10,   // discount mic flux floor below this from "activity"
   dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
   eventRefractoryMs: 3500,   // suppress repeat dropFired within this window
@@ -109,6 +144,21 @@ const STATE_NAME = Object.freeze({ 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' });
 function clamp01(x) {
   if (!(x > 0)) return 0;
   return x < 1 ? x : 1;
+}
+
+/**
+ * Falling smoothstep soft-knee: 1 when x ≤ center−width, 0 when x ≥
+ * center+width, a smooth Hermite transition (3u²−2u³) across the knee. Used
+ * for the slow-zone target so a measured activity threshold cleanly separates
+ * calm from active without a hard step or the old saturating linear ramp.
+ */
+function _smoothKneeDown(x, center, width) {
+  const w = width > 0 ? width : 1e-6;
+  const u = (x - (center - w)) / (2 * w);  // 0 at lo edge, 1 at hi edge
+  if (u <= 0) return 1;
+  if (u >= 1) return 0;
+  const s = u * u * (3 - 2 * u);
+  return 1 - s;
 }
 
 export class AudioStructureDetector {
@@ -346,14 +396,37 @@ export class AudioStructureDetector {
     if (kFlux.nis >= cfg.dropNisThreshold)               this._fluxHotAtMs = now;
     const lowHot  = (now - this._lowHotAtMs)  <= cfg.dropCoWindowMs;
     const fluxHot = (now - this._fluxHotAtMs) <= cfg.dropCoWindowMs;
-    const kalmanDropEdge = warmupOk && lowHot && fluxHot;
+    // Same absolute sub floor as the windowed/level edges: a real drop's sub
+    // is sustained-high, so reject a kalman co-occurrence that lands while the
+    // short envelope is still near the noise floor (a near-silent build blip).
+    const kalmanLevelOk = !(cfg.dropMinLevel > 0) || this._shortEnv >= cfg.dropMinLevel;
+    const kalmanDropEdge = warmupOk && lowHot && fluxHot && kalmanLevelOk;
     const kalmanConf = clamp01(Math.min(kLow.nis, kFlux.nis) / (2 * cfg.dropNisThreshold));
 
     //   Slow-zone: how much we're in a sparse / breakdown / ambient section.
-    //   Activity = max(micLow, micFlux); slowness rises as activity falls
-    //   below slowZoneRef, EMA-smoothed over ~1.5 s so it marks a ZONE.
-    const activity = Math.max(micLow, micFluxRaw);
-    const slowTarget = clamp01((cfg.slowZoneRef - activity) / cfg.slowZoneRef);
+    //   Activity = max(micLow, micFlux). A calm/ambient passage has near-ZERO
+    //   sub (micLow) and no sustained flux; a drop body, sustain, or driving
+    //   techno body has high sub and/or flux. (Measured through the playa mic:
+    //   slow micLow ≈ 0.00–0.04 vs non-slow micLow ≈ 0.07–0.60; slow flux floor
+    //   ≈ 0.08 vs non-slow flux up to 0.55 — see detection_eval slow probe.)
+    //
+    //   slowness = a SMOOTHSTEP soft-knee centered on slowZoneRef with half-
+    //   width slowZoneWidth: ~1 well below (ref−width), ~0 well above
+    //   (ref+width), smooth across the knee. The old linear (ref−act)/ref map
+    //   with ref=0.5 kept BOTH slow and non-slow regions reading ~0.75 once the
+    //   mic compressed the dynamic range — a useless separation. The knee at a
+    //   measured ref (~0.12) cleanly splits the two. EMA-smoothed over
+    //   SLOW_ZONE_TAU so it marks a sustained ZONE, not a flicker.
+    //   Activity discounts the mic FLUX FLOOR: the playa mic posts a constant
+    //   ~0.08–0.10 flux even on silence (capsule/room noise differenced hop to
+    //   hop), so a raw max(micLow, micFlux) reads ambient as "active". We only
+    //   count flux ABOVE slowFluxFloor as real activity (a build/riser), while
+    //   micLow (sub presence) always counts. Measured: this collapses ambient
+    //   activity to ≈0.04 while drop/sustain/techno bodies stay ≥0.09 across
+    //   all mic tiers (detection_eval slow probe) — a clean calm/active split.
+    const fluxActivity = Math.max(0, micFluxRaw - cfg.slowFluxFloor);
+    const activity = Math.max(micLow, fluxActivity);
+    const slowTarget = _smoothKneeDown(activity, cfg.slowZoneRef, cfg.slowZoneWidth);
     if (dt > 0) this._slowZone += (dt / SLOW_ZONE_TAU) * (slowTarget - this._slowZone);
     this._slowZone = clamp01(this._slowZone);
 
@@ -416,8 +489,31 @@ export class AudioStructureDetector {
       const windowedRatio = this._shortEnv / Math.max(past, EPS);
       dropEdge = windowedRatio > cfg.dropEnergyJump;
       dropEdgeRatio = windowedRatio;
+      // LEVEL ASSIST (windowed only). The pure rate-of-change edge misses two
+      // real drops: (a) the SECOND drop after a breakdown — the short envelope
+      // had already been nudged up by build noise so the window ratio under-
+      // shoots, but the steady short/long LEVEL ratio is huge (long env is low
+      // from the breakdown); and (b) a drop through the heavy mic, where the
+      // slam is compressed to a smaller step. So ALSO fire when the steady
+      // level ratio clears the jump. This re-introduces the level edge's only
+      // failure mode — in-body re-fire — which is now independently prevented
+      // by the SUSTAIN-entry rising-tracker reset + the eventRefractory, so it
+      // is safe. The absolute floor below gates BOTH. Disable via
+      // dropLevelAssist:false to get the pure rate-of-change edge.
+      if (cfg.dropLevelAssist !== false && energyLevelRatio > cfg.dropEnergyJump) {
+        dropEdge = true;
+        if (energyLevelRatio > dropEdgeRatio) dropEdgeRatio = energyLevelRatio;
+      }
     } else {
       dropEdge = energyLevelRatio > cfg.dropEnergyJump;
+    }
+    // Absolute sub-energy floor (both ratio edges). A drop's sub slams to a
+    // SUSTAINED high level; a near-silent build can post a huge RATIO off
+    // noise-floor sub but its absolute shortEnv stays tiny. Gating on
+    // shortEnv ≥ dropMinLevel rejects those false edges without hurting a real
+    // drop (whose shortEnv is far above the floor). dropMinLevel:0 disables it.
+    if (cfg.dropMinLevel > 0 && this._shortEnv < cfg.dropMinLevel) {
+      dropEdge = false;
     }
 
     // 5. State machine.

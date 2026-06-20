@@ -111,6 +111,13 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
     micLowRaw: [], micMidRaw: [], micHighRaw: [], micKickRaw: [], micFluxRaw: [],
     tMs: [],
   };
+  // Detector OUTPUT series, one row per hop — used by the scoring/eval harness
+  // (tools/detection_eval.mjs) for buildScore-vs-ramp correlation and
+  // slow-zone separation. Additive: the synthetic regression guard does not
+  // assert on these.
+  const detectorSeries = {
+    tMs: [], buildScore: [], energyRatio: [], slowZone: [], dropPulse: [], structure: [],
+  };
   let lastState = null;
   let lastAnalysisAtMs = 0;
   let anyNonFinite = false;
@@ -193,6 +200,14 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
       timeline.push({ tMs: nowMs, state });
       lastState = state;
 
+      // Detector output series (post-tick CPC values for this hop).
+      detectorSeries.tMs.push(nowMs);
+      detectorSeries.buildScore.push(paramCenter.get('audioBuildScore'));
+      detectorSeries.energyRatio.push(paramCenter.get('audioEnergyRatio'));
+      detectorSeries.slowZone.push(paramCenter.get('audioSlowZone'));
+      detectorSeries.dropPulse.push(paramCenter.get('audioDropPulse'));
+      detectorSeries.structure.push(state);
+
       for (const k of finiteKeys) {
         const v = paramCenter.get(k);
         if (typeof v !== 'number' || !Number.isFinite(v)) anyNonFinite = true;
@@ -239,6 +254,7 @@ export function runClip(clip, { mode, detectorConfig, chainsOverride = null, ban
     hopMs,
     timeline,
     signals,
+    detectorSeries,
     transitions,
     dropFired,
     reachedSustain: timeline.some((r) => r.state === 2),
@@ -316,6 +332,113 @@ export function dropMetrics(rec, toleranceMs = 1200) {
     latencies,
     meanLatencyMs,
   };
+}
+
+/**
+ * F1 from a dropMetrics result (or any {precision, recall}).
+ * Harmonic mean of precision & recall; 0 when both are 0.
+ */
+export function f1Score(precision, recall) {
+  if (precision === null || recall === null) return null;
+  const denom = precision + recall;
+  return denom > 0 ? (2 * precision * recall) / denom : 0;
+}
+
+/** Pearson correlation between two equal-length numeric series. */
+export function pearson(xs, ys) {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return null;
+  let sx = 0, sy = 0;
+  for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; }
+  const mx = sx / n, my = sy / n;
+  let cov = 0, vx = 0, vy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    cov += dx * dy; vx += dx * dx; vy += dy * dy;
+  }
+  if (vx <= 0 || vy <= 0) return null;
+  return cov / Math.sqrt(vx * vy);
+}
+
+/**
+ * BUILD-score correlation: for each labeled build ramp [start, end], correlate
+ * the detector's published buildScore against a reference ramp that rises
+ * linearly from 0 at `start` to 1 at `peakAtMs` (the drop). A well-behaved
+ * build score tracks the riser and peaks at the drop, so a high correlation
+ * means the BUILD signal is musically meaningful. Also reports whether the
+ * buildScore's own peak within the ramp lands near `peakAtMs`.
+ *
+ * @returns {object|null} { meanCorrelation, ramps:[{correlation, peakErrMs}] }
+ *   or null when the clip has no labeled build ramps.
+ */
+export function buildCorrelation(rec) {
+  const builds = (rec.labels.build || []);
+  if (!builds.length) return null;
+  const ds = rec.detectorSeries;
+  const ramps = [];
+  for (const b of builds) {
+    const xs = [], ref = [];
+    let peakAtScore = -Infinity, peakAtMs = null;
+    for (let i = 0; i < ds.tMs.length; i++) {
+      const t = ds.tMs[i];
+      if (t < b.startMs || t > b.peakAtMs) continue;
+      xs.push(ds.buildScore[i]);
+      const u = (t - b.startMs) / Math.max(1, b.peakAtMs - b.startMs);
+      ref.push(u);
+      if (ds.buildScore[i] > peakAtScore) { peakAtScore = ds.buildScore[i]; peakAtMs = t; }
+    }
+    const correlation = pearson(xs, ref);
+    const peakErrMs = peakAtMs === null ? null : (peakAtMs - b.peakAtMs);
+    ramps.push({ correlation, peakErrMs, startMs: b.startMs, peakAtMs: b.peakAtMs });
+  }
+  const cors = ramps.map((r) => r.correlation).filter((c) => c !== null);
+  const meanCorrelation = cors.length ? cors.reduce((a, b) => a + b, 0) / cors.length : null;
+  return { meanCorrelation, ramps };
+}
+
+/**
+ * SLOW-ZONE separation: compares the detector's published audioSlowZone in
+ * the labeled true-slow regions vs the non-slow regions. A good slow-zone
+ * signal is HIGH in calm/ambient passages and LOW in drops/sustains/busy
+ * bodies. Reports the two means, their margin, and a simple threshold
+ * accuracy at 0.5 (hops classified slow when slowZone>0.5).
+ *
+ * Settling guard: the EMA needs ~SLOW_ZONE_TAU to converge, so we skip the
+ * first `settleMs` of each region before measuring (a region boundary is a
+ * transition, not steady state).
+ *
+ * @returns {object|null}
+ */
+export function slowZoneSeparation(rec, { threshold = 0.5, settleMs = 1500 } = {}) {
+  const slowRegions = (rec.labels.slow || []);
+  const ds = rec.detectorSeries;
+  if (!ds.tMs.length) return null;
+  const inSlow = (t) => slowRegions.some((r) => t >= r.startMs + settleMs && t < r.endMs);
+  // A hop is "non-slow steady" if it's inside a non-slow region by settleMs.
+  // We approximate non-slow regions as the complement: a hop that is NOT in
+  // any slow region (and is past the global settle) is non-slow.
+  const lastSlowEnd = slowRegions.length ? Math.max(...slowRegions.map((r) => r.endMs)) : 0;
+  void lastSlowEnd;
+  const inNonSlow = (t) => t > settleMs && !slowRegions.some((r) => t >= r.startMs && t < r.endMs + settleMs);
+  const slowVals = [], nonSlowVals = [];
+  let tp = 0, fp = 0, tn = 0, fn = 0;
+  for (let i = 0; i < ds.tMs.length; i++) {
+    const t = ds.tMs[i], v = ds.slowZone[i];
+    if (inSlow(t)) {
+      slowVals.push(v);
+      if (v > threshold) tp++; else fn++;
+    } else if (inNonSlow(t)) {
+      nonSlowVals.push(v);
+      if (v > threshold) fp++; else tn++;
+    }
+  }
+  const mean = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const slowMean = mean(slowVals), nonSlowMean = mean(nonSlowVals);
+  const margin = (slowMean !== null && nonSlowMean !== null) ? slowMean - nonSlowMean : null;
+  const total = tp + fp + tn + fn;
+  const accuracy = total > 0 ? (tp + tn) / total : null;
+  return { slowMean, nonSlowMean, margin, accuracy, tp, fp, tn, fn,
+    slowHops: slowVals.length, nonSlowHops: nonSlowVals.length };
 }
 
 /**

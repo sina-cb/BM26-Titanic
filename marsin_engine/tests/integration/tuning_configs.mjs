@@ -72,14 +72,23 @@ export const TUNED_CHAINS = {
 export const TUNED_BANDS = { ...DEFAULT_BANDS };
 export const TUNED_KICK  = { ...DEFAULT_KICK };
 
-// ── TUNED detector (Task E) ───────────────────────────────────────────────
-// windowed-delta drop edge. Refractory stays at the shipped 2000 ms: the
-// rising-tracker reset on SUSTAIN entry structurally prevents in-body
-// re-fires, so a longer refractory is no longer needed (and 2000 keeps
-// recall on genuinely close double-drops).
+// ── TUNED detector (Task E + 2026-06-20 super-tuning) ─────────────────────
+// windowed-delta drop edge, now gated by an ABSOLUTE sub floor (dropMinLevel)
+// + a higher energy-jump (dropEnergyJump 1.8). The 2026-06-20 detector pass
+// (tools/detection_eval + detection_sweep over the labeled detector_scenarios
+// degraded through the playa mic) found this the F1-maximising arm at ZERO
+// spurious drops on calm/build passages: windowed P=1.00 R=0.56 F1=0.71
+// negFP=0. The level edge scored higher F1 (0.78) but fired phantom drops on
+// calm music (negFP=3) — a worse failure on a dance floor — so windowed +
+// floor ships. dropLevelAssist (a higher-recall, higher-FP arm) is OFF.
+// Refractory stays 2000 ms (the SUSTAIN-entry rising-tracker reset already
+// prevents in-body re-fire; 2000 keeps close-double-drop recall).
 export const TUNED_DETECTOR = {
   dropEdgeMode: 'windowed',
   dropDeltaWindowMs: 400,
+  dropMinLevel: 0.06,
+  dropEnergyJump: 1.8,
+  dropLevelAssist: false,
   eventRefractoryMs: 2000,
 };
 
