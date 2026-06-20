@@ -273,3 +273,6 @@ Protocol unchanged: don't stop when blocked — pivot to another avenue. Keep re
 
 - ✅ D7 genre v2 real-audio re-tune MERGED — honest 22%→44.4% on real corpus (agent's 63.9% was a replay-tool artifact; verified 44.4% live). 4 engineered features.
 - 📋 D8 genre v3 (follow-up): re-tune the genre WEIGHTS directly against the LIVE tools/genre_eval.mjs (not a replay) to recover the gap to ~60%; fix BPM half/double-tempo (octave-doubling) which kills downtempo + would help all genres; consider a techno harmonic-stability feature.
+
+- `14:05Z` WAVE D COMPLETE — all merged + pushed: D1 FFT-2048, D2 9 new signals, D3+D10 ten reactive patterns (59–68), D4 detector recall 1.00 @ zero false-fires, D6 real corpus + harness, D7+D8 genre **63.9% deployed** (corrected from my fft-default error) + BPM octave fix, D9 companion surfaces all new signals. 25 audio merges total. Branch `feat/audio_analysis_2` in sync w/ origin.
+- `14:05Z` Queue empty → fired ADVERSARIAL RE-WAVE 2 immediately (per operator: don't wait for cron): 5 read-only auditors (genre/corpus/BPM · detector+structure signals · analyzer/DSP@2048+perf/Pi · companion/patterns/CaptainPad · robustness/tests/offline). Consolidate top P0/P1 → implement next.
