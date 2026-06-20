@@ -117,6 +117,28 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [ ] Adversarial wave (5 read-only agents on tip 37f4505) — RUNNING; implement top safe finds
 - [ ] Merge WAVE 3 + adversarial fixes → verify → push
 
+## Adversarial findings (accumulating; verify each against real code before trusting)
+
+### Lens B — engine robustness/codex (agent a0a9fac, DONE)
+Top EASY/P0 candidates (api_server.js line refs ~, must re-confirm):
+- F1 fader writes lack isFinite/clamp (~2889/3709/4389) → NaN into render. EASY.
+- F4 deck base-channel restore compile-fail returns silently (~1388-1394) →
+  null deck; should throw loud at boot. EASY.
+- F2 restore stale playlist activeEntryId not cleared when entry gone
+  (~1430-1442). EASY.
+- F9 /deck/transition-config durationMs range not validated (~3962-3968)
+  (E1 added NaN reject; range may still be open). EASY — VERIFY vs E1's work.
+- F7 transition-config mode not validated vs isValidBlendMode (~3943-3953)
+  — VERIFY: E1 centralized VALID_CHANNEL_BLEND_MODES; may already be fixed.
+- F10 WS broadcast routing throw may be swallowed at call site (ws_topic_routing
+  + api_server ~462). EASY.
+- F5 fader range clamp on disk; F6 PATCH /mixer/channels pattern-fail returns
+  200 (~2933-2948) MED; F3 concurrent entry-load race MED; F8 save-during-
+  transition MED; F11 stale control-id MED; F12 stale viewMask on model reload MED.
+→ Consolidate verified P0/EASY ones into ONE engine-hardening slice owning
+  api_server.js + ws_topic_routing.js (+ pattern_mixer.js if needed). Awaiting
+  lenses A/D/E to batch before launch (avoid serial conflict on those hot files).
+
 ## Datasets / assets policy
 
 No external assets needed. Offline-only. Scratch in `~/tmp`. Worktree
