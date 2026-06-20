@@ -238,7 +238,26 @@ export class PatternMixer {
     // host-side blend fallback (or a WASM blend copy if we ever needed
     // to mutate it). See docs/27 §4.2.
     this.blendedScratch = new Uint8Array(this.pixelCount * 6);
-    
+
+    // Per-key vis buffer pool (item 6). `_extractVis` used to allocate a
+    // fresh `new Uint8Array(buf)` for every channel on every vis-broadcast
+    // frame. The broadcast consumer (engine.js render loop) reads ALL of
+    // _visData's entries synchronously in one tick (subsample + base64),
+    // before the next frame runs — so a per-KEY persistent buffer is safe
+    // to reuse across frames: we just copy fresh pixels into the same
+    // backing array each vis frame. A single shared buffer would NOT be
+    // safe (all of one frame's per-channel entries co-exist in _visData
+    // until the broadcast drains them), hence keying by channel/vis id.
+    this._visBufferPool = new Map();
+
+    // Reusable render-order scratch (item 7). When a scripted transition
+    // promotes its target channel to render LAST, we need a reordered view
+    // of mixerChannels. Building `[...filter(), target]` every frame would
+    // allocate two arrays per frame for the whole duration of the fade;
+    // instead we rebuild this persistent array in place. Never aliased
+    // outside renderAll6ch, never held across frames.
+    this._renderOrderScratch = [];
+
     this.transitions = []; // Active per-channel fader transitions
     this.blendHandles = {}; // Cache: blendName -> WASM handle
     this._patternsDir = null; // Backing field for the patternsDir setter below.
@@ -616,12 +635,22 @@ export class PatternMixer {
     if (!this.deckChannel) return false;
     const id = this.deckChannel.id;
     if (this.onChannelRemoved) this.onChannelRemoved(id);
+    // Cancel any in-flight swap FIRST, before we tear down the deck or the
+    // inactive slot. cancelDeckPatternSwap() drops `_swapTransition` and
+    // parks the inactive fader at 0, so updateDeckSwapTransition() can't
+    // run its completion branch against a half-destroyed deck/inactive pair
+    // on a later tick. (Single-threaded event loop means there's no
+    // concurrent render, but a queued swap-completion path firing after we
+    // null deckChannel would be a use-after-free of the destroyed handle.)
+    this.cancelDeckPatternSwap();
     this.deckChannel.destroy(this.wasmHost);
     this.deckChannel = null;
-    // Cancel any in-flight swap and tear down the warm inactive — once
-    // there is no active deck, the inactive has nothing to ping-pong
-    // back to. Caller (engine.js boot reload, /deck/channel replace)
-    // will install a fresh deck via setDeckChannel + first swap.
+    // Tear down the warm inactive — once there is no active deck, the
+    // inactive has nothing to ping-pong back to. Caller (engine.js boot
+    // reload, /deck/channel replace) installs a fresh deck via
+    // setDeckChannel + first swap. (_swapTransition is already null from
+    // cancelDeckPatternSwap above; keep the explicit reset for clarity in
+    // the no-swap-in-flight case where cancel was a no-op.)
     this._swapTransition = null;
     if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
       try { this.wasmHost.destroy(this._inactiveDeckChannel.handle); } catch (_) {}
@@ -1474,12 +1503,12 @@ export class PatternMixer {
       if (this.deckChannel) {
         this.channelBuffer.fill(0);
         this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
-        this._visData[this.deckChannel.id] = this._extractVis(this.channelBuffer);
+        this._visData[this.deckChannel.id] = this._extractVisInto(this.deckChannel.id, this.channelBuffer);
       }
       for (const channel of this.mixerChannels) {
         this.channelBuffer.fill(0);
         channel.renderInto(this.wasmHost, this.channelBuffer, true);
-        this._visData[channel.id] = this._extractVis(this.channelBuffer);
+        this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
       }
     }
 
@@ -1562,7 +1591,9 @@ export class PatternMixer {
       // vis-broadcast frames — see the OPTIMIZATION note in the
       // pre-pass section.
       if (wantVis) {
-        const vis = this._extractVis(this.channelBuffer);
+        // Both keys deliberately alias the SAME extracted buffer — they
+        // carry identical data and are drained together by the broadcast.
+        const vis = this._extractVisInto('__deck_inactive__', this.channelBuffer);
         this._visData['__deck_inactive__'] = vis;
         this._visData['__deck_swap__'] = vis;
       }
@@ -1593,7 +1624,19 @@ export class PatternMixer {
       const tid = this.scriptedTransitionTargetId;
       const idx = this.mixerChannels.findIndex(c => c.id === tid);
       if (idx !== -1 && idx !== this.mixerChannels.length - 1) {
-        renderOrder = [...this.mixerChannels.filter(c => c.id !== tid), this.mixerChannels[idx]];
+        // Reorder into the persistent scratch (item 7 — no per-frame
+        // array spread/filter). Copy every non-target channel preserving
+        // order, then push the target so its trans_* blend composites on
+        // top of all the fading-out overlays.
+        const scratch = this._renderOrderScratch;
+        scratch.length = 0;
+        const target = this.mixerChannels[idx];
+        for (let i = 0; i < this.mixerChannels.length; i++) {
+          const c = this.mixerChannels[i];
+          if (c.id !== tid) scratch.push(c);
+        }
+        scratch.push(target);
+        renderOrder = scratch;
       }
     }
 
@@ -1676,15 +1719,36 @@ export class PatternMixer {
     // single broadcast could ship a master that's one frame older than
     // the per-channel vis, which is mildly confusing for debugging).
     if (wantVis) {
-      this._visData['master'] = this._extractVis(this.outputBuffer);
+      this._visData['master'] = this._extractVisInto('master', this.outputBuffer);
     }
 
     return this.outputBuffer;
   }
 
   /**
+   * Extract vis data from a 6ch buffer (full RGBWAU, 6 bytes per pixel)
+   * into the pooled buffer for `key`, copying in place (item 6 — no
+   * per-frame allocation). Returns the pooled Uint8Array.
+   *
+   * Safe only because the broadcast consumer drains the whole _visData map
+   * synchronously each vis frame before the next frame overwrites these
+   * buffers. The pool persists across frames; the buffer for a given key
+   * is the same object frame-to-frame, refilled here.
+   */
+  _extractVisInto(key, buf6ch) {
+    let out = this._visBufferPool.get(key);
+    if (!out || out.length !== buf6ch.length) {
+      out = new Uint8Array(buf6ch.length);
+      this._visBufferPool.set(key, out);
+    }
+    out.set(buf6ch);
+    return out;
+  }
+
+  /**
    * Extract vis data from a 6ch buffer (full RGBWAU, 6 bytes per pixel).
-   * Returns a copy of the buffer as Uint8Array.
+   * Returns a copy of the buffer as Uint8Array. Kept for callers/tests
+   * that want a standalone snapshot not tied to the pool.
    */
   _extractVis(buf6ch) {
     return new Uint8Array(buf6ch);
