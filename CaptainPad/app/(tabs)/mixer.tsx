@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Palette } from '@/constants/theme';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, AppState, Modal, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, Alert } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -8,7 +8,6 @@ import { useFocusEffect } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import {
-  getApiBaseAsync, testConnection,
   fetchMixerState, updateMixerChannel, removeMixerChannel, setMixerChannelControl,
   addMixerChannel, updateMixerMaster,
   fetchChannelBlends, fetchTransitions, setMixerView,
@@ -18,7 +17,6 @@ import {
   type PlaylistData,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
-import { engineVizEvents } from '@/utils/engineVizEvents';
 import { useActiveModel } from '@/hooks/useEngineState';
 
 import { CPCControls } from '@/components/CPCControls';
@@ -26,13 +24,23 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { TimerWheel } from '@/components/ui/TimerWheel';
-import { PixelStrip } from '@/components/ui/PixelStrip';
+import { ChannelVizStrip } from '@/components/ChannelVizStrip';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+import { useEngineConnection } from '@/hooks/useEngineConnection';
+import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
   GhostMarker, prettySliderName,
 } from '@/components/Modulation';
 
 // HorizontalFader moved to shared ui
+
+// Production-console touch target: the title-bar icon buttons (refresh,
+// lock, pin, delete) render as 28×28 squircles to keep the toolbar tidy,
+// but a 28pt tap target is below the 44pt accessibility/operator-safety
+// floor. An 8pt hitSlop on every edge expands the *interactive* area to
+// 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
+const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
 
 // ── Global Rig Buttons moved to RigGlobals ────────────────────────────
 
@@ -180,7 +188,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, visData, playlistLibrary, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -267,6 +275,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               operator a deterministic recovery path. */}
           <TouchableOpacity
             style={styles.titleBtn}
+            hitSlop={ICON_BTN_HIT_SLOP}
             onPress={() => {
               invalidatePlaylistsCache();
               const curName = channel.playlist?.name;
@@ -281,8 +290,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           {/* Lock (playlist/pattern lock) — amber when engaged. */}
           <TouchableOpacity
             style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
+            hitSlop={ICON_BTN_HIT_SLOP}
             onPress={() => onLockToggle(channel.id, !locked)}
             accessibilityLabel={locked ? 'Unlock channel' : 'Lock channel'}
+            accessibilityRole="button"
           >
             <IconSymbol name={locked ? 'lock.fill' : 'lock.open.fill'} size={14} color={locked ? '#F5A623' : C.secondary} />
           </TouchableOpacity>
@@ -294,8 +305,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           {onFaderLockToggle && (
             <TouchableOpacity
               style={[styles.titleBtn, faderLocked && styles.titleBtnTealActive]}
+              hitSlop={ICON_BTN_HIT_SLOP}
               onPress={() => onFaderLockToggle(channel.id, !faderLocked)}
               accessibilityLabel={faderLocked ? 'Unpin fader' : 'Pin fader'}
+              accessibilityRole="button"
             >
               <IconSymbol
                 name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
@@ -304,14 +317,23 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.modeDropdown} onPress={() => { if (!locked) setShowBlendPicker(true); }} activeOpacity={locked ? 1.0 : 0.2}>
+          <TouchableOpacity
+            style={styles.modeDropdown}
+            hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+            onPress={() => { if (!locked) setShowBlendPicker(true); }}
+            activeOpacity={locked ? 1.0 : 0.2}
+            accessibilityRole="button"
+            accessibilityLabel={`Blend mode: ${(channel.mode || 'normal').replace('blend_', '')}`}
+          >
             <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
           {!locked && (
             <TouchableOpacity
               style={[styles.titleBtn, { borderColor: 'rgba(217, 48, 37, 0.4)' }]}
+              hitSlop={ICON_BTN_HIT_SLOP}
               onPress={() => onDelete(channel.id)}
               accessibilityLabel="Delete channel"
+              accessibilityRole="button"
             >
               <IconSymbol name="trash" size={14} color={C.error} />
             </TouchableOpacity>
@@ -319,20 +341,26 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         </View>
       </View>
 
-      {/* Pixel Visualization */}
-      <PixelStrip base64Data={visData} height={14} style={{ marginBottom: 6 }} />
+      {/* Pixel Visualization — self-subscribing per-channel strip so a
+          new viz frame re-renders ONLY this tiny component, not the whole
+          strip list (see ChannelVizStrip + the perf note on the mixer
+          screen's viz handling). */}
+      <ChannelVizStrip vizKey={channel.id} height={14} style={{ marginBottom: 6 }} />
 
-      {/* Level Fader */}
+      {/* Level Fader. `fader` is null-coalesced to 0 for display ONLY —
+          a broadcast that omits it shows an empty fader rather than NaN%
+          (which RN would render as the literal text "NaN"). The engine is
+          the source of truth and normally always sends fader. */}
       <View style={styles.levelRow}>
         <Text style={[styles.labelCaps, { width: 36 }]}>LEVEL</Text>
         <HorizontalFader
-          value={channel.fader}
+          value={channel.fader ?? 0}
           onChange={(v: number) => onFaderChange(channel.id, v)}
           trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
           fillStyle={styles.faderFill}
         />
         <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13 }]}>
-          {Math.round(channel.fader * 100)}
+          {Math.round((channel.fader ?? 0) * 100)}
         </Text>
       </View>
 
@@ -546,9 +574,8 @@ export default function MixerScreen() {
   // Pre-May-2026 we owned a WebSocket per tab. The May 2026 topic
   // split moved that into singleton buses (utils/engineEvents +
   // utils/engineVizEvents + utils/engineParamsEvents), so this tab
-  // just subscribes — no per-tab socket, no double-parse of the
-  // mixer / vis firehose.
-  const apiBaseRef = useRef('');
+  // just subscribes (via useEngineConnection) — no per-tab socket, no
+  // double-parse of the mixer / vis firehose.
   // Per-channel inline playlist payload, populated synchronously from
   // the POST /mixer/channels response BEFORE the matching mixer WS event
   // mounts the PlaylistPanel. This is what makes "+ default" /
@@ -575,13 +602,12 @@ export default function MixerScreen() {
   }, []);
   // globalExports fetching moved to GlobalParams.tsx
   const throttleRef = useRef<{[key: string]: number}>({});
-  const visDataRef = useRef<{[key: string]: string | null}>({});
-  // visVersion is intentionally unread — its sole job is to trigger
-  // a re-render every time the viz subscriber stamps a new frame
-  // (visDataRef is a ref, so mutating it doesn't redraw). The
-  // setter is invoked from the engineVizEvents handler below.
-  const [, setVisVersion] = useState(0);
-  const lastVisUpdateRef = useRef(0);
+  // Per-channel pixel viz no longer lives at the screen level. Each
+  // ChannelVizStrip (and the master strip) subscribes to the viz bus
+  // itself and holds only its own frame, so a 5 Hz viz tick re-renders
+  // one tiny <PixelStrip> instead of reconciling the whole strip list.
+  // This is the perf fix that lets ChannelStrip's React.memo actually
+  // hold — it no longer receives a per-tick `visData` prop.
   // Note: previous versions tracked an `transitionActiveRef` echo-lockout
   // and a `transitionGenRef` cancellation token here. Both are gone —
   // transitions are now driven server-side (see handleTransition), so the
@@ -615,15 +641,15 @@ export default function MixerScreen() {
     }, [])
   );
 
-  // Subscribe to the two singleton buses we care about (control + viz).
-  // Returns a teardown that unsubscribes both.
-  const subscribeBuses = useCallback(() => {
-    // Control plane: mixer state, baseChannelId, maxChannels, in-flight
-    // add reconciliation. ALSO: the playlist library list — engine
-    // emits `playlistLibrary` on every save/delete (and on boot it
-    // seeds via the REST fetch below). Owning it here means every
-    // ChannelStrip sees the same list via prop, not its own fetch.
-    const unsubControl = engineEvents.subscribe((msg) => {
+  // Control plane handler (consumed by useEngineConnection below): mixer
+  // state, baseChannelId, maxChannels, in-flight add reconciliation. ALSO:
+  // the playlist library list — engine emits `playlistLibrary` on every
+  // save/delete (and on boot it seeds via the REST fetch below). Owning it
+  // here means every ChannelStrip sees the same list via prop, not its own
+  // fetch. (The viz plane is no longer subscribed at the screen level —
+  // each ChannelVizStrip self-subscribes; see the perf note above.)
+  const onControl = useCallback((msg: EngineMessage) => {
+    {
       if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
         setPlaylistLibrary(msg.names as string[]);
       }
@@ -708,33 +734,19 @@ export default function MixerScreen() {
           }
         }
       }
-    });
-    // Connection state pill (mirror engineEvents → setIsConnected).
-    const unsubStatus = engineEvents.subscribeStatus((s) => setIsConnected(!!s.connected));
-    // Viz plane: per-channel pixel data for the PixelStrip rows. These
-    // frames are ~3-15 KB at 10 Hz so they MUST NOT ride the control
-    // socket — that's the regression the May 2026 topic split fixed.
-    const unsubViz = engineVizEvents.subscribe((msg) => {
-      if (msg.type === 'vis') {
-        visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
-        // Client-side cap at 5 Hz redraw to keep the iPad cool even
-        // when the engine emits at a higher cadence.
-        const now = Date.now();
-        if (now - lastVisUpdateRef.current > 200) {
-          lastVisUpdateRef.current = now;
-          setVisVersion(v => v + 1);
-        }
-      }
-    });
-    return () => { unsubControl(); unsubStatus(); unsubViz(); };
+    }
   }, []);
 
-  const loadAll = useCallback(async () => {
-    const base = await getApiBaseAsync();
-    apiBaseRef.current = base;
-    const conn = await testConnection(base);
-    setIsConnected(conn.ok);
-    if (!conn.ok) return;
+  // Connection state pill (mirror status → setIsConnected). The shared
+  // hook funnels BOTH the boot-time testConnection probe and live
+  // subscribeStatus pushes through here, matching the prior behavior
+  // where loadAll() and the status subscription both wrote isConnected.
+  const onStatus = useCallback((s: BusStatus) => {
+    setIsConnected(!!s.connected);
+  }, []);
+
+  const seed = useCallback(async (_base: string, connected: boolean) => {
+    if (!connected) return;
 
     // Pre-May-2026 this was a 5-fetch serial waterfall — each request
     // waited on the previous, so the mixer's first paint after a tab
@@ -776,23 +788,17 @@ export default function MixerScreen() {
       }
     }
 
-    // Singleton WS buses connect lazily on first subscribe — no
-    // per-tab connect call needed. We only nudge a reconnect if the
-    // bus is currently DOWN; otherwise this would tear down a live
-    // socket on every tab focus and flash "Engine Offline" in the UI.
-    // App-foreground wakeup is already handled inside engineBus.
-    if (!engineEvents.getStatus().connected) engineEvents.reconnect();
-    if (!engineVizEvents.getStatus().connected) engineVizEvents.reconnect();
   }, []);
 
-  useEffect(() => {
-    loadAll();
-    const teardown = subscribeBuses();
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') loadAll();
-    });
-    return () => { sub.remove(); teardown(); };
-  }, [loadAll, subscribeBuses]);
+  // Boot + subscription lifecycle is shared with the deck via
+  // useEngineConnection: it resolves the API base, probes the connection
+  // (→ onStatus), nudges the singleton WS buses to reconnect only when
+  // they're DOWN (a forced reconnect on every focus would tear a live
+  // socket apart and flash "Engine Offline"), re-runs `seed` on AppState
+  // 'active', and owns the control/status subscribe + teardown. The viz
+  // bus is intentionally NOT subscribed here — ChannelVizStrip does that
+  // per-strip so a viz tick never reconciles this screen.
+  useEngineConnection({ seed, onControl, onStatus });
 
   // ── Handlers ───────────────────────────────────────────────────────
   // (Pattern selection is handled by the per-channel PlaylistPanel, which talks
@@ -802,13 +808,15 @@ export default function MixerScreen() {
   // All ChannelStrip-bound handlers are useCallback'd with empty deps
   // so React.memo() on ChannelStrip can actually short-circuit on a
   // MixerScreen re-render. Pre-fix (May 2026) every MixerScreen render
-  // — including the 5 Hz `setVisVersion` ticks below — created fresh
-  // handler identities, bypassing memo and reconciling every strip
-  // along with its CPC sliders, PixelStrip, and playlist panel. That
-  // was a large chunk of the "mixer feels laggy with 3 channels"
-  // operator complaint. Bodies reference only refs + module-level
-  // event buses + the setState callbacks (which React guarantees are
-  // stable), so the empty dep array is correct.
+  // created fresh handler identities, bypassing memo and reconciling
+  // every strip along with its CPC sliders, PixelStrip, and playlist
+  // panel. That was a large chunk of the "mixer feels laggy with 3
+  // channels" operator complaint. The other half of that complaint was
+  // the 5 Hz screen-level viz re-render, now eliminated — viz lives in
+  // the self-subscribing ChannelVizStrip, so a viz frame never reaches
+  // this screen and the memo holds. Handler bodies reference only refs +
+  // module-level event buses + the setState callbacks (which React
+  // guarantees are stable), so the empty dep array is correct.
   const handleFaderChange = useCallback(async (channelId: string, level: number) => {
     // Stamp BEFORE the WS send so any racing broadcast that arrives
     // during the round-trip is held off the slider's last finger position.
@@ -1137,9 +1145,22 @@ export default function MixerScreen() {
     }
   };
 
-  const handleDeleteChannel = useCallback(async (id: string) => {
-    await removeMixerChannel(id);
+  // Destructive-action guard (production-console safety): deleting a
+  // mixer channel drops a live overlay layer mid-show, so it must never
+  // happen on a single accidental tap. The trash button now ARMS the
+  // confirm sheet; the actual removeMixerChannel only fires when the
+  // operator confirms. `deletePrompt` holds the target id + display name.
+  const [deletePrompt, setDeletePrompt] = useState<{ id: string; name: string } | null>(null);
+  const handleDeleteChannel = useCallback((id: string) => {
+    const ch = channelsRef.current.find(c => c.id === id);
+    setDeletePrompt({ id, name: ch?.name || ch?.id || id });
   }, []);
+  const confirmDeleteChannel = useCallback(async () => {
+    const target = deletePrompt;
+    if (!target) return;
+    setDeletePrompt(null);
+    await removeMixerChannel(target.id);
+  }, [deletePrompt]);
 
   const handleTransitionSettingsChange = useCallback((channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
     updateMixerChannel(channelId, updates);
@@ -1286,7 +1307,7 @@ export default function MixerScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
           <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
         </View>
-        <PixelStrip base64Data={visDataRef.current['master']} height={18} style={{ borderRadius: 6 }} />
+        <ChannelVizStrip vizKey="master" height={18} style={{ borderRadius: 6 }} />
       </View>
 
       {/* ── Channel Strips ─────────────────────────────────────────── */}
@@ -1311,7 +1332,6 @@ export default function MixerScreen() {
               isDeck={false}
               blends={blends}
               transitions={transitionsList}
-              visData={visDataRef.current[channel.id]}
               playlistLibrary={playlistLibrary}
               initialPlaylist={channelInlinePlaylist}
               onFaderChange={handleFaderChange}
@@ -1363,6 +1383,17 @@ export default function MixerScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* ── Delete-channel confirmation (production-console safety) ──── */}
+      <ConfirmSheet
+        visible={!!deletePrompt}
+        title="Delete channel?"
+        message={`This removes the "${deletePrompt?.name ?? ''}" overlay layer from the live mix. Its playlist assignment stays on disk, but the channel and its current settings are gone.`}
+        confirmLabel="DELETE CHANNEL"
+        cancelLabel="CANCEL"
+        onConfirm={confirmDeleteChannel}
+        onCancel={() => setDeletePrompt(null)}
+      />
 
       {/* ── Unlock-dirty prompt ─────────────────────────────────────── */}
       {/* Channel has unsaved param edits made while locked. The user must

@@ -43,5 +43,24 @@ $ ENGINE_PORT=31268 node tests/hil/hil_concurrent_entry_test.mjs (live engine)
 Content: atomic temp+fsync+rename state writes; `serializeChannel()` de-dup
 (byte-compatible on disk); +27 tests (atomicity 14, invariants 10,
 blend-fallback-presence 5 doc-only, HIL concurrent 7). Backward-compatible
-state_manager (no export/signature removed). Merge commit: see git log.
+state_manager (no export/signature removed). Merge commit: 45dd556.
+
+### MERGE 2 — dev/captainpad_views (C2, slot 1) — VERIFIED ON MERGED TIP
+Boundary: CaptainPad only — index.tsx, mixer.tsx, PlaylistPanel.tsx, api.ts
+modified + new ConfirmSheet.tsx, ChannelVizStrip.tsx, useEngineConnection.ts +
+report. No engine files touched.
+Verified in main checkout on merged tip (pre-commit):
+```
+$ git diff --check -- CaptainPad                           → DIFFCHECK_OK
+$ npx tsc --noEmit                                         → TSC_EXIT=0
+$ npm run lint                                             → 0 errors / 12 warnings (baseline held, no new)
+$ npm run web:build                                        → WEBBUILD_EXIT=0, dist exported, 21 routes
+   ((tabs)/mixer 49.7kB and (tabs) deck 74.2kB both bundled)
+```
+Content: ConfirmSheet for destructive channel-delete + playlist-entry-remove
+(no silent destructive taps); ≥44pt touch targets (hitSlop) on mixer icon
+buttons + deck ◎ALL; ChannelVizStrip self-subscribes so viz frames no longer
+reconcile the strip list (React.memo holds); shared useEngineConnection hook
+de-dups deck/mixer boot/subscribe/teardown; typed fetchMixerState (hard-fails
+non-2xx instead of silent ok). Merge commit: see git log.
 </content>

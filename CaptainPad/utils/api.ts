@@ -868,11 +868,51 @@ export async function patchOscConfig(partial: {
   }
 }
 
-export async function fetchMixerState(): Promise<ApiResult<any>> {
+// Shape of GET /mixer. `channels` are mixer overlays only (the deck
+// channel lives on /deck/channel post channel-split). Channel internals
+// stay loosely typed (`MixerChannel`) because the strip renders many
+// engine-authored fields (exports, viewSelection, transition*) that the
+// UI passes through verbatim; the fields the screen actually reads at the
+// top level are pinned here.
+export interface MixerChannel {
+  id: string;
+  name?: string;
+  fader?: number;
+  mode?: string;
+  enabled?: boolean;
+  locked?: boolean;
+  faderLocked?: boolean;
+  dirty?: boolean;
+  transitionTime?: number;
+  transitionMode?: string;
+  exports?: any[];
+  playlist?: PlaylistAssignment | null;
+  viewSelection?: { type: string; target: string | number | null; invert?: boolean } | null;
+  [key: string]: any;
+}
+
+export interface MixerState {
+  master: number;
+  channels: MixerChannel[];
+  baseChannelId?: string;
+  maxChannels?: number;
+  [key: string]: any;
+}
+
+export async function fetchMixerState(): Promise<ApiResult<MixerState>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer`);
+    // Hard-fail on non-2xx instead of treating an error body as state —
+    // the old `return { ok: true, data }` would have fed a
+    // `{ error: '...' }` payload straight into the mixer screen, which
+    // reads data.master / data.channels and would have rendered NaN /
+    // an empty rig. Codex P0: fail loud, no silent fallback.
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
-    return { ok: true, data };
+    if (!data || typeof data !== 'object' || typeof data.master !== 'number' || !Array.isArray(data.channels)) {
+      return { ok: false, error: 'Malformed /mixer response (expected { master:number, channels:[] })' };
+    }
+    return { ok: true, data: data as MixerState };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }

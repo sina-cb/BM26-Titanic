@@ -14,6 +14,7 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // "1 list to rule them all": this component renders the active playlist's
@@ -818,8 +819,21 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [fetchDirEntries, flashSaved, refresh]);
 
-  // Remove + persist in one step.
-  const handleRemoveEntry = useCallback(async (entryId: string) => {
+  // Destructive-action guard (production-console safety): removing a
+  // playlist entry persists immediately to disk, so it must not happen on
+  // a single accidental tap mid-show. The (−) button ARMS the confirm
+  // sheet; performRemoveEntry only runs on explicit confirmation.
+  // `removePrompt` holds the target entry id + a display label.
+  const [removePrompt, setRemovePrompt] = useState<{ id: string; label: string } | null>(null);
+  const requestRemoveEntry = useCallback((entryId: string) => {
+    const cur = playlistRef.current;
+    const entry = cur?.entries.find((e) => e.id === entryId);
+    const label = entry ? (entry.label || patternDisplayName(entry.pattern)) : entryId;
+    setRemovePrompt({ id: entryId, label });
+  }, []);
+
+  // Remove + persist in one step (invoked only after confirmation).
+  const performRemoveEntry = useCallback(async (entryId: string) => {
     const cur = playlistRef.current;
     if (!cur) return;
     const nextEntries = cur.entries.filter((e) => e.id !== entryId);
@@ -832,6 +846,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     }
     flashSaved();
   }, [flashSaved, refresh]);
+
+  const confirmRemoveEntry = useCallback(async () => {
+    const target = removePrompt;
+    if (!target) return;
+    setRemovePrompt(null);
+    await performRemoveEntry(target.id);
+  }, [removePrompt, performRemoveEntry]);
 
   // ── Reorder: move an entry one slot up (direction=-1) or down (+1) ──
   // Operator request (May 2026): re-sequence mid-show without going back
@@ -1269,7 +1290,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   </TouchableOpacity>
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
                     <TouchableOpacity
-                      onPress={() => handleRemoveEntry(e.id)}
+                      onPress={() => requestRemoveEntry(e.id)}
+                      // Compact (−) chrome but >= 44pt tap area via
+                      // hitSlop so an operator doesn't fat-finger a
+                      // neighbouring control on the production console.
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                       style={{
                         width: sz.btnH - 4,
                         height: sz.btnH - 4,
@@ -1278,6 +1303,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         justifyContent: 'center',
                       }}
                       accessibilityLabel={`Remove ${e.pattern} from playlist`}
+                      accessibilityRole="button"
                     >
                       <Text style={{ color: isActive ? '#FFF' : C.error, fontWeight: 'bold', fontSize: sz.fontPrimary }}>−</Text>
                     </TouchableOpacity>
@@ -1330,6 +1356,17 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         exists={playlists.includes(sanitizeName(newDirPlaylistName))}
         onCancel={() => setPendingNewDir(null)}
         onCreate={confirmDirNewPlaylist}
+      />
+
+      {/* Remove-entry confirmation (production-console safety). */}
+      <ConfirmSheet
+        visible={!!removePrompt}
+        title="Remove entry?"
+        message={`Remove "${removePrompt?.label ?? ''}" from this playlist? This saves immediately to disk.`}
+        confirmLabel="REMOVE"
+        cancelLabel="CANCEL"
+        onConfirm={confirmRemoveEntry}
+        onCancel={() => setRemovePrompt(null)}
       />
     </View>
   );
