@@ -6,13 +6,16 @@
 
 - TARGET SUBSYSTEM: the MarsinEngine and CaptainPad handling of **channels**.
 - DELIVERABLE BRANCH (intended durable name): `feat/optimize_channels`.
-  **Operational note:** the harness pins this session to push to
-  `claude/bm26-channels-optimization-9ok9d3` (already cut from `origin/main`,
-  already tracked on origin). Per the hard harness rule "NEVER push to a
-  different branch without explicit permission", the **actual pushed
-  deliverable branch is `claude/bm26-channels-optimization-9ok9d3`**;
-  `feat/optimize_channels` is the conceptual name. All `dev/*` worktree
-  branches merge into the claude branch and it is what gets pushed.
+  **DELIVERABLE BRANCH = `feat/optimize_channels` (pushed + tracking on origin).**
+  Operator directive (2026-06-20): deliverable MUST be `feat/`-style; the old
+  auto-named branch `claude/bm26-channels-optimization-9ok9d3` was promoted
+  (renamed) to `feat/optimize_channels` and pushed. The operator is deleting the
+  old `claude/...` ref from origin themselves (my `git push --delete` kept
+  hitting a network disconnect — do NOT keep retrying; operator owns it).
+  **HARD RULES (operator-reaffirmed): NEVER push `dev/*` or any temp branch to
+  origin — they are LOCAL ONLY. origin holds only `main` + `feat/*`.** All
+  `dev/*` worktree branches merge into `feat/optimize_channels`, which is the
+  ONLY branch this campaign pushes.
 - SUBSYSTEM DIRS owned: `marsin_engine/`, `CaptainPad/`.
 - MISSION FOCUS:
   1. check & optimize interaction between the **deck** and the **mixer**;
@@ -221,6 +224,17 @@ single-threaded so A4/A6 are wrong). Ship safe subset, document rest.
 CaptainPad files). Lens C: removeMixerChannel res.ok + delete feedback (C1/C7),
 fail-loud on .catch swallow (C2), ConfirmSheet hitSlop (C3), SOLO text (C10),
 view-sel/deck-tx error surfacing (C5/C6) + Lens E#9 any-typing.
+
+## STATUS LOG (cont.)
+
+- 2026-06-20 T4: All 5 adversarial lenses DONE; findings + WAVE 4/5 plan
+  recorded. WAVE 3 hot-swap UI agent DONE (c8e14f9 on dev/captainpad_hotswap_ui;
+  PlaylistPanel.tsx + api.ts only; tsc 0, lint baseline, web:build 0). WAVE 4
+  worktree (dev/engine_hardening_timeline, slot 2) created from tip; agent
+  not yet launched.
+- 2026-06-20 T5: OPERATOR promoted deliverable to `feat/optimize_channels`
+  (renamed from claude/..., pushed, tracking). Operator deleting old claude
+  ref. Resuming: merge WAVE 3, launch WAVE 4 engine-hardening agent.
 
 ## Datasets / assets policy
 
