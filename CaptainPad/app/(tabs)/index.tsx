@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, AppState } from 'react-native';
+import React, { useState, useRef, useCallback } from 'react';
+import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -14,16 +14,15 @@ import { AutopilotTimerPills, DeckTransitionControls } from '@/components/DeckTr
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
-  getApiBaseAsync,
-  getAutopilot, setAutopilot, testConnection,
+  getAutopilot, setAutopilot,
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchPlaylists,
   type DeckTransitionConfig,
 } from '@/utils/api';
-import { engineEvents } from '@/utils/engineEvents';
-import { engineVizEvents } from '@/utils/engineVizEvents';
+import { useEngineConnection } from '@/hooks/useEngineConnection';
+import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -164,8 +163,11 @@ export default function ControlDeckScreen() {
   // Pre-May-2026 the deck tab owned its own WS. The topic split
   // moved that into singleton buses (utils/engineEvents +
   // utils/engineVizEvents). This tab now just subscribes — no per-tab
-  // socket, no double-parse of the mixer / vis firehose.
-  const apiBaseRef = useRef<string>('');
+  // socket, no double-parse of the mixer / vis firehose. The boot +
+  // subscription lifecycle (resolve base, probe, nudge buses, AppState
+  // re-seed, subscribe/teardown) is shared with the mixer via
+  // useEngineConnection; the per-bus message handlers below are the
+  // deck-specific part.
   const visDataRef = useRef<{ [key: string]: string | null }>({});
   const [, setVisVersion] = useState(0);
   const lastVisUpdateRef = useRef(0);
@@ -181,75 +183,61 @@ export default function ControlDeckScreen() {
     }, [])
   );
 
-  const subscribeBuses = useCallback(() => {
-    // Control plane: deck channel state, autopilot, deck-transition
-    // config, soft-swap lifecycle markers.
-    const unsubControl = engineEvents.subscribe((msg) => {
-      if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
-        setPlaylistLibrary(msg.names as string[]);
+  // Control plane: deck channel state, autopilot, deck-transition
+  // config, soft-swap lifecycle markers.
+  const onControl = useCallback((msg: EngineMessage) => {
+    if (msg.type === 'playlistLibrary' && Array.isArray(msg.names)) {
+      setPlaylistLibrary(msg.names as string[]);
+    }
+    if (msg.type === 'deck') {
+      setDeckChannel((msg.channel as any) || null);
+    } else if (msg.type === 'autopilot') {
+      if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
+      if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
+        setPlaylistDelayStr(msg.delay_s as string);
       }
-      if (msg.type === 'deck') {
-        setDeckChannel((msg.channel as any) || null);
-      } else if (msg.type === 'autopilot') {
-        if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
-        if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
-          setPlaylistDelayStr(msg.delay_s as string);
-        }
-        if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
-      } else if (msg.type === 'deckTransitionConfig') {
-        setDeckTxConfig((prev) => ({
-          enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
-          mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
-          durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
-          shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
-        }));
-      } else if (msg.type === 'deckSwapStarted') {
-        setDeckSwapInFlight(true);
-        const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
-        if (typeof tm === 'string') setLastSwapMode(tm);
-      } else if (msg.type === 'deckSwapComplete') {
-        setDeckSwapInFlight(false);
-        const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
-        if (typeof tm === 'string') setLastSwapMode(tm);
-      }
-    });
-    const unsubStatus = engineEvents.subscribeStatus((s) => {
-      setIsConnected(!!s.connected);
-      setConnectionError(s.connected ? '' : (s.lastError || ''));
-    });
-    // Viz plane: master strip lives on the deck tab too.
-    const unsubViz = engineVizEvents.subscribe((msg) => {
-      if (msg.type === 'vis') {
-        visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
-        const now = Date.now();
-        if (now - lastVisUpdateRef.current > 200) {
-          lastVisUpdateRef.current = now;
-          setVisVersion(v => v + 1);
-        }
-      }
-    });
-    return () => { unsubControl(); unsubStatus(); unsubViz(); };
+      if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+    } else if (msg.type === 'deckTransitionConfig') {
+      setDeckTxConfig((prev) => ({
+        enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
+        mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
+        durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
+        shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+      }));
+    } else if (msg.type === 'deckSwapStarted') {
+      setDeckSwapInFlight(true);
+      const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
+      if (typeof tm === 'string') setLastSwapMode(tm);
+    } else if (msg.type === 'deckSwapComplete') {
+      setDeckSwapInFlight(false);
+      const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
+      if (typeof tm === 'string') setLastSwapMode(tm);
+    }
   }, []);
 
-  // ── Boot: warm REST seeds + nudge singleton buses to reconnect ─────
-  const connectToEngine = useCallback(async () => {
-    const base = await getApiBaseAsync();
-    apiBaseRef.current = base;
+  const onStatus = useCallback((s: BusStatus) => {
+    setIsConnected(!!s.connected);
+    setConnectionError(s.connected ? '' : (s.lastError || ''));
+  }, []);
 
-    // 1. Test connection first
-    const conn = await testConnection(base);
-    setIsConnected(conn.ok);
-    setConnectionError(conn.ok ? '' : (conn.error || 'Unknown error'));
+  // Viz plane: master strip lives on the deck tab too.
+  const onViz = useCallback((msg: EngineMessage) => {
+    if (msg.type === 'vis') {
+      visDataRef.current = (msg.vis as { [key: string]: string | null }) || {};
+      const now = Date.now();
+      if (now - lastVisUpdateRef.current > 200) {
+        lastVisUpdateRef.current = now;
+        setVisVersion(v => v + 1);
+      }
+    }
+  }, []);
 
-    // Only nudge the singleton buses if they're actually down — a
-    // forced reconnect on every tab focus tears the live socket apart
-    // and surfaces as the "Engine Offline" flash. The buses already
-    // self-heal on AppState 'active' and on the engine closing the
-    // socket, so this is purely a safety net.
-    if (!engineEvents.getStatus().connected) engineEvents.reconnect();
-    if (!engineVizEvents.getStatus().connected) engineVizEvents.reconnect();
-
-    if (!conn.ok) return;
+  // ── Boot: warm REST seeds (the shared hook handles base resolution,
+  // the connection probe, bus reconnect nudging, and AppState 'active'
+  // re-seeding). Deck deliberately does NOT call /mixer — the deck tab
+  // has no business surfacing overlay channels.
+  const seed = useCallback(async (_base: string, connected: boolean) => {
+    if (!connected) return;
 
     // Load autopilot state
     const apResult = await getAutopilot();
@@ -265,9 +253,7 @@ export default function ControlDeckScreen() {
       setDeckTxConfig(dtRes.data);
     }
 
-    // Load initial deck channel state. We deliberately do NOT
-    // call /mixer here — the deck tab has no business surfacing
-    // overlay channels.
+    // Load initial deck channel state.
     const deckRes = await fetchDeckChannel();
     if (deckRes.ok && deckRes.data) {
       setDeckChannel(deckRes.data.channel || null);
@@ -279,6 +265,8 @@ export default function ControlDeckScreen() {
     if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
   }, []);
 
+  const { reconnect: connectToEngine } = useEngineConnection({ seed, onControl, onStatus, onViz });
+
   // Patch the deck transition config (optimistic local update + POST).
   // The server broadcasts `deckTransitionConfig` on success which we
   // already mirror in the WS handler — that's the source of truth, but
@@ -287,25 +275,6 @@ export default function ControlDeckScreen() {
     setDeckTxConfig((prev) => ({ ...prev, ...patch }));
     setDeckTransitionConfig(patch);
   }, []);
-
-  useEffect(() => {
-    connectToEngine();
-    const teardown = subscribeBuses();
-
-    // Reconnect REST seeds when app comes to foreground. The
-    // singleton buses also auto-reconnect on AppState 'active'
-    // (utils/engineBus.ts), so we don't duplicate the WS work here.
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        connectToEngine();
-      }
-    });
-
-    return () => {
-      sub.remove();
-      teardown();
-    };
-  }, [connectToEngine, subscribeBuses]);
 
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
     // Deck tab only ever writes to the deck channel — there's a single
@@ -489,8 +458,17 @@ export default function ControlDeckScreen() {
                         onPress={() => setShowAllMods(true)}
                         disabled={!channel.playlist?.name}
                         accessibilityLabel="Open all modulations panel"
+                        accessibilityRole="button"
+                        // Production-console touch target: the pill is
+                        // visually compact (fontSize 11 + 4pt vertical
+                        // padding) so we expand the tappable area with
+                        // hitSlop + a 44pt min height/width instead of
+                        // inflating the chrome, keeping the header tidy.
+                        hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
                         style={{
-                          paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                          paddingHorizontal: 12, borderRadius: 6,
+                          minHeight: 44, minWidth: 44,
+                          alignItems: 'center', justifyContent: 'center',
                           borderWidth: 1, borderColor: '#00a86b',
                           backgroundColor: 'transparent',
                           opacity: channel.playlist?.name ? 1 : 0.4,
