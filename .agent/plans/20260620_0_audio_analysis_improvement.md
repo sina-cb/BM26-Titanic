@@ -240,3 +240,13 @@ summary report, push `feat/audio_analysis_2`.
 - `05:40Z` A1 (companion accounting + theming) MERGED @ `1924803`. **ALL 5 SLICES
   MERGED.** Full integration sweep: 270 audio tests green. Next: push to preserve
   (ephemeral container), then Wave C adversarial (queue ACTIVE now empty) + I1/I2/I3.
+- `06:35Z` Wave C: 5 adversarial auditors done → findings `20260620_9`. Signals P1
+  batch (dead startup guard, party warmup, genre conf, dead BPM params) MERGED @
+  `a775398` (271 green). Companion/CaptainPad polish (items 5–10) MERGED @ `~1924803→`
+  (279 green). Repo-hygiene fix `9364f64` (node_modules symlink untracked).
+- `07:45Z` Safe quality pass MERGED @ `facebde` (detector scoring honesty additive,
+  dom2 smoothing, doc cleanups; 261 green). **DELIVERABLE COMPLETE + PUSHED.**
+  Merge summary `20260620_11`. Remaining = documented coordinated backlog (FFT-2048,
+  fixed-dt, genre v2 real-audio, detector recall) — needs real audio / HIL / browser
+  not available here; NOT landed piecemeal to protect the green "just works" state.
+  Instigator now in MAINTAIN mode (cron backstop) until the 12:43Z deadline.
