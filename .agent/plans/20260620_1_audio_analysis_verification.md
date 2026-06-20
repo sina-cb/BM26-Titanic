@@ -238,3 +238,10 @@ Proof entry template:
 - 10 pulse keys (micOnsetLow/Mid/High, audioChestHit, audioDropCountdown, audioBeat, audioPhraseBoundary, audioTrackChange, audioSwitchColor, audioSwitchPattern) now render via new `PulseFlash.tsx` (arm-on-edge + frame-normalised decay ~150-250ms), themed; continuous keys keep bars. Single source of truth `isPulseKey()` in audioSignals.ts.
 - Command(s) BY INSTIGATOR on merged tip: `cd CaptainPad && npx tsc --noEmit` → **exit 0**. Agent: lint exit 0, web:build exit 0, classification assertion 10 pulse / 14 continuous correct.
 - Verdict: F3 crossed off. ✅
+
+### F2 — BPM fast-tempo recovery  [PASS]  2026-06-20T23:40Z
+- Branch `dev/f2_bpm_fasttempo` → merged (--no-ff, clean three-way; F3 PulseFlash preserved).
+- Recovered (real AudioAnalyzer+BpmTracker): full_track@170 84.8→**171.6**; DnB rfs005 92.7→180, tkep010 90.1→175, tkep012 90.1→180, tkep017 77.7→155. Psytrance preserved (139-148). Downtempo preserved (DWK217 **70.0**, DWK031 110.7). No 118-160 EDM or fold-boundary (95→80) regression. Residual edm_drop@150/174 etc. are 3:2/6:5 metric-ratio (out of octave scope).
+- Params (bpm_tracker.js): octaveCenterBpm 115→128, octaveSigma 0.42→0.30, new octaveSigmaHi 0.60, octMigrateConf 0.10→0.06; skewed log-Gaussian _octavePref.
+- Command(s) BY INSTIGATOR: `node --test tests/bpm_tracker_octave.test.js tests/audio_config.test.js tests/note_estimator_synthetic.test.js` → **39 pass**; dry-run exit 0. Also fixed a pre-existing AUDIO_LIVE_FIELDS contract-test regression F2 surfaced (E1 keys) → audio_config 23/23.
+- Verdict: F2 crossed off. ✅
