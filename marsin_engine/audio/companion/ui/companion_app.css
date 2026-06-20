@@ -25,35 +25,42 @@
  * of their CaptainPad counterparts. :root carries the dark values so a missing
  * data-theme still renders (it never goes unstyled).
  */
+/* --on-accent: the foreground used on top of --accent (active seg-btn, .primary,
+ * .cal-apply). It is a PER-THEME token because the accents differ in luminance:
+ * the dark/amber/yellow/blue accents are light enough that near-black text
+ * (#1a1205) clears WCAG AA, but the LIGHT theme's teal accent (#006875) at 2.86:1
+ * against #1a1205 FAILS AA — there white (#ffffff) is the only AA-passing pair.
+ * No fallback default: every theme (and :root) defines it so a missing token is a
+ * visible breakage, not a silent wrong color (codex P0). */
 :root,
 [data-theme="dark"]{
   --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
   --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
-  --ok:#34d3b5; --err:#ff5d6c;
+  --ok:#34d3b5; --err:#ff5d6c; --on-accent:#1a1205;
 }
 /* LIGHT — CaptainPad "Luminance Command" daytime palette. */
 [data-theme="light"]{
   --bg:#f8f9fa; --panel:#f3f4f5; --panel2:#ffffff; --raised:#e7e8e9;
   --border:#bac9cc; --text:#191c1d; --muted:#466270; --accent:#006875;
-  --ok:#1b9e77; --err:#ba1a1a;
+  --ok:#1b9e77; --err:#ba1a1a; --on-accent:#ffffff;
 }
 /* MIDNIGHT — deep blue-black, cool blue accent. */
 [data-theme="midnight"]{
   --bg:#06080c; --panel:#0d1320; --panel2:#04060a; --raised:#152030;
   --border:#27313f; --text:#d4dde8; --muted:#7a8a9e; --accent:#5cc0ff;
-  --ok:#3ad4a6; --err:#ff7a82;
+  --ok:#3ad4a6; --err:#ff7a82; --on-accent:#1a1205;
 }
 /* SUNSET — warm amber low-light. */
 [data-theme="sunset"]{
   --bg:#1a0f0a; --panel:#251812; --panel2:#100905; --raised:#2e2017;
   --border:#3e2e1a; --text:#f4e8d8; --muted:#b89478; --accent:#ffb84a;
-  --ok:#9acb87; --err:#ff8a6a;
+  --ok:#9acb87; --err:#ff8a6a; --on-accent:#1a1205;
 }
 /* GRUVBOX — retro warm, mustard-yellow accent. */
 [data-theme="gruvbox"]{
   --bg:#282828; --panel:#32302f; --panel2:#1d2021; --raised:#3c3836;
   --border:#504945; --text:#ebdbb2; --muted:#a89984; --accent:#fabd2f;
-  --ok:#b8bb26; --err:#fb4934;
+  --ok:#b8bb26; --err:#fb4934; --on-accent:#1a1205;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -70,7 +77,7 @@ body{background:var(--bg);color:var(--text);
 .seg-btn{background:var(--panel);color:var(--muted);border:none;border-right:1px solid var(--border);
   padding:5px 14px;font:inherit;cursor:pointer}
 .seg-btn:last-child{border-right:none}
-.seg-btn.active{background:var(--accent);color:#1a1205;font-weight:700}
+.seg-btn.active{background:var(--accent);color:var(--on-accent);font-weight:700}
 .file-wrap{display:none;align-items:center;gap:6px}
 .file-wrap.show{display:flex}
 .file-input{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
@@ -100,7 +107,7 @@ body{background:var(--bg);color:var(--text);
 @keyframes pulse{50%{opacity:.5}}
 .cal-res{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:8px}
 .cal-res b{color:var(--text)}
-.cal-apply{background:var(--accent);color:#1a1205;border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
+.cal-apply{background:var(--accent);color:var(--on-accent);border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
 .mic-wrap{display:none;align-items:center;gap:6px}
 .mic-wrap.show{display:flex}
 .device-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
@@ -158,7 +165,7 @@ body{background:var(--bg);color:var(--text);
 .status{padding:3px 10px;border-radius:6px;border:1px solid var(--border);color:var(--muted)}
 .status.ok{color:var(--ok);border-color:var(--ok);background:rgba(52,211,181,.08)}
 .status.err{color:var(--err);border-color:var(--err);background:rgba(255,93,108,.08)}
-.primary{background:var(--accent);color:#1a1205;border:none;border-radius:6px;
+.primary{background:var(--accent);color:var(--on-accent);border:none;border-radius:6px;
   padding:6px 14px;font:inherit;font-weight:700;cursor:pointer}
 .primary:hover{filter:brightness(1.08)}
 
@@ -289,6 +296,10 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 #export-text{width:100%;height:340px;background:var(--panel2);color:var(--text);border:1px solid var(--border);
   border-radius:8px;padding:10px;font:inherit;resize:vertical}
 .modal-foot{margin-top:10px;text-align:right}
+.modal-foot .op-btn{margin-right:8px}
+/* themed confirm dialog (replaces native window.confirm) */
+.confirm-box{width:min(420px,92vw)}
+.confirm-msg{color:var(--text);font-size:13px;line-height:1.5;padding:4px 2px 2px}
 .add-box{width:min(440px,92vw)}
 .add-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .add-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;

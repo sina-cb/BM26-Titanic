@@ -212,9 +212,29 @@ function registerBuiltinOscOutput(entry) {
 // BPM is the one always-on built-in emit today (bpm_emit.js → /marsin/audio/bpm).
 registerBuiltinOscOutput({ address: BPM_OSC_ADDRESS, label: 'BPM (derived)', cpcKey: 'audioBpm', kind: 'derived' });
 
+// The reported rate must reflect a stream that has STOPPED (a disabled tap, or
+// BPM during silence where emitDerivedBpm returns false), not freeze at the last
+// EWMA forever — a stale rate is observability that LIES (codex P0). At READ time
+// we decay each row's stored EWMA by the idle gap since its last packet: the same
+// EWMA folding recordOscSend does, but with `value=0` for the idle interval. A
+// stream sending at rate R reads ~R; one idle for many TAUs reads ~0. Past a hard
+// cutoff (idle > IDLE_CUTOFF_TAUS × TAU) we force exactly 0 so a long-dead stream
+// is unambiguously dead rather than an exponential whisker.
+const OSC_RATE_IDLE_CUTOFF_TAUS = 4;   // idle past this × TAU ⇒ report 0
+function effectiveRateHz(acc, now) {
+  if (!acc || !acc._lastMs) return 0;
+  const idleMs = now - acc._lastMs;
+  if (idleMs <= 0) return acc.rateHz;
+  if (idleMs > OSC_RATE_IDLE_CUTOFF_TAUS * OSC_RATE_TAU_MS) return 0;
+  // Fold an idle (value-0) interval into the EWMA: rate ← (1 - a) · rate.
+  const a = Math.min(1, idleMs / OSC_RATE_TAU_MS);
+  return (1 - a) * acc.rateHz;
+}
+
 function buildOscAccounting() {
   const rows = [];
   const seen = new Set();
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   const push = (address, label, cpcKey, kind) => {
     if (seen.has(address)) return;
     seen.add(address);
@@ -223,7 +243,7 @@ function buildOscAccounting() {
       address, label, cpcKey, kind,
       count: acc ? acc.count : 0,
       value: acc ? acc.lastValue : null,
-      rateHz: acc ? +acc.rateHz.toFixed(2) : 0,
+      rateHz: acc ? +effectiveRateHz(acc, now).toFixed(2) : 0,
     });
   };
   // Designed OUTPUT signals — one row each, only when the tap is enabled.

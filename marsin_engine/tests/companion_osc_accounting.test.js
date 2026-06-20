@@ -24,7 +24,11 @@ const SERVER = path.join(__dirname, '..', 'audio', 'companion', 'companion_serve
 const CSS = path.join(__dirname, '..', 'audio', 'companion', 'ui', 'companion_app.css');
 
 // The companion var set every theme must define (the tokens the UI reads).
-const REQUIRED_VARS = ['--bg', '--panel', '--panel2', '--raised', '--border', '--text', '--muted', '--accent', '--ok', '--err'];
+// --on-accent is required in EVERY theme: it is the foreground on top of --accent
+// (active seg-btn, .primary, .cal-apply). Light's teal accent fails WCAG AA on the
+// near-black text, so each theme carries its own AA-passing on-accent color — a
+// missing token must FAIL here, not silently fall back (codex P0).
+const REQUIRED_VARS = ['--bg', '--panel', '--panel2', '--raised', '--border', '--text', '--muted', '--accent', '--ok', '--err', '--on-accent'];
 const EXPECTED_THEMES = ['light', 'dark', 'midnight', 'sunset', 'gruvbox'];
 const CANONICAL_GENRES = ['ambient', 'deep_house', 'melodic_house', 'tech_house', 'techno', 'melodic_techno', 'downtempo'];
 
@@ -110,6 +114,38 @@ test('/osc_accounting enumerates every designed OUTPUT + the BPM emit, live', as
     assert.ok(micLow.count > 0, `micLow has emitted packets (count=${micLow.count})`);
     assert.ok(micLow.rateHz > 0, `micLow reports a send rate (${micLow.rateHz}/s)`);
     assert.ok(acc.totalSent > 0, `totalSent climbed (${acc.totalSent})`);
+  });
+});
+
+test('a STOPPED OSC stream decays its accounting rate toward 0 (no stale-rate lie)', async () => {
+  // Observability that LIES is a codex-P0 hazard: if a stream stops (a tap is
+  // removed/disabled, or BPM goes silent), its last EWMA rate must NOT freeze
+  // forever. We boot test mode so /marsin/mic/low streams (rate > 0), then
+  // remove that signal so its packets STOP, wait past the idle cutoff, and
+  // assert the accounting rate has decayed to ~0 while its count stays frozen.
+  const port = 31995 + Math.floor(Math.random() * 4);
+  await withCompanion(port, async (ws) => {
+    const addr = '/marsin/mic/low';
+    let acc = await getJson(port, '/osc_accounting');
+    let row = acc.outputs.find(o => o.address === addr);
+    assert.ok(row && row.count > 0, `${addr} is streaming (count=${row && row.count})`);
+    assert.ok(row.rateHz > 0, `${addr} reports a live rate before stop (${row.rateHz}/s)`);
+    // Stop the stream: remove the 'low' signal so its tap no longer emits.
+    ws.send(JSON.stringify({ type: 'removeSignal', id: 'low' }));
+    // Let any in-flight analyzer hop that was already mid-send land, then snapshot
+    // the now-frozen count (the removal + last packet have settled).
+    await new Promise(r => setTimeout(r, 400));
+    let settled = (await getJson(port, '/osc_accounting')).outputs.find(o => o.address === addr);
+    const frozenCount = settled.count;
+
+    // Wait past the hard idle cutoff (OSC_RATE_IDLE_CUTOFF_TAUS=4 × TAU=1000ms).
+    await new Promise(r => setTimeout(r, 4500));
+
+    acc = await getJson(port, '/osc_accounting');
+    row = acc.outputs.find(o => o.address === addr);
+    assert.ok(row, `${addr} still accounted for after stop (defensive row)`);
+    assert.equal(row.count, frozenCount, 'count is frozen after stop — no new packets sent');
+    assert.equal(row.rateHz, 0, `stopped stream decays to 0 (was non-zero), got ${row.rateHz}`);
   });
 });
 

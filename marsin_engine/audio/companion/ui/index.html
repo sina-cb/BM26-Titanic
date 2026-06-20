@@ -176,6 +176,20 @@
     </div>
   </div>
 
+  <!-- Themed confirm dialog (replaces native window.confirm — the designer
+       must show NO native dialogs). Message + Cancel/Confirm filled in by JS. -->
+  <div id="confirm-modal" class="modal">
+    <div class="modal-box confirm-box">
+      <div class="modal-head"><span id="confirm-title">confirm</span>
+        <button id="confirm-x" class="op-btn">✕</button></div>
+      <div id="confirm-msg" class="confirm-msg"></div>
+      <div class="modal-foot">
+        <button id="confirm-cancel" class="op-btn">Cancel</button>
+        <button id="confirm-ok" class="primary">Remove</button>
+      </div>
+    </div>
+  </div>
+
   <script src="companion_app.js"></script>
 </body>
 </html>
