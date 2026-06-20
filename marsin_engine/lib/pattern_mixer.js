@@ -171,6 +171,15 @@ export class PatternMixer {
     this.deckChannel = null;
     this.mixerChannels = [];
     this.master = 1.0;
+    // ── Grand-master timed fade (F-B) ────────────────────────────────
+    // An in-flight master fade animates `master` from a start value toward
+    // a target over a fixed wall-clock duration on the 40 Hz render tick.
+    // Mirrors the viewFader ramp's dt-clamped, frame-rate-independent
+    // approach (see renderAll6ch). `_masterFade` is null when no fade is in
+    // flight; a direct setMaster() write cancels any in-flight fade so the
+    // operator's hand always wins (no animation fighting a manual set).
+    //   { from, to, startMs, durationMs }
+    this._masterFade = null;
     this.deckFocusChannelId = null; // When set, deck view renders this channel instead of the deck channel
     // maxChannels comes from config.yaml `mixer.maxChannels`. Default 3 — the
     // CaptainPad iPad strip layout doesn't fit more than that without
@@ -694,7 +703,78 @@ export class PatternMixer {
   }
 
   setMaster(value) {
+    // A direct master write cancels any in-flight timed fade — the
+    // operator's explicit set is the last word (no animation fighting a
+    // manual slider). Mirrors cancelChannelTransition before a manual fader.
+    this._masterFade = null;
     this.master = Math.max(0, Math.min(1, value));
+  }
+
+  /**
+   * Begin a timed grand-master fade (F-B). Animates `master` from its
+   * CURRENT value toward `target` over `durationMs` on the render tick.
+   * A timed blackout is target=0; a restore is a fade back to a non-zero
+   * value. Starting a new fade replaces any in-flight one (last-write-wins).
+   *
+   * Caller (api_server) MUST have validated target ∈ [0,1] finite and
+   * durationMs finite > 0 — this method defensively re-validates and throws
+   * on bad input rather than silently no-opping (Codex P0: fail loud).
+   *
+   * @param {number} target normalized [0,1] master gain to fade to
+   * @param {number} durationMs fade duration in ms (> 0)
+   */
+  startMasterFade(target, durationMs) {
+    if (!Number.isFinite(target) || target < 0 || target > 1) {
+      throw new Error(`startMasterFade: target must be finite in [0,1], got ${target}`);
+    }
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      throw new Error(`startMasterFade: durationMs must be finite > 0, got ${durationMs}`);
+    }
+    this._masterFade = {
+      from: this.master,
+      to: target,
+      startMs: Date.now(),
+      durationMs,
+    };
+  }
+
+  /**
+   * Snapshot of the in-flight master fade for /status + /mixer, or null
+   * when no fade is animating. Shape:
+   *   { active: true, from, to, durationMs, elapsedMs, remainingMs }
+   */
+  getMasterFade() {
+    if (!this._masterFade) return null;
+    const f = this._masterFade;
+    const elapsed = Math.max(0, Date.now() - f.startMs);
+    return {
+      active: true,
+      from: f.from,
+      to: f.to,
+      durationMs: f.durationMs,
+      elapsedMs: Math.min(elapsed, f.durationMs),
+      remainingMs: Math.max(0, f.durationMs - elapsed),
+    };
+  }
+
+  /**
+   * Advance the master fade one render tick. Linear interpolation over
+   * wall-clock time so the perceived duration is frame-rate independent.
+   * Lands EXACTLY on the target and clears `_masterFade` when complete, so
+   * a steady-state master never carries a dangling fade descriptor. Called
+   * from renderAll6ch alongside the viewFader ramp.
+   */
+  _tickMasterFade() {
+    if (!this._masterFade) return;
+    const f = this._masterFade;
+    const elapsed = Date.now() - f.startMs;
+    if (elapsed >= f.durationMs) {
+      this.master = Math.max(0, Math.min(1, f.to));
+      this._masterFade = null;
+      return;
+    }
+    const t = elapsed <= 0 ? 0 : elapsed / f.durationMs;
+    this.master = f.from + (f.to - f.from) * t;
   }
 
   async transitionBaseTo(patternName, options = {}) {
@@ -1477,6 +1557,12 @@ export class PatternMixer {
     const wantVis = this.wantVisThisFrame !== false;
     if (wantVis) this._visData = {};
 
+    // Grand-master timed fade (F-B). Advance before compositing so this
+    // frame's applyMaster uses the freshly-stepped value. Frame-rate
+    // independent (wall-clock interpolation); a no-op when no fade is in
+    // flight. Lives alongside the viewFader ramp below by design.
+    this._tickMasterFade();
+
     // Smooth view crossfade (0 = deck, 1 = mixer). Time-based ramp so
     // the perceived duration stays at viewFaderRampPerSec regardless
     // of the engine's render fps. dt is clamped so a frame stall
@@ -1650,7 +1736,22 @@ export class PatternMixer {
       // suspenders check keeps the invariant honest.
       const isScriptedTarget = channel.id === this.scriptedTransitionTargetId;
       if (!channel.enabled) continue;
-      if (!isScriptedTarget && channel.fader <= 0.001) continue;
+
+      // F-C — per-channel intensity clamp (faderMax). The channel's OWN
+      // contribution can never exceed faderMax: it is a hard ceiling applied
+      // AFTER the live fader / transition value, so a scripted transition or
+      // a manual slider can ride up to faderMax but no further. Absent /
+      // legacy channels default faderMax=1.0 (no clamp). This is the LAST
+      // word on a channel's own output (docs/39 §F-C).
+      const faderMax = (typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax))
+        ? channel.faderMax
+        : 1.0;
+      const effFader = channel.fader < faderMax ? channel.fader : faderMax;
+
+      // Skip-dark gate uses the CLAMPED fader: a channel clamped to 0 (or a
+      // fader at ~0) contributes nothing, so skip it — except the scripted-
+      // transition target, whose blend script must run every frame.
+      if (!isScriptedTarget && effFader <= 0.001) continue;
 
       // Re-render into channelBuffer for blend compositing.
       this.channelBuffer.fill(0);
@@ -1668,7 +1769,7 @@ export class PatternMixer {
       if (blendHandle) {
         blended = this.wasmHost.renderBlend6ch(
           blendHandle, this.pixelCount,
-          this.mixerBuffer, this.channelBuffer, channel.fader
+          this.mixerBuffer, this.channelBuffer, effFader
         );
       } else {
         // DEGRADED PATH (Codex P0 visibility): the channel's blend mode has
@@ -1689,7 +1790,7 @@ export class PatternMixer {
         );
         blended = this.blendedScratch;
         for (let i = 0; i < blended.length; i++) {
-          blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * channel.fader);
+          blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * effFader);
         }
       }
 

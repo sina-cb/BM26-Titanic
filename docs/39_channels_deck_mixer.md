@@ -400,6 +400,108 @@ Tests / HIL (`marsin_engine/tests/`):
 
 ---
 
+## 8. Channel-features wave (2026-06-20, engine-side)
+
+Four additive, backward-compatible features. Every new field defaults so an
+old state file (without the field) still loads and restores to the documented
+default — **a schema default is not a silent fallback**; non-finite /
+structurally-wrong inputs are rejected loudly (Codex P0).
+
+### 8.1 F-A — Named mixer snapshots / look recall (flagship)
+
+A **snapshot** ("look") is the FULL mixer state captured under a name: the
+grand-master value, the deck channel, and every overlay's serialized core
+(id / name / pattern / fader / **faderMax** / **color** / mode / enabled /
+locked / faderLocked / viewSelection / playlist+activeEntry). Persisted as
+YAML in `states/<model>/snapshots/<name>.yaml` via the SAME atomic
+temp+fsync+rename writer as the playlist / state managers
+(`StateManager.writeFileAtomic`, new public wrapper). Implemented in
+`lib/snapshot_manager.js` (`SnapshotManager`, `SnapshotLoadError`).
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/mixer/snapshots` | — | `{ snapshots: string[] }` (sorted names) |
+| `POST` | `/mixer/snapshots` | `{ name }` | `{ status:'ok', name }` — captures current look |
+| `GET` | `/mixer/snapshots/:name` | — | the full look object, or `404` |
+| `DELETE` | `/mixer/snapshots/:name` | — | `{ status:'ok' }`, or `404` |
+| `POST` | `/mixer/snapshots/:name/recall` | — | `{ status:'ok', name }` — restores the look |
+
+- **Name rules**: `^[a-z0-9][a-z0-9_-]{0,63}$` (snake_case slug). A bad name,
+  a `null`/empty `name` on capture ⇒ `400`. Path traversal is rejected.
+- **Capture** reuses `serializeChannel` (`state_manager.js`) so a captured
+  look round-trips through recall identically to an engine restart.
+- **Recall** reuses the existing build/setter machinery
+  (`buildChannelFromSaved` → `setDeckChannel` / `addMixerChannel` /
+  `removeMixerChannel`, then `setMaster`) and **RESPECTS `maxChannels`**: it
+  removes every current overlay, rebuilds the deck (mission-critical
+  never-dark fallback applies), then re-adds the snapshot's overlays. A
+  snapshot with MORE overlays than `maxChannels` ⇒ `400 code:SNAPSHOT_OVER_CAP`
+  (fail loud — never a silent truncation). Recall persists via `saveAllState()`.
+- **Fail loud**: unknown name on recall/GET ⇒ `404`; malformed snapshot YAML
+  or invalid shape ⇒ `400 code:SNAPSHOT_MALFORMED` (mirrors `PlaylistLoadError`).
+- **WS**: broadcasts `{ type:'snapshots', action:'saved'|'deleted'|'recalled',
+  name, snapshots }` on `/ws/control` on every mutation.
+
+### 8.2 F-B — Grand-master fade-time / timed blackout (flagship)
+
+`POST /mixer/master/fade { target, durationMs }` animates `master` from its
+current value toward `target` over `durationMs` on the 40 Hz render tick —
+the SAME dt-clamped, frame-rate-independent ramp as the `viewFader` crossfade
+(`PatternMixer.renderAll6ch` → `_tickMasterFade`). A **timed blackout** is
+`target:0`; a **restore** is a fade back to a non-zero value.
+
+- Validation (Codex P0, before the mixer is touched): `target` must be a
+  finite number in `[0,1]` (reuses `validateFader`; non-finite ⇒ `400`),
+  `durationMs` must be a finite number `> 0` (else `400`).
+- A direct `PATCH /mixer { master }` (or any `setMaster`) **cancels** any
+  in-flight fade — the operator's hand always wins.
+- The fade lands EXACTLY on the target and clears its descriptor when done.
+- **Exposed**: `master` + `masterFade` on `GET /status`, `GET /mixer`, and the
+  `deck`/`mixer` WS broadcasts. `masterFade` is `null` when steady, else
+  `{ active:true, from, to, durationMs, elapsedMs, remainingMs }`.
+- Default behavior unchanged: an instant `PATCH /mixer { master }` set is
+  unaffected — the fade is opt-in via the new route.
+
+### 8.3 F-C — Per-channel intensity clamp (`faderMax`)
+
+`faderMax` (number, default `1.0`) is a hard ceiling on a channel's OWN
+contribution to the composite. Applied at blend time as
+`effectiveFader = min(channel.fader, faderMax)` in `PatternMixer.renderAll6ch`
+— so a fader, a scripted transition, or a manual write can ride up to
+`faderMax` but **never above it**. The clamp is the **last word** on a
+channel's own output. `faderMax = 0` fully suppresses the channel.
+
+- Set via `PATCH /mixer/channels/:id` and `PATCH /deck/channel` with
+  `{ faderMax }`. Validated identically to a fader (finite, clamped to
+  `[0,1]`; non-finite ⇒ `400`).
+- Added to `PatternChannel`, BOTH serializers (broadcast + state), and the
+  restore path. Persists across restart; absent in an old file ⇒ `1.0`.
+
+### 8.4 F-D — Channel color
+
+`color` (string or `null`, default `null`) is pure operator-facing METADATA
+(e.g. a hex accent for the CaptainPad strip) with **no render effect**.
+
+- Set via `PATCH /mixer/channels/:id` and `PATCH /deck/channel` with
+  `{ color }`. Must be a string or `null`; any other type ⇒ `400`.
+- Added to `PatternChannel`, BOTH serializers, and the restore path. Persists
+  across restart; absent in an old file ⇒ `null`.
+
+### 8.5 Implementation map (this wave)
+
+| Site | What |
+|---|---|
+| `lib/snapshot_manager.js` | `SnapshotManager` (save/list/load/delete, atomic write, name safety), `SnapshotLoadError` |
+| `lib/state_manager.js` | `serializeChannel` appends `faderMax`/`color`; `saveMixerState` persists them; new public `writeFileAtomic` |
+| `lib/pattern_channel.js` | `faderMax`/`color` constructor fields (clamped/typed) |
+| `lib/pattern_mixer.js` | `_masterFade` state, `startMasterFade`/`getMasterFade`/`_tickMasterFade`, `setMaster` cancels fade; `effFader = min(fader, faderMax)` clamp in the overlay composite |
+| `lib/api_server.js` | snapshot routes + `captureLook`/`recallLook`; `POST /mixer/master/fade`; `faderMax`/`color` in PATCH handlers, both serializers, `/status`, restore config |
+| `lib/ws_topic_routing.js` | `snapshots` → `/ws/control` |
+| `tests/snapshot_manager.test.js`, `tests/master_fade.test.js`, `tests/fader_max_clamp.test.js`, `tests/channel_feature_fields.test.js` | Unit coverage |
+| `tests/hil/hil_channel_features_test.mjs` | HIL: capture/recall, master fade ramp, faderMax/color, error paths (25 assertions) |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -7,6 +7,22 @@ export class PatternChannel {
     this.mode = mode; // 'blend_screen', 'blend_crossfade', 'blend_add', 'blend_over'
     this.fader = fader;
     this.enabled = enabled;
+    // Per-channel intensity clamp (F-C). A hard ceiling on this channel's
+    // OWN contribution to the composite, applied as Math.min(effectiveFader,
+    // faderMax) at blend time in pattern_mixer. The fader/transition can
+    // never push the channel above faderMax — the clamp is the last word on
+    // a channel's own output. Default 1.0 = no clamp (absent field in an old
+    // state file restores to this safe default, NOT a silent fallback: it is
+    // the documented schema default). Constrained to [0,1] at the API
+    // boundary (validateFader) and defensively here.
+    this.faderMax = (typeof faderMax === 'number' && Number.isFinite(faderMax))
+      ? Math.max(0, Math.min(1, faderMax))
+      : 1.0;
+    // Per-channel color tag (F-D). Pure operator-facing METADATA (e.g. a hex
+    // string for the CaptainPad channel strip accent) — it has NO effect on
+    // rendering. Default null = "no color assigned". An old state file
+    // without this field restores to null (documented schema default).
+    this.color = (typeof color === 'string') ? color : null;
     this.locked = locked;
     // Fader-lock (independent of `locked`): when true, the channel's
     // fader value is frozen against scripted transitions and solo

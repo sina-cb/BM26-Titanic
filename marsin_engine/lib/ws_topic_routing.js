@@ -90,6 +90,10 @@ const TOPIC_BY_TYPE = Object.freeze({
   playlistDeleted:             TOPICS.CONTROL,
   channelPlaylistData:         TOPICS.CONTROL,
   playlistEntryCaptured:       TOPICS.CONTROL,
+  // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
+  // recall so every CaptainPad mirrors the snapshot library + a recalled
+  // look. Operator-driven, low volume → /ws/control next to mixer/deck.
+  snapshots:                   TOPICS.CONTROL,
   paramRejected:               TOPICS.CONTROL,
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
