@@ -29,6 +29,11 @@ import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
+import {
+  type MixGroup,
+  postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
+} from '@/utils/groupsSoloApi';
+import { GroupRail } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
@@ -207,7 +212,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -241,6 +246,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   //   locked (playlist/pattern lock) → lock.fill, amber
   //   faderLocked                    → arrow.left.and.right circle-style, teal
   const faderLocked = !!channel.faderLocked;
+  // Solo-safe (docs/39 §10): rig-config flag — this channel is never gated off
+  // by ANOTHER channel's solo (protects the mission-critical exterior).
+  // Server-authoritative (PATCH {soloSafe}); the engine broadcast is the truth.
+  // fader-lock IMPLIES solo-safe on the engine, so the effective protection is
+  // soloSafe || faderLocked.
+  const soloSafe = !!channel.soloSafe;
+  const soloProtected = soloSafe || faderLocked;
 
   // View-selection state read straight from the channel (engine is the
   // source of truth — broadcasts overwrite local state on every mixer
@@ -272,7 +284,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       // wins (operator-critical state) — only paint the color accent when the
       // channel isn't locked.
       !locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+      // Group tint (docs/39 §10): a member channel takes its group's color on
+      // the left edge so grouped strips read together at a glance. The
+      // channel's own color (above) wins if both are set; the lock border
+      // (operator-critical) wins over both.
+      !locked && !channel.color && group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
       locked && styles.channelCardLocked,
+      // Solo dimming is DISPLAY-ONLY (docs/39 §10): when another channel is
+      // soloed and this one isn't soloed / solo-safe / fader-locked, the
+      // engine gates its contribution to 0. We mirror that visually by
+      // dimming the strip — we NEVER mutate its enabled/fader.
+      dimmedBySolo ? { opacity: 0.45 } : null,
     ]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
@@ -328,6 +350,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
+          {/* Group badge (docs/39 §10): when this channel is a group member,
+              show a small tinted chip with the group name so the operator can
+              see the membership without opening the group rail. */}
+          {group ? (
+            <View style={[styles.groupBadge, group.color ? { borderColor: group.color } : null]}>
+              <View style={[styles.groupBadgeDot, { backgroundColor: group.color || C.secondary }]} />
+              <Text style={styles.groupBadgeText} numberOfLines={1}>
+                {(group.name || 'GROUP').toUpperCase()}
+              </Text>
+            </View>
+          ) : null}
           <TextInput
             style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
             defaultValue={channel.name || 'CH ' + index}
@@ -529,9 +562,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           onPress={() => onMuteToggle(channel.id, !channel.enabled)}>
           <Text style={[styles.labelCaps, !channel.enabled && { color: '#FFF' }]}>Mute</Text>
         </TouchableOpacity>
-        {/* C10 — solo state must not be color-only (accessibility): the
-            ✓ glyph + accessibilityState carry the on/off state for
-            operators who can't distinguish the green fill. */}
+        {/* SOLO (docs/39 §10) — server-authoritative. Tapping sends the WS
+            setSolo (with a REST mirror); the engine's soloedChannelIds Set is
+            the truth and the strip's lit/dimmed state reconciles from the
+            broadcast. `isSolo` = this channel is in the soloed Set. We do NOT
+            mutate sibling enabled/fader.
+            C10 — solo state must not be color-only (accessibility): the
+            ✓ glyph + accessibilityState carry the on/off state. */}
         <TouchableOpacity
           style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
           onPress={() => onSoloToggle(channel.id)}
@@ -540,6 +577,27 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           accessibilityState={{ selected: !!isSolo }}>
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>{isSolo ? 'Solo ✓' : 'Solo'}</Text>
         </TouchableOpacity>
+        {/* SOLO-SAFE (docs/39 §10) — rig-config flag: protects this channel
+            from being gated off by ANOTHER channel's solo (mission-critical
+            exterior). When a solo is active the protected strip shows a teal
+            "SAFE" lit state; fader-lock implies solo-safe so the toggle reads
+            ON (and is non-destructive to toggle) when fader-locked. */}
+        {onSoloSafeToggle && (
+          <TouchableOpacity
+            style={[
+              styles.toggleBtn,
+              soloProtected && styles.toggleBtnSafe,
+              soloActive && soloProtected && styles.toggleBtnSafeLit,
+            ]}
+            onPress={() => onSoloSafeToggle(channel.id, !soloSafe)}
+            accessibilityRole="button"
+            accessibilityLabel={soloProtected ? 'Solo-safe on' : 'Solo-safe'}
+            accessibilityState={{ selected: soloProtected }}>
+            <Text style={[styles.labelCaps, { fontSize: 9 }, soloProtected && { color: C.primary }]}>
+              {soloProtected ? (faderLocked && !soloSafe ? 'SAFE (LOCK)' : 'SAFE ✓') : 'SAFE'}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* View-selection picker. Three sections in the modal: ALL,
             GROUPS, and VIEW MASKS. Sections/fixtures are still routed
@@ -669,6 +727,13 @@ export default function MixerScreen() {
   useEffect(() => { channelsRef.current = channels; }, [channels]);
 
   const [master, setMaster] = useState(1.0);
+  // Channel groups (gang-faders) + server-authoritative solo (docs/39 §10).
+  // Both are reconciled DISPLAY-ONLY from the `mixer` broadcast's top-level
+  // `mixGroups[]` + `soloedChannelIds[]` — the engine is the authority. The
+  // soloed set is a Set<string> for O(1) per-strip membership checks; per-
+  // channel `mixGroupId`/`soloSafe` ride on the channel objects themselves.
+  const [mixGroups, setMixGroups] = useState<MixGroup[]>([]);
+  const [soloedIds, setSoloedIds] = useState<Set<string>>(new Set());
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   // Active model name (GET /status → activeModel), from the shared
   // engine-state cache. Null until the first /status probe lands /
@@ -795,6 +860,13 @@ export default function MixerScreen() {
       }
       if (msg.type === 'mixer') {
         setMaster(msg.master as number);
+        // Groups + solo (docs/39 §10) — reconcile DISPLAY state from the
+        // authoritative broadcast on EVERY mixer event. The engine owns both;
+        // these arrays survive a reconnect because they live server-side.
+        if (Array.isArray(msg.mixGroups)) setMixGroups(msg.mixGroups as MixGroup[]);
+        if (Array.isArray(msg.soloedChannelIds)) {
+          setSoloedIds(new Set(msg.soloedChannelIds as string[]));
+        }
         if (msg.baseChannelId) baseChannelIdRef.current = msg.baseChannelId as string;
         if (typeof msg.maxChannels === 'number') maxChannelsRef.current = msg.maxChannels;
         // Always trust the engine: it owns transitions, mute/solo
@@ -946,6 +1018,12 @@ export default function MixerScreen() {
 
     if (mRes.ok && mRes.data) {
       setMaster(mRes.data.master);
+      // Seed groups + solo display state (docs/39 §10). GET /mixer carries the
+      // same top-level mixGroups[] + soloedChannelIds[] as the WS broadcast.
+      if (Array.isArray((mRes.data as any).mixGroups)) setMixGroups((mRes.data as any).mixGroups as MixGroup[]);
+      if (Array.isArray((mRes.data as any).soloedChannelIds)) {
+        setSoloedIds(new Set((mRes.data as any).soloedChannelIds as string[]));
+      }
       if (mRes.data.baseChannelId) baseChannelIdRef.current = mRes.data.baseChannelId;
       if (typeof mRes.data.maxChannels === 'number') maxChannelsRef.current = mRes.data.maxChannels;
       setChannels(mRes.data.channels || []);
@@ -1015,11 +1093,10 @@ export default function MixerScreen() {
     // able to drop a channel even during a transition. "Transitions take
     // precedence over mute/solo" is enforced at *transition start* time
     // (force-enable + clear solo); after that, the operator's manual
-    // mute/solo input wins.
-    if (enabled && soloRef.current) {
-      soloRef.current = null;
-      preSoloStateRef.current = {};
-    }
+    // mute/solo input wins. Solo is now server-authoritative (docs/39 §10) —
+    // un-muting a channel no longer needs to tear down any client-side solo
+    // bookkeeping (there is none); the engine's precedence (explicit mute wins
+    // over solo) handles the interaction.
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, enabled } : c));
     engineEvents.send({ type: 'setChannelEnabled', channelId, enabled });
     // Codex P0 — no silent swallow. Mute is operator-critical (drop a
@@ -1032,89 +1109,80 @@ export default function MixerScreen() {
     });
   }, []);
 
-  // Track which channel is solo'd (null = no solo)
-  const soloRef = useRef<string | null>(null);
-  // Track pre-solo state (enabled + fader) so we can restore
-  const preSoloStateRef = useRef<{ [id: string]: { enabled: boolean; fader: number } }>({});
-
+  // Solo (docs/39 §10) — SERVER-AUTHORITATIVE. The engine's
+  // PatternMixer.soloedChannelIds Set is the SOLE source of truth. The old
+  // client-side implementation (soloRef + preSoloStateRef destructive
+  // save/restore that mutated every sibling's enabled+fader) is GONE — it was
+  // structurally wrong (it clobbered parked levels and couldn't survive a
+  // reconnect). Now:
+  //   - Tapping SOLO toggles this channel in the engine's Set. We send the WS
+  //     setSolo/clearSolo (low-latency mirror, same dual-path as mute) AND a
+  //     REST mirror for durability. `additive:false` REPLACES the set so a
+  //     single tap solos exactly one channel (the dominant operator gesture);
+  //     tapping the already-soloed channel clears it.
+  //   - We optimistically flip the local soloedIds Set for instant button
+  //     feedback, but the engine broadcast (soloedChannelIds[]) is the truth
+  //     and reconciles it. We NEVER mutate sibling enabled/fader — the strip
+  //     dim/active state is purely DISPLAY, derived from soloedIds + soloSafe
+  //     + faderLocked at render time.
+  //   - fader-lock IMPLIES solo-safe on the engine, so a locked layer stays
+  //     lit through a solo automatically (no client-side skip needed).
   const handleSoloToggle = useCallback(async (channelId: string) => {
-    // Solo remains interactive at all times (see handleMuteToggle).
-    //
-    // Fader-lock (slot 5) interaction: solo is implemented entirely
-    // client-side (by mutating enabled+fader on each sibling channel)
-    // so the engine has no way to know "this enable/fader change is
-    // really a solo gesture". The rule is enforced HERE: fader-locked
-    // channels are SKIPPED in both the solo-on and solo-off branches
-    // — we never write enabled/fader to them, never save their state
-    // to preSoloStateRef, never restore them. The result is that a
-    // locked layer keeps its current contribution intact regardless
-    // of which other layer the operator solos. Explicit mute (the
-    // operator tapping MUTE on the locked layer itself) still works
-    // because handleMuteToggle is a separate code path and writes
-    // through to setChannelEnabled directly.
-    if (soloRef.current === channelId) {
-      // Un-solo: restore all channels to their pre-solo state
-      soloRef.current = null;
-      const restored = preSoloStateRef.current;
-      setChannels(chs => chs.map(c => {
-        if (c.faderLocked) return c;
-        return {
-          ...c,
-          enabled: restored[c.id]?.enabled ?? true,
-          fader: restored[c.id]?.fader ?? c.fader,
-        };
-      }));
-      for (const c of channelsRef.current) {
-        if (c.faderLocked) continue;
-        const prev = restored[c.id];
-        const enabled = prev?.enabled ?? true;
-        const fader = prev?.fader ?? c.fader;
-        engineEvents.send({ type: 'setChannelEnabled', channelId: c.id, enabled });
-        engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader });
-        // Codex P0 — no silent swallow. This fires per-channel inside the
-        // un-solo restore loop, so we log rather than alert (an alert per
-        // channel would bury the operator); the WS sends above are the
-        // primary path and the next mixer broadcast re-syncs.
-        updateMixerChannel(c.id, { enabled, fader }).catch((err) => {
-          console.error(`[Mixer] Un-solo restore PATCH failed for ${c.id}:`, err);
-        });
-      }
-      preSoloStateRef.current = {};
-    } else {
-      // Solo: save current state, enable + fader=1.0 only on target.
-      // Locked channels are skipped from the saved snapshot too —
-      // they're not getting mutated, so there's nothing to restore
-      // later either.
-      const saveState: { [id: string]: { enabled: boolean; fader: number } } = {};
-      channelsRef.current.forEach(c => {
-        if (c.faderLocked) return;
-        saveState[c.id] = { enabled: c.enabled, fader: c.fader };
+    const alreadySolo = soloedIds.has(channelId);
+    if (alreadySolo) {
+      // Clear this channel's solo. Single-solo is the common case, so a tap on
+      // the soloed channel clears it entirely; if multiple were additively
+      // soloed this still un-solos just the tapped one (DELETE /mixer/solo/:id).
+      setSoloedIds(prev => {
+        const next = new Set(prev);
+        next.delete(channelId);
+        return next;
       });
-      preSoloStateRef.current = saveState;
-      soloRef.current = channelId;
-
-      setChannels(chs => chs.map(c => {
-        if (c.faderLocked) return c;
-        return {
-          ...c,
-          enabled: c.id === channelId,
-          fader: c.id === channelId ? 1.0 : c.fader,
-        };
-      }));
-      for (const c of channelsRef.current) {
-        if (c.faderLocked) continue;
-        const enabled = c.id === channelId;
-        const fader = c.id === channelId ? 1.0 : c.fader;
-        engineEvents.send({ type: 'setChannelEnabled', channelId: c.id, enabled });
-        if (c.id === channelId) {
-          engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader: 1.0 });
+      engineEvents.send({ type: 'clearSolo', channelId });
+      // REST durability mirror (DELETE /mixer/solo/:channelId). Codex P0 —
+      // fail loud: a rejected clear is logged (the next broadcast reconciles
+      // the lit state regardless); an un-solo is less critical than a solo-on
+      // so we don't Alert on a transport hiccup.
+      deleteSolo(channelId).then((res) => {
+        if (!res.ok) console.error(`[Mixer] Un-solo REST mirror rejected for ${channelId}:`, res.error);
+      }).catch((err) => console.error(`[Mixer] Un-solo REST mirror failed for ${channelId}:`, err));
+    } else {
+      // Replace the set with just this channel (non-additive single solo).
+      setSoloedIds(new Set([channelId]));
+      engineEvents.send({ type: 'setSolo', channelId, additive: false });
+      postSolo(channelId, false).then((res) => {
+        if (!res.ok) {
+          console.error(`[Mixer] Solo REST mirror rejected for ${channelId}:`, res.error);
+          Alert.alert('Solo not applied', `The engine rejected this solo. ${res.error || ''}`.trim());
         }
-        updateMixerChannel(c.id, { enabled, ...(c.id === channelId ? { fader: 1.0 } : {}) }).catch((err) => {
-          // Codex P0 — no silent swallow. Per-channel inside the solo
-          // loop, so log rather than alert (see un-solo branch above).
-          console.error(`[Mixer] Solo PATCH failed for ${c.id}:`, err);
-        });
-      }
+      }).catch((err) => {
+        console.error(`[Mixer] Solo REST mirror failed for ${channelId}:`, err);
+      });
+    }
+  }, [soloedIds]);
+
+  // Clear ALL solos (header button). Server-authoritative.
+  const handleClearAllSolo = useCallback(async () => {
+    setSoloedIds(new Set());
+    engineEvents.send({ type: 'clearSolo' });
+    const res = await clearAllSolo();
+    if (!res.ok) {
+      console.error('[Mixer] Clear-all-solo REST mirror rejected:', res.error);
+    }
+  }, []);
+
+  // Solo-safe toggle (docs/39 §10) — rig-config flag protecting a channel from
+  // being gated off by ANOTHER channel's solo. Server-authoritative via PATCH
+  // {soloSafe}. Optimistic local flip + reconcile from the next broadcast;
+  // fail-loud revert + Alert on rejection (same shape as faderMax/color).
+  const handleSoloSafeToggle = useCallback(async (channelId: string, soloSafe: boolean) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.soloSafe ?? false;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, soloSafe } : c));
+    const res = await setChannelSoloSafe(channelId, soloSafe);
+    if (!res.ok) {
+      console.error(`[Mixer] Solo-safe toggle rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, soloSafe: prev } : c));
+      Alert.alert('Solo-safe not applied', `The engine rejected this change. ${res.error || ''}`.trim());
     }
   }, []);
 
@@ -1554,12 +1622,13 @@ export default function MixerScreen() {
     const safeTransMode = (typeof transMode === 'string' && transMode.startsWith('trans_'))
       ? transMode
       : 'trans_crossfade';
-    // Clear solo client-side so the SOLO button visually pops back to off
-    // immediately. The engine's triggerMixerTransition() force-enables
-    // every overlay and broadcasts the new state within 100 ms, but the
-    // operator shouldn't have to wait that long to see the badge clear.
-    soloRef.current = null;
-    preSoloStateRef.current = {};
+    // Clear solo display optimistically so the SOLO buttons pop back to off
+    // immediately. The engine's triggerMixerTransition() clears the
+    // soloedChannelIds Set at the start of the transition (docs/39 §10) and
+    // broadcasts the empty set within ~100 ms, but the operator shouldn't have
+    // to wait that long to see the badges clear. This is DISPLAY-ONLY — the
+    // engine is the authority and the broadcast reconciles.
+    setSoloedIds(new Set());
     // engineEvents.send queues the message if the control bus is
     // reconnecting; we deliberately don't bail out on transient
     // disconnect so a stale state doesn't strand the transition.
@@ -1609,6 +1678,21 @@ export default function MixerScreen() {
           {!isPortrait ? <SnapshotBar /> : null}
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+          {/* CLEAR SOLO — only shown while a server-authoritative solo is
+              engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
+              empty soloedChannelIds[] reconciles every strip back to lit. */}
+          {soloedIds.size > 0 ? (
+            <TouchableOpacity
+              style={[styles.clearSoloBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+              onPress={handleClearAllSolo}
+              accessibilityRole="button"
+              accessibilityLabel="Clear all solos"
+            >
+              <Text style={[styles.labelCaps, { color: '#FFF' }, isPortrait && { fontSize: 9 }]}>
+                {isPortrait ? 'CLR SOLO' : 'CLEAR SOLO'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
           {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
           <HorizontalFader 
             value={master} 
@@ -1639,6 +1723,12 @@ export default function MixerScreen() {
 
       <CPCControls />
 
+      {/* ── Channel Groups (gang-faders) rail (docs/39 §10) ──────────── */}
+      {/* Stateless w.r.t. the registry — it renders the parent-owned
+          mixGroups + channels (both reconciled from the `mixer` broadcast)
+          and reports edits up through the typed groupsSoloApi clients. */}
+      <GroupRail mixGroups={mixGroups} channels={channels} />
+
       {/* ── Master Visualization ────────────────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -1655,7 +1745,21 @@ export default function MixerScreen() {
           guards this invariant. */}
       <ScrollView horizontal scrollEnabled={false} contentContainerStyle={{ padding: 16, gap: 16, flexGrow: 1 }} style={{ flex: 1 }}>
         {channels.map((channel, idx) => {
-          const isSoloActive = soloRef.current === channel.id;
+          // Solo display (docs/39 §10) — DISPLAY-ONLY, derived from the
+          // authoritative soloedIds Set. `isSolo` = this channel is soloed.
+          // `soloActive` = ANY solo is engaged. `dimmedBySolo` mirrors the
+          // engine's render gate: when a solo is active and this channel is
+          // NOT soloed / solo-safe / fader-locked, the engine zeroes its
+          // contribution — we dim the strip to match (never mutating state).
+          const isSoloActive = soloedIds.has(channel.id);
+          const anySolo = soloedIds.size > 0;
+          const soloProtected = !!channel.soloSafe || !!channel.faderLocked;
+          const dimmedBySolo = anySolo && !isSoloActive && !soloProtected;
+          // Group this channel belongs to (single-membership pointer), for the
+          // strip tint + badge.
+          const group = channel.mixGroupId
+            ? mixGroups.find(g => g.id === channel.mixGroupId) || null
+            : null;
           // Read inlinePlaylistVersion so this scope re-renders when
           // the Map changes (Maps aren't structurally compared by React).
           void inlinePlaylistVersion;
@@ -1666,6 +1770,9 @@ export default function MixerScreen() {
               index={idx + 1}
               channel={channel}
               isSolo={isSoloActive}
+              soloActive={anySolo}
+              dimmedBySolo={dimmedBySolo}
+              group={group}
               isDeck={false}
               blends={blends}
               transitions={transitionsList}
@@ -1676,6 +1783,7 @@ export default function MixerScreen() {
               onColorChange={handleColorChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
+              onSoloSafeToggle={handleSoloSafeToggle}
               onModeChange={handleModeChange}
               onControlChange={handleControlChange}
               onDelete={handleDeleteChannel}
@@ -2102,6 +2210,49 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   toggleBtnMuted: {
     backgroundColor: C.error,
     borderColor: C.error,
+  },
+  // Solo-safe toggle (docs/39 §10). Teal-tinted when engaged (protection ON);
+  // a brighter "lit" variant while a solo is ACTIVE so the operator sees which
+  // channels are surviving the solo (mission-critical exterior protection).
+  toggleBtnSafe: {
+    backgroundColor: 'rgba(0,104,117,0.12)',
+    borderColor: 'rgba(0,104,117,0.5)',
+  },
+  toggleBtnSafeLit: {
+    backgroundColor: 'rgba(0,104,117,0.28)',
+    borderColor: C.primary,
+  },
+  // Clear-all-solo header button — only rendered while a solo is engaged.
+  // Green to match the solo accent (it CLEARS the green solo state).
+  clearSoloBtn: {
+    backgroundColor: '#00a86b',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    ...globalStyles.ambientShadow,
+  },
+  // Group membership badge in the strip header (docs/39 §10).
+  groupBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: 96,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  groupBadgeDot: {
+    width: 8, height: 8, borderRadius: 4,
+  },
+  groupBadgeText: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 9,
+    letterSpacing: 0.6,
+    color: C.text,
+    flexShrink: 1,
   },
   // Transition action + dropdown + time on its own full-width row.
   transitionBar: {
