@@ -659,6 +659,59 @@ display-only.
 
 ---
 
+## 11. Per-channel output METERING (2026-06-20)
+
+A cheap effective-output **level** per channel, surfaced as a bar/percent
+meter in the self-subscribing `ChannelVizStrip` (beyond the existing pixel
+viz). It answers "is this layer actually putting light on the rig, or is it
+sitting dark?" — a layer faded out, in a muted group, solo-gated, or made
+invisible by a blend mode reads ~0 even when its underlying pattern is bright.
+
+**Engine.** `PatternMixer` computes one `level` (0..1) per channel each
+vis-broadcast frame, **allocation-free** and folded into the existing vis
+extraction pre-pass (no new per-frame `Uint8Array`, no extra render). The
+level is the channel's intrinsic **mean brightness** (`_bufferMeanLevel` —
+one pass summing the just-rendered `channelBuffer`'s RGBWAU bytes / `n*255`)
+scaled by the **same `effFader`** the composite gate uses (fader → `faderMax`
+clamp → group scale → solo gate → enabled). The deck is PFL, so its meter uses
+only its own clamped fader + enabled gate (decks are never in groups/solos);
+the `master` key meters the final composed output; the deck-swap inactive
+sibling meters its incoming pattern × swap fader. The WAVE 15 per-frame
+group-scale cache + `soloActive` flag are now precomputed ONCE **before** the
+vis pre-pass (hoisted up from the composite loop) and reused by both, keeping
+`_effFader` pure O(1). Exposed via `PatternMixer.getVisLevels()` → `{ <visKey>:
+number }` keyed identically to `getVisData()`. Populated only when
+`wantVisThisFrame` (same cadence as vis), so non-broadcast frames do zero extra
+work.
+
+**Broadcast.** `engine.js` adds a `levels` sidecar to the existing
+`{ type:'vis', vis, pixelCount }` message: `{ type:'vis', vis, levels,
+pixelCount }`, where `levels` is the plain `{ <visKey>: number }` map. The
+`api_server.js` viz publish hook forwards the whole `type:'vis'` object to
+`/ws/viz` unchanged, so no route edit was needed.
+
+**CaptainPad.** `ChannelVizStrip` (still self-subscribed to the viz bus — no
+new prop, no `mixer.tsx` coupling) reads its own key off `msg.levels` and
+renders a thin bar (green→amber→red) + tabular percent under the pixel strip,
+on the same 5 Hz redraw cap. A new `showMeter` prop (default `true`) lets
+tight layouts opt out.
+
+**Fail-loud / no silent fallback (Codex P0).** If the engine omits `levels`
+(older engine) or the key is absent / non-finite, the client's `level` stays
+`null` and **NO meter renders** (the pixel strip layout is unchanged — no
+layout shift). That `null` is the documented "no level reported" default,
+never a fabricated `0`. Default behavior is otherwise unchanged: the level is
+purely additive telemetry with no render effect.
+
+| Site | What |
+|---|---|
+| `lib/pattern_mixer.js` | `_visLevels` field; `_bufferMeanLevel`; `getVisLevels()`; group-scale/`soloActive` precompute hoisted before the vis pre-pass; per-channel/deck/master/inactive level fill in `renderAll6ch` |
+| `engine.js` | `levels` sidecar on the `type:'vis'` broadcast |
+| `components/ChannelVizStrip.tsx` | meter bar + percent from `msg.levels`; `showMeter` prop; `null`-when-absent |
+| `tests/channel_metering.test.js` | Unit: fader→level (0/0.5/1), faderMax clamp, disabled, solo gate, group mute/fader, deck PFL, master, non-vis-frame skip, key parity with vis (13 tests) |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

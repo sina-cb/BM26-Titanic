@@ -259,6 +259,24 @@ export class PatternMixer {
     // until the broadcast drains them), hence keying by channel/vis id.
     this._visBufferPool = new Map();
 
+    // ── Per-channel effective-output METERING ───────────────────────────
+    // `_visLevels` maps the same vis keys used by `_visData`
+    // (channel id / 'master' / '__deck_inactive__') to a cheap effective
+    // output LEVEL in [0,1]: the channel's intrinsic brightness scaled by
+    // the SAME effFader (fader/clamp/group/solo) that gates its
+    // contribution to the composite. It answers "is this layer actually
+    // putting light on the rig right now, or is it sitting dark?" — a fader
+    // at 0, a muted group, or a solo gate all drive the meter to ~0 even
+    // when the underlying pattern is bright.
+    //
+    // Computed allocation-free in the SAME pass as the vis extraction
+    // (renderAll6ch step 1) — no new per-frame Uint8Array. Refilled (a
+    // fresh plain object) only on vis-broadcast frames, exactly like
+    // `_visData`, and drained synchronously by the broadcast each frame.
+    // Absent ⇒ the client renders NO meter (documented schema default, not
+    // a hidden failure — see ChannelVizStrip).
+    this._visLevels = {};
+
     // Reusable render-order scratch (item 7). When a scripted transition
     // promotes its target channel to render LAST, we need a reordered view
     // of mixerChannels. Building `[...filter(), target]` every frame would
@@ -1773,7 +1791,13 @@ export class PatternMixer {
     // Stale frames between broadcasts keep the previous _visData,
     // which is fine — nobody reads it on those ticks.
     const wantVis = this.wantVisThisFrame !== false;
-    if (wantVis) this._visData = {};
+    if (wantVis) {
+      this._visData = {};
+      // Per-channel meter levels (item: channel metering). Reset alongside
+      // _visData and refilled in the vis pre-pass below; drained together
+      // by the broadcast each vis frame.
+      this._visLevels = {};
+    }
 
     // Grand-master timed fade (F-B). Advance before compositing so this
     // frame's applyMaster uses the freshly-stepped value. Frame-rate
@@ -1800,19 +1824,52 @@ export class PatternMixer {
       }
     }
 
+    // WAVE 15 hot-path precompute (allocation-free): refresh the per-frame
+    // group-scale cache (clear()+set() — no realloc) and the soloActive flag
+    // ONCE, BEFORE both the vis pre-pass (meter levels) and the composite
+    // channel loop, so _effFader is pure O(1) arithmetic per channel and the
+    // meter level uses the exact same effFader the composite gate does.
+    // groupScale = muted ? 0 : fader.
+    this._groupScaleCache.clear();
+    for (let i = 0; i < this.mixGroups.length; i++) {
+      const g = this.mixGroups[i];
+      this._groupScaleCache.set(g.id, g.muted ? 0 : g.fader);
+    }
+    const soloActive = this.soloedChannelIds.size > 0;
+
     // 1. Render ALL channels for vis data (every channel always gets fresh
     //    vis on vis-broadcast frames). Skipped on non-broadcast frames per
     //    the OPTIMIZATION note above.
+    //
+    //    Per-channel METER LEVEL is folded into this same pass (no extra
+    //    render, no extra buffer): the channel's intrinsic mean brightness
+    //    (`_bufferMeanLevel`, one pass over the just-rendered channelBuffer)
+    //    scaled by its EFFECTIVE fader so the meter reflects what actually
+    //    reaches the mix — a fader at 0 / muted group / solo gate drives the
+    //    level to ~0 even when the underlying pattern is bright. The deck is
+    //    PFL (rendered at 100% downstream), so its meter uses only its OWN
+    //    clamped fader + enabled gate (decks are never in groups / solos).
     if (wantVis) {
       if (this.deckChannel) {
         this.channelBuffer.fill(0);
         this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
         this._visData[this.deckChannel.id] = this._extractVisInto(this.deckChannel.id, this.channelBuffer);
+        const d = this.deckChannel;
+        let deckEff = 0;
+        if (d.enabled) {
+          const fMax = (typeof d.faderMax === 'number' && Number.isFinite(d.faderMax)) ? d.faderMax : 1.0;
+          let f = d.fader < fMax ? d.fader : fMax;
+          if (f < 0) f = 0;
+          deckEff = f;
+        }
+        this._visLevels[d.id] = this._bufferMeanLevel(this.channelBuffer) * deckEff;
       }
       for (const channel of this.mixerChannels) {
         this.channelBuffer.fill(0);
         channel.renderInto(this.wasmHost, this.channelBuffer, true);
         this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
+        this._visLevels[channel.id] =
+          this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
       }
     }
 
@@ -1900,6 +1957,11 @@ export class PatternMixer {
         const vis = this._extractVisInto('__deck_inactive__', this.channelBuffer);
         this._visData['__deck_inactive__'] = vis;
         this._visData['__deck_swap__'] = vis;
+        // Meter the incoming pattern by its intrinsic brightness scaled by
+        // the swap fader (how much of it is actually crossfaded in yet).
+        const inactiveLevel = this._bufferMeanLevel(this.channelBuffer) * this._inactiveDeckChannel.fader;
+        this._visLevels['__deck_inactive__'] = inactiveLevel;
+        this._visLevels['__deck_swap__'] = inactiveLevel;
       }
     }
 
@@ -1923,16 +1985,10 @@ export class PatternMixer {
     // of the flash and obscure it. The natural order is restored as
     // soon as the transition completes (scriptedTransitionTargetId is
     // cleared in updateTransitions).
-    // WAVE 15 hot-path precompute (allocation-free): refresh the per-frame
-    // group-scale cache (clear()+set() — no realloc) and the soloActive flag
-    // ONCE before the channel loop, so _effFader is pure O(1) arithmetic per
-    // channel. groupScale = muted ? 0 : fader.
-    this._groupScaleCache.clear();
-    for (let i = 0; i < this.mixGroups.length; i++) {
-      const g = this.mixGroups[i];
-      this._groupScaleCache.set(g.id, g.muted ? 0 : g.fader);
-    }
-    const soloActive = this.soloedChannelIds.size > 0;
+    // (The per-frame group-scale cache + soloActive flag are precomputed
+    // ABOVE, before the vis pre-pass — see the WAVE 15 hot-path precompute
+    // note there. They are reused both for the meter levels and for this
+    // composite gate.)
 
     let renderOrder = this.mixerChannels;
     if (this.scriptedTransitionTargetId) {
@@ -2049,6 +2105,10 @@ export class PatternMixer {
     // the per-channel vis, which is mildly confusing for debugging).
     if (wantVis) {
       this._visData['master'] = this._extractVisInto('master', this.outputBuffer);
+      // Master meter: the final composed output's mean brightness. Already
+      // reflects master gain + view crossfade (applied to outputBuffer
+      // above), so no extra fader scale here.
+      this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer);
     }
 
     return this.outputBuffer;
@@ -2084,11 +2144,38 @@ export class PatternMixer {
   }
 
   /**
+   * Cheap mean brightness of a 6ch RGBWAU buffer, normalized to [0,1].
+   * Single allocation-free pass — sum every byte, divide by (length*255).
+   * Mean (not peak) so a mostly-dark pattern with one hot pixel doesn't
+   * read as fully lit; it tracks the perceived "how much light is this
+   * layer contributing" rather than a single fixture's spike. The caller
+   * scales this by the channel's effFader to get the post-fader level.
+   */
+  _bufferMeanLevel(buf6ch) {
+    const n = buf6ch.length;
+    if (n === 0) return 0;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += buf6ch[i];
+    return sum / (n * 255);
+  }
+
+  /**
    * Get per-channel and master vis data for streaming to clients.
    * Returns { channels: [{id, rgb: Uint8Array|null}, ...], master: Uint8Array }
    */
   getVisData() {
     return this._visData || {};
+  }
+
+  /**
+   * Per-channel effective-output meter levels for streaming to clients.
+   * Returns { <visKey>: number(0..1) } keyed identically to getVisData().
+   * Each value is the channel's intrinsic mean brightness scaled by its
+   * effFader (fader/clamp/group/solo) — i.e. what actually reaches the
+   * mix. Refilled only on vis-broadcast frames; drained alongside vis.
+   */
+  getVisLevels() {
+    return this._visLevels || {};
   }
 
   destroy() {
