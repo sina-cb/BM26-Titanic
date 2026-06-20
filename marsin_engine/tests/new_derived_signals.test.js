@@ -43,9 +43,15 @@ const SR = 44100, FFT = 1024, HOP = 512, HOP_MS = (HOP / SR) * 1000;
 // Mirrors engine.js onAnalysis ordering exactly (analyzer writes raw mirrors,
 // detector.tick reads them + publishes its keys, derivedSignals.tick reads all
 // of the above + publishes the new keys). Records every new CPC key per hop.
-function driveChain(segments, { detectorEnabled = true } = {}) {
+// `injectDropAtMs` fires a single canonical `audioDropPulse=1` at the given time
+// (after the detector tick, before the signals tick) so a test can validate the
+// SIGNALS' response to a drop EVENT without depending on the detector firing.
+// Needed because the DEPLOYED detector is precision-first (E1: dropEnergyJump 4.0
+// + rise/novelty gates) and intentionally does NOT fire on the synthetic edm_drop
+// — the detector's real-audio precision/recall is covered by detector_eval.
+function driveChain(segments, { detectorEnabled = true, injectDropAtMs = null } = {}) {
   const pc = new ParamCenter(null);
-  let clock = 0, prevMs = 0;
+  let clock = 0, prevMs = 0, dropInjected = false;
   const detector = new AudioStructureDetector({
     paramCenter: pc, broadcast: () => {},
     getConfig: () => (detectorEnabled ? { enabled: true } : { enabled: false }),
@@ -77,6 +83,11 @@ function driveChain(segments, { detectorEnabled = true } = {}) {
         { kind: 'scalar', key: 'micOnsetHighRaw', value: a.onsetHigh || 0 }, { kind: 'scalar', key: 'micSubRaw', value: a.micSub || 0 },
       ], 'audio', 'audio:mic');
       detector.tick(nowMs, dt);
+      // Inject a single canonical drop event for signal-response tests.
+      if (injectDropAtMs != null && !dropInjected && nowMs >= injectDropAtMs) {
+        pc.setMany([{ kind: 'scalar', key: 'audioDropPulse', value: 1.0 }], 'audio');
+        dropInjected = true;
+      }
       ds.tick(nowMs, dt);
       series.tMs.push(nowMs);
       series.riserScore.push(pc.get('audioRiserScore'));
@@ -132,11 +143,11 @@ test('riser RISES through a build and RESETS on the drop (full chain, detector O
     `riser should reset after the drop; got ${s.riserScore[idx9].toFixed(2)} at ~9s`);
 });
 
-test('riser RESETS on the audioDropPulse edge (full chain, detector ON)', () => {
+test('riser RESETS on an audioDropPulse drop event (injected; deployed detector precision-first)', () => {
   // With the detector enabled, audioDropPulse fires on the drop and the riser's
   // explicit drop-reset collapses the score within the reset window.
   const hopSec = HOP_MS / 1000;
-  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: true });
+  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: false, injectDropAtMs: 7500 });
   const dropHop = s.dropPulse.findIndex((v) => v >= 0.5);
   assert.ok(dropHop > 0, 'a drop should occur in edm_drop');
   const postIdx = dropHop + Math.floor(1.2 / hopSec);
@@ -279,8 +290,8 @@ test('phrase boundary lands on an 8-bar wrap over a long steady track', () => {
   assert.ok(peak(s.phrasePhase) > 0.5, 'phrasePhase should advance through the phrase');
 });
 
-test('phrase re-anchors on a drop (edm_drop fires a boundary at the drop)', () => {
-  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: true });
+test('phrase re-anchors on an injected drop event (boundary)', () => {
+  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: false, injectDropAtMs: 7500 });
   assert.ok(countEdges(s.phraseBoundary) >= 1, 'a drop should re-anchor the phrase grid (boundary)');
 });
 
@@ -306,8 +317,8 @@ test('PhraseTracker (unit): counts 8 downbeats → one boundary, wraps phase', (
 // 5. DROP COUNTDOWN (#7)
 // ════════════════════════════════════════════════════════════════════════════
 
-test('drop-countdown fires before the drop on edm_drop', () => {
-  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: true });
+test('drop-countdown fires before an injected drop on edm_drop', () => {
+  const s = driveChain([{ synth: 'edm_drop', seconds: 16 }], { detectorEnabled: false, injectDropAtMs: 7500 });
   const dropHop = s.dropPulse.findIndex((v) => v >= 0.5);
   assert.ok(dropHop > 0, 'a drop should occur');
   // Count countdown pulses BEFORE the drop.
