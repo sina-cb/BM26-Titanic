@@ -72,22 +72,24 @@ export const TUNED_CHAINS = {
 export const TUNED_BANDS = { ...DEFAULT_BANDS };
 export const TUNED_KICK  = { ...DEFAULT_KICK };
 
-// ── TUNED detector (Task E + 2026-06-20 super-tuning) ─────────────────────
+// ── TUNED detector (Task E + 2026-06-20 super-tuning + FFT-2048 retune) ────
 // windowed-delta drop edge, now gated by an ABSOLUTE sub floor (dropMinLevel)
-// + a higher energy-jump (dropEnergyJump 1.8). The 2026-06-20 detector pass
+// + a higher energy-jump (dropEnergyJump). The 2026-06-20 detector pass
 // (tools/detection_eval + detection_sweep over the labeled detector_scenarios
-// degraded through the playa mic) found this the F1-maximising arm at ZERO
-// spurious drops on calm/build passages: windowed P=1.00 R=0.56 F1=0.71
-// negFP=0. The level edge scored higher F1 (0.78) but fired phantom drops on
-// calm music (negFP=3) — a worse failure on a dance floor — so windowed +
-// floor ships. dropLevelAssist (a higher-recall, higher-FP arm) is OFF.
-// Refractory stays 2000 ms (the SUSTAIN-entry rising-tracker reset already
-// prevents in-body re-fire; 2000 keeps close-double-drop recall).
+// degraded through the playa mic) found the windowed arm the F1-maximising one
+// at ZERO spurious drops on calm/build passages. The level edge scored higher
+// F1 but fired phantom drops on calm music (negFP=3) — a worse failure on a
+// dance floor — so windowed + floor ships. dropLevelAssist (a higher-recall,
+// higher-FP arm) is OFF. Refractory stays 2000 ms.
+// FFT 1024→2048 retune (report 20260620_14): the finer spectrum sharpens the
+// windowed rate-of-change ratio, so dropEnergyJump moves 1.8→1.9 — at 2048 that
+// lifts the labeled score to P=1.00 R=0.78 F1=0.875 (negFP=0), up from the old
+// 1024 P=1.00 R=0.56 F1=0.71. Kept in lock-step with DETECTOR_DEFAULTS.
 export const TUNED_DETECTOR = {
   dropEdgeMode: 'windowed',
   dropDeltaWindowMs: 400,
   dropMinLevel: 0.06,
-  dropEnergyJump: 1.8,
+  dropEnergyJump: 1.9,
   dropLevelAssist: false,
   eventRefractoryMs: 2000,
 };

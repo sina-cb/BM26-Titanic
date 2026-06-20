@@ -14,8 +14,10 @@
  *      of the hop's max magnitude) AND an absolute floor; keep the top
  *      `numPeaks` by magnitude.
  *   2. Parabolic (quadratic) interpolation on each peak's 3 log-magnitude
- *      bins for sub-bin frequency + true peak magnitude. Critical at
- *      fftSize=1024 where one bin is ~43 Hz — far too coarse for bass.
+ *      bins for sub-bin frequency + true peak magnitude. Essential for bass:
+ *      at the shipped fftSize=2048 one bin is ~21.5 Hz, and the interpolation +
+ *      cluster centroid take the residual error to <1 Hz on pure bass roots.
+ *      (All tuning here is in Hz / per-hop, so the tracker is fftSize-agnostic.)
  *   3. Main-lobe energy: integrate magnitude over +-mainLobeBins around
  *      the peak bin so the reported energy is the partial's lobe, not a
  *      single bin (a Hann lobe is ~4 bins wide).

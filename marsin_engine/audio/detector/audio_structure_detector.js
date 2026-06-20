@@ -46,8 +46,13 @@ const DETECTOR_DEFAULTS = Object.freeze({
   // spurious drops on calm/ambient/build passages to ZERO across all mic tiers
   // (detection_sweep) while keeping precision at 1.00 — a phantom drop on a
   // calm Burning Man passage is far worse than missing one, so we tune for
-  // zero false positives first. F1 0.29→0.71 on the labeled scenarios.
-  dropEnergyJump:    1.8,
+  // zero false positives first.
+  // Re-tuned 1.8→1.9 with the FFT 1024→2048 bump (report 20260620_14): the
+  // finer spectrum sharpens the windowed rate-of-change ratio, so genuine drops
+  // read a slightly larger jump. At 1.9 the labeled-scenario score is
+  // P=1.00 R=0.78 F1=0.875 (vs 1.8→P=0.86 R=0.67 F1=0.75 at 2048, and the old
+  // 1024 default P=1.00 R=0.56 F1=0.71) — strictly better precision AND recall.
+  dropEnergyJump:    1.9,
   // Drop-edge discriminator:
   //   'level'    — short/long LEVEL ratio > dropEnergyJump (the original
   //                behavior; re-fires in a loud body because the slow long

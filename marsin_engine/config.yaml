@@ -45,7 +45,7 @@ audio:
     jitterBufferHops: 4
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
-  fftSize: 1024
+  fftSize: 2048
   hopSize: 512
   bands:
     lowMaxHz: 200
@@ -62,9 +62,12 @@ audio:
     refractoryMs: 220
     decayMs: 70
   # Sub-bass "chest hit" window — the body-felt 30–60 Hz slam, distinct from the
-  # kick CLICK window (50–110 Hz). Drives micSub → audioChestHit. NOTE the
-  # 1024-FFT resolution caveat (~43 Hz/bin): at fftSize 1024 this resolves to a
-  # single sub bin (~43 Hz); the FFT 1024→2048 bump (deferred) sharpens it.
+  # kick CLICK window (50–110 Hz). Drives micSub → audioChestHit. At fftSize 2048
+  # (~21.5 Hz/bin) this resolves to bins 1–2 (≈21.5–64.6 Hz): bin 1 (≈21.5 Hz) is
+  # the body-felt sub fundamental BELOW the kick, so micSub now keys off the real
+  # sub — an 80 Hz kick reads ~0.13 here vs ~0.49 at the old 1024 (43 Hz/bin),
+  # where the sub band was a single bin overlapping the kick. (Verified offline,
+  # report 20260620_14.) Only bin 2 (≈43 Hz) is shared with the kick window.
   sub:
     minHz: 30
     maxHz: 60
