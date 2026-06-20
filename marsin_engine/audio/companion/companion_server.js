@@ -71,7 +71,10 @@ import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
-const SR = 44100, FFT = 1024, HOP = 512;
+// FFT must track config.yaml audio.fftSize so the companion's analysis + derived
+// signals (genre / note / dom / sub) match the engine's exactly. (The spectrum
+// visualizer below uses a separate, larger FFT for display only.)
+const SR = 44100, FFT = 2048, HOP = 512;
 
 // Canonical GENRE name list — index-aligned with the sibling slot-0 detector's
 // `audioGenre` CPC key (an integer index) and its exported GENRE_NAMES. Kept

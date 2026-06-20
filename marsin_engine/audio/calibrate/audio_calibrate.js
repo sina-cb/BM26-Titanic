@@ -24,7 +24,7 @@
  * Usage:
  *   node marsin_engine/tools/audio_calibrate.js [--seconds 10]
  *       [--device <ffmpeg-device>] [--mic <ffmpeg-device>]
- *       [--sample-rate 44100] [--fft 1024] [--hop 512]
+ *       [--sample-rate 44100] [--fft 2048] [--hop 512]
  *
  * The tool writes NOTHING to disk (Codex P0 — diagnostics print only).
  * Run it in the QUIET room to seed `noiseGate`, then again with the
@@ -52,7 +52,7 @@ const DEFAULTS = Object.freeze({
   seconds:    10,
   sampleRate: 44100,
   channels:   1,
-  fftSize:    1024,
+  fftSize:    2048,
   hopSize:    512,
   bands: { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0 },
   kick:  { minHz: 50, maxHz: 110, threshold: 1.8, refractoryMs: 140, decayMs: 120 },

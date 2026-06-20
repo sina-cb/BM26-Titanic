@@ -19,9 +19,10 @@
  *    (`tLow`) re-arms only after the transient falls back, so one slam = one hit.
  *
  * Pure Math, allocation-free. Warmup-seeds the drone EMA so the first frame
- * can't phantom-fire. The 1024-FFT resolution caveat (43 Hz/bin barely resolves
- * 30–60 Hz) is documented in the report — the FFT 1024→2048 bump is a separate
- * deferred follow-up and is NOT done here.
+ * can't phantom-fire. At the shipped fftSize 2048 (~21.5 Hz/bin) micSub keys off
+ * the real 30–60 Hz sub fundamental (bins 1–2) rather than the kick: an 80 Hz
+ * kick tone reads micSub ~0.13 vs ~0.49 at the old 1024, so the chest-hit is now
+ * the body-felt sub slam, not a kick duplicate (report 20260620_14).
  *
  * Validated offline (synth bank): bassline / kick_4floor / edm_drop fire
  * audioChestHit; silence fires nothing (gate holds).

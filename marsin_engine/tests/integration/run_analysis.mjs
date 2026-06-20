@@ -52,7 +52,7 @@ import { ParamCenter } from '../../lib/param_center.js';
 
 import { writeWavMono, readWavMono } from './wav_io.mjs';
 
-const FFT_SIZE = 1024;   // config.yaml audio.fftSize
+const FFT_SIZE = 2048;   // config.yaml audio.fftSize
 const HOP_SIZE = 512;    // config.yaml audio.hopSize
 // config.yaml audio.bands / audio.kick (the PRODUCT defaults).
 const BANDS = { lowMaxHz: 200, midMaxHz: 4000, attackMs: 8, releaseMs: 180, noiseGate: 0.04 };

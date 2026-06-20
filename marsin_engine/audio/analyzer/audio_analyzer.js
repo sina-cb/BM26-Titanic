@@ -75,9 +75,14 @@ import { DominantFreqTracker } from './dominant_freq_tracker.js';
 // scalar Kalman smoother (useKalman:true) tuned for stability (low process
 // noise + high measurement noise → the filter trusts its model and glides,
 // killing the bin-to-bin freq jitter). energyGain matches PRE_CLAMP_GAIN so dom
-// energy shares the bands' [0,1] softCompress scale. Works at fftSize 1024;
-// bump the analyzer FFT to 2048 (config) to resolve sub-bass partials below
-// ~200 Hz more cleanly.
+// energy shares the bands' [0,1] softCompress scale. Runs at the config FFT
+// (2048 as of 2026-06-20, ~21.5 Hz/bin): parabolic interpolation + the cluster
+// centroid push sub-bin error well below one bin — measured mean |dom1-true|
+// 0.66 Hz on pure bass roots (vs 4.46 Hz at the old 1024), so bass-root pitch
+// classes are now correct (8/8 vs 5/8 on a known-pitch sweep, report 20260620_14).
+// The params are FFT-size-agnostic — every threshold here is in Hz, and the
+// Kalman is per-HOP tuned (hop rate ~86 Hz is unchanged), so the 2048 bump needs
+// no retune of this block.
 const DOM_FREQ_PARAMS = Object.freeze({
   numTracks: 2, numPeaks: 8, relFloor: 0.06, absFloor: 1e-4,
   maxJumpHz: 90, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
@@ -345,11 +350,12 @@ export class AudioAnalyzer {
           `sub band invalid: require 0 < minHz (${sMin}) < maxHz (${sMax}) <= nyquist (${nyquist})`,
         );
       }
-      // 1024-FFT resolution caveat: 43 Hz/bin (44.1 kHz). A 30–60 Hz window can
-      // collapse to a single bin (bin 1 ≈ 43 Hz). Force a ≥1-bin window starting
-      // at bin 1 (skip DC) so the sub energy is always well-defined; the FFT
-      // 1024→2048 bump (deferred follow-up) would sharpen this. NOT a fallback —
-      // it's the documented behaviour at the current resolution.
+      // At fftSize 2048 (~21.5 Hz/bin, 44.1 kHz) a 30–60 Hz window resolves to
+      // bins 1–2 (≈21.5–64.6 Hz) — a real ≥2-bin window covering the body-felt
+      // sub fundamental below the kick, no longer a single bin overlapping it.
+      // We still force a ≥1-bin window starting at bin 1 (skip DC) so the sub
+      // energy is always well-defined for any (smaller) fftSize an operator
+      // might PATCH. NOT a fallback — it's the bin-quantization floor.
       const b0 = Math.max(1, hzToBin(sMin, this.sampleRate, this.fftSize));
       let b1 = hzToBin(sMax, this.sampleRate, this.fftSize);
       if (b1 <= b0) b1 = b0 + 1;
