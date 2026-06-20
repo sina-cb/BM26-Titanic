@@ -742,12 +742,25 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
         visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        // Per-channel effective-output METER levels (channel metering).
+        // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
+        // each is the channel's intrinsic brightness scaled by its effFader
+        // (fader/clamp/group/solo), so a layer sitting dark (faded out, muted
+        // group, blend-mode-invisible) reads ~0 even when its pattern is
+        // bright. Shipped as a tiny numeric sidecar to the base64 vis frames
+        // (no per-pixel cost). Absent ⇒ client renders no meter (older engine
+        // / non-vis frame) — a documented default, not a silent fallback.
+        const visLevels = mixer.getVisLevels();
+        const levelsPayload = {};
+        for (const [key, level] of Object.entries(visLevels)) {
+          levelsPayload[key] = level;
+        }
         // `pixelCount` in the message is the number of pixels the iPad
         // should actually expect in each base64 buffer — that's the
         // SAMPLED count, not the model's true pixelCount. PixelStrip
         // already does Math.min(propPixelCount, bytes.length/6) so the
         // strip never tries to draw past the data.
-        statsCallback({ type: 'vis', vis: visPayload, pixelCount: visPxOut });
+        statsCallback({ type: 'vis', vis: visPayload, levels: levelsPayload, pixelCount: visPxOut });
       }
     }
   }
