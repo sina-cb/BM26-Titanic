@@ -180,3 +180,10 @@ Proof entry template:
 - Command(s) BY INSTIGATOR on merged tip: `node tools/genre_eval.mjs --corpus ~/tmp/genre_corpus` → **OVERALL 16/36 = 44.4%** (per-genre: tech_house 100%, melodic_house 67%, melodic_techno 67%, techno 17%, deep_house 17%, downtempo 0%). `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/genre_eval_harness.test.mjs` → **166 pass**. dry-run exit 0.
 - DISCREPANCY (verification-discipline catch): the agent REPORTED 63.9% from a private in-engine tuning-REPLAY tool (~/tmp); the HONEST reproducible number via the live genre_eval.mjs is **44.4%** — confirmed identical in D7's own worktree (16/36). Still a 2× lift over 22% baseline; merged with the corrected number logged.
 - Verdict: D7 crossed off (at 44.4% honest). ✅
+
+### D4 — detector RECALL recovery + adversarial scenarios  [PASS]  2026-06-20T13:40Z
+- Branch/commit: `dev/detector_recall` @ `e473341` → merged into `feat/audio_analysis_2` (--no-ff; auto-merged with D1's dropEnergyJump on different lines, no conflicts).
+- New config (range-validated): dropBuildGate(0.5), dropBuildMemoryMs(3000), dropSlowZoneMax(0.4), dropRelLevel(OFF). +4 adversarial scenarios, +3 regression tests.
+- CRITICAL re-validation BY INSTIGATOR at the MERGED fft2048 state (D4 was tuned at fft1024): `node tools/detection_eval.mjs` default config → **DROP P=1.00 R=1.00 F1=1.00 lat=232ms negFP=0, falseFiresPerMin=0.00** (the recall fix HOLDS at 2048). `node --test` detector+eval+integration+config+validation → **88 pass / 0 fail**. dry-run exit 0.
+- Root cause: drop edge fired only from BUILD; mic never latches THIN→BUILD (energyRatio saturates) → drops missed in THIN. Fix: build-score-memory transition gate fires from THIN/BUILD + slow-zone guard rejects breakdown-onset false edges.
+- Verdict: D4 crossed off. ✅ — detector now recall 1.00 at zero false-fires on the adversarial set @ fft2048.
