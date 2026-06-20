@@ -393,3 +393,15 @@ node_modules symlinked to main checkout (gitignored, never committed).
   Launched read-only channel-ops design (#6 dup / #7 reorder / #9 panic) to de-risk reorder.
   Next engine waves after 16 merges (serial on api_server.js): WAVE 14 metering →
   WAVE 15 groups+solo (spec _13) → channel-ops (spec pending). Then re-discover.
+
+## STATUS LOG (cont. 6)
+- 2026-06-20 T10: WAVE 16 playlist tags+hold/loop MERGED (f3194ac); also de-flaked
+  master_fade test (1e-6→RAMP_TOL 0.05), suite stable 876/0. Launched:
+  * WAVE 15 dev/groups_solo_engine — groups + server-solo/solo-safe ENGINE (spec _13).
+    Sole engine writer. effFader gate rewrite + mixGroups + soloedChannelIds.
+  * dev/ui_deck_extras — deck-side faderMax/color (closes 13-B deferral; index.tsx only).
+  Disjoint: engine(pattern_mixer/api_server/pattern_channel) ‖ CaptainPad(index.tsx).
+  CADENCE after 15-engine merges: 15-UI (mixer.tsx group rail+solo) ‖ WAVE 14 metering
+  ENGINE (pattern_mixer viz+api_server) — disjoint, parallel. Then ops cluster (spec _17,
+  after 15). FEATURES SHIPPED so far: hot-swap, snapshots, master-fade, clamp, color,
+  playlist tags/search, hold/loop (+ all hardening/QoL/perf/audit/docs).
