@@ -157,8 +157,13 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       channelFaderRejected/channelModeRejected client-side; N3/F1 surface renderHealth +
       deckRestoreDegraded on the connection pill (defer if it needs unowned files);
       N4/F5 HIL honor ENGINE_PORT; N5/F7 ref-guard hot-swap re-entrancy.
-- [ ] Merge WAVE 8 → verify → push. Then likely WIND DOWN (ship-with-nits achieved;
-      deliverable is handoff-ready).
+- [x] WAVE 8: dev/audit_nits — DONE + MERGED (41a4bcb). 4/5 P2 nits; N3 deferred.
+- [ ] WAVE 9: dev/health_pill (slot 1) — RUNNING. Last audit item N3/F1: surface
+      /status renderHealth.ok===false || deckRestoreDegraded!=null as a non-intrusive
+      amber "⚠ DEGRADED" chip by the connection pill (DeckTopBar). Additive; healthy
+      engine = no change. Touches api.ts/engineBus.ts/useEngineConnection.ts/DeckTopBar.tsx.
+- [ ] Merge WAVE 9 → verify → push. Then WIND DOWN: audit fully closed, deliverable
+      handoff-ready. (Beyond this = diminishing returns; re-audit only if operator wants more.)
 
 ## STATUS LOG (cont. 2)
 
