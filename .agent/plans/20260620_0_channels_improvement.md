@@ -136,7 +136,16 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       fails — keep mission-critical exterior LIT. FIX B: swap/entry response carries resolved
       targetEntryId, UI arms pending-gate from it; mixer copy says "Switch" not "Crossfade".
       + boot-safety unit test + transition-enabled swap-response HIL.
-- [ ] Merge WAVE 6 → verify on tip → push. Then wind down (queue empty, near deadline).
+- [x] WAVE 6: dev/regression_fixes — DONE + MERGED (5fd7f3d, pushed). 829 tests,
+      FIX-B HIL 10/10, FIX-A keep-lit verified (boots not dark + deckRestoreDegraded).
+- [ ] WAVE 7 (no-wait, kicked immediately per operator): two parallel agents —
+      (a) FINAL INTEGRATION + OFFLINE-READINESS audit of the whole delta
+          (origin/main..feat tip, 35 files) — read-only, handoff verdict.
+      (b) dev/channels_docs — additive doc docs/NN_channels_deck_mixer.md: hot-swap
+          API surface, /status renderHealth + deckRestoreDegraded, two-view best
+          practices, timeline-readiness note.
+- [ ] Merge docs + implement any safe audit finds → verify → push. Operator: do NOT
+      wait for cron; kick next wave immediately on empty queue (cron = stuck-agent net).
 
 ## STATUS LOG (cont. 2)
 
