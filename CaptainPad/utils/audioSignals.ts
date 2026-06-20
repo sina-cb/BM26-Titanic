@@ -54,6 +54,48 @@ export const COMPANION_ACCENT: Record<string, string> = {
 // known band token and isn't a frequency source.
 export const ACCENT_AUTO = '#1b9e77';
 
+// ── genre classifier (audioGenre) ───────────────────────────────────
+//
+// The Companion's genre classifier routes a single `audioGenre` CPC key
+// whose live value is an INDEX into this list (index-aligned with the
+// engine/Companion classifier — keep in lockstep). A raw integer in a
+// meter reads as noise ("3"), so the AUDIO tab resolves the index to the
+// human name. This list is the canonical contract order; do NOT reorder
+// without matching the analyzer side.
+export const AUDIO_GENRE_NAMES: readonly string[] = [
+  'ambient',
+  'deep_house',
+  'melodic_house',
+  'tech_house',
+  'techno',
+  'melodic_techno',
+  'downtempo',
+];
+
+/**
+ * Resolve an `audioGenre` CPC value (a float index) to its genre name for
+ * display. Rounds to the nearest index and looks it up in
+ * AUDIO_GENRE_NAMES; an out-of-range / negative index returns null so the
+ * caller can render a neutral placeholder rather than INVENT a label
+ * (Codex P0 — no fallback fabrication).
+ */
+export function audioGenreName(value: number): string | null {
+  if (!Number.isFinite(value) || value < 0) return null;
+  const idx = Math.round(value);
+  if (idx < 0 || idx >= AUDIO_GENRE_NAMES.length) return null;
+  return AUDIO_GENRE_NAMES[idx];
+}
+
+/**
+ * Whether an audio CPC key is the genre classifier output. Matched by the
+ * `genre` token (case-insensitive) so a `audioGenre` / `micGenre` / a
+ * dynamic Companion key carrying "genre" all resolve. Used by the AUDIO
+ * tab to switch a signal column from a numeric readout to the genre name.
+ */
+export function isGenreKey(key: string): boolean {
+  return /genre/i.test(key);
+}
+
 /**
  * Identity colour (resolved hex) for a dynamic audio signal. Match the
  * Companion's source colour when we recognise the band token; KICK red,
