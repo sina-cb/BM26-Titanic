@@ -57,6 +57,28 @@ Ran skill 05 chain on default ports (engine 6968 / sim 6969-6972 / CaptainPad 69
 > auto-named claude branch on 2026-06-20 per operator). Merges 1-3 below landed
 > on that branch (same commits, renamed).
 
+### MERGE 6 — dev/engine_hardening_timeline (WAVE 4) — VERIFIED ON MERGED TIP
+Boundary: api_server.js, pattern_mixer.js + 4 additive tests + report. No overlap
+with merged CaptainPad work. Verified on merged tip:
+```
+$ git diff --check -- marsin_engine          → DIFFCHECK_OK
+$ node --check {2 lib + 4 tests}             → all OK
+$ node engine.js --list                      → 60 patterns
+$ dry-run                                    → exit 0, no missing-blend warning
+$ node --test "tests/*.test.js"              → 823 pass / 0 fail (+21 vs 802)
+$ ENGINE_PORT=31268 hil_deck_swap_param_test → ALL HIL ASSERTIONS PASSED, exit 0
+  states/test_bench residue: clean (restored)
+```
+Content: validateFader (reject non-finite + clamp [0,1]) on all 4 fader write
+paths incl. WS channelFaderRejected reply; deck base-channel restore THROWS at
+boot on compile-fail (no silent null deck); stale playlist activeEntryId cleared
++ warned; per-key vis buffer pool (_extractVisInto); alloc-free scripted-transition
+render order; removeDeckChannel cancels in-flight swap; parametric /deck/playlist/swap
+(per-call transition override, 409 on in-flight); new /deck/playlist/queue warm
+endpoint. Verified-already-correct (skipped): transition-config validation, WS
+fail-loud, warmInactiveDeckHandle leak-safety. Deferred: applyChannelPatch refactor.
+Merge commit: see git log.
+
 ### MERGE 5 — dev/captainpad_qol (WAVE 5, lens C) — VERIFIED ON MERGED TIP
 Boundary: index.tsx, mixer.tsx, ConfirmSheet.tsx, api.ts + report. Verified:
 ```

@@ -180,6 +180,103 @@ export function isValidBlendMode(mode) {
   return false;
 }
 
+// ── Fader value validation (single source of truth) ────────────────────
+// A fader is a normalized [0,1] gain. Every write path (mixer PATCH, deck
+// PATCH, mixer master PATCH, WS setChannelFader) routes through this so a
+// bad value can never reach the render loop. Codex P0 (no silent fallback):
+// a non-finite value (NaN/Infinity, e.g. `Number('abc')`) is REJECTED with
+// 400 — we do NOT coerce it to 0/1, because that masks a broken client. A
+// finite-but-out-of-range value IS clamped to [0,1]: that's a benign
+// saturation of a real intent (slider overshoot), not a malformed input.
+//
+// Returns { ok: true, value } with the clamped number on success, or
+// { ok: false, error } (human-readable, suitable for a 400 body) when the
+// input is not a finite number.
+export function validateFader(raw) {
+  // Only accept an actual number, or a string that parses to a finite
+  // number. Reject null / undefined / boolean / object outright — JSON
+  // coercion (Number(null)===0, Number(true)===1) would otherwise mask a
+  // structurally-wrong payload as a valid fader (silent fallback, Codex P0).
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `fader must be a finite number in [0,1], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `fader must be a finite number in [0,1], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(0, Math.min(1, n)) };
+}
+
+// ── Deck transition durationMs bounds (single source of truth) ─────────
+// The /deck/transition-config POST, the per-call swap override, and the
+// internal loadPlaylistEntryWithTransition resolve all clamp to this same
+// window so a "5 minute" or "1 ms" fade can never reach the render loop.
+export const DECK_TRANSITION_MIN_MS = 50;
+export const DECK_TRANSITION_MAX_MS = 30000;
+
+/**
+ * Validate a per-call deck-transition override (item 10 — drivable by
+ * feat/timeline_support). Mirrors the field validation of POST
+ * /deck/transition-config EXACTLY so the two paths can't drift:
+ *   - enabled  optional boolean
+ *   - shuffle  optional boolean
+ *   - mode     optional string, must be a trans_* transition name
+ *   - durationMs optional, must be finite, clamped to [50, 30000] ms
+ *
+ * Returns { ok: true, value } where value is a NEW config object built by
+ * merging the validated override on top of `base` (so omitted fields keep
+ * the base/global config), or { ok: false, error } on the first bad field.
+ * A null/undefined override yields a shallow copy of base unchanged.
+ *
+ * @param {Object} override per-call { enabled?, shuffle?, mode?, durationMs? }
+ * @param {Object} base the global deckTransitionConfig to layer onto
+ */
+export function validateSwapTransitionOverride(override, base) {
+  const out = { ...base };
+  if (override === null || override === undefined) {
+    return { ok: true, value: out };
+  }
+  if (typeof override !== 'object' || Array.isArray(override)) {
+    return { ok: false, error: 'transition must be an object' };
+  }
+  if (override.enabled !== undefined) {
+    if (typeof override.enabled !== 'boolean') {
+      return { ok: false, error: 'transition.enabled must be a boolean' };
+    }
+    out.enabled = override.enabled;
+  }
+  if (override.shuffle !== undefined) {
+    if (typeof override.shuffle !== 'boolean') {
+      return { ok: false, error: 'transition.shuffle must be a boolean' };
+    }
+    out.shuffle = override.shuffle;
+  }
+  if (override.mode !== undefined) {
+    if (typeof override.mode !== 'string' || !override.mode.startsWith('trans_')) {
+      return {
+        ok: false,
+        error: `transition.mode must be a trans_* transition name, got '${override.mode}'`,
+      };
+    }
+    out.mode = override.mode;
+  }
+  if (override.durationMs !== undefined) {
+    const n = Number(override.durationMs);
+    if (!Number.isFinite(n)) {
+      return {
+        ok: false,
+        error: `transition.durationMs must be a finite number, got '${override.durationMs}'`,
+      };
+    }
+    out.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
+  }
+  return { ok: true, value: out };
+}
+
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
   return fs.readdirSync(patternsDir)
@@ -1389,7 +1486,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const src = loadPattern(patternsDir, saved.pattern);
       const comp = wasmHost.compile(src);
       if (!comp.ok) {
-        console.warn(`Failed to compile saved channel ${saved.pattern}:`, comp.error);
+        // Codex P0 (no silent fallback): a deck base channel that fails to
+        // compile must FAIL LOUD, not boot a null deck. The deck is the
+        // mission-critical exterior surface — silently booting without it
+        // would leave the Titanic dark with no error surfaced. Throw so the
+        // tagged re-throw in the catch below propagates to engine boot.
+        // (Mixer overlays still degrade: a dead overlay leaves the deck +
+        // other overlays live, and is logged — see catch.)
+        const msg = `Failed to compile saved ${role} channel '${saved.pattern}': ${comp.error}`;
+        if (role === 'deck') {
+          const e = new Error(msg);
+          e._deckRestoreFatal = true;
+          throw e;
+        }
+        console.warn(msg);
         return;
       }
       const config = {
@@ -1430,6 +1540,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
       const entry = pl && ch.playlist.activeEntryId &&
         pl.entries.find(e => e.id === ch.playlist.activeEntryId);
+      // Codex P0: a dangling activeEntryId (the entry was deleted from the
+      // playlist since this state was saved) is a restore-time bomb — every
+      // later "advance from current entry" lookup would silently no-op
+      // against an id that resolves to nothing. Detect it here, WARN loudly,
+      // and CLEAR the stale id so the channel is in a clean "no active
+      // entry" state rather than carrying a pointer to a ghost. We still
+      // fall back to localControls below so the slot keeps its last params.
+      const danglingEntryId = pl && ch.playlist.activeEntryId && !entry;
+      if (danglingEntryId) {
+        console.warn(
+          `[Restore] ${role} channel '${ch.id}': playlist '${ch.playlist.name}' ` +
+          `has no entry '${ch.playlist.activeEntryId}' (deleted since save) — ` +
+          `clearing the stale activeEntryId.`);
+        ch.playlist.activeEntryId = null;
+      }
       if (entry && !entry._missing) {
         playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
       } else if (saved.localControls) {
@@ -1442,7 +1567,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // CPC gets the last word — latest color palette, speed, etc. always win
       finalizeCpcValues(ch);
     } catch (e) {
-      console.warn(`Failed to restore channel ${saved.pattern}:`, e.message);
+      // Codex P0: never swallow a fatal deck restore. A dead deck must
+      // crash boot loudly, not be logged-and-ignored (which would leave the
+      // exterior dark with the engine reporting "started").
+      if (e && e._deckRestoreFatal) throw e;
+      console.warn(`Failed to restore ${role} channel ${saved.pattern}:`, e.message);
     }
   }
 
@@ -2719,7 +2848,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(serializeMixerState()));
     } else if (req.method === 'PATCH' && req.url === '/mixer') {
       readBody(data => {
-        if (data.master !== undefined) mixer.setMaster(data.master);
+        if (data.master !== undefined) {
+          // Codex P0: master is a [0,1] fader. Reject non-finite with 400
+          // (setMaster's Math.max/min would otherwise pass NaN straight
+          // through to applyMaster and black the rig). Clamp finite.
+          const mv = validateFader(data.master);
+          if (!mv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: mv.error }));
+          }
+          mixer.setMaster(mv.value);
+        }
         saveAllState();
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -2876,6 +3015,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
+          // Codex P0: reject a non-finite fader (NaN/Infinity) with 400
+          // BEFORE the fader-lock check — a malformed value is a client
+          // bug regardless of lock state, and must never reach the render
+          // loop. A finite out-of-range value is clamped to [0,1].
+          const fv = validateFader(data.fader);
+          if (!fv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fv.error }));
+          }
           // Fader-lock: reject the fader portion silently (no-op) but
           // still process other fields in this PATCH. We do NOT 4xx
           // because operators bulk-PATCH multiple fields at once and a
@@ -2886,7 +3034,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // Manual fader writes ALWAYS cancel any in-flight transition
             // for that channel — mirrors WS setChannelFader (see above).
             mixer.cancelChannelTransition(id);
-            channel.fader = data.fader;
+            channel.fader = fv.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
@@ -3703,10 +3851,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
+          // Codex P0: reject non-finite, clamp finite (see validateFader).
+          const fv = validateFader(data.fader);
+          if (!fv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fv.error }));
+          }
           // Fader-lock: same silent-skip semantics as the mixer PATCH.
           if (!channel.faderLocked) {
             mixer.cancelChannelTransition(channel.id);
-            channel.fader = data.fader;
+            channel.fader = fv.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
@@ -3845,16 +3999,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // rides the smooth crossfade/transition. This is additive and behind
       // an explicit endpoint; the existing entry-advance route is untouched.
       //
-      // Body: { name: string, entryId?: string }
-      //   name    — playlist to swap to (required)
-      //   entryId — entry within that playlist to land on (optional;
-      //             defaults to the first non-missing entry)
+      // Body: { name: string, entryId?: string, transition?: {...} }
+      //   name       — playlist to swap to (required)
+      //   entryId    — entry within that playlist to land on (optional;
+      //                defaults to the first non-missing entry)
+      //   transition — OPTIONAL per-call override of the global deck
+      //                transition config FOR THIS SWAP ONLY (item 10,
+      //                feat/timeline_support). { enabled?, shuffle?,
+      //                mode?, durationMs? }, validated identically to
+      //                POST /deck/transition-config. Omitted ⇒ existing
+      //                callers get the exact current behavior (the global
+      //                deckTransitionConfig). Does NOT mutate the global.
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         if (typeof data.name !== 'string' || data.name.length === 0) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'name (playlist) required' }));
         }
+        // Resolve the transition config for THIS swap: validated per-call
+        // override layered on the global. A bad override 400s before we
+        // touch the deck — fail loud, don't silently use the global.
+        const tv = validateSwapTransitionOverride(data.transition, deckTransitionConfig);
+        if (!tv.ok) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: tv.error }));
+        }
+        const swapTransitionConfig = tv.value;
         let pl;
         try {
           pl = playlistManager.load(data.name);
@@ -3887,7 +4056,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // rebinds baseCh.playlist.name to the new playlist — so a swap
           // is just an entry load that happens to cross playlists.
           const r = loadPlaylistEntryWithTransition(
-            baseCh, pl.name, targetEntry.id, deckTransitionConfig,
+            baseCh, pl.name, targetEntry.id, swapTransitionConfig,
           );
           res.writeHead(200);
           res.end(JSON.stringify({
@@ -3897,11 +4066,113 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             transitionId: r && r.transitionId ? r.transitionId : null,
           }));
         } catch (e) {
+          // Concurrency: an in-flight swap throws EBUSY (see
+          // loadPlaylistEntryWithTransition). We return 409 — the SAFER
+          // choice (documented): finishing the previous swap NOW to make
+          // room would visibly snap the deck to an intermediate pattern the
+          // operator didn't ask to settle on. 409 lets the caller (timeline
+          // driver) decide whether to retry on the next anchor.
           if (e && e.code === 'EBUSY') {
             res.writeHead(409); res.end(JSON.stringify({ error: 'transition in progress', code: 'EBUSY' }));
           } else {
             res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
           }
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/queue') {
+      // ── Warm-then-fire-on-anchor (item 11, feat/timeline_support) ─────
+      // Compile a target entry and PARK it in the inactive deck slot WITHOUT
+      // advancing the deck. The next swap (manual ping-pong or autopilot)
+      // that targets the same pattern reuses this warm handle for a
+      // zero-compile fade — letting a timeline pre-stage the next look on a
+      // musical anchor and fire it instantly when the beat lands.
+      //
+      // Body: { name: string, entryId?: string }
+      //   name    — playlist holding the entry to warm (required)
+      //   entryId — entry to warm (optional; first non-missing entry)
+      //
+      // Uses the SAME leak-safe warmInactiveDeckHandle contract: a
+      // redundant or refused handle is destroyed by the mixer, never
+      // leaked. Returns once the slot is warm (the compile is synchronous).
+      readBody(data => {
+        const baseCh = mixer.getDeckChannel();
+        if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        if (typeof data.name !== 'string' || data.name.length === 0) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name (playlist) required' }));
+        }
+        let pl;
+        try {
+          pl = playlistManager.load(data.name);
+        } catch (e) {
+          if (e instanceof PlaylistLoadError) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          }
+          throw e;
+        }
+        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        let targetEntry;
+        if (data.entryId !== undefined) {
+          targetEntry = pl.entries.find(e => e.id === data.entryId);
+          if (!targetEntry) {
+            res.writeHead(404);
+            return res.end(JSON.stringify({ error: `entry not found in ${data.name}: ${data.entryId}` }));
+          }
+          if (targetEntry._missing) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `pattern missing for entry ${data.entryId}: ${targetEntry.pattern}` }));
+          }
+        } else {
+          targetEntry = pl.entries.find(e => !e._missing);
+          if (!targetEntry) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `playlist ${data.name} has no usable entries` }));
+          }
+        }
+        // Refuse to touch the inactive slot mid-fade — it's the live fade
+        // target then. warmInactiveDeckHandle also guards this (and would
+        // destroy our handle), but returning 409 here avoids a wasted
+        // compile and gives the caller a clean retry signal.
+        if (mixer.isDeckSwapInFlight && mixer.isDeckSwapInFlight()) {
+          res.writeHead(409);
+          return res.end(JSON.stringify({ error: 'transition in progress', code: 'EBUSY' }));
+        }
+        // Already warm with this exact pattern? Skip the compile — the slot
+        // holds a ticking handle for it (e.g. a prior queue or ping-pong).
+        if (mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern() === targetEntry.pattern) {
+          res.writeHead(200);
+          return res.end(JSON.stringify({
+            status: 'ok', warmed: targetEntry.pattern, entryId: targetEntry.id, reused: true,
+          }));
+        }
+        try {
+          const src = loadPattern(patternsDir, targetEntry.pattern);
+          const comp = wasmHost.compile(src);
+          if (!comp.ok) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `Compile error: ${comp.error}` }));
+          }
+          // Seed top-level scope so the warmed handle's exports initialize
+          // and it ticks correctly while parked at fader 0.
+          wasmHost.beginFrame(comp.handle, 0);
+          // Ownership of comp.handle transfers to the mixer. If the slot
+          // already holds a DIFFERENT pattern, the mixer destroys the old
+          // handle; if it somehow holds the same one, it destroys the
+          // redundant incoming handle. Either way: no leak.
+          const installed = mixer.warmInactiveDeckHandle(targetEntry.pattern, comp.handle);
+          if (!installed) {
+            // Refused (e.g. a swap raced in). The mixer already destroyed
+            // our handle per its contract — surface loudly, don't pretend.
+            res.writeHead(409);
+            return res.end(JSON.stringify({
+              error: 'could not warm slot (swap in flight)', code: 'EBUSY',
+            }));
+          }
+          res.writeHead(200);
+          res.end(JSON.stringify({
+            status: 'ok', warmed: targetEntry.pattern, entryId: targetEntry.id, reused: false,
+          }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
@@ -4364,6 +4635,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           saveAllState();
           broadcastMixerState();
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
+          // Codex P0: reject a non-finite fader loudly over WS too. We have
+          // no res to 4xx on a socket, so push back a typed rejection the
+          // iPad can surface + re-sync from; we do NOT coerce NaN to a
+          // number. Finite values are clamped to [0,1] before they land.
+          const fv = validateFader(d.fader);
+          if (!fv.ok) {
+            ws.send(JSON.stringify({
+              type: 'channelFaderRejected',
+              channelId: d.channelId,
+              fader: d.fader,
+              reason: fv.error,
+            }));
+            return;
+          }
           const channel = mixer.getChannel(d.channelId);
           if (channel) {
             // Fader-lock: refuse manual fader writes on a locked
@@ -4386,7 +4671,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // would keep overwriting the operator's slider drag, causing
             // a "rubber band" snap-back effect. Agent review (May 2026) §5.
             mixer.cancelChannelTransition(d.channelId);
-            channel.fader = d.fader;
+            channel.fader = fv.value;
             // No broadcast — fader-only updates outside transitions are
             // already at human-touch rate; full state syncs on
             // saveMixerState (e.g. on slider release).
