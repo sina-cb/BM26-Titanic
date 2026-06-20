@@ -180,7 +180,7 @@ Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCK
 ### Wave B (launching)
 - ⏳ B2 detector super-tuning + scoring/eval (drop/slow/build) — `dev/detector_tuning`
 - ⏳ B3 analyzer features: per-band onsets + sub-bass chest-hit — `dev/analyzer_features`
-- ⏳ B4 CaptainPad audio UI improvements — `dev/captainpad_audio_ui`
+- ✅ B4 CaptainPad audio UI improvements — `dev/captainpad_audio_ui` MERGED @ `bd0fc34` (proof in `_verification` 03:00Z; tsc+lint exit 0 on merged tip)
 
 ### Instigator-owned (apply post-merge, from `20260620_3`)
 - 📋 I1 fix dead `switch_signals` startup guard (epoch-ms bug, P1) — after A0 merges
@@ -216,3 +216,6 @@ summary report, push `feat/audio_analysis_2`.
 - `02:43Z` T0. Wave A launched earlier; A2/A3 discovery DONE + reports committed
   (`509e285`). Baseline: 223 audio+companion tests green. Wave B worktrees created;
   launching B2/B3/B4 + 30-min heartbeat. Queue per §6.
+- `03:00Z` B4 (CaptainPad UI) completed + MERGED @ `bd0fc34`; tsc+lint exit 0 on the
+  merged tip (proof logged). Still in flight: A0 genre/note, A1 companion, B2 detector
+  tuning, B3 analyzer features. 4 agents running.

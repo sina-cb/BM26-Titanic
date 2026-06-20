@@ -45,4 +45,14 @@ Proof entry template:
 ---
 
 ## Wave B + merges (appended at each check-in as proof arrives)
-_(empty — populated as B2/B3/B4 and A0/A1 are reviewed and merged)_
+
+### B4 — CaptainPad audio UI (scrollable grid, dynamic genre name, richer modulation popup)  [PASS]  2026-06-20T03:00Z
+- Branch / commit: `dev/captainpad_audio_ui` → merged into `feat/audio_analysis_2` @ `bd0fc34` (--no-ff).
+- Files: `CaptainPad/utils/audioSignals.ts` (canonical genre list + `audioGenreName()`/`isGenreKey()`), `CaptainPad/app/(tabs)/audio.tsx` (genre renders NAME; 3-col grid in height-capped ScrollView), `CaptainPad/components/Modulation.tsx` (live source-level `SourceChip`).
+- Command(s) run BY INSTIGATOR on the MERGED tip (independent re-verification, not just the agent's claim):
+  `cd CaptainPad && npx tsc --noEmit` → **exit 0**; `npm run lint` → **exit 0** (12 pre-existing warnings, 0 errors, none in changed files).
+- Agent-side proof (from report `20260620_6`): `npm run web:build` → exit 0, `/audio` exported; Playwright screenshots vs a dependency-free mock engine — `~/tmp/audio_tab_viewport.png`, `~/tmp/audio_tab_full.png`, `~/tmp/audio_tab_grid_scrolled.png` (onset/chest-hit rows revealed by scroll), `~/tmp/modulation_popup.png` (rich popup). Captures are in ~/tmp (gitignored — scratch); agent visually inspected them.
+- Capture(s): screenshots above (ephemeral, in worktree ~/tmp). Hard re-runnable proof = the tsc/lint exit-0 on the merged tip.
+- Process: confirmed branch touches CaptainPad-only files (disjoint from all engine/companion agents) → safe first Wave-B merge; three-way merge preserved the plan files (branch was cut at 509e285); re-ran static checks on the merged tip.
+- Verdict: B4 crossed off in plan §6. ✅
+  - Deferred (documented, not a gap): per-candidate *full* animated trails in the picker (perf — selected source still gets full trail).
