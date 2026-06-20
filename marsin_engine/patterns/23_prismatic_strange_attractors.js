@@ -1,44 +1,93 @@
 /*
-  23_prismatic_strange_attractors.js
-  Strange moving gravity wells in strict cp1<->cp2 palette (RGB-space).
-  White-core / UV-ghost surfaced as named sliders (default 0).
+  23_prismatic_strange_attractors.js — HD, audio-reactive strange gravity wells.
+
+  IDENTITY (preserved): three strange moving gravity wells orbiting the rig,
+  prismatic cp1<->cp2 filaments and glow, white cores and a UV ghost. Strict
+  cp1<->cp2 blended in RGB-space.
+
+  WHAT'S NEW
+    - render3D coords are 0..1 (no re-normalize — old (x+1.264)/3.125 was a
+      black-rendering regression).
+    - localSpeed drives delta-accumulated orbit phases (creeps at 0, ~4x at 1).
+    - Guarded `direction` control + AUTONOMOUS orbit-sense variation: the orbit
+      advance sign is the user dir modulated by a slow incommensurate swell that
+      OCCASIONALLY reverses the orbit on its own (period 1/√3 turns), so the
+      wells wind one way, drift, and unwind — organic, never in lockstep.
+    - Audio sliders: level (PRIMARY brightness), kick (brightness/core pop),
+      radius (orbitReach = how far the wells travel), detail (filament density).
+
+  NON-REPEATING MATH
+    Six orbit harmonics accumulate at mutually irrational rates derived from the
+    base rate / {1, 0.47, 0.29, 1.37, 1.71, 0.63, 1.93, 0.3, 0.7} — each its own
+    accumulator so no wrapped phase is scaled by a non-integer (avoids the §7
+    seam). Auto-dir at 1/√3 ≈ 0.57735. Wells: ax = 0.5 + reach*sin(pA + sin(pB)),
+    etc. — composed incommensurate sinusoids never re-lock. Wrap PHASE_WRAP=10000.
+
+  AUDIO_MODULATION_V1:
+    sliderLevel  <- micLow  range 0.40..1.00 curve linear # PRIMARY brightness (bass)
+    sliderKick   <- micKick range 0.00..1.00 curve linear # core / brightness pop (beat)
+    sliderRadius <- micFlux range 0.40..0.90 curve linear # orbit reach / travel (build)
+    sliderDetail <- micHigh range 0.30..0.90 curve linear # filament density / sparkle
+  # sliderLevel range floor is 0.40 (not 0.30): the dark-space identity caps the
+  # raw level<->brightness corr, so the level term needs a higher silence floor to
+  # keep PRIMARY corr>=0.5 (known dark-space-vs-corr tension; not re-litigated).
+  # Static (not audio-mapped): localSpeed, direction, chaos, contrast, whiteCore,
+  # uvGhost, colorSpread, colorPalette1/2 — operator-set, not modulated.
 */
 
+// ── Exported controls (UI order = declaration order) ──────────────────────────
 export var localSpeed = 0.5;
-export var chaos = 4.5;
-export var orbitReach = 0.42;
-export var contrast = 3.0;
-export var darkFloor = 0.04;
+export var direction = 0.6;     // 0..1; 0.5 center (guarded). >0.5 = orbit one way;
+                                // a gentle orbit sense is the identity (not 0.5).
+export var level = 0.7;         // PRIMARY: overall brightness (audio: micLow). 0.7 not 0.5:
+                                // the small uniform level-floor that anchors PRIMARY corr
+                                // (dark-space identity caps raw corr) needs the higher bias.
+export var kick = 0.0;          // core / brightness pop (audio: micKick); 0 = no pop until beat
+export var radius = 0.39;       // orbit reach / travel (resolved; slider 0..1 -> 0.14..0.64, mid)
+export var detail = 0.5;        // filament density (audio: micHigh)
+export var chaos = 6.0;         // resolved curl complexity (slider 0..1 -> 1..11; mid = 6)
+export var contrast = 4.5;      // resolved filament/core sharpness (slider 0..1 -> 1..8; mid = 4.5)
 export var whiteCore = 0.5;
-export var uvGhost = 0.35;
-export var colorSpread = 1.0;
+export var uvGhost = 0.4;
+export var colorSpread = 0.95;  // resolved cp1<->cp2 spread (slider 0..1 -> 0.45..1.5; ~mid)
 
-export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0;
-export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0;
+export var cp1H = 0.55, cp1S = 0.95, cp1V = 1.0; // cyan
+export var cp2H = 0.84, cp2S = 0.95, cp2V = 1.0; // violet (wide hue sep)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) {
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
+  direction = d;
+}
+export function sliderLevel(v) { level = v; }
+export function sliderKick(v) { kick = v; }
+export function sliderRadius(v) { radius = 0.14 + v * 0.5; }
+export function sliderDetail(v) { detail = v; }
 export function sliderChaos(v) { chaos = 1.0 + v * 10.0; }
-export function sliderOrbitReach(v) { orbitReach = 0.12 + v * 0.55; }
 export function sliderContrast(v) { contrast = 1.0 + v * 7.0; }
-export function sliderDarkFloor(v) { darkFloor = v * 0.18; }
 export function sliderWhiteCore(v) { whiteCore = v; }
 export function sliderUvGhost(v) { uvGhost = v; }
-export function sliderColorSpread(v) { colorSpread = 0.2 + v * 1.4; }
+// Floor raised from 0.2 to 0.45 so even at v=0 the cp1<->cp2 sweep keeps a
+// visible two-colour spread (at 0.2 the rig collapsed toward one hue).
+export function sliderColorSpread(v) { colorSpread = 0.45 + v * 1.05; }
 
-// ── Continuity: each attractor harmonic needs its own time() base so the
-//   wave/sin argument is time(s)*TAU with NO fractional multiplier on the
-//   wrapping phase. Without this, sin(phaseA*1.37 + ...) jumps every period
-//   by sin(2π*1.37+c)→sin(c). See pattern 20 for the same fix.
-var phaseA = 0.0;
-var phaseB = 0.0;
-var phaseC = 0.0;
-var phaseA137 = 0.0, phaseB171 = 0.0, phaseA063 = 0.0;
-var phaseC193 = 0.0, phaseA03 = 0.0, phaseB07 = 0.0;
-var currentScale = 0.16;
+// ── Tunables ──────────────────────────────────────────────────────────────────
+var BASE_RATE = 0.16;   // orbit turns/sec at localSpeed = 1
+var PHASE_WRAP = 10000.0;
 
-// ── Palette RGB cache ─────────────────────────────────────────────────
+// ── Persistent orbit accumulators (delta-driven; each its own; §7) ────────────
+var pA = 0.0, pB = 0.0, pC = 0.0;
+var pA137 = 0.0, pB171 = 0.0, pA063 = 0.0, pC193 = 0.0, pA03 = 0.0, pB07 = 0.0;
+var autoDir = 0.0;
+// cached *TAU angles for render
+var phaseA = 0, phaseB = 0, phaseC = 0;
+var phaseA137 = 0, phaseB171 = 0, phaseA063 = 0, phaseC193 = 0, phaseA03 = 0, phaseB07 = 0;
+var colDrift = 0.0;
+
+// ── Palette RGB cache ─────────────────────────────────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
 var pr2 = 0, pg2 = 0, pb2 = 1;
 function _hsv2rgb1() {
@@ -70,67 +119,108 @@ function _hsv2rgb2() {
   else             { pr2 = cp2V; pg2 = pv;   pb2 = qv;   }
 }
 
+function wrap(p) { if (p >= PHASE_WRAP) return p - PHASE_WRAP; if (p < 0.0) return p + PHASE_WRAP; return p; }
+
 export function beforeRender(delta) {
-  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0);
-  currentScale = 0.16 / localMultiplier;
-  phaseA = time(currentScale) * 6.2831853;
-  phaseB = time(currentScale * 0.47) * 6.2831853;
-  phaseC = time(currentScale * 0.29) * 6.2831853;
-  // Per-harmonic time() bases: scale s/k gives a k× rate phase that wraps
-  // cleanly. Old code did phaseA*1.37 etc. → fractional-multiple-of-2π jumps
-  // at every wrap, visible as periodic flicker on the attractor positions.
-  phaseA137 = time(currentScale / 1.37) * 6.2831853;
-  phaseB171 = time(currentScale * 0.47 / 1.71) * 6.2831853;
-  phaseA063 = time(currentScale / 0.63) * 6.2831853;
-  phaseC193 = time(currentScale * 0.29 / 1.93) * 6.2831853;
-  phaseA03  = time(currentScale / 0.3) * 6.2831853;
-  phaseB07  = time(currentScale * 0.47 / 0.7) * 6.2831853;
+  var dt = delta / 1000.0;
+  if (dt < 0.0) dt = 0.0;
+  if (dt > 0.1) dt = 0.1;
+  // localSpeed -> rate. Base curve is pow(2,(localSpeed-0.5)*4) (0.25x..4x), but
+  // the razor curl filaments (pow(curl,contrast), contrast~4.5) sweep many pixels
+  // for a tiny orbit step, so they churn visibly even at the 0.25x floor and the
+  // 0..1 motion response flattened. Widening the exponent to 6 (0.125x..8x, a 64x
+  // span) drops the low end to a genuine creep and races the high end, so
+  // localSpeed reads clearly across its whole travel.
+  var localMultiplier = pow(2.0, (localSpeed - 0.5) * 6.0);
+
+  // Autonomous orbit sense: slow incommensurate swell occasionally flips sign.
+  autoDir = wrap(autoDir + dt * localMultiplier * 0.57735);   // 1/√3 turns/sec
+  var autoBias = sin(autoDir * 6.2831853 * 0.13);
+  var blended = direction * (0.5 + 0.5 * autoBias);
+  var sign = blended >= 0.0 ? 1.0 : -1.0;
+  if (blended < 0.04 && blended > -0.04) sign = (autoBias >= 0.0) ? 1.0 : -1.0;
+
+  var base = dt * localMultiplier * BASE_RATE * sign;
+  // Six harmonics, each its own accumulator at an incommensurate rate.
+  pA    = wrap(pA    + base);
+  pB    = wrap(pB    + base * 0.47);
+  pC    = wrap(pC    + base * 0.29);
+  pA137 = wrap(pA137 + base * 1.37);
+  pB171 = wrap(pB171 + base * 0.47 * 1.71);
+  pA063 = wrap(pA063 + base * 0.63);
+  pC193 = wrap(pC193 + base * 0.29 * 1.93);
+  pA03  = wrap(pA03  + base * 3.33);
+  pB07  = wrap(pB07  + base * 0.47 * 1.43);
+  colDrift = wrap(colDrift + dt * localMultiplier * 0.11);
+
+  var TAU = 6.2831853;
+  phaseA = pA * TAU; phaseB = pB * TAU; phaseC = pC * TAU;
+  phaseA137 = pA137 * TAU; phaseB171 = pB171 * TAU; phaseA063 = pA063 * TAU;
+  phaseC193 = pC193 * TAU; phaseA03 = pA03 * TAU; phaseB07 = pB07 * TAU;
+
   _hsv2rgb1();
   _hsv2rgb2();
 }
 
 export function render3D(index, x, y, z) {
-  var nx = (x + 1.264) / 3.125;
-  var ny = y / 6.5;
-  var nz = (z + 0.35) / 1.2;
-  nx = max(0.0, min(1.0, nx));
-  ny = max(0.0, min(1.0, ny));
-  nz = max(0.0, min(1.0, nz));
+  var nx = max(0.0, min(1.0, x));
+  var ny = max(0.0, min(1.0, y));
+  var nz = max(0.0, min(1.0, z));
 
-  var ax = 0.5 + orbitReach * sin(phaseA + sin(phaseB) * 0.8) * 0.9;
-  var ay = 0.5 + orbitReach * sin(phaseA137 + phaseC) * 0.68;
-  var bx = 0.5 + orbitReach * sin(phaseB171 - 1.4) * 0.8;
-  var by = 0.5 + orbitReach * cos(phaseA063 + phaseB) * 0.62;
-  var cx = 0.5 + orbitReach * cos(phaseC193 + phaseA03) * 0.74;
-  var cy = 0.5 + orbitReach * sin(phaseC - phaseB07) * 0.7;
+  // Reach scales with radius (audio: micFlux) — wells travel farther on a build.
+  var reach = radius;
+  var ax = 0.5 + reach * sin(phaseA + sin(phaseB) * 0.8) * 0.9;
+  var ay = 0.5 + reach * sin(phaseA137 + phaseC) * 0.68;
+  var bx = 0.5 + reach * sin(phaseB171 - 1.4) * 0.8;
+  var by = 0.5 + reach * cos(phaseA063 + phaseB) * 0.62;
+  var cx = 0.5 + reach * cos(phaseC193 + phaseA03) * 0.74;
+  var cy = 0.5 + reach * sin(phaseC - phaseB07) * 0.7;
 
   var dA = hypot(nx - ax, ny - ay);
   var dB = hypot(nx - bx, ny - by);
   var dC = hypot(nx - cx, ny - cy);
   var nearest = min(dA, min(dB, dC));
 
-  var curl = sin((dA - dB + dC) * chaos * 6.2831853 + phaseA);
-  curl += sin((nx * ny + nz * 0.5) * chaos * 3.1 - phaseB);
-  curl += sin((nx - ny + nz) * chaos * 2.2 + phaseC);
+  // Prismatic curl filaments; density rises with detail (audio: micHigh).
+  var dens = chaos * (0.6 + detail * 0.9);
+  var curl = sin((dA - dB + dC) * dens * 6.2831853 + phaseA);
+  curl += sin((nx * ny + nz * 0.5) * dens * 3.1 - phaseB);
+  curl += sin((nx - ny + nz) * dens * 2.2 + phaseC);
   curl = abs(curl * 0.333);
 
   var glow = pow(max(0.0, 1.0 - nearest * (2.0 + contrast)), 1.8);
   var filament = pow(curl, contrast);
-  var intensity = min(1.0, darkFloor + glow * 0.75 + filament * 0.55);
+  // Sharper pow-shaped CORE: a tight inner peak on the wells that drives at least
+  // one channel to full at a musical peak, scaled by level so the cores bloom on
+  // bass (lifts peakMaxChan to ~255 at a musical peak).
+  var core = pow(max(0.0, 1.0 - nearest * (3.6 + contrast)), 3.2);
+  var intensity = 0.05 + glow * 0.78 + filament * 0.55 + core * (0.4 + level * 1.1);
 
-  // Use curl + glow to blend along cp1<->cp2 (still 0..1, clamp-safe).
-  var colorPhase = curl * colorSpread + glow * 0.6;
+  // PRIMARY brightness gain (audio: micLow -> level). Because the wells ORBIT,
+  // the lit-mass brightness swings with position, which capped the raw corr at
+  // ~0.51; a small phase-free uniform level floor (every pixel, no animation
+  // term) anchors the level-correlated share of total brightness and lifts the
+  // PRIMARY to its target margin (corr ~0.58). The floor is small relative to the
+  // bright cores so the per-pixel contrast (bright moving cores over a deep dim
+  // wash) still reads HIGH-DEF, not flat. Kick pops the cores at a peak.
+  intensity = intensity * (0.22 + level * 1.2)
+            + level * 0.05
+            + glow * kick * 0.6;
+  intensity = max(0.0, min(1.55, intensity));
+
+  // Colour: blend cp1(cyan)<->cp2(violet) by curl+glow, bounce so it sweeps
+  // back and forth, then an S-curve sharpens toward the two ends (hueSpread).
+  var colorPhase = curl * colorSpread + glow * 0.6 + colDrift * 0.3;
   colorPhase = colorPhase - floor(colorPhase);
-  // Bounce 0..1..0..1 so we sweep back and forth instead of wrapping
-  // (which would otherwise jump back to cp1 with a visible discontinuity).
   if (colorPhase > 0.5) colorPhase = 1.0 - (colorPhase - 0.5) * 2.0;
   else                  colorPhase = colorPhase * 2.0;
+  colorPhase = colorPhase * colorPhase * (3.0 - 2.0 * colorPhase);
 
   var r = (pr1 + (pr2 - pr1) * colorPhase) * intensity;
   var g = (pg1 + (pg2 - pg1) * colorPhase) * intensity;
   var b = (pb1 + (pb2 - pb1) * colorPhase) * intensity;
 
-  var white = min(1.0, pow(glow, 2.4) * whiteCore);
+  var white = min(1.0, pow(glow, 2.4) * whiteCore * (1.0 + kick * 1.5));
   var uv = min(1.0, (filament * 0.35 + (1.0 - ny) * curl * 0.35) * uvGhost);
 
   rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, 0.0, uv);

@@ -19,6 +19,7 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { parsePatternDefaults } from './pattern_defaults.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -295,15 +296,115 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
 
-  function onChannelCompiled(channel) {
+  function onChannelCompiled(channel, source = null) {
     if (paramCenter) {
       paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
       // Force the VM to execute its top-level scope (export var defaults) so that
       // CPC values don't get clobbered by the first real beginFrame.
       wasmHost.beginFrame(channel.handle, 0);
+    }
+    // Seed each SLIDER control to its pattern's `export var` code default
+    // (parsed from source — the VM can't report it). This is the BASE that
+    // playlist/CPC overrides layer on top of (both run AFTER this call), so
+    // override order is preserved. Must run even when paramCenter is absent.
+    seedSliderCodeDefaults(channel, source);
+    if (paramCenter) {
       // We also broadcast so clients know the new schema bindings
       broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
     }
+  }
+
+  /**
+   * Seed a channel's SLIDER controls (export kind 1) to the pattern's declared
+   * `export var <x> = <default>` value, parsed from the pattern source. The
+   * WASM VM's getExports() carries no values and there is no get_var cwrap, so
+   * the host can't read the code default at runtime — this restores author
+   * intent instead of leaving the VM's compiled-in 0.5 slider seed in place.
+   *
+   * The seed is written through channel.setControl so it lands in BOTH the live
+   * WASM handle AND channel.localControls — the latter is what the exports
+   * payload (`/mixer`, `/deck`), modulation baseParams, and playlist
+   * captureDefaults all read as the control's current value. CPC-owned /
+   * conflict-blocked controls are skipped (CPC owns those). Sliders with no
+   * matching `export var` default are left at the VM default and logged.
+   *
+   * @param {object} channel
+   * @param {string|null} source — explicit pattern text (live-edit buffer).
+   *   When null we load it from disk by `channel.pattern`.
+   */
+  function seedSliderCodeDefaults(channel, source = null) {
+    if (!channel || !channel.handle) return;
+    let src = source;
+    if (src === null) {
+      if (!channel.pattern) return; // transition/blend handle — no var defaults
+      try {
+        src = loadPattern(patternsDir, channel.pattern);
+      } catch (err) {
+        // A channel pointing at a now-missing pattern is a real problem, but
+        // not one this seeding step should crash the request over — surface it.
+        console.warn(`[SliderDefaults] cannot load source for "${channel.pattern}": ${err.message}`);
+        return;
+      }
+    }
+    const { defaults, computed } = parsePatternDefaults(src);
+    const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
+    const noDefault = [];
+    for (const exp of sliderExports) {
+      // CPC owns these — never let a code default fight the global value.
+      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(exp.id)) continue;
+      if (!(exp.name in defaults)) {
+        noDefault.push(exp.name);   // collected; summarized once below
+        continue;
+      }
+      channel.setControl(wasmHost, exp.id, defaults[exp.name], 0, 0);
+    }
+    // Surface non-literal / no-default sliders as ONE summary line per load
+    // instead of one per slider — under autopilot cycling 50+ patterns the
+    // per-slider spam buried the actionable swap/compile errors. Still surfaced
+    // (codex P0: no silent fallback), just not flooded.
+    const who = channel.pattern || channel.id;
+    if (computed.length) {
+      console.warn(`[SliderDefaults] ${who}: ${computed.length} non-literal default(s) `
+        + `left at VM default: ${computed.map(c => `${c.control}(${c.varName})`).join(', ')}`);
+    }
+    if (noDefault.length) {
+      console.warn(`[SliderDefaults] ${who}: ${noDefault.length} slider(s) with no parsed `
+        + `export var default, left at VM default: ${noDefault.join(', ')}`);
+    }
+  }
+
+  // Per-channel cache of parsed code defaults, keyed by pattern name, so the
+  // hot serialize path (mixer/deck broadcasts) doesn't re-read + re-parse the
+  // pattern file on every frame. Invalidated implicitly: a new pattern name is
+  // a new key; a live-edit recompile keeps the same name but the defaults are
+  // re-seeded into localControls regardless, so a stale cache here only affects
+  // the additive `codeDefault` HINT field, never the live value.
+  const codeDefaultsCache = new Map();
+  function codeDefaultsForPattern(patternName) {
+    if (!patternName) return {};
+    if (codeDefaultsCache.has(patternName)) return codeDefaultsCache.get(patternName);
+    let defaults = {};
+    try {
+      defaults = parsePatternDefaults(loadPattern(patternsDir, patternName)).defaults;
+    } catch (err) {
+      console.warn(`[SliderDefaults] codeDefault hint unavailable for "${patternName}": ${err.message}`);
+    }
+    codeDefaultsCache.set(patternName, defaults);
+    return defaults;
+  }
+
+  /**
+   * Additive: stamp each SLIDER export (kind 1) with `codeDefault` — the
+   * pattern's declared `export var` default — so clients can show / reset to
+   * it. Does NOT touch existing fields; mutates and returns the same array.
+   */
+  function annotateCodeDefaults(channel, exportsArr) {
+    const defaults = codeDefaultsForPattern(channel.pattern);
+    for (const e of exportsArr) {
+      if (e.kind === 1 && e.name in defaults) e.codeDefault = defaults[e.name];
+    }
+    return exportsArr;
   }
 
   /**
@@ -1061,6 +1162,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       paramCenter.applyToChannel(wasmHost, '__deck_swap__');
     }
+    // Seed the shadow swap handle's sliders to their pattern code defaults so
+    // the fading-in pattern reads author intent as its BASE (entry defaults +
+    // CPC still layer on top below / via finalizeCpcValues on completion).
+    // Skip on reuse — the warm inactive handle was already seeded when it was
+    // first compiled and has been ticking since. CPC-owned/blocked sliders are
+    // skipped (resolved against the shadow id).
+    if (!isReused) {
+      try {
+        const swapSrc = loadPattern(patternsDir, entry.pattern);
+        const { defaults: swapDefaults } = parsePatternDefaults(swapSrc);
+        for (const exp of (handleExports || [])) {
+          if (exp.kind !== 1) continue;
+          if (!(exp.name in swapDefaults)) continue;
+          if (paramCenter && paramCenter.isSharedExport('__deck_swap__', exp.name)) continue;
+          if (paramCenter && paramCenter.getBlockedIds('__deck_swap__').has(exp.id)) continue;
+          wasmHost.setControl(handleForSwap, exp.id, swapDefaults[exp.name], 0, 0);
+        }
+      } catch (err) {
+        console.warn(`[SliderDefaults] deck-swap seed skipped for "${entry.pattern}": ${err.message}`);
+      }
+    }
     // Apply per-entry defaults to the swap handle directly (not via
     // the channel object — that's still pointing at the active
     // channel). Mimics playlistManager.applyEntryDefaults but bypasses
@@ -1307,7 +1429,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
       // pre-split serializer for the May 2026 reasoning.
-      exports: wasmHost.getExports(c.handle)
+      exports: annotateCodeDefaults(c, wasmHost.getExports(c.handle)
         .filter(e => localControlKinds.has(e.kind))
         .map(e => {
           const cv = c.localControls[e.id];
@@ -1319,7 +1441,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             e.cpcLabel = owned.label;
           }
           return e;
-        })
+        }))
     };
   }
 
@@ -1395,7 +1517,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // path still no-ops on these exports (getReplayableLocalExport
         // returns null for shared IDs), so re-exposing them in the
         // payload doesn't open a back-channel write.
-        exports: wasmHost.getExports(c.handle)
+        exports: annotateCodeDefaults(c, wasmHost.getExports(c.handle)
           .filter(e => localControlKinds.has(e.kind))
           .map(e => {
             const cv = c.localControls[e.id];
@@ -1407,7 +1529,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               e.cpcLabel = owned.label;
             }
             return e;
-          })
+          }))
       }))
     };
   }
@@ -1829,7 +1951,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       const exports = wasmHost.getExports(baseChannel.handle);
       const filtered = exports.filter(e => !(paramCenter && paramCenter.isSharedExport(baseChannel.id, e.name)));
-      res.end(JSON.stringify(filtered));
+      res.end(JSON.stringify(annotateCodeDefaults(baseChannel, filtered)));
     } else if (req.method === 'GET' && req.url.startsWith('/pattern-code')) {
       const name = req.url.split('?name=')[1];
       if (!name) { res.writeHead(400); return res.end(JSON.stringify({ error: 'name required' })); }
@@ -1871,7 +1993,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (compNew.ok) {
               if (ch.handle) wasmHost.destroy(ch.handle);
               ch.handle = compNew.handle;
-              onChannelCompiled(ch);
+              // Seed slider defaults from the LIVE edit buffer, not stale disk.
+              onChannelCompiled(ch, data.code);
               // Re-apply playlist entry defaults if a playlist+entry is active.
               const pl = ch.playlist && ch.playlist.name && playlistManager.load(ch.playlist.name);
               const entry = pl && ch.playlist.activeEntryId &&

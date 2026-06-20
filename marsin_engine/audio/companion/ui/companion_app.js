@@ -23,6 +23,8 @@ const TRAIL = 360;
 
 const S = {
   ops: {}, frequencyOps: [], frequencyOnlyOps: [], rawSources: {}, signalTypes: [],
+  synths: [],          // [{ name, label, description }] — selectable test synths
+
   signals: [],         // [{ id, label, source, type, chain, output }]
   views: [],           // [{ id, label, type, signals:[signalId...] }] — VISUALIZERS
   viewTypes: {},       // { typeId: { label, accepts } } — viz type registry
@@ -104,6 +106,7 @@ function connect() {
       S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.frequencyOnlyOps = m.frequencyOnlyOps || []; S.rawSources = m.rawSources || {};
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
       S.views = m.views || []; S.viewTypes = m.viewTypes || {};
+      S.synths = m.synths || [];
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
       if (m.device != null) S.device = m.device;
@@ -395,6 +398,24 @@ function removeSignal(id) {
 // ── source panel ────────────────────────────────────────────────────────────
 function buildSource() {
   const box = $('source'); box.innerHTML = '';
+  // SYNTH selector — pick which test SYNTHESIZER drives the 'test' source.
+  // Populated from the server catalog (hello.synths); the choice is sent over
+  // the same `setSource` WS path as the param knobs.
+  if (S.synths && S.synths.length) {
+    const cur = (S.source && S.source.synth) || 'tone';
+    const sel = el('div', 'synth-select');
+    sel.innerHTML = '<div class="synth-head">SYNTH</div>';
+    const dd = el('select', 'synth-dd');
+    for (const s of S.synths) {
+      const o = el('option'); o.value = s.name; o.textContent = s.label || s.name;
+      if (s.description) o.title = s.description;
+      if (s.name === cur) o.selected = true;
+      dd.appendChild(o);
+    }
+    dd.onchange = () => { S.source.synth = dd.value; send({ type: 'setSource', source: { synth: dd.value } }); };
+    sel.appendChild(dd);
+    box.appendChild(sel);
+  }
   const knobs = [
     ['subLevel', 'SUB', 0, 1], ['midLevel', 'MID', 0, 1], ['highLevel', 'HIGH', 0, 1],
     ['kickLevel', 'KICK', 0, 1], ['kickHz', 'KICK/s', 0, 8], ['noiseLevel', 'NOISE', 0, 0.2],
