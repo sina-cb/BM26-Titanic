@@ -261,7 +261,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <TextInput
             style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
             defaultValue={channel.name || 'CH ' + index}
-            onEndEditing={(e) => updateMixerChannel(channel.id, { name: e.nativeEvent.text })}
+            onEndEditing={async (e) => {
+              // Codex P0 — no silent swallow. Name is cosmetic (not
+              // operator-critical), so a rejected rename is logged, not
+              // alerted; the uncontrolled input keeps the typed text and
+              // the next mixer broadcast re-syncs the committed value.
+              const res = await updateMixerChannel(channel.id, { name: e.nativeEvent.text });
+              if (!res.ok) console.error(`[Mixer] Channel rename rejected for ${channel.id}:`, res.error);
+            }}
             placeholderTextColor={C.icon}
           />
         </View>
@@ -739,6 +746,42 @@ export default function MixerScreen() {
             setAddBusy(false);
           }
         }
+      } else if (msg.type === 'channelFaderRejected' || msg.type === 'channelModeRejected') {
+        // Codex P0 — fail loud, don't drop. The engine rejected a WS
+        // fader/mode write (non-finite fader, invalid blend mode) and
+        // does NOT broadcast a fresh mixer state on that path, so our
+        // optimistic local change would silently stick on a value the
+        // engine never accepted. Re-sync the affected channel from the
+        // authoritative mixer state. We clear the local-write hold first
+        // so the re-fetch isn't suppressed by the fader drag guard.
+        const channelId = msg.channelId as string | undefined;
+        if (channelId) {
+          delete localFaderWriteRef.current[channelId];
+          // Throttle the log so a burst of rejections (e.g. a wedged
+          // client spamming NaN) can't flood the console.
+          const now = Date.now();
+          const key = `reject_${channelId}`;
+          if (now - (throttleRef.current[key] || 0) > 1000) {
+            throttleRef.current[key] = now;
+            const bad = msg.type === 'channelFaderRejected' ? msg.fader : msg.mode;
+            console.error(
+              `[Mixer] Engine rejected ${msg.type === 'channelFaderRejected' ? 'fader' : 'mode'} write on ${channelId} ` +
+              `(value=${JSON.stringify(bad)}, reason=${JSON.stringify(msg.reason)}); reverting to engine truth.`,
+            );
+          }
+          // Pull authoritative state and overwrite the rejected channel's
+          // optimistic value. Other channels are left as-is.
+          fetchMixerState().then((res) => {
+            if (res.ok && res.data && Array.isArray(res.data.channels)) {
+              const truth = res.data.channels.find((c: any) => c.id === channelId);
+              if (truth) {
+                setChannels(chs => chs.map(c => c.id === channelId ? { ...c, ...truth } : c));
+              }
+            }
+          }).catch((err) => {
+            console.error('[Mixer] Re-sync after rejection failed:', err);
+          });
+        }
       }
     }
   }, []);
@@ -959,10 +1002,29 @@ export default function MixerScreen() {
   }, []);
 
   const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
+    // Capture the prior mode so we can revert if the engine rejects the
+    // blend-mode change. The canonical saved mode is the source of truth.
+    const prevMode = savedModesRef.current[channelId]
+      ?? channelsRef.current.find(c => c.id === channelId)?.mode;
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, mode: newMode } : c));
     // Update canonical modes — this is a user-initiated change
     savedModesRef.current[channelId] = newMode;
-    await updateMixerChannel(channelId, { mode: newMode });
+    // Codex P0 — fail loud. Blend MODE is operator-critical (it changes
+    // how a channel composites into the live mix), so a rejected change
+    // is reverted AND surfaced with an Alert, matching the
+    // view-selection handler's pattern.
+    const res = await updateMixerChannel(channelId, { mode: newMode });
+    if (!res.ok) {
+      console.error(`[Mixer] Blend-mode change rejected for ${channelId}:`, res.error);
+      if (prevMode != null) {
+        savedModesRef.current[channelId] = prevMode;
+        setChannels(chs => chs.map(c => c.id === channelId ? { ...c, mode: prevMode } : c));
+      }
+      Alert.alert(
+        'Blend mode not applied',
+        `The engine rejected this blend mode. ${res.error || ''} The channel kept its previous mode.`.trim(),
+      );
+    }
   }, []);
 
   // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
@@ -979,7 +1041,19 @@ export default function MixerScreen() {
     // Locking is always immediate — freezing playlist saves is a safe op.
     if (locked) {
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
-      await updateMixerChannel(channelId, { locked: true });
+      // Codex P0 — fail loud. Lock is operator-critical (it freezes
+      // playlist saves; a silently-failed lock means edits the operator
+      // believes are protected can still overwrite the saved entry).
+      // Revert the toggle and surface an Alert on rejection.
+      const res = await updateMixerChannel(channelId, { locked: true });
+      if (!res.ok) {
+        console.error(`[Mixer] Lock engage rejected for ${channelId}:`, res.error);
+        setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
+        Alert.alert(
+          'Lock not applied',
+          `The engine rejected locking this channel. ${res.error || ''} The channel is still unlocked.`.trim(),
+        );
+      }
       return;
     }
     // Unlocking: if the channel accumulated edits while locked, intercept
@@ -992,7 +1066,19 @@ export default function MixerScreen() {
       return;
     }
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: false } : c));
-    await updateMixerChannel(channelId, { locked: false });
+    // Codex P0 — fail loud. Releasing a lock is operator-critical for
+    // the same reason engaging one is: a silently-failed unlock leaves
+    // the operator believing edits will save when the engine still has
+    // the channel frozen. Revert + Alert on rejection.
+    const res = await updateMixerChannel(channelId, { locked: false });
+    if (!res.ok) {
+      console.error(`[Mixer] Lock release rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, locked: true } : c));
+      Alert.alert(
+        'Unlock not applied',
+        `The engine rejected unlocking this channel. ${res.error || ''} The channel is still locked.`.trim(),
+      );
+    }
   }, []);
 
   // Resolve the unlock-dirty prompt. `mode` is the user's choice:
@@ -1019,7 +1105,21 @@ export default function MixerScreen() {
     }
     // Persisted (or reverted) cleanly — now drop the lock.
     setChannels(chs => chs.map(c => c.id === prompt.channelId ? { ...c, locked: false, dirty: false } : c));
-    await updateMixerChannel(prompt.channelId, { locked: false });
+    // Codex P0 — fail loud. The save/discard above already committed, but
+    // the lock release itself can still be rejected; surface it and keep
+    // the channel locked + the prompt open so the operator can retry the
+    // unlock rather than silently believing the channel is editable.
+    const unlockRes = await updateMixerChannel(prompt.channelId, { locked: false });
+    if (!unlockRes.ok) {
+      console.error(`[Mixer] Unlock release rejected for ${prompt.channelId}:`, unlockRes.error);
+      setChannels(chs => chs.map(c => c.id === prompt.channelId ? { ...c, locked: true } : c));
+      setUnlockPrompt({ ...prompt, pending: false });
+      Alert.alert(
+        'Unlock not applied',
+        `Edits were saved, but the engine rejected releasing the lock. ${unlockRes.error || ''} The channel is still locked.`.trim(),
+      );
+      return;
+    }
     setUnlockPrompt(null);
   }, [unlockPrompt]);
 
@@ -1030,7 +1130,15 @@ export default function MixerScreen() {
   // doesn't gate playlist edits.
   const handleFaderLockToggle = useCallback(async (channelId: string, faderLocked: boolean) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderLocked } : c));
-    await updateMixerChannel(channelId, { faderLocked });
+    // Codex P0 — no silent swallow. Fader-lock is less critical than the
+    // playlist lock (it only gates fader drags, not saves), so a rejected
+    // toggle reverts the optimistic flip and logs — no Alert spam for a
+    // quick toggle.
+    const res = await updateMixerChannel(channelId, { faderLocked });
+    if (!res.ok) {
+      console.error(`[Mixer] Fader-lock toggle rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderLocked: !faderLocked } : c));
+    }
   }, []);
 
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
@@ -1203,8 +1311,16 @@ export default function MixerScreen() {
     }
   }, [deletePrompt]);
 
-  const handleTransitionSettingsChange = useCallback((channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
-    updateMixerChannel(channelId, updates);
+  const handleTransitionSettingsChange = useCallback(async (channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
+    // Codex P0 — no silent swallow. The transition mode/time live in the
+    // child ChannelStrip's local state (re-synced from the engine on the
+    // next mixer broadcast), so the parent can't cleanly revert them
+    // here; surface the rejection via log. These aren't show-critical
+    // (they tune HOW a transition runs, not the live mix), so no Alert.
+    const res = await updateMixerChannel(channelId, updates);
+    if (!res.ok) {
+      console.error(`[Mixer] Transition-settings change rejected for ${channelId}:`, res.error, updates);
+    }
   }, []);
 
   // Per-channel view-selection update. Optimistic local apply + PATCH;

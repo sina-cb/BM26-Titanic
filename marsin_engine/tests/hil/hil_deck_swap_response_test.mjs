@@ -38,7 +38,8 @@
 
 import http from 'http';
 
-const ENGINE_BASE = process.env.ENGINE_BASE || 'http://127.0.0.1:6968';
+const PORT = Number(process.env.ENGINE_PORT || 6968);
+const ENGINE_BASE = process.env.ENGINE_BASE || `http://127.0.0.1:${PORT}`;
 const SETTLE_MS = 250;
 
 function httpFull(method, path, body = null) {

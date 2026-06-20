@@ -163,6 +163,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // so an accidental tap can't crossfade the whole channel mid-show.
   const [swapPrompt, setSwapPrompt] = useState<string | null>(null);
   const [swapInFlight, setSwapInFlight] = useState(false);
+  // Re-entrancy guard for the hot swap. `swapInFlight` STATE drives the
+  // disabled/opacity chrome, but state updates are async — two confirms
+  // in the same tick can both read swapInFlight===false before the first
+  // setSwapInFlight(true) flushes, so both would queue a crossfade. This
+  // ref flips synchronously, closing that double-fire window.
+  const swapInFlightRef = useRef(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [showLoadDir, setShowLoadDir] = useState(false);
   // "New playlist from folder" name prompt. `pendingNewDir` holds the
@@ -707,7 +713,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // row highlight settles on the swapped-in entry without bouncing.
   const handleHotSwap = useCallback(async (name: string) => {
     if (disabled) return;                              // soft-swap-in-flight lock
-    if (swapInFlight) return;                          // our own re-entrancy guard
+    if (swapInFlightRef.current) return;               // synchronous re-entrancy guard
+    swapInFlightRef.current = true;
     setSwapInFlight(true);
     try {
       const res = await swapChannelPlaylist(role, channelId, name);
@@ -746,9 +753,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     } catch (e) {
       Alert.alert('Hot swap failed', (e as Error)?.message || 'Network error');
     } finally {
+      swapInFlightRef.current = false;
       setSwapInFlight(false);
     }
-  }, [role, channelId, disabled, swapInFlight, flashSaved, refresh, armPendingWatchdog]);
+  }, [role, channelId, disabled, flashSaved, refresh, armPendingWatchdog]);
 
   const handleEntryTap = useCallback(async (entryId: string) => {
     if (disabled) return;                                  // tap-during-transition lock
