@@ -53,6 +53,28 @@ Ran skill 05 chain on default ports (engine 6968 / sim 6969-6972 / CaptainPad 69
 
 ## Merge proofs
 
+### MERGE 7 — dev/regression_fixes (WAVE 6) — VERIFIED ON MERGED TIP
+Boundary: api_server.js, PlaylistPanel.tsx + 2 additive tests + report.
+```
+$ git diff --check (engine + CaptainPad)   → clean
+$ node engine.js --list                    → 60 patterns; dry-run exit 0, no missing-blend
+$ node --test "tests/*.test.js"            → 829 pass / 0 fail (+6)
+$ node tests/hil/hil_deck_swap_response_test.mjs (engine :6968) → 10/10, exit 0
+   (proves mid-fade targetEntryId b_one ≠ stale playlist.activeEntryId a_one)
+$ FIX-A keep-lit: bogus deck pattern → engine BOOTS (not dark), deck not null
+   (fell back to test_const), /status.deckRestoreDegraded populated, loud log
+$ CaptainPad: tsc 0 / lint 0 err·12 warn (baseline) / web:build 0 · 21 routes
+   states residue restored clean.
+```
+Content: FIX A — restoreDeckWithFallback: deck restore falls back to default
+pattern on ANY failure (null/empty/missing/compile-fail), loud + VISIBLE via new
+/status.deckRestoreDegraded {failedPattern,reason,fellBackTo}; fatal only if
+default also fails. FIX B — /deck/playlist/swap + /entry return resolved
+targetEntryId; UI arms pending-gate from it; mixer SWAP copy now "Switch (no
+crossfade)" vs deck "Crossfade". Merge commit: see git log.
+MINOR follow-up noted: hil_deck_swap_response_test.mjs hardcodes :6968 (other HILs
+honor ENGINE_PORT) — canonical HIL port per spec, low priority.
+
 > NOTE: deliverable branch is `feat/optimize_channels` (promoted from the old
 > auto-named claude branch on 2026-06-20 per operator). Merges 1-3 below landed
 > on that branch (same commits, renamed).

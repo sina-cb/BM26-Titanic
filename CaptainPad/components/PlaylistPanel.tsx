@@ -719,13 +719,24 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         Alert.alert('Hot swap failed', (res as { error?: string }).error || 'Unknown error');
         return;
       }
-      // Adopt the engine-reported assignment as the pending target so the
+      // Adopt the RESOLVED target entry as the pending target so the
       // mid-transition gate keeps the UI pinned to the swapped-in entry
-      // until the broadcast confirms. The HTTP body carries the canonical
-      // { playlist } the engine settled on.
+      // until the broadcast confirms.
+      //
+      // FIX B: during a deck soft-swap the engine's `playlist.activeEntryId`
+      // is still the OLD entry (the new id is only written in the swap
+      // onComplete AFTER the fade). Arming the gate from that stale id pinned
+      // the panel to the old entry for the full ~8s watchdog. The engine now
+      // returns the resolved `targetEntryId` in the 200 body — prefer it for
+      // the deck role. Fall back to playlist.activeEntryId only if the engine
+      // didn't report a target (older engine).
+      const targetEntryId = (res.data && res.data.targetEntryId) as string | undefined;
       const next = (res.data && res.data.playlist) as PlaylistAssignment | undefined;
-      if (next && next.activeEntryId) {
-        pendingActiveEntryIdRef.current = next.activeEntryId;
+      const pendingTarget = (role === 'deck' && targetEntryId)
+        ? targetEntryId
+        : (next && next.activeEntryId) || null;
+      if (pendingTarget) {
+        pendingActiveEntryIdRef.current = pendingTarget;
         armPendingWatchdog();
       }
       flashSaved();
@@ -1448,15 +1459,20 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         playlists={playlists}
         currentName={assignment?.name || null}
         onPick={(name) => { setShowSwap(false); setSwapPrompt(name); }}
+        role={role}
       />
 
-      {/* Hot-swap confirmation (production-console safety) — a crossfade
-          of the whole channel onto a different playlist is a deliberate
-          show action, not a one-tap accident. */}
+      {/* Hot-swap confirmation (production-console safety) — swapping the
+          whole channel onto a different playlist is a deliberate show
+          action, not a one-tap accident. FIX B: deck swaps crossfade;
+          mixer-overlay swaps load instantly (no crossfade), so branch the
+          copy on role rather than promising a crossfade the mixer never does. */}
       <ConfirmSheet
         visible={!!swapPrompt}
         title="Hot swap playlist?"
-        message={`Crossfade ${channelLabel ? `"${channelLabel}"` : 'this channel'} onto "${swapPrompt ?? ''}" — it transitions to that playlist's first entry, riding the active transition.`}
+        message={role === 'deck'
+          ? `Crossfade ${channelLabel ? `"${channelLabel}"` : 'this channel'} onto "${swapPrompt ?? ''}" — it transitions to that playlist's first entry, riding the active transition.`
+          : `Switch ${channelLabel ? `"${channelLabel}"` : 'this channel'} onto "${swapPrompt ?? ''}" — it loads that playlist's first entry instantly (no crossfade).`}
         confirmLabel="HOT SWAP"
         cancelLabel="CANCEL"
         onConfirm={() => {
@@ -1603,16 +1619,23 @@ interface SwapPlaylistModalProps {
   playlists: string[];
   currentName: string | null;
   onPick: (name: string) => void;
+  role: ChannelRole;
 }
 
 // Hot-swap picker (feat/timeline_support). Lists the playlist library so
-// the operator can crossfade the channel onto a DIFFERENT playlist. The
+// the operator can switch the channel onto a DIFFERENT playlist. The
 // currently-assigned playlist is shown but disabled — swapping onto the
 // already-active playlist is a no-op (use the per-entry tap to move within
 // it). Picking a different one calls onPick, which arms a confirm sheet in
-// the parent before the crossfade fires.
+// the parent before the swap fires.
+//
+// FIX B copy: the DECK swap rides the deck's soft-swap transition (a
+// crossfade); a MIXER-overlay swap is an INSTANT load (no crossfade — the
+// engine path is loadPlaylistEntry, not the transition helper). Branch the
+// user-facing wording on role so the mixer copy doesn't promise a crossfade
+// that never happens.
 const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
-  visible, onClose, playlists, currentName, onPick,
+  visible, onClose, playlists, currentName, onPick, role,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
@@ -1629,7 +1652,9 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
         <View style={[modalStyles.card, { maxHeight: '80%' }]}>
           <Text style={modalStyles.title}>HOT SWAP PLAYLIST</Text>
           <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
-            {'Pick a different playlist to crossfade onto. It transitions to that playlist’s first usable entry, riding the active transition.'}
+            {role === 'deck'
+              ? 'Pick a different playlist to crossfade onto. It transitions to that playlist’s first usable entry, riding the active transition.'
+              : 'Pick a different playlist to switch onto. It loads that playlist’s first usable entry instantly (no crossfade).'}
           </Text>
           <ScrollView style={{ maxHeight: 360 }}>
             {currentName && (
