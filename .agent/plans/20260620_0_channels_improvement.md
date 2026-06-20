@@ -462,3 +462,18 @@ Normal worktree-merge flow applies. ~/tmp/wave15_backup no longer needed. No cro
   NEXT after these: round-2 C flash/bump (pattern_mixer+mixer.tsx), B param presets (new file+
   api_server), then #3 phase-clock chain (#3/#4/#11), #1 morph, #6 follow, #8 invert, #10 undo.
   Suite 933 pass/0 fail; deliverable 6557b7c.
+
+## OPERATOR REQUESTS (T16) — TOP PRIORITY, ahead of round-2 backlog
+1. (answered) "What is CAP" = per-channel intensity ceiling (faderMax); hard clamp on a
+   channel's contribution regardless of fader/transition/group; default 100%; fixture protection.
+2. NEW: Hue shifter as a GLOBAL EFFECT (rotate hue of final output; fits GLOBAL EFFECTS bar).
+3. NEW: Hue shifter PER MIXER CHANNEL (rotate that channel's hue before blend; per-channel field + strip control).
+4. FIX: Mixer UI cramped — pattern/entry NAMES unreadable (truncated). Layout/readability fix in mixer.tsx/PlaylistPanel.
+SEQUENCING: these touch mixer.tsx (cramp fix + per-channel hue UI) + engine api_server/pattern_mixer
+(hue effects) — currently owned by in-flight ops-UI (mixer.tsx) + cue-to-deck (engine/index.tsx).
+LET THOSE LAND FIRST, then do these as the immediate next batch. Recon agent a47e25 (read-only)
+mapping global-effects architecture + the mixer-cramp cause is RUNNING.
+Likely build order once files free: (4) mixer readability fix [mixer.tsx, high-impact, safe] →
+(2)+(3) hue engine [one engine writer: global effect + per-channel field + composite] →
+hue UI [mixer.tsx global-effects bar + per-strip]. The cramp fix (4) should go FIRST so the
+new per-channel hue control lands into an already-decluttered strip.
