@@ -7,6 +7,10 @@
 
 # Dependencies
 node_modules/
+# Also ignore a node_modules SYMLINK (worktree shares deps via a symlink, which
+# the trailing-slash rule above does NOT match — a tracked symlink merged into
+# another checkout becomes a self-referential link and breaks module resolution).
+node_modules
 
 # OS files
 Thumbs.db
