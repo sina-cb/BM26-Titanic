@@ -405,10 +405,16 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           onPress={() => onMuteToggle(channel.id, !channel.enabled)}>
           <Text style={[styles.labelCaps, !channel.enabled && { color: '#FFF' }]}>Mute</Text>
         </TouchableOpacity>
+        {/* C10 — solo state must not be color-only (accessibility): the
+            ✓ glyph + accessibilityState carry the on/off state for
+            operators who can't distinguish the green fill. */}
         <TouchableOpacity
           style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
-          onPress={() => onSoloToggle(channel.id)}>
-          <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>Solo</Text>
+          onPress={() => onSoloToggle(channel.id)}
+          accessibilityRole="button"
+          accessibilityLabel={isSolo ? 'Solo on' : 'Solo'}
+          accessibilityState={{ selected: !!isSolo }}>
+          <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>{isSolo ? 'Solo ✓' : 'Solo'}</Text>
         </TouchableOpacity>
 
         {/* View-selection picker. Three sections in the modal: ALL,
@@ -833,7 +839,13 @@ export default function MixerScreen() {
       const key = `fader_${channelId}`;
       if (now - (throttleRef.current[key] || 0) > 100) {
         throttleRef.current[key] = now;
-        updateMixerChannel(channelId, { fader: level }).catch(()=>{});
+        // REST fallback for a fader write when the WS is down. Codex
+        // P0 — no silent swallow: log the failure. We don't alert here
+        // (fader drags fire continuously and the next mixer broadcast
+        // re-syncs the slider), but the operator/devtools must see it.
+        updateMixerChannel(channelId, { fader: level }).catch((err) => {
+          console.error('[Mixer] Fader REST fallback failed:', err);
+        });
       }
     }
   }, []);
@@ -850,7 +862,14 @@ export default function MixerScreen() {
     }
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, enabled } : c));
     engineEvents.send({ type: 'setChannelEnabled', channelId, enabled });
-    updateMixerChannel(channelId, { enabled }).catch(() => {});
+    // Codex P0 — no silent swallow. Mute is operator-critical (drop a
+    // channel mid-show), so a rejected REST mirror is surfaced. The WS
+    // send above is the primary path; this PATCH is the durability
+    // mirror, and a failure here means the mute may not persist.
+    updateMixerChannel(channelId, { enabled }).catch((err) => {
+      console.error('[Mixer] Mute PATCH failed:', err);
+      Alert.alert('Mute may not have applied', `Could not confirm the mute change. ${err?.message || ''}`.trim());
+    });
   }, []);
 
   // Track which channel is solo'd (null = no solo)
@@ -892,7 +911,13 @@ export default function MixerScreen() {
         const fader = prev?.fader ?? c.fader;
         engineEvents.send({ type: 'setChannelEnabled', channelId: c.id, enabled });
         engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader });
-        updateMixerChannel(c.id, { enabled, fader }).catch(() => {});
+        // Codex P0 — no silent swallow. This fires per-channel inside the
+        // un-solo restore loop, so we log rather than alert (an alert per
+        // channel would bury the operator); the WS sends above are the
+        // primary path and the next mixer broadcast re-syncs.
+        updateMixerChannel(c.id, { enabled, fader }).catch((err) => {
+          console.error(`[Mixer] Un-solo restore PATCH failed for ${c.id}:`, err);
+        });
       }
       preSoloStateRef.current = {};
     } else {
@@ -924,7 +949,11 @@ export default function MixerScreen() {
         if (c.id === channelId) {
           engineEvents.send({ type: 'setChannelFader', channelId: c.id, fader: 1.0 });
         }
-        updateMixerChannel(c.id, { enabled, ...(c.id === channelId ? { fader: 1.0 } : {}) }).catch(() => {});
+        updateMixerChannel(c.id, { enabled, ...(c.id === channelId ? { fader: 1.0 } : {}) }).catch((err) => {
+          // Codex P0 — no silent swallow. Per-channel inside the solo
+          // loop, so log rather than alert (see un-solo branch above).
+          console.error(`[Mixer] Solo PATCH failed for ${c.id}:`, err);
+        });
       }
     }
   }, []);
@@ -1159,7 +1188,19 @@ export default function MixerScreen() {
     const target = deletePrompt;
     if (!target) return;
     setDeletePrompt(null);
-    await removeMixerChannel(target.id);
+    // Codex P0 — fail loud: removeMixerChannel now reports a rejected
+    // DELETE instead of always returning ok. The strip is still shown
+    // by the live mixer broadcast (the engine never removed it), so the
+    // operator MUST be told the layer is still on air rather than
+    // assuming a silent success on a live-show destructive action.
+    const res = await removeMixerChannel(target.id);
+    if (!res.ok) {
+      console.error('[Mixer] Delete channel failed:', res.error);
+      Alert.alert(
+        'Delete channel failed',
+        `"${target.name}" is still in the live mix. ${res.error || 'The engine did not accept the delete.'} Check that the engine is reachable, then try again.`,
+      );
+    }
   }, [deletePrompt]);
 
   const handleTransitionSettingsChange = useCallback((channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
@@ -1170,9 +1211,26 @@ export default function MixerScreen() {
   // the engine validates and broadcasts a fresh `mixer` event with the
   // committed value, so a rejected PATCH (e.g. unknown group) is
   // visually corrected on the next broadcast. v1 ships ALL vs GROUP.
-  const handleViewSelectionChange = useCallback((channelId: string, viewSelection: any) => {
+  const handleViewSelectionChange = useCallback(async (channelId: string, viewSelection: any) => {
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, viewSelection } : c));
-    updateMixerChannel(channelId, { viewSelection }).catch(() => {});
+    // Codex P0 — fail loud. The optimistic apply above flips the picker
+    // immediately; if the engine REJECTS the PATCH (unknown group, bad
+    // viewMask) the next mixer broadcast silently reverts it and the
+    // operator never learns why their pick "didn't take". Surface both
+    // a transport failure (catch) and an engine rejection (res.ok=false).
+    try {
+      const res = await updateMixerChannel(channelId, { viewSelection });
+      if (!res.ok) {
+        console.error('[Mixer] View-selection PATCH rejected:', res.error);
+        Alert.alert(
+          'View selection not applied',
+          `The engine rejected this view selection. ${res.error || ''} The channel will snap back to its committed value.`.trim(),
+        );
+      }
+    } catch (err: any) {
+      console.error('[Mixer] View-selection PATCH failed:', err);
+      Alert.alert('View selection not applied', `Could not reach the engine. ${err?.message || ''}`.trim());
+    }
   }, []);
 
   // ─────────────────────────────────────────────────────────────────────

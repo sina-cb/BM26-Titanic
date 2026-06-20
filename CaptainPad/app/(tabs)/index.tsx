@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -272,8 +272,36 @@ export default function ControlDeckScreen() {
   // already mirror in the WS handler — that's the source of truth, but
   // updating locally first avoids the visible "snap-back" on tap.
   const handleDeckTxChange = useCallback((patch: Partial<DeckTransitionConfig>) => {
-    setDeckTxConfig((prev) => ({ ...prev, ...patch }));
-    setDeckTransitionConfig(patch);
+    // Optimistic apply with rollback (C5). We snapshot the fields the
+    // patch touches BEFORE applying so a rejected POST can restore
+    // exactly those keys without clobbering any concurrent WS update to
+    // other fields. Keeps the no-visible-snap UX on the happy path while
+    // honoring Codex P0 — a server reject must NOT leave the UI showing a
+    // value the engine refused. The `deckTransitionConfig` WS broadcast
+    // remains the source of truth on success.
+    let prevSnapshot: Partial<DeckTransitionConfig> = {};
+    setDeckTxConfig((prev) => {
+      const snap: Partial<DeckTransitionConfig> = {};
+      for (const k of Object.keys(patch) as (keyof DeckTransitionConfig)[]) {
+        (snap as any)[k] = prev[k];
+      }
+      prevSnapshot = snap;
+      return { ...prev, ...patch };
+    });
+    void setDeckTransitionConfig(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Transition-config POST rejected:', res.error);
+        setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
+        Alert.alert(
+          'Transition setting not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Transition-config POST failed:', err);
+      setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
+      Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
   }, []);
 
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {

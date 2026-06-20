@@ -25,11 +25,51 @@ $ npm run lint                 → ✖ 12 problems (0 errors, 12 warnings) [exit
     HorizontalFader.tsx:14, TimerWheel.tsx:233, + others — accepted baseline)
 ```
 
+## FULL-STACK SMOKE + SCREENSHOTS (2026-06-20, merged tip feat/optimize_channels)
+
+Ran skill 05 chain on default ports (engine 6968 / sim 6969-6972 / CaptainPad 6967).
+- Engine boot (model test_bench): renderHealth.ok=true at frame 6004+, unrealState=streaming.
+- Live API exercised: PATCH /deck, POST /deck/playlist/entry (advanced deck default→09_cyclone),
+  POST /mixer/channels x2 (10_chasers, 13_sparkle @ fader 1), POST /mixer/view.
+- Engine log on shutdown: "[sACN Out] Sender stopped after 9256 frames" → engine WAS
+  streaming sACN to the sim (engine→sim link real).
+- Screenshots (in .agent_renders/, visually inspected):
+  - smoke_captainpad_deck.png — DECK ● CONNECTED, model test_bench, MASTER 100, live
+    BPM 128 + audio bars, deck viz strip, full playlist + **✕ SWAP hot-swap button**, autopilot,
+    DECK TX, param sliders.
+  - smoke_captainpad_mixer2.png — MIXER ● CONNECTED, 3 live channel strips each with
+    **per-channel ✕ SWAP**, LEVEL faders (0/100/100), local params, MUTE/SOLO, TRANSITION/
+    CROSSFADE, per-channel viz strips (ChannelVizStrip from C2).
+  - smoke_cyclone_1.png — sim test_bench rendered LIT (green cyclone wash on par/bar/vintage
+    fixtures + ground pool); frame sizes differ frame-to-frame (animation).
+  - smoke_testbench_ui_1/2.png — earlier (deck on test_const = black-at-defaults; correct).
+  - smoke_captainpad_mixer.png — bonus: OFFLINE state shows graceful degradation
+    ("Failed to fetch" / "NO CHANNELS").
+- NOTE: the engine background process was repeatedly reaped by the harness ~60-70s after
+  launch (SIGTERM → clean "Stopping…" exit 0) when subsequent foreground commands ran; this
+  is a HARNESS lifecycle artifact, NOT an engine bug — running engine+capture in a single
+  command kept it alive fine. Tracked states/test_bench + models/test_bench.* residue from the
+  smoke was restored from snapshot (not committed).
+
 ## Merge proofs
 
 > NOTE: deliverable branch is `feat/optimize_channels` (promoted from the old
 > auto-named claude branch on 2026-06-20 per operator). Merges 1-3 below landed
 > on that branch (same commits, renamed).
+
+### MERGE 5 — dev/captainpad_qol (WAVE 5, lens C) — VERIFIED ON MERGED TIP
+Boundary: index.tsx, mixer.tsx, ConfirmSheet.tsx, api.ts + report. Verified:
+```
+$ git diff --check -- CaptainPad   → DIFFCHECK_OK
+$ npx tsc --noEmit                 → TSC=0
+$ npm run lint                     → 0 errors / 12 warnings (baseline held)
+$ npm run web:build                → WEBBUILD=0, dist, 21 routes
+```
+Content: removeMixerChannel/updateMixerChannel/setDeckTransitionConfig now honor
+res.ok (were silently {ok:true} — codex P0); delete surfaces Alert; 4 `.catch(()=>{})`
+swallows replaced with console.error (+Alert on mute); ConfirmSheet hitSlop; SOLO
+no longer color-only ("Solo ✓" + accessibilityState); deck-tx + view-selection
+await POST and roll back/alert on reject. Merge commit: see git log.
 
 ### MERGE 4 — dev/captainpad_hotswap_ui (WAVE 3) — VERIFIED ON MERGED TIP
 Boundary: CaptainPad PlaylistPanel.tsx + api.ts + report (additive UI, no
