@@ -450,3 +450,15 @@ Normal worktree-merge flow applies. ~/tmp/wave15_backup no longer needed. No cro
   * round-2 feature DISCOVERY (read-only) — fresh backlog of NEXT channel features.
   All agents now hard-instructed: edit ONLY within worktree (post WAVE-15 misdirection guard).
   Suite at 923 pass/0 fail; deliverable f41b81f. After ops: ops-UI + round-2 batch.
+
+## STATUS LOG (cont. 9)
+- 2026-06-20 T14: ops-cluster ENGINE MERGED (6557b7c): dup/reorder/panic, 933 pass/0 fail,
+  HIL 30/30 incl. panic-keeps-rig-LIT (even malformed-home). Original backlog DONE.
+  Round-2 backlog banked (_23). Launched 2 parallel (disjoint):
+  * dev/channel_ops_ui — dup/reorder/panic UI in mixer.tsx + new channelOpsApi.ts.
+  * dev/cue_to_deck — round-2 #7 cue-to-deck: engine /deck/focus (deckFocusChannelId
+    already honored in render) + index.tsx CUE + new deckFocusApi.ts + HIL.
+  Disjoint: mixer.tsx(ops-UI) vs index.tsx+api_server+pattern_mixer(cue). Both worktree-scoped.
+  NEXT after these: round-2 C flash/bump (pattern_mixer+mixer.tsx), B param presets (new file+
+  api_server), then #3 phase-clock chain (#3/#4/#11), #1 morph, #6 follow, #8 invert, #10 undo.
+  Suite 933 pass/0 fail; deliverable 6557b7c.
