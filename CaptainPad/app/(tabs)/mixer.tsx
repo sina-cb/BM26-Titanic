@@ -27,6 +27,8 @@ import { HealthChip } from '@/components/ui/HealthChip';
 import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+import { SnapshotBar } from '@/components/SnapshotBar';
+import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
@@ -42,6 +44,22 @@ import {
 // floor. An 8pt hitSlop on every edge expands the *interactive* area to
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
+// no render effect). A small fixed set of high-contrast hex accents so the
+// operator can tint a strip for at-a-glance identification; the last option
+// clears the accent (color = null). The engine accepts any string or null, so
+// this curated list is purely the UI's tap-to-pick surface.
+const CHANNEL_COLOR_SWATCHES: string[] = [
+  '#E53935', // red
+  '#FB8C00', // orange
+  '#FDD835', // yellow
+  '#43A047', // green
+  '#00ACC1', // cyan
+  '#1E88E5', // blue
+  '#8E24AA', // purple
+  '#EC407A', // pink
+];
 
 // ── Global Rig Buttons moved to RigGlobals ────────────────────────────
 
@@ -189,13 +207,14 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   // Transition duration is stored as ms-integers (matching the deck's
   // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
   // equality lights up consistently. Engine wire format is seconds
@@ -246,9 +265,59 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
     viewSelLabel = String(viewSel.type).toUpperCase();
   }
   return (
-    <View style={[styles.channelCard, locked && styles.channelCardLocked]}>
+    <View style={[
+      styles.channelCard,
+      // Channel color accent (docs/39 §8.4): tint the card's left edge so
+      // the operator can identify a strip at a glance. The lock border still
+      // wins (operator-critical state) — only paint the color accent when the
+      // channel isn't locked.
+      !locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+      locked && styles.channelCardLocked,
+    ]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
+      {/* Channel color picker (docs/39 §8.4). A swatch grid + a "NO COLOR"
+          clear option (color = null). Pure metadata — tints the strip for
+          identification, no render effect. */}
+      <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowColorPicker(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={styles.modalContent}>
+              <Text style={[styles.labelCaps, { marginBottom: 12 }]}>CHANNEL COLOR</Text>
+              <View style={styles.swatchGrid}>
+                {CHANNEL_COLOR_SWATCHES.map((hex) => {
+                  const active = channel.color === hex;
+                  return (
+                    <TouchableOpacity
+                      key={hex}
+                      style={[
+                        styles.swatch,
+                        { backgroundColor: hex },
+                        active && styles.swatchActive,
+                      ]}
+                      hitSlop={ICON_BTN_HIT_SLOP}
+                      onPress={() => { onColorChange && onColorChange(channel.id, hex); setShowColorPicker(false); }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Set channel color ${hex}`}
+                      accessibilityState={{ selected: active }}
+                    >
+                      {active ? <Text style={styles.swatchCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <TouchableOpacity
+                style={styles.clearColorBtn}
+                onPress={() => { onColorChange && onColorChange(channel.id, null); setShowColorPicker(false); }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear channel color"
+              >
+                <Text style={[styles.valueReadout, { color: C.secondary }]}>NO COLOR</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
       {/* Header — title bar buttons share one geometry (28×28 squircle,
           identical surface / border) so they read as a single toolbar.
           Pre-May-2026 refresh was 22×22 + pinned to the name, lock was
@@ -274,6 +343,31 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           />
         </View>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+          {/* Color swatch (docs/39 §8.4) — taps open the accent picker.
+              The swatch fill IS the channel's current color (or a neutral
+              "no color" outline when null). Pure metadata; it tints the
+              strip for at-a-glance identification, no render effect. */}
+          <TouchableOpacity
+            style={[
+              styles.titleBtn,
+              channel.color
+                ? { backgroundColor: channel.color, borderColor: channel.color }
+                : null,
+            ]}
+            hitSlop={ICON_BTN_HIT_SLOP}
+            onPress={() => setShowColorPicker(true)}
+            accessibilityLabel={channel.color ? `Channel color ${channel.color}` : 'Set channel color'}
+            accessibilityRole="button"
+          >
+            {/* No tinted fill ⇒ a hollow ring reads as "no color set"; a
+                filled swatch shows the chosen accent. A glyph (not an
+                SF-symbol) keeps this within owned files. */}
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold',
+              fontSize: 13,
+              color: channel.color ? '#FFFFFF' : C.secondary,
+            }}>{channel.color ? '●' : '○'}</Text>
+          </TouchableOpacity>
           {/* Refresh ↻ — operator's one-tap rescue for a panel that
               lost its entries to a transient WS / fetch race. Bumps
               `refreshNonce` so the PlaylistPanel does a hard cache-bust
@@ -371,6 +465,28 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           {Math.round((channel.fader ?? 0) * 100)}
         </Text>
       </View>
+
+      {/* Intensity ceiling (faderMax, docs/39 §8.3). A hard cap on this
+          channel's OWN contribution — the level fader (and scripted
+          transitions) can ride up to this ceiling but never above it.
+          faderMax defaults to 1.0; faderMax=0 fully suppresses the channel.
+          Disabled while locked (matches the level fader / blend-mode lock
+          behaviour). The cap slider's fill is amber to distinguish it from
+          the teal level fader. */}
+      {onFaderMaxChange && (
+        <View style={styles.capRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>CAP</Text>
+          <HorizontalFader
+            value={channel.faderMax ?? 1}
+            onChange={(v: number) => { if (!locked) onFaderMaxChange(channel.id, v); }}
+            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            fillStyle={styles.capFill}
+          />
+          <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: '#F5A623' }]}>
+            {Math.round((channel.faderMax ?? 1) * 100)}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.channelBody}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to
@@ -1142,6 +1258,43 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // Per-channel intensity clamp (faderMax, docs/39 §8.3). A hard ceiling
+  // on this channel's OWN contribution: effectiveFader = min(fader, faderMax).
+  // WAVE 5 pattern: optimistic local apply + PATCH, reconcile from the next
+  // mixer broadcast, revert + Alert on a fail-loud rejection. Validated by the
+  // engine identically to a fader (finite, clamped to [0,1]; non-finite ⇒ 400).
+  const handleFaderMaxChange = useCallback(async (channelId: string, faderMax: number) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.faderMax;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderMax } : c));
+    const res = await setChannelFaderMax(channelId, faderMax);
+    if (!res.ok) {
+      console.error(`[Mixer] faderMax change rejected for ${channelId}:`, res.error);
+      // Revert to the prior ceiling; the next mixer broadcast re-syncs too.
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderMax: prev ?? 1.0 } : c));
+      Alert.alert(
+        'Intensity ceiling not applied',
+        `The engine rejected this ceiling. ${res.error || ''} The channel kept its previous limit.`.trim(),
+      );
+    }
+  }, []);
+
+  // Per-channel color metadata (docs/39 §8.4). Pure operator-facing accent
+  // (no render effect). Same optimistic + reconcile + fail-loud shape. A
+  // null color clears the accent; the engine requires a string or null.
+  const handleColorChange = useCallback(async (channelId: string, color: string | null) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.color ?? null;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, color } : c));
+    const res = await setChannelColor(channelId, color);
+    if (!res.ok) {
+      console.error(`[Mixer] color change rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, color: prev } : c));
+      Alert.alert(
+        'Color not applied',
+        `The engine rejected this color. ${res.error || ''} The channel kept its previous color.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -1449,6 +1602,11 @@ export default function MixerScreen() {
               shift); shows an amber "⚠ DEGRADED" chip only when the engine
               reports a degrade on /status. See HealthChip / useEngineHealth. */}
           <HealthChip compact={isPortrait} />
+          {/* Named-look snapshots (docs/39 §8.1): capture the full mixer
+              state under a name + recall/delete saved looks. Reconciles
+              from the WS `snapshots` event. Hidden in portrait to keep the
+              narrow header uncrowded (matches the model chip's behaviour). */}
+          {!isPortrait ? <SnapshotBar /> : null}
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
           {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
@@ -1514,6 +1672,8 @@ export default function MixerScreen() {
               playlistLibrary={playlistLibrary}
               initialPlaylist={channelInlinePlaylist}
               onFaderChange={handleFaderChange}
+              onFaderMaxChange={handleFaderMaxChange}
+              onColorChange={handleColorChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
               onModeChange={handleModeChange}
@@ -1849,6 +2009,54 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     left: 0, top: 0, bottom: 0,
     backgroundColor: C.primaryFixedDim,
     borderRadius: 4,
+  },
+  // Intensity-ceiling (faderMax) row — same geometry as the LEVEL row but
+  // amber fill so the operator reads it as a distinct "cap" control, not a
+  // second level fader.
+  capRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  capFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#F5A623',
+    borderRadius: 4,
+  },
+  // Channel color picker swatch grid.
+  swatchGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    maxWidth: 220,
+    marginBottom: 12,
+  },
+  swatch: {
+    width: 44, height: 44, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.15)',
+  },
+  swatchActive: {
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  swatchCheck: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 18,
+    color: '#FFFFFF',
+  },
+  clearColorBtn: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerHigh,
   },
   channelBody: {
     flex: 1,
