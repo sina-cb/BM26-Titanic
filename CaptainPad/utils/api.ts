@@ -1374,6 +1374,98 @@ export async function setChannelPlaylistEntry(
   return setMixerChannelPlaylistEntry(channelId, entryId);
 }
 
+// ── Hot-swap playlist (feat/timeline_support) ─────────────────────────────
+// Load a DIFFERENT playlist onto the channel and transition to its first
+// usable entry (or the given entryId) using the SAME deck/mixer transition
+// machinery as the per-entry swap — a smooth hot swap, not a hard cut.
+//
+// Distinct from setChannelPlaylist (which is a plain assignment that the
+// engine lands on the first entry of via loadPlaylistEntry): the swap route
+// rides the deck's double-buffer transition so the change crossfades.
+//
+// Fail-loud contract (Codex P0 — no silent fallback). The engine returns:
+//   200 { status:'ok', playlist, pattern, transitionId }
+//   404 no deck channel / playlist not found / entryId not found
+//   400 missing name / entry pattern missing / playlist has no usable entries
+//   409 transition already in progress (code 'EBUSY')
+// We surface the engine's `error` string and a `code` marker (EBUSY for 409)
+// so the caller can swallow "swap in flight" silently — mirroring
+// setChannelPlaylistEntry — and alert on everything else. On success we
+// invalidate the per-name + global playlist caches exactly as
+// setChannelPlaylist's neighbours (savePlaylist) do, so the next fetch
+// re-converges to the swapped-in playlist's canonical state.
+
+export async function swapDeckPlaylist(
+  name: string,
+  entryId?: string,
+): Promise<ApiResult<any> & { code?: string }> {
+  try {
+    const body: { name: string; entryId?: string } = { name };
+    if (entryId !== undefined) body.entryId = entryId;
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/swap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    // The swapped-in playlist may have changed activeEntryId / cursor
+    // server-side; drop the cached copy so the next fetchPlaylist is
+    // canonical, and bust the library cache in case the swap is the
+    // operator's first touch of a freshly-saved name.
+    if (res.ok) {
+      invalidatePlaylistCache(name);
+      invalidatePlaylistsCache();
+    }
+    const code = !res.ok && data && data.code
+      ? String(data.code)
+      : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+    return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function swapMixerChannelPlaylist(
+  channelId: string,
+  name: string,
+  entryId?: string,
+): Promise<ApiResult<any> & { code?: string }> {
+  try {
+    const body: { name: string; entryId?: string } = { name };
+    if (entryId !== undefined) body.entryId = entryId;
+    const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist/swap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      invalidatePlaylistCache(name);
+      invalidatePlaylistsCache();
+    }
+    const code = !res.ok && data && data.code
+      ? String(data.code)
+      : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+    return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Polymorphic hot-swap. Dispatches to the deck or mixer swap route by role,
+// mirroring setChannelPlaylist / setChannelPlaylistEntry. The deck route
+// rides the soft-swap transition machinery; the mixer route is an instant
+// overlay load of the different playlist's entry.
+export async function swapChannelPlaylist(
+  role: ChannelRole,
+  channelId: string,
+  name: string,
+  entryId?: string,
+): Promise<ApiResult<any> & { code?: string }> {
+  if (role === 'deck') return swapDeckPlaylist(name, entryId);
+  return swapMixerChannelPlaylist(channelId, name, entryId);
+}
+
 export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${channelId}/playlist`);
