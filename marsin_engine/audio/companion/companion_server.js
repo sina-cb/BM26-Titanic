@@ -727,6 +727,20 @@ const analyzer = new AudioAnalyzer({
         // this tree → safeGet returns null → the UI shows "—". index → name
         // via GENRE_NAMES on the client.
         genre: safeGet('audioGenre'), genreConf: safeGet('audioGenreConf'),
+        // ── NEW Round-2/Wave-D derived signals (computed by THIS companion's own
+        // DerivedSignals into paramCenter). safeGet returns null when a key isn't
+        // registered in this build → the UI shows "—"/idle (honest "not published",
+        // NOT a value fallback). Continuous keys meter; pulse keys flash.
+        // BUILD / anticipation:
+        riserScore: safeGet('audioRiserScore'), buildEta: safeGet('audioBuildEta'),
+        riserConf: safeGet('audioRiserConf'), dropCountdown: safeGet('audioDropCountdown'),
+        // STRUCTURE:
+        climax: safeGet('audioClimax'), phrasePhase: safeGet('audioPhrasePhase'),
+        phraseBoundary: safeGet('audioPhraseBoundary'), silence: safeGet('audioSilence'),
+        trackChange: safeGet('audioTrackChange'),
+        // ONSETS / sub:
+        onsetLow: safeGet('micOnsetLow'), onsetMid: safeGet('micOnsetMid'),
+        onsetHigh: safeGet('micOnsetHigh'), chestHit: safeGet('audioChestHit'),
       },
     });
   },

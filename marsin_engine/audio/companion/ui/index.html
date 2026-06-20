@@ -70,6 +70,51 @@
           </div>
         </div>
       </div>
+
+      <!-- NEW Round-2/Wave-D derived signals: BUILD · STRUCTURE · ONSETS. All
+           values come from the server `derived` frame; continuous keys meter,
+           pulse keys flash. Styled entirely with the theme CSS vars. -->
+      <div class="live-readouts derived2">
+        <div class="lr-card build">
+          <div class="lr-title">BUILD
+            <span id="countdown-flash" class="cue-flash err">⏱ COUNTDOWN</span>
+          </div>
+          <div class="build-body">
+            <div class="sbar riser"><span>riser</span><i id="riser-bar"></i></div>
+            <div class="build-stats">
+              <span class="d-item"><span class="d-lab">ETA</span><span id="eta-val" class="d-mid">—</span></span>
+              <span class="d-item"><span class="d-lab">CONF</span><span id="riser-conf" class="d-mid">—</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="lr-card struct2">
+          <div class="lr-title">STRUCTURE
+            <span id="boundary-flash" class="cue-flash">▮ PHRASE</span>
+            <span id="trackchange-flash" class="cue-flash err">⤳ TRACK</span>
+          </div>
+          <div class="struct2-body">
+            <div class="phrase-ring-wrap">
+              <svg class="phrase-ring" viewBox="0 0 40 40" width="42" height="42" aria-hidden="true">
+                <circle class="pr-track" cx="20" cy="20" r="16"></circle>
+                <circle id="phrase-ring-fill" class="pr-fill" cx="20" cy="20" r="16"
+                  transform="rotate(-90 20 20)"></circle>
+              </svg>
+              <span class="d-lab">phrase</span>
+            </div>
+            <div class="sbar climax"><span>climax</span><i id="climax-bar"></i></div>
+            <span id="silence-pill" class="party-pill silence-pill">live</span>
+          </div>
+        </div>
+        <div class="lr-card onsets">
+          <div class="lr-title">ONSETS</div>
+          <div class="onsets-body">
+            <span class="onset-item"><span id="onset-low" class="onset-dot low">●</span><span class="d-lab">low</span></span>
+            <span class="onset-item"><span id="onset-mid" class="onset-dot mid">●</span><span class="d-lab">mid</span></span>
+            <span class="onset-item"><span id="onset-high" class="onset-dot high">●</span><span class="d-lab">high</span></span>
+            <span class="chest-item"><span id="chest-thump" class="chest-thump">◉</span><span class="d-lab">chest</span></span>
+          </div>
+        </div>
+      </div>
       <div class="viz-row">
         <div class="viz-panel">
           <div class="viz-title">FREQUENCY SPECTRUM <span class="viz-sub">dom1 / dom2 location + cluster window</span></div>
