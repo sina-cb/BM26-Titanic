@@ -241,8 +241,29 @@ export class PatternMixer {
     
     this.transitions = []; // Active per-channel fader transitions
     this.blendHandles = {}; // Cache: blendName -> WASM handle
-    this.patternsDir = null; // Set by caller after construction
+    this._patternsDir = null; // Backing field for the patternsDir setter below.
     this.onChannelRemoved = null; // Callback: (channelId) => void
+
+    // ── Render-health structure (Codex P0 visibility) ────────────────────
+    // The 40 Hz render loop must NEVER crash on a bad blend script (that
+    // would freeze the whole rig). But it must also never silently produce
+    // wrong output. This structure makes blend failures VISIBLE on /status:
+    //
+    //   blendErrors: { <blendName>: { message, sinceFrame, count } }
+    //
+    // A blend that falls through to the host-side linear-interpolation
+    // path (because its WASM handle is missing/failed to compile) records
+    // its error here ONCE and is logged loudly ONCE per mode (not per
+    // frame — a 40 Hz log would bury the console). `getRenderHealth()`
+    // surfaces this for the /status endpoint so an operator (or a smoke
+    // check) sees `renderHealth.ok === false` immediately instead of a
+    // silently-wrong fade. Cleared for a mode the moment its handle
+    // compiles successfully (e.g. after a boot precompile or a hot edit).
+    this.renderHealth = {
+      blendErrors: {},        // blendName -> { message, sinceFrame, count }
+      loggedBlendErrors: {},  // blendName -> true once we've logged it
+    };
+    this._frameCounter = 0;
 
     // Group-transition machinery — when a triggerMixerTransition arrives
     // via the API, we register one transitionGroupId on every per-channel
@@ -304,6 +325,113 @@ export class PatternMixer {
     this._inactiveDeckChannel = null;
     this._swapTransition = null;
     this.onDeckSwapComplete = null; // Callback: ({ pattern, transitionId }) => void
+  }
+
+  // ── patternsDir: setting it triggers a one-time blend precompile ─────
+  // Boot wiring lives HERE (not in engine.js) on purpose: engine.js sets
+  // `mixer.patternsDir = .../patterns` exactly once after construction,
+  // and that single assignment is the natural hook to scan
+  // patterns/channel_blends/ + patterns/transitions/ and warm every blend
+  // handle BEFORE the first render frame. This removes lazy compile from
+  // the 40 Hz hot path (a first-use compile could blow a frame budget and
+  // produce a visible stutter) and lets the dry-run prove there are no
+  // missing-blend scripts. Idempotent: re-assigning the same dir re-scans.
+  set patternsDir(dir) {
+    this._patternsDir = dir;
+    if (dir) this.precompileAllBlends();
+  }
+
+  get patternsDir() {
+    return this._patternsDir;
+  }
+
+  // Snapshot of render-health for /status. `ok` is false whenever any
+  // blend is degraded (running on the host-side linear-interp fallback
+  // instead of its real WASM blend script). Returns a plain serializable
+  // object — safe to JSON.stringify into the status payload.
+  getRenderHealth() {
+    const blendErrors = Object.entries(this.renderHealth.blendErrors).map(
+      ([name, info]) => ({ blend: name, ...info }),
+    );
+    return {
+      ok: blendErrors.length === 0,
+      frame: this._frameCounter,
+      blendErrors,
+    };
+  }
+
+  // Scan the blend + transition pattern directories once and compile every
+  // blend handle into `this.blendHandles`. Called from the patternsDir
+  // setter (boot) and reusable for a manual rewarm. Records a render-health
+  // error for any blend that fails to compile so the failure is VISIBLE
+  // rather than silently lazy-deferred to the hot path. Never throws — a
+  // single bad blend script must not block engine boot, but it MUST show
+  // up on /status.
+  precompileAllBlends() {
+    if (!this._patternsDir) return;
+    const dirs = ['channel_blends', 'transitions'];
+    for (const sub of dirs) {
+      const full = path.join(this._patternsDir, sub);
+      if (!fs.existsSync(full)) continue;
+      const files = fs.readdirSync(full).filter(f => f.endsWith('.js'));
+      for (const file of files) {
+        const blendName = file.replace(/\.js$/, '');
+        // Force a (re)compile even if a stale entry exists so a hot edit
+        // that fixed a previously-broken script clears its health error.
+        this.precompileBlend(blendName);
+      }
+    }
+  }
+
+  // Compile a single named blend and cache the handle. On success, clears
+  // any prior render-health error for that name. On failure, records the
+  // error (visible on /status) and caches null (so the hot path doesn't
+  // retry-compile every frame). Returns the handle or null.
+  precompileBlend(blendName) {
+    const handle = this._compileBlend(blendName);
+    this.blendHandles[blendName] = handle;
+    if (handle) {
+      this._clearBlendError(blendName);
+    } else {
+      this._recordBlendError(
+        blendName,
+        `Blend script '${blendName}' failed to compile or is missing`,
+      );
+    }
+    return handle;
+  }
+
+  // ── Render-health bookkeeping (logged loudly ONCE per mode) ──────────
+  _recordBlendError(blendName, message) {
+    const existing = this.renderHealth.blendErrors[blendName];
+    if (existing) {
+      existing.count += 1;
+      existing.message = message;
+    } else {
+      this.renderHealth.blendErrors[blendName] = {
+        message,
+        sinceFrame: this._frameCounter,
+        count: 1,
+      };
+    }
+    if (!this.renderHealth.loggedBlendErrors[blendName]) {
+      this.renderHealth.loggedBlendErrors[blendName] = true;
+      console.error(
+        `[Mixer] RENDER-HEALTH DEGRADED: ${message}. ` +
+        `Compositing this mode via host-side linear interpolation ` +
+        `(visible on /status as renderHealth.ok=false). This log fires ` +
+        `ONCE per mode, not per frame.`,
+      );
+    }
+  }
+
+  _clearBlendError(blendName) {
+    if (this.renderHealth.blendErrors[blendName]) {
+      delete this.renderHealth.blendErrors[blendName];
+    }
+    if (this.renderHealth.loggedBlendErrors[blendName]) {
+      delete this.renderHealth.loggedBlendErrors[blendName];
+    }
   }
 
   // ── Channel split: canonical accessors ─────────────────────────────
@@ -775,6 +903,71 @@ export class PatternMixer {
   }
 
   /**
+   * Pre-warm the inactive deck slot with a compiled handle for the
+   * PREDICTED next pattern, so the next deck advance reuses a warm handle
+   * (zero-compile) instead of stalling on a fresh compile in the request
+   * path. This is the "precompile-next-entry" optimization for hot-swap
+   * playlist playback (feat/timeline_support).
+   *
+   * Contract (kept deliberately conservative so it can't corrupt the
+   * ping-pong machinery):
+   *   - Refuses while a swap is in flight (the inactive slot is the live
+   *     fade target then — overwriting it would glitch the transition).
+   *     Returns false; the caller can retry after completion.
+   *   - No-op (returns true) if the slot already holds `patternName` —
+   *     the handle is already warm (this is also the ping-pong case).
+   *   - Otherwise installs `handle` into the inactive slot at fader 0
+   *     (parked, invisible) and destroys whatever stale handle was there.
+   *     Ownership of `handle` transfers to the mixer.
+   *
+   * The slot is ticked every frame by renderAll6ch() regardless of fader,
+   * so the warmed pattern stays time-synced and ready.
+   *
+   * @param {string} patternName
+   * @param {Object} handle  Compiled WASM handle (ownership transfers).
+   * @param {string} [mode='blend_screen']  Steady blend for the parked slot.
+   * @returns {boolean} true if the slot now holds patternName, false if refused.
+   */
+  warmInactiveDeckHandle(patternName, handle, mode = 'blend_screen') {
+    if (!patternName || !handle) return false;
+    if (this.isDeckSwapInFlight()) {
+      // Don't touch the slot mid-fade — the caller compiled a handle we
+      // now own but can't install; destroy it to avoid a leak.
+      try { this.wasmHost.destroy(handle); } catch (_) {}
+      return false;
+    }
+    if (this._inactiveDeckChannel && this._inactiveDeckChannel.pattern === patternName) {
+      // Already warm — the caller's freshly compiled handle is redundant.
+      // Destroy it so we don't leak a duplicate VM.
+      try { this.wasmHost.destroy(handle); } catch (_) {}
+      return true;
+    }
+    if (this._inactiveDeckChannel) {
+      const oldHandle = this._inactiveDeckChannel.handle;
+      if (oldHandle && oldHandle !== handle) {
+        try { this.wasmHost.destroy(oldHandle); } catch (_) {}
+      }
+      this._inactiveDeckChannel.handle = handle;
+      this._inactiveDeckChannel.pattern = patternName;
+      this._inactiveDeckChannel.mode = mode;
+      this._inactiveDeckChannel.fader = 0;
+      this._inactiveDeckChannel.enabled = true;
+    } else {
+      this._inactiveDeckChannel = new PatternChannel({
+        id: '__deck_inactive__',
+        name: 'Deck Inactive',
+        pattern: patternName,
+        handle,
+        mode,
+        enabled: true,
+      });
+      this._inactiveDeckChannel._hidden = true;
+      this._inactiveDeckChannel.fader = 0;
+    }
+    return true;
+  }
+
+  /**
    * Returns the pattern name currently held in the inactive deck slot,
    * or null if there isn't one. The api_server calls this BEFORE
    * compiling a new handle on a deck-swap request — if the inactive
@@ -1223,11 +1416,12 @@ export class PatternMixer {
   }
 
   renderAll6ch() {
+    this._frameCounter++;
     if (!this.deckBuffer) {
       this.deckBuffer = new Uint8Array(this.pixelCount * 6);
       this.mixerBuffer = new Uint8Array(this.pixelCount * 6);
     }
-    
+
     this.deckBuffer.fill(0);
     this.mixerBuffer.fill(0);
     this.outputBuffer.fill(0);
@@ -1434,10 +1628,22 @@ export class PatternMixer {
           this.mixerBuffer, this.channelBuffer, channel.fader
         );
       } else {
-        // Fallback: lerp(bg, fg, fader) into the pre-allocated scratch
-        // buffer (no GC allocation). Mirrors the math the WASM
-        // blend_normal script would produce so unknown blends still
-        // composite sanely.
+        // DEGRADED PATH (Codex P0 visibility): the channel's blend mode has
+        // no compiled WASM handle — either the script is missing/failed to
+        // compile, or it's a brand-new mode that boot precompile didn't
+        // know about. We do NOT crash the 40 Hz loop (that would freeze the
+        // whole rig), and we still composite SOMETHING sane (host-side
+        // linear interpolation) so the operator isn't staring at black.
+        // But this is recorded as a render-health error so /status shows
+        // renderHealth.ok=false and logged loudly ONCE per mode — it must
+        // never be a silently-wrong fade. A precompile failure for a known
+        // blend was already recorded at boot; this catches runtime modes
+        // (e.g. a channel set to a typo'd mode name via the API).
+        this._recordBlendError(
+          channel.mode || '(empty mode)',
+          `No compiled blend handle for mode '${channel.mode}' on channel ` +
+          `'${channel.id}'`,
+        );
         blended = this.blendedScratch;
         for (let i = 0; i < blended.length; i++) {
           blended[i] = Math.round(this.mixerBuffer[i] + (this.channelBuffer[i] - this.mixerBuffer[i]) * channel.fader);
@@ -1517,30 +1723,45 @@ export class PatternMixer {
   getBlendHandle(blendName) {
     if (!blendName) return null;
     if (this.blendHandles[blendName] !== undefined) return this.blendHandles[blendName];
-    // Lazy-compile the blend script
-    this.blendHandles[blendName] = this._compileBlend(blendName);
-    return this.blendHandles[blendName];
+    // Cache miss: compile now and route through precompileBlend so a
+    // failure is recorded in render-health (visible on /status) rather
+    // than silently caching null. Boot precompile warms the common case,
+    // so this lazy path is now only hit for runtime-introduced modes.
+    return this.precompileBlend(blendName);
   }
 
+  // Compile a blend/transition script to a WASM handle. Returns the handle
+  // on success or null on failure. Callers (precompileBlend / getBlendHandle)
+  // are responsible for recording the failure in render-health — this
+  // method does the I/O + compile and reports the SPECIFIC reason loudly so
+  // the missing-script vs compile-error distinction isn't lost.
   _compileBlend(blendName) {
-    if (!this.patternsDir) return null;
-    try {
-      let blendPath = path.join(this.patternsDir, 'channel_blends', `${blendName}.js`);
-      if (!fs.existsSync(blendPath)) {
-        blendPath = path.join(this.patternsDir, 'transitions', `${blendName}.js`);
-      }
-      const code = fs.readFileSync(blendPath, 'utf8');
-      const result = this.wasmHost.compile(code);
-      if (result.ok) {
-        console.log(`[Mixer] Compiled blend script: ${blendName}`);
-        return result.handle;
-      } else {
-        console.warn(`[Mixer] Blend compile failed for ${blendName}: ${result.error}`);
-        return null;
-      }
-    } catch (e) {
-      console.warn(`[Mixer] Could not load blend script ${blendName}:`, e.message);
+    if (!this._patternsDir) {
+      console.warn(`[Mixer] _compileBlend('${blendName}') called before patternsDir was set`);
       return null;
     }
+    let blendPath = path.join(this._patternsDir, 'channel_blends', `${blendName}.js`);
+    if (!fs.existsSync(blendPath)) {
+      blendPath = path.join(this._patternsDir, 'transitions', `${blendName}.js`);
+    }
+    if (!fs.existsSync(blendPath)) {
+      console.warn(`[Mixer] Blend script NOT FOUND: '${blendName}' ` +
+        `(looked in channel_blends/ and transitions/)`);
+      return null;
+    }
+    let code;
+    try {
+      code = fs.readFileSync(blendPath, 'utf8');
+    } catch (e) {
+      console.warn(`[Mixer] Could not read blend script ${blendName}: ${e.message}`);
+      return null;
+    }
+    const result = this.wasmHost.compile(code);
+    if (result.ok) {
+      console.log(`[Mixer] Compiled blend script: ${blendName}`);
+      return result.handle;
+    }
+    console.warn(`[Mixer] Blend compile FAILED for ${blendName}: ${result.error}`);
+    return null;
   }
 }

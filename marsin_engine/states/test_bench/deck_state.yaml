@@ -1,7 +1,7 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 29_bar_dancers
+  pattern: test_const
   mode: blend_screen
   fader: 1
   enabled: true

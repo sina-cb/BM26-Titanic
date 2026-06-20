@@ -6,7 +6,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { StateManager } from './state_manager.js';
-import { PlaylistManager } from './playlist_manager.js';
+import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
 } from './modulation_engine.js';
@@ -148,6 +148,36 @@ export function validateSignalManifest(body) {
     out.push({ cpcKey, address, label: label || cpcKey, type, range: [range[0], range[1]] });
   }
   return { ok: true, signals: out };
+}
+
+// ── Blend-mode validation (single source of truth) ─────────────────────
+// A channel's `mode` is the compositing blend used to lay it over the
+// layer beneath it. Two legitimate shapes:
+//   1. A steady channel-blend script under patterns/channel_blends/.
+//   2. A scripted transition under patterns/transitions/ (a `trans_*`
+//      name), used transiently while a fade is in flight.
+// Centralizing the accepted set here means the PATCH /mixer/channels/:id,
+// PATCH /deck/channel, and /deck/transition-config paths can't drift apart
+// (before this, each path open-coded its own `startsWith('trans_')` check
+// or accepted anything). An unknown mode is rejected with 400 instead of
+// being silently handed to the mixer (which would then composite it via
+// the degraded host-side fallback — visible on /status, but better caught
+// at the API boundary).
+export const VALID_CHANNEL_BLEND_MODES = Object.freeze(new Set([
+  'blend_screen',
+  'blend_add',
+  'blend_over',
+]));
+
+// True for any accepted channel mode: a known steady channel-blend, or a
+// scripted transition (`trans_*`). Transition script existence is verified
+// by the mixer at compile time; here we only gate the NAME shape so a typo
+// like 'blend_scren' is rejected loudly.
+export function isValidBlendMode(mode) {
+  if (typeof mode !== 'string' || mode.length === 0) return false;
+  if (VALID_CHANNEL_BLEND_MODES.has(mode)) return true;
+  if (mode.startsWith('trans_')) return true;
+  return false;
 }
 
 function listPatterns(patternsDir) {
@@ -1079,6 +1109,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       opts.pattern = channel.pattern;
       broadcastWs({ type: 'pattern', name: channel.pattern });
       broadcastMixerState();
+      // Warm the predicted-next handle for the next sequential advance.
+      if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
+        precompileNextDeckEntry(channel);
+      }
       return { ...r, transitionId: null, done: Promise.resolve() };
     }
 
@@ -1255,6 +1289,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'pattern', name: channel.pattern });
         broadcastWs({ type: 'deckSwapComplete', pattern: channel.pattern, transitionId: txid, transitionMode: transMode });
         broadcastMixerState();
+        // Warm the predicted-next handle now that the swap landed and the
+        // inactive slot is free again. Sequential autopilot only (the
+        // helper guards this) so manual ping-pong warmth is preserved.
+        precompileNextDeckEntry(channel);
         // Resolve the autopilot's await so its inter-pattern timer
         // can start its next countdown from a clean baseline.
         try { resolveDone(); } catch (_) {}
@@ -1284,6 +1322,66 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       entry, index: idx, total: playlist.entries.length,
       transitionId: txid, done,
     };
+  }
+
+  // ── Precompile-next-entry (hot-swap playlist optimization) ───────────
+  // After the deck lands on an entry, predict the NEXT entry the operator
+  // (or autopilot) will advance to and warm-compile its pattern into the
+  // mixer's inactive deck slot. The next advance then reuses a warm handle
+  // (zero-compile) instead of stalling on a fresh compile in the request
+  // path — the smooth-swap win that feat/timeline_support needs.
+  //
+  // Prediction is intentionally simple and side-effect-free:
+  //   - shuffle autopilot → unpredictable, so we DON'T pre-warm (a wrong
+  //     guess would just waste a compile + evict a possibly-useful warm
+  //     ping-pong handle).
+  //   - otherwise → the next non-missing entry after the active cursor,
+  //     wrapping to the top (matches sequential autopilot advance).
+  //
+  // Safe to call after every deck entry load. Never throws (a prediction
+  // failure must not break the load that just succeeded).
+  function precompileNextDeckEntry(channel) {
+    try {
+      if (!channel || !channel.playlist || !channel.playlist.name) return;
+      const ap = channel.playlist.autopilot;
+      // Only pre-warm during ACTIVE SEQUENTIAL autopilot (the forward
+      // timeline-playback scenario). Manual taps are left to the ping-pong
+      // warm-keeper so we don't evict a useful back-and-forth handle on a
+      // single manual advance. Shuffle is unpredictable → skip.
+      if (!ap || !ap.active || ap.shuffle) return;
+      const pl = playlistManager.tryLoad(channel.playlist.name);
+      if (!pl || pl.entries.length === 0) return;
+      const usable = pl.entries.filter(e => !e._missing);
+      if (usable.length === 0) return;
+      const activeIdx = usable.findIndex(e => e.id === channel.playlist.activeEntryId);
+      // Next sequential entry, wrapping. If the active entry isn't found
+      // (e.g. it was missing), start from the first usable entry.
+      const nextEntry = usable[(activeIdx + 1) % usable.length];
+      if (!nextEntry || nextEntry.pattern === channel.pattern) return;
+      // Already warm? getInactiveDeckPattern avoids a redundant compile.
+      if (mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern() === nextEntry.pattern) {
+        return;
+      }
+      // Don't fight an in-flight swap — the inactive slot is the live fade
+      // target then. warmInactiveDeckHandle also guards this, but checking
+      // here avoids a wasted compile.
+      if (mixer.isDeckSwapInFlight && mixer.isDeckSwapInFlight()) return;
+      const src = loadPattern(patternsDir, nextEntry.pattern);
+      const comp = wasmHost.compile(src);
+      if (!comp.ok) {
+        console.warn(`[Deck] precompile-next skipped for '${nextEntry.pattern}': ${comp.error}`);
+        return;
+      }
+      // Seed top-level scope so the warmed handle's exports are initialized
+      // and it ticks correctly while parked.
+      wasmHost.beginFrame(comp.handle, 0);
+      const installed = mixer.warmInactiveDeckHandle(nextEntry.pattern, comp.handle);
+      if (installed) {
+        console.log(`[Deck] precompiled next entry '${nextEntry.pattern}' into warm slot`);
+      }
+    } catch (err) {
+      console.warn(`[Deck] precompileNextDeckEntry failed (non-fatal): ${err.message}`);
+    }
   }
 
   function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
@@ -1327,7 +1425,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
       // canonical per-slot state. If a playlist+entry survived in saved
       // state, re-apply those defaults; otherwise just replay localControls.
-      const pl = ch.playlist && ch.playlist.name && playlistManager.load(ch.playlist.name);
+      // tryLoad (not load) so a corrupt active playlist degrades to the
+      // localControls fallback instead of aborting the channel restore.
+      const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
       const entry = pl && ch.playlist.activeEntryId &&
         pl.entries.find(e => e.id === ch.playlist.activeEntryId);
       if (entry && !entry._missing) {
@@ -1941,6 +2041,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // and the engine is still rendering the old model — restart needed.
         modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
         modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
+        // Render-health (Codex P0 visibility): renderHealth.ok === false
+        // means at least one channel blend is degraded — running on the
+        // host-side linear-interp fallback because its WASM blend script is
+        // missing or failed to compile. blendErrors lists the offending
+        // modes. A green rig has renderHealth.ok === true with an empty
+        // blendErrors array. See pattern_mixer.getRenderHealth().
+        renderHealth: mixer.getRenderHealth ? mixer.getRenderHealth() : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -1996,7 +2103,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               // Seed slider defaults from the LIVE edit buffer, not stale disk.
               onChannelCompiled(ch, data.code);
               // Re-apply playlist entry defaults if a playlist+entry is active.
-              const pl = ch.playlist && ch.playlist.name && playlistManager.load(ch.playlist.name);
+              // tryLoad so a corrupt active playlist can't break a pattern save.
+              const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
               const entry = pl && ch.playlist.activeEntryId &&
                 pl.entries.find(e => e.id === ch.playlist.activeEntryId);
               if (entry && !entry._missing) {
@@ -2752,6 +2860,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!channel) { res.writeHead(404); return res.end(); }
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
+          if (!isValidBlendMode(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid blend mode '${data.mode}' (expected one of ` +
+                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+            }));
+          }
           // PATCH-driven mode change: clear any scripted-transition
           // restore so the operator's pick is sticky. Mirrors the WS
           // setChannelMode logic — see that handler for rationale.
@@ -3575,6 +3690,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
+          if (!isValidBlendMode(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid blend mode '${data.mode}' (expected one of ` +
+                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+            }));
+          }
           if (channel._savedMode) delete channel._savedMode;
           mixer.cancelChannelTransition(channel.id);
           channel.mode = data.mode;
@@ -3715,6 +3837,73 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
       });
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/swap') {
+      // ── Hot-swap the deck playlist (feat/timeline_support) ────────────
+      // Load a DIFFERENT playlist and transition to its first (or a
+      // specified) entry using the SAME deck transition machinery as
+      // /deck/playlist/entry — no blocking full-recompile stall, the swap
+      // rides the smooth crossfade/transition. This is additive and behind
+      // an explicit endpoint; the existing entry-advance route is untouched.
+      //
+      // Body: { name: string, entryId?: string }
+      //   name    — playlist to swap to (required)
+      //   entryId — entry within that playlist to land on (optional;
+      //             defaults to the first non-missing entry)
+      readBody(data => {
+        const baseCh = mixer.getDeckChannel();
+        if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        if (typeof data.name !== 'string' || data.name.length === 0) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name (playlist) required' }));
+        }
+        let pl;
+        try {
+          pl = playlistManager.load(data.name);
+        } catch (e) {
+          if (e instanceof PlaylistLoadError) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          }
+          throw e;
+        }
+        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        // Resolve the target entry: explicit entryId, else first usable.
+        let targetEntry;
+        if (data.entryId !== undefined) {
+          targetEntry = pl.entries.find(e => e.id === data.entryId);
+          if (!targetEntry) {
+            res.writeHead(404); return res.end(JSON.stringify({ error: `entry not found in ${data.name}: ${data.entryId}` }));
+          }
+          if (targetEntry._missing) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: `pattern missing for entry ${data.entryId}: ${targetEntry.pattern}` }));
+          }
+        } else {
+          targetEntry = pl.entries.find(e => !e._missing);
+          if (!targetEntry) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: `playlist ${data.name} has no usable entries` }));
+          }
+        }
+        try {
+          // Same helper the entry-advance path uses. It loads the named
+          // playlist fresh, drives the deck transition, and on completion
+          // rebinds baseCh.playlist.name to the new playlist — so a swap
+          // is just an entry load that happens to cross playlists.
+          const r = loadPlaylistEntryWithTransition(
+            baseCh, pl.name, targetEntry.id, deckTransitionConfig,
+          );
+          res.writeHead(200);
+          res.end(JSON.stringify({
+            status: 'ok',
+            playlist: baseCh.playlist,
+            pattern: baseCh.pattern,
+            transitionId: r && r.transitionId ? r.transitionId : null,
+          }));
+        } catch (e) {
+          if (e && e.code === 'EBUSY') {
+            res.writeHead(409); res.end(JSON.stringify({ error: 'transition in progress', code: 'EBUSY' }));
+          } else {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        }
+      });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
       const baseCh = mixer.getDeckChannel();
       if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -3751,12 +3940,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // can update one knob without resetting the rest.
         if (typeof data.enabled === 'boolean') deckTransitionConfig.enabled = data.enabled;
         if (typeof data.shuffle === 'boolean') deckTransitionConfig.shuffle = data.shuffle;
-        if (typeof data.mode === 'string' && data.mode.startsWith('trans_')) {
+        if (data.mode !== undefined) {
+          // The deck transition `mode` is a scripted transition (trans_*),
+          // not a steady channel blend. Reject anything else with 400 so a
+          // typo can't silently leave the previous mode in place.
+          if (typeof data.mode !== 'string' || !data.mode.startsWith('trans_')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `transition-config mode must be a trans_* transition name, got '${data.mode}'`,
+            }));
+          }
           deckTransitionConfig.mode = data.mode;
         }
         if (data.durationMs !== undefined) {
-          const ms = Math.max(50, Math.min(30000, Number(data.durationMs) || 1000));
-          deckTransitionConfig.durationMs = ms;
+          // NaN/finite validation (Codex P0): reject a non-finite duration
+          // with 400 instead of silently coercing it (Number(NaN)||1000
+          // used to mask 'abc'/NaN as 1000s, hiding a broken client). A
+          // finite value is still clamped to the safe 50..30000 ms window.
+          const n = Number(data.durationMs);
+          if (!Number.isFinite(n)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `durationMs must be a finite number, got '${data.durationMs}'`,
+            }));
+          }
+          deckTransitionConfig.durationMs = Math.max(50, Math.min(30000, n));
         }
         saveAllState();
         // Broadcast so other clients see the change immediately.
@@ -3846,6 +4054,57 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           } else {
             res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
           }
+        }
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/swap$/)) {
+      // Mixer-overlay equivalent of /deck/playlist/swap. Mixer overlays
+      // don't have the deck's double-buffer transition machinery, so this
+      // is an instant load of a DIFFERENT playlist's first/specified entry
+      // onto the overlay. Additive + explicit, mirroring the deck route.
+      //
+      // Body: { name: string, entryId?: string }
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        const ch = mixer.getMixerChannel(id);
+        if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+        if (typeof data.name !== 'string' || data.name.length === 0) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name (playlist) required' }));
+        }
+        let pl;
+        try {
+          pl = playlistManager.load(data.name);
+        } catch (e) {
+          if (e instanceof PlaylistLoadError) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          }
+          throw e;
+        }
+        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        let targetEntry;
+        if (data.entryId !== undefined) {
+          targetEntry = pl.entries.find(e => e.id === data.entryId);
+          if (!targetEntry) {
+            res.writeHead(404); return res.end(JSON.stringify({ error: `entry not found in ${data.name}: ${data.entryId}` }));
+          }
+          if (targetEntry._missing) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: `pattern missing for entry ${data.entryId}: ${targetEntry.pattern}` }));
+          }
+        } else {
+          targetEntry = pl.entries.find(e => !e._missing);
+          if (!targetEntry) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: `playlist ${data.name} has no usable entries` }));
+          }
+        }
+        try {
+          loadPlaylistEntry(ch, pl.name, targetEntry.id);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, pattern: ch.pattern, playlistData: pl }));
+          broadcastChannelPlaylistData(ch);
+          broadcastMixerState();
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
@@ -4133,6 +4392,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // saveMixerState (e.g. on slider release).
           }
         } else if (d.type === 'setChannelMode' && d.channelId && d.mode) {
+          if (!isValidBlendMode(d.mode)) {
+            ws.send(JSON.stringify({
+              type: 'channelModeRejected',
+              channelId: d.channelId,
+              mode: d.mode,
+              reason: 'invalid-blend-mode',
+            }));
+            return;
+          }
           const channel = mixer.getChannel(d.channelId);
           if (channel) {
             // A manual mode change wins over any in-flight scripted

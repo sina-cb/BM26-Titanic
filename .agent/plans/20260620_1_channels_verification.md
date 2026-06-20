@@ -45,6 +45,39 @@ Content: atomic temp+fsync+rename state writes; `serializeChannel()` de-dup
 blend-fallback-presence 5 doc-only, HIL concurrent 7). Backward-compatible
 state_manager (no export/signature removed). Merge commit: 45dd556.
 
+### MERGE 3 — dev/engine_hotswap_mixer (E1, slot 0) — VERIFIED ON MERGED TIP
+Boundary: pattern_mixer.js, api_server.js, playlist_manager.js modified + 4
+additive tests + report. No overlap with merged tip (state_manager/CaptainPad).
+Two reconciliations by instigator on the merged tip (union-of-intent):
+1. **E3's `blend_fallback_presence.test.js`** documented the OLD silent-null
+   behavior with a TODO "assert loud-fail once the fix lands". E1 landed the
+   fix (renderHealth). Rewrote the test: real `compile()` stub (E1's
+   patternsDir setter now precompiles), assert missing blend flips
+   `renderHealth.ok=false` + names the mode. Net +1 test.
+2. **Pre-existing fixture bug** (E1 flagged it): `states/test_bench/
+   deck_state.yaml` pointed the deck at deleted pattern `29_bar_dancers`
+   (absent from `--list`, last touched PR #22) → fresh boot = dead deck →
+   all deck endpoints 404. Repointed to `test_const` (one-line fixture fix).
+Verified on merged tip:
+```
+$ git diff --check -- marsin_engine                        → DIFFCHECK_OK
+$ node --check {3 lib + 4 test files}                      → all OK
+$ node engine.js --list                                    → 60 patterns
+$ dry-run                                                  → exit 0, no missing-blend warning
+$ node --test "tests/*.test.js"                            → 802 pass / 0 fail
+$ /status renderHealth                                     → {ok: true, frame: 11, blendErrors: []}
+$ deck/channel at boot (post fixture fix)                  → pattern test_const, id ch_base_…
+$ ENGINE_PORT=31068 node tests/hil/hil_playlist_hotswap_test.mjs
+  → 17/17 assertions passed, HIL_EXIT=0 (before fixture fix: 9/17 — all 8
+    failures were 404/null deck assertions caused by the dead-deck fixture)
+  states/test_bench residue: only the intentional deck_state pattern fix; summer_camp_dome runtime churn restored
+```
+Content: boot blend precompile (19 handles warm, lazy compile off hot path);
+fail-loud render-health on /status; PlaylistLoadError on malformed YAML;
+NaN durationMs rejected 400; centralized VALID_CHANNEL_BLEND_MODES; hot-swap
+`POST /deck/playlist/swap` + mixer mirror + precompileNextDeckEntry. Merge
+commit: see git log. Known follow-up: full handle pooling (documented by E1).
+
 ### MERGE 2 — dev/captainpad_views (C2, slot 1) — VERIFIED ON MERGED TIP
 Boundary: CaptainPad only — index.tsx, mixer.tsx, PlaylistPanel.tsx, api.ts
 modified + new ConfirmSheet.tsx, ChannelVizStrip.tsx, useEngineConnection.ts +
