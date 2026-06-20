@@ -67,13 +67,40 @@ const DEFAULTS = Object.freeze({
   warmupFill: 0.85,
   confPeakW: 0.6,
 
+  // ── Tempo-octave (half/double) disambiguation ────────────────────────────
+  // The comb-enhanced autocorrelation and the 128-BPM prior both bias the raw
+  // measurement toward the FASTER metrical level: a genuine ~90 BPM groove
+  // (with on-beat kicks + offbeat hats / 8th-note bass) scores its double
+  // (~180) or a ×4/3 relative (~120) as strongly as the true period, and the
+  // prior then tips the tie upward. That octave-doubles slow material
+  // (downtempo, slow house) and is the single biggest BPM error on real audio.
+  //
+  // After the comb argmax picks a candidate period, we re-evaluate the PURE
+  // (non-comb) normalized autocorrelation at the candidate AND at its half- and
+  // double-tempo octaves, weight each by a WIDE perceptual tempo preference,
+  // and choose the octave that maximizes (autocorr × preference). The
+  // preference is a log-Gaussian centred at `octaveCenterBpm` so that, when two
+  // octaves have COMPARABLE periodicity strength, the perceptually-central one
+  // wins — but a clearly stronger octave still beats a weak central one, so
+  // genuine fast (e.g. 174 DnB) and genuine slow tempos are both preserved.
+  octaveCenterBpm: 115,     // perceptual centre of the tempo-preference curve
+  octaveSigma: 0.42,        // log-space width — wide enough to keep 75..180 viable
+  octaveAcRatio: 0.65,      // an alternate octave must carry at least this fraction
+                            //   of the candidate's autocorr to be CONSIDERED a real
+                            //   metrical level (guards against folding onto noise).
+                            //   0.65 lets a genuine double-tempo (e.g. 150 read as a
+                            //   strong 75 + a slightly-weaker 150) be recovered while
+                            //   still rejecting noise lags.
+
   // Confidence gating
   confFloor: 0.06,          // measurements below this are ignored entirely (hold last)
 
   // Tempo histogram (SEARCHING → LOCK)
   histBinBpm: 2.0,          // bin width in BPM (after octave folding)
   histDecay: 0.985,         // per-refresh decay of vote mass (~slow forgetting)
-  histFoldLo: 95,           // fold the histogram to [histFoldLo, 2*histFoldLo)
+  histFoldLo: 80,           // fold the histogram to [histFoldLo, 2*histFoldLo) —
+                            //   lowered from 95 so genuine ~80-95 BPM tempos keep
+                            //   their own octave instead of being folded UP.
   lockVoteFrac: 0.30,       // winning cluster (bin ±1) must hold this fraction of total mass
   lockMinMass: 3.0,         // and this much absolute mass before we lock
 
@@ -81,6 +108,10 @@ const DEFAULTS = Object.freeze({
   lockTolFrac: 0.055,       // a measurement within ±5.5% of lock "agrees"
   unlockVoteHops: 90,       // sustained clustered, octave-DISTINCT disagreement before unlock (~8s)
   unlockTolFrac: 0.05,      // the disagreeing reads must cluster within ±5% of each other
+
+  // Lock-octave migration (recover a lock that latched a half/double error)
+  octMigrateHops: 40,       // sustained half/double evidence before migrating (~3.7s)
+  octMigrateConf: 0.10,     // only confident half/double reads count toward migration
 
   // Kalman (BPM) — two regimes
   kfQSearch: 0.20,          // process noise while searching (lets seed move)
@@ -151,6 +182,8 @@ export class BpmTracker {
     this._hist.fill(0);
     this._disagreeCount = 0;
     this._disagreeMean = 0;
+    this._octMigrateCount = 0;
+    this._octMigrateTarget = 0;
 
     this._phase = 0;
     this._prevPhase = 0;
@@ -274,6 +307,13 @@ export class BpmTracker {
 
     if (bestLag === 0) { this._applyMeasurement(0, 0); return; }
 
+    // ── Tempo-octave disambiguation ─────────────────────────────────────────
+    // Re-pick the metrical level using PURE (non-comb) autocorrelation strength
+    // weighted by a wide perceptual preference, so a genuinely slow groove is
+    // not octave-doubled by the comb + 128-prior. Evaluate the candidate, its
+    // double-tempo (half-lag) and half-tempo (double-lag) octaves.
+    bestLag = this._chooseTempoOctave(at, N, mean, r0, bestLag);
+
     const lagInterp = this._parabolicPeak(at, N, mean, bestLag, r0);
     let measBpm = (60 * p.hopsPerSec) / lagInterp;
 
@@ -304,6 +344,53 @@ export class BpmTracker {
     const delta = 0.5 * (ym1 - yp1) / denom;
     if (delta < -1 || delta > 1) return lag;
     return lag + delta;
+  }
+
+  /** @private wide perceptual tempo-preference weight (log-Gaussian, [0,1]). */
+  _octavePref(bpm) {
+    if (bpm <= 0) return 0;
+    const d = Math.log(bpm) - Math.log(this.p.octaveCenterBpm);
+    const s = this.p.octaveSigma;
+    return Math.exp(-(d * d) / (2 * s * s));
+  }
+
+  /**
+   * @private pick the best metrical octave for the winning lag.
+   *
+   * The comb argmax found a strong periodicity at `lag`, but on slow material
+   * the comb + 128-prior systematically prefer the FASTER octave. We compare
+   * the PURE normalized autocorrelation at `lag`, `2*lag` (half tempo) and
+   * `lag/2` (double tempo), each scaled by a wide perceptual preference, and
+   * return the lag whose (autocorr × preference) is greatest — but only consider
+   * an alternate octave whose autocorrelation is a real metrical level (≥
+   * `octaveAcRatio` of the candidate's), so we never fold the tempo onto noise.
+   */
+  _chooseTempoOctave(at, N, mean, r0, lag) {
+    const p = this.p;
+    const acAt = (L) => {
+      if (L < this._lagMin || L > this._lagMax || L >= N) return null;
+      return this._autocorrAt(at, N, mean, L) / r0;
+    };
+    const bpmOf = (L) => (60 * p.hopsPerSec) / L;
+
+    const baseAc = acAt(lag);
+    if (baseAc === null || baseAc <= 0) return lag;
+
+    // Candidate octaves: self, half-tempo (double the period → 2*lag),
+    // double-tempo (halve the period → round(lag/2)).
+    const cands = [lag, 2 * lag, Math.round(lag / 2)];
+    let bestLag = lag;
+    let bestVal = baseAc * this._octavePref(bpmOf(lag));
+    for (const L of cands) {
+      if (L === lag) continue;
+      const ac = acAt(L);
+      if (ac === null || ac <= 0) continue;
+      // Must be a real metrical level, not a noise lag.
+      if (ac < p.octaveAcRatio * baseAc) continue;
+      const val = ac * this._octavePref(bpmOf(L));
+      if (val > bestVal) { bestVal = val; bestLag = L; }
+    }
+    return bestLag;
   }
 
   /** @private the heart of v2: 2-state tempo model + histogram. */
@@ -387,6 +474,15 @@ export class BpmTracker {
   /** @private LOCKED: stiff tracking; ignore disagreement until sustained. */
   _lockedUpdate(measBpm, conf) {
     const p = this.p;
+    // Octave-migration evidence is gathered from the RAW (octave-corrected by
+    // `_chooseTempoOctave`, but NOT yet folded to the lock) measurement, BEFORE
+    // `_toLockOctave` collapses a clean half/double back onto the lock. A
+    // sustained, confident half/double read means the lock latched the wrong
+    // metrical level and must migrate — this runs in every branch below so the
+    // "agrees-after-folding" case (the actual slow-tempo-double failure mode)
+    // is not silently swallowed.
+    this._accumulateOctaveMigration(measBpm, conf);
+
     // Fold the measurement to the lock octave.
     const m = this._toLockOctave(measBpm, this._lockBpm);
     const err = Math.abs(m - this._lockBpm) / this._lockBpm;
@@ -430,6 +526,58 @@ export class BpmTracker {
         this._hist[bin] = p.lockMinMass * 0.6;
         this._disagreeCount = 0;
       }
+    }
+  }
+
+  /**
+   * @private accumulate evidence that the LOCK sits on the wrong tempo octave.
+   *
+   * Called for measurements that are metric-relative to the lock. The raw
+   * measurement has ALREADY been octave-corrected by `_chooseTempoOctave` using
+   * the pure autocorrelation evidence — so a measurement reading a clean HALF
+   * (or DOUBLE) of the lock means the autocorrelation genuinely prefers that
+   * other metrical level, and the lock latched the half/double error. We
+   * require this evidence to be SUSTAINED and CONFIDENT (`octMigrateHops` of it)
+   * before migrating, so a momentary ÷2 read on a correctly-locked track never
+   * moves the lock. Among the two octaves, migration only happens toward the one
+   * the autocorrelation chose — the perceptual preference is NOT used here
+   * (it is already baked into `_chooseTempoOctave`), which is what lets a
+   * genuinely slow ~70-90 BPM track recover from a double even though the faster
+   * octave is nearer the 115-BPM perceptual centre.
+   */
+  _accumulateOctaveMigration(measBpm, conf) {
+    const p = this.p;
+    const ratio = measBpm > 0 ? measBpm / this._lockBpm : 0;
+    // Nearest clean half/double the measurement could represent.
+    let target = 0;
+    if (measBpm > 0 && conf >= p.octMigrateConf) {
+      if (Math.abs(ratio - 0.5) <= 0.5 * p.lockTolFrac + p.unlockTolFrac) target = this._lockBpm * 0.5;
+      else if (Math.abs(ratio - 2) <= 2 * (0.5 * p.lockTolFrac + p.unlockTolFrac)) target = this._lockBpm * 2;
+    }
+    if (target <= 0 || target < p.minBpm || target > p.maxBpm) {
+      // Not a confident clean half/double this hop — DECAY the streak rather than
+      // hard-reset, so the intermittent ×4/3 / low-conf reads between the strong
+      // half-tempo reads don't keep the count pinned at zero forever.
+      this._octMigrateCount = Math.max(0, this._octMigrateCount - 1);
+      this._octMigrateTarget = this._octMigrateCount > 0 ? this._octMigrateTarget : 0;
+      return;
+    }
+    // Same target octave as the running streak? Keep accumulating; otherwise
+    // restart the streak on the new target.
+    if (this._octMigrateTarget === 0 ||
+        Math.abs(target - this._octMigrateTarget) / this._octMigrateTarget > p.unlockTolFrac) {
+      this._octMigrateTarget = target;
+      this._octMigrateCount = 1;
+    } else {
+      this._octMigrateCount += 2; // confident on-target read counts double a miss
+    }
+    if (this._octMigrateCount >= p.octMigrateHops) {
+      // Migrate the lock (and the filter state) to the autocorr-chosen octave.
+      this._lockBpm = target;
+      this._kfX = target;
+      this._octMigrateCount = 0;
+      this._octMigrateTarget = 0;
+      this._disagreeCount = 0;
     }
   }
 

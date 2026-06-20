@@ -55,8 +55,16 @@ const SUB   = { minHz: 30, maxHz: 60 };
 // seconds of window fill. Vote over the steady tail, ignoring the lead-in.
 const VOTE_START_MS = 12000;
 
+// Default fftSize MUST match the deployed product (config.yaml audio.fftSize =
+// 2048, the same value run_analysis.mjs pins). It was previously 1024 — a stale
+// pre-FFT-bump value — so the no-flag run scored the classifier at a resolution
+// the engine never uses and reported a fictitiously LOW accuracy (the profiles
+// are anchored to measured fft-2048 centroids). Tune/report at the deployed
+// fftSize; pass --fft to override for analysis.
+const PRODUCT_FFT_SIZE = 2048;
+
 function parseArgs(argv) {
-  const a = { corpus: path.join(os.homedir(), 'tmp', 'genre_corpus'), forceParty: true, json: false, fftSize: 1024 };
+  const a = { corpus: path.join(os.homedir(), 'tmp', 'genre_corpus'), forceParty: true, json: false, fftSize: PRODUCT_FFT_SIZE };
   for (let i = 2; i < argv.length; i++) {
     const t = argv[i];
     if (t === '--corpus') a.corpus = argv[++i];
