@@ -165,3 +165,11 @@ Proof entry template:
 - Agent proof (report 20260620_15): 22 new tests, 830/830 suite; riser peaks 0.81-0.85 + resets on drop; track-change fires once across silence gap; climax holds 1.0 on sustained sections; phrase boundary on 8-bar wraps; countdown 3-4× before drop, 0 on false builds.
 - Honest caveats (documented): audioBuildEta absolute seconds unreliable (BPM octave) — shipped best-effort behind riserConf, countdown gates on riser PEAK not ETA; chord_progression reads riserScore~0.78 (soft synth FP, no countdown/climax trigger).
 - Verdict: D2 crossed off. ✅
+
+### D1 — FFT 1024→2048 + dom/note/sub re-tune  [PASS]  2026-06-20T09:20Z
+- Branch/commit: `dev/fft2048_retune` @ `2753ebb` → merged into `feat/audio_analysis_2` (--no-ff, clean — disjoint from D2/D3/D6).
+- config.yaml fftSize 1024→2048 (hopSize 512 → hop rate ~86Hz preserved). Bin math is Hz/per-hop driven (auto-adapts). dropEnergyJump 1.8→1.9 (re-tune for the new resolution). Calibrate + companion FFT tracked to 2048.
+- Command(s) BY INSTIGATOR on merged tip: `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/note_estimator_synthetic.test.js tests/integration/audio_analysis_validation.test.mjs` → **209 pass / 0 fail**; dry-run @2048 **exit 0**.
+- Before→after (agent, report 20260620_14): dom1 bass-root err **4.46→0.66 Hz**; note pitch-class **5/8→8/8**; sub separation (80Hz kick) micSub **0.49→0.13**; drop **P=1.00 R=0.78 F1=0.875 negFP=0** (vs 1024 R=0.56); analyzer per-hop p99 **0.17→0.28ms** (<0.5).
+- Genre: NOT re-tuned on real corpus (harness/corpus weren't in D1's worktree); classification invariant across the bump on synth (9/9). → D7 will do the real-corpus re-tune at 2048.
+- Verdict: D1 crossed off. ✅
