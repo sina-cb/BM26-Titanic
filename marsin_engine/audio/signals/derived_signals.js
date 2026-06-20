@@ -21,6 +21,19 @@
  * Inputs (RAW mic mirrors + detector keys): micFluxRaw, micKickRaw,
  *   micLowRaw/MidRaw/HighRaw, micDomFreq1/2 + micDomEnergy1/2, audioDropPulse,
  *   audioEnergyRatio, audioBuildScore, audioSlowZone, audioStructure.
+ *
+ * FAIL-LOUD POLICY (codex P0 — no fail-quiet):
+ *   A throwing sub-module must NOT silently disable the WHOLE derived chain for
+ *   the session (the old behaviour: one bad signal blanked BPM/party/note/genre
+ *   permanently). Instead each sub-module update is isolated: a throw is logged
+ *   LOUDLY (console.error, once per module so we don't spam), records the module
+ *   into an operator-visible `getStatus().moduleErrors` map + sets `degraded`,
+ *   and that ONE module's outputs fall back to its last-good / zero for THAT hop
+ *   only — every healthy module keeps publishing. The engine surfaces `degraded`
+ *   + the failing module names in the `audioStatus` broadcast so the operator
+ *   SEES the failure, not just stderr. Only a failure of the CPC publish path
+ *   itself (`paramCenter.setMany`) — which means nothing audio works — escalates
+ *   to a loud `_fatal` (the publish target is gone; there is nowhere to write).
  */
 import { BpmTracker } from './bpm_tracker.js';
 import { PartyMode } from './party_mode.js';
@@ -51,6 +64,23 @@ const PARAMS = Object.freeze({
   sw:    { startupGuardMs: 2000, patternMinDwellMs: 6000, dropMinDwellMs: 2500, energyRegimeHi: 0.6, energyRegimeLo: 0.3, regimeHoldMs: 1500, dropPulseFire: 0.5, slowZoneHi: 0.55, slowZoneLo: 0.35, quantizeToBeat: true, quantizeMaxWaitMs: 350, patternUrgeTau: 8, colorMinDwellMs: 2500, noteChangeMinDwellMs: 1800, colorUrgeTau: 4 },
 });
 
+// Safe per-module result shapes used when a sub-module update() throws this hop.
+// These mirror the field names the publish step reads, holding the neutral /
+// zero value so a single failing module degrades to "off" rather than poisoning
+// the others. (Frozen — never mutated; the publish step only reads them.)
+const SAFE_BPM = Object.freeze({ bpm: 0, beat: 0, beatEdge: false, locked: false, beatInBar: 0, barPhase: 0, downbeat: false });
+const SAFE_NOTE = Object.freeze({ pitchClass: -1, hue: 0, stable: false });
+const SAFE_PARTY = Object.freeze({ party: false });
+const SAFE_SWITCH = Object.freeze({ switchPattern: false, switchColor: false });
+const SAFE_ONSETS = Object.freeze({ low: 0, mid: 0, high: 0 });
+const SAFE_SUB = Object.freeze({ pulse: 0 });
+const SAFE_GENRE = Object.freeze({ genre: 0, confidence: 0 });
+const SAFE_RISER = Object.freeze({ riserScore: 0, buildEta: 0, riserConf: 0 });
+const SAFE_TRACK = Object.freeze({ silence: false, trackChange: false });
+const SAFE_CLIMAX = Object.freeze({ climax: 0 });
+const SAFE_PHRASE = Object.freeze({ phrasePhase: 0, phraseBoundary: false });
+const SAFE_COUNTDOWN = Object.freeze({ countdown: 0 });
+
 export class DerivedSignals {
   /** @param {{paramCenter:object}} deps */
   constructor({ paramCenter }) {
@@ -73,6 +103,13 @@ export class DerivedSignals {
     this._phrase = new PhraseTracker();
     this._countdown = new DropCountdown();
     this._fatal = false;
+    // Per-module failure tracking (fail-loud + operator-visible, NOT fail-quiet).
+    // moduleErrors maps a module name → its last error message; degraded is true
+    // whenever any module has failed at least once this session. _warnedModules
+    // rate-limits the loud console.error to once per module.
+    this._moduleErrors = {};
+    this._degraded = false;
+    this._warnedModules = new Set();
     // Last note actually committed by the estimator. We HOLD this on the
     // published audioNote/audioNoteHue keys whenever the estimator currently
     // reports "no note" (pitchClass < 0) — silence/warmup/sub-gate energy must
@@ -80,6 +117,49 @@ export class DerivedSignals {
     // hue 0 (a defined, non-spurious neutral), then track the live note.
     this._heldPc = 0;
     this._heldHue = 0;
+
+    // ── Hoisted publish payload (codex: allocation-free hot path) ─────────────
+    // The {kind,key} shapes are static; only `.value` changes each hop. Build
+    // the array + its objects ONCE here and mutate `.value` in place every tick
+    // instead of allocating ~25 fresh objects + an array per hop (~2150 obj/s at
+    // 86 Hz). param_center.setMany() reads each entry synchronously and never
+    // retains the array or its objects, so reuse is safe.
+    this._publishWrites = [
+      { kind: 'scalar', key: 'audioBpm',           value: 0.0 },
+      { kind: 'scalar', key: 'audioBeat',          value: 0.0 },
+      { kind: 'scalar', key: 'audioParty',         value: 0.0 },
+      { kind: 'scalar', key: 'audioNote',          value: 0.0 },
+      { kind: 'scalar', key: 'audioNoteHue',       value: 0.0 },
+      { kind: 'scalar', key: 'audioSwitchPattern', value: 0.0 },
+      { kind: 'scalar', key: 'audioSwitchColor',   value: 0.0 },
+      { kind: 'scalar', key: 'audioBeatInBar',     value: 0.0 },
+      { kind: 'scalar', key: 'audioBarPhase',      value: 0.0 },
+      { kind: 'scalar', key: 'audioDownbeat',      value: 0.0 },
+      // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
+      { kind: 'scalar', key: 'micOnsetLow',        value: 0.0 },
+      { kind: 'scalar', key: 'micOnsetMid',        value: 0.0 },
+      { kind: 'scalar', key: 'micOnsetHigh',       value: 0.0 },
+      { kind: 'scalar', key: 'audioChestHit',      value: 0.0 },
+      // genre_signals (slot 0): party-mode dance-genre + confidence.
+      { kind: 'scalar', key: 'audioGenre',         value: 0.0 },
+      { kind: 'scalar', key: 'audioGenreConf',     value: 0.0 },
+      // new_derived_signals: riser/anticipation, track-change/silence, climax,
+      // phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
+      { kind: 'scalar', key: 'audioRiserScore',     value: 0.0 },
+      { kind: 'scalar', key: 'audioBuildEta',       value: 0.0 },
+      { kind: 'scalar', key: 'audioRiserConf',      value: 0.0 },
+      { kind: 'scalar', key: 'audioSilence',        value: 0.0 },
+      { kind: 'scalar', key: 'audioTrackChange',    value: 0.0 },
+      { kind: 'scalar', key: 'audioClimax',         value: 0.0 },
+      { kind: 'scalar', key: 'audioPhrasePhase',    value: 0.0 },
+      { kind: 'scalar', key: 'audioPhraseBoundary', value: 0.0 },
+      { kind: 'scalar', key: 'audioDropCountdown',  value: 0.0 },
+    ];
+    // Index map for O(1) in-place writes by key in the publish step.
+    this._wIdx = {};
+    for (let i = 0; i < this._publishWrites.length; i++) {
+      this._wIdx[this._publishWrites[i].key] = i;
+    }
   }
 
   reset() {
@@ -101,6 +181,33 @@ export class DerivedSignals {
     console.warn(`[derivedSignals] non-finite ${key}=${val} — treating as 0 (key dropout?)`);
   }
 
+  /**
+   * @private Run one sub-module update under an isolated guard. On throw: log
+   * LOUDLY (once per module), record into the operator-visible status, mark the
+   * chain degraded, and return the module's SAFE fallback so the OTHER modules
+   * keep publishing this hop. This is the fail-loud-but-isolated contract that
+   * replaces the old session-killing `try { …everything… } catch { _fatal }`.
+   * @param {string} name  module name (for the loud log + status map)
+   * @param {() => object} fn  the module update closure
+   * @param {object} safe  frozen safe fallback result for a failed hop
+   */
+  _runModule(name, fn, safe) {
+    try {
+      return fn();
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      this._moduleErrors[name] = msg;
+      this._degraded = true;
+      if (!this._warnedModules.has(name)) {
+        this._warnedModules.add(name);
+        // LOUD: a sub-module failing is a real defect — surface it, don't bury
+        // it. We isolate (other modules keep running) but we do NOT go quiet.
+        console.error(`[derivedSignals] module '${name}' FAILED — isolating (other signals keep running): ${msg}`);
+      }
+      return safe;
+    }
+  }
+
   /** Per-hop step. `now` ms (analyzer hop clock), `dt` seconds since last hop. */
   tick(now, dt) {
     if (this._fatal) return;
@@ -108,133 +215,133 @@ export class DerivedSignals {
     // Finite guard (fail loud, don't die): a key dropout / NaN must not poison
     // the BPM/note/party state for the session. Non-finite → 0 + warn once.
     const g = (key) => { const v = pc.get(key); if (Number.isFinite(v)) return v; this._warnNonFinite(key, v); return 0; };
+
+    // Each sub-module runs under its OWN guard (_runModule): a throw in one
+    // (e.g. the genre classifier) can no longer blank BPM/party/note — it
+    // degrades only its own keys for that hop and is reported loud + visible.
+    const b = this._runModule('bpm', () => this._bpm.update(g('micFluxRaw'), g('micKickRaw'), dt), SAFE_BPM);
+    const n = this._runModule('note', () => this._note.update(g('micDomFreq1'), g('micDomEnergy1'), g('micDomFreq2'), g('micDomEnergy2')), SAFE_NOTE);
+    const p = this._runModule('party', () => this._party.update(g('micLowRaw'), g('micMidRaw'), g('micHighRaw'), dt, now), SAFE_PARTY);
+    // NOTE PUBLISH: the estimator returns pitchClass = -1 ("no note") during
+    // silence, warmup, or sub-gate energy. Publishing that as 0 collapses the
+    // colour to a permanent C whenever the live dom-freq energy is below the
+    // gate (the "NOTE always C" bug). HOLD the last committed note instead —
+    // the estimator's own design says colour should freeze, not blink to C.
+    if (n.pitchClass >= 0) {
+      this._heldPc = n.pitchClass;
+      this._heldHue = n.hue;
+    }
+    const s = this._runModule('switch', () => this._switch.update({
+      nowMs: now, dt,
+      dropPulse: g('audioDropPulse'), energyRatio: g('audioEnergyRatio'),
+      buildScore: g('audioBuildScore'), slowZone: g('audioSlowZone'),
+      structure: g('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
+      pitchClass: n.pitchClass, noteStable: n.stable,
+    }), SAFE_SWITCH);
+    // ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ─────
+    // Reads the RAW analyzer mirrors (micOnsetLow/Mid/HighRaw, micSubRaw) the
+    // engine publishes each hop and shapes them into pulse keys.
+    const dtMs = dt * 1000;
+    const ob = this._runModule('onsets', () => this._onsets.update(
+      g('micOnsetLowRaw'), g('micOnsetMidRaw'), g('micOnsetHighRaw'), dtMs, now,
+    ), SAFE_ONSETS);
+    const sb = this._runModule('sub', () => this._sub.update(g('micSubRaw'), dt, dtMs, now), SAFE_SUB);
+    // ── genre_signals (slot 0): party-mode dance-genre classifier ───────────
+    const gn = this._runModule('genre', () => this._genre.update({
+      nowMs: now, dt, party: p.party,
+      bpm: b.bpm, low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+      flux: g('micFluxRaw'), kick: g('micKickRaw'),
+      pitchClass: n.pitchClass, noteStable: n.stable,
+    }), SAFE_GENRE);
+    // ── new_derived_signals: riser/anticipation, track-change/silence, ──────
+    //    climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
+    const rz = this._runModule('riser', () => this._riser.update({
+      flux: g('micFluxRaw'), high: g('micHighRaw'),
+      low: g('micLowRaw'), mid: g('micMidRaw'),
+      buildScore: g('audioBuildScore'), structure: g('audioStructure'),
+      dropPulse: g('audioDropPulse'), bpm: b.bpm, bpmLocked: b.locked,
+      barPhase: b.barPhase || 0, dt, nowMs: now,
+    }), SAFE_RISER);
+    const tc = this._runModule('trackChange', () => this._trackChange.update({
+      low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+      bpm: b.bpm, bpmLocked: b.locked,
+      pitchClass: n.pitchClass, noteStable: n.stable, dt, nowMs: now,
+    }), SAFE_TRACK);
+    const cx = this._runModule('climax', () => this._climax.update({
+      low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+      dropPulse: g('audioDropPulse'), dt, nowMs: now,
+    }), SAFE_CLIMAX);
+    const ph = this._runModule('phrase', () => this._phrase.update({
+      downbeat: b.downbeat ? 1.0 : 0.0, barPhase: b.barPhase || 0,
+      dropPulse: g('audioDropPulse'), bpmLocked: b.locked, active: p.party, nowMs: now,
+    }), SAFE_PHRASE);
+    const cd = this._runModule('countdown', () => this._countdown.update({
+      riserScore: rz.riserScore, riserConf: rz.riserConf, buildEta: rz.buildEta,
+      bpm: b.bpm, bpmLocked: b.locked, beat: b.beat,
+      dropPulse: g('audioDropPulse'), dtMs, nowMs: now,
+    }), SAFE_COUNTDOWN);
+
+    // ── PUBLISH: mutate the hoisted payload in place, then one setMany ────────
+    const w = this._publishWrites;
+    const idx = this._wIdx;
+    w[idx.audioBpm].value           = b.bpm;
+    w[idx.audioBeat].value          = b.beat;
+    w[idx.audioParty].value         = p.party ? 1.0 : 0.0;
+    w[idx.audioNote].value          = this._heldPc;
+    w[idx.audioNoteHue].value       = this._heldHue;
+    w[idx.audioSwitchPattern].value = s.switchPattern ? 1.0 : 0.0;
+    w[idx.audioSwitchColor].value   = s.switchColor ? 1.0 : 0.0;
+    w[idx.audioBeatInBar].value     = b.beatInBar || 0;
+    w[idx.audioBarPhase].value      = b.barPhase || 0;
+    w[idx.audioDownbeat].value      = b.downbeat ? 1.0 : 0.0;
+    w[idx.micOnsetLow].value        = ob.low;
+    w[idx.micOnsetMid].value        = ob.mid;
+    w[idx.micOnsetHigh].value       = ob.high;
+    w[idx.audioChestHit].value      = sb.pulse;
+    w[idx.audioGenre].value         = gn.genre;
+    w[idx.audioGenreConf].value     = gn.confidence;
+    w[idx.audioRiserScore].value     = rz.riserScore;
+    w[idx.audioBuildEta].value       = rz.buildEta;
+    w[idx.audioRiserConf].value      = rz.riserConf;
+    w[idx.audioSilence].value        = tc.silence ? 1.0 : 0.0;
+    w[idx.audioTrackChange].value    = tc.trackChange ? 1.0 : 0.0;
+    w[idx.audioClimax].value         = cx.climax;
+    w[idx.audioPhrasePhase].value    = ph.phrasePhase;
+    w[idx.audioPhraseBoundary].value = ph.phraseBoundary ? 1.0 : 0.0;
+    w[idx.audioDropCountdown].value  = cd.countdown;
+
+    // Only a failure of the PUBLISH PATH itself (the CPC target is gone) is
+    // truly fatal — there is nowhere left to write any signal. That escalates
+    // loud + disables (the operator sees `audioStructure`/derived go flat and
+    // the FATAL line). A sub-module throw never reaches here.
     try {
-      const b = this._bpm.update(g('micFluxRaw'), g('micKickRaw'), dt);
-      const n = this._note.update(g('micDomFreq1'), g('micDomEnergy1'), g('micDomFreq2'), g('micDomEnergy2'));
-      const p = this._party.update(g('micLowRaw'), g('micMidRaw'), g('micHighRaw'), dt, now);
-      // NOTE PUBLISH: the estimator returns pitchClass = -1 ("no note") during
-      // silence, warmup, or sub-gate energy. Publishing that as 0 collapses the
-      // colour to a permanent C whenever the live dom-freq energy is below the
-      // gate (the "NOTE always C" bug). HOLD the last committed note instead —
-      // the estimator's own design says colour should freeze, not blink to C.
-      if (n.pitchClass >= 0) {
-        this._heldPc = n.pitchClass;
-        this._heldHue = n.hue;
-      }
-      const s = this._switch.update({
-        nowMs: now, dt,
-        dropPulse: g('audioDropPulse'), energyRatio: g('audioEnergyRatio'),
-        buildScore: g('audioBuildScore'), slowZone: g('audioSlowZone'),
-        structure: g('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
-        pitchClass: n.pitchClass, noteStable: n.stable,
-      });
-      // ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ─────
-      // Reads the RAW analyzer mirrors (micOnsetLow/Mid/HighRaw, micSubRaw) the
-      // engine publishes each hop and shapes them into pulse keys. Keep this
-      // block small + localized so the merge into derived_signals.js is trivial.
-      const dtMs = dt * 1000;
-      const ob = this._onsets.update(
-        g('micOnsetLowRaw'), g('micOnsetMidRaw'), g('micOnsetHighRaw'), dtMs, now,
-      );
-      const sb = this._sub.update(g('micSubRaw'), dt, dtMs, now);
-      // ── genre_signals (slot 0): party-mode dance-genre classifier ───────────
-      // Genre is meaningful only inside party mode. We feed it the RAW bands +
-      // flux + kick pulse train (same mirrors the other modules read), the
-      // realtime BPM, and the committed note so it can measure melodic content.
-      const gn = this._genre.update({
-        nowMs: now, dt, party: p.party,
-        bpm: b.bpm, low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
-        flux: g('micFluxRaw'), kick: g('micKickRaw'),
-        pitchClass: n.pitchClass, noteStable: n.stable,
-      });
-      // ── new_derived_signals: riser/anticipation, track-change/silence, ──────
-      //    climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
-      //    All read the CPC keys the analyzer + structure detector + BPM tracker
-      //    already wrote this hop; no analyzer change. Countdown depends on the
-      //    riser's ETA/conf (computed above) and the beat grid. Keep this block
-      //    localized so the merge into derived_signals.js stays a union-add.
-      const rz = this._riser.update({
-        flux: g('micFluxRaw'), high: g('micHighRaw'),
-        low: g('micLowRaw'), mid: g('micMidRaw'),
-        buildScore: g('audioBuildScore'), structure: g('audioStructure'),
-        dropPulse: g('audioDropPulse'), bpm: b.bpm, bpmLocked: b.locked,
-        barPhase: b.barPhase || 0, dt, nowMs: now,
-      });
-      const tc = this._trackChange.update({
-        low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
-        bpm: b.bpm, bpmLocked: b.locked,
-        pitchClass: n.pitchClass, noteStable: n.stable, dt, nowMs: now,
-      });
-      const cx = this._climax.update({
-        low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
-        dropPulse: g('audioDropPulse'), dt, nowMs: now,
-      });
-      const ph = this._phrase.update({
-        downbeat: b.downbeat ? 1.0 : 0.0, barPhase: b.barPhase || 0,
-        dropPulse: g('audioDropPulse'), bpmLocked: b.locked, active: p.party, nowMs: now,
-      });
-      const cd = this._countdown.update({
-        riserScore: rz.riserScore, riserConf: rz.riserConf, buildEta: rz.buildEta,
-        bpm: b.bpm, bpmLocked: b.locked, beat: b.beat,
-        dropPulse: g('audioDropPulse'), dtMs, nowMs: now,
-      });
-      pc.setMany([
-        { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
-        { kind: 'scalar', key: 'audioBeat',          value: b.beat },
-        { kind: 'scalar', key: 'audioParty',         value: p.party ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioNote',          value: this._heldPc },
-        { kind: 'scalar', key: 'audioNoteHue',       value: this._heldHue },
-        { kind: 'scalar', key: 'audioSwitchPattern', value: s.switchPattern ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioSwitchColor',   value: s.switchColor ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioBeatInBar',     value: b.beatInBar || 0 },
-        { kind: 'scalar', key: 'audioBarPhase',      value: b.barPhase || 0 },
-        { kind: 'scalar', key: 'audioDownbeat',      value: b.downbeat ? 1.0 : 0.0 },
-        // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
-        { kind: 'scalar', key: 'micOnsetLow',        value: ob.low },
-        { kind: 'scalar', key: 'micOnsetMid',        value: ob.mid },
-        { kind: 'scalar', key: 'micOnsetHigh',       value: ob.high },
-        { kind: 'scalar', key: 'audioChestHit',      value: sb.pulse },
-        // genre_signals (slot 0): party-mode dance-genre + confidence.
-        { kind: 'scalar', key: 'audioGenre',         value: gn.genre },
-        { kind: 'scalar', key: 'audioGenreConf',     value: gn.confidence },
-        // new_derived_signals: riser/anticipation, track-change/silence, climax,
-        // phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
-        { kind: 'scalar', key: 'audioRiserScore',     value: rz.riserScore },
-        { kind: 'scalar', key: 'audioBuildEta',       value: rz.buildEta },
-        { kind: 'scalar', key: 'audioRiserConf',      value: rz.riserConf },
-        { kind: 'scalar', key: 'audioSilence',        value: tc.silence ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioTrackChange',    value: tc.trackChange ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioClimax',         value: cx.climax },
-        { kind: 'scalar', key: 'audioPhrasePhase',    value: ph.phrasePhase },
-        { kind: 'scalar', key: 'audioPhraseBoundary', value: ph.phraseBoundary ? 1.0 : 0.0 },
-        { kind: 'scalar', key: 'audioDropCountdown',  value: cd.countdown },
-      ], 'derivedSignals');
+      pc.setMany(w, 'derivedSignals');
     } catch (e) {
       this._fatal = true;
-      console.error(`[derivedSignals] FATAL — disabling for session: ${e && e.message}`);
+      console.error(`[derivedSignals] FATAL — CPC publish path failed, disabling for session: ${e && e.message}`);
     }
   }
 
+  /**
+   * Operator-visible health snapshot (parallels AudioStructureDetector.getStatus).
+   * The engine folds `degraded` + `moduleErrors` into the `audioStatus` broadcast
+   * so a failing sub-module is VISIBLE in CaptainPad / the companion, not buried
+   * in stderr. `fatal` means the whole chain is disabled (publish path gone).
+   */
+  getStatus() {
+    return {
+      fatal: this._fatal,
+      degraded: this._degraded,
+      // shallow copy so callers can't mutate our internal map
+      moduleErrors: { ...this._moduleErrors },
+    };
+  }
+
   _zero() {
-    this.paramCenter.setMany([
-      { kind: 'scalar', key: 'audioBpm', value: 0.0 }, { kind: 'scalar', key: 'audioBeat', value: 0.0 },
-      { kind: 'scalar', key: 'audioParty', value: 0.0 }, { kind: 'scalar', key: 'audioNote', value: 0.0 },
-      { kind: 'scalar', key: 'audioNoteHue', value: 0.0 }, { kind: 'scalar', key: 'audioSwitchPattern', value: 0.0 },
-      { kind: 'scalar', key: 'audioSwitchColor', value: 0.0 },
-      { kind: 'scalar', key: 'audioBeatInBar', value: 0.0 }, { kind: 'scalar', key: 'audioBarPhase', value: 0.0 },
-      { kind: 'scalar', key: 'audioDownbeat', value: 0.0 },
-      // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
-      { kind: 'scalar', key: 'micOnsetLow', value: 0.0 }, { kind: 'scalar', key: 'micOnsetMid', value: 0.0 },
-      { kind: 'scalar', key: 'micOnsetHigh', value: 0.0 }, { kind: 'scalar', key: 'audioChestHit', value: 0.0 },
-      // genre_signals (slot 0): party-mode dance-genre + confidence.
-      { kind: 'scalar', key: 'audioGenre', value: 0.0 }, { kind: 'scalar', key: 'audioGenreConf', value: 0.0 },
-      // new_derived_signals: riser/anticipation, track-change/silence, climax,
-      // phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
-      { kind: 'scalar', key: 'audioRiserScore', value: 0.0 }, { kind: 'scalar', key: 'audioBuildEta', value: 0.0 },
-      { kind: 'scalar', key: 'audioRiserConf', value: 0.0 }, { kind: 'scalar', key: 'audioSilence', value: 0.0 },
-      { kind: 'scalar', key: 'audioTrackChange', value: 0.0 }, { kind: 'scalar', key: 'audioClimax', value: 0.0 },
-      { kind: 'scalar', key: 'audioPhrasePhase', value: 0.0 }, { kind: 'scalar', key: 'audioPhraseBoundary', value: 0.0 },
-      { kind: 'scalar', key: 'audioDropCountdown', value: 0.0 },
-    ], 'derivedSignals');
+    // Reuse the hoisted payload (already all-zero at construction; re-zero in
+    // case a prior tick left live values) for the disable/reset publish.
+    const w = this._publishWrites;
+    for (let i = 0; i < w.length; i++) w[i].value = 0.0;
+    this.paramCenter.setMany(w, 'derivedSignals');
   }
 }

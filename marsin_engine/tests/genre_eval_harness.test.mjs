@@ -19,6 +19,12 @@ import assert from 'node:assert/strict';
 import { runWav, GENRE_NAMES } from '../tools/genre_eval.mjs';
 
 const SR = 44100;
+// Deployed product FFT size (config.yaml audio.fftSize = 2048, Wave D1; the
+// same value run_analysis.mjs + tools/genre_eval.mjs default to). The harness
+// must exercise the chain at the SHIPPED resolution — testing 1024 (the old
+// value here) guarded a configuration the engine no longer runs and could mask
+// a 2048-only regression.
+const PRODUCT_FFT_SIZE = 2048;
 
 /** Deterministic loud 4-on-the-floor clip: ~128 BPM kick + steady bass tone. */
 function synthFourOnFloor({ seconds = 18, bpm = 128 } = {}) {
@@ -45,7 +51,7 @@ function synthFourOnFloor({ seconds = 18, bpm = 128 } = {}) {
 
 test('genre-eval harness: force-party latches and publishes a valid party genre', () => {
   const samples = synthFourOnFloor();
-  const r = runWav(samples, SR, { forceParty: true, fftSize: 1024 });
+  const r = runWav(samples, SR, { forceParty: true, fftSize: PRODUCT_FFT_SIZE });
 
   assert.ok(r.perHop.length > 100, `expected many hops, got ${r.perHop.length}`);
   assert.equal(r.partyEverOn, true, 'force-party should latch the party gate');
@@ -69,7 +75,7 @@ test('genre-eval harness: force-party latches and publishes a valid party genre'
 
 test('genre-eval harness: without force-party, a SILENT clip never latches party (genre stays ambient)', () => {
   const samples = new Int16Array(Math.floor(8 * SR)); // all zeros = silence
-  const r = runWav(samples, SR, { forceParty: false, fftSize: 1024 });
+  const r = runWav(samples, SR, { forceParty: false, fftSize: PRODUCT_FFT_SIZE });
   assert.equal(r.partyEverOn, false, 'silence must not latch party');
   // Genre is ambient (0) outside party mode — the classifier publishes 0.
   assert.equal(r.tailVoteGenre, 0, `silent clip should publish ambient (0), got ${r.tailVoteGenre}`);
