@@ -18,6 +18,7 @@ import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { HealthChip } from '@/components/ui/HealthChip';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 
@@ -75,6 +76,10 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
+        {/* Engine-health warning — renders NOTHING when healthy (no layout
+            shift); shows an amber "⚠ DEGRADED" chip only when the engine
+            reports a degrade on /status. See HealthChip / useEngineHealth. */}
+        <HealthChip compact={isPortrait} />
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}

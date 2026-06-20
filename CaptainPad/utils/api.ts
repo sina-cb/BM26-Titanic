@@ -67,6 +67,36 @@ function warnThrottled(tag: string, msg: string, err: unknown) {
 
 // ── Connection Health ─────────────────────────────────────────────────────
 
+// Engine render-health snapshot, surfaced on GET /status as `renderHealth`
+// (see marsin_engine/lib/pattern_mixer.js → getRenderHealth() and
+// docs/39_channels_deck_mixer.md). `ok === false` means at least one channel
+// blend is degraded — compositing via the host-side linear-interp fallback
+// because its WASM blend script is missing / failed to compile. `blendErrors`
+// names the offending modes. A healthy engine reports `{ ok:true, blendErrors:[] }`.
+export interface RenderHealthBlendError {
+  blend: string;
+  message?: string;
+  sinceFrame?: number;
+  count?: number;
+}
+
+export interface RenderHealth {
+  ok: boolean;
+  frame?: number;
+  blendErrors?: RenderHealthBlendError[];
+}
+
+// Deck-restore degrade descriptor, surfaced on GET /status as
+// `deckRestoreDegraded` (see marsin_engine/lib/api_server.js FIX A). Non-null
+// ONLY when the saved DECK pattern failed to restore at boot and the engine
+// fell back to a known-good default to keep the mission-critical exterior LIT.
+// Null on a clean boot.
+export interface DeckRestoreDegraded {
+  failedPattern: string | null;
+  reason: string;
+  fellBackTo: string;
+}
+
 export interface ConnectionResult {
   ok: boolean;
   data?: {
@@ -74,6 +104,14 @@ export interface ConnectionResult {
     activeModel?: string;
     activePattern?: string;
     unrealState?: string;
+    // Operator-visibility health signals (additive — older engines omit
+    // these and are treated as healthy by useEngineHealth). This is the
+    // Codex P0 "loud, VISIBLE degrade" channel: a degraded engine literally
+    // reports the degrade here, so treating absence as healthy is NOT a
+    // silent fallback (a healthy engine reports `renderHealth.ok:true` and
+    // `deckRestoreDegraded:null`).
+    renderHealth?: RenderHealth | null;
+    deckRestoreDegraded?: DeckRestoreDegraded | null;
   };
   error?: string;
   latencyMs?: number;
