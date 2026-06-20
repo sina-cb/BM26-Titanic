@@ -686,6 +686,117 @@ export class PatternMixer {
     return true;
   }
 
+  /**
+   * Reorder the mixer overlay stack to exactly `orderedIds` (CHANNEL OPS #7).
+   *
+   * `orderedIds` MUST be a permutation of the CURRENT mixerChannels ids —
+   * same set, same length, no duplicates. The API layer validates this
+   * BEFORE calling (REORDER_BAD_SET 400); this method re-validates as a
+   * fail-loud belt-and-braces and THROWS rather than partially applying, so
+   * a buggy caller can never half-reorder the live composite stack.
+   *
+   * Semantics: a SINGLE atomic reassignment of `this.mixerChannels` to the
+   * SAME channel objects in the new order. No splice, no recompile, no new
+   * PatternChannel. Every per-channel field (handle, compiledPixelMask,
+   * fader, faderMax, color, mixGroupId, soloSafe, _savedMode, …) is preserved
+   * because the objects are preserved by reference — only the array order
+   * changes. This is SAFE against the index invariant (pattern_mixer.js stack
+   * order == array position, no numeric index field) and against an in-flight
+   * scripted transition (renderAll6ch rebuilds `_renderOrderScratch` from
+   * mixerChannels every frame via findIndex, and transitions key on channel
+   * id, never on array index) — so a reorder mid-transition is picked up on
+   * the very next frame with no 409 and no glitch.
+   *
+   * order[0] is the BOTTOM of the mix (composited first, the seed layer);
+   * order[last] is the TOP (composited last, paints over everything below).
+   *
+   * @param {string[]} orderedIds Permutation of current mixer channel ids.
+   * @returns {PatternChannel[]} the reordered live array.
+   */
+  reorderMixerChannels(orderedIds) {
+    if (!Array.isArray(orderedIds)) {
+      throw new Error('reorderMixerChannels: orderedIds must be an array');
+    }
+    if (orderedIds.length !== this.mixerChannels.length) {
+      throw new Error(
+        `reorderMixerChannels: orderedIds length (${orderedIds.length}) must equal ` +
+        `the current mixer channel count (${this.mixerChannels.length})`);
+    }
+    const byId = new Map();
+    for (const c of this.mixerChannels) byId.set(c.id, c);
+    const seen = new Set();
+    const reordered = orderedIds.map(id => {
+      if (seen.has(id)) {
+        throw new Error(`reorderMixerChannels: duplicate id '${id}' in orderedIds`);
+      }
+      seen.add(id);
+      const ch = byId.get(id);
+      if (!ch) {
+        throw new Error(`reorderMixerChannels: id '${id}' is not a current mixer channel`);
+      }
+      return ch;
+    });
+    // Single atomic reassignment — same objects, new order. Nothing else
+    // (handles, masks, groups, solo set) is touched.
+    this.mixerChannels = reordered;
+    return this.mixerChannels;
+  }
+
+  /**
+   * PANIC → safe LIT default (CHANNEL OPS #9). Brings the rig to a known
+   * maximally-visible state, mission-critical. Used by POST /mixer/panic when
+   * there is no operator-defined "home" snapshot (or as the still-LIT half of
+   * the documented loud fallback when a configured home snapshot is broken).
+   *
+   * This is the engine-side half — the route layer additionally clears the
+   * global blackout flag (intensityController), bumps master, resets the view
+   * override lease, and persists. Here we make the MIXER itself safe:
+   *
+   *   - Cancel any in-flight grand-master fade and force master to FULL
+   *     (setMaster(1.0) nulls _masterFade — no fade, maximize visibility now).
+   *   - cancelDeckPatternSwap() — drop a half-chosen deck target, keep the
+   *     current KNOWN-LIT active deck pattern (NOT finishDeckSwapNow, which
+   *     would commit to a maybe-wrong target).
+   *   - cancelChannelTransition(id) on every overlay — restores each channel's
+   *     saved blend mode + clears the scripted-target render flag.
+   *   - Enable every overlay at fader 1.0, EXCEPT a faderLocked channel (its
+   *     parked level is sacred) — and NEVER touch faderMax (the safety
+   *     ceiling stays). enabled is forced true so a muted layer comes back.
+   *   - soloedChannelIds.clear() — drop any solo gate (a stuck solo darkens
+   *     the rig).
+   *   - Un-MUTE every group (muted=false) WITHOUT deleting groups or resetting
+   *     their faders — a muted group would otherwise gate its members dark.
+   *   - Restore the view crossfade target to the mixer side (targetViewFader
+   *     = 1.0) so the composed overlay output is what's shown.
+   */
+  panicToSafeDefault() {
+    // Master: cancel any fade + go to FULL immediately (no animation).
+    this.setMaster(1.0);
+    this.targetViewFader = 1.0;
+
+    // Deck: cancel an in-flight swap WITHOUT committing to its target.
+    this.cancelDeckPatternSwap();
+
+    // Overlays: cancel transitions, force-enable + full fader (respecting
+    // faderLocked; never touching faderMax).
+    for (const c of this.mixerChannels) {
+      this.cancelChannelTransition(c.id);
+      c.enabled = true;
+      if (!c.faderLocked) c.fader = 1.0;
+    }
+    // Defensive: clear any lingering scripted-transition render-order flag
+    // (cancelChannelTransition clears it per-channel, but a stale id with no
+    // matching transition would otherwise promote a non-existent target).
+    this.scriptedTransitionTargetId = null;
+
+    // Solo: drop the gate entirely (a stuck solo darkens everyone else).
+    this.soloedChannelIds.clear();
+
+    // Groups: un-mute (do NOT delete or reset faders). A muted group would
+    // gate its members to 0 at composite time.
+    for (const g of this.mixGroups) g.muted = false;
+  }
+
   // ── Channel groups (gang-faders) ───────────────────────────────────────
   // Single-membership group registry. CRUD is validate-then-mutate; the API
   // layer owns persistence + broadcast. Members are derived from the
