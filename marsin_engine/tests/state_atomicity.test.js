@@ -122,6 +122,8 @@ test('serializeChannel emits exactly the fields the engine restores', () => {
     // Additive (channel_features wave): appended AFTER viewSelection so the
     // pre-existing key order for all earlier fields is unchanged.
     'faderMax', 'color',
+    // Additive (groups + solo wave, WAVE 15): appended AFTER faderMax/color.
+    'mixGroupId', 'soloSafe',
   ]);
 });
 
@@ -235,6 +237,8 @@ test('saveMixerState preserves on-disk key order and overlay-only fields', () =>
     // Additive (channel_features wave): appended after the existing overlay
     // fields so legacy mixer_state.yaml files still load.
     'faderMax', 'color',
+    // Additive (groups + solo wave, WAVE 15): appended after faderMax/color.
+    'mixGroupId', 'soloSafe',
   ]);
 });
 

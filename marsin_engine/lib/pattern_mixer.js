@@ -267,6 +267,29 @@ export class PatternMixer {
     // outside renderAll6ch, never held across frames.
     this._renderOrderScratch = [];
 
+    // ── Channel groups + server-authoritative solo (WAVE 15) ────────────
+    // `mixGroups` is the gang-fader registry. Each MixGroup is
+    //   { id: 'mg_*', name, fader (0..1), muted (bool), color (string|null) }
+    // and applies a SCALE (or 0 when muted) to every member channel's
+    // contribution at composite time. Membership is a channel→group pointer
+    // (`channel.mixGroupId`), so members are derived, never stored here.
+    this.mixGroups = [];
+    this._mixGroupCounter = 0;
+
+    // `soloedChannelIds` is the SOLE server-side source of truth for solo.
+    // TRANSIENT — never persisted; cleared on restart and at the start of a
+    // scripted mixer transition. When non-empty, only soloed / solo-safe /
+    // fader-locked channels contribute (see _effFader). A Set so membership
+    // tests are O(1) on the hot path.
+    this.soloedChannelIds = new Set();
+
+    // Per-frame group-scale cache (allocation-free hot path). Precomputed
+    // ONCE per render frame into this reused Map (clear()+set(), never
+    // realloc — mirrors _renderOrderScratch) so _effFader is pure O(1)
+    // arithmetic with zero per-channel allocation. Maps group id -> scale
+    // (group.muted ? 0 : group.fader). Never aliased outside renderAll6ch.
+    this._groupScaleCache = new Map();
+
     this.transitions = []; // Active per-channel fader transitions
     this.blendHandles = {}; // Cache: blendName -> WASM handle
     this._patternsDir = null; // Backing field for the patternsDir setter below.
@@ -634,7 +657,195 @@ export class PatternMixer {
     if (this.onChannelRemoved) this.onChannelRemoved(channelId);
     channel.destroy(this.wasmHost);
     this.mixerChannels.splice(index, 1);
+    // WAVE 15 cleanup (spec §8): drop any solo + group membership the
+    // removed channel held. A lingering id in soloedChannelIds would be a
+    // PHANTOM solo — soloActive would stay true with no visible soloed
+    // channel, darkening the whole rig. mixGroupId lives on the channel
+    // object (gone with the splice), but clearing it here is belt-and-braces
+    // for any retained reference.
+    this.soloedChannelIds.delete(channelId);
+    channel.mixGroupId = null;
     return true;
+  }
+
+  // ── Channel groups (gang-faders) ───────────────────────────────────────
+  // Single-membership group registry. CRUD is validate-then-mutate; the API
+  // layer owns persistence + broadcast. Members are derived from the
+  // channel→group pointer (`channel.mixGroupId`), never stored on the group.
+
+  /** All groups (live references — callers must not mutate ids). */
+  getMixGroups() { return this.mixGroups; }
+
+  /** Find a group by id, or undefined. */
+  getMixGroup(groupId) { return this.mixGroups.find(g => g.id === groupId); }
+
+  /**
+   * Create a group. `name`/`color` are optional metadata. Returns the new
+   * MixGroup. fader defaults to 1 (no attenuation), muted to false.
+   */
+  createMixGroup({ name = null, color = null } = {}) {
+    const id = `mg_${++this._mixGroupCounter}_${Date.now()}`;
+    const group = {
+      id,
+      name: (typeof name === 'string' && name.length > 0) ? name : `Group ${this._mixGroupCounter}`,
+      fader: 1.0,
+      muted: false,
+      color: (typeof color === 'string' && color.length > 0) ? color : null,
+    };
+    this.mixGroups.push(group);
+    return group;
+  }
+
+  /**
+   * Update a group's fields. Caller has already validated values (fader via
+   * validateFader, etc). Returns the group, or null if not found. Only the
+   * fields present in `patch` are written.
+   */
+  updateMixGroup(groupId, patch) {
+    const group = this.getMixGroup(groupId);
+    if (!group) return null;
+    if (patch.name !== undefined) group.name = patch.name;
+    if (patch.fader !== undefined) group.fader = Math.max(0, Math.min(1, patch.fader));
+    if (patch.muted !== undefined) group.muted = !!patch.muted;
+    if (patch.color !== undefined) group.color = patch.color === null ? null : patch.color;
+    return group;
+  }
+
+  /**
+   * Delete a group. Clears `mixGroupId` on every member first so no channel
+   * is left pointing at a ghost group. Returns true iff a group was removed.
+   */
+  deleteMixGroup(groupId) {
+    const index = this.mixGroups.findIndex(g => g.id === groupId);
+    if (index === -1) return false;
+    for (const c of this.mixerChannels) {
+      if (c.mixGroupId === groupId) c.mixGroupId = null;
+    }
+    this.mixGroups.splice(index, 1);
+    return true;
+  }
+
+  /**
+   * Add a mixer channel to a group (single membership). Returns
+   *   { ok: true } on success, or { ok: false, status, error } on a
+   * fail-loud condition: group/channel missing (404), the channel is the
+   * deck (400 — decks aren't in groups), or it's already in a DIFFERENT
+   * group (400 — single membership). Re-adding to the SAME group is a no-op
+   * success (idempotent).
+   */
+  addChannelToGroup(groupId, channelId) {
+    const group = this.getMixGroup(groupId);
+    if (!group) return { ok: false, status: 404, error: `group '${groupId}' not found` };
+    const channel = this.getMixerChannel(channelId);
+    if (!channel) return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    if (channel.mixGroupId && channel.mixGroupId !== groupId) {
+      return {
+        ok: false, status: 400,
+        error: `channel '${channelId}' is already in group '${channel.mixGroupId}' (single membership; remove it first)`,
+      };
+    }
+    channel.mixGroupId = groupId;
+    return { ok: true };
+  }
+
+  /**
+   * Remove a channel from a group. Returns { ok:true } even if the channel
+   * wasn't in this group (idempotent clear), or a 404 if the channel/group
+   * doesn't exist (fail-loud on a bad id).
+   */
+  removeChannelFromGroup(groupId, channelId) {
+    const group = this.getMixGroup(groupId);
+    if (!group) return { ok: false, status: 404, error: `group '${groupId}' not found` };
+    const channel = this.getMixerChannel(channelId);
+    if (!channel) return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    if (channel.mixGroupId === groupId) channel.mixGroupId = null;
+    return { ok: true };
+  }
+
+  // ── Server-authoritative solo ──────────────────────────────────────────
+  // soloedChannelIds is the sole truth. setSolo/clearSolo never mutate any
+  // sibling's enabled/fader — parked levels survive a solo unchanged (the
+  // render gate reads the Set; un-solo simply empties it). All return true
+  // iff the set changed (caller decides whether to broadcast).
+
+  /**
+   * Solo a channel. `additive` true → add to the current solo set; false
+   * (default) → replace the set with just this channel. Returns
+   *   { ok:true, changed } or { ok:false, status:404, error } if the id is
+   * not a mixer channel (fail-loud — never solo a non-existent / deck id).
+   */
+  setSolo(channelId, additive = false) {
+    if (!this.getMixerChannel(channelId)) {
+      return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    }
+    if (additive) {
+      const had = this.soloedChannelIds.has(channelId);
+      this.soloedChannelIds.add(channelId);
+      return { ok: true, changed: !had };
+    }
+    // Replace: only "changed" if the resulting set differs from the current.
+    const same = this.soloedChannelIds.size === 1 && this.soloedChannelIds.has(channelId);
+    this.soloedChannelIds.clear();
+    this.soloedChannelIds.add(channelId);
+    return { ok: true, changed: !same };
+  }
+
+  /**
+   * Clear solo. With a channelId → un-solo just that channel; without →
+   * clear ALL solos. Returns { ok:true, changed }. A bad channelId (not a
+   * mixer channel) is a fail-loud 404; clearing all is always ok.
+   */
+  clearSolo(channelId = null) {
+    if (channelId === null || channelId === undefined) {
+      const changed = this.soloedChannelIds.size > 0;
+      this.soloedChannelIds.clear();
+      return { ok: true, changed };
+    }
+    if (!this.getMixerChannel(channelId)) {
+      return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    }
+    const changed = this.soloedChannelIds.delete(channelId);
+    return { ok: true, changed };
+  }
+
+  /**
+   * Effective fader for a channel at composite time (WAVE 15 precedence).
+   * Pure O(1) arithmetic — no allocation, no closures. `soloActive` and the
+   * group scale come precomputed from the caller (per-frame, hot path).
+   *
+   *   effFader = clamp(fader, 0, faderMax) * groupScale * soloGate * enabledGate
+   *
+   * where groupScale = (group ? (muted?0:fader) : 1), soloGate = 1 unless a
+   * solo is active and this channel is neither soloed nor solo-safe nor
+   * fader-locked, enabledGate = enabled?1:0. faderMax clamp is applied to the
+   * channel's OWN fader FIRST (per-fixture ceiling), then the group scales
+   * it (gang scale ≠ a fader write, so it still attenuates a locked channel).
+   */
+  _effFader(channel, soloActive) {
+    if (!channel.enabled) return 0;
+    const faderMax = (typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax))
+      ? channel.faderMax
+      : 1.0;
+    let eff = channel.fader < faderMax ? channel.fader : faderMax;
+    if (eff < 0) eff = 0;
+    // Group scale (gang fader / mute). Cache miss = no group => scale 1.
+    if (channel.mixGroupId) {
+      const scale = this._groupScaleCache.get(channel.mixGroupId);
+      // A non-null mixGroupId with no cache entry means the group was deleted
+      // out from under the channel — treat as no group (scale 1) rather than
+      // dropping it dark. (deleteMixGroup clears membership, so this is only
+      // a belt-and-braces guard against a stale pointer.)
+      if (scale !== undefined) eff *= scale;
+    }
+    // Solo gate. fader-lock implies solo-safe (a locked level keeps its
+    // parked contribution through another channel's solo).
+    if (soloActive
+        && !channel.soloSafe
+        && !channel.faderLocked
+        && !this.soloedChannelIds.has(channel.id)) {
+      return 0;
+    }
+    return eff;
   }
 
   /** Destroy the deck channel's WASM handle and clear the slot.
@@ -950,6 +1161,13 @@ export class PatternMixer {
         delete c._savedMode;
       }
     }
+
+    // WAVE 15: a mixer transition is a wholesale re-cue of the overlay stack
+    // (every channel's fader is animated to its new target). A leftover solo
+    // would gate the fading-out losers to black mid-transition, fighting the
+    // crossfade. Clear it at the START so the transition animates against a
+    // clean, un-soloed mix. (Solo is transient anyway — never persisted.)
+    this.soloedChannelIds.clear();
 
     const id = transitionId || `g_${++this.transitionGroupCounter}_${Date.now()}`;
     this.activeTransitionGroupId = id;
@@ -1705,6 +1923,17 @@ export class PatternMixer {
     // of the flash and obscure it. The natural order is restored as
     // soon as the transition completes (scriptedTransitionTargetId is
     // cleared in updateTransitions).
+    // WAVE 15 hot-path precompute (allocation-free): refresh the per-frame
+    // group-scale cache (clear()+set() — no realloc) and the soloActive flag
+    // ONCE before the channel loop, so _effFader is pure O(1) arithmetic per
+    // channel. groupScale = muted ? 0 : fader.
+    this._groupScaleCache.clear();
+    for (let i = 0; i < this.mixGroups.length; i++) {
+      const g = this.mixGroups[i];
+      this._groupScaleCache.set(g.id, g.muted ? 0 : g.fader);
+    }
+    const soloActive = this.soloedChannelIds.size > 0;
+
     let renderOrder = this.mixerChannels;
     if (this.scriptedTransitionTargetId) {
       const tid = this.scriptedTransitionTargetId;
@@ -1735,22 +1964,21 @@ export class PatternMixer {
       // to fader=0.002 in triggerMixerTransition, but this belt-and-
       // suspenders check keeps the invariant honest.
       const isScriptedTarget = channel.id === this.scriptedTransitionTargetId;
-      if (!channel.enabled) continue;
 
-      // F-C — per-channel intensity clamp (faderMax). The channel's OWN
-      // contribution can never exceed faderMax: it is a hard ceiling applied
-      // AFTER the live fader / transition value, so a scripted transition or
-      // a manual slider can ride up to faderMax but no further. Absent /
-      // legacy channels default faderMax=1.0 (no clamp). This is the LAST
-      // word on a channel's own output (docs/39 §F-C).
-      const faderMax = (typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax))
-        ? channel.faderMax
-        : 1.0;
-      const effFader = channel.fader < faderMax ? channel.fader : faderMax;
+      // WAVE 15 composite gate — one effective fader folds together: the
+      // explicit-mute check (enabled), the F-C per-channel intensity clamp
+      // (faderMax, applied to the channel's OWN level FIRST), the gang-fader
+      // group scale (muted group ⇒ 0), and the server-authoritative solo
+      // gate. See _effFader for the exact precedence. The grand-master fade
+      // (F-B) acts LAST + independently at applyMaster — solo/group never
+      // touch this.master.
+      const effFader = this._effFader(channel, soloActive);
 
-      // Skip-dark gate uses the CLAMPED fader: a channel clamped to 0 (or a
-      // fader at ~0) contributes nothing, so skip it — except the scripted-
-      // transition target, whose blend script must run every frame.
+      // Skip-dark gate uses the composite effFader: a muted / group-muted /
+      // solo-gated / clamped-to-0 channel contributes nothing, so skip it —
+      // except the scripted-transition target, whose blend script must run
+      // every frame (its progress arg is the fader; at fade start it can sit
+      // below 0.001 for a frame or two, and skipping would pop).
       if (!isScriptedTarget && effFader <= 0.001) continue;
 
       // Re-render into channelBuffer for blend compositing.
@@ -1883,6 +2111,11 @@ export class PatternMixer {
     this.blendHandles = {};
     this.deckChannel = null;
     this.mixerChannels = [];
+    // WAVE 15: drop group registry + transient solo on teardown so a
+    // re-init doesn't inherit ghost groups / phantom solos.
+    this.mixGroups = [];
+    this.soloedChannelIds.clear();
+    this._groupScaleCache.clear();
   }
 
   getBlendHandle(blendName) {
