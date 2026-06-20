@@ -22,6 +22,9 @@ import { BpmTracker } from './bpm_tracker.js';
 import { PartyMode } from './party_mode.js';
 import { NoteEstimator } from './note_estimator.js';
 import { SwitchSignals } from './switch_signals.js';
+// ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ──────────
+import { BandOnsetBank } from './band_onsets.js';
+import { SubBass } from './sub_bass.js';
 
 // Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
 const PARAMS = Object.freeze({
@@ -42,6 +45,9 @@ export class DerivedSignals {
     this._party = new PartyMode(PARAMS.party);
     this._note = new NoteEstimator(PARAMS.note);
     this._switch = new SwitchSignals(PARAMS.sw);
+    // analyzer_features (slot 3): band-onset chase + sub-bass chest hit shapers.
+    this._onsets = new BandOnsetBank();
+    this._sub = new SubBass();
     this._fatal = false;
     // Last note actually committed by the estimator. We HOLD this on the
     // published audioNote/audioNoteHue keys whenever the estimator currently
@@ -54,6 +60,7 @@ export class DerivedSignals {
 
   reset() {
     this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
+    this._onsets.reset(); this._sub.reset();   // analyzer_features (slot 3)
     this._heldPc = 0; this._heldHue = 0;
     if (!this._fatal) this._zero();
   }
@@ -93,6 +100,15 @@ export class DerivedSignals {
         structure: g('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
         pitchClass: n.pitchClass, noteStable: n.stable,
       });
+      // ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ─────
+      // Reads the RAW analyzer mirrors (micOnsetLow/Mid/HighRaw, micSubRaw) the
+      // engine publishes each hop and shapes them into pulse keys. Keep this
+      // block small + localized so the merge into derived_signals.js is trivial.
+      const dtMs = dt * 1000;
+      const ob = this._onsets.update(
+        g('micOnsetLowRaw'), g('micOnsetMidRaw'), g('micOnsetHighRaw'), dtMs, now,
+      );
+      const sb = this._sub.update(g('micSubRaw'), dt, dtMs, now);
       pc.setMany([
         { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
         { kind: 'scalar', key: 'audioBeat',          value: b.beat },
@@ -104,6 +120,11 @@ export class DerivedSignals {
         { kind: 'scalar', key: 'audioBeatInBar',     value: b.beatInBar || 0 },
         { kind: 'scalar', key: 'audioBarPhase',      value: b.barPhase || 0 },
         { kind: 'scalar', key: 'audioDownbeat',      value: b.downbeat ? 1.0 : 0.0 },
+        // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
+        { kind: 'scalar', key: 'micOnsetLow',        value: ob.low },
+        { kind: 'scalar', key: 'micOnsetMid',        value: ob.mid },
+        { kind: 'scalar', key: 'micOnsetHigh',       value: ob.high },
+        { kind: 'scalar', key: 'audioChestHit',      value: sb.pulse },
       ], 'derivedSignals');
     } catch (e) {
       this._fatal = true;
@@ -119,6 +140,9 @@ export class DerivedSignals {
       { kind: 'scalar', key: 'audioSwitchColor', value: 0.0 },
       { kind: 'scalar', key: 'audioBeatInBar', value: 0.0 }, { kind: 'scalar', key: 'audioBarPhase', value: 0.0 },
       { kind: 'scalar', key: 'audioDownbeat', value: 0.0 },
+      // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
+      { kind: 'scalar', key: 'micOnsetLow', value: 0.0 }, { kind: 'scalar', key: 'micOnsetMid', value: 0.0 },
+      { kind: 'scalar', key: 'micOnsetHigh', value: 0.0 }, { kind: 'scalar', key: 'audioChestHit', value: 0.0 },
     ], 'derivedSignals');
   }
 }

@@ -1436,7 +1436,9 @@ async function main() {
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2 }) => {
+        sub:        cfg.sub,   // analyzer_features (slot 3): sub-bass chest-hit window (optional)
+        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
+                       onsetLow, onsetMid, onsetHigh, micSub }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1467,6 +1469,14 @@ async function main() {
             { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
             { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
             { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
+            // analyzer_features (slot 3): RAW per-band onset strengths + sub-bass
+            // energy. The band_onsets/sub_bass shapers (derivedSignals) read
+            // these each hop and publish the pulse keys micOnsetLow/Mid/High +
+            // audioChestHit. (Pure additive analyzer outputs.)
+            { kind: 'scalar', key: 'micOnsetLowRaw',  value: onsetLow  },
+            { kind: 'scalar', key: 'micOnsetMidRaw',  value: onsetMid  },
+            { kind: 'scalar', key: 'micOnsetHighRaw', value: onsetHigh },
+            { kind: 'scalar', key: 'micSubRaw',       value: micSub    },
           ], 'audio', 'audio:mic');
           // docs/30: run the structure detector at the analyzer hop rate
           // (lowest latency, auto-pauses when the analyzer is off). It
@@ -1548,9 +1558,9 @@ async function main() {
       // Rebuild from scratch — buildAndStartAudio reads audioState.config.
       await buildAndStartAudio();
     } else if (audioState.analyzer) {
-      // Hot reconfigure path — bands/kick only. Throws on invalid
+      // Hot reconfigure path — bands/kick/sub only. Throws on invalid
       // combinations; caller catches and returns 400.
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
       audioState.config = next;
     } else {
       audioState.config = next;
@@ -1596,7 +1606,7 @@ async function main() {
       enabled: audioState.config?.enabled,
     });
     if (audioState.analyzer) {
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
     try {

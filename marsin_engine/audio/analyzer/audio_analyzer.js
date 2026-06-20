@@ -132,6 +132,10 @@ export class AudioAnalyzer {
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
+   * @param {object} [opts.sub]         — { minHz, maxHz } narrow sub-bass window
+   *        (~30–60 Hz, distinct from the kick window). Optional: absent → the
+   *        sub-band outputs are emitted as 0 (the feature is off, NOT a silent
+   *        fallback for the existing bands). Present → validated like kick.
    * @param {(r: {low, mid, high, kick, flux}) => void} opts.onAnalysis
    *        Each callback receives the RAW post-envelope band values
    *        in [0, 1], plus `flux` (half-wave-rectified spectral flux,
@@ -257,7 +261,7 @@ export class AudioAnalyzer {
     this._srcLp = 0;
     this._srcSmoothAlpha = 0;
 
-    this.reconfigure({ bands: opts.bands, kick: opts.kick });
+    this.reconfigure({ bands: opts.bands, kick: opts.kick, sub: opts.sub });
   }
 
   /**
@@ -272,6 +276,9 @@ export class AudioAnalyzer {
     const next = {
       bands: { ...(this.bands || {}), ...(updates.bands || {}) },
       kick:  { ...(this.kick  || {}), ...(updates.kick  || {}) },
+      // `sub` is OPTIONAL (the chest-hit feature). Merge whatever is present;
+      // an empty {} means "feature off" (no window) — handled below.
+      sub:   { ...(this.sub   || {}), ...(updates.sub   || {}) },
     };
     const nyquist = this.sampleRate / 2;
     const lowMaxHz = +next.bands.lowMaxHz;
@@ -323,8 +330,34 @@ export class AudioAnalyzer {
       throw new RangeError(`kick.decayMs must be > 0`);
     }
 
+    // Sub-bass "chest hit" window (~30–60 Hz), distinct from the kick window.
+    // OPTIONAL: when neither minHz nor maxHz is supplied the feature is OFF and
+    // `_binSub` is null (the analyzer emits micSub:0). This is NOT a silent
+    // fallback for an existing signal — it's an opt-in additive output; when
+    // present BOTH edges must be valid (codex P0: validate explicitly).
+    let subBin = null;
+    if (next.sub && (next.sub.minHz !== undefined || next.sub.maxHz !== undefined)) {
+      const sMin = +next.sub.minHz, sMax = +next.sub.maxHz;
+      if (!(sMin > 0 && sMin < sMax && sMax <= nyquist)) {
+        throw new RangeError(
+          `sub band invalid: require 0 < minHz (${sMin}) < maxHz (${sMax}) <= nyquist (${nyquist})`,
+        );
+      }
+      // 1024-FFT resolution caveat: 43 Hz/bin (44.1 kHz). A 30–60 Hz window can
+      // collapse to a single bin (bin 1 ≈ 43 Hz). Force a ≥1-bin window starting
+      // at bin 1 (skip DC) so the sub energy is always well-defined; the FFT
+      // 1024→2048 bump (deferred follow-up) would sharpen this. NOT a fallback —
+      // it's the documented behaviour at the current resolution.
+      const b0 = Math.max(1, hzToBin(sMin, this.sampleRate, this.fftSize));
+      let b1 = hzToBin(sMax, this.sampleRate, this.fftSize);
+      if (b1 <= b0) b1 = b0 + 1;
+      subBin = [b0, b1];
+    }
+
     this.bands = next.bands;
     this.kick  = next.kick;
+    this.sub   = next.sub;
+    this._binSub = subBin;
 
     // Source-stage smoothing: gentle one-pole LP on the PCM before the FFT
     // (denoise). bands.sourceSmoothHz = cutoff in Hz; 0 / absent / invalid = off.
@@ -452,6 +485,10 @@ export class AudioAnalyzer {
     const midE  = this._bandEnergy(out, this._binMid);
     const highE = this._bandEnergy(out, this._binHigh);
     const kickE = this._bandEnergy(out, this._binKick);
+    // Sub-bass "chest hit" energy — narrow window (~30–60 Hz), distinct from the
+    // kick band. ADDITIVE: reuses the same _bandEnergy sum-of-magnitudes; null
+    // window (feature off) → 0. (Same softCompress(PRE_CLAMP_GAIN·E) scale.)
+    const subE  = this._binSub ? this._bandEnergy(out, this._binSub) : 0;
 
     // Half-wave-rectified spectral flux (SuperFlux-lite — Böck & Widmer
     // 2013; research memo §A2). One pass over the positive-frequency
@@ -463,16 +500,35 @@ export class AudioAnalyzer {
     const halfBins = this.fftSize >> 1;
     if (this._prevMag === null) this._prevMag = new Float64Array(halfBins);
     const prevMag = this._prevMag;
-    let fluxE = 0;
+    // PER-BAND ONSET (spatial-chase trigger): the SAME half-wave-rectified
+    // spectral-flux accumulation the global `fluxE` already does, RESTRICTED to
+    // the LOW / MID / HIGH bin ranges. Each band's rising-energy-only flux is a
+    // drum-kit-following onset strength (kick→LOW, snare/mid→MID, hats→HIGH).
+    // Computed in the SAME single pass — additive, ~0 extra cost. The five
+    // existing outputs (low/mid/high/kick/flux) stay byte-identical because the
+    // global `fluxE` sum and `prevMag` updates are unchanged. (Böck & Widmer
+    // 2013 SuperFlux-lite, restricted to a band.)
+    const [loL, loH] = this._binLow;
+    const [miL, miH] = this._binMid;
+    const [hiL, hiH] = this._binHigh;
+    let fluxE = 0, onLowE = 0, onMidE = 0, onHighE = 0;
     for (let k = 0; k < halfBins; k++) {
       const re = out[k * 2];
       const im = out[k * 2 + 1];
       const mag = Math.hypot(re, im);
       const diff = mag - prevMag[k];
-      if (diff > 0) fluxE += diff;
+      if (diff > 0) {
+        fluxE += diff;
+        if (k >= loL && k < loH) onLowE += diff;
+        else if (k >= miL && k < miH) onMidE += diff;
+        else if (k >= hiL && k < hiH) onHighE += diff;
+      }
       prevMag[k] = mag;
     }
-    fluxE /= this.fftSize;
+    fluxE   /= this.fftSize;
+    onLowE  /= this.fftSize;
+    onMidE  /= this.fftSize;
+    onHighE /= this.fftSize;
 
     // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
     // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
@@ -604,6 +660,15 @@ export class AudioAnalyzer {
     // fields are byte-for-byte unchanged. SuperFlux-lite (Böck &
     // Widmer 2013; research memo §A2).
     const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * fluxE));   // gain applied pre-FFT (source)
+    // Per-band onset strengths + sub-bass energy — same softCompress(PRE_CLAMP_GAIN·E)
+    // mapping as the bands/flux so they share the [0,1] scale. Additive outputs:
+    // the second-tier shapers (band_onsets.js / sub_bass.js) turn these into
+    // pulse CPC keys. micSub is RAW band energy (no envelope) so the shaper can
+    // do its own transient emphasis.
+    const onsetLowOut  = clamp01(softCompress(PRE_CLAMP_GAIN * onLowE));
+    const onsetMidOut  = clamp01(softCompress(PRE_CLAMP_GAIN * onMidE));
+    const onsetHighOut = clamp01(softCompress(PRE_CLAMP_GAIN * onHighE));
+    const subOut       = clamp01(softCompress(PRE_CLAMP_GAIN * subE));
 
     try {
       this._onAnalysis({
@@ -624,6 +689,13 @@ export class AudioAnalyzer {
         domEnergy2: dom2.energy,
         domLo2:     dom2.loHz,
         domHi2:     dom2.hiHz,
+        // Per-band onset strengths (raw rising-only spectral flux per band) +
+        // sub-bass energy. Additive — the engine publishes these to RAW CPC
+        // mirrors that the band_onsets/sub_bass shapers read each hop.
+        onsetLow:   onsetLowOut,
+        onsetMid:   onsetMidOut,
+        onsetHigh:  onsetHighOut,
+        micSub:     subOut,
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

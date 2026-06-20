@@ -542,3 +542,140 @@ test('dominant-frequency tracker follows a frequency change', () => {
   assert.ok(Math.abs(lowF - 300) < 30, `dom1 should track 300 Hz; got ${lowF.toFixed(1)}`);
   assert.ok(Math.abs(highF - 1200) < 40, `dom1 should re-lock to 1200 Hz; got ${highF.toFixed(1)}`);
 });
+
+// ── Per-band onsets + sub-bass (analyzer_features, slot 3) ────────────────
+//
+// The analyzer emits four ADDITIVE outputs: onsetLow/onsetMid/onsetHigh
+// (half-wave-rectified spectral flux restricted to each band's bin range)
+// and micSub (narrow sub-band energy). These pin: presence + finiteness +
+// [0,1] range, band steering (a band onset only spikes for that band), the
+// existing five outputs staying byte-identical, and the sub-window config
+// validation (codex P0: no silent fallback).
+
+test('onAnalysis emits finite onsetLow/Mid/High + micSub in [0,1]', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    sub:   { minHz: 30, maxHz: 60 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(whiteNoiseInt16(0.2, 0.5));
+  assert.ok(results.length > 0);
+  for (const r of results) {
+    for (const k of ['onsetLow', 'onsetMid', 'onsetHigh', 'micSub']) {
+      assert.ok(typeof r[k] === 'number' && Number.isFinite(r[k]), `${k} finite; got ${r[k]}`);
+      assert.ok(r[k] >= 0 && r[k] <= 1, `${k} in [0,1]; got ${r[k]}`);
+    }
+  }
+});
+
+test('a sudden LOW-band tone spikes onsetLow, not onsetHigh', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: (r) => results.push(r),
+  });
+  // Settle on quiet, then a loud 100 Hz (LOW) burst.
+  an.pushSamples(sineInt16(100, 0.2, 0.05));
+  const before = results.length;
+  an.pushSamples(sineInt16(100, 0.1, 0.9));
+  const after = results.slice(before);
+  const onLowMax = Math.max(...after.map(r => r.onsetLow));
+  const onHighMax = Math.max(...after.map(r => r.onsetHigh));
+  assert.ok(onLowMax > 0.1, `onsetLow should spike on a low-band onset; got ${onLowMax}`);
+  assert.ok(onLowMax > onHighMax + 0.05, `low onset should dominate high; low=${onLowMax} high=${onHighMax}`);
+});
+
+test('a sudden HIGH-band tone spikes onsetHigh, not onsetLow', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(sineInt16(8000, 0.2, 0.05));
+  const before = results.length;
+  an.pushSamples(sineInt16(8000, 0.1, 0.9));
+  const after = results.slice(before);
+  const onHighMax = Math.max(...after.map(r => r.onsetHigh));
+  const onLowMax = Math.max(...after.map(r => r.onsetLow));
+  assert.ok(onHighMax > 0.1, `onsetHigh should spike on a high-band onset; got ${onHighMax}`);
+  assert.ok(onHighMax > onLowMax + 0.05, `high onset should dominate low; high=${onHighMax} low=${onLowMax}`);
+});
+
+test('micSub is 0 when no sub window is configured (feature off, not a fallback)', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);   // no `sub` in makeAnalyzer
+  an.pushSamples(sineInt16(45, 0.3, 0.9));  // strong sub-bass tone
+  for (const r of results) assert.equal(r.micSub, 0, `micSub must be 0 with no sub window; got ${r.micSub}`);
+});
+
+test('micSub lights up on a sub-bass tone when the window is configured', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    sub:   { minHz: 30, maxHz: 60 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(sineInt16(43, 0.4, 0.9));  // ~sub bin at fftSize 1024
+  assert.ok(lastResult(results).micSub > 0.2, `micSub should light on a 43 Hz tone; got ${lastResult(results).micSub}`);
+});
+
+test('the five legacy outputs are unaffected by the new sub window', () => {
+  // Same signal, with and without `sub` configured → low/mid/high/kick/flux
+  // must be byte-identical (the additive outputs must not perturb them).
+  function runOnce(withSub) {
+    const results = [];
+    const opts = {
+      sampleRate: SR, fftSize: 1024, hopSize: 512,
+      bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+      kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+      onAnalysis: (r) => results.push(r),
+    };
+    if (withSub) opts.sub = { minHz: 30, maxHz: 60 };
+    const an = new AudioAnalyzer(opts);
+    an.pushSamples(whiteNoiseInt16(0.3, 0.5));
+    return results;
+  }
+  // Deterministic noise needed for byte-exactness — reseed Math.random via a
+  // fixed buffer instead.
+  const seed = whiteNoiseInt16(0.3, 0.5);
+  function runFixed(withSub) {
+    const results = [];
+    const opts = {
+      sampleRate: SR, fftSize: 1024, hopSize: 512,
+      bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+      kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+      onAnalysis: (r) => results.push(r),
+    };
+    if (withSub) opts.sub = { minHz: 30, maxHz: 60 };
+    const an = new AudioAnalyzer(opts);
+    an.pushSamples(seed);
+    return results;
+  }
+  const a = runFixed(false), b = runFixed(true);
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < a.length; i++) {
+    for (const k of ['low', 'mid', 'high', 'kick', 'flux']) {
+      assert.equal(a[i][k], b[i][k], `legacy output ${k}[${i}] must be byte-identical (additive guarantee)`);
+    }
+  }
+});
+
+test('sub window validation throws on invalid edges (codex P0)', () => {
+  const base = {
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: () => {},
+  };
+  assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: 60, maxHz: 30 } }), /sub band invalid/);
+  assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: -1, maxHz: 60 } }), /sub band invalid/);
+});

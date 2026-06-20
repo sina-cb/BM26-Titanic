@@ -61,6 +61,13 @@ audio:
     threshold: 2.4
     refractoryMs: 220
     decayMs: 70
+  # Sub-bass "chest hit" window — the body-felt 30–60 Hz slam, distinct from the
+  # kick CLICK window (50–110 Hz). Drives micSub → audioChestHit. NOTE the
+  # 1024-FFT resolution caveat (~43 Hz/bin): at fftSize 1024 this resolves to a
+  # single sub bin (~43 Hz); the FFT 1024→2048 bump (deferred) sharpens it.
+  sub:
+    minHz: 30
+    maxHz: 60
   structureDetector:
     enabled: true
     dropEdgeMode: windowed

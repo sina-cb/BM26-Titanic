@@ -42,6 +42,9 @@ import yaml from 'js-yaml';
 export const AUDIO_LIVE_FIELDS = Object.freeze({
   bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+  // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz). Live-
+  // tunable like kick; analyzer.reconfigure rebinds the sub bin in place.
+  sub:   ['minHz', 'maxHz'],
   // structureDetector — audio build/drop/sustain detector (docs/30).
   // Disabled by default; the detector module is instantiated at boot
   // regardless (so its surface exists) but `tick()` no-ops until the
@@ -93,6 +96,12 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     inputGain: (v) => (v >= 0 && v <= 64) ? null : `must be in [0, 64]; got ${v}`,
     // Source-stage smoothing LP cutoff (Hz); 0 = off. Up to ~Nyquist.
     sourceSmoothHz: (v) => (v >= 0 && v <= 22050) ? null : `must be in [0, 22050]; got ${v}`,
+  }),
+  // analyzer_features (slot 3): sub-bass window edges (Hz). Validated like the
+  // kick window — both positive, below Nyquist; the analyzer enforces min<max.
+  sub: Object.freeze({
+    minHz: (v) => (v > 0 && v <= 22050) ? null : `must be in (0, 22050]; got ${v}`,
+    maxHz: (v) => (v > 0 && v <= 22050) ? null : `must be in (0, 22050]; got ${v}`,
   }),
   structureDetector: Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
