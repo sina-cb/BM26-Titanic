@@ -49,8 +49,18 @@ const S = {
   dropFlash: 0,
   spectrum: [],
   wave: [],
-  derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0, genre: null, genreConf: null },
+  derived: {
+    bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0, genre: null, genreConf: null,
+    // NEW Round-2/Wave-D derived signals (null until the server publishes them).
+    riserScore: null, buildEta: null, riserConf: null, dropCountdown: null,
+    climax: null, phrasePhase: null, phraseBoundary: null, silence: null, trackChange: null,
+    onsetLow: null, onsetMid: null, onsetHigh: null, chestHit: null,
+  },
   spFlash: 0, scFlash: 0,
+  // Decaying flash levels for the NEW pulse keys (armed on the rising edge in the
+  // frame drain, decayed each render so a one-hop pulse stays visible).
+  countdownFlash: 0, boundaryFlash: 0, trackChangeFlash: 0,
+  onsetLowFlash: 0, onsetMidFlash: 0, onsetHighFlash: 0, chestFlash: 0,
   genreNames: [],      // index-aligned GENRE name list (from the server)
   page: 'design',      // 'design' | 'osc' — top-bar nav
   oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
@@ -1010,6 +1020,78 @@ function renderLive() {
     if (spEl) { spEl.style.opacity = S.spFlash.toFixed(2); spEl.classList.toggle('lit', S.spFlash > 0.5); }
     if (scEl) { scEl.style.opacity = S.scFlash.toFixed(2); scEl.classList.toggle('lit', S.scFlash > 0.5); }
   }
+  renderDerived2(dv);
+}
+
+// ── NEW Round-2/Wave-D derived signals: BUILD · STRUCTURE · ONSETS ───────────
+// `null` for any key means the server didn't publish it (key not registered in
+// this build) → render an honest idle/"—", NOT a value fallback. Continuous keys
+// meter; pulse keys flash (armed on the rising edge in the frame drain, decayed
+// here so a single-hop pulse stays visible).
+const PHRASE_RING_CIRC = 2 * Math.PI * 16;   // r=16 in the SVG viewBox
+
+// Arm a decaying flash when a pulse key rises past 0.5 (a null reads as 0).
+function armPulse(cur, key, flashKey) {
+  const c = cur[key], p = S.derived[key];
+  if ((c || 0) > 0.5 && (p || 0) <= 0.5) S[flashKey] = 1;
+}
+
+// Decay a flash level + drive an element's opacity + .lit (for text cue badges
+// that fade fully out, like the existing PATTERN/COLOR cues).
+function tickFlash(elId, flashKey, decay) {
+  S[flashKey] *= decay; if (S[flashKey] < 0.02) S[flashKey] = 0;
+  const el = $(elId);
+  if (el) { el.style.opacity = S[flashKey].toFixed(2); el.classList.toggle('lit', S[flashKey] > 0.4); }
+}
+
+// Decay a flash level + toggle only `.lit` (for always-visible glyphs like the
+// onset dots / chest thump — they stay dim at rest, light up on a pulse). No
+// opacity drive so the resting glyph never disappears.
+function tickLit(elId, flashKey, decay) {
+  S[flashKey] *= decay; if (S[flashKey] < 0.02) S[flashKey] = 0;
+  const el = $(elId);
+  if (el) el.classList.toggle('lit', S[flashKey] > 0.4);
+}
+
+function renderDerived2(dv) {
+  // BUILD — riser meter + ETA + confidence + countdown flash.
+  const riserBar = $('riser-bar');
+  if (riserBar) riserBar.style.width = (clamp01(dv.riserScore) * 100).toFixed(0) + '%';
+  const etaEl = $('eta-val');
+  if (etaEl) {
+    // audioBuildEta carries SECONDS (0 = no honest estimate). Show "—" when 0/absent.
+    etaEl.textContent = (dv.buildEta != null && dv.buildEta > 0.05)
+      ? dv.buildEta.toFixed(1) + 's' : '—';
+  }
+  const confEl = $('riser-conf');
+  if (confEl) {
+    confEl.textContent = (dv.riserConf != null && Number.isFinite(dv.riserConf))
+      ? clamp01(dv.riserConf).toFixed(2) : '—';
+  }
+  tickFlash('countdown-flash', 'countdownFlash', 0.82);
+
+  // STRUCTURE — phrase ring + climax meter + silence/track-change cues.
+  const ring = $('phrase-ring-fill');
+  if (ring) {
+    const phase = (dv.phrasePhase != null) ? clamp01(dv.phrasePhase) : 0;
+    ring.style.strokeDashoffset = (PHRASE_RING_CIRC * (1 - phase)).toFixed(2);
+  }
+  const climaxBar = $('climax-bar');
+  if (climaxBar) climaxBar.style.width = (clamp01(dv.climax) * 100).toFixed(0) + '%';
+  const silPill = $('silence-pill');
+  if (silPill) {
+    const sil = (dv.silence || 0) > 0.5;
+    silPill.textContent = sil ? 'SILENCE' : 'live';
+    silPill.classList.toggle('on', sil);
+  }
+  tickFlash('boundary-flash', 'boundaryFlash', 0.85);
+  tickFlash('trackchange-flash', 'trackChangeFlash', 0.9);
+
+  // ONSETS — 3 per-band dots + a chest-hit thump (dim at rest, light on a pulse).
+  tickLit('onset-low', 'onsetLowFlash', 0.7);
+  tickLit('onset-mid', 'onsetMidFlash', 0.7);
+  tickLit('onset-high', 'onsetHighFlash', 0.7);
+  tickLit('chest-thump', 'chestFlash', 0.72);
 }
 
 // ── OSC OUT accounting page (TASK 1) ─────────────────────────────────────────
@@ -1122,6 +1204,15 @@ function draw() {
     if (m.derived) {
       if (m.derived.sp > 0.5 && S.derived.sp <= 0.5) S.spFlash = 1;
       if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
+      // Arm the NEW pulse-key flashes on the rising edge (one-hop pulses would
+      // otherwise blink past a 60 fps render). null prev/cur reads as 0 → no arm.
+      armPulse(m.derived, 'dropCountdown', 'countdownFlash');
+      armPulse(m.derived, 'phraseBoundary', 'boundaryFlash');
+      armPulse(m.derived, 'trackChange', 'trackChangeFlash');
+      armPulse(m.derived, 'onsetLow', 'onsetLowFlash');
+      armPulse(m.derived, 'onsetMid', 'onsetMidFlash');
+      armPulse(m.derived, 'onsetHigh', 'onsetHighFlash');
+      armPulse(m.derived, 'chestHit', 'chestFlash');
       S.derived = m.derived;
     }
     // Advance the scrolling trace for EVERY designed signal.

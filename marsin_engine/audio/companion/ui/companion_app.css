@@ -349,6 +349,43 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 /* The note color-change + pattern-switch cues must be VISIBLE when they pulse
    (operator: the feedback wasn't visible). A short bright flash on the label. */
 .cue-flash.lit{opacity:1}
+.cue-flash.err{color:var(--err)}
+
+/* ── NEW derived row: BUILD · STRUCTURE · ONSETS (Round-2/Wave-D signals) ─────
+   Every color is a theme var so all 5 themes restyle these together. Continuous
+   keys (riser, climax, phrase) meter; pulse keys (countdown, boundary, track
+   change, onsets, chest-hit) flash. */
+.derived2{margin-top:12px}
+.derived2 .d-lab{text-transform:uppercase;letter-spacing:.5px}
+.d-mid{font-weight:700;font-size:15px;color:var(--text)}
+
+/* BUILD card */
+.build-body{display:flex;flex-direction:column;gap:9px}
+.build-stats{display:flex;gap:18px}
+.sbar.riser i{background:var(--accent)}
+.sbar.climax i{background:var(--ok)}
+
+/* STRUCTURE2 card: phrase ring + climax meter + silence pill */
+.struct2-body{display:flex;align-items:center;gap:16px}
+.phrase-ring-wrap{display:flex;flex-direction:column;align-items:center;gap:3px}
+.phrase-ring{display:block}
+.phrase-ring .pr-track{fill:none;stroke:var(--raised);stroke-width:4}
+.phrase-ring .pr-fill{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;
+  /* r=16 → circumference ≈ 100.53; dasharray full, offset set live in JS */
+  stroke-dasharray:100.53;stroke-dashoffset:100.53;transition:stroke-dashoffset .08s linear}
+.struct2-body .sbar{flex:1}
+.silence-pill{align-self:center}
+.silence-pill.on{background:color-mix(in srgb, var(--err) 18%, transparent);color:var(--err)}
+
+/* ONSETS card: 3 band dots + a chest-hit thump */
+.onsets-body{display:flex;align-items:center;gap:18px}
+.onset-item,.chest-item{display:flex;flex-direction:column;align-items:center;gap:3px}
+.onset-dot{font-size:20px;color:var(--raised);transition:color .04s,text-shadow .04s}
+.onset-dot.lit{color:var(--accent);text-shadow:0 0 8px var(--accent)}
+.onset-dot.high.lit{color:var(--ok);text-shadow:0 0 8px var(--ok)}
+.chest-thump{font-size:24px;color:var(--raised);transform:scale(1);
+  transition:color .04s,transform .06s,text-shadow .04s}
+.chest-thump.lit{color:var(--err);text-shadow:0 0 12px var(--err);transform:scale(1.35)}
 
 /* ── OSC OUT accounting page (TASK 1) ───────────────────────────────────────── */
 .osc-page{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
