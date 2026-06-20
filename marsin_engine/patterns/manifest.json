@@ -61,5 +61,10 @@
   "61_riser_release",
   "62_genre_palette",
   "63_note_color",
+  "64_drop_countdown",
+  "65_climax_hold",
+  "66_phrase_stepped",
+  "67_track_reset",
+  "68_riser_sweep",
   "rainbow"
 ]
