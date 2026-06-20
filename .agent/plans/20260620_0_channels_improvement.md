@@ -441,3 +441,12 @@ Normal worktree-merge flow applies. ~/tmp/wave15_backup no longer needed. No cro
   After these: ops cluster (dup/reorder/panic, spec _17). FEATURES SHIPPED: hot-swap,
   snapshots, master-fade, clamp, color, playlist tags/search, hold/loop, groups, server-solo,
   deck-extras (+ hardening/QoL/perf/audit/docs/de-flake).
+
+## STATUS LOG (cont. 8)
+- 2026-06-20 T13: WAVE 15-UI MERGED (2f078a9, group rail + server solo + solo-safe, destructive
+  client solo removed) + WAVE 14 metering MERGED (f41b81f, 923 pass/0 fail). Original 13-feature
+  backlog ~exhausted (only ops cluster + low-value #13 left). Launched 2 parallel:
+  * dev/channel_ops_engine — ops cluster ENGINE (dup/reorder/panic, spec _17). Sole engine writer.
+  * round-2 feature DISCOVERY (read-only) — fresh backlog of NEXT channel features.
+  All agents now hard-instructed: edit ONLY within worktree (post WAVE-15 misdirection guard).
+  Suite at 923 pass/0 fail; deliverable f41b81f. After ops: ops-UI + round-2 batch.
