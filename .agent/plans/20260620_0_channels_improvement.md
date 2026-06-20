@@ -144,8 +144,21 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       (b) dev/channels_docs — additive doc docs/NN_channels_deck_mixer.md: hot-swap
           API surface, /status renderHealth + deckRestoreDegraded, two-view best
           practices, timeline-readiness note.
-- [ ] Merge docs + implement any safe audit finds → verify → push. Operator: do NOT
-      wait for cron; kick next wave immediately on empty queue (cron = stuck-agent net).
+- [x] WAVE 7a: final integration + offline audit — DONE. VERDICT: SHIP-WITH-NITS.
+      Offline-readiness CLEAN (0 external URLs/fonts/CDN/telemetry; lockfile unchanged),
+      codex P0 CLEAN, 829 tests pass. No P0/P1 blockers; 7 P2 nits (F1-F7).
+      NOTE: audit F3 (restore 29_bar_dancers) is WRONG — that pattern is DELETED;
+      test_const is the correct fallback. SKIP F3. F6 (PLAYLIST_DBG logs) pre-existing
+      on main, out of scope.
+- [x] WAVE 7b: dev/channels_docs — DONE + MERGED (8b20697). docs/39_channels_deck_mixer.md
+      (renumbered 38->39 to dodge feat/timeline_support's docs/38). + report.
+- [ ] WAVE 8: dev/audit_nits (slot 1) — RUNNING. Safe P2 fixes: N1/F4 finish fail-loud
+      consistency on mixer updateMixerChannel name/mode/lock/transition; N2/F2 handle WS
+      channelFaderRejected/channelModeRejected client-side; N3/F1 surface renderHealth +
+      deckRestoreDegraded on the connection pill (defer if it needs unowned files);
+      N4/F5 HIL honor ENGINE_PORT; N5/F7 ref-guard hot-swap re-entrancy.
+- [ ] Merge WAVE 8 → verify → push. Then likely WIND DOWN (ship-with-nits achieved;
+      deliverable is handoff-ready).
 
 ## STATUS LOG (cont. 2)
 
