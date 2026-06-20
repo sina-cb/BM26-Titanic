@@ -167,6 +167,11 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       .agent/02_reports/202606/20260620_10_channels_campaign_merge_summary.md.
       Deliverable feat/optimize_channels @ a76a044 — handoff-ready, pushed.
       WINDING DOWN: re-engage only on operator request (cron stays as stuck-net).
+- [ ] WAVE 10 (evidence, not churn): dev/perf_bench — measure the "optimize" claim.
+      Render-loop benchmark feat (after) vs origin/main (before): ms/frame + GC/alloc
+      from vis-buffer reuse, blend precompile, alloc-free transition order. Report-only
+      (harness in ~/tmp, no code change). Honest numbers incl. any null result.
+      bench_baseline worktree = origin/main for the "before". After this: truly done.
 
 ## STATUS LOG (cont. 2)
 
