@@ -169,7 +169,11 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // (windowed-edge level assist toggle), and the slow-zone soft-knee knobs
   // `slowZoneWidth` + `slowFluxFloor`. The 2026-06-20 detector-RECALL pass added
   // the build→drop transition gate (`dropBuildGate` + `dropBuildMemoryMs`) and
-  // the mic-gain-relative drop floor (`dropRelLevel`).
+  // the mic-gain-relative drop floor (`dropRelLevel`). The 2026-06-20 detector
+  // REAL-AUDIO pass (E1) added the precision-first gates `dropBuildRise` (required
+  // buildScore rise, not a flat-high plateau) + `dropNoveltyRatio`/`dropNoveltyWindowMs`
+  // (windowed-ratio novelty vs recent median) — they cut real-corpus false-fires
+  // from 1.48 to 0.12/min.
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
     bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
@@ -178,7 +182,7 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
       'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
-      'dropSlowZoneMax', 'dropRelLevel',
+      'dropSlowZoneMax', 'dropBuildRise', 'dropNoveltyRatio', 'dropNoveltyWindowMs', 'dropRelLevel',
       'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
       'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
