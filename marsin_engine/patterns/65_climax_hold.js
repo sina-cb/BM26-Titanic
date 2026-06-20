@@ -47,7 +47,11 @@
 export var localSpeed = 0.5;   // idle wash + sweep rate
 export var climax = 0.0;       // sustained peak (audio audioClimax)
 export var beat = 0.0;         // beat pulse     (audio audioBeat)
-export var base = 0.18;        // calm base floor (always-on)
+export var base = 0.46;        // calm base floor (always-on; never near-dark) — the
+                               //   relaxed two-colour wash stays CLEARLY visible at
+                               //   silence (mission-critical night-visibility, ~70/255
+                               //   like 62/67); the climax bloom still drives every
+                               //   pixel to full white (max-composite) at the drop.
 export var bloom = 0.6;        // how far the climax pushes coverage
 
 export var cp1H = 0.60, cp1S = 1.0, cp1V = 1.0; // palette 1 — calm indigo (relaxed)
@@ -58,7 +62,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderClimax(v) { climax = v; }
 export function sliderBeat(v) { beat = v; }
-export function sliderBase(v) { base = v * 0.32; }
+export function sliderBase(v) { base = 0.20 + v * 0.42; } // 0.20..0.62; never near-dark
 export function sliderBloom(v) { bloom = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -146,8 +150,11 @@ export function render3D(index, x, y, z) {
   // the whole rig stays clearly ALIVE and welcoming in silence (mission critical,
   // never near-black), not just a dim core dot.
   var coreFall = 1.0 - radN; if (coreFall < 0.0) coreFall = 0.0;
-  var washProf = 0.30 + 0.70 * coreFall;             // 0.30 floor at the rim .. 1.0 at centre
-  var baseBri = base * washProf * (0.5 + 0.5 * wave(washPhase * 0.5 + rad * 1.4));
+  var washProf = 0.62 + 0.38 * coreFall;             // 0.62 floor at the rim .. 1.0 at centre
+                                                     //   (raised from 0.30 so the rim is
+                                                     //   clearly lit at silence, not a dim
+                                                     //   core dot — never near-dark)
+  var baseBri = base * washProf * (0.72 + 0.28 * wave(washPhase * 0.5 + rad * 1.4));
 
   // ── CLIMAX BLOOM: as `held` climbs, the lit core EXPANDS outward to full
   // coverage (the rim fills in), brightness rises, and a grand sweep crosses.

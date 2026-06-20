@@ -48,7 +48,10 @@
 export var localSpeed = 0.5;   // idle drift
 export var phrasePhase = 0.0;  // 0->1 across the phrase (audio audioPhrasePhase)
 export var boundary = 0.0;     // phrase-wrap pulse      (audio audioPhraseBoundary)
-export var base = 0.16;        // calm base floor (always-on)
+export var base = 0.42;        // calm base floor (always-on; never near-dark) — the idle
+                               //   wash reads CLEARLY at silence (mission-critical night-
+                               //   visibility, ~70/255 like 62/67) while the phrase sweep
+                               //   + boundary step flash still pop bright (max-composite).
 export var level = 0.9;        // overall brightness
 
 export var cp1H = 0.50, cp1S = 1.0, cp1V = 1.0; // palette 1 — teal (phrase start)
@@ -59,7 +62,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderPhrasePhase(v) { phrasePhase = v; }
 export function sliderBoundary(v) { boundary = v; }
-export function sliderBase(v) { base = v * 0.3; }
+export function sliderBase(v) { base = 0.18 + v * 0.42; } // 0.18..0.60; never near-dark
 export function sliderLevel(v) { level = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -151,8 +154,9 @@ export function render3D(index, x, y, z) {
   var dy = clamp01(y) - 0.5;
   var rad = sqrt(dx * dx + dy * dy);
 
-  // ── calm BASE wash (always-on, never dark) ──────────────────────────────────
-  var baseBri = base * (0.5 + 0.5 * wave(driftPhase * 0.5 + rad * 1.4));
+  // ── calm BASE wash (always-on, never dark) — solid 0.72..1.0 floor so the wash
+  // is evenly visible across the hull at silence, not a faint flicker. ──────────
+  var baseBri = base * (0.72 + 0.28 * wave(driftPhase * 0.5 + rad * 1.4));
 
   // ── PHRASE SWEEP: a bright band whose position tracks audioPhrasePhase across
   // the current geometry coordinate. As the phrase progresses 0->1 the band

@@ -53,9 +53,13 @@ export var lowHit = 0.0;       // LOW onset trigger  -> bars burst  (audio micOn
 export var midHit = 0.0;       // MID onset trigger  -> columns     (audio micOnsetMid)
 export var highHit = 0.0;      // HIGH onset trigger -> par glints   (audio micOnsetHigh)
 export var decay = 0.5;        // envelope fall rate (slow = long after-glow)
-export var floor_ = 0.10;      // minimum time-based base brightness (0..~0.18); 0.10
-                               //   keeps the rig clearly readable at silence (mission-
-                               //   critical visibility) without washing out the hits
+export var floor_ = 0.58;      // minimum time-based base brightness (0..~0.7); 0.58
+                               //   keeps the rig CLEARLY visible at silence (mission-
+                               //   critical: night-visibility) — silence peak lands
+                               //   ~70/255 like the 62/67 reference patterns — while
+                               //   the per-band onset hits still slam to 255 (max-
+                               //   composite), so true-black negative space returns
+                               //   the instant a zone is between hits under audio.
 
 export var cp1H = 0.03, cp1S = 0.85, cp1V = 1.0; // palette 1 — hot red-amber (kick)
 export var cp2H = 0.55, cp2S = 1.0,  cp2V = 1.0; // palette 2 — cool cyan      (hats)
@@ -67,7 +71,7 @@ export function sliderLowHit(v) { lowHit = v; }
 export function sliderMidHit(v) { midHit = v; }
 export function sliderHighHit(v) { highHit = v; }
 export function sliderDecay(v) { decay = v; }
-export function sliderFloor(v) { floor_ = v * 0.18; }
+export function sliderFloor(v) { floor_ = 0.18 + v * 0.52; } // 0.18..0.70; never near-dark
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 var ARM_THRESH = 0.30;   // onset level that arms a fresh zone burst (rising edge)
@@ -154,7 +158,9 @@ export function render3D(index, x, y, z) {
   // Time-based traveling base so silence still reads (never fully dark). Speed
   // set by the localSpeed cadence (tBase rate) so localSpeed is visible at rest.
   var travel = wave(tBase * 1.4 + x * 0.9 + y * 0.4);
-  var bri = floor_ * (0.55 + 0.45 * travel);
+  var bri = floor_ * (0.74 + 0.26 * travel);   // solid floor (0.74..1.0 of floor_) so
+                                               //   the idle palette line is clearly lit
+                                               //   across the whole rig at silence
   var tcol = 0.5;
 
   if (sectionId == 3) {
