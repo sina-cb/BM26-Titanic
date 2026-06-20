@@ -14,13 +14,26 @@
  *   BUILD  corr=0.97  peakErr≈-6ms
  *   SLOW   margin=0.65 acc=0.91  (slow=0.83 vs nonSlow=0.18)
  *
+ * P0-1 real-audio precision-first re-tune (report 20260620_23):
+ *   The above synthetic recall (0.56) was a SYNTHETIC artifact — the same loose
+ *   windowed-edge tuning that scored it fired 1.48 phantom drops/min on 60 min of
+ *   REAL continuous DJ music (the synthetic negatives are structurally blind to
+ *   busy-music false-fires). The re-tune (jump 1.9→4.0, rise/novelty gates on
+ *   BOTH drop edges, slowZoneMax 0.4→0.30) drives REAL falseFiresPerMin to 0.12
+ *   (≤ 0.15 target) at the honest cost of synthetic DROP recall → 0.28 (only the
+ *   realistic MODERATE mic tier still fires; clean/heavy true drops read the same
+ *   gentle windowed ratio as busy music and are inseparable from a phantom).
+ *   Per codex + operator: a phantom drop on the dance floor is worse than a miss.
+ *   Re-measured shipped DETECTOR_DEFAULTS (all 3 tiers):
+ *     DROP   P=1.00 R=0.28 F1=0.43 lat≈202ms  negFP=0  REAL ff/min=0.12
+ *
  * Run:  cd marsin_engine && node --test tests/detector_eval.test.mjs
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { evalConfig } from '../tools/detection_eval.mjs';
+import { evalConfig, evalRealCorpus } from '../tools/detection_eval.mjs';
 import { buildScenarios } from './integration/detector_scenarios.mjs';
 import { applyMicModel } from './integration/mic_model.mjs';
 import { runClip, dropMetrics, buildCorrelation, slowZoneSeparation } from './integration/run_analysis.mjs';
@@ -75,14 +88,37 @@ test('honest metrics: a config with KNOWN phantom drops exposes falseFiresPerMin
     `falseFiresPerMin ${r.drop.falseFiresPerMin} != negFp/min ${expectedFfpm}`);
 });
 
-test('drop scoring: high precision + meaningful recall + low latency on labeled drops', () => {
+test('drop scoring: high precision + (precision-first) recall + low latency on labeled drops', () => {
   const r = evalConfig(SHIPPED, { quiet: true });
   assert.ok(r.drop.precision >= 0.9, `drop precision ${r.drop.precision} < 0.9`);
-  assert.ok(r.drop.recall >= 0.5, `drop recall ${r.drop.recall} < 0.5`);
-  assert.ok(r.drop.f1 >= 0.65, `drop F1 ${r.drop.f1} < 0.65`);
+  // PRECISION-FIRST recall bar (P0-1 re-tune, report 23). The recall floor is
+  // deliberately LOW: the shipped gates trade synthetic recall (clean/heavy mic
+  // tiers, whose synthetic drops are indistinguishable from real busy music) for
+  // a near-zero REAL false-fire rate. We keep a meaningful floor so a regression
+  // that kills ALL drops trips, but never re-raise this without re-proving the
+  // REAL falseFiresPerMin stays ≤ 0.15 (the real_corpus test below).
+  assert.ok(r.drop.recall >= 0.25, `drop recall ${r.drop.recall} < 0.25`);
+  assert.ok(r.drop.f1 >= 0.40, `drop F1 ${r.drop.f1} < 0.40`);
   // Latency is the signed detected−labeled mean; a drop fires AFTER its
   // downbeat but must stay within ~½ bar.
   assert.ok(Math.abs(r.drop.meanLatencyMs) <= 600, `drop latency ${r.drop.meanLatencyMs}ms exceeds 600ms`);
+});
+
+test('REAL-corpus dance-floor safety: falseFiresPerMin ≤ 0.15 (skipped when corpus absent)', (t) => {
+  // The headline P0-1 invariant (report 23): on 60 min of continuous real DJ
+  // music — which has NO EDM drops in its windows, so every dropFired is a false
+  // positive — the shipped detector must stay below the dance-floor safety bar.
+  // The corpus is real audio in ~/tmp and is NOT present in CI; when absent the
+  // eval returns { available:false } and we skip cleanly (codex offline-readiness
+  // — no fabricated pass, no fallback). This is the test that would have caught
+  // the original 1.48/min regression the synthetic suite was blind to.
+  const real = evalRealCorpus(SHIPPED, { quiet: true });
+  if (!real.available) { t.skip(`real corpus absent (${real.corpusDir})`); return; }
+  assert.ok(real.falseFiresPerMin <= 0.15,
+    `REAL falseFiresPerMin ${real.falseFiresPerMin} exceeds 0.15 (${real.drops} phantom drops over ${real.minutes.toFixed(1)} min)`);
+  // P0-2: no Infinity buildDurationMs ever broadcast (the THIN-edge clamp).
+  assert.equal(real.infiniteBuildDur, 0,
+    `${real.infiniteBuildDur} dropFired carried a non-finite buildDurationMs`);
 });
 
 test('build scoring: buildScore tracks the riser (high correlation) and peaks at the drop', () => {

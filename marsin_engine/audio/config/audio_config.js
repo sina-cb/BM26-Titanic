@@ -55,7 +55,7 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   structureDetector: [
     'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
     'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
-    'dropSlowZoneMax', 'dropRelLevel',
+    'dropSlowZoneMax', 'dropBuildRise', 'dropNoveltyRatio', 'dropNoveltyWindowMs', 'dropRelLevel',
     'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
     'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
     'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
@@ -132,6 +132,15 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // The build-memory THIN-firing edge only fires when slowZone < this (rejects
     // a build's onset out of a breakdown). [0,1]; 1 disables the slow-zone gate.
     dropSlowZoneMax:   (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // P0-1 drop-edge music-shape gates (report 20260620_23) — applied to BOTH
+    // the THIN build-mem edge and the BUILD-state edge. dropBuildRise: the
+    // buildScore rise (peak−trough over dropBuildMemoryMs) a real build must
+    // show — rejects busy music's flat high plateau. dropNoveltyRatio: the
+    // firing windowed ratio must outlier this × above the recent median ratio —
+    // rejects routine busy-music transients. Both 0 = disabled (revert).
+    dropBuildRise:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    dropNoveltyRatio:  (v) => (v >= 0 && v <= 50) ? null : `must be in [0, 50]; got ${v}`,
+    dropNoveltyWindowMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     // Mic-gain-relative drop floor factor: effective floor =
     // max(dropMinLevel, dropRelLevel · runningLoudnessRef). 0 → pure absolute
     // floor; ≤1 keeps it below the loud-passage level.
