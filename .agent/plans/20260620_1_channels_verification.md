@@ -53,6 +53,26 @@ Ran skill 05 chain on default ports (engine 6968 / sim 6969-6972 / CaptainPad 69
 
 ## Merge proofs
 
+### MERGE 8 — dev/channels_docs (WAVE 7b) — docs/39_channels_deck_mixer.md (renumbered
+38->39 to avoid feat/timeline_support collision). Markdown-only, diff-check clean.
+Merge commit 8b20697.
+
+### MERGE 9 — dev/audit_nits (WAVE 8) — VERIFIED ON MERGED TIP
+Boundary: mixer.tsx, PlaylistPanel.tsx, hil_deck_swap_response_test.mjs + report.
+```
+$ CaptainPad: tsc 0 / lint 0 err·12 warn (baseline) / web:build 0 · 21 routes
+$ git diff --check (engine+CaptainPad) → clean
+$ node --test "tests/*.test.js" → 829 pass / 0 fail
+$ hil_deck_swap_response_test.mjs (ENGINE_PORT honored) → 10/10, exit 0
+  states clean
+```
+Content (audit P2 nits): N1/F4 remaining updateMixerChannel sites honor res.ok
+(MODE/lock revert+Alert, name/fader-lock/transition revert+log); N2/F2 client
+handles WS channelFaderRejected/channelModeRejected (revert + refetch); N4/F5 HIL
+honors ENGINE_PORT; N5/F7 swapInFlightRef same-tick guard. DEFERRED: N3/F1 pill
+health surfacing (needs api.ts+engineBus.ts+useEngineConnection.ts+DeckTopBar.tsx
+— 4 unowned files; /status already exposes the signals). Merge commit: see git log.
+
 ### MERGE 7 — dev/regression_fixes (WAVE 6) — VERIFIED ON MERGED TIP
 Boundary: api_server.js, PlaylistPanel.tsx + 2 additive tests + report.
 ```
