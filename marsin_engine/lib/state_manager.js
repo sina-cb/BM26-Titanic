@@ -2,6 +2,37 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
+// ── Channel serialization (additive de-dup helper) ──────────────────────
+// saveDeckState and saveMixerState both flatten a PatternChannel into the
+// on-disk shape. They diverge slightly (the mixer file carries overlay-only
+// fields like `transitionMode`/`transitionTime`), so this helper emits the
+// COMMON core and each caller layers its extra fields on top. This keeps the
+// byte-for-byte on-disk schema identical to the pre-refactor output — the
+// fields below are exactly those the engine restores at boot.
+//
+// Exported (not just internal) so a unit test can pin the serialized shape
+// against regressions without reaching into a save path that touches disk.
+export function serializeChannel(ch) {
+  return {
+    id: ch.id,
+    name: ch.name,
+    pattern: ch.pattern,
+    mode: ch.mode,
+    fader: ch.fader,
+    enabled: ch.enabled,
+    // Lock flags (slot 5). `locked` is the mute/solo-style lock; `faderLocked`
+    // freezes the fader against scripted transitions. Both round-trip so an
+    // engine restart preserves the operator's lock decisions.
+    locked: !!ch.locked,
+    faderLocked: !!ch.faderLocked,
+    localControls: ch.localControls,
+    playlist: ch.playlist || null,
+    // Per-channel view-selection so the engine boots back into the exact
+    // mixer layout the operator left it in (docs/27).
+    viewSelection: ch.viewSelection || { type: 'all', target: null, invert: false },
+  };
+}
+
 export class StateManager {
   constructor(stateDir) {
     this.stateDir = stateDir;
@@ -25,9 +56,55 @@ export class StateManager {
   save(filename, state) {
     const filePath = path.join(this.stateDir, filename);
     try {
-      fs.writeFileSync(filePath, yaml.dump(state));
+      this._writeFileAtomic(filePath, yaml.dump(state));
     } catch (e) {
       console.warn(`Failed to save state to ${filename}:`, e);
+    }
+  }
+
+  /**
+   * Crash-safe write: serialize to a sibling temp file, fsync it, then
+   * atomically rename over the destination. A crash (or a thrown error)
+   * mid-write can leave a stray `.<name>.<pid>.<n>.tmp` behind, but it can
+   * NEVER leave a half-written/corrupt `filename` on disk — the previous
+   * good file stays intact until the rename swaps in the fully-written one.
+   *
+   * Rename within the same directory is atomic on POSIX and on NTFS
+   * (ReplaceFile semantics via Node's fs.renameSync over an existing file),
+   * so a reader either sees the old complete file or the new complete file.
+   *
+   * The temp file is written into the SAME directory as the destination so
+   * the rename never crosses a filesystem boundary (a cross-device rename
+   * is not atomic and would fall back to copy+unlink). On any failure we
+   * best-effort unlink the temp file and re-throw so the caller's existing
+   * try/catch logs it — we do not silently swallow the write error here.
+   */
+  _writeFileAtomic(filePath, data) {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    // Unique temp name: pid + monotonic counter avoids collisions between
+    // concurrent saves of different files (and back-to-back saves of the
+    // same file) in a single engine process.
+    this._tmpCounter = (this._tmpCounter || 0) + 1;
+    const tmpPath = path.join(dir, `.${base}.${process.pid}.${this._tmpCounter}.tmp`);
+    let fd;
+    try {
+      fd = fs.openSync(tmpPath, 'w');
+      fs.writeSync(fd, data);
+      // Flush to the storage device before the rename so a power loss right
+      // after the rename can't leave the new inode pointing at empty data.
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch (_) { /* fd already gone */ }
+      }
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch (_) { /* best-effort temp cleanup */ }
+      throw err;
     }
   }
 
@@ -143,27 +220,34 @@ export class StateManager {
       : mixer.channels.filter(c => c.id !== mixer.baseChannelId);
     const state = {
       master: mixer.master,
-      channels: overlays.map(c => ({
-        id: c.id,
-        name: c.name,
-        pattern: c.pattern,
-        mode: c.mode.startsWith('trans_') ? 'blend_screen' : c.mode,
-        fader: c.fader,
-        enabled: c.enabled,
-        locked: !!c.locked,
-        // Fader-lock (slot 5): independent of `locked`. Persisted so an
-        // engine restart preserves the operator's frozen-fader
-        // decision. See PatternChannel.faderLocked for semantics.
-        faderLocked: !!c.faderLocked,
-        transitionMode: c.transitionMode || 'trans_crossfade',
-        transitionTime: c.transitionTime || 1.0,
-        localControls: c.localControls,
-        playlist: c.playlist || null,
-        // Persist the per-channel view-selection so the engine boots
-        // back into the exact mixer layout the operator left it in.
-        // See docs/27_[todo]_mixer_layer_view_selection.md.
-        viewSelection: c.viewSelection || { type: 'all', target: null, invert: false }
-      }))
+      channels: overlays.map((c) => {
+        // serializeChannel emits the common core (id..faderLocked,
+        // localControls, playlist, viewSelection). The mixer file carries
+        // two extra overlay-only fields (transitionMode/transitionTime)
+        // and never persists a live trans_* mode (it would re-trigger a
+        // scripted blend on reload), so we coerce that here. Key order is
+        // preserved byte-for-byte vs the pre-refactor output: the trans_*
+        // fields slot between faderLocked and localControls exactly as
+        // before.
+        const core = serializeChannel(c);
+        return {
+          id: core.id,
+          name: core.name,
+          pattern: core.pattern,
+          mode: c.mode.startsWith('trans_') ? 'blend_screen' : core.mode,
+          fader: core.fader,
+          enabled: core.enabled,
+          locked: core.locked,
+          // Fader-lock (slot 5): independent of `locked`. Persisted so an
+          // engine restart preserves the operator's frozen-fader decision.
+          faderLocked: core.faderLocked,
+          transitionMode: c.transitionMode || 'trans_crossfade',
+          transitionTime: c.transitionTime || 1.0,
+          localControls: core.localControls,
+          playlist: core.playlist,
+          viewSelection: core.viewSelection,
+        };
+      }),
     };
     this.save('mixer_state.yaml', state);
   }
@@ -182,25 +266,12 @@ export class StateManager {
       ? mixer.getDeckChannel()
       : mixer.getChannel(mixer.baseChannelId);
     if (!baseCh) return;
+    // The deck file's channel shape is exactly serializeChannel's core
+    // (id..faderLocked, localControls, playlist, viewSelection) with no
+    // overlay-only extras, so we emit it directly. Byte-compatible with
+    // the pre-refactor output, including both lock flags round-tripping.
     const state = {
-      channel: {
-        id: baseCh.id,
-        name: baseCh.name,
-        pattern: baseCh.pattern,
-        mode: baseCh.mode,
-        fader: baseCh.fader,
-        enabled: baseCh.enabled,
-        // Lock flags (slot 5): mirror the mixer-side persistence so
-        // the deck channel also survives restart in the same lock
-        // state. `locked` was previously omitted from the deck save
-        // path; including it alongside `faderLocked` so both round-
-        // trip cleanly.
-        locked: !!baseCh.locked,
-        faderLocked: !!baseCh.faderLocked,
-        localControls: baseCh.localControls,
-        playlist: baseCh.playlist || null,
-        viewSelection: baseCh.viewSelection || { type: 'all', target: null, invert: false }
-      }
+      channel: serializeChannel(baseCh),
     };
     if (extras && typeof extras === 'object') {
       Object.assign(state, extras);
