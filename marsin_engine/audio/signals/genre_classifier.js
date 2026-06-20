@@ -5,9 +5,9 @@
  * directory. Driven ENTIRELY from signals the engine already derives (no new
  * FFT work): realtime BPM, kick density + regularity (from the micKickRaw
  * pulse train), the low/mid/high band balance and their variance, spectral
- * flux, the note-change rate (pitch-class flips from NoteEstimator), and the
- * structure detector's build/energy scores. It aggregates these over a
- * multi-second window into a small feature vector, scores that vector against
+ * flux, and the note-change rate (pitch-class flips from NoteEstimator). It
+ * aggregates these over a multi-second window into a small feature vector,
+ * scores that vector against
  * a fixed bank of per-genre "musical prior" profiles, takes the argmax, then
  * applies temporal smoothing + hysteresis + a minimum dwell so the published
  * genre holds steady for several seconds instead of flickering bar-to-bar.

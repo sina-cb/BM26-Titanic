@@ -71,7 +71,8 @@ function resolveHome(p) {
 
 /**
  * Run one detector config over the whole scenario set × tiers and aggregate.
- * @returns {object} { drop:{precision,recall,f1,meanLatencyMs,tp,fp,fn,negFp},
+ * @returns {object} { drop:{precision,recall,f1,meanLatencyMs,tp,fp,fn,negFp,
+ *                            guardedPrecision,falseFiresPerMin,negDurationMs},
  *                     build:{meanCorrelation,meanPeakErrMs},
  *                     slow:{meanMargin,meanAccuracy,meanSlow,meanNonSlow},
  *                     perScenario:{...}, perTier:{...} }
@@ -96,7 +97,7 @@ export function evalConfig(detectorConfig, { tiers = ALL_TIERS, scenarios = null
 function _evalConfigInner(ds, cfg, tiers) {
 
   const agg = {
-    tp: 0, fp: 0, fn: 0, lat: [], negFp: 0,
+    tp: 0, fp: 0, fn: 0, lat: [], negFp: 0, negDurationMs: 0,
     buildCors: [], buildPeakErrs: [],
     slowMargins: [], slowAccs: [], slowMeans: [], nonSlowMeans: [],
   };
@@ -104,7 +105,7 @@ function _evalConfigInner(ds, cfg, tiers) {
   const perScenario = {};
 
   for (const tier of tiers) {
-    perTier[tier] = { tp: 0, fp: 0, fn: 0, negFp: 0, buildCors: [], slowMargins: [] };
+    perTier[tier] = { tp: 0, fp: 0, fn: 0, negFp: 0, negDurationMs: 0, buildCors: [], slowMargins: [] };
     for (const clip of ds) {
       const deg = applyMicModel(clip.samples, clip.sampleRate, { tier, seed: MIC_SEED });
       const micClip = { ...clip, samples: deg.samples };
@@ -126,7 +127,12 @@ function _evalConfigInner(ds, cfg, tiers) {
       } else {
         const spurious = rec.dropFired.length;
         agg.negFp += spurious; perTier[tier].negFp += spurious;
-        entry.drop = { negFp: spurious };
+        // Accumulate the duration of non-drop audio so falseFiresPerMin has a
+        // real denominator (phantom drops per MINUTE of calm/steady music, not
+        // a per-clip count that hides how much audio it took to false-fire).
+        agg.negDurationMs += rec.durationMs;
+        perTier[tier].negDurationMs += rec.durationMs;
+        entry.drop = { negFp: spurious, negDurationMs: rec.durationMs };
       }
 
       // BUILD correlation (only on clips with labeled build ramps).
@@ -155,10 +161,25 @@ function _evalConfigInner(ds, cfg, tiers) {
   const mean = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
   const precision = (agg.tp + agg.fp) > 0 ? agg.tp / (agg.tp + agg.fp) : null;
   const recall = (agg.tp + agg.fn) > 0 ? agg.tp / (agg.tp + agg.fn) : null;
+  // HONEST metrics (additive — the original precision/recall/f1 above are
+  // UNCHANGED). The positive-only precision can read 1.00 while the detector
+  // still false-fires on calm/steady NEGATIVE clips, because those phantom
+  // drops (negFp) are excluded above. Fold them in here so a tuning pass
+  // cannot hide false-fires on the dance floor:
+  //   guardedPrecision = tp / (tp + fp + negFp)  — every spurious drop, on a
+  //     positive OR a negative clip, counts against precision.
+  //   falseFiresPerMin = negFp / minutes-of-non-drop-audio — the headline
+  //     dance-floor safety number (a phantom drop on calm music is the worst
+  //     failure), normalized so it is comparable across scenario-set sizes.
+  const guardedDenom = agg.tp + agg.fp + agg.negFp;
+  const guardedPrecision = guardedDenom > 0 ? agg.tp / guardedDenom : null;
+  const negMinutes = agg.negDurationMs / 60000;
+  const falseFiresPerMin = negMinutes > 0 ? agg.negFp / negMinutes : null;
   return {
     drop: {
       precision, recall, f1: f1Score(precision, recall),
       meanLatencyMs: mean(agg.lat), tp: agg.tp, fp: agg.fp, fn: agg.fn, negFp: agg.negFp,
+      guardedPrecision, falseFiresPerMin, negDurationMs: agg.negDurationMs,
     },
     build: { meanCorrelation: mean(agg.buildCors), meanPeakErrMs: mean(agg.buildPeakErrs) },
     slow: { meanMargin: mean(agg.slowMargins), meanAccuracy: mean(agg.slowAccs),
@@ -236,6 +257,10 @@ function printSummary(name, r) {
   console.log(`\n── ${name} ───────────────────────────────────────────`);
   console.log(`  DROP   P=${fmt(r.drop.precision)} R=${fmt(r.drop.recall)} F1=${fmt(r.drop.f1)} ` +
     `lat=${fmt(r.drop.meanLatencyMs, 0)}ms  (tp/fp/fn=${r.drop.tp}/${r.drop.fp}/${r.drop.fn})  negFP=${r.drop.negFp}`);
+  // HONEST metrics — these COUNT the phantom drops the positive-only P hides.
+  console.log(`  HONEST guardedP=${fmt(r.drop.guardedPrecision)} ` +
+    `falseFiresPerMin=${fmt(r.drop.falseFiresPerMin)} ` +
+    `(negFP=${r.drop.negFp} over ${fmt(r.drop.negDurationMs / 60000, 2)} min calm audio)`);
   console.log(`  BUILD  corr=${fmt(r.build.meanCorrelation)}  peakErr=${fmt(r.build.meanPeakErrMs, 0)}ms`);
   console.log(`  SLOW   margin=${fmt(r.slow.meanMargin)} acc=${fmt(r.slow.meanAccuracy)} ` +
     `(slow=${fmt(r.slow.meanSlow)} vs nonSlow=${fmt(r.slow.meanNonSlow)})`);
