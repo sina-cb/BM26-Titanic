@@ -49,9 +49,47 @@ const S = {
   dropFlash: 0,
   spectrum: [],
   wave: [],
-  derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0 },
+  derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0, genre: null, genreConf: null },
   spFlash: 0, scFlash: 0,
+  genreNames: [],      // index-aligned GENRE name list (from the server)
+  page: 'design',      // 'design' | 'osc' — top-bar nav
+  oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
 };
+
+// ── THEME (TASK 2) ───────────────────────────────────────────────────────────
+// The companion mirrors CaptainPad's theme set (CaptainPad/constants/theme.ts).
+// The palettes themselves live in companion_app.css ([data-theme="…"]); here we
+// only carry the picker order + labels and persist the choice. Default: dark.
+const THEME_ORDER = ['light', 'dark', 'midnight', 'sunset', 'gruvbox'];
+const THEME_LABELS = {
+  light: 'LIGHT', dark: 'DARK', midnight: 'MIDNIGHT', sunset: 'SUNSET', gruvbox: 'GRUVBOX',
+};
+const THEME_KEY = 'companion.theme';
+function currentTheme() {
+  let t = null;
+  try { t = localStorage.getItem(THEME_KEY); } catch { /* storage blocked */ }
+  return THEME_ORDER.includes(t) ? t : 'dark';
+}
+function applyTheme(t) {
+  const theme = THEME_ORDER.includes(t) ? t : 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.body.setAttribute('data-theme', theme);
+  try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage blocked */ }
+  const sel = document.getElementById('theme-select');
+  if (sel && sel.value !== theme) sel.value = theme;
+}
+function buildThemePicker() {
+  const sel = document.getElementById('theme-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const t of THEME_ORDER) {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = THEME_LABELS[t] || t;
+    sel.appendChild(o);
+  }
+  sel.value = currentTheme();
+  sel.onchange = () => applyTheme(sel.value);
+}
 // Per-op-param SANE slider ranges (a UI concern — client-side).
 const UI_RANGE = {
   gain:       { value: { min: 0, max: 4, step: 0.05 } },
@@ -107,6 +145,7 @@ function connect() {
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
       S.views = m.views || []; S.viewTypes = m.viewTypes || {};
       S.synths = m.synths || [];
+      S.genreNames = m.genreNames || [];
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
       if (m.device != null) S.device = m.device;
@@ -125,6 +164,9 @@ function connect() {
       frameQueue.push(m);
     } else if (m.type === 'frames') {
       frameQueue.push(...m.frames);
+    } else if (m.type === 'oscAccounting') {
+      S.oscAcc = m;
+      if (S.page === 'osc') renderOscPage();
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -233,7 +275,17 @@ function oscAddressForName(name) {
 }
 function setStatus(t, c) { const e = $('status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 let flashT = 0;
-function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color = bad ? '#ff5d6c' : '#34d3b5'; clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800); }
+// Read a theme CSS var (so flash/canvas colours follow the active theme instead
+// of hardcoded hex — report 20260616_3 §UI: move JS hex accents to CSS vars).
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function flash(t, bad) {
+  const e = $('flash'); e.textContent = t;
+  e.style.color = bad ? cssVar('--err', '#ff5d6c') : cssVar('--ok', '#34d3b5');
+  clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800);
+}
 function seedTraces() {
   const next = {};
   // Dom split (2026-06-17): freq and energy are now SEPARATE ordinary signals,
@@ -911,11 +963,88 @@ function renderLive() {
     $('bpm-val').textContent = dv.bpm > 0 ? dv.bpm.toFixed(0) : '—';
     const pp = $('party-pill'); pp.textContent = dv.party > 0.5 ? 'PARTY' : 'calm'; pp.className = 'party-pill' + (dv.party > 0.5 ? ' on' : '');
     const nn = $('note-val'); const pc = Math.round(dv.note);
-    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
+    const noteColor = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
+    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = noteColor;
+    // NOTE color SWATCH — the live audioNoteHue rendered as a colour chip so the
+    // operator can see the note→colour mapping the engine is driving.
+    const sw = $('note-swatch'); if (sw) sw.style.background = noteColor;
+    // GENRE — index → human name via the server's GENRE_NAMES. `genre` is null
+    // until the sibling detector publishes audioGenre (then it lights up). An
+    // index-to-name map is display, not a forbidden value fallback.
+    const gv = $('genre-val'), gc = $('genre-conf');
+    if (gv) {
+      const gi = dv.genre;
+      const name = (gi != null && Number.isFinite(gi)) ? S.genreNames[Math.round(gi)] : null;
+      gv.textContent = name ? name.replace(/_/g, ' ') : '—';
+    }
+    if (gc) {
+      gc.textContent = (dv.genreConf != null && Number.isFinite(dv.genreConf))
+        ? clamp01(dv.genreConf).toFixed(2) : '';
+    }
     $('beat-dot').style.opacity = clamp01(dv.beat).toFixed(2);
+    // COLOR/PATTERN switch cues — a visible FLASH when audioSwitchPattern /
+    // audioSwitchColor pulse (operator: the colour-change feedback wasn't
+    // visible). The flash is armed in the frame drain (rising edge) and decays
+    // here; the `.lit` class makes it pop fully opaque while hot.
     S.spFlash *= 0.85; S.scFlash *= 0.85;
-    $('sp-flash').style.opacity = S.spFlash.toFixed(2);
-    $('sc-flash').style.opacity = S.scFlash.toFixed(2);
+    const spEl = $('sp-flash'), scEl = $('sc-flash');
+    if (spEl) { spEl.style.opacity = S.spFlash.toFixed(2); spEl.classList.toggle('lit', S.spFlash > 0.5); }
+    if (scEl) { scEl.style.opacity = S.scFlash.toFixed(2); scEl.classList.toggle('lit', S.scFlash > 0.5); }
+  }
+}
+
+// ── OSC OUT accounting page (TASK 1) ─────────────────────────────────────────
+// Render the live table of every signal the companion sends to the engine. The
+// data is GENERIC — whatever `oscAccounting` the server enumerated (designed
+// output signals + built-in emits like BPM + any sibling-added derived output).
+function renderOscPage() {
+  const acc = S.oscAcc;
+  const tgt = $('osc-target'), cnt = $('osc-count'), tot = $('osc-total'), rate = $('osc-rate');
+  const tbody = $('osc-rows'), empty = $('osc-empty');
+  if (!tbody) return;
+  if (!acc) {
+    if (tgt) tgt.textContent = `${S.osc.host}:${S.osc.port}`;
+    return;
+  }
+  if (tgt) tgt.textContent = `${acc.target.host}:${acc.target.port}`;
+  if (cnt) cnt.textContent = String(acc.outputs.length);
+  if (tot) tot.textContent = acc.totalSent.toLocaleString();
+  const aggRate = acc.outputs.reduce((s, o) => s + (o.rateHz || 0), 0);
+  if (rate) rate.textContent = aggRate.toFixed(0) + '/s';
+  if (empty) empty.style.display = acc.outputs.length ? 'none' : 'block';
+  // Max rate for the inline rate bar scaling.
+  const maxRate = Math.max(1, ...acc.outputs.map(o => o.rateHz || 0));
+  tbody.innerHTML = '';
+  for (const o of acc.outputs) {
+    const tr = document.createElement('tr');
+    const valTxt = (o.value == null) ? '—'
+      : (Math.abs(o.value) >= 100 ? o.value.toFixed(0) : o.value.toFixed(3));
+    const barW = ((o.rateHz || 0) / maxRate * 100).toFixed(0);
+    tr.innerHTML = `<td class="osc-sig">${o.label || o.address}</td>`
+      + `<td class="osc-addr">${o.address}</td>`
+      + `<td class="osc-key">${o.cpcKey || '—'}</td>`
+      + `<td class="osc-kind">${o.kind || ''}</td>`
+      + `<td class="num osc-val">${valTxt}</td>`
+      + `<td class="num osc-bar-cell"><span class="osc-bar" style="width:${barW}%"></span><span>${(o.rateHz || 0).toFixed(1)}/s</span></td>`
+      + `<td class="num">${(o.count || 0).toLocaleString()}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+// ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────
+function setPage(page) {
+  S.page = (page === 'osc') ? 'osc' : 'design';
+  const design = $('page-design'), osc = $('page-osc');
+  if (design) design.style.display = S.page === 'design' ? '' : 'none';
+  if (osc) osc.style.display = S.page === 'osc' ? 'flex' : 'none';
+  for (const b of document.querySelectorAll('.nav-btn')) {
+    b.classList.toggle('active', b.dataset.page === S.page);
+  }
+  if (S.page === 'osc') renderOscPage();
+}
+function buildNav() {
+  for (const b of document.querySelectorAll('.nav-btn')) {
+    b.onclick = () => setPage(b.dataset.page);
   }
 }
 
@@ -1197,6 +1326,12 @@ function drawWave(ctx, wave) {
   ctx.lineTo(W, yOf(wave[n - 1]));
   ctx.stroke();
 }
+
+// Theme + nav are pure client UI — wire them before the socket so the picked
+// theme is applied immediately on load (no flash of the default palette).
+applyTheme(currentTheme());
+buildThemePicker();
+buildNav();
 
 connect();
 requestAnimationFrame(draw);

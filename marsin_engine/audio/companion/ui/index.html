@@ -15,6 +15,14 @@
     </div>
     <div class="top-right">
       <span id="flash" class="flash"></span>
+      <div class="nav-seg" id="nav-seg">
+        <button class="nav-btn active" data-page="design">DESIGN</button>
+        <button class="nav-btn" data-page="osc">OSC OUT</button>
+      </div>
+      <label class="theme-pick" title="UI theme">
+        <span class="theme-lab">THEME</span>
+        <select id="theme-select" class="theme-select"></select>
+      </label>
       <span id="status" class="status">connecting…</span>
       <button id="export-btn" class="primary">Export config ▾</button>
     </div>
@@ -26,7 +34,7 @@
     <div id="gainbar" class="gainbar"></div>
   </div>
 
-  <main class="layout">
+  <main class="layout" id="page-design">
     <aside class="sidebar">
       <div class="panel-label">SIGNALS</div>
       <div id="signals" class="signals"></div>
@@ -56,7 +64,8 @@
           </div>
           <div class="derived-row">
             <span class="d-item"><span class="d-lab">BPM</span><span id="bpm-val" class="d-big">—</span><span id="beat-dot" class="beat-dot">●</span></span>
-            <span class="d-item"><span class="d-lab">NOTE</span><span id="note-val" class="d-big">—</span></span>
+            <span class="d-item"><span class="d-lab">NOTE</span><span id="note-swatch" class="note-swatch"></span><span id="note-val" class="d-big">—</span></span>
+            <span class="d-item"><span class="d-lab">GENRE</span><span id="genre-val" class="d-genre">—</span><span id="genre-conf" class="d-conf"></span></span>
             <span id="party-pill" class="party-pill">calm</span>
           </div>
         </div>
@@ -93,6 +102,32 @@
       </div>
     </section>
   </main>
+
+  <!-- OSC OUT accounting page (TASK 1): one page = every signal sent to the
+       engine. Live table, themed, enumerated at runtime (no hardcoded list). -->
+  <section class="osc-page" id="page-osc" style="display:none">
+    <div class="osc-head">
+      <div class="osc-title">OSC OUT — signals sent to the marsin engine</div>
+      <div class="osc-stats">
+        <span class="osc-stat"><span class="osc-stat-lab">TARGET</span><span id="osc-target" class="osc-stat-val">—</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">OUTPUTS</span><span id="osc-count" class="osc-stat-val">0</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">TOTAL SENT</span><span id="osc-total" class="osc-stat-val">0</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">AGG RATE</span><span id="osc-rate" class="osc-stat-val">0/s</span></span>
+      </div>
+    </div>
+    <div class="osc-table-wrap">
+      <table class="osc-table">
+        <thead>
+          <tr>
+            <th>SIGNAL</th><th>OSC ADDRESS</th><th>CPC KEY</th><th>KIND</th>
+            <th class="num">VALUE</th><th class="num">RATE</th><th class="num">SENT</th>
+          </tr>
+        </thead>
+        <tbody id="osc-rows"></tbody>
+      </table>
+      <div id="osc-empty" class="osc-empty">no OSC outputs yet — add an output signal in DESIGN</div>
+    </div>
+  </section>
 
   <div id="export-modal" class="modal">
     <div class="modal-box">

@@ -1,8 +1,59 @@
-/* companion_app.css — TouchDesigner-flavoured dark UI. No web fonts (offline). */
-:root{
+/* companion_app.css — TouchDesigner-flavoured UI. No web fonts (offline).
+ *
+ * THEMES (TASK 2): the companion now supports the SAME 5 themes CaptainPad
+ * exposes (light, dark, midnight, sunset, gruvbox — see
+ * CaptainPad/constants/theme.ts). Each [data-theme="…"] block maps that
+ * theme's CaptainPad Palette tokens onto the companion's existing CSS vars so
+ * EVERY component restyles from one place. The picker (companion_app.js) sets
+ * data-theme on <html>; default is dark.
+ *
+ *   CaptainPad token            → companion var
+ *   ─────────────────────────────────────────────
+ *   background                  → --bg
+ *   surfaceContainerLow         → --panel
+ *   surfaceContainerLowest      → --panel2
+ *   surfaceContainerHigh        → --raised
+ *   ghostBorder (→ solid)       → --border
+ *   text                        → --text
+ *   secondary / icon            → --muted
+ *   primary                     → --accent
+ *   tertiary                    → --ok
+ *   error                       → --err
+ *
+ * The original companion dark look is preserved verbatim as the `dark` theme
+ * (the values below) so nothing regresses; the other four are faithful ports
+ * of their CaptainPad counterparts. :root carries the dark values so a missing
+ * data-theme still renders (it never goes unstyled).
+ */
+:root,
+[data-theme="dark"]{
   --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
   --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
   --ok:#34d3b5; --err:#ff5d6c;
+}
+/* LIGHT — CaptainPad "Luminance Command" daytime palette. */
+[data-theme="light"]{
+  --bg:#f8f9fa; --panel:#f3f4f5; --panel2:#ffffff; --raised:#e7e8e9;
+  --border:#bac9cc; --text:#191c1d; --muted:#466270; --accent:#006875;
+  --ok:#1b9e77; --err:#ba1a1a;
+}
+/* MIDNIGHT — deep blue-black, cool blue accent. */
+[data-theme="midnight"]{
+  --bg:#06080c; --panel:#0d1320; --panel2:#04060a; --raised:#152030;
+  --border:#27313f; --text:#d4dde8; --muted:#7a8a9e; --accent:#5cc0ff;
+  --ok:#3ad4a6; --err:#ff7a82;
+}
+/* SUNSET — warm amber low-light. */
+[data-theme="sunset"]{
+  --bg:#1a0f0a; --panel:#251812; --panel2:#100905; --raised:#2e2017;
+  --border:#3e2e1a; --text:#f4e8d8; --muted:#b89478; --accent:#ffb84a;
+  --ok:#9acb87; --err:#ff8a6a;
+}
+/* GRUVBOX — retro warm, mustard-yellow accent. */
+[data-theme="gruvbox"]{
+  --bg:#282828; --panel:#32302f; --panel2:#1d2021; --raised:#3c3836;
+  --border:#504945; --text:#ebdbb2; --muted:#a89984; --accent:#fabd2f;
+  --ok:#b8bb26; --err:#fb4934;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -74,8 +125,8 @@ body{background:var(--bg);color:var(--text);
 .d-lab{color:var(--muted);font-size:10px}
 .d-big{font-weight:700;font-size:20px}
 .beat-dot{color:var(--ok);opacity:0;font-size:12px}
-.party-pill{font-weight:700;letter-spacing:1px;padding:4px 11px;border-radius:7px;background:#22303a;color:#8aa;font-size:11px}
-.party-pill.on{background:rgba(240,162,59,.18);color:var(--accent)}
+.party-pill{font-weight:700;letter-spacing:1px;padding:4px 11px;border-radius:7px;background:var(--raised);color:var(--muted);font-size:11px}
+.party-pill.on{background:color-mix(in srgb, var(--accent) 18%, transparent);color:var(--accent)}
 .cue-flash{float:right;margin-left:8px;color:var(--accent);font-weight:700;font-size:10px;opacity:0;transition:opacity .1s}
 .lr-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
 .lr-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:8px}
@@ -87,9 +138,9 @@ body{background:var(--bg);color:var(--text);
 .dom-e{text-align:right;color:var(--muted)}
 .struct-row{display:flex;align-items:center;gap:14px}
 .state-pill{font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:7px;min-width:78px;text-align:center}
-.s-thin{background:#22303a;color:#8aa}
-.s-build{background:#3a3320;color:var(--accent)}
-.s-sustain{background:#1f3a33;color:var(--ok)}
+.s-thin{background:var(--raised);color:var(--muted)}
+.s-build{background:color-mix(in srgb, var(--accent) 22%, var(--panel2));color:var(--accent)}
+.s-sustain{background:color-mix(in srgb, var(--ok) 22%, var(--panel2));color:var(--ok)}
 .sbars{flex:1;display:flex;flex-direction:column;gap:5px}
 .sbar{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:8px}
 .sbar span{color:var(--muted);font-size:10px}
@@ -143,13 +194,13 @@ body{background:var(--bg);color:var(--text);
 .sig-add{background:var(--raised);border:1px solid var(--border);color:var(--accent);cursor:pointer;
   font:inherit;font-weight:700;font-size:13px;width:24px;height:24px;border-radius:6px;line-height:1}
 .sig-add:hover{filter:brightness(1.2)}
-.input-row{--acc:#34d3b5;grid-template-columns:1fr;margin-bottom:8px}
-.input-row .sig-name{color:#34d3b5}
+.input-row{--acc:var(--ok);grid-template-columns:1fr;margin-bottom:8px}
+.input-row .sig-name{color:var(--ok)}
 .sig-sub{display:block;color:var(--muted);font-size:9px;margin-top:2px}
 .input-ctrls{display:flex;flex-direction:column;gap:16px;max-width:440px}
 .views-label{margin-top:14px}
-.view-row{--acc:#f0a23b;grid-template-columns:1fr}
-.view-row .sig-name{color:#cdd6e0}
+.view-row{--acc:var(--accent);grid-template-columns:1fr}
+.view-row .sig-name{color:var(--text)}
 .view-row.active .sig-name{color:var(--accent)}
 
 .stage{display:flex;flex-direction:column;min-width:0;padding:14px;gap:14px;overflow:auto}
@@ -267,3 +318,50 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;opacity:.55}
 .view-sig-card:hover{background:var(--raised)}
 .view-sig-card.on{opacity:1;box-shadow:0 0 0 1px var(--src-accent,#9aa) inset}
+
+/* ── top-bar nav (DESIGN / OSC OUT) + theme picker ──────────────────────────── */
+.nav-seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.nav-btn{background:var(--panel2);color:var(--muted);border:none;border-right:1px solid var(--border);
+  padding:5px 13px;font:inherit;font-weight:700;letter-spacing:1px;font-size:10.5px;cursor:pointer}
+.nav-btn:last-child{border-right:none}
+.nav-btn.active{background:var(--accent);color:var(--bg)}
+.theme-pick{display:flex;align-items:center;gap:6px}
+.theme-lab{color:var(--muted);letter-spacing:1px;font-size:10px}
+.theme-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;
+  padding:5px 8px;font:inherit;font-size:11px;cursor:pointer}
+
+/* ── DERIVED panel: note swatch + genre readout ─────────────────────────────── */
+.note-swatch{display:inline-block;width:13px;height:13px;border-radius:3px;background:var(--raised);
+  border:1px solid var(--border);align-self:center}
+.d-genre{font-weight:700;font-size:13px;color:var(--text);text-transform:uppercase;letter-spacing:.5px}
+.d-conf{color:var(--muted);font-size:10px}
+/* The note color-change + pattern-switch cues must be VISIBLE when they pulse
+   (operator: the feedback wasn't visible). A short bright flash on the label. */
+.cue-flash.lit{opacity:1}
+
+/* ── OSC OUT accounting page (TASK 1) ───────────────────────────────────────── */
+.osc-page{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.osc-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.osc-title{font-weight:700;letter-spacing:1.5px;font-size:13px;color:var(--text)}
+.osc-stats{display:flex;gap:18px;flex-wrap:wrap}
+.osc-stat{display:flex;flex-direction:column;gap:2px}
+.osc-stat-lab{color:var(--muted);letter-spacing:1px;font-size:9.5px}
+.osc-stat-val{font-weight:700;font-size:15px;color:var(--accent);font-variant-numeric:tabular-nums}
+.osc-table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.osc-table{width:100%;border-collapse:collapse;font-size:12px}
+.osc-table thead th{text-align:left;color:var(--muted);letter-spacing:1px;font-size:10px;font-weight:700;
+  padding:10px 12px;background:var(--panel2);border-bottom:1px solid var(--border);position:sticky;top:0}
+.osc-table th.num,.osc-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.osc-table tbody td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}
+.osc-table tbody tr:last-child td{border-bottom:none}
+.osc-table tbody tr:hover{background:var(--raised)}
+.osc-sig{font-weight:700;color:var(--accent)}
+.osc-addr{color:var(--ok);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px}
+.osc-key{color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px}
+.osc-kind{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.osc-val{font-weight:700;color:var(--text)}
+.osc-bar-cell{position:relative}
+.osc-bar{position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb, var(--accent) 14%, transparent);
+  z-index:0;transition:width .12s linear}
+.osc-bar-cell>*{position:relative;z-index:1}
+.osc-empty{color:var(--muted);padding:18px;text-align:center}
