@@ -1335,6 +1335,10 @@ async function main() {
   // publish, runs right after the detector each hop off the live CPC keys.
   const derivedSignals = new DerivedSignals({ paramCenter });
   audioState.derivedSignals = derivedSignals;
+  // Last-broadcast derived-signal health fingerprint (null = healthy, never
+  // broadcast). Used to fire the audioStatus health update only on a real
+  // transition (no per-hop spam) — see the onAnalysis callback.
+  audioState.lastDerivedHealthKey = null;
 
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
@@ -1430,6 +1434,31 @@ async function main() {
       // `*Gain` CPC param live each call, preserving the operator's
       // existing slider-as-source-of-truth contract.
       let lastAnalysisAtMs = 0;
+      // Hoisted analyzer-publish payload (codex: allocation-free hot path). The
+      // {kind,key} shapes are static; only `.value` changes each hop. Allocate
+      // the 19 objects + array ONCE per analyzer build (not ~1640 obj/s at
+      // 86 Hz) and mutate in place in onAnalysis. paramCenter.setMany() reads
+      // each entry synchronously and never retains the array, so reuse is safe.
+      const micWrites = [
+        { kind: 'scalar', key: 'micLow',     value: 0 },
+        { kind: 'scalar', key: 'micMid',     value: 0 },
+        { kind: 'scalar', key: 'micHigh',    value: 0 },
+        { kind: 'scalar', key: 'micKick',    value: 0 },
+        { kind: 'scalar', key: 'micFlux',    value: 0 },
+        { kind: 'scalar', key: 'micLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micKickRaw', value: 0 },
+        { kind: 'scalar', key: 'micFluxRaw', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq1',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy1', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq2',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy2', value: 0 },
+        { kind: 'scalar', key: 'micOnsetLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micSubRaw',       value: 0 },
+      ];
       audioState.analyzer = new AudioAnalyzer({
         sampleRate: cfg.capture.sampleRate,
         fftSize:    cfg.fftSize,
@@ -1453,31 +1482,29 @@ async function main() {
           // CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys to render
           // the raw row of the diagnostics strip. micFlux (docs/30) is
           // the spectral-flux primitive the structure detector reads.
-          paramCenter.setMany([
-            { kind: 'scalar', key: 'micLow',     value: lowPost  },
-            { kind: 'scalar', key: 'micMid',     value: midPost  },
-            { kind: 'scalar', key: 'micHigh',    value: highPost },
-            { kind: 'scalar', key: 'micKick',    value: kickPost },
-            { kind: 'scalar', key: 'micFlux',    value: fluxPost },
-            { kind: 'scalar', key: 'micLowRaw',  value: low      },
-            { kind: 'scalar', key: 'micMidRaw',  value: mid      },
-            { kind: 'scalar', key: 'micHighRaw', value: high     },
-            { kind: 'scalar', key: 'micKickRaw', value: kick     },
-            { kind: 'scalar', key: 'micFluxRaw', value: flux     },
-            // Dominant-frequency analyzer outputs (dom1/dom2 + energy).
-            { kind: 'scalar', key: 'micDomFreq1',   value: domFreq1   },
-            { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
-            { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
-            { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
-            // analyzer_features (slot 3): RAW per-band onset strengths + sub-bass
-            // energy. The band_onsets/sub_bass shapers (derivedSignals) read
-            // these each hop and publish the pulse keys micOnsetLow/Mid/High +
-            // audioChestHit. (Pure additive analyzer outputs.)
-            { kind: 'scalar', key: 'micOnsetLowRaw',  value: onsetLow  },
-            { kind: 'scalar', key: 'micOnsetMidRaw',  value: onsetMid  },
-            { kind: 'scalar', key: 'micOnsetHighRaw', value: onsetHigh },
-            { kind: 'scalar', key: 'micSubRaw',       value: micSub    },
-          ], 'audio', 'audio:mic');
+          // Mutate the hoisted payload in place (order matches micWrites above):
+          // post bands, raw bands, dom1/dom2 + energy, then the slot-3 RAW
+          // per-band onset strengths + sub-bass energy (additive analyzer
+          // outputs the band_onsets/sub_bass shapers read each hop).
+          micWrites[0].value  = lowPost;
+          micWrites[1].value  = midPost;
+          micWrites[2].value  = highPost;
+          micWrites[3].value  = kickPost;
+          micWrites[4].value  = fluxPost;
+          micWrites[5].value  = low;
+          micWrites[6].value  = mid;
+          micWrites[7].value  = high;
+          micWrites[8].value  = kick;
+          micWrites[9].value  = flux;
+          micWrites[10].value = domFreq1;
+          micWrites[11].value = domEnergy1;
+          micWrites[12].value = domFreq2;
+          micWrites[13].value = domEnergy2;
+          micWrites[14].value = onsetLow;
+          micWrites[15].value = onsetMid;
+          micWrites[16].value = onsetHigh;
+          micWrites[17].value = micSub;
+          paramCenter.setMany(micWrites, 'audio', 'audio:mic');
           // docs/30: run the structure detector at the analyzer hop rate
           // (lowest latency, auto-pauses when the analyzer is off). It
           // reads the live keys just written above and publishes its own
@@ -1485,6 +1512,24 @@ async function main() {
           audioStructureDetector.tick(nowMs, dt);
           // Derived signals read the keys the analyzer + detector just wrote.
           derivedSignals.tick(nowMs, dt);
+          // Fail-LOUD + VISIBLE (codex P0): a derived sub-module that throws is
+          // isolated (others keep running) but must SURFACE to the operator, not
+          // just stderr. On the transition into a degraded/fatal state, fold the
+          // failing-module status into the audioStatus broadcast ONCE (gated so
+          // there's no per-hop spam — the broadcast only fires when health
+          // actually changes).
+          const dStatus = derivedSignals.getStatus();
+          const dKey = `${dStatus.fatal}|${dStatus.degraded}|${Object.keys(dStatus.moduleErrors).sort().join(',')}`;
+          if (dKey !== audioState.lastDerivedHealthKey) {
+            audioState.lastDerivedHealthKey = dKey;
+            audioState.lastStatus = {
+              ...(audioState.lastStatus || {}),
+              derivedDegraded: dStatus.degraded,
+              derivedFatal: dStatus.fatal,
+              derivedModuleErrors: dStatus.moduleErrors,
+            };
+            broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+          }
         },
       });
       audioState.capture = new AudioCapture({
