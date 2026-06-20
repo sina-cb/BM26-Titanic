@@ -261,3 +261,12 @@ KEY UNBLOCK: real CC audio fetch WORKS now (Wikimedia + archive.org verified) �
 - ⏳ D4 detector RECALL + adversarial scenarios + mic-gain-relative gate — `dev/detector_recall` (slot3)
 Disjoint file ownership (analyzer+genre / new-signal-files+derived_signals hub / patterns / detector+scenarios / datasets+harness). Merge order: D3 patterns + D6 corpus (additive) → D2 (derived hub) → D4 (detector) → D1 (analyzer+genre, re-tune last on the corpus if ready). Resource cap ≤2-3 engines (most validate offline).
 Protocol unchanged: don't stop when blocked — pivot to another avenue. Keep refilling; adversarial re-wave when queue empties.
+
+### Wave D follow-on (sequenced)
+- ✅ D6 real corpus + genre_eval MERGED — exposed genre = 22% on real audio (near chance).
+- 📋 D7 GENRE v2 DATA-DRIVEN RE-TUNE (after D1/fft2048 merges; owns genre_classifier.js next):
+  re-engineer the features using `genre_eval.mjs` + the real corpus at the FINAL fftSize —
+  fix/replace `melodic` (doesn't saturate on real audio), drop `kickDens` weight, re-anchor
+  `sparkle`/`sparkleVar` to measured centroids, add a working 2nd axis beyond BPM. Target a
+  real-audio accuracy lift from 22%. Keep/refresh the synthetic tests. THIS is now the
+  highest-value audio task — genre is structurally sound but near-chance until re-tuned on real data.

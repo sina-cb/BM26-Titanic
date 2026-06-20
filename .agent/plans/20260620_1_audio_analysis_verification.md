@@ -143,3 +143,10 @@ Proof entry template:
   - `node engine.js ... --dry-run` → **exit 0**.
 - Metric proof (agent): shipped `default` UNCHANGED (`P=1.00 R=0.56 F1=0.71` → `guardedP=1.00 falseFiresPerMin=0.00`); the new metric exposes hidden phantom drops on a false-firing `level` config (`guardedP=0.58 falseFiresPerMin=0.83`, 3 phantoms the old precision hid). Sweep winner unchanged.
 - Verdict: C-fix-quality crossed off. ✅
+
+### D6 — real CC genre corpus + genre_eval harness  [PASS]  2026-06-20T08:30Z
+- Branch/commit: `dev/audio_corpus_real` → merged into `feat/audio_analysis_2` (--no-ff, clean, all additive).
+- Deliverables: `tools/genre_eval.mjs` (real engine-chain genre eval, confusion matrix, `--corpus/--fft/--json`), `datasets/genre_corpus_manifest.json` (60 CC tracks, 10 genres, archive.org netlabels — per-track license/id/url pinned), `tests/genre_eval_harness.test.mjs`, datasets/README update. Audio WAVs in ~/tmp (not committed).
+- Command(s) run BY INSTIGATOR: `node --test tests/genre_eval_harness.test.mjs` → **2 pass / 0 fail**.
+- KEY FINDING (real-audio truth): genre classifier baseline **8/36 = 22.2% @ fft1024** (chance ~17%) — the synthetic tuning did NOT transfer. Root causes (measured centroids): `melodic` note-rate reads ~0.10–0.21 for ALL genres (doesn't saturate → melodic_house/melodic_techno never predicted, techno over-fires); `kickDens` saturates ~0.9 everywhere; `sparkle` polarity inverted (deep_house brightest, not techno); `sparkleVar` no longer flags tech_house.
+- Verdict: D6 crossed off. ✅ — and it MANDATES a data-driven genre re-tune (queued D7, after the FFT change).
