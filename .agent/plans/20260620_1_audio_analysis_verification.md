@@ -193,3 +193,10 @@ Proof entry template:
 - **CORRECTION to the D7 entry:** deployed genre accuracy is **63.9% (23/36 @ fft2048)**, not 44.4%. The 44.4% was an INSTIGATOR error — `genre_eval.mjs` defaulted to fftSize 1024 but the engine deploys 2048; I verified D7 at the wrong fftSize. D7's classifier was correct; D8 fixed the harness default to 2048. genre_classifier.js byte-for-byte unchanged (honest ceiling 63.9% on 36 noisy-label tracks). Per-genre @2048: tech_house 100%, melodic_house 83%, deep_house 67%, melodic_techno 67%, techno 33%, downtempo 33%.
 - BPM octave (bpm_tracker.js): tempo-octave disambiguation + lock-octave migration + histFoldLo 95→80. Command(s) BY INSTIGATOR: `node tools/genre_eval.mjs --corpus ~/tmp/genre_corpus` (now default 2048) → **63.9%**; `node --test tests/bpm_tracker_octave.test.js tests/audio_*.test.js tests/genre_classifier.test.js tests/note_estimator_synthetic.test.js tests/integration/audio_analysis_validation.test.mjs` → **215 pass**; dry-run exit 0. Agent BPM evidence: 90-BPM synth 90.1 (unchanged), 128-BPM 128.2 (unchanged), real downtempo DWK217 144.1→72.3, DWK301 140.6→70.3.
 - Verdict: D8 crossed off. ✅ — **genre confirmed 63.9% deployed; BPM octave-doubling fixed. Lesson: always verify with the deployed config (fft2048), not the harness default.**
+
+### D9 — companion surfaces new derived signals  [PASS]  2026-06-20T13:55Z
+- Branch/commit: `dev/companion_new_signals` @ `18b0777` → merged into `feat/audio_analysis_2` (--no-ff, clean, companion-only).
+- 13 keys into the companion DERIVED frame + grouped UI (BUILD/STRUCTURE/ONSETS), theme-var only (no hex), pulse keys flash / continuous meter.
+- Command(s) BY INSTIGATOR on merged tip: `node --test tests/companion_*.test.js` → **72 pass**. Agent proof: live WS frame on :31266 carried 13/13 new keys (finite); 5 [data-theme] blocks define every new var (asserted); zero hardcoded hex.
+- No screenshot (no chromium) — browser visual check before playa (noted).
+- Verdict: D9 crossed off. ✅
