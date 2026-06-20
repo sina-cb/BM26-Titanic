@@ -173,7 +173,7 @@ Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCK
 
 ### Wave A
 - ✅ A0 genre detection + note→color fix — `dev/genre_signals` MERGED @ `08d9537` (sub-agent STALLED; instigator finished + verified: 263 tests green, 13 new; proof in `_verification` 05:25Z)
-- ⏳ A1 companion OSC accounting page + CaptainPad theming — `dev/companion_ui` (slot 1)
+- ✅ A1 companion OSC accounting page + CaptainPad theming — `dev/companion_ui` MERGED @ `1924803` (sub-agent STALLED; instigator finished + verified: 69 companion tests, /osc_accounting live; proof in `_verification` 05:40Z)
 - ✅ A2 discovery: new audio features → `20260620_2`
 - ✅ A3 discovery: low-hanging-fruit triage → `20260620_3`
 
@@ -219,3 +219,14 @@ summary report, push `feat/audio_analysis_2`.
 - `03:00Z` B4 (CaptainPad UI) completed + MERGED @ `bd0fc34`; tsc+lint exit 0 on the
   merged tip (proof logged). Still in flight: A0 genre/note, A1 companion, B2 detector
   tuning, B3 analyzer features. 4 agents running.
+- `03:20Z` B3 (analyzer features) MERGED @ `1aa12f4` (242 tests). `04:00Z` B2 (detector
+  super-tuning) MERGED @ `8ac1b6d` (250+40 tests, drop F1 0.29→0.71).
+- `05:05Z` Detected A0 + A1 sub-agents STALLED (~02:42Z, no completion/commit, zero
+  file activity 90 min, no live proc). Instigator took over BOTH stalled slices as
+  developer (full authority), finished + verified them.
+- `05:25Z` A0 (genre + note/color) MERGED @ `08d9537` (263 tests; union-resolved
+  derived_signals/registry conflicts w/ B3). Fixed a mid-run node_modules self-symlink
+  incident (npm reinstall; fft.js restored).
+- `05:40Z` A1 (companion accounting + theming) MERGED @ `1924803`. **ALL 5 SLICES
+  MERGED.** Full integration sweep: 270 audio tests green. Next: push to preserve
+  (ephemeral container), then Wave C adversarial (queue ACTIVE now empty) + I1/I2/I3.
