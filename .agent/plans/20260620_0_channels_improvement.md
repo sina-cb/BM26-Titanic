@@ -385,3 +385,11 @@ node_modules symlinked to main checkout (gitignored, never committed).
   Disjoint files: DeckTopBar|masterApi ‖ mixer.tsx|SnapshotBar|channelExtrasApi ‖
   PlaylistPanel|api.ts|playlist_manager|api_server. No shared file across the three.
   NEXT engine waves (serial): WAVE 14 metering, WAVE 15 groups+solo (spec ready _13).
+
+## STATUS LOG (cont. 5)
+- 2026-06-20 T9: 13-A master-fade UI MERGED (c3f7192) + 13-B snapshots/clamp/color UI
+  MERGED (586d4ef). Snapshots, master-fade, faderMax, color now FULLY shipped (engine+UI).
+  WAVE 16 playlist tags+hold/loop still building (sole engine writer, owns api_server.js).
+  Launched read-only channel-ops design (#6 dup / #7 reorder / #9 panic) to de-risk reorder.
+  Next engine waves after 16 merges (serial on api_server.js): WAVE 14 metering →
+  WAVE 15 groups+solo (spec _13) → channel-ops (spec pending). Then re-discover.
