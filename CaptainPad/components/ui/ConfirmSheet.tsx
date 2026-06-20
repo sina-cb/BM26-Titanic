@@ -22,6 +22,12 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 // Codex P0 — NO fallback behaviors: onConfirm is invoked verbatim; this
 // component never swallows or substitutes the caller's action.
 
+// The buttons already render at the 44pt min touch target (see `btn`
+// style), but an 8pt hitSlop on every edge guarantees the *interactive*
+// zone clears 44pt even if a future style shrinks the visual footprint,
+// and gives the operator margin for error on a moving show surface.
+const BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
 export interface ConfirmSheetProps {
   visible: boolean;
   title: string;
@@ -68,6 +74,7 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
               <TouchableOpacity
                 style={[styles.btn, styles.cancelBtn]}
                 onPress={onCancel}
+                hitSlop={BTN_HIT_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel={cancelLabel}
               >
@@ -76,6 +83,7 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
               <TouchableOpacity
                 style={[styles.btn, styles.confirmBtn]}
                 onPress={onConfirm}
+                hitSlop={BTN_HIT_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel={confirmLabel}
               >

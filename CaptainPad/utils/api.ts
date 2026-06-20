@@ -259,7 +259,13 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
+    // Codex P0 — fail loud: surface an engine rejection so the deck's
+    // optimistic transition-config update can roll back instead of
+    // showing a value the engine never accepted.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set deck transition config failed:', 'Set deck transition config failed:', err);
@@ -1003,7 +1009,15 @@ export async function updateMixerChannel(id: string, updates: any): Promise<ApiR
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
+    // Codex P0 — fail loud: an engine rejection (400 unknown group /
+    // bad viewMask, 400 WRONG_ROLE, 404, 500) used to come back as
+    // { ok: true } with the error body as `data`, so callers that
+    // branch on `ok` (e.g. mixer view-selection) could never see a
+    // rejected PATCH. Mirror updateDeckChannel's res.ok handling.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -1027,7 +1041,16 @@ export async function updateMixerMaster(master: number): Promise<ApiResult<any>>
 export async function removeMixerChannel(id: string): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
+    // Codex P0 — fail loud: a DELETE the engine rejected (404 unknown
+    // id, 400 WRONG_ROLE for the deck channel, 500) used to return
+    // { ok: true } unconditionally, so the delete-confirm handler
+    // assumed success on a destructive, live-show action that never
+    // landed. Surface the engine's error body on non-2xx, mirroring
+    // fetchMixerState / updateDeckChannel.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
