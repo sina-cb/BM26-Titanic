@@ -77,14 +77,39 @@ const DEFAULTS = Object.freeze({
   //
   // After the comb argmax picks a candidate period, we re-evaluate the PURE
   // (non-comb) normalized autocorrelation at the candidate AND at its half- and
-  // double-tempo octaves, weight each by a WIDE perceptual tempo preference,
-  // and choose the octave that maximizes (autocorr × preference). The
-  // preference is a log-Gaussian centred at `octaveCenterBpm` so that, when two
-  // octaves have COMPARABLE periodicity strength, the perceptually-central one
-  // wins — but a clearly stronger octave still beats a weak central one, so
-  // genuine fast (e.g. 174 DnB) and genuine slow tempos are both preserved.
-  octaveCenterBpm: 115,     // perceptual centre of the tempo-preference curve
-  octaveSigma: 0.42,        // log-space width — wide enough to keep 75..180 viable
+  // double-tempo octaves, weight each by a perceptual tempo preference, and
+  // choose the octave that maximizes (autocorr × preference). The preference is
+  // a SKEWED log-Gaussian centred at `octaveCenterBpm` so that, when two octaves
+  // have COMPARABLE periodicity strength, the perceptually-preferred one wins —
+  // but a clearly stronger octave still beats a weak central one, so genuine
+  // fast (174 DnB) and genuine slow (downtempo) tempos are both preserved.
+  //
+  // ── Why the curve is SKEWED (asymmetric sigma) and centred at 128 ──────────
+  // Burning Man runs FAST: psytrance ~140-150, drum & bass ~170-174. With the
+  // old SYMMETRIC curve (centre 115, sigma 0.42) the perceptual weight at a
+  // genuine fast tempo and at its HALF were near-equal — e.g. pref(170)/pref(85)
+  // ≈ 0.84, so the half was actually FAVOURED. Whenever the autocorrelation at
+  // the half was even marginally strong (the comb prefers the faster metrical
+  // level, but the PURE autocorr of a heavy 4-on-floor often peaks at the
+  // half-tempo two-bar period), the half won and fast EDM HALVED
+  // (full_track @170 → 85, DnB → ~90). Adv-A (report 22 P1-D) flagged this.
+  //
+  // The fix keeps the SLOW side narrow (sigLo 0.30) so the preference drops
+  // steeply below ~100 BPM, and widens the FAST side (sigHi 0.60) so the whole
+  // 120-180 dance band stays near the preference plateau. Net: pref(fast)/
+  // pref(half) > 1.5 across 150-180, so a genuine fast tempo wins its ×2 contest
+  // — while downtempo is UNAFFECTED, because a genuinely slow ~70 BPM track has
+  // autocorr at its double far below `octaveAcRatio` of the slow peak, so the
+  // double is never even CONSIDERED (the perceptual weight only breaks ties
+  // between two real metrical levels; it cannot manufacture one). Verified on
+  // the real corpus: DWK217 stays 70, DWK031 110, Vkrsnl 116/130 — no re-double.
+  octaveCenterBpm: 128,     // perceptual centre (the EDM sweet spot / 128-prior)
+  octaveSigma: 0.30,        // log-space width BELOW centre — narrow: the
+                            //   preference falls off steeply for slow tempos so a
+                            //   genuine fast tempo is not dragged down to its half.
+  octaveSigmaHi: 0.60,      // log-space width ABOVE centre — wide: keeps the whole
+                            //   120-180 dance band near the preference plateau so
+                            //   fast psytrance/DnB win their ×2 contest vs the half.
   octaveAcRatio: 0.65,      // an alternate octave must carry at least this fraction
                             //   of the candidate's autocorr to be CONSIDERED a real
                             //   metrical level (guards against folding onto noise).
@@ -111,7 +136,14 @@ const DEFAULTS = Object.freeze({
 
   // Lock-octave migration (recover a lock that latched a half/double error)
   octMigrateHops: 40,       // sustained half/double evidence before migrating (~3.7s)
-  octMigrateConf: 0.10,     // only confident half/double reads count toward migration
+  octMigrateConf: 0.06,     // min confidence for a half/double read to count toward
+                            //   migration. Lowered 0.10 → 0.06 so a low-energy FAST
+                            //   track that locked its half during the warmup window
+                            //   (e.g. DnB tkep017: autocorr ~0.12, locked 76, the
+                            //   steady chooser then reads a clean 152) can still
+                            //   migrate UP to its true fast tempo. The clean-×2 ratio
+                            //   gate + sustained-streak requirement keep this from
+                            //   re-doubling a correctly-locked slow track.
 
   // Kalman (BPM) — two regimes
   kfQSearch: 0.20,          // process noise while searching (lets seed move)
@@ -346,11 +378,20 @@ export class BpmTracker {
     return lag + delta;
   }
 
-  /** @private wide perceptual tempo-preference weight (log-Gaussian, [0,1]). */
+  /**
+   * @private skewed perceptual tempo-preference weight (log-Gaussian, [0,1]).
+   *
+   * Asymmetric: `octaveSigma` (narrow) governs the slow side BELOW the centre,
+   * `octaveSigmaHi` (wide) the fast side ABOVE it. The narrow slow side makes the
+   * preference fall off steeply for slow tempos so a genuine fast tempo is never
+   * dragged down to its half; the wide fast side keeps the whole 120-180 dance
+   * band near the plateau so fast psytrance/DnB win their ×2 contest. See the
+   * DEFAULTS block for the full rationale (Burning Man runs fast).
+   */
   _octavePref(bpm) {
     if (bpm <= 0) return 0;
     const d = Math.log(bpm) - Math.log(this.p.octaveCenterBpm);
-    const s = this.p.octaveSigma;
+    const s = d < 0 ? this.p.octaveSigma : this.p.octaveSigmaHi;
     return Math.exp(-(d * d) / (2 * s * s));
   }
 
