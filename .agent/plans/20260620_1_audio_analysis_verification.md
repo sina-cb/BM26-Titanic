@@ -150,3 +150,10 @@ Proof entry template:
 - Command(s) run BY INSTIGATOR: `node --test tests/genre_eval_harness.test.mjs` → **2 pass / 0 fail**.
 - KEY FINDING (real-audio truth): genre classifier baseline **8/36 = 22.2% @ fft1024** (chance ~17%) — the synthetic tuning did NOT transfer. Root causes (measured centroids): `melodic` note-rate reads ~0.10–0.21 for ALL genres (doesn't saturate → melodic_house/melodic_techno never predicted, techno over-fires); `kickDens` saturates ~0.9 everywhere; `sparkle` polarity inverted (deep_house brightest, not techno); `sparkleVar` no longer flags tech_house.
 - Verdict: D6 crossed off. ✅ — and it MANDATES a data-driven genre re-tune (queued D7, after the FFT change).
+
+### D3 — reactive patterns (59–63)  [PASS]  2026-06-20T08:45Z
+- Branch/commit: `dev/reactive_patterns` @ `0eeaaea` → merged into `feat/audio_analysis_2` (--no-ff, clean, additive).
+- 5 patterns modulating off Round-2 signals: 59 drumkit_chase (micOnsetLow/Mid/High, corr 0.81/0.84), 60 chest_thump (audioChestHit 0.92/0.86), 61 riser_release (buildScore 0.99 + drop release), 62 genre_palette (audioGenre→hue), 63 note_color (audioNoteHue −0.79 + switchColor flash — validates the Round-2 note→colour fix).
+- Command(s) BY INSTIGATOR: manifest valid JSON (63 entries); `node engine.js --pattern 62_genre_palette --model test_bench --dry-run` → compiles, **exit 0**.
+- Agent proof (report 20260620_16): all 5 COMPILE_OK/ANIMATING/silence-safe via a real-DSP derived-signal harness; HTML clips `~/tmp/reactive_patterns/clips/{59..63}_*.html`. NOTE flagged: micSub/audioChestHit need the analyzer `sub:{minHz,maxHz}` window (config.yaml 30–60 Hz) to be non-silent.
+- Verdict: D3 crossed off. ✅
