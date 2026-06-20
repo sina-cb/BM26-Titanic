@@ -345,6 +345,83 @@ function loadPattern(patternsDir, name) {
 }
 
 /**
+ * Mission-critical deck-restore safety (Codex P0 — keep the exterior LIT).
+ *
+ * The deck channel drives the Titanic's exterior — the one surface that is
+ * mission-critical to be visible at night. Restoring it from saved state can
+ * fail two ways: the saved pattern is null/empty/missing-on-disk (load throws),
+ * or it loads but fails to compile. EITHER outcome used to leave the rig dark
+ * (silent null deck) or refuse to boot (crash). Both are unacceptable for the
+ * deck.
+ *
+ * This helper makes the deck restore self-healing: it tries to build from the
+ * saved pattern, and on ANY failure FALLS BACK to the known-good default
+ * pattern so the deck is never dark. The fallback is NOT silent — it returns a
+ * `degraded` descriptor the caller surfaces on `/status` (so an operator /
+ * CaptainPad / smoke-check can SEE the saved deck didn't restore) and logs a
+ * loud one-time `console.error`. Only if the DEFAULT pattern ALSO fails does it
+ * throw fatally — that means the install itself is broken.
+ *
+ * `build(pattern)` must synchronously return the built channel or THROW. It is
+ * the only injected dependency, which keeps this pure and unit-testable without
+ * booting the engine.
+ *
+ * Returns `{ channel, degraded }` where `degraded` is either `null` (saved
+ * pattern restored cleanly) or `{ failedPattern, reason, fellBackTo }`.
+ */
+export function restoreDeckWithFallback(saved, defaultPattern, build) {
+  const savedPattern = saved && saved.pattern;
+  // A null/empty saved pattern can't even be attempted — treat the same as a
+  // load failure so the fallback path runs (don't hand build() a bad name).
+  if (typeof savedPattern === 'string' && savedPattern.length > 0) {
+    try {
+      const channel = build(savedPattern);
+      return { channel, degraded: null };
+    } catch (e) {
+      return buildDeckFallback(saved, savedPattern, e.message, defaultPattern, build);
+    }
+  }
+  return buildDeckFallback(
+    saved,
+    savedPattern == null ? null : String(savedPattern),
+    savedPattern == null ? 'saved deck pattern is null/empty' : `saved deck pattern is empty`,
+    defaultPattern,
+    build,
+  );
+}
+
+function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) {
+  console.error(
+    `[Restore] DECK RESTORE DEGRADED — saved deck pattern ` +
+    `'${failedPattern == null ? '(null)' : failedPattern}' failed to restore ` +
+    `(${reason}). Falling back to default pattern '${defaultPattern}' to keep ` +
+    `the mission-critical exterior LIT. This is a LOUD, VISIBLE degrade — see ` +
+    `deckRestoreDegraded on /status.`,
+  );
+  // Build the deck from the known-good default with the saved channel's
+  // identity/lock/view prefs preserved (so the operator's slot survives) but
+  // the broken pattern swapped for the default.
+  let channel;
+  try {
+    channel = build(defaultPattern);
+  } catch (e) {
+    // The default ALSO failed — the install is broken; boot must fail loud.
+    const fatal = new Error(
+      `Deck restore fallback FAILED: default pattern '${defaultPattern}' also ` +
+      `failed to build (${e.message}) after saved pattern ` +
+      `'${failedPattern == null ? '(null)' : failedPattern}' failed (${reason}). ` +
+      `The install is broken — refusing to boot a dark deck.`,
+    );
+    fatal._deckRestoreFatal = true;
+    throw fatal;
+  }
+  return {
+    channel,
+    degraded: { failedPattern: failedPattern == null ? null : failedPattern, reason, fellBackTo: defaultPattern },
+  };
+}
+
+/**
  * Enumerate every non-internal IPv4 URL the engine is reachable on,
  * for the boot-time "Reachable on:" block.
  *
@@ -1481,96 +1558,114 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
-  function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
-    try {
-      const src = loadPattern(patternsDir, saved.pattern);
-      const comp = wasmHost.compile(src);
-      if (!comp.ok) {
-        // Codex P0 (no silent fallback): a deck base channel that fails to
-        // compile must FAIL LOUD, not boot a null deck. The deck is the
-        // mission-critical exterior surface — silently booting without it
-        // would leave the Titanic dark with no error surfaced. Throw so the
-        // tagged re-throw in the catch below propagates to engine boot.
-        // (Mixer overlays still degrade: a dead overlay leaves the deck +
-        // other overlays live, and is logged — see catch.)
-        const msg = `Failed to compile saved ${role} channel '${saved.pattern}': ${comp.error}`;
-        if (role === 'deck') {
-          const e = new Error(msg);
-          e._deckRestoreFatal = true;
-          throw e;
-        }
-        console.warn(msg);
-        return;
-      }
-      const config = {
-        id: saved.id,
-        name: saved.name,
-        pattern: saved.pattern,
-        handle: comp.handle,
-        mode: saved.mode,
-        fader: saved.fader,
-        enabled: saved.enabled,
-        // Restore lock flags so the channel survives engine restart in
-        // the same lock state the operator left it in. Pre-fader_lock
-        // these were silently dropped; with the new faderLocked field
-        // added in slot 5 we plumb them through explicitly. Falsy
-        // defaults match the PatternChannel constructor.
-        locked: !!saved.locked,
-        faderLocked: !!saved.faderLocked,
-        // Same reasoning for transition prefs.
-        transitionMode: saved.transitionMode || 'trans_crossfade',
-        transitionTime: saved.transitionTime || 1.0,
-        // Restore view-selection so a mask-restricted channel survives
-        // engine restart. setDeckChannel / addMixerChannel will compile
-        // the mask immediately via recompileChannelMask (no extra call
-        // needed here).
-        viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
-      };
-      const ch = role === 'deck'
-        ? mixer.setDeckChannel(config)
-        : mixer.addMixerChannel(config);
-      if (saved.playlist) ch.playlist = saved.playlist;
-      onChannelCompiled(ch);
+  // Mission-critical deck-restore visibility (FIX A). Set to a descriptor
+  // `{ failedPattern, reason, fellBackTo }` iff the saved deck channel failed
+  // to restore and we fell back to the default pattern to keep the exterior
+  // LIT. Surfaced on GET /status as `deckRestoreDegraded` so an operator /
+  // CaptainPad / smoke-check can SEE that the saved deck didn't restore.
+  // Null on a clean boot.
+  let deckRestoreDegraded = null;
 
-      // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
-      // canonical per-slot state. If a playlist+entry survived in saved
-      // state, re-apply those defaults; otherwise just replay localControls.
-      // tryLoad (not load) so a corrupt active playlist degrades to the
-      // localControls fallback instead of aborting the channel restore.
-      const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
-      const entry = pl && ch.playlist.activeEntryId &&
-        pl.entries.find(e => e.id === ch.playlist.activeEntryId);
-      // Codex P0: a dangling activeEntryId (the entry was deleted from the
-      // playlist since this state was saved) is a restore-time bomb — every
-      // later "advance from current entry" lookup would silently no-op
-      // against an id that resolves to nothing. Detect it here, WARN loudly,
-      // and CLEAR the stale id so the channel is in a clean "no active
-      // entry" state rather than carrying a pointer to a ghost. We still
-      // fall back to localControls below so the slot keeps its last params.
-      const danglingEntryId = pl && ch.playlist.activeEntryId && !entry;
-      if (danglingEntryId) {
-        console.warn(
-          `[Restore] ${role} channel '${ch.id}': playlist '${ch.playlist.name}' ` +
-          `has no entry '${ch.playlist.activeEntryId}' (deleted since save) — ` +
-          `clearing the stale activeEntryId.`);
-        ch.playlist.activeEntryId = null;
+  // Build a channel (deck or mixer) from a saved-state shape against a given
+  // pattern name. Loads + compiles the pattern, installs the channel, re-binds
+  // its saved playlist, and replays entry defaults / localControls. THROWS on
+  // load or compile failure so the deck-fallback wrapper can react; the mixer
+  // path lets the throw bubble to restoreChannel's catch (degrade + warn).
+  function buildChannelFromSaved(saved, role, pattern) {
+    const src = loadPattern(patternsDir, pattern);
+    const comp = wasmHost.compile(src);
+    if (!comp.ok) {
+      throw new Error(`Failed to compile saved ${role} channel '${pattern}': ${comp.error}`);
+    }
+    const config = {
+      id: saved.id,
+      name: saved.name,
+      // Use the pattern we actually built — on a deck fallback this is the
+      // default, not the broken saved.pattern.
+      pattern: pattern,
+      handle: comp.handle,
+      mode: saved.mode,
+      fader: saved.fader,
+      enabled: saved.enabled,
+      // Restore lock flags so the channel survives engine restart in
+      // the same lock state the operator left it in. Pre-fader_lock
+      // these were silently dropped; with the new faderLocked field
+      // added in slot 5 we plumb them through explicitly. Falsy
+      // defaults match the PatternChannel constructor.
+      locked: !!saved.locked,
+      faderLocked: !!saved.faderLocked,
+      // Same reasoning for transition prefs.
+      transitionMode: saved.transitionMode || 'trans_crossfade',
+      transitionTime: saved.transitionTime || 1.0,
+      // Restore view-selection so a mask-restricted channel survives
+      // engine restart. setDeckChannel / addMixerChannel will compile
+      // the mask immediately via recompileChannelMask (no extra call
+      // needed here).
+      viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
+    };
+    const ch = role === 'deck'
+      ? mixer.setDeckChannel(config)
+      : mixer.addMixerChannel(config);
+    if (saved.playlist) ch.playlist = saved.playlist;
+    onChannelCompiled(ch);
+
+    // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
+    // canonical per-slot state. If a playlist+entry survived in saved
+    // state, re-apply those defaults; otherwise just replay localControls.
+    // tryLoad (not load) so a corrupt active playlist degrades to the
+    // localControls fallback instead of aborting the channel restore.
+    const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
+    const entry = pl && ch.playlist.activeEntryId &&
+      pl.entries.find(e => e.id === ch.playlist.activeEntryId);
+    // Codex P0: a dangling activeEntryId (the entry was deleted from the
+    // playlist since this state was saved) is a restore-time bomb — every
+    // later "advance from current entry" lookup would silently no-op
+    // against an id that resolves to nothing. Detect it here, WARN loudly,
+    // and CLEAR the stale id so the channel is in a clean "no active
+    // entry" state rather than carrying a pointer to a ghost. We still
+    // fall back to localControls below so the slot keeps its last params.
+    const danglingEntryId = pl && ch.playlist.activeEntryId && !entry;
+    if (danglingEntryId) {
+      console.warn(
+        `[Restore] ${role} channel '${ch.id}': playlist '${ch.playlist.name}' ` +
+        `has no entry '${ch.playlist.activeEntryId}' (deleted since save) — ` +
+        `clearing the stale activeEntryId.`);
+      ch.playlist.activeEntryId = null;
+    }
+    if (entry && !entry._missing) {
+      playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
+    } else if (saved.localControls) {
+      for (const [idStr, cv] of Object.entries(saved.localControls)) {
+        const controlId = parseInt(idStr, 10);
+        if (!getReplayableLocalExport(ch, controlId)) continue;
+        paramRouter.setChannelControl(ch.id, controlId, cv.v0, cv.v1, cv.v2);
       }
-      if (entry && !entry._missing) {
-        playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
-      } else if (saved.localControls) {
-        for (const [idStr, cv] of Object.entries(saved.localControls)) {
-          const controlId = parseInt(idStr, 10);
-          if (!getReplayableLocalExport(ch, controlId)) continue;
-          paramRouter.setChannelControl(ch.id, controlId, cv.v0, cv.v1, cv.v2);
-        }
-      }
-      // CPC gets the last word — latest color palette, speed, etc. always win
-      finalizeCpcValues(ch);
+    }
+    // CPC gets the last word — latest color palette, speed, etc. always win
+    finalizeCpcValues(ch);
+    return ch;
+  }
+
+  function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
+    if (role === 'deck') {
+      // FIX A (mission critical): the deck drives the exterior — it must NEVER
+      // boot dark. On ANY failure to restore the saved deck (null/empty/
+      // missing-file/compile-fail) fall back to the known-good default pattern
+      // and surface a LOUD, VISIBLE degrade (console.error + deckRestoreDegraded
+      // on /status). Only a default that ALSO fails throws fatally.
+      const { degraded } = restoreDeckWithFallback(
+        saved,
+        opts.pattern,
+        (pattern) => buildChannelFromSaved(saved, 'deck', pattern),
+      );
+      deckRestoreDegraded = degraded;
+      return;
+    }
+    // Mixer overlay path: a dead overlay degrades + warns (the deck + other
+    // overlays stay live). Behavior unchanged from before FIX A.
+    try {
+      buildChannelFromSaved(saved, 'mixer', saved.pattern);
     } catch (e) {
-      // Codex P0: never swallow a fatal deck restore. A dead deck must
-      // crash boot loudly, not be logged-and-ignored (which would leave the
-      // exterior dark with the engine reporting "started").
-      if (e && e._deckRestoreFatal) throw e;
       console.warn(`Failed to restore ${role} channel ${saved.pattern}:`, e.message);
     }
   }
@@ -2177,6 +2272,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // modes. A green rig has renderHealth.ok === true with an empty
         // blendErrors array. See pattern_mixer.getRenderHealth().
         renderHealth: mixer.getRenderHealth ? mixer.getRenderHealth() : null,
+        // FIX A (Codex P0 visibility): non-null iff the saved DECK channel
+        // failed to restore at boot and the engine fell back to the default
+        // pattern to keep the mission-critical exterior LIT. Shape:
+        // { failedPattern, reason, fellBackTo }. Null on a clean boot. An
+        // operator / CaptainPad / smoke-check reads this to SEE that the
+        // saved deck did not restore (a loud, VISIBLE degrade — never silent).
+        deckRestoreDegraded,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -3975,6 +4077,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             playlist: baseCh.playlist,
             pattern: baseCh.pattern,
             transitionId: r && r.transitionId ? r.transitionId : null,
+            // FIX B: the RESOLVED target entry id for this swap. During a soft
+            // transition baseCh.playlist.activeEntryId is still the OLD entry
+            // (the new id is written in onComplete after the fade), so the
+            // client must arm its pending-gate from THIS, not playlist.
+            // activeEntryId, or the panel suppresses reconcile until the ~8s
+            // watchdog. For the entry-advance path the resolved target IS the
+            // requested entryId.
+            targetEntryId: data.entryId,
           }));
         } catch (e) {
           if (e && e.code === 'EBUSY') {
@@ -4064,6 +4174,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             playlist: baseCh.playlist,
             pattern: baseCh.pattern,
             transitionId: r && r.transitionId ? r.transitionId : null,
+            // FIX B: the RESOLVED target entry id for this swap. During a soft
+            // transition baseCh.playlist.activeEntryId is still the OLD entry
+            // (the new id is written in onComplete after the fade), so the
+            // client must arm its pending-gate from THIS, not playlist.
+            // activeEntryId, or the panel pins to the stale id until the ~8s
+            // watchdog.
+            targetEntryId: targetEntry.id,
           }));
         } catch (e) {
           // Concurrency: an in-flight swap throws EBUSY (see
