@@ -162,8 +162,11 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       /status renderHealth.ok===false || deckRestoreDegraded!=null as a non-intrusive
       amber "⚠ DEGRADED" chip by the connection pill (DeckTopBar). Additive; healthy
       engine = no change. Touches api.ts/engineBus.ts/useEngineConnection.ts/DeckTopBar.tsx.
-- [ ] Merge WAVE 9 → verify → push. Then WIND DOWN: audit fully closed, deliverable
-      handoff-ready. (Beyond this = diminishing returns; re-audit only if operator wants more.)
+- [x] WAVE 9: dev/health_pill — DONE + MERGED (a76a044). Last audit nit closed.
+- [x] CAMPAIGN CLOSED. 10 slices merged + verified. Final merge summary:
+      .agent/02_reports/202606/20260620_10_channels_campaign_merge_summary.md.
+      Deliverable feat/optimize_channels @ a76a044 — handoff-ready, pushed.
+      WINDING DOWN: re-engage only on operator request (cron stays as stuck-net).
 
 ## STATUS LOG (cont. 2)
 
