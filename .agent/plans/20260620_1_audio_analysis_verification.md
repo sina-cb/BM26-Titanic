@@ -200,3 +200,9 @@ Proof entry template:
 - Command(s) BY INSTIGATOR on merged tip: `node --test tests/companion_*.test.js` → **72 pass**. Agent proof: live WS frame on :31266 carried 13/13 new keys (finite); 5 [data-theme] blocks define every new var (asserted); zero hardcoded hex.
 - No screenshot (no chromium) — browser visual check before playa (noted).
 - Verdict: D9 crossed off. ✅
+
+### D10 — structure/anticipation patterns (64–68)  [PASS]  2026-06-20T14:05Z
+- Branch/commit: `dev/patterns_new_signals` @ `877fc50` → merged into `feat/audio_analysis_2` (--no-ff, clean, additive).
+- 64 drop_countdown (audioDropCountdown→bri 0.99/0.84), 65 climax_hold (audioClimax 0.94), 66 phrase_stepped (phrasePhase + 8-bar step), 67 track_reset (silence→fade, never dark), 68 riser_sweep (riserScore 0.81, conf-gated).
+- Command(s) BY INSTIGATOR: manifest 68 entries valid; `node engine.js --pattern 64_drop_countdown --dry-run` → compiles, complete. Agent: all 5 COMPILE_OK/ANIMATING/silence-safe via real-DSP harness; clips in ~/tmp/patterns_new_signals/clips/.
+- Verdict: D10 crossed off. ✅ — rig now has 10 Round-2 reactive patterns (59–68).
