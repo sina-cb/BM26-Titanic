@@ -428,3 +428,16 @@ The agent caught its own misdirection: copied the work into the worktree, restor
 baseline (verified: main lib diff empty, only this plan note pending). Work properly committed
 to dev/groups_solo_engine (9974153). 910 pass/0 fail (+34), HIL 18/18 incl. soloSafe-stays-lit.
 Normal worktree-merge flow applies. ~/tmp/wave15_backup no longer needed. No cross-contamination.
+
+## STATUS LOG (cont. 7)
+- 2026-06-20 T12: WAVE 15 groups+solo ENGINE MERGED (f802f41): 910 pass/0 fail, HIL 18/18
+  incl. soloSafe-stays-lit. deck-extras MERGED (fe86285). Launched 2 parallel (disjoint):
+  * WAVE 15-UI dev/groups_solo_ui — group rail + server-solo + solo-safe in mixer.tsx
+    (+ new groupsSoloApi.ts); deletes destructive client soloRef/preSoloStateRef.
+  * WAVE 14 dev/channel_metering — engine per-channel output level (alloc-free, folded into
+    vis extraction) + meter in ChannelVizStrip (self-subscribing, NOT mixer.tsx).
+  Both agents told EXPLICITLY to edit only within their worktree (the WAVE 15 engine agent
+  had mistakenly edited main, self-recovered; guard added to prevent repeats).
+  After these: ops cluster (dup/reorder/panic, spec _17). FEATURES SHIPPED: hot-swap,
+  snapshots, master-fade, clamp, color, playlist tags/search, hold/loop, groups, server-solo,
+  deck-extras (+ hardening/QoL/perf/audit/docs/de-flake).
