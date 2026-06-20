@@ -245,3 +245,10 @@ Proof entry template:
 - Params (bpm_tracker.js): octaveCenterBpm 115→128, octaveSigma 0.42→0.30, new octaveSigmaHi 0.60, octMigrateConf 0.10→0.06; skewed log-Gaussian _octavePref.
 - Command(s) BY INSTIGATOR: `node --test tests/bpm_tracker_octave.test.js tests/audio_config.test.js tests/note_estimator_synthetic.test.js` → **39 pass**; dry-run exit 0. Also fixed a pre-existing AUDIO_LIVE_FIELDS contract-test regression F2 surfaced (E1 keys) → audio_config 23/23.
 - Verdict: F2 crossed off. ✅
+
+### FULL-SUITE INTEGRATION GATE (post F-wave)  [PASS]  2026-06-20T23:55Z
+- Running the FULL audio suite (not subsets — the lesson) caught 2 cross-slice regressions the per-slice merges missed:
+  1. `audio_config.test.js` AUDIO_LIVE_FIELDS contract drifted (E1's 3 new detector keys not in the snapshot) → fixed (fd84567).
+  2. 3 `new_derived_signals.test.js` tests assumed the detector fires on synthetic edm_drop, but E1's precision-first detector no longer does → decoupled via an injected canonical drop event (signals validated; detector precision covered by detector_eval).
+- Command BY INSTIGATOR: `node --test tests/audio_*.test.js tests/bpm_tracker_octave.test.js tests/genre_classifier.test.js tests/new_derived_signals.test.js tests/switch_color_note.test.js tests/band_onsets.test.js tests/note_estimator_synthetic.test.js tests/companion_*.test.js tests/derived_signals_perf_finiteness.test.js` → **300 pass / 0 fail**. (detector_eval real-corpus test verified separately green; perf p99 deterministic per E3.)
+- LESSON LOGGED: always run the FULL audio suite after a wave of merges — per-slice subset runs miss cross-slice interactions (precision-first detector ↔ signal/test assumptions; config-contract snapshots).
