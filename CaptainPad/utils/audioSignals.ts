@@ -87,13 +87,16 @@ export function audioGenreName(value: number): string | null {
 }
 
 /**
- * Whether an audio CPC key is the genre classifier output. Matched by the
- * `genre` token (case-insensitive) so a `audioGenre` / `micGenre` / a
- * dynamic Companion key carrying "genre" all resolve. Used by the AUDIO
- * tab to switch a signal column from a numeric readout to the genre name.
+ * Whether an audio CPC key is the genre classifier NAME output (the float
+ * INDEX into AUDIO_GENRE_NAMES) — not its companion `audioGenreConf` key.
+ * Matched by the `genre` token (case-insensitive) so `audioGenre` / `micGenre`
+ * / a dynamic Companion key carrying "genre" all resolve, but the sibling
+ * CONFIDENCE key (`audioGenreConf`, a real [0,1] level) is EXCLUDED — otherwise
+ * its 0..1 confidence would be misread through audioGenreName() and rendered
+ * as a fake genre name (e.g. 0 → "AMBIENT") instead of a numeric readout.
  */
 export function isGenreKey(key: string): boolean {
-  return /genre/i.test(key);
+  return /genre/i.test(key) && !/conf/i.test(key);
 }
 
 /**
@@ -127,9 +130,12 @@ export function audioAccentHex(signal: AudioSignalDescriptor): string {
 //                        deck — see BpmTile — so it's intentionally NOT in
 //                        this bar to avoid a duplicate readout.)
 //
-// Matching is by trailing band TOKEN (substring, case-insensitive) so a
-// `micLow` / `audioLow` both qualify as the LOW cue. Order here is the
-// on-screen order; the first live signal matching each token wins.
+// Matching is by band TOKEN as a WORD SEGMENT of the camelCase/lower key (NOT a
+// bare substring) so `micLow` / `audioLow` qualify as the LOW cue but
+// `audioSlowZone` (which contains the substring "low" inside "s-low-zone") does
+// NOT — a bare `includes('low')` mis-curated the slow-zone signal as a band cue.
+// Same fragility applied to mid/high. Order here is the on-screen order; the
+// first live signal matching each token wins.
 export const CURATED_DECK_TOKENS: readonly string[] = [
   'low',
   'mid',
@@ -139,6 +145,25 @@ export const CURATED_DECK_TOKENS: readonly string[] = [
   'beat',
   'energy',
 ];
+
+/**
+ * Whether `key` contains `token` as a discrete WORD SEGMENT — anchored to a
+ * camelCase boundary or the key edges — rather than as a loose substring. This
+ * is what lets LOW match `micLow`/`audioLow`/`low` while rejecting the embedded
+ * "low" in `audioSlowZone`. The token boundary on each side is: the key edge, a
+ * non-letter, or a case transition (lower↔Upper). Case-insensitive.
+ */
+export function keyHasBandToken(key: string, token: string): boolean {
+  // Split the camelCase/underscore key into lowercase word segments:
+  // 'audioSlowZone' → ['audio','slow','zone']; 'micLow' → ['mic','low'].
+  const segments = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  return segments.includes(token.toLowerCase());
+}
 
 /**
  * Filter the full dynamic signal set down to the curated deck subset, in
@@ -155,7 +180,7 @@ export function curateDeckSignals(
   const used = new Set<string>();
   for (const token of CURATED_DECK_TOKENS) {
     const hit = signals.find(
-      (s) => !used.has(s.key) && s.key.toLowerCase().includes(token),
+      (s) => !used.has(s.key) && keyHasBandToken(s.key, token),
     );
     if (hit) {
       out.push(hit);

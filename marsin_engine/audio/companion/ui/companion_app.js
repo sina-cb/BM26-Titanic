@@ -418,12 +418,28 @@ function renderAddViewSignals() {
 }
 function removeView(id) {
   // Confirm before destroying a view (parity with removeSignal — an accidental
-  // [×] tap is otherwise unrecoverable).
+  // [×] tap is otherwise unrecoverable). Themed modal, NOT a native dialog.
   const v = viewById(id);
-  if (v && !window.confirm(`Remove view "${v.label}"?`)) return;
-  if (S.selected === id) S.selected = 'input';
-  send({ type: 'removeView', id });
+  const doRemove = () => {
+    if (S.selected === id) S.selected = 'input';
+    send({ type: 'removeView', id });
+  };
+  if (!v) { doRemove(); return; }
+  confirmModal(`Remove view "${v.label}"?`, doRemove);
 }
+
+// Themed confirm dialog — the designer must NEVER use a native window.confirm/
+// alert/prompt (they ignore the theme + block the event loop). Shows the message
+// in the #confirm-modal and runs `onConfirm` only when the operator hits Remove.
+// `_confirmCb` holds the pending action; the buttons are wired once at boot.
+let _confirmCb = null;
+function confirmModal(message, onConfirm, okLabel = 'Remove') {
+  $('confirm-msg').textContent = message;
+  $('confirm-ok').textContent = okLabel;
+  _confirmCb = onConfirm;
+  $('confirm-modal').style.display = 'flex';
+}
+function closeConfirm() { _confirmCb = null; $('confirm-modal').style.display = 'none'; }
 
 // Adding a signal opens a themed picker (no native prompt) — a grid of the raw
 // sources, each card showing its label + type; click adds it and closes.
@@ -442,9 +458,12 @@ function promptAddSignal() {
 }
 function removeSignal(id) {
   const sig = signalById(id);
-  if (sig && !window.confirm(`Remove signal "${signalName(sig)}"?`)) return;
-  if (S.selected === id) S.selected = 'input';
-  send({ type: 'removeSignal', id });
+  const doRemove = () => {
+    if (S.selected === id) S.selected = 'input';
+    send({ type: 'removeSignal', id });
+  };
+  if (!sig) { doRemove(); return; }
+  confirmModal(`Remove signal "${signalName(sig)}"?`, doRemove);
 }
 
 // ── source panel ────────────────────────────────────────────────────────────
@@ -1068,8 +1087,12 @@ $('view-create').onclick = () => {
   send({ type: 'addView', label, viewType: _addViewType, signals: [..._addViewPicked] });
   $('view-modal').style.display = 'none';
 };
+// Themed confirm dialog wiring (Cancel/✕/backdrop dismiss; Remove runs the cb).
+$('confirm-cancel').onclick = closeConfirm;
+$('confirm-x').onclick = closeConfirm;
+$('confirm-ok').onclick = () => { const cb = _confirmCb; closeConfirm(); if (cb) cb(); };
 // Click the dark backdrop (outside the box) to dismiss any modal.
-for (const mid of ['add-modal', 'export-modal', 'browse-modal', 'view-modal']) {
+for (const mid of ['add-modal', 'export-modal', 'browse-modal', 'view-modal', 'confirm-modal']) {
   const m = $(mid); if (m) m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
 }
 
