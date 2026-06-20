@@ -66,54 +66,84 @@ const LAST_PARTY_GENRE = 6;
 //                 highs read as HIGH variance; a steady hiss reads LOW).
 //   melodic     : note-change rate 0..1 (pitch-class flips per second).
 //   flux        : spectral flux 0..1 (overall change / busyness).
+//   bassW       : low-band SHARE of total band energy low/(low+mid+high) —
+//                 bass dominance, robust to overall level. ENGINEERED v2.
+//   midW        : mid-band SHARE mid/(low+mid+high) — melodic/chord weight.
+//                 ENGINEERED v2.
+//   tilt        : spectral tilt high/(low+mid) — brightness independent of
+//                 absolute level (deep_house bright, downtempo dark).
+//                 ENGINEERED v2.
+//   fluxVar     : short-window variance of spectral flux — "busyness
+//                 dynamics" (techno-family high, deep/downtempo low).
+//                 ENGINEERED v2.
 const F_BPM = 0, F_KICKREG = 1, F_KICKDENS = 2, F_LOWMID = 3,
-      F_SPARKLE = 4, F_SPARKLEVAR = 5, F_MELODIC = 6, F_FLUX = 7;
-const N_FEAT = 8;
+      F_SPARKLE = 4, F_SPARKLEVAR = 5, F_MELODIC = 6, F_FLUX = 7,
+      F_BASSW = 8, F_MIDW = 9, F_TILT = 10, F_FLUXVAR = 11;
+const N_FEAT = 12;
 
 // Per-genre prior PROFILES (target feature vectors) + per-feature WEIGHTS
-// (how discriminating each feature is for the match). Tuned from the musical
-// priors in the enum doc above. Index 0 (ambient) has no profile — it is the
-// not-party default and is never scored against these.
+// (how discriminating each feature is for the match). Index 0 (ambient) has no
+// profile — it is the not-party default and is never scored against these.
 //
 // profile = the "ideal" normalized feature vector for the genre.
 // weight   = relative importance of matching that feature (0 = ignore).
-// PROFILE TUNING NOTE (2026-06-20): the targets + weights below were tuned
-// against the REAL analyzer's measured feature vectors on a per-genre
-// synthetic bank (the `chord_progression`-style tracks the validation test
-// drives), not against idealized priors. Two empirical realities shaped them:
-//   • the note-rate ("melodic") feature SATURATES high (~0.85–1.0) for any
-//     track with a moving bass root / chord change, and reads ~0 ONLY for a
-//     single-root, single-note track. So `melodic` mainly separates TECHNO
-//     (one driving root → ~0) from everything else; it is weighted as a
-//     techno discriminator, not a fine melodic/non-melodic split.
-//   • `sparkleVar` cleanly flags TECH_HOUSE's offbeat-hat groove (~1.0 vs
-//     ~0.35 elsewhere), and `sparkle` separates the brighter house genres
-//     from the dark techno family. BPM is the strongest single axis.
+//
+// ════════════════════════════════════════════════════════════════════════
+// PROFILE TUNING NOTE v2 (2026-06-20 — REAL-AUDIO DATA-DRIVEN RETUNE):
+// The v1 targets/weights were tuned on a SYNTHETIC bank and collapsed to
+// ~14–22% on a real 60-track CC dance-music corpus (chance ≈ 17%). They are
+// now re-anchored to the MEASURED per-genre feature centroids from
+// `tools/genre_eval.mjs --corpus ~/tmp/genre_corpus --fft 2048` (the deployed
+// fftSize) and re-weighted by each feature's measured SEPARABILITY (a Fisher
+// between/within-genre variance ratio over the corpus). Key empirical facts
+// that shaped this:
+//   • BPM is now NOISY/UNRELIABLE on real audio (the tracker octave-doubles —
+//     downtempo reads FAST, ~0.71 norm). Its Fisher score is low; weight ≈ 0.
+//   • `kickDens` saturates (~0.63–0.97) → near-dead; weight ≈ 0.
+//   • `melodic` does NOT saturate as v1 assumed; on real audio it is a
+//     compressed-but-ORDERED signal (melodic_house ~0.30 highest, tech_house
+//     ~0.10 lowest). Its RELATIVE ordering is one of the most separable axes
+//     (Fisher ~0.57) — so it is KEPT (re-anchored to real values), NOT dropped.
+//   • `kickReg` is the single most separable feature (Fisher ~0.59): melodic_
+//     house lowest (~0.29), melodic_techno highest (~0.69).
+//   • FOUR new ENGINEERED features add a working 2nd/3rd axis beyond BPM:
+//     bassW (tech_house high), midW (melodic_house high), tilt (deep_house
+//     bright), fluxVar (techno-family high). Each is cheap, allocation-free,
+//     derived from bands the classifier already receives.
+//   • `sparkle`/`sparkleVar` lost their v1 polarity on real audio; weights
+//     dropped and targets re-anchored to measured values.
+// Profiles below ARE the measured centroids; one shared weight vector encodes
+// the measured separability (see GENRE_WEIGHTS).
+//
+// Feature order: [bpm,kickReg,kickDens,lowMid,sparkle,sparkleVar,melodic,flux,
+//                 bassW,midW,tilt,fluxVar]
+// Weights from an in-engine corpus search (faithful replay of the smoothing +
+// hysteresis + tail-vote decision over the 36 scored tracks at fft 2048). The
+// search zeroed BPM (noisy/octave-doubled), kickDens (saturated), and
+// sparkle/sparkleVar (lost polarity on real audio) and leaned on the separable
+// axes: kickReg, melodic (relative ordering), the engineered midW + bassW, flux.
+const GENRE_WEIGHTS = Object.freeze(
+  [0.00, 1.01, 0.00, 0.36, 0.00, 0.00, 1.40, 0.69, 0.46, 1.20, 0.11, 0.32]);
+
 const PROFILES = Object.freeze([
-  // 1 deep_house: ~121 BPM, soft regular kick, low sparkle, moderate
-  // sparkleVar, melodic-feature mid-high (chord roots move).
-  { genre: 1, w: [1.3, 0.6, 0.5, 0.6, 1.2, 0.7, 0.6, 0.4],
-    p: [bpmN(121), 0.64, 0.40, 0.48, 0.14, 0.36, 0.82, 0.20] },
-  // 2 melodic_house: ~123 BPM, regular kick, brighter mid (some sparkle),
-  // strong melodic, low sparkleVar (no offbeat-hat groove).
-  { genre: 2, w: [1.3, 0.6, 0.5, 0.6, 1.0, 0.9, 0.8, 0.4],
-    p: [bpmN(123), 0.72, 0.45, 0.53, 0.29, 0.35, 1.0, 0.09] },
-  // 3 tech_house: ~125 BPM, the offbeat-hat groove → HIGH sparkleVar (the
-  // signature) + higher sparkle, regular kick.
-  { genre: 3, w: [1.2, 0.6, 0.5, 0.6, 1.0, 2.0, 0.6, 0.4],
-    p: [bpmN(125), 0.80, 0.49, 0.43, 0.37, 1.0, 1.0, 0.10] },
-  // 4 techno: ~130 BPM, DARK (very low sparkle), single driving root → very
-  // low melodic feature (the key techno flag), low sparkleVar.
-  { genre: 4, w: [1.3, 0.5, 0.5, 0.7, 1.3, 0.8, 1.8, 0.4],
-    p: [bpmN(130), 0.53, 0.38, 0.42, 0.05, 0.08, 0.0, 0.08] },
-  // 5 melodic_techno: ~127 BPM, driving (very high kickReg), melodic, dark-ish
-  // (low sparkle) — between melodic_house and techno.
-  { genre: 5, w: [1.2, 1.1, 0.5, 0.7, 1.0, 0.8, 0.9, 0.4],
-    p: [bpmN(127), 0.97, 0.53, 0.55, 0.15, 0.40, 1.0, 0.09] },
-  // 6 downtempo: ~102 BPM (the strongest cue — well below the 4/4 band),
-  // organic, low density, low sparkle.
-  { genre: 6, w: [2.2, 0.6, 0.9, 0.6, 1.0, 0.7, 0.5, 0.4],
-    p: [bpmN(102), 0.51, 0.21, 0.39, 0.07, 0.39, 0.98, 0.13] },
+  // 1 deep_house: brightest (high tilt/sparkle), low bassW, low fluxVar.
+  { genre: 1, w: GENRE_WEIGHTS,
+    p: [0.447, 0.599, 0.877, 0.541, 0.514, 0.503, 0.178, 0.367, 0.288, 0.398, 0.464, 0.154] },
+  // 2 melodic_house: low kickReg, high midW (chord/melody weight), low fluxVar.
+  { genre: 2, w: GENRE_WEIGHTS,
+    p: [0.609, 0.285, 0.633, 0.520, 0.372, 0.549, 0.297, 0.348, 0.277, 0.487, 0.339, 0.137] },
+  // 3 tech_house: high bassW, LOW flux, lowest melodic — groovy and dry.
+  { genre: 3, w: GENRE_WEIGHTS,
+    p: [0.779, 0.588, 0.909, 0.445, 0.329, 0.615, 0.104, 0.226, 0.376, 0.370, 0.367, 0.181] },
+  // 4 techno: high fluxVar + high lowMid + high sparkleVar — driving, busy.
+  { genre: 4, w: GENRE_WEIGHTS,
+    p: [0.722, 0.497, 0.912, 0.556, 0.381, 0.716, 0.201, 0.301, 0.335, 0.416, 0.351, 0.191] },
+  // 5 melodic_techno: highest kickReg + kickDens — relentless + melodic.
+  { genre: 5, w: GENRE_WEIGHTS,
+    p: [0.703, 0.691, 0.967, 0.525, 0.381, 0.693, 0.170, 0.308, 0.310, 0.442, 0.354, 0.182] },
+  // 6 downtempo: darkest (low tilt), low kickDens, low fluxVar — organic.
+  { genre: 6, w: GENRE_WEIGHTS,
+    p: [0.713, 0.465, 0.686, 0.520, 0.326, 0.609, 0.252, 0.339, 0.356, 0.432, 0.296, 0.137] },
 ]);
 
 // Map a BPM onto the dance band [85,140] → [0,1] (clamped). Defined as a
@@ -134,6 +164,13 @@ export const GENRE_DEFAULTS = Object.freeze({
   featTau: 4.0,
   // Faster EMA for the high-band variance estimator's mean tracker.
   sparkleVarTau: 1.2,
+  // Faster EMA for the flux-variance estimator's mean tracker (fluxVar feature).
+  fluxVarTau: 1.2,
+  // fluxVar scale: turn the small absolute flux RMS-deviation into a 0..1
+  // feature. Anchored so the measured techno-family fluxVar (~0.19) and
+  // house/downtempo (~0.14) land where the PROFILES expect them (they store
+  // the raw RMS deviation directly, so this is 1.0 — kept explicit for tuning).
+  fluxVarScale: 1.0,
   // Re-score the profile bank every this-many hops (not every hop — the
   // windowed features barely move between hops). ~8 hops ≈ 0.09 s.
   scoreEveryHops: 8,
@@ -178,6 +215,11 @@ export class GenreClassifier {
     this._emaNoteRate = 0;
     // High-band variance tracking (mean + EMA of squared deviation).
     this._sparkleMean = 0; this._sparkleVar = 0;
+    // Engineered v2 features.
+    //  Band-share EMAs (bassW, midW) + spectral-tilt EMA.
+    this._emaBassW = 0; this._emaMidW = 0; this._emaTilt = 0;
+    //  Flux-variance estimator (fast mean + EMA of squared deviation).
+    this._fluxMean = 0; this._fluxVar = 0;
     // Kick edge detection + interval ring.
     this._prevKick = 0; this._lastKickMs = -Infinity;
     this._kickIntervals.fill(0); this._kickFilled = 0; this._kickHead = 0;
@@ -260,6 +302,10 @@ export class GenreClassifier {
     this._emaKickReg += a * (0 - this._emaKickReg);
     this._emaKickDens += a * (0 - this._emaKickDens);
     this._emaNoteRate += a * (0 - this._emaNoteRate);
+    // Engineered v2 EMAs decay too, so a brief party blip carries no stale state.
+    this._emaBassW += a * (0 - this._emaBassW);
+    this._emaMidW += a * (0 - this._emaMidW);
+    this._emaTilt += a * (0 - this._emaTilt);
   }
 
   /** @private slow band + flux EMAs and the high-band variance estimator. */
@@ -275,6 +321,19 @@ export class GenreClassifier {
     this._sparkleMean += av * (high - this._sparkleMean);
     const dev = high - this._sparkleMean;
     this._sparkleVar += av * (dev * dev - this._sparkleVar);
+    // ── Engineered v2 ──
+    // Band SHARES (bass/mid weight) + spectral tilt. Computed per-hop on the
+    // instantaneous bands (level-robust ratios), then slow-EMA'd over the
+    // section window so they characterize the genre, not a single transient.
+    const tot = low + mid + high + 1e-6;
+    this._emaBassW += a * (low / tot - this._emaBassW);
+    this._emaMidW  += a * (mid / tot - this._emaMidW);
+    this._emaTilt  += a * (high / (low + mid + 1e-6) - this._emaTilt);
+    // Flux variance: fast mean + EMA of squared deviation → "busyness dynamics".
+    const afv = 1 - Math.exp(-dt / p.fluxVarTau);
+    this._fluxMean += afv * (flux - this._fluxMean);
+    const fdev = flux - this._fluxMean;
+    this._fluxVar += afv * (fdev * fdev - this._fluxVar);
   }
 
   /** @private kick density + regularity from the raw kick pulse train. */
@@ -346,6 +405,11 @@ export class GenreClassifier {
     f[F_SPARKLEVAR] = clamp01(Math.sqrt(this._sparkleVar) * 6);
     f[F_MELODIC] = clamp01(this._emaNoteRate);
     f[F_FLUX] = clamp01(this._emaFlux);
+    // Engineered v2 features (already ~[0,1] ratios / small RMS values).
+    f[F_BASSW] = clamp01(this._emaBassW);
+    f[F_MIDW] = clamp01(this._emaMidW);
+    f[F_TILT] = clamp01(this._emaTilt);
+    f[F_FLUXVAR] = clamp01(Math.sqrt(this._fluxVar) * this.p.fluxVarScale);
   }
 
   /** @private score the profile bank, smooth, argmax-with-hysteresis. */
