@@ -1,8 +1,9 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
@@ -21,8 +22,29 @@ import {
   fetchPlaylists,
   type DeckTransitionConfig,
 } from '@/utils/api';
+import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
+
+// 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
+// area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
+const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// Deck channel color accent palette (docs/39 §8.4 — channel `color` metadata,
+// no render effect). Same curated high-contrast set the mixer strip uses so
+// the deck and mixer read consistently; the "NO COLOR" option clears it
+// (color = null). The engine accepts any string or null — this is purely the
+// tap-to-pick surface.
+const CHANNEL_COLOR_SWATCHES: string[] = [
+  '#E53935', // red
+  '#FB8C00', // orange
+  '#FDD835', // yellow
+  '#43A047', // green
+  '#00ACC1', // cyan
+  '#1E88E5', // blue
+  '#8E24AA', // purple
+  '#EC407A', // pink
+];
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -110,6 +132,11 @@ export default function ControlDeckScreen() {
   // level so the panel can layer above every card on the deck without
   // borrowing the deck channel card's clipping context.
   const [showAllMods, setShowAllMods] = useState(false);
+
+  // Deck channel color picker visibility (docs/39 §8.4). The swatch button
+  // in the deck card header opens this modal; selecting a swatch (or NO
+  // COLOR) routes through handleDeckColor.
+  const [showColorPicker, setShowColorPicker] = useState(false);
 
   // Post-channel-split (May 2026): the deck channel comes from its
   // own /deck/channel endpoint and the WS `deck` event. The mixer's
@@ -304,6 +331,48 @@ export default function ControlDeckScreen() {
     });
   }, []);
 
+  // Per-channel intensity clamp (faderMax, docs/39 §8.3) on the DECK channel.
+  // A hard ceiling on the deck's OWN contribution — the level fader and
+  // scripted transitions can ride up to this ceiling but never above it
+  // (effectiveFader = min(fader, faderMax)). WAVE 5 pattern: optimistic local
+  // apply + PATCH /deck/channel (via setChannelFaderMax {deck:true}), then the
+  // engine's `deck` WS broadcast reconciles canonical state (onControl above).
+  // Fail loud (Codex P0): a rejected ceiling reverts locally + Alerts; the
+  // next deck broadcast re-syncs too. Validated by the engine identically to a
+  // fader (finite, clamped to [0,1]; non-finite ⇒ 400).
+  const handleDeckFaderMax = useCallback(async (channelId: string, faderMax: number) => {
+    const prev = deckChannel?.faderMax;
+    setDeckChannel((c: any) => (c ? { ...c, faderMax } : c));
+    const res = await setChannelFaderMax(channelId, faderMax, { deck: true });
+    if (!res.ok) {
+      console.error(`[Deck] faderMax change rejected for ${channelId}:`, res.error);
+      setDeckChannel((c: any) => (c ? { ...c, faderMax: prev ?? 1.0 } : c));
+      Alert.alert(
+        'Intensity ceiling not applied',
+        `The engine rejected this ceiling. ${res.error || ''} The deck kept its previous limit.`.trim(),
+      );
+    }
+  }, [deckChannel?.faderMax]);
+
+  // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
+  // operator-facing accent (no render effect) — tints the deck card for
+  // at-a-glance identification, matching the mixer strips. Same optimistic +
+  // reconcile + fail-loud shape; a null color clears the accent and the engine
+  // requires a string or null.
+  const handleDeckColor = useCallback(async (channelId: string, color: string | null) => {
+    const prev = deckChannel?.color ?? null;
+    setDeckChannel((c: any) => (c ? { ...c, color } : c));
+    const res = await setChannelColor(channelId, color, { deck: true });
+    if (!res.ok) {
+      console.error(`[Deck] color change rejected for ${channelId}:`, res.error);
+      setDeckChannel((c: any) => (c ? { ...c, color: prev } : c));
+      Alert.alert(
+        'Color not applied',
+        `The engine rejected this color. ${res.error || ''} The deck kept its previous color.`.trim(),
+      );
+    }
+  }, [deckChannel?.color]);
+
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
@@ -460,7 +529,16 @@ export default function ControlDeckScreen() {
                 const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
 
                 return (
-                  <View key={channel.id} style={{ width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder }}>
+                  <View key={channel.id} style={[
+                    { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
+                    // Color accent (docs/39 §8.4): tint the card's left edge so
+                    // the operator can identify the deck at a glance — mirrors the
+                    // mixer strip. The lock border still wins (operator-critical
+                    // state); only paint the accent when the deck isn't locked.
+                    // No layout shift when color is null (defaults to ghostBorder
+                    // at the same 1px width).
+                    !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+                  ]}>
                     {/* D6 trigger: ◎ ALL pill next to the entry label.
                         Disabled when no deck playlist is loaded — the
                         AllModulationsPanel renders an empty state in
@@ -482,6 +560,28 @@ export default function ControlDeckScreen() {
                           always reserves the same width/height — the inner
                           pill only fades in/out. */}
                       <DeckSavedFlash deckChannelId={channel.id} />
+                      {/* Color swatch (docs/39 §8.4) — taps open the accent
+                          picker. The swatch fill IS the deck's current color
+                          (or a hollow "no color" ring when null). Pure
+                          metadata; tints the card for identification, no render
+                          effect. Mirrors the mixer strip's swatch button. */}
+                      <TouchableOpacity
+                        onPress={() => setShowColorPicker(true)}
+                        hitSlop={ICON_BTN_HIT_SLOP}
+                        accessibilityRole="button"
+                        accessibilityLabel={channel.color ? `Deck color ${channel.color}` : 'Set deck color'}
+                        style={[
+                          styles.deckSwatchBtn,
+                          { borderColor: C.ghostBorder },
+                          channel.color ? { backgroundColor: channel.color, borderColor: channel.color } : null,
+                        ]}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: 13,
+                          color: channel.color ? '#FFFFFF' : C.secondary,
+                        }}>{channel.color ? '●' : '○'}</Text>
+                      </TouchableOpacity>
                       <TouchableOpacity
                         onPress={() => setShowAllMods(true)}
                         disabled={!channel.playlist?.name}
@@ -516,6 +616,27 @@ export default function ControlDeckScreen() {
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 
+                    {/* Intensity ceiling (faderMax, docs/39 §8.3). A hard cap on
+                        the deck channel's OWN contribution — the level fader (on
+                        DeckTopBar) and scripted transitions can ride up to this
+                        ceiling but never above it. faderMax defaults to 1.0;
+                        faderMax=0 fully suppresses the deck. Disabled while the
+                        deck is locked (matches the mixer CAP lock behaviour). The
+                        cap slider's fill is amber to distinguish it from a level
+                        fader. Mirrors the mixer strip's CAP row. */}
+                    <View style={[styles.capRow, { borderBottomColor: C.ghostBorder }]}>
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', width: 36 }}>CAP</Text>
+                      <HorizontalFader
+                        value={channel.faderMax ?? 1}
+                        onChange={(v: number) => { if (!channel.locked) handleDeckFaderMax(channel.id, v); }}
+                        trackStyle={[styles.faderTrack, { backgroundColor: C.surfaceContainerHigh, flex: 1, marginHorizontal: 6, opacity: channel.locked ? 0.5 : 1 }]}
+                        fillStyle={styles.capFill}
+                      />
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: '#F5A623', width: 32, textAlign: 'right' }}>
+                        {Math.round((channel.faderMax ?? 1) * 100)}
+                      </Text>
+                    </View>
+
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
                       {toggles.map((e: any) => (
                         <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
@@ -539,6 +660,112 @@ export default function ControlDeckScreen() {
         playlistName={deckChannel?.playlist?.name ?? null}
         activeEntryId={deckChannel?.playlist?.activeEntryId ?? null}
       />
+      {/* Deck channel color picker (docs/39 §8.4). A swatch grid + a "NO COLOR"
+          clear option (color = null). Pure metadata — tints the deck card for
+          identification, no render effect. Mirrors the mixer strip's picker.
+          Screen-level so it draws above every card. */}
+      <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowColorPicker(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={[styles.modalContent, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder }]}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>DECK COLOR</Text>
+              <View style={styles.swatchGrid}>
+                {CHANNEL_COLOR_SWATCHES.map((hex) => {
+                  const active = (deckChannel?.color ?? null) === hex;
+                  return (
+                    <TouchableOpacity
+                      key={hex}
+                      style={[styles.swatch, { backgroundColor: hex }, active && styles.swatchActive]}
+                      hitSlop={ICON_BTN_HIT_SLOP}
+                      onPress={() => { if (deckChannelId) handleDeckColor(deckChannelId, hex); setShowColorPicker(false); }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Set deck color ${hex}`}
+                      accessibilityState={{ selected: active }}
+                    >
+                      {active ? <Text style={styles.swatchCheck}>✓</Text> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <TouchableOpacity
+                style={[styles.clearColorBtn, { borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }]}
+                onPress={() => { if (deckChannelId) handleDeckColor(deckChannelId, null); setShowColorPicker(false); }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear deck color"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.secondary }}>NO COLOR</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
+
+// Local styles mirror the mixer strip's CAP row + color-picker recipe (docs/39
+// §8.3/§8.4). Palette-dependent colors are applied inline at the call site
+// (this screen reads the palette via the usePalette hook, not a StyleSheet
+// factory), keeping these to layout + the fixed amber cap fill.
+const styles = StyleSheet.create({
+  deckSwatchBtn: {
+    width: 44, height: 44, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1,
+  },
+  capRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    marginBottom: 16,
+  },
+  faderTrack: {
+    height: 16,
+    borderRadius: 4,
+  },
+  capFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#F5A623',
+    borderRadius: 4,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalContent: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 20,
+  },
+  swatchGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    maxWidth: 220,
+    marginBottom: 12,
+  },
+  swatch: {
+    width: 44, height: 44, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.15)',
+  },
+  swatchActive: {
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  swatchCheck: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 18,
+    color: '#FFFFFF',
+  },
+  clearColorBtn: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+});
