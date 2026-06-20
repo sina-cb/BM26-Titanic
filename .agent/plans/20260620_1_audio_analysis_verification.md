@@ -109,3 +109,18 @@ Proof entry template:
 - Capture(s): `/osc_accounting` + `/catalog` JSON captured (in chat log). **No UI screenshot** — no chromium/puppeteer in this datacenter; the committed test (asserts accounting shape + genre catalog + per-theme CSS-var completeness) is the durable proof in lieu of an image. Follow-up: visual check on a browser machine before playa.
 - **FULL INTEGRATION SWEEP (all 5 slices merged):** `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/switch_color_note.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/note_estimator_synthetic.test.js tests/companion_*.test.js tests/integration/detection_metrics.test.mjs` → **270 pass / 0 fail**.
 - Verdict: A1 crossed off in plan §6. ✅ — **ALL 5 Wave-A/B code slices now merged + verified.**
+
+## Wave C — adversarial wave
+### C-fix-signals — adversarial P1 batch (startup guard / party warmup / genre conf / dead BPM params)  [PASS]  2026-06-20T06:35Z
+- Commit: `feat/audio_analysis_2` @ `a775398` (pushed).
+- Fixes (each independently confirmed by ≥2 of the 5 adversarial auditors):
+  switch_signals startup guard now relative (`_firstTickMs`); party_mode `warmupMs` gate;
+  genre_classifier argmax seed `-Infinity` (deep_house conf was structurally 0);
+  removed dead `PARAMS.bpm` + fixed `audioBpm` doc range.
+- Command(s) run BY INSTIGATOR:
+  - `node --test tests/genre_classifier.test.js tests/switch_color_note.test.js tests/party_mode.test.js tests/audio_signals.test.js tests/note_estimator_synthetic.test.js` → **35 pass / 0 fail**.
+  - Full audio suite `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/switch_color_note.test.js tests/party_mode.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/note_estimator_synthetic.test.js tests/companion_*.test.js` → **271 pass / 0 fail**.
+  - Independent auditor (adversary 5) ran the committed tree → **295 pass / 0 fail**; measured `DerivedSignals.tick()` p99 ~0.38 ms (within budget); confirmed the `audio_analysis_validation` perf-flake is NOT real (3× concurrent, all green); offline-readiness / mic-failure / tracked-state all CLEAN.
+- New regression tests: `party_mode.test.js` (4, module had none), switch startup-guard test, genre confidence test.
+- Process: 5 read-only adversarial auditors (DSP / detection+genre / signals / companion+UI / robustness) audited the merged tree; I implemented the confirmed-safe signals P1s inline, captured all findings in report `20260620_9`, and routed the disjoint companion/CaptainPad/test-gap fixes (items 5–10) to `dev/companion_captainpad_fixes`. Bigger items (FFT 2048, fixed-dt, genre v2 real-audio tuning, detector scoring honesty) documented as coordinated follow-ups.
+- Verdict: C-fix-signals crossed off. ✅  C-fix-companion in flight; C-backlog documented.
