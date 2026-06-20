@@ -13,6 +13,10 @@
  *   audioNoteHue      — pitchClass/12 → [0,1], for "play the notes as colour"
  *   audioSwitchPattern— pulse: a musically-sensible moment to change PATTERN
  *   audioSwitchColor  — pulse: a musically-sensible moment to change COLOUR
+ *   audioGenre        — coarse dance-genre index (0 ambient .. 6 downtempo;
+ *                       see GENRE_NAMES in genre_classifier.js). Meaningful
+ *                       only in party mode; 0 when audioParty is off/unsure.
+ *   audioGenreConf    — 0..1 confidence of the current genre
  *
  * Inputs (RAW mic mirrors + detector keys): micFluxRaw, micKickRaw,
  *   micLowRaw/MidRaw/HighRaw, micDomFreq1/2 + micDomEnergy1/2, audioDropPulse,
@@ -22,6 +26,7 @@ import { BpmTracker } from './bpm_tracker.js';
 import { PartyMode } from './party_mode.js';
 import { NoteEstimator } from './note_estimator.js';
 import { SwitchSignals } from './switch_signals.js';
+import { GenreClassifier } from './genre_classifier.js';
 
 // Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
 const PARAMS = Object.freeze({
@@ -42,6 +47,7 @@ export class DerivedSignals {
     this._party = new PartyMode(PARAMS.party);
     this._note = new NoteEstimator(PARAMS.note);
     this._switch = new SwitchSignals(PARAMS.sw);
+    this._genre = new GenreClassifier();   // tuned DEFAULTS baked in
     this._fatal = false;
     // Last note actually committed by the estimator. We HOLD this on the
     // published audioNote/audioNoteHue keys whenever the estimator currently
@@ -54,6 +60,7 @@ export class DerivedSignals {
 
   reset() {
     this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
+    this._genre.reset();
     this._heldPc = 0; this._heldHue = 0;
     if (!this._fatal) this._zero();
   }
@@ -93,6 +100,15 @@ export class DerivedSignals {
         structure: g('audioStructure'), beatEdge: b.beatEdge, bpmLocked: b.locked,
         pitchClass: n.pitchClass, noteStable: n.stable,
       });
+      // Genre is meaningful only inside party mode. We feed it the RAW bands +
+      // flux + kick pulse train (same mirrors the other modules read), the
+      // realtime BPM, and the committed note so it can measure melodic content.
+      const gn = this._genre.update({
+        nowMs: now, dt, party: p.party,
+        bpm: b.bpm, low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+        flux: g('micFluxRaw'), kick: g('micKickRaw'),
+        pitchClass: n.pitchClass, noteStable: n.stable,
+      });
       pc.setMany([
         { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
         { kind: 'scalar', key: 'audioBeat',          value: b.beat },
@@ -104,6 +120,8 @@ export class DerivedSignals {
         { kind: 'scalar', key: 'audioBeatInBar',     value: b.beatInBar || 0 },
         { kind: 'scalar', key: 'audioBarPhase',      value: b.barPhase || 0 },
         { kind: 'scalar', key: 'audioDownbeat',      value: b.downbeat ? 1.0 : 0.0 },
+        { kind: 'scalar', key: 'audioGenre',         value: gn.genre },
+        { kind: 'scalar', key: 'audioGenreConf',     value: gn.confidence },
       ], 'derivedSignals');
     } catch (e) {
       this._fatal = true;
@@ -119,6 +137,7 @@ export class DerivedSignals {
       { kind: 'scalar', key: 'audioSwitchColor', value: 0.0 },
       { kind: 'scalar', key: 'audioBeatInBar', value: 0.0 }, { kind: 'scalar', key: 'audioBarPhase', value: 0.0 },
       { kind: 'scalar', key: 'audioDownbeat', value: 0.0 },
+      { kind: 'scalar', key: 'audioGenre', value: 0.0 }, { kind: 'scalar', key: 'audioGenreConf', value: 0.0 },
     ], 'derivedSignals');
   }
 }

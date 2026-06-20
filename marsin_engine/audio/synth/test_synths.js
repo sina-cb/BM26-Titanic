@@ -130,6 +130,48 @@ export const SYNTHS = {
     },
   },
 
+  // Melodic chord progression — clear, sustained NOTE CHANGES over time so the
+  // dominant-frequency tracker + NoteEstimator have a moving pitch class to
+  // follow, and the switch-color cue has real note changes to fire on. Each
+  // chord holds for `chordBeats` beats; the root walks a 4-chord progression so
+  // the pitch class changes on a musical timescale (~1.x s per chord at 110
+  // BPM), not every hop. Energy sits well above the note estimator's gate.
+  //
+  // The root is placed in the BASS register (the NoteEstimator's `preferLow`
+  // anchor) so the published pitch class tracks the chord ROOT cleanly; the
+  // upper triad tones add mid body without confusing the dominant-freq tracker.
+  chord_progression: {
+    label: 'Chord progression (melodic)',
+    description: 'Sustained bass-rooted chords walking a 4-chord progression. '
+      + 'Drives micLow/micMid + dom freq with clear NOTE CHANGES for color cues.',
+    defaults: { bpm: 110, chordBeats: 4, level: 0.85 },
+    sample(n, SR, p) {
+      const bpm = p.bpm ?? 110;
+      const chordBeats = p.chordBeats ?? 4;
+      const beatLen = (60 / bpm) * SR;
+      const chordLen = beatLen * chordBeats;
+      const chordIdx = Math.floor(n / chordLen);
+      const phase = (n % chordLen) / chordLen;   // 0..1 within the chord
+      const t = n / SR;
+      // Bass roots (Hz) — a clear i-VI-III-VII style walk in distinct pitch
+      // classes: A2, F2, C3, G2 → pitch classes A, F, C, G (well separated).
+      const roots = [110.0, 87.31, 130.81, 98.00];
+      const root = roots[chordIdx % roots.length];
+      // A simple major-ish triad above the root (root, M3, P5) in the mids.
+      const third = root * Math.pow(2, 4 / 12);
+      const fifth = root * Math.pow(2, 7 / 12);
+      // Gentle attack/sustain envelope per chord so energy is steady (no gaps
+      // that would freeze the estimator) but each chord is clearly articulated.
+      const attack = Math.min(1, phase / 0.04);
+      const env = attack * (0.7 + 0.3 * Math.cos(TAU * phase));
+      // Bass root carries the most energy (the color anchor), triad fills mid.
+      let s = 0.9 * Math.sin(TAU * root * t)
+            + 0.35 * Math.sin(TAU * third * 2 * t)
+            + 0.35 * Math.sin(TAU * fifth * 2 * t);
+      return Math.max(-1, Math.min(1, s * env * (p.level ?? 0.85)));
+    },
+  },
+
   // Build-up riser — rising noise sweep + accelerating ticks over `barBeats`.
   riser: {
     label: 'Riser / build',

@@ -115,6 +115,10 @@ const DERIVED = [
   { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30 },
   { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30 },
   { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30 },
+  // Coarse dance-genre classifier (party-mode only). audioGenre is an integer
+  // index 0..6 (GENRE_NAMES in audio/signals/genre_classifier.js); conf 0..1.
+  { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5 },
+  { key: 'audioGenreConf',     label: 'Audio · Genre Conf',     range: [0, 1],   hz: 5 },
 ];
 
 function gainDescriptor(key, label) {
