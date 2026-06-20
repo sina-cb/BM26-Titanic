@@ -6,7 +6,14 @@
 //   - a known-90 BPM 4-on-floor synth is NOT octave-doubled (~90, not ~180);
 //   - a known-128 BPM synth reads ~128;
 //   - genuine fast EDM tempos (120..174) are NOT octave-HALVED (the slow-tempo
-//     recovery must not regress 4/4 dance tempos).
+//     recovery must not regress 4/4 dance tempos);
+//   - genuinely FAST material (psytrance ~140-150, DnB ~170-174 — Burning Man
+//     runs fast) is recovered, NOT halved: full_track @160/@170 reads ~160/~170,
+//     guarding the skewed octave-preference fast-tempo fix (Adv-A report 22 P1-D);
+//   - the two-sided tension holds: a slow 4-on-floor groove (kick_4floor @75,
+//     the synthetic downtempo proxy) is NOT doubled to ~150;
+//   - the histogram fold boundary (kick_4floor @80, just above histFoldLo=80) is
+//     preserved (reads ~80, not folded up).
 //
 // Run:  cd marsin_engine && node --test tests/bpm_tracker_octave.test.js
 
@@ -78,4 +85,35 @@ test('genuine fast EDM tempos (120..174) are not octave-halved', () => {
         `${synth} @ ${bpm}: got ${meas.toFixed(1)} (octave/metric error)`);
     }
   }
+});
+
+test('genuinely FAST material (160, 170) is recovered, not halved', () => {
+  // Burning Man runs fast (psytrance ~140-150, DnB ~170-174). The skewed
+  // octave-preference (octaveSigmaHi 0.60 / centre 128) must let a fast tempo
+  // win its ×2 contest against the half so full_track @170 reads ~170, NOT ~85
+  // (the pre-existing halving Adv-A flagged in report 22 P1-D).
+  for (const bpm of [160, 170]) {
+    const meas = measureBpm('full_track', bpm);
+    assert.ok(Math.abs(meas - bpm) / bpm <= 0.05,
+      `full_track @ ${bpm}: got ${meas.toFixed(1)} (fast tempo HALVED — octave-preference regression)`);
+  }
+});
+
+test('a slow 4-on-floor groove is NOT doubled (downtempo recovery holds)', () => {
+  // The fast-tempo fix must not re-break the slow side: a genuinely slow ~75 BPM
+  // 4-on-floor (the synthetic proxy for the corpus downtempo DWK217→72 recovery)
+  // must stay ~75, not double to ~150. The protection is the octaveAcRatio gate
+  // (the autocorr at the double is far below the slow peak, so the perceptual
+  // preference never gets to tip it).
+  const meas = measureBpm('kick_4floor', 75);
+  assert.ok(Math.abs(meas - 75) / 75 <= 0.06,
+    `expected ~75 BPM (not doubled), got ${meas.toFixed(1)}`);
+});
+
+test('the histogram fold boundary (80, just above histFoldLo) is preserved', () => {
+  // histFoldLo=80: a tempo at the fold boundary keeps its own octave and reads
+  // ~80, not folded up. Guards the 95→80 boundary lowering from report 19.
+  const meas = measureBpm('kick_4floor', 80);
+  assert.ok(Math.abs(meas - 80) / 80 <= 0.05,
+    `expected ~80 BPM at the fold boundary, got ${meas.toFixed(1)}`);
 });
