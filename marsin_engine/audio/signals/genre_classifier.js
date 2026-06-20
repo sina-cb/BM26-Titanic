@@ -369,9 +369,12 @@ export class GenreClassifier {
       this._score[prof.genre] += a * (sim - this._score[prof.genre]);
     }
 
-    // Argmax + runner-up over the smoothed scores.
-    let best = FIRST_PARTY_GENRE, bestS = this._score[FIRST_PARTY_GENRE];
-    let secondS = -Infinity;
+    // Argmax + runner-up over the smoothed scores. Seed bestS = -Infinity (NOT
+    // score[FIRST_PARTY_GENRE]): self-seeding made the first genre's own score
+    // fall into the `else if` on iteration 0 → secondS = bestS → spread 0 →
+    // confidence ALWAYS 0 whenever genre 1 (deep_house) won. Seeding -Infinity
+    // lets the real runner-up populate secondS.
+    let best = FIRST_PARTY_GENRE, bestS = -Infinity, secondS = -Infinity;
     for (let gIdx = FIRST_PARTY_GENRE; gIdx <= LAST_PARTY_GENRE; gIdx++) {
       const sc = this._score[gIdx];
       if (sc > bestS) { secondS = bestS; bestS = sc; best = gIdx; }

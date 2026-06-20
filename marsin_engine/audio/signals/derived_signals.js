@@ -6,7 +6,7 @@
  * offline on the FMA EDM corpus (report 202606; ~28 µs/hop total).
  *
  * Publishes:
- *   audioBpm          — realtime tempo (Kalman-smoothed), [0,300]
+ *   audioBpm          — realtime tempo (Kalman-smoothed), [0,180] (BpmTracker v2 clamp)
  *   audioBeat         — phase-locked beat pulse [0,1]
  *   audioParty        — loud-music gate, 0/1 (hysteresis + hold)
  *   audioNote         — dominant pitch class 0–11 (−1→0 when no stable note)
@@ -34,8 +34,12 @@ import { GenreClassifier } from './genre_classifier.js';
 
 // Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
 const PARAMS = Object.freeze({
-  bpm:   { hopsPerSec: 86.13, minBpm: 70, maxBpm: 180, kickWeight: 1.5, whitenTau: 0.5, windowS: 4, periodRefreshHops: 8, combHarmonics: 3, combDecay: 0.5, priorBpm: 128, priorStrength: 0.15, octaveCorrFloor: 0.85, octaveVotes: 10, octaveStickiness: 0.6, warmupFill: 0.85, confPeakW: 0.6, kfQ: 0.15, kfRBase: 60, kfRMin: 4, phaseCorrGain: 0.08, onsetThreshForPhase: 0.15, beatPulseWidth: 0.18, lockConf: 0.25, lockHoldHops: 60 },
-  party: { wLow: 0.4, wMid: 0.4, wHigh: 0.2, loudTau: 0.4, onThresh: 0.22, offThresh: 0.12, holdMs: 1200, offConfirmMs: 800 },
+  // NOTE: there is intentionally NO `bpm` block here. BPM uses the BpmTracker v2
+  // baked-in DEFAULTS, which are the corpus-validated ones (see bpm_tracker.js
+  // header). A former `PARAMS.bpm` was dead config (never passed to the tracker)
+  // and carried stale v1-only keys (octaveCorrFloor/octaveVotes/lockConf/…) that
+  // no longer exist in v2 — removed to stop it lying about what runs.
+  party: { wLow: 0.4, wMid: 0.4, wHigh: 0.2, loudTau: 0.4, onThresh: 0.22, offThresh: 0.12, holdMs: 1200, offConfirmMs: 800, warmupMs: 1500 },
   note:  { minPitchHz: 40, maxPitchHz: 1200, preferLow: true, preferLowEnergyFrac: 0.5, energyGate: 0.05, medianN: 15, holdHops: 26, kfQ: 0.15, kfR: 8, stableHops: 26 },
   sw:    { startupGuardMs: 2000, patternMinDwellMs: 6000, dropMinDwellMs: 2500, energyRegimeHi: 0.6, energyRegimeLo: 0.3, regimeHoldMs: 1500, dropPulseFire: 0.5, slowZoneHi: 0.55, slowZoneLo: 0.35, quantizeToBeat: true, quantizeMaxWaitMs: 350, patternUrgeTau: 8, colorMinDwellMs: 2500, noteChangeMinDwellMs: 1800, colorUrgeTau: 4 },
 });

@@ -109,6 +109,16 @@ test('tech_house-like scenario (offbeat-hat variance) → tech_house (3)', () =>
   assert.equal(r.genre, 3, `expected tech_house, got ${GENRE_NAMES[r.genre]}`);
 });
 
+test('confidence is non-zero when deep_house (genre 1) wins (argmax self-seed regression)', () => {
+  // The old argmax seeded bestS = score[1], so when genre 1 won, the runner-up
+  // collapsed onto it → spread 0 → confidence ALWAYS 0 for deep_house. ~121 bpm
+  // + low sparkle + melodic content → deep_house should win WITH real confidence.
+  const gc = new GenreClassifier();
+  const r = runScenario(gc, { seconds: 12, bpm: 121, kickBpm: 121, dark: true, noteFlipsPerSec: 1.6 });
+  assert.equal(r.genre, 1, `expected deep_house, got ${GENRE_NAMES[r.genre]}`);
+  assert.ok(r.confidence > 0, 'deep_house must report confidence > 0 (not structurally 0)');
+});
+
 test('hysteresis: a committed genre resets to ambient when party drops', () => {
   const gc = new GenreClassifier();
   const a = runScenario(gc, { seconds: 12, bpm: 102, kickBpm: 90, dark: true, noteFlipsPerSec: 1.6 });

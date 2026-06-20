@@ -41,15 +41,22 @@ function drive(sw, startMs, endMs, pitchClass) {
   return { fires: fires.length, firedMs: fires };
 }
 
+// Pass the startup guard, which is relative to the FIRST update(): tick from
+// t=0 to just past startupGuardMs (2000) feeding NO stable note (pitchClass -1),
+// so nothing fires and `_firstTickMs` anchors at 0. Real scenarios then start at
+// t≥2500, comfortably past the guard.
+function warmup(sw) { drive(sw, 0, 2100, -1); }
+
 test('first stable note past the startup guard fires a colour', () => {
   const sw = new SwitchSignals();
-  // startupGuardMs default 2000 (relative clock here) — begin at 2500.
+  warmup(sw);
   const r = drive(sw, 2500, 2600, 0);
   assert.ok(r.fires >= 1, 'the first stable note should recolour once');
 });
 
 test('a note change blocked by colorMinDwell is NOT lost — it fires after the dwell', () => {
   const sw = new SwitchSignals();
+  warmup(sw);
   // 1) first note (pc 0) at t=2500 → fires a colour, stamps _lastColorMs.
   const a = drive(sw, 2500, 2520, 0);
   assert.ok(a.fires >= 1, 'first colour should fire');
@@ -67,6 +74,7 @@ test('a note change blocked by colorMinDwell is NOT lost — it fires after the 
 
 test('a note that flips back to the last-coloured class before firing is dropped (no recolour to same hue)', () => {
   const sw = new SwitchSignals();
+  warmup(sw);
   drive(sw, 2500, 2520, 0);            // colour committed for pc 0
   drive(sw, 2820, 2900, 3);            // pc 3 latched pending (blocked by dwell)
   // pc returns to 0 (the last-coloured class) before the dwell elapses → the
@@ -77,7 +85,41 @@ test('a note that flips back to the last-coloured class before firing is dropped
 
 test('a steady held note does not strobe the colour', () => {
   const sw = new SwitchSignals();
+  warmup(sw);
   drive(sw, 2500, 2520, 5);            // one fire for the first note
   const steady = drive(sw, 2520, 9000, 5);   // ~6.5 s holding the SAME note
   assert.equal(steady.fires, 0, 'a held note must not keep recolouring');
+});
+
+// Drive the PATTERN path with a drop pulse, counting switchPattern fires.
+function drivePattern(sw, startMs, endMs, dropPulse) {
+  let now = startMs, fires = 0;
+  while (now <= endMs) {
+    const r = sw.update({
+      nowMs: now, dt: DT,
+      dropPulse, energyRatio: 0.5, buildScore: 0, slowZone: 0,
+      structure: 1, beatEdge: false, bpmLocked: false,
+      pitchClass: -1, noteStable: false,
+    });
+    if (r.switchPattern) fires++;
+    now += DT * 1000;
+  }
+  return fires;
+}
+
+test('startup guard: a drop in the first startupGuardMs does NOT fire switchPattern; after it does', () => {
+  // REGRESSION for the dead-guard bug: `now` is the engine epoch clock, so the
+  // guard MUST be measured relative to the first tick. A big drop at t≈epoch+200
+  // ms (i.e. 200 ms into playback) must be suppressed.
+  const base = 1_700_000_000_000;   // a realistic absolute epoch ms (like Date.now())
+  const sw = new SwitchSignals();
+  // First tick anchors the guard. A strong drop pulse 200 ms in → still inside
+  // the 2 s guard → must NOT swap.
+  const early = drivePattern(sw, base, base + 200, 1.0);
+  assert.equal(early, 0, 'no pattern swap during the startup guard window');
+  // Past the guard (well beyond startupGuardMs since the first tick), a drop
+  // should swap. Quiet gap, then a fresh drop edge at ~2.6 s.
+  drivePattern(sw, base + 200, base + 2400, 0);          // quiet (no fire)
+  const late = drivePattern(sw, base + 2400, base + 2700, 1.0);
+  assert.ok(late >= 1, 'a drop after the startup guard must swap the pattern');
 });

@@ -87,6 +87,7 @@ export class SwitchSignals {
     this._prevState = -1;
     this._pendNote = false;       // a note change waiting to recolour
     this._pendNotePc = -1;
+    this._firstTickMs = null;     // hop clock of the first update() (startup anchor)
 
     this._prevDropPulse = 0;
   }
@@ -131,8 +132,12 @@ export class SwitchSignals {
 
     // Startup guard: suppress all pattern fires in the first startupGuardMs so
     // the song's opening transient (regime/slow flip as levels first rise)
-    // doesn't burn a swap before the music has even started.
-    const pastStartup = now >= p.startupGuardMs;
+    // doesn't burn a swap before the music has even started. `now` is the engine
+    // hop clock (absolute epoch ms), so the guard MUST be measured relative to
+    // the first tick — comparing `now >= startupGuardMs` against epoch ms made
+    // the guard always-true (dead). Anchor on the first update() instead.
+    if (this._firstTickMs === null) this._firstTickMs = now;
+    const pastStartup = (now - this._firstTickMs) >= p.startupGuardMs;
 
     // A DROP is the single most important pattern cue and bypasses the normal
     // dwell gate (using its own shorter refractory) — a drop should ALWAYS
