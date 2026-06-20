@@ -232,3 +232,9 @@ Proof entry template:
 - Both edges gated (dropEnergyJump 1.9→4.0, dropBuildRise 0.15→0.30, dropNoveltyRatio 2.5→5.0, dropSlowZoneMax 0.4→0.30). Key finding: THIN-edge-off only reaches 0.55/min — BOTH edges false-fire on busy music; the fix is gating both, not disabling one.
 - Command(s) BY INSTIGATOR on merged tip: `node --test tests/audio_structure_detector.test.js` → **15 pass**; merge clean; config values confirmed. Agent: detector 15/15 + detector_eval 11/11 (incl REAL-corpus ff/min≤0.15 safety test that ran + passed); dry-run exit 0.
 - Verdict: E1 crossed off. ✅ — **WAVE E COMPLETE.** Honest limitation: precision-first detector under-fires real drops; documented for operator.
+
+### F3 — CaptainPad pulse-flash  [PASS]  2026-06-20T23:25Z
+- Branch `dev/f3_captainpad_flash` @ `5abc070` → merged (--no-ff, clean, CaptainPad-only).
+- 10 pulse keys (micOnsetLow/Mid/High, audioChestHit, audioDropCountdown, audioBeat, audioPhraseBoundary, audioTrackChange, audioSwitchColor, audioSwitchPattern) now render via new `PulseFlash.tsx` (arm-on-edge + frame-normalised decay ~150-250ms), themed; continuous keys keep bars. Single source of truth `isPulseKey()` in audioSignals.ts.
+- Command(s) BY INSTIGATOR on merged tip: `cd CaptainPad && npx tsc --noEmit` → **exit 0**. Agent: lint exit 0, web:build exit 0, classification assertion 10 pulse / 14 continuous correct.
+- Verdict: F3 crossed off. ✅
