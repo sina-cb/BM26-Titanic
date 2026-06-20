@@ -113,9 +113,11 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [x] E1 engine_hotswap_mixer (slot 0) — DONE + MERGED (37f4505, pushed)
 - [x] C2 captainpad_views (slot 1) — DONE + MERGED (355b2ca, pushed)
 - [x] E3 engine_state_hardening (slot 2) — DONE + MERGED (45dd556, pushed)
-- [ ] WAVE 3: dev/captainpad_hotswap_ui (slot 1) — RUNNING (hot-swap UI on merged tip)
-- [ ] Adversarial wave (5 read-only agents on tip 37f4505) — RUNNING; implement top safe finds
-- [ ] Merge WAVE 3 + adversarial fixes → verify → push
+- [ ] WAVE 3: dev/captainpad_hotswap_ui (slot 1) — RUNNING (hot-swap UI)
+- [x] Adversarial wave (5 read-only lenses on tip 37f4505) — DONE; findings recorded
+- [ ] WAVE 4: dev/engine_hardening_timeline (slot 2) — engine validation+perf+timeline-additive+tests
+- [ ] WAVE 5: dev/captainpad_qol — Lens C QoL, AFTER WAVE 3 merges
+- [ ] Merge WAVE 3/4/5 → verify on tip → push
 
 ## Adversarial findings (accumulating; verify each against real code before trusting)
 
@@ -138,6 +140,87 @@ Top EASY/P0 candidates (api_server.js line refs ~, must re-confirm):
 → Consolidate verified P0/EASY ones into ONE engine-hardening slice owning
   api_server.js + ws_topic_routing.js (+ pattern_mixer.js if needed). Awaiting
   lenses A/D/E to batch before launch (avoid serial conflict on those hot files).
+
+### Lens A — engine perf/realtime (agent aded161, DONE)
+EASY/verified candidates (pattern_mixer.js, re-confirm lines):
+- A1 `_extractVis` allocates new Uint8Array every vis frame (~1690) → pre-alloc
+  reuse buffer. EASY, P0-ish (GC). HIGHEST-VALUE per agent.
+- A2 scripted-transition renderOrder array alloc per frame (~1596) → 2-pass
+  loop. EASY.
+- A5 warmInactiveDeckHandle reuse-mismatch handle leak (~939-943) → null-check
+  /compare before destroy. EASY.
+- A7 removeDeckChannel doesn't cancelDeckPatternSwap → orphaned transition
+  state machine (~615-631). EASY.
+NOTE: agent's "render thread vs request thread" model (A4) is WRONG — Node is
+single-threaded event loop; treat A4/A6 skeptically. A3 (buffer ownership),
+A9 (master quantization) are HARD/speculative — defer. A10 = no action (correct).
+
+### Lens C — CaptainPad UX/console (agent acb0978, DONE)
+P0/EASY (CaptainPad — owned by WAVE3 UI now; do AFTER WAVE3 merges):
+- C1/C7 channel delete: removeMixerChannel doesn't check res.ok (api.ts) +
+  confirmDeleteChannel ignores result (mixer.tsx ~1158) → no operator feedback.
+- C2 `.catch(()=>{})` swallows fader/mute/solo/view errors (mixer.tsx ~836/853/
+  895/927/1175) → CODEX P0 fail-loud violation. Surface errors.
+- C3 ConfirmSheet buttons lack hitSlop (ConfirmSheet.tsx ~76). EASY.
+- C5 deck-tx mode optimistic, no rollback on reject (index.tsx ~200). MED.
+- C10 SOLO color-only feedback, add text state (mixer.tsx ~408). EASY.
+- C6 view-selection optimistic swallow (mixer.tsx ~1173). EASY (toast).
+→ Consolidate into ONE captainpad_qol slice owning mixer.tsx/index.tsx/api.ts/
+  ConfirmSheet.tsx, launched AFTER WAVE3 (dev/captainpad_hotswap_ui) merges.
+
+### Lens D — deck/mixer × hot-swap × timeline (agent aea469e, DONE) — STRATEGIC
+HEADLINE: merged hot-swap path and origin/feat/timeline_support were never
+integrated. Timeline drives deck via INSTANT loadPlaylistEntry (hard cuts),
+bypassing loadPlaylistEntryWithTransition + /deck/playlist/swap +
+precompileNextDeckEntry. Timeline uses a per-channel autopilotPool; merged tip
+has a single global deck autopilot → THEY COLLIDE on merge (#2, HARD, a
+merge-time design decision for whoever merges timeline — NOT mine to fix here;
+DOCUMENT only). Most D findings (#1,#2,#4,#5,#9) are in the TIMELINE BRANCH
+(not my deliverable branch, coordinate-free — out of scope).
+IN-LANE, ADDITIVE engine items that make MY hot-swap API timeline-ready:
+- D-A (P0, EASY-MED): make /deck/playlist/swap PARAMETRIC + concurrency-safe —
+  optional per-call `transition:{enabled,mode,durationMs}` overriding
+  deckTransitionConfig (validated same as /deck/transition-config); if
+  isDeckSwapInFlight → finishDeckSwapNow() then proceed OR return 409 EBUSY.
+  Closes #1/#3/#8. Additive; existing callers keep defaults.
+- D-B (P1, MED): add `POST /deck/playlist/queue {name,entryId}` → compile +
+  warmInactiveDeckHandle WITHOUT advancing (warm-then-fire-on-anchor). Reuses
+  the already-leak-safe warmInactiveDeckHandle contract. Replaces wrong-guess
+  precompile heuristic.
+- D-#10 == A7: removeDeckChannel / scene-switch must cancelDeckPatternSwap()
+  before tearing down _inactiveDeckChannel (avoid rebind-to-destroyed-handle).
+CORRECTION D flagged: E1's report calling swap "the win timeline needs" is
+aspirational — timeline doesn't call it yet. D-A/D-B make it real.
+
+### Lens E — techdebt/tests/arch (agent aee2692, DONE)
+Verdict: MAINTAINABLE, no P0 bugs, 802 tests solid. Safe ADDITIVE wins:
+- E#1/#10 (EASY): extract `applyChannelPatch(channel,data,id)` helper unifying
+  deck (api_server ~3684-3731) + mixer (~2854-2907) PATCH (fader-lock, blend-mode
+  validation, viewSelection, transition-cancel). Behavior-preserving.
+- E#2 (EASY, additive test): saveDeckState pattern-swap persistence round-trip.
+- E#5 (EASY, additive test): viewFader ramp interpolation (updateTransitions).
+- E#6 (EASY, additive test): null-deck control path → 404.
+- E#11 (MED, additive test): viewSelection validate→compile→render round-trip.
+- E#7 api_server god-file router extraction → HARD, DEFER (risky, low value).
+- E#4 channelIdCounter, E#3 serialize dup = RESOLVED/no-action.
+- E#8 ChannelStrip prop-drilling, E#9 remaining `any` → CaptainPad, fold into
+  captainpad_qol slice.
+
+## IMPLEMENTATION WAVES (post-adversarial)
+
+### WAVE 4 — engine hardening + timeline-ready (dev/engine_hardening_timeline,
+slot 2) — owns pattern_mixer.js + api_server.js + ws_topic_routing.js + new
+engine tests. Parallel & disjoint with WAVE 3 (CaptainPad). Priority order:
+P0 validation/fail-loud (B:F1/F4/F2/F9/F7/F10) → perf-EASY (A:A1/A2/A5/A7) →
+timeline-additive (D-A parametric+concurrency-safe swap, D-B queue/warm) →
+dedup (E#1) → tests (E#2/E#5/E#6 + tests for all changes). VERIFY each
+adversarial claim against real code (some are speculative; Node is
+single-threaded so A4/A6 are wrong). Ship safe subset, document rest.
+
+### WAVE 5 — captainpad QoL (dev/captainpad_qol) — AFTER WAVE 3 merges (shares
+CaptainPad files). Lens C: removeMixerChannel res.ok + delete feedback (C1/C7),
+fail-loud on .catch swallow (C2), ConfirmSheet hitSlop (C3), SOLO text (C10),
+view-sel/deck-tx error surfacing (C5/C6) + Lens E#9 any-typing.
 
 ## Datasets / assets policy
 
