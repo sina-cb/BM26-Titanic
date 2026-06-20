@@ -502,6 +502,46 @@ channel's own output. `faderMax = 0` fully suppresses the channel.
 
 ---
 
+## 9. Playlist tags + per-entry hold/loop wave (2026-06-20)
+
+Two additive playlist features, schema'd in `lib/playlist_manager.js` and
+surfaced through CaptainPad's `PlaylistPanel`. Full schema + coercion rules
+live in `docs/19_playlists.md` §2.5; this section is the channels-side summary.
+
+- **#11 Tags + search/filter.** Playlist-level `tags: string[]` (lenient
+  coerce: trim + lowercase + drop empties on load; same + `Set` dedupe on
+  save; non-array → `[]`). `GET /playlists/:name` returns them inline; the
+  `POST /playlists` handler now passes `save({ name, tags, entries })`. The
+  CaptainPad library picker (`LibraryModal`) and hot-swap picker
+  (`SwapPlaylistModal`) gained a search box + tag chips that filter
+  client-side; tags are fetched lazily per name (reusing the api.ts per-name
+  cache) so names render immediately and the filter is additive. A tag-edit
+  row on the loaded playlist commits comma-separated tags via `savePlaylist`.
+- **#12 Per-entry hold/loop.** `hold`/`loop: boolean` per entry (strict
+  `=== true` coerce in load + save). **Honored ONLY by the deck autopilot
+  advance** (the `changePattern` closure passed to `new Autopilot`): `hold`
+  → park (return without cancelling the timer — a binary park-until-released
+  flag, not a timed hold); `loop` → repeat the current entry, overriding
+  shuffle; else the existing shuffle/sequential pick. The gate does NOT touch
+  manual `POST /deck/playlist/entry` taps — a tap releases a hold. A
+  stale/undefined current entry skips the gate. `lib/autopilot.js` is
+  unchanged. Mixer overlays persist the flags but have no live autopilot, so
+  they are inert there (CaptainPad toggle buttons render on both panels for
+  symmetry; the panel notes the deck-only honoring).
+
+### 9.1 Implementation map (this wave)
+
+| Site | What |
+|---|---|
+| `lib/playlist_manager.js` | `tags` coerce in `load()`/`save()`; per-entry `hold`/`loop` coerce in both |
+| `lib/api_server.js` | TWO surgical edits: `save({ name, tags, entries })` on `POST /playlists`; hold/loop gate in the autopilot `changePattern` callback |
+| `CaptainPad/utils/api.ts` | `tags?` on `PlaylistData`; `hold?`/`loop?` on `PlaylistEntry`; `savePlaylist` arg includes `tags?` |
+| `CaptainPad/components/PlaylistPanel.tsx` | search + tag chips in both pickers; tag-edit row; per-entry hold/loop toggle buttons |
+| `tests/playlist_tags_holdloop.test.js` | Unit: tags round-trip, hold/loop round-trip, OLD-playlist coercion (byte-compat), junk coercion (7 tests) |
+| `tests/hil/hil_playlist_hold_loop_test.mjs` | HIL: hold parks ≥3 ticks + releases, loop repeats/overrides shuffle, manual tap overrides hold (9 assertions) |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

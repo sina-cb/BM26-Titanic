@@ -27,16 +27,24 @@ function tickSeconds(mixer, seconds) {
   mixer.renderAll6ch();
 }
 
+// Mid-ramp linear checks compare a WALL-CLOCK-derived value against an exact
+// fraction. `_tickMasterFade()` re-reads Date.now() a few ms after tickSeconds()
+// stamped startMs, so the real elapsed is always slightly past the target —
+// under parallel test load that drift can reach tens of ms. A 1e-6 tolerance is
+// therefore unwinnable (flaky); 0.05 (≤50ms over a 1s fade) still proves the
+// ramp is roughly linear and not broken. Exact-landing/clamp checks stay exact.
+const RAMP_TOL = 0.05;
+
 test('startMasterFade ramps master toward the target over the duration', () => {
   const m = makeMixer();
   m.master = 1.0;
   m.startMasterFade(0.0, 1000); // full blackout over 1s
   // 0.25s elapsed → linear ~0.75.
   tickSeconds(m, 0.25);
-  assert.ok(Math.abs(m.master - 0.75) < 1e-6, `expected ~0.75, got ${m.master}`);
+  assert.ok(Math.abs(m.master - 0.75) < RAMP_TOL, `expected ~0.75, got ${m.master}`);
   // 0.5s elapsed → ~0.5.
   tickSeconds(m, 0.5);
-  assert.ok(Math.abs(m.master - 0.5) < 1e-6, `expected ~0.5, got ${m.master}`);
+  assert.ok(Math.abs(m.master - 0.5) < RAMP_TOL, `expected ~0.5, got ${m.master}`);
 });
 
 test('master fade lands EXACTLY on the target and clears the descriptor', () => {
@@ -53,7 +61,7 @@ test('master fade can ramp UP (restore from blackout)', () => {
   m.master = 0.0;
   m.startMasterFade(1.0, 2000);
   tickSeconds(m, 1.0); // halfway
-  assert.ok(Math.abs(m.master - 0.5) < 1e-6, `expected ~0.5, got ${m.master}`);
+  assert.ok(Math.abs(m.master - 0.5) < RAMP_TOL, `expected ~0.5, got ${m.master}`);
   tickSeconds(m, 2.0); // past end
   assert.equal(m.master, 1.0);
 });

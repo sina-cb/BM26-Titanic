@@ -179,6 +179,20 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
+  // ── Tags (#11) ──────────────────────────────────────────────────────
+  // `tagDraft` is the editable comma-separated buffer for the currently
+  // loaded playlist's tags; seeded from the playlist whenever its tag set
+  // changes (load / WS save). The operator commits with the SAVE button or
+  // submit, which calls handleSaveTags.
+  const [tagDraft, setTagDraft] = useState('');
+  // Per-name tag cache for the library/swap pickers' client-side filter.
+  // Populated lazily when a picker opens (one fetchPlaylist per name,
+  // riding the api.ts per-name cache so it's cheap and shared). Names
+  // render immediately; the tag chips + filter become available as the
+  // lazy fetches land (filter additively — an un-fetched playlist still
+  // matches a name search, just not a tag filter until its tags arrive).
+  const [tagsByName, setTagsByName] = useState<Record<string, string[]>>({});
+
   // Playlist-edits lock — operator-toggled gate that hides every
   // destructive edit affordance on the deck's playlist: per-row up/down
   // chevrons, per-row remove (−) button, and the header's add (+)
@@ -305,6 +319,45 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const assignmentRef = useRef<PlaylistAssignment | null>(null);
   useEffect(() => { playlistRef.current = playlist; }, [playlist]);
   useEffect(() => { assignmentRef.current = assignment; }, [assignment]);
+
+  // Seed the tag-edit buffer from the loaded playlist's tags. Re-runs when
+  // the playlist name OR its tag set changes (a WS playlistSaved from a
+  // sibling tab, or a fresh load) so the field never goes stale. We depend
+  // on the JOINED string (not the array, which changes identity every
+  // render) so the effect only fires on a real tag-set change; `name` is
+  // listed so switching playlists with identical tags still re-seeds.
+  const playlistName = playlist?.name ?? null;
+  const tagDraftSeed = (playlist?.tags ?? []).join(', ');
+  useEffect(() => {
+    setTagDraft(tagDraftSeed);
+  }, [playlistName, tagDraftSeed]);
+
+  // Lazy tag fetch for the picker filters. When the library or swap picker
+  // opens, fetch tags for any playlist name we don't yet have cached. Each
+  // fetchPlaylist hits the shared api.ts per-name cache, so concurrent
+  // panels and repeated opens don't pile up GETs. Names render immediately
+  // (the picker lists `playlists` directly); tag chips/filter light up as
+  // these resolve.
+  const pickerOpen = showLibrary || showSwap;
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let cancelled = false;
+    const missing = playlists.filter((n) => !(n in tagsByName));
+    if (missing.length === 0) return;
+    (async () => {
+      const results = await Promise.all(missing.map((n) => fetchPlaylist(n)));
+      if (cancelled) return;
+      setTagsByName((prev) => {
+        const next = { ...prev };
+        missing.forEach((n, i) => {
+          const r = results[i];
+          next[n] = (r.ok && r.data && Array.isArray(r.data.tags)) ? r.data.tags : [];
+        });
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [pickerOpen, playlists, tagsByName]);
 
   // ── Late-prop hydration: adopt initialAssignment / initialPlaylist ──
   //
@@ -990,6 +1043,65 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [flashSaved, refresh]);
 
+  // ── Per-entry hold / loop toggles (#12) ────────────────────────────
+  // Mirror the handleMoveEntry optimistic + rollback template: flip the
+  // flag in local state, persist the whole playlist, and on failure
+  // restore the prior entries + surface the error (Codex P0 — no silent
+  // fallback). `field` is 'hold' or 'loop'; the toggle is independent per
+  // field so an entry may be both held and looping (hold wins at the
+  // engine, but the operator can pre-arm loop).
+  //
+  // NOTE: hold/loop are honored by the DECK autopilot only. Mixer overlays
+  // persist these flags (round-tripped on save) but have no live autopilot
+  // to act on them, so on a mixer panel they are inert metadata.
+  const handleToggleEntryFlag = useCallback(async (entryId: string, field: 'hold' | 'loop') => {
+    const cur = playlistRef.current;
+    if (!cur) return;
+    const idx = cur.entries.findIndex((e) => e.id === entryId);
+    if (idx < 0) throw new Error(`handleToggleEntryFlag: entry not found: ${entryId}`);
+    const prevEntries = cur.entries;
+    const nextEntries = cur.entries.map((e) =>
+      e.id === entryId ? { ...e, [field]: !(e[field] === true) } : e,
+    );
+    // Optimistic: flip the chip instantly.
+    setPlaylist({ ...cur, entries: nextEntries });
+    const res = await savePlaylist({ name: cur.name, tags: cur.tags, entries: nextEntries });
+    if (!res.ok) {
+      setPlaylist({ ...cur, entries: prevEntries });
+      Alert.alert(`Toggle ${field} failed`, res.error || 'Unknown error');
+      await refresh();
+      return;
+    }
+    flashSaved();
+  }, [flashSaved, refresh]);
+
+  // ── Playlist tags edit (#11) ───────────────────────────────────────
+  // The tag-edit row parses a comma-separated string into a tag array and
+  // saves the whole playlist (engine lowercases/trims/dedupes). Optimistic
+  // + flashSaved + rollback, same template as the entry toggles. The local
+  // text buffer is owned below (`tagDraft`) and seeded from the loaded
+  // playlist; this just commits it.
+  const handleSaveTags = useCallback(async (rawTags: string) => {
+    const cur = playlistRef.current;
+    if (!cur) return;
+    const parsed = rawTags
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    const deduped = [...new Set(parsed)];
+    const prevTags = cur.tags;
+    // Optimistic.
+    setPlaylist({ ...cur, tags: deduped });
+    const res = await savePlaylist({ name: cur.name, tags: deduped, entries: cur.entries });
+    if (!res.ok) {
+      setPlaylist({ ...cur, tags: prevTags });
+      Alert.alert('Save tags failed', res.error || 'Unknown error');
+      await refresh();
+      return;
+    }
+    flashSaved();
+  }, [flashSaved, refresh]);
+
   const handleCreateNew = useCallback(async () => {
     const name = sanitizeName(newPlaylistName);
     if (!name) return;
@@ -1277,6 +1389,60 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         )}
       </View>
 
+      {/* ── Tag-edit row (#11) ──────────────────────────────────────────
+          Comma-separated tags for the currently-loaded playlist. Engine
+          lowercases / trims / dedupes on save, so the field is forgiving
+          ("Chill, AMBIENT" → chill, ambient). Editable only; hidden when
+          locked or no playlist is loaded. Saves on the SAVE button or the
+          keyboard submit. Same optimistic + flashSaved + rollback model as
+          the entry toggles. */}
+      {editable && playlist && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: sz.btnFont + 2, color: C.secondary }}>#</Text>
+          <TextInput
+            value={tagDraft}
+            onChangeText={setTagDraft}
+            onSubmitEditing={() => handleSaveTags(tagDraft)}
+            placeholder="tags (comma-separated)"
+            placeholderTextColor={C.icon}
+            returnKeyType="done"
+            style={{
+              flex: 1,
+              height: sz.btnH,
+              paddingHorizontal: 8,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+              color: C.text,
+              fontFamily: 'Inter_400Regular',
+              fontSize: sz.btnFont,
+            }}
+            accessibilityLabel="Edit playlist tags"
+          />
+          <TouchableOpacity
+            onPress={() => handleSaveTags(tagDraft)}
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+            style={{
+              height: sz.btnH,
+              paddingHorizontal: 10,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.secondary,
+              backgroundColor: C.surfaceContainerHigh,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            accessibilityLabel="Save playlist tags"
+            accessibilityRole="button"
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: sz.btnFont, color: C.secondary }}>
+              TAGS
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ── Entry list (THE one and only pattern queue for this channel) ── */}
       {playlist ? (
         playlist.entries.length === 0 ? (
@@ -1416,6 +1582,61 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </Text>
                     )}
                   </TouchableOpacity>
+                  {/* Per-entry HOLD / LOOP toggles (#12). Same editable +
+                      playlist-edits-lock guard as the reorder chevrons.
+                      hold = park autopilot on this entry until released by
+                      a manual tap; loop = repeat this entry (overrides
+                      shuffle). Compact "H"/"L" chrome, >= 44pt tap target
+                      via hitSlop. Honored by the DECK autopilot only —
+                      inert (but persisted) on mixer overlays. */}
+                  {editable && !(role === 'deck' && playlistEditsLocked) && (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => handleToggleEntryFlag(e.id, 'hold')}
+                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 6 }}
+                        style={{
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
+                          borderRadius: 4,
+                          borderWidth: 1,
+                          borderColor: e.hold ? C.primary : C.ghostBorder,
+                          backgroundColor: e.hold ? C.primaryContainer : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        accessibilityLabel={`${e.hold ? 'Clear' : 'Set'} hold on ${e.pattern}`}
+                        accessibilityRole="button"
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: sz.fontMicro + 1,
+                          color: e.hold ? C.primary : (isActive ? 'rgba(255,255,255,0.7)' : C.icon),
+                        }}>H</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleToggleEntryFlag(e.id, 'loop')}
+                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 6 }}
+                        style={{
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
+                          borderRadius: 4,
+                          borderWidth: 1,
+                          borderColor: e.loop ? C.primary : C.ghostBorder,
+                          backgroundColor: e.loop ? C.primaryContainer : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        accessibilityLabel={`${e.loop ? 'Clear' : 'Set'} loop on ${e.pattern}`}
+                        accessibilityRole="button"
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: sz.fontMicro + 1,
+                          color: e.loop ? C.primary : (isActive ? 'rgba(255,255,255,0.7)' : C.icon),
+                        }}>L</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
                     <TouchableOpacity
                       onPress={() => requestRemoveEntry(e.id)}
@@ -1451,6 +1672,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         visible={showLibrary}
         onClose={() => setShowLibrary(false)}
         playlists={playlists}
+        tagsByName={tagsByName}
         currentName={assignment?.name || null}
         onLoad={handleLoadPlaylist}
         onDelete={handleDeletePlaylist}
@@ -1465,6 +1687,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         visible={showSwap}
         onClose={() => setShowSwap(false)}
         playlists={playlists}
+        tagsByName={tagsByName}
         currentName={assignment?.name || null}
         onPick={(name) => { setShowSwap(false); setSwapPrompt(name); }}
         role={role}
@@ -1537,10 +1760,106 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
 // readable. Both share the same backdrop pattern: outer TWF closes on tap,
 // inner TWF swallows taps so the modal content is opaque to dismissal.
 
+// ── Tag / search filtering (#11) ────────────────────────────────────
+// Shared by the library + swap pickers. A playlist matches when its name
+// contains the (lowercased) search query AND it carries every selected
+// tag. Tag membership is read from `tagsByName` — a name not yet in that
+// map (lazy fetch still in flight) is treated as having NO tags, so it
+// only survives a tag filter once its tags have loaded (additive filter,
+// per the design). The set of selectable chips is the union of all known
+// tags across the supplied names.
+function filterPlaylistNames(
+  names: string[],
+  tagsByName: Record<string, string[]>,
+  query: string,
+  selectedTags: string[],
+): string[] {
+  const q = query.trim().toLowerCase();
+  return names.filter((n) => {
+    if (q && !n.toLowerCase().includes(q)) return false;
+    if (selectedTags.length > 0) {
+      const tags = tagsByName[n] || [];
+      for (const t of selectedTags) {
+        if (!tags.includes(t)) return false;
+      }
+    }
+    return true;
+  });
+}
+
+function allKnownTags(names: string[], tagsByName: Record<string, string[]>): string[] {
+  const set = new Set<string>();
+  for (const n of names) {
+    for (const t of (tagsByName[n] || [])) set.add(t);
+  }
+  return [...set].sort();
+}
+
+interface PlaylistFilterBarProps {
+  C: Palette;
+  query: string;
+  setQuery: (s: string) => void;
+  tags: string[];
+  selectedTags: string[];
+  toggleTag: (t: string) => void;
+}
+
+// Search box + tag chips, shared by both pickers. Chips render only when
+// at least one playlist has a tag (so an all-untagged library shows just
+// the search box). Each chip toggles its tag in/out of the active filter.
+const PlaylistFilterBar: React.FC<PlaylistFilterBarProps> = ({
+  C, query, setQuery, tags, selectedTags, toggleTag,
+}) => (
+  <View style={{ marginBottom: 8, gap: 6 }}>
+    <TextInput
+      value={query}
+      onChangeText={setQuery}
+      placeholder="search playlists…"
+      placeholderTextColor={C.icon}
+      style={{
+        paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6,
+        borderWidth: 1, borderColor: C.ghostBorder, color: C.text,
+        fontFamily: 'Inter_400Regular', fontSize: 12,
+      }}
+      accessibilityLabel="Search playlists by name"
+    />
+    {tags.length > 0 && (
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {tags.map((t) => {
+          const on = selectedTags.includes(t);
+          return (
+            <TouchableOpacity
+              key={t}
+              onPress={() => toggleTag(t)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              style={{
+                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
+                borderWidth: 1,
+                borderColor: on ? C.primary : C.ghostBorder,
+                backgroundColor: on ? C.primaryContainer : 'transparent',
+              }}
+              accessibilityLabel={`${on ? 'Remove' : 'Add'} tag filter ${t}`}
+              accessibilityRole="button"
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+                color: on ? C.primary : C.icon,
+              }}>
+                {on ? `✓ ${t}` : t}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    )}
+  </View>
+);
+
 interface LibraryModalProps {
   visible: boolean;
   onClose: () => void;
   playlists: string[];
+  tagsByName: Record<string, string[]>;
   currentName: string | null;
   onLoad: (name: string) => void;
   onDelete: (name: string) => void;
@@ -1550,11 +1869,26 @@ interface LibraryModalProps {
 }
 
 const LibraryModal: React.FC<LibraryModalProps> = ({
-  visible, onClose, playlists, currentName, onLoad, onDelete,
+  visible, onClose, playlists, tagsByName, currentName, onLoad, onDelete,
   newPlaylistName, setNewPlaylistName, onCreateNew,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const [query, setQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const toggleTag = useCallback((t: string) => {
+    setSelectedTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
+  }, []);
+  // Reset the filter each time the picker opens so a stale query from a
+  // prior open doesn't hide everything.
+  useEffect(() => {
+    if (visible) { setQuery(''); setSelectedTags([]); }
+  }, [visible]);
+  const knownTags = useMemo(() => allKnownTags(playlists, tagsByName), [playlists, tagsByName]);
+  const filtered = useMemo(
+    () => filterPlaylistNames(playlists, tagsByName, query, selectedTags),
+    [playlists, tagsByName, query, selectedTags],
+  );
   return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <TouchableOpacity
@@ -1566,13 +1900,26 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
       <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
         <View style={modalStyles.card}>
             <Text style={modalStyles.title}>PLAYLIST LIBRARY</Text>
+            <PlaylistFilterBar
+              C={C}
+              query={query}
+              setQuery={setQuery}
+              tags={knownTags}
+              selectedTags={selectedTags}
+              toggleTag={toggleTag}
+            />
             <ScrollView style={{ maxHeight: 320 }}>
               {playlists.length === 0 && (
                 <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
                   No playlists yet — create one below.
                 </Text>
               )}
-              {playlists.map((name) => {
+              {playlists.length > 0 && filtered.length === 0 && (
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                  No playlists match the current filter.
+                </Text>
+              )}
+              {filtered.map((name) => {
                 const isCurrent = name === currentName;
                 return (
                   <View key={name} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -1586,6 +1933,17 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isCurrent ? '#FFF' : C.text }}>
                         {isCurrent ? '▶ ' : ''}{name}
                       </Text>
+                      {(tagsByName[name] || []).length > 0 && (
+                        <Text
+                          style={{
+                            fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 2,
+                            color: isCurrent ? 'rgba(255,255,255,0.75)' : C.icon,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {(tagsByName[name] || []).join(' · ')}
+                        </Text>
+                      )}
                     </TouchableOpacity>
                     {name !== 'default' && (
                       <TouchableOpacity
@@ -1625,6 +1983,7 @@ interface SwapPlaylistModalProps {
   visible: boolean;
   onClose: () => void;
   playlists: string[];
+  tagsByName: Record<string, string[]>;
   currentName: string | null;
   onPick: (name: string) => void;
   role: ChannelRole;
@@ -1643,11 +2002,24 @@ interface SwapPlaylistModalProps {
 // user-facing wording on role so the mixer copy doesn't promise a crossfade
 // that never happens.
 const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
-  visible, onClose, playlists, currentName, onPick, role,
+  visible, onClose, playlists, tagsByName, currentName, onPick, role,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
-  const others = playlists.filter((n) => n !== currentName);
+  const [query, setQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const toggleTag = useCallback((t: string) => {
+    setSelectedTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
+  }, []);
+  useEffect(() => {
+    if (visible) { setQuery(''); setSelectedTags([]); }
+  }, [visible]);
+  const swappable = playlists.filter((n) => n !== currentName);
+  const knownTags = useMemo(() => allKnownTags(swappable, tagsByName), [swappable, tagsByName]);
+  const others = useMemo(
+    () => filterPlaylistNames(swappable, tagsByName, query, selectedTags),
+    [swappable, tagsByName, query, selectedTags],
+  );
   return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <TouchableOpacity
@@ -1664,6 +2036,14 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
               ? 'Pick a different playlist to crossfade onto. It transitions to that playlist’s first usable entry, riding the active transition.'
               : 'Pick a different playlist to switch onto. It loads that playlist’s first usable entry instantly (no crossfade).'}
           </Text>
+          <PlaylistFilterBar
+            C={C}
+            query={query}
+            setQuery={setQuery}
+            tags={knownTags}
+            selectedTags={selectedTags}
+            toggleTag={toggleTag}
+          />
           <ScrollView style={{ maxHeight: 360 }}>
             {currentName && (
               <View
@@ -1698,9 +2078,16 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
                 accessibilityRole="button"
               >
                 <IconSymbol name="shuffle" size={14} color={C.secondary} />
-                <Text style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }} numberOfLines={1}>
-                  {name}
-                </Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }} numberOfLines={1}>
+                    {name}
+                  </Text>
+                  {(tagsByName[name] || []).length > 0 && (
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.icon, marginTop: 2 }} numberOfLines={1}>
+                      {(tagsByName[name] || []).join(' · ')}
+                    </Text>
+                  )}
+                </View>
               </TouchableOpacity>
             ))}
           </ScrollView>
