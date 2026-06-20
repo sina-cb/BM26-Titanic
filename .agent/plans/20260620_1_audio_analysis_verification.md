@@ -83,3 +83,17 @@ Proof entry template:
 - Process: root-caused bad drop precision (mic-compressed BUILD ratio spike off noise floor) → added absolute `dropMinLevel` floor + raised `dropEnergyJump`; reworked slow-zone to smoothstep soft-knee; shipped `dropLevelAssist` OFF (a phantom drop on calm music is worse than a miss). Dry-run merge showed no conflicts; ran suites + boot before commit; no state files staged.
 - Verdict: B2 crossed off in plan §6. ✅
   - Known: `audio_analysis_validation` tick-p99 perf assertion is a pre-existing flake under concurrent CI load (passed here 40/40 run alone) — not introduced by this work.
+
+### A0 — party-mode genre detection + note→colour fix  [PASS]  2026-06-20T05:25Z
+- Branch / commit: `dev/genre_signals` @ `89b65c2` → merged into `feat/audio_analysis_2` @ `08d9537` (--no-ff, union-resolved conflicts in `derived_signals.js` + `audio_signals.test.js` keeping BOTH slot-0 genre and slot-3 analyzer blocks).
+- IMPORTANT — this slice's SUB-AGENT STALLED mid-task (~02:42Z, no completion/commit). Instigator detected the stall (zero file activity 90 min, no live proc, no commit), reviewed the partial work (genre_classifier.js 406 lines + note/colour fix — both coherent and high-quality), and FINISHED it: wrote the 2 missing validation suites, the datasets note, and the report, then verified before merge.
+- Deliverables: `audio/signals/genre_classifier.js` (`GenreClassifier`, 7-genre enum `[ambient,deep_house,melodic_house,tech_house,techno,melodic_techno,downtempo]`, publishes `audioGenre`/`audioGenreConf`); note→colour fix in `switch_signals.js` (pending-latch so a change blocked by the colour dwell is not dropped); `chord_progression` melodic synth.
+- Command(s) run BY INSTIGATOR:
+  - `node --test tests/genre_classifier.test.js` → **9 pass / 0 fail** (party-gate, warmup, techno-family, downtempo, house-family, tech_house, hysteresis, no-flicker stability).
+  - `node --test tests/switch_color_note.test.js` → **4 pass / 0 fail** (blocked note change fires after dwell — the fix; stale intent dropped; held note no strobe).
+  - Merged tip full audio suite: `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/switch_color_note.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/note_estimator_synthetic.test.js tests/companion_*.test.js` → **263 pass / 0 fail**.
+  - `node engine.js ... --dry-run` → **exit 0**; registry confirms `audioGenre` + `audioChestHit` both present (genre + analyzer keys coexist).
+- Capture(s): none visual (signal logic — numeric/test proof above). Genre test scenarios are deterministic and committed.
+- Process: resolved 6 union conflicts in derived_signals.js (imports/ctor/reset/tick/setMany/_zero — kept both modules) and the registry-order conflict in audio_signals.test.js (verified actual order via `audioRegistryEntries()`: genre keys then analyzer keys). Initial genre-test failures (downtempo/tech_house → techno) were a TEST-scenario bug (fed zero note-changes; classifier expects `melodic≈0` only for techno) — fixed the scenarios, not the classifier.
+- INCIDENT (resolved): mid-merge, the main checkout's `marsin_engine/node_modules` had become a self-referential symlink (circular → `fft.js` unresolvable, 3 analyzer-dependent test files failed to import). Fixed by `rm` the bad link + `npm install` (fft.js restored); re-ran → 263 green. Root cause likely a stray `ln -sf` from a stalled worktree; no source impact. Watching for recurrence.
+- Verdict: A0 crossed off in plan §6. ✅

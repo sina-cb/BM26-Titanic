@@ -172,7 +172,7 @@ subsystem auto-checks green, `node --test` green (incl. new tests), engine
 Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCKED · ❌ DROPPED
 
 ### Wave A
-- ⏳ A0 genre detection + note→color fix — `dev/genre_signals` (slot 0)
+- ✅ A0 genre detection + note→color fix — `dev/genre_signals` MERGED @ `08d9537` (sub-agent STALLED; instigator finished + verified: 263 tests green, 13 new; proof in `_verification` 05:25Z)
 - ⏳ A1 companion OSC accounting page + CaptainPad theming — `dev/companion_ui` (slot 1)
 - ✅ A2 discovery: new audio features → `20260620_2`
 - ✅ A3 discovery: low-hanging-fruit triage → `20260620_3`
