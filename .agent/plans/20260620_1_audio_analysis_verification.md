@@ -124,3 +124,13 @@ Proof entry template:
 - New regression tests: `party_mode.test.js` (4, module had none), switch startup-guard test, genre confidence test.
 - Process: 5 read-only adversarial auditors (DSP / detection+genre / signals / companion+UI / robustness) audited the merged tree; I implemented the confirmed-safe signals P1s inline, captured all findings in report `20260620_9`, and routed the disjoint companion/CaptainPad/test-gap fixes (items 5–10) to `dev/companion_captainpad_fixes`. Bigger items (FFT 2048, fixed-dt, genre v2 real-audio tuning, detector scoring honesty) documented as coordinated follow-ups.
 - Verdict: C-fix-signals crossed off. ✅  C-fix-companion in flight; C-backlog documented.
+
+### C-fix-companion — companion/CaptainPad adversarial polish (items 5–10)  [PASS]  2026-06-20T07:00Z
+- Branch / commit: `dev/companion_captainpad_fixes` @ `179a6d8` → merged into `feat/audio_analysis_2` (--no-ff, clean).
+- Fixes: accounting `rateHz` decays by idle (no stale-rate lie); light-theme `--on-accent` token (contrast 2.86:1 → 6.49:1); themed confirm modals replace both `window.confirm()` (0 native dialogs); CaptainPad `isGenreKey` excludes `conf`, band-token match segment-anchored (kills `audioSlowZone`→LOW collision); new `derived_signals_perf_finiteness.test.js`.
+- Command(s) run BY INSTIGATOR on the MERGED tip:
+  - `node --test tests/companion_*.test.js tests/derived_signals_perf_finiteness.test.js` → **72 pass / 0 fail**; `[derived perf] hops=200000 p50=0.0107ms p99=0.3897ms` (budget 0.5).
+  - `cd CaptainPad && npx tsc --noEmit` → **exit 0**.
+  - Final full audio sweep `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/switch_color_note.test.js tests/party_mode.test.js tests/band_onsets.test.js tests/detector_eval.test.mjs tests/derived_signals_perf_finiteness.test.js tests/note_estimator_synthetic.test.js tests/companion_*.test.js tests/integration/detection_metrics.test.mjs` → **279 pass / 0 fail**.
+- Agent proof (report `20260620_10`): WCAG ratios, 70/70 companion ×3 consecutive, behavioral node checks for items 7/8, live `/osc_accounting` curl. No screenshots (no chromium) — CSS-var theme test + WCAG numbers + grep-confirmed no native dialogs.
+- Verdict: C-fix-companion crossed off. ✅ — **ALL adversarial implement-now items (signals + companion/CaptainPad + test-gaps) landed.**
