@@ -243,3 +243,13 @@ reconcile the strip list (React.memo holds); shared useEngineConnection hook
 de-dups deck/mixer boot/subscribe/teardown; typed fetchMixerState (hard-fails
 non-2xx instead of silent ok). Merge commit: see git log.
 </content>
+
+## MILESTONE SHOWCASE (T15, merged tip 6557b7c+)
+Live full-stack capture proving ~13 shipped features in the integrated UI:
+- showcase_mixer.png: ● CONNECTED; LOOKS/RECALL/CAPTURE (snapshots); GROUPS rail +
+  gang-faders; SOLO active + CLEAR SOLO + per-strip SAFE (solo-safe); CAP rows
+  (CH3=70 faderMax); channel color swatches; green per-channel level meters; tags
+  field + H/L hold-loop toggles; SWAP (hot-swap).
+- showcase_deck.png: master FADE (1s/3s/5s/10s + TO BLACK / UP); tags + TAGS; H/L per
+  entry; SWAP; autopilot; deck color/cap control.
+Engine renderHealth ok, 09_cyclone live. Servers town down; states/config restored (not committed).
