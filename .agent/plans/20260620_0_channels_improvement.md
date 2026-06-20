@@ -110,12 +110,12 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 
 - [x] Recon engine + CaptainPad
 - [x] Plan + verification files
-- [ ] E1 engine_hotswap_mixer (slot 0) — running
+- [x] E1 engine_hotswap_mixer (slot 0) — DONE + MERGED (37f4505, pushed)
 - [x] C2 captainpad_views (slot 1) — DONE + MERGED (355b2ca, pushed)
 - [x] E3 engine_state_hardening (slot 2) — DONE + MERGED (45dd556, pushed)
-- [ ] Merge E1 → verify on tip → push
-- [ ] WAVE 3: hot-swap UI on merged tip (C2 deferred it; needs E1 endpoint)
-- [ ] Adversarial wave on queue-empty
+- [ ] WAVE 3: dev/captainpad_hotswap_ui (slot 1) — RUNNING (hot-swap UI on merged tip)
+- [ ] Adversarial wave (5 read-only agents on tip 37f4505) — RUNNING; implement top safe finds
+- [ ] Merge WAVE 3 + adversarial fixes → verify → push
 
 ## Datasets / assets policy
 
@@ -134,5 +134,14 @@ node_modules symlinked to main checkout (gitignored, never committed).
   on merged tip: tsc 0, lint baseline (0 err/12 warn), web:build 0 / 21 routes.
   Only E1 (engine_hotswap_mixer) still running. When E1 lands: merge+verify,
   then WAVE 3 hot-swap UI + adversarial wave.
+- 2026-06-20 T3: E1 engine_hotswap_mixer done + MERGED (37f4505, pushed).
+  WAVE 2 COMPLETE (all 3 slices landed). Two instigator reconciliations on
+  the merged tip: rewrote blend_fallback_presence.test.js to the new fail-loud
+  contract; fixed dead-deck fixture (test_bench/deck_state 29_bar_dancers→
+  test_const). Merged-tip proof: 802 unit pass/0 fail, dry-run clean,
+  renderHealth ok, hot-swap HIL 17/17. Cleaned up 3 merged worktrees.
+  LAUNCHED WAVE 3 (dev/captainpad_hotswap_ui, slot 1) + 5-agent adversarial
+  wave (read-only on tip). Endpoint contract for UI: POST /deck/playlist/swap
+  {name, entryId?} + /mixer/channels/:id/playlist/swap. Cron re-armed.
 </content>
 </invoke>
