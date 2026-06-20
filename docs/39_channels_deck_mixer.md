@@ -712,6 +712,73 @@ purely additive telemetry with no render effect.
 
 ---
 
+## 6b. Channel ops cluster — Duplicate · Reorder · Panic/Home
+
+Engine wave (2026-06-20). Three operator actions on the overlay stack. All
+mutations are validate→mutate→`saveAllState()`→`broadcastMixerState()`; bad
+input fails loud (400/404), never silently. Routes are armed in
+`api_server.js` **before** the `^/mixer/channels/[^/]+$` PATCH/DELETE regexes
+so the literal `/duplicate` and `reorder` segments aren't read as channel ids.
+
+### #6 Duplicate — `POST /mixer/channels/:id/duplicate`
+Deep-copies a mixer overlay into a NEW overlay that lands on **top** of the
+stack. Rejects the deck id (`WRONG_ROLE` 400); a missing source id is 404.
+Copy = `serializeChannelForState(src)` (the same serializer `captureLook`
+uses) with `id` overridden to a freshly minted `ch_<ts>_<counter>` and `name`
+to `"<src> copy"`, then rebuilt via `buildChannelFromSaved` — which compiles a
+**fresh** WASM handle (never shares `src.handle`, so no double-free),
+re-binds the playlist, replays `localControls`, and runs `finalizeCpcValues`.
+All additive fields (`faderMax`, `color`, `mixGroupId`, `soloSafe`,
+`viewSelection`, locks, transition prefs) inherit for free via the blob. The
+cap is **delegated** to `addMixerChannel` (throws → 400) — single source of
+truth, no separate pre-check. Response mirrors the add route (`channelId`,
+`pattern`, `playlist`, inline `playlistData`) plus `sourceChannelId`.
+
+### #7 Reorder — `POST /mixer/channels/reorder { order: [ids] }`
+Reassigns the overlay stack order. `order` MUST be a **permutation** of the
+current overlay ids — array, exact length, no duplicates, exact same id set —
+validated BEFORE any mutation; any deviation ⇒ `400 REORDER_BAD_SET` (no
+partial apply). The mixer method `reorderMixerChannels(orderedIds)` does a
+single atomic reassignment of `this.mixerChannels` to the **same** channel
+objects in the new order (no splice, no recompile). Every per-channel field
+(handle, `compiledPixelMask`, `mixGroupId`, `soloSafe`, …) is preserved by
+reference. **Accepted mid-transition (no 409):** `renderAll6ch` rebuilds
+`_renderOrderScratch` from `mixerChannels` every frame via `findIndex`, and
+transitions key on channel id, so the new order is picked up next frame with
+no glitch. `order[0]` = bottom of the mix (seed layer), `order[last]` = top.
+
+### #9 Panic / Home — `POST /mixer/panic { home? }`
+Mission-critical: **always leaves the rig LIT.** `home` defaults to `true`.
+
+- If a snapshot named **`home`** exists → `recallLook` it, then force blackout
+  off + master to 1.0 (so a home captured at low master can't leave it dark).
+  Response `{ status:'ok', mode:'home', home:'home', rigLit:true }`.
+- Else → `mixer.panicToSafeDefault()` + clear blackout + master 1.0. Response
+  `{ status:'ok', mode:'safeDefault', rigLit:true }`.
+- **The ONE sanctioned loud fallback:** if a configured `home` snapshot is
+  malformed (corrupt YAML / bad shape) or structurally unusable (over-cap),
+  return **400** with a structured error (`PANIC_HOME_MALFORMED` /
+  `PANIC_HOME_RECALL_FAILED`) **but still clear blackout + master up** so the
+  exterior stays visible. The response carries `rigLit:true`.
+
+`panicToSafeDefault()` (mixer method): `setMaster(1.0)` (cancels any in-flight
+master fade); `cancelDeckPatternSwap()` (drops a half-chosen deck target,
+keeps the current known-lit deck pattern — NOT `finishDeckSwapNow`);
+`cancelChannelTransition` on every overlay (restores saved blend modes + clears
+the scripted-target flag); force-enable every overlay at fader 1.0 **except**
+`faderLocked` channels (parked level sacred) and **never** touching `faderMax`
+(safety ceiling); `soloedChannelIds.clear()`; un-**mute** every group (without
+deleting groups or resetting their faders); reset `targetViewFader` to 1.0.
+
+| Site | What |
+|---|---|
+| `lib/pattern_mixer.js` | `reorderMixerChannels(orderedIds)` (atomic re-order, re-validates + throws); `panicToSafeDefault()` (cancel fade/swap/transitions, enable overlays, clear solo, un-mute groups) |
+| `lib/api_server.js` | route arms `POST /mixer/channels/:id/duplicate`, `POST /mixer/channels/reorder`, `POST /mixer/panic` (armed before the `:id` regex) |
+| `tests/channel_ops_state.test.js` | Unit: reorder reverse/by-ref/atomic/bad-set/mid-transition; panic master/overlays/solo/faderLocked/faderMax/groups/deck-swap (10 tests) |
+| `tests/hil/hil_channel_ops_test.mjs` | HIL: dup distinct id + top + inherit + cap-400 + 404; reorder reverse/intact/bad-set/mid-transition; panic (all-in-flight) → master 1, blackout false, solo cleared, **NON-ZERO pixels (rig LIT)**; panic-with-home; panic-malformed-home → 400 but still LIT (30 checks) |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

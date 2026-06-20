@@ -3519,6 +3519,191 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           playlistData: inlinePlaylistData,
         }));
       });
+    }
+    // ── CHANNEL OPS #6 — DUPLICATE ───────────────────────────────────────
+    // POST /mixer/channels/:id/duplicate. Deep-copies a mixer overlay into a
+    // NEW overlay landing on TOP of the stack. MUST be armed BEFORE the
+    // `^/mixer/channels/[^/]+$` PATCH/DELETE regexes so the literal
+    // `/duplicate` segment isn't swallowed as a channel id.
+    //
+    // Copy strategy (spec §#6): serialize the source via the SAME serializer
+    // captureLook uses (serializeChannelForState), override id (fresh minted)
+    // + name (`<src> copy`), then rebuild through buildChannelFromSaved which
+    // compiles a FRESH wasm handle (never shares src.handle → no double-free),
+    // re-binds playlist + replays localControls + finalizeCpcValues. All
+    // additive fields (faderMax, color, mixGroupId, soloSafe, viewSelection,
+    // locks, transition prefs) ride along in the serialized blob for free.
+    else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/duplicate$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      // Decks can't be duplicated via /mixer routes (single deck identity).
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const src = mixer.getMixerChannel(id);
+      if (!src) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `mixer channel '${id}' not found` }));
+      }
+      // Serialize, then override identity. The id uses the SAME monotonic
+      // minting as POST /mixer/channels so two rapid dups can't collide.
+      const serialized = serializeChannelForState(src);
+      serialized.id = 'ch_' + Date.now() + '_' + (channelIdCounter++);
+      serialized.name = `${src.name} copy`;
+      let copy;
+      try {
+        // buildChannelFromSaved delegates the cap check to addMixerChannel
+        // (throws "Maximum of N mixer channels allowed" → 400, single source
+        // of truth — no separate pre-check to drift out of sync).
+        copy = buildChannelFromSaved(serialized, 'mixer', serialized.pattern);
+      } catch (dupErr) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: String(dupErr.message || dupErr) }));
+      }
+      saveAllState();
+      // Mirror POST /mixer/channels ordering: prime the playlist cache BEFORE
+      // the mixer broadcast so a freshly-mounting panel has its entries.
+      broadcastChannelPlaylistData(copy);
+      broadcastMixerState();
+      let inlinePlaylistData = null;
+      try {
+        if (copy.playlist && copy.playlist.name) {
+          const pl = playlistManager.load(copy.playlist.name);
+          if (pl) inlinePlaylistData = pl;
+        }
+      } catch (_) {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        channelId: copy.id,
+        sourceChannelId: id,
+        pattern: copy.pattern,
+        playlist: copy.playlist,
+        playlistData: inlinePlaylistData,
+      }));
+    }
+    // ── CHANNEL OPS #7 — REORDER ─────────────────────────────────────────
+    // POST /mixer/channels/reorder { order: [ids] }. Reassigns the overlay
+    // stack order. MUST be armed BEFORE the `:id` regexes (the literal
+    // `reorder` segment would otherwise be read as a channel id). Validate the
+    // permutation BEFORE mutating (fail loud, no partial apply).
+    // order[0] = bottom of the mix, order[last] = top.
+    else if (req.method === 'POST' && req.url === '/mixer/channels/reorder') {
+      readBody(data => {
+        const order = data && data.order;
+        const current = mixer.getMixerChannels();
+        const currentIds = current.map(c => c.id);
+        // Permutation validation: array, exact length, no dups, exact same id
+        // set as the live stack. Any deviation ⇒ 400 REORDER_BAD_SET.
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: msg, code: 'REORDER_BAD_SET' }));
+        };
+        if (!Array.isArray(order)) return bad('order must be an array of channel ids');
+        if (order.length !== currentIds.length) {
+          return bad(`order has ${order.length} ids but the mixer has ${currentIds.length} channels`);
+        }
+        const orderSet = new Set(order);
+        if (orderSet.size !== order.length) return bad('order contains duplicate ids');
+        const currentSet = new Set(currentIds);
+        for (const oid of order) {
+          if (!currentSet.has(oid)) return bad(`order contains unknown channel id '${oid}'`);
+        }
+        // Set equality is now guaranteed (same length, no dups, every order id
+        // is a current id) — every current id is therefore covered too.
+        try {
+          mixer.reorderMixerChannels(order);
+        } catch (e) {
+          // Defensive: the mixer re-validates and throws. Shouldn't happen
+          // after the checks above, but surface it loud rather than swallow.
+          return bad(String(e.message || e));
+        }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', order: mixer.getMixerChannels().map(c => c.id) }));
+      });
+    }
+    // ── CHANNEL OPS #9 — PANIC / HOME ────────────────────────────────────
+    // POST /mixer/panic { home? }. Mission-critical: leave the rig LIT.
+    //   - If a "home" snapshot exists (reserved name 'home') → recallLook it.
+    //     A 404/malformed home is the ONE sanctioned LOUD fallback: return
+    //     400 with the structured error BUT STILL clear blackout + master up
+    //     so the exterior is never left dark on a broken home.
+    //   - Else panicToSafeDefault() + clear blackout + master 1.0.
+    // Always cancels master-fade / deck-swap / transitions, clears solo,
+    // un-mutes groups (panicToSafeDefault), and persists.
+    else if (req.method === 'POST' && req.url === '/mixer/panic') {
+      readBody(data => {
+        const HOME_NAME = 'home';
+        const wantHome = data && data.home !== undefined ? !!data.home : true;
+
+        // The always-run LIT guarantee: blackout off + master up. Factored so
+        // every exit path (success, safe-default, broken-home loud fallback)
+        // leaves the rig visible.
+        const forceLit = () => {
+          if (intensityController) intensityController.setBlackout(false);
+          globalsState.blackout = false;
+          stateManager.saveGlobalsState(globalsState, paramCenter);
+          mixer.setMaster(1.0);
+          mixer.targetViewFader = 1.0;
+        };
+
+        // Try a home snapshot first when requested + present.
+        let homeLook = null;
+        let homeExists = false;
+        if (wantHome) {
+          try {
+            homeLook = snapshotManager.load(HOME_NAME);
+            homeExists = !!homeLook;
+          } catch (e) {
+            // Malformed home snapshot — fail loud, but STILL light the rig.
+            forceLit();
+            broadcastMixerState();
+            broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+            const status = (e instanceof SnapshotLoadError) ? 400 : 400;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `home snapshot '${HOME_NAME}' is malformed: ${e.message}`,
+              code: e.code || 'PANIC_HOME_MALFORMED',
+              rigLit: true,
+            }));
+          }
+        }
+
+        if (homeExists) {
+          try {
+            recallLook(homeLook);
+          } catch (e) {
+            // Home loaded but is structurally unusable (e.g. over-cap). Loud
+            // 400 — but light the rig first so the exterior stays visible.
+            forceLit();
+            broadcastMixerState();
+            broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `home snapshot '${HOME_NAME}' could not be recalled: ${e.message}`,
+              code: e.code || 'PANIC_HOME_RECALL_FAILED',
+              rigLit: true,
+            }));
+          }
+          // Recall set master/overlays from the look; still force blackout off
+          // + master up so a home captured at low master can't leave it dark.
+          forceLit();
+          saveAllState();
+          broadcastMixerState();
+          broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'ok', mode: 'home', home: HOME_NAME, rigLit: true }));
+        }
+
+        // No home snapshot → safe LIT default.
+        mixer.panicToSafeDefault();
+        forceLit();
+        saveAllState();
+        broadcastMixerState();
+        broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', mode: 'safeDefault', rigLit: true }));
+      });
     } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
       const id = req.url.split('/')[3];
       readBody(data => {
