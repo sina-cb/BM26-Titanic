@@ -124,8 +124,19 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [x] WAVE 4: dev/engine_hardening_timeline — DONE + MERGED (25f355c, pushed)
       823 unit pass/0 fail, deck-swap-param HIL all-pass.
 - [x] ALL PLANNED WAVES MERGED. Deliverable feat/optimize_channels @ 25f355c.
-- [ ] Queue empty → 2nd pass: focused regression review on NEW surface (hot-swap
-      e2e + fail-loud/validation + parametric swap/queue). Implement safe finds.
+- [x] 2nd pass: focused regression review (2 read-only agents) on the new surface — DONE.
+      Result: most of the new surface verified SAFE (vis-pool keying, validateFader x4,
+      render order, handle leak-safety, concurrency/EBUSY, CaptainPad res.ok). Two real finds:
+      * P0 (mission-critical): deck restore can dark-start the exterior — null/missing
+        pattern → silent NULL deck; compile-fail → fatal BOOT CRASH. Both = rig dark.
+      * P1: deck soft-swap UI pinned to OLD entry ~8s (swap response returns pre-completion
+        activeEntryId); + misleading mixer SWAP "crossfade" copy (mixer swap is instant).
+- [ ] WAVE 6: dev/regression_fixes (slot 2) — RUNNING. FIX A: deck restore falls back to
+      default pattern on ANY failure, LOUD+VISIBLE (/status flag), fatal only if default also
+      fails — keep mission-critical exterior LIT. FIX B: swap/entry response carries resolved
+      targetEntryId, UI arms pending-gate from it; mixer copy says "Switch" not "Crossfade".
+      + boot-safety unit test + transition-enabled swap-response HIL.
+- [ ] Merge WAVE 6 → verify on tip → push. Then wind down (queue empty, near deadline).
 
 ## STATUS LOG (cont. 2)
 
