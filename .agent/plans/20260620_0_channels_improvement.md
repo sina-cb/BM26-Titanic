@@ -112,8 +112,8 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [x] Plan + verification files
 - [ ] E1 engine_hotswap_mixer (slot 0) — running
 - [ ] C2 captainpad_views (slot 1) — running
-- [ ] E3 engine_state_hardening (slot 2) — running
-- [ ] Merge passing branches → verify on tip → push
+- [x] E3 engine_state_hardening (slot 2) — DONE + MERGED (45dd556, pushed)
+- [ ] Merge E1, C2 → verify on tip → push
 - [ ] WAVE 3: hot-swap UI on merged tip
 - [ ] Adversarial wave on queue-empty
 
@@ -127,5 +127,8 @@ node_modules symlinked to main checkout (gitignored, never committed).
 - 2026-06-20 T0: Recon done. Baselines: engine 760 unit tests pass, dry-run
   clean, 60 patterns; CaptainPad tsc exit 0, lint 0 err/12 warn. Plan written.
   Launching WAVE 2 (3 agents).
+- 2026-06-20 T1: E3 engine_state_hardening done + MERGED (45dd556, pushed).
+  Verified on merged tip: 787 unit pass/0 fail (+27), dry-run clean, HIL
+  concurrent 7/7, no state residue. E1 + C2 still running. Cron re-armed.
 </content>
 </invoke>
