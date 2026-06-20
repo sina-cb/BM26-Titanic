@@ -182,7 +182,34 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       refill from the backlog; re-discover when it empties.
 - [ ] WAVE 11: feature-discovery agent → ranked NEW-channel-feature backlog +
       recommended first parallel batch (disjoint ownership). RUNNING.
-- [ ] WAVE 12+: implement top safe features in parallel worktrees; repeat to deadline.
+## NEW-CHANNEL-FEATURE BACKLOG (discovery a2d18e, ranked; in-lane only)
+HIGH: #1 Named Mixer Snapshots/look-recall; #2 Channel Groups/gang-faders;
+#3 Server-authoritative Solo + solo-safe; #4 Per-channel intensity clamp (faderMax);
+#5 Grand-master fade-time/timed blackout. MED: #6 channel duplicate; #7 mixer
+reorder; #8 channel color; #9 panic/home reset; #10 per-channel metering;
+#11 playlist tags+search. LOW/MED: #12 per-entry hold/loop; #13 bulk ops.
+KEY: api_server.js + pattern_mixer.js are the shared hot files — SERIALIZE engine
+edits (one engine writer per wave), parallelize UI after. Integration line refs:
+serializeChannel api_server.js:1728 + state_manager.js:15; PATCH /mixer/channels/:id
+~3095; addChannel cap pattern_mixer.js:604; master ~697 / applyMaster ~1441;
+index invariant ~186; viz ~1722; client solo mixer.tsx ~924; PatternChannel
+pattern_channel.js:2.
+PRECEDENCE NOTE: #2 groups + #3 solo both rewrite the per-channel composite gate
+— do them together, decide precedence (group×fader×solo×fader-lock×clamp) once;
+do NOT parallelize #2/#3/#7 (all touch composite ordering).
+
+## FEATURE WAVES
+- [ ] WAVE 11: feature discovery — DONE (backlog above).
+- [ ] WAVE 12 (engine, sole engine writer): dev/channel_features_engine — RUNNING.
+      F-A Snapshots (+ new snapshot_manager.js + routes), F-B Master fade (+ route),
+      F-C clamp faderMax, F-D color. Engine-side + persistence + tests/HIL + docs/39.
+- [ ] WAVE 13 (UI, parallel after 12 merges): SnapshotBar+master-fade controls in
+      DeckTopBar (one owner) ‖ clamp+color strip controls in mixer.tsx (another owner).
+      api.ts append-only (serialize or trivial-merge).
+- [ ] WAVE 14: #10 metering (engine viz + ChannelVizStrip) — next engine writer.
+- [ ] WAVE 15: #2 groups + #3 solo (together, composite precedence) — engine writer.
+- [ ] Then #6/#9 (need snapshots), #7 reorder, #11/#12 playlist, #8 done w/12, #13.
+- [ ] Repeat/refill to deadline; re-discover when backlog empties.
 
 ## STATUS LOG (cont. 2)
 
