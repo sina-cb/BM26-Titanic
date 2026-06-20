@@ -19,13 +19,24 @@
  * the riser score has climbed to its PEAK and is SUSTAINED there — which is
  * exactly the final stretch of a real build, the moment right before the drop.
  * A steady track never peaks the riser, so it never counts down ("NOT on false
- * builds"). When a finite ETA IS available and small, it TIGHTENS the window
- * (shortens it) but it is never REQUIRED.
+ * builds"). The raw ETA seconds are NOT used — the bars-to-phrase grid reads a
+ * full phrase out even on a genuine build, so it is fiction at this granularity.
  *
  * ── Algorithm (gate HARD — under-fire ≫ false countdown) ───────────────────
+ * REAL-AUDIO RE-TUNE (E2 P1-4, 2026-06-20): on the 60-track no-drop corpus the
+ * v1 gate fired 338 spurious count-ins (35/60 tracks) because the riser
+ * momentarily crosses `peakScore` on normal flux/high wobble. Two gates fix it:
+ *   • MONOTONIC CLIMB: the riser must have been clearly LOW (≤ `climbFromScore`)
+ *     within `climbWindowMs` before reaching the peak — a real build CLIMBS in,
+ *     it does not merely sit near the peak.
+ *   • BOUNDED PEAK: a countdown is the FINAL bars — a SHORT top right before the
+ *     drop. If the riser stays peaked longer than `peakMaxMs` it is steady-state
+ *     (a busy continuous track reads "building" indefinitely), so we DISARM.
  * ARM only when ALL of:
- *   - riser is peaking:  riserScore ≥ `peakScore` AND riserConf ≥ `minConf`,
- *   - the peak has been HELD ≥ `peakHoldMs` (a momentary spike is not a build top),
+ *   - riser is peaking:  riserScore ≥ `peakScore` AND riserConf ≥ `minConfArm`,
+ *   - it CLIMBED into the peak from a recent low (monotonic-climb gate),
+ *   - the peak has been HELD in [`peakHoldMs`, `peakMaxMs`] (not a spike, not
+ *     a chronic steady-state plateau),
  *   - the BPM is locked  (we need a real beat to flash on),
  *   - no drop in the last `dropRefractoryMs` (don't count down right after a drop).
  * While armed, fire ONE pulse per beat rising edge (audioBeat crossing up). A
@@ -40,15 +51,31 @@
 
 export const DROP_COUNTDOWN_DEFAULTS = Object.freeze({
   peakScore: 0.7,          // riser score must reach this peak to arm the countdown
-  minConf: 0.6,            // and confidence must clear this
   peakHoldMs: 600,         // the peak must hold this long (not a momentary spike)
   dropPeakExit: 0.55,      // riser falling below this exits the peak (disarm)
+  // ── Monotonic-climb arm gate (E2 P1-4, 2026-06-20) ───────────────────────
+  // On REAL continuous tracks the riser momentarily crosses peakScore on a
+  // normal flux/high wobble, and a confident-looking but stationary riser then
+  // counted down (338 spurious count-ins / 35 tracks). A real build CLIMBS into
+  // the peak: it must have been clearly LOW (`climbFromScore`) within a recent
+  // window (`climbWindowMs`) before reaching the peak. A steady track that just
+  // sits near peakScore never satisfies the "was low → climbed" history, so it
+  // no longer arms. The drop pulse / riser reset clears the climb memory.
+  climbFromScore: 0.3,     // the riser must have been ≤ this recently …
+  climbWindowMs: 4000,     // … within this lookback to count as a real climb-in
+  minConfArm: 0.7,         // and confidence must clear this stricter bar to arm
+  // A countdown is the FINAL bars of a build — a SHORT window right before the
+  // drop. If the riser sits peaked LONGER than `peakMaxMs` it is steady-state
+  // (a busy continuous track reads "building" indefinitely), NOT a build top, so
+  // we DISARM. This bounds the countdown to a genuine short climb→top→drop arc;
+  // a no-drop corpus, where the riser is chronically high, never produces the
+  // bounded climb-then-brief-peak shape and so stops counting in.
+  peakMaxMs: 4000,         // riser may be peaked at most this long for a countdown
   beatFire: 0.6,           // audioBeat above this = on-beat (rising edge fires)
   beatRearm: 0.3,          // audioBeat must fall below this to re-arm a beat fire
   refractoryMs: 180,       // min spacing between countdown pulses (one per beat)
   dropFire: 0.5,           // a drop pulse disarms + opens the refractory
   dropRefractoryMs: 4000,  // no countdown for this long after a drop
-  etaTightenSec: 6.0,      // if a finite ETA ≤ this exists, REQUIRE it too (tighten)
   pulseDecayMs: 80,        // pulse exponential decay after a fire
 });
 
@@ -64,6 +91,7 @@ export class DropCountdown {
     this._lastFireMs = -Infinity;
     this._peakSinceMs = null;  // when the riser first entered its peak
     this._lastDropMs = -Infinity;
+    this._lastLowMs = -Infinity; // last time the riser was clearly LOW (climb origin)
     this.countdown = 0;
     this._active = false;      // currently inside a countdown window (for tests)
   }
@@ -71,7 +99,7 @@ export class DropCountdown {
   /**
    * @param {object} s
    *   s.riserScore, s.riserConf  — from BuildAnticipation
-   *   s.buildEta                 — seconds to predicted drop (0 = no estimate)
+   *   s.buildEta                 — seconds to predicted drop (unused; see header)
    *   s.bpm, s.bpmLocked, s.beat — beat grid
    *   s.dropPulse                — audioDropPulse [0,1]
    *   s.dtMs, s.nowMs
@@ -82,25 +110,25 @@ export class DropCountdown {
     if (s.dropPulse >= p.dropFire) this._lastDropMs = s.nowMs;
     const postDrop = (s.nowMs - this._lastDropMs) < p.dropRefractoryMs;
 
-    // Peak hold: the riser must be at/above peakScore (confident) and STAY there.
-    const peaking = s.riserScore >= p.peakScore && s.riserConf >= p.minConf;
+    // Climb memory: note the last time the riser was clearly LOW. Arming later
+    // requires that this was RECENT — i.e. the riser CLIMBED from low into the
+    // peak (a real build), not merely sat near the peak (a steady-track wobble).
+    if (s.riserScore <= p.climbFromScore) this._lastLowMs = s.nowMs;
+    const climbedIn = (s.nowMs - this._lastLowMs) <= p.climbWindowMs;
+
+    // Peak hold: the riser must be at/above peakScore (confident) and STAY there,
+    // AND have climbed into the peak from a recent low (monotonic-climb gate).
+    const peaking = s.riserScore >= p.peakScore && s.riserConf >= p.minConfArm && climbedIn;
     if (peaking) {
       if (this._peakSinceMs === null) this._peakSinceMs = s.nowMs;
     } else if (s.riserScore < p.dropPeakExit) {
       this._peakSinceMs = null;   // fell out of the peak — reset the hold
     }
-    const peakHeld = this._peakSinceMs !== null && (s.nowMs - this._peakSinceMs) >= p.peakHoldMs;
+    const peakAgeMs = this._peakSinceMs !== null ? (s.nowMs - this._peakSinceMs) : 0;
+    const peakHeld = this._peakSinceMs !== null
+      && peakAgeMs >= p.peakHoldMs && peakAgeMs <= p.peakMaxMs;
 
-    // Optional ETA tightener: when a finite small ETA exists, also require it.
-    // (A large/zero ETA does NOT block — the peak gate is the primary signal.)
-    const etaOk = !(s.buildEta > 0 && s.buildEta <= p.etaTightenSec)
-      ? true
-      : s.buildEta <= p.etaTightenSec;
-    // (etaOk is true unless a finite ETA exists and is > the tighten window; in
-    // practice a finite ETA inside the window only helps. Kept explicit so the
-    // ETA, when trustworthy, narrows the countdown rather than being ignored.)
-
-    this._active = s.bpmLocked && peakHeld && !postDrop && etaOk;
+    this._active = s.bpmLocked && peakHeld && !postDrop;
 
     let fired = false;
     if (this._active) {
