@@ -119,8 +119,9 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
 - [x] WAVE 3: dev/captainpad_hotswap_ui — DONE + MERGED (35deb6f, pushed)
 - [x] Adversarial wave (5 read-only lenses on tip 37f4505) — DONE; findings recorded
 - [ ] WAVE 4: dev/engine_hardening_timeline (slot 2) — RUNNING (engine validation+perf+timeline-additive+tests)
-- [ ] WAVE 5: dev/captainpad_qol (slot 1) — RUNNING (Lens C fail-loud QoL)
-- [ ] Merge WAVE 4/5 → verify on tip → push
+- [x] WAVE 5: dev/captainpad_qol — DONE + MERGED (71bd908, pushed)
+- [x] Full-stack smoke + screenshots (operator request) — DONE: deck+mixer CONNECTED w/ hot-swap SWAP, lit animated sim; proof in verification log + .agent_renders/
+- [ ] Merge WAVE 4 → verify on tip → push
 - [ ] When queue empties again: 2nd adversarial pass or wind down near deadline
 
 ## Adversarial findings (accumulating; verify each against real code before trusting)
