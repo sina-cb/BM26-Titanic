@@ -129,3 +129,30 @@ trusting drop precision/recall.
   `corpus_relabel.mjs`.
 - Keep usage **non-commercial** (both datasets require it / are CC). Don't
   redistribute the audio; don't commit it.
+
+## Genre detection — datasets used (2026-06-20, dev/genre_signals)
+
+The party-mode genre classifier (`audio/signals/genre_classifier.js`) was
+developed and validated **offline against deterministic synthetic profiles**,
+NOT a fetched audio corpus. Rationale: this datacenter IP is bot-gated for
+YouTube/streaming audio (documented in report 20260616_1 §7), and the operator
+offered SoundCloud/Spotify creds that are not reachable here. The classifier is
+driven entirely from already-derived signals (BPM, kick density/regularity,
+band balance + high-band variance, note-change rate), so genre-characteristic
+**signal scenarios** are a faithful tuning/validation surface.
+
+Datasets / fixtures used:
+- **Synthetic genre scenarios** (`tests/genre_classifier.test.js`): per-genre
+  raw-signal profiles (techno / tech_house / house / downtempo …) constructed
+  from the musical priors in the classifier header. Deterministic, committed.
+- **`chord_progression` synth** (`audio/synth/test_synths.js`, new): a
+  bass-rooted 4-chord walk with clear NOTE CHANGES, used to validate the
+  note→colour cue (`audioSwitchColor`) end-to-end through the real analyzer.
+- The classifier's per-genre PROFILE vectors were tuned against the real
+  `AudioAnalyzer`'s measured feature vectors on these synthetic tracks (see the
+  PROFILE TUNING NOTE in `genre_classifier.js`).
+
+**Follow-up (needs un-gated network):** re-tune the genre profiles against real
+labelled audio per genre (e.g. a CC dance-music set, or the operator's
+SoundCloud/Spotify on a residential IP). The synthetic profiles are a solid
+v1 but real-audio tuning is the path to field-grade accuracy.

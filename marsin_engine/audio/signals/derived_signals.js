@@ -13,6 +13,10 @@
  *   audioNoteHue      — pitchClass/12 → [0,1], for "play the notes as colour"
  *   audioSwitchPattern— pulse: a musically-sensible moment to change PATTERN
  *   audioSwitchColor  — pulse: a musically-sensible moment to change COLOUR
+ *   audioGenre        — coarse dance-genre index (0 ambient .. 6 downtempo;
+ *                       see GENRE_NAMES in genre_classifier.js). Meaningful
+ *                       only in party mode; 0 when audioParty is off/unsure.
+ *   audioGenreConf    — 0..1 confidence of the current genre
  *
  * Inputs (RAW mic mirrors + detector keys): micFluxRaw, micKickRaw,
  *   micLowRaw/MidRaw/HighRaw, micDomFreq1/2 + micDomEnergy1/2, audioDropPulse,
@@ -25,6 +29,8 @@ import { SwitchSignals } from './switch_signals.js';
 // ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ──────────
 import { BandOnsetBank } from './band_onsets.js';
 import { SubBass } from './sub_bass.js';
+// ── genre_signals (slot 0): party-mode dance-genre classifier ────────────────
+import { GenreClassifier } from './genre_classifier.js';
 
 // Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
 const PARAMS = Object.freeze({
@@ -48,6 +54,7 @@ export class DerivedSignals {
     // analyzer_features (slot 3): band-onset chase + sub-bass chest hit shapers.
     this._onsets = new BandOnsetBank();
     this._sub = new SubBass();
+    this._genre = new GenreClassifier();   // genre_signals (slot 0): tuned DEFAULTS baked in
     this._fatal = false;
     // Last note actually committed by the estimator. We HOLD this on the
     // published audioNote/audioNoteHue keys whenever the estimator currently
@@ -61,6 +68,7 @@ export class DerivedSignals {
   reset() {
     this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
     this._onsets.reset(); this._sub.reset();   // analyzer_features (slot 3)
+    this._genre.reset();                        // genre_signals (slot 0)
     this._heldPc = 0; this._heldHue = 0;
     if (!this._fatal) this._zero();
   }
@@ -109,6 +117,16 @@ export class DerivedSignals {
         g('micOnsetLowRaw'), g('micOnsetMidRaw'), g('micOnsetHighRaw'), dtMs, now,
       );
       const sb = this._sub.update(g('micSubRaw'), dt, dtMs, now);
+      // ── genre_signals (slot 0): party-mode dance-genre classifier ───────────
+      // Genre is meaningful only inside party mode. We feed it the RAW bands +
+      // flux + kick pulse train (same mirrors the other modules read), the
+      // realtime BPM, and the committed note so it can measure melodic content.
+      const gn = this._genre.update({
+        nowMs: now, dt, party: p.party,
+        bpm: b.bpm, low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+        flux: g('micFluxRaw'), kick: g('micKickRaw'),
+        pitchClass: n.pitchClass, noteStable: n.stable,
+      });
       pc.setMany([
         { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
         { kind: 'scalar', key: 'audioBeat',          value: b.beat },
@@ -125,6 +143,9 @@ export class DerivedSignals {
         { kind: 'scalar', key: 'micOnsetMid',        value: ob.mid },
         { kind: 'scalar', key: 'micOnsetHigh',       value: ob.high },
         { kind: 'scalar', key: 'audioChestHit',      value: sb.pulse },
+        // genre_signals (slot 0): party-mode dance-genre + confidence.
+        { kind: 'scalar', key: 'audioGenre',         value: gn.genre },
+        { kind: 'scalar', key: 'audioGenreConf',     value: gn.confidence },
       ], 'derivedSignals');
     } catch (e) {
       this._fatal = true;
@@ -143,6 +164,8 @@ export class DerivedSignals {
       // analyzer_features (slot 3): band-onset chase + sub-bass chest hit.
       { kind: 'scalar', key: 'micOnsetLow', value: 0.0 }, { kind: 'scalar', key: 'micOnsetMid', value: 0.0 },
       { kind: 'scalar', key: 'micOnsetHigh', value: 0.0 }, { kind: 'scalar', key: 'audioChestHit', value: 0.0 },
+      // genre_signals (slot 0): party-mode dance-genre + confidence.
+      { kind: 'scalar', key: 'audioGenre', value: 0.0 }, { kind: 'scalar', key: 'audioGenreConf', value: 0.0 },
     ], 'derivedSignals');
   }
 }

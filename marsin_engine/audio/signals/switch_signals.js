@@ -85,6 +85,8 @@ export class SwitchSignals {
     this._lastNoteChangeMs = -Infinity;
     this._prevPc = -1;
     this._prevState = -1;
+    this._pendNote = false;       // a note change waiting to recolour
+    this._pendNotePc = -1;
 
     this._prevDropPulse = 0;
   }
@@ -167,14 +169,31 @@ export class SwitchSignals {
 
     // ───────────── COLOR ─────────────
     // 1. Note / pitch-class change (rate-limited, only when stable).
-    let noteEvent = false;
+    //
+    // A stable change of the pitch class away from the LAST-COLORED note is a
+    // colour intent. CRITICAL: a note change must not be "consumed" unless it
+    // actually produces a colour. The original code advanced `_prevPc` (and
+    // `_lastNoteChangeMs`) the moment the note differed, EVEN when the colour
+    // was then blocked by `colorMinDwellMs` — so every change that landed
+    // inside the colour dwell was silently dropped and the rig recoloured at
+    // roughly HALF the real note rate (and felt disconnected from the music).
+    // Instead we latch a PENDING note intent and clear it only when the colour
+    // fires; `_prevPc` is advanced at fire time, not at detection time.
     if (s.noteStable && s.pitchClass >= 0 && s.pitchClass !== this._prevPc) {
-      if ((now - this._lastNoteChangeMs) >= p.noteChangeMinDwellMs) {
-        noteEvent = true;
-        this._lastNoteChangeMs = now;
-      }
-      this._prevPc = s.pitchClass;
+      this._pendNote = true;
+      this._pendNotePc = s.pitchClass;
+    } else if (s.noteStable && s.pitchClass === this._prevPc) {
+      // The live note returned to the last-coloured class before we got to
+      // fire — the intent is stale, drop it (no recolour to the same hue).
+      this._pendNote = false;
     }
+    // The note gate is now the SINGLE colour dwell below (colorMinDwellMs);
+    // `noteChangeMinDwellMs` is kept as an extra floor specifically on
+    // note-driven recolours so a busy melodic line can be throttled
+    // independently of drop/structure recolours.
+    const noteDwellOk = (now - this._lastNoteChangeMs) >= p.noteChangeMinDwellMs;
+    const noteEvent = this._pendNote && noteDwellOk;
+
     // 2. Drop event → punch a palette.
     // 3. Structure state change.
     let stateEvent = false;
@@ -185,6 +204,13 @@ export class SwitchSignals {
     if (wantColor && (now - this._lastColorMs) >= p.colorMinDwellMs) {
       this.switchColor = true;
       this._lastColorMs = now;
+      // The colour fired — commit the note bookkeeping ONLY now, so a change
+      // blocked by the dwell stays pending and fires on the next eligible hop.
+      if (this._pendNote) {
+        this._prevPc = this._pendNotePc;
+        this._lastNoteChangeMs = now;
+        this._pendNote = false;
+      }
     }
     const sinceCol = (now - this._lastColorMs) / 1000;
     this.switchColorUrge = Number.isFinite(sinceCol)
