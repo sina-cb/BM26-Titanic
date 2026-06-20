@@ -215,6 +215,50 @@ function registerBuiltinOscOutput(entry) {
 // BPM is the one always-on built-in emit today (bpm_emit.js → /marsin/audio/bpm).
 registerBuiltinOscOutput({ address: BPM_OSC_ADDRESS, label: 'BPM (derived)', cpcKey: 'audioBpm', kind: 'derived' });
 
+// ── ENGINE-INTERNAL DERIVED signals (NOT OSC-routed) ─────────────────────────
+// Observability honesty (report 20260620_26): the OSC OUT page lists only the
+// signals THIS companion sends over the wire. But the engine ALSO computes a
+// much richer set of second-tier signals in-process — the AudioStructureDetector
+// + DerivedSignals chain (marsin_engine/audio/detector + audio/signals) — that
+// drive patterns 59–68 and never leave the engine. They are NOT sent by the
+// companion and NOT on the OSC bus; they're written straight into the engine's
+// ParamCenter each analyzer hop. Surfacing them here (clearly labelled as
+// engine-internal) stops an operator mistaking the companion for the sole
+// "brain": the engine has its own audio intelligence. This list is informational
+// (static catalogue of CPC keys), not a live tally — these never call sendOsc.
+const ENGINE_INTERNAL_DERIVED = Object.freeze([
+  { cpcKey: 'audioBeat',          label: 'beat pulse (phase-locked)' },
+  { cpcKey: 'audioParty',         label: 'party / loud-music gate' },
+  { cpcKey: 'audioNote',          label: 'dominant pitch class 0–11' },
+  { cpcKey: 'audioNoteHue',       label: 'note → hue (melody as colour)' },
+  { cpcKey: 'audioSwitchPattern', label: 'cue: change pattern' },
+  { cpcKey: 'audioSwitchColor',   label: 'cue: change colour' },
+  { cpcKey: 'audioBeatInBar',     label: 'beat index within the bar' },
+  { cpcKey: 'audioBarPhase',      label: 'phase 0→1 across the bar' },
+  { cpcKey: 'audioDownbeat',      label: 'downbeat pulse' },
+  { cpcKey: 'micOnsetLow',        label: 'per-band onset: kick/low' },
+  { cpcKey: 'micOnsetMid',        label: 'per-band onset: snare/mid' },
+  { cpcKey: 'micOnsetHigh',       label: 'per-band onset: hat/high' },
+  { cpcKey: 'audioChestHit',      label: 'sub-bass chest-hit pulse' },
+  { cpcKey: 'audioGenre',         label: 'coarse dance-genre index' },
+  { cpcKey: 'audioGenreConf',     label: 'genre confidence 0–1' },
+  { cpcKey: 'audioRiserScore',    label: 'riser / build-up strength' },
+  { cpcKey: 'audioBuildEta',      label: 'estimated time-to-drop' },
+  { cpcKey: 'audioRiserConf',     label: 'riser confidence 0–1' },
+  { cpcKey: 'audioSilence',       label: 'inter-track silence latch' },
+  { cpcKey: 'audioTrackChange',   label: 'new-track pulse' },
+  { cpcKey: 'audioClimax',        label: 'sustained climax level' },
+  { cpcKey: 'audioPhrasePhase',   label: 'phase 0→1 across the 8-bar phrase' },
+  { cpcKey: 'audioPhraseBoundary',label: 'phrase-boundary pulse' },
+  { cpcKey: 'audioDropCountdown', label: 'beat-synced drop count-in' },
+  // structure-detector primitives (audio/detector) — also engine-internal.
+  { cpcKey: 'audioBuildScore',    label: 'build-up score (detector)' },
+  { cpcKey: 'audioDropPulse',     label: 'drop pulse (detector)' },
+  { cpcKey: 'audioSlowZone',      label: 'slow-zone / breakdown (detector)' },
+  { cpcKey: 'audioEnergyRatio',   label: 'short/long energy ratio (detector)' },
+  { cpcKey: 'audioStructure',     label: 'structure state (detector)' },
+]);
+
 // The reported rate must reflect a stream that has STOPPED (a disabled tap, or
 // BPM during silence where emitDerivedBpm returns false), not freeze at the last
 // EWMA forever — a stale rate is observability that LIES (codex P0). At READ time
@@ -265,6 +309,13 @@ function buildOscAccounting() {
     target: { host: design.osc.host, port: design.osc.port },
     totalSent: oscSent,
     outputs: rows,
+    // Informational: the rich second-tier signals the ENGINE computes in-process
+    // (detector + DerivedSignals) and does NOT route over OSC. Clearly labelled so
+    // the OSC OUT page can't be read as "the companion is the whole brain".
+    engineInternalDerived: {
+      note: 'Computed IN-ENGINE (AudioStructureDetector + DerivedSignals), NOT OSC-routed — written straight to the engine ParamCenter each analyzer hop. The companion does not send these.',
+      signals: ENGINE_INTERNAL_DERIVED.map(s => ({ ...s })),
+    },
   };
 }
 

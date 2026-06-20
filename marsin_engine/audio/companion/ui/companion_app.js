@@ -1130,6 +1130,28 @@ function renderOscPage() {
       + `<td class="num">${(o.count || 0).toLocaleString()}</td>`;
     tbody.appendChild(tr);
   }
+  // ── ENGINE-INTERNAL DERIVED (report 20260620_26) ──────────────────────────
+  // The signals the engine computes in-process and does NOT route over OSC.
+  // Informational chips so the operator sees the engine has its own audio brain.
+  const grid = $('osc-internal-grid'), note = $('osc-internal-note'), wrap = $('osc-internal');
+  const eid = acc.engineInternalDerived;
+  if (grid && wrap) {
+    if (eid && Array.isArray(eid.signals) && eid.signals.length) {
+      if (note && eid.note) note.textContent = eid.note;
+      grid.innerHTML = '';
+      for (const s of eid.signals) {
+        const chip = document.createElement('div');
+        chip.className = 'osc-internal-chip';
+        chip.innerHTML = `<span class="osc-internal-key">${s.cpcKey}</span>`
+          + `<span class="osc-internal-lab">${s.label || ''}</span>`;
+        grid.appendChild(chip);
+      }
+      wrap.style.display = '';
+    } else {
+      // Older server without the field — hide the panel rather than show empty.
+      wrap.style.display = 'none';
+    }
+  }
 }
 
 // ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────

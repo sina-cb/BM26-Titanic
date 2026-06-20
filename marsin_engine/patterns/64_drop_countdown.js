@@ -45,7 +45,10 @@
 export var localSpeed = 0.5;   // idle wash drift
 export var countdown = 0.0;    // count pulse train (audio audioDropCountdown)
 export var release = 0.0;      // drop pulse      (audio audioDropPulse)
-export var base = 0.16;        // calm base floor (always-on)
+export var base = 0.42;        // calm base floor (always-on; never near-dark) — the
+                               //   idle wash reads clearly at silence (mission-critical
+                               //   night-visibility, ~70/255 like 62/67) while the count
+                               //   strobe + drop shock still slam to 255 (max-composite).
 export var decay = 0.5;        // strobe-flash fall rate
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 — cool cyan (early count)
@@ -56,7 +59,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderCountdown(v) { countdown = v; }
 export function sliderRelease(v) { release = v; }
-export function sliderBase(v) { base = v * 0.3; }
+export function sliderBase(v) { base = 0.18 + v * 0.42; } // 0.18..0.60; never near-dark
 export function sliderDecay(v) { decay = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -161,7 +164,10 @@ export function render3D(index, x, y, z) {
   var rad = sqrt(dx * dx + dy * dy);                 // 0..~0.7 from centre
 
   // ── calm BASE wash so silence reads (never fully dark) ──────────────────────
-  var baseBri = base * (0.5 + 0.5 * wave(washPhase * 0.5 + rad * 1.4));
+  // Keep a solid floor (0.72..1.0 of `base`) so the wash is evenly visible across
+  // the whole hull even at the dim phase of the breathing wave — mission-critical
+  // night-visibility, not a faint flicker.
+  var baseBri = base * (0.72 + 0.28 * wave(washPhase * 0.5 + rad * 1.4));
 
   // ── COUNT rings: filled from the rim INWARD, one ring per counted beat. ─────
   // ringsLit rings occupy radial bands from the outside in, so 4-3-2-1 reads as

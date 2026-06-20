@@ -172,6 +172,17 @@
       </table>
       <div id="osc-empty" class="osc-empty">no OSC outputs yet — add an output signal in DESIGN</div>
     </div>
+
+    <!-- ENGINE-INTERNAL DERIVED (report 20260620_26): the rich second-tier
+         signals the ENGINE computes in-process (detector + DerivedSignals) and
+         does NOT route over OSC. Surfaced here so the OSC OUT page can't be read
+         as "the companion is the whole brain". Informational only — these never
+         leave the engine, so there is no value/rate/count to show. -->
+    <div class="osc-internal" id="osc-internal">
+      <div class="osc-internal-title">ENGINE-INTERNAL DERIVED <span class="osc-internal-tag">computed in-engine, NOT OSC-routed</span></div>
+      <div class="osc-internal-note" id="osc-internal-note">The marsin engine computes a richer set of second-tier signals in-process (AudioStructureDetector + DerivedSignals) that drive patterns 59–68 and never touch the OSC bus. The companion does not send these — the engine has its own audio intelligence.</div>
+      <div class="osc-internal-grid" id="osc-internal-grid"></div>
+    </div>
   </section>
 
   <div id="export-modal" class="modal">

@@ -413,3 +413,17 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   z-index:0;transition:width .12s linear}
 .osc-bar-cell>*{position:relative;z-index:1}
 .osc-empty{color:var(--muted);padding:18px;text-align:center}
+/* ENGINE-INTERNAL DERIVED panel (report 20260620_26) — informational catalogue
+   of the signals the engine computes in-process and does NOT route over OSC. */
+.osc-internal{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+  display:flex;flex-direction:column;gap:10px}
+.osc-internal-title{font-weight:700;letter-spacing:1.2px;font-size:12px;color:var(--text);display:flex;
+  align-items:center;gap:10px;flex-wrap:wrap}
+.osc-internal-tag{font-weight:700;letter-spacing:.5px;font-size:9.5px;text-transform:uppercase;color:var(--bg);
+  background:var(--muted);border-radius:5px;padding:2px 7px}
+.osc-internal-note{color:var(--muted);font-size:11px;line-height:1.5;max-width:70ch}
+.osc-internal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.osc-internal-chip{display:flex;flex-direction:column;gap:2px;background:var(--panel2);border:1px solid var(--border);
+  border-radius:8px;padding:8px 10px}
+.osc-internal-key{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;font-weight:700;color:var(--accent)}
+.osc-internal-lab{color:var(--muted);font-size:10.5px;line-height:1.35}
