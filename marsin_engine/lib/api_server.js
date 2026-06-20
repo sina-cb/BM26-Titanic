@@ -5,7 +5,8 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
-import { StateManager } from './state_manager.js';
+import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
+import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
@@ -666,6 +667,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
+  // Named mixer snapshots / look recall (F-A). Lives in <stateDir>/snapshots
+  // and reuses the StateManager's atomic writer for torn-write safety.
+  const snapshotManager = new SnapshotManager(stateDir, stateManager);
 
   // Playlist library lives in simulation/scenes/<scene>/playlists/
   const playlistsDir = path.join(
@@ -1602,6 +1606,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // the mask immediately via recompileChannelMask (no extra call
       // needed here).
       viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
+      // F-C / F-D restore. An old state file without these fields restores
+      // to the documented schema defaults (faderMax 1.0 = no clamp,
+      // color null). The PatternChannel constructor clamps/types both.
+      faderMax: typeof saved.faderMax === 'number' ? saved.faderMax : 1.0,
+      color: typeof saved.color === 'string' ? saved.color : null,
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -1716,6 +1725,69 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     for (const ch of mixer.getMixerChannels()) finalizeCpcValues(ch);
   }
 
+  // ── Named mixer snapshots / look recall (F-A) ─────────────────────────
+  //
+  // captureLook() serializes the FULL mixer state (master + the deck channel
+  // + every overlay) into the same on-disk channel shape buildChannelFromSaved
+  // restores from — so a captured look round-trips through recall identically
+  // to an engine restart. recallLook() reuses the existing build/setter
+  // machinery (buildChannelFromSaved → setDeckChannel/addMixerChannel) and
+  // RESPECTS maxChannels: it removes every current overlay, then re-adds the
+  // snapshot's overlays up to the cap. A snapshot with more overlays than the
+  // cap is a fail-loud condition (the caller 400s) — not a silent truncation.
+  function captureLook() {
+    const deck = mixer.getDeckChannel();
+    return {
+      master: mixer.master,
+      deck: deck ? serializeChannelForState(deck) : null,
+      channels: mixer.getMixerChannels().map(c => serializeChannelForState(c)),
+    };
+  }
+
+  // Apply a loaded snapshot to the live mixer. Throws on a structurally
+  // invalid look (over-cap overlay count, deck rebuild failure) so the route
+  // can surface a real error instead of half-applying. Best-effort per overlay
+  // (a dead overlay degrades + warns, matching restoreChannel's mixer path).
+  function recallLook(look) {
+    if (!look || typeof look !== 'object') {
+      throw new Error('recallLook: look must be an object');
+    }
+    const overlays = Array.isArray(look.channels) ? look.channels : [];
+    if (overlays.length > mixer.maxChannels) {
+      const err = new Error(
+        `Snapshot has ${overlays.length} overlays but the mixer cap is ` +
+        `${mixer.maxChannels}`);
+      err.code = 'SNAPSHOT_OVER_CAP';
+      throw err;
+    }
+    // Tear down the current overlays (unregister CPC + destroy handles via the
+    // existing remover). The deck channel is rebuilt in place below.
+    for (const overlay of [...mixer.getMixerChannels()]) {
+      if (paramCenter) paramCenter.unregisterChannel(overlay.id);
+      mixer.removeMixerChannel(overlay.id);
+    }
+    // Deck: rebuild from the snapshot if present (reuses the mission-critical
+    // never-dark fallback). If the snapshot carried no deck, leave the live
+    // deck untouched rather than going dark.
+    if (look.deck) {
+      if (mixer.getDeckChannel()) {
+        if (paramCenter) paramCenter.unregisterChannel(mixer.getDeckChannel().id);
+        mixer.removeDeckChannel();
+      }
+      restoreChannel(look.deck, 'deck');
+    }
+    // Overlays: rebuild each through the same degrade-tolerant path as boot.
+    for (const saved of overlays) {
+      if (saved && saved.id && saved.id.startsWith('ch_base')) continue;
+      restoreChannel(saved, 'mixer');
+    }
+    // Master last (setMaster cancels any in-flight fade — a recall is a hard
+    // set of the whole look, not an animation).
+    if (typeof look.master === 'number' && Number.isFinite(look.master)) {
+      mixer.setMaster(look.master);
+    }
+  }
+
   // ── Channel serialization (post-split) ────────────────────────────
   //
   // After the May 2026 channel split, /mixer surfaces ONLY overlay
@@ -1749,6 +1821,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       transitionTime: c.transitionTime || 1.0,
       playlist: c.playlist || null,
       viewSelection: c.viewSelection || { type: 'all', target: null, invert: false },
+      // F-C: per-channel intensity ceiling (hard cap on this channel's own
+      // contribution). Default 1.0 = no clamp. F-D: per-channel color
+      // metadata (no render effect). Surfaced so CaptainPad can show the
+      // clamp slider + color chip. See docs/39 §F-C/§F-D.
+      faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
+      color: typeof c.color === 'string' ? c.color : null,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -1779,6 +1857,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       type: 'deck',
       blackout: globalsState.blackout,
       master: mixer.master,
+      // F-B: in-flight grand-master fade descriptor, or null when steady.
+      // Lets the deck tab show a fade-in-progress affordance.
+      masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       channel: serializeDeckChannel(),
     };
   }
@@ -1804,6 +1885,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
       modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
       master: mixer.master,
+      // F-B: in-flight grand-master fade descriptor (null when steady).
+      masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       maxChannels: mixer.maxChannels,
       baseChannelId: mixer.baseChannelId,
       channels: mixer.getMixerChannels().map(c => ({
@@ -1832,6 +1915,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // pointer. Broadcasting it lets the deck and mixer panels detect
         // cross-tab swaps without polling.
         playlist: c.playlist || null,
+        // F-C / F-D: per-channel intensity ceiling + color metadata. See
+        // serializeChannel above for semantics.
+        faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
+        color: typeof c.color === 'string' ? c.color : null,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -2279,6 +2366,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // operator / CaptainPad / smoke-check reads this to SEE that the
         // saved deck did not restore (a loud, VISIBLE degrade — never silent).
         deckRestoreDegraded,
+        // F-B: current grand-master value + any in-flight timed fade. A
+        // timed blackout / restore animates `master` toward a target on the
+        // render tick; `masterFade` is null when steady, else carries
+        // { active, from, to, durationMs, elapsedMs, remainingMs }.
+        master: mixer.master,
+        masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -2965,6 +3058,119 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
+    } else if (req.method === 'POST' && req.url === '/mixer/master/fade') {
+      // F-B: grand-master timed fade / timed blackout. Animates `master`
+      // toward `target` over `durationMs` on the render tick. A timed
+      // blackout is target=0; a restore is a fade to a non-zero value.
+      readBody(data => {
+        // Codex P0: reject non-finite / out-of-range BEFORE touching the
+        // mixer. target reuses validateFader's finite-[0,1] contract (but
+        // is NOT clamped silently here — validateFader clamps a finite
+        // overshoot, which is the same benign saturation as a slider).
+        const tv = validateFader(data.target);
+        if (!tv.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: tv.error.replace('fader', 'target') }));
+        }
+        const durationMs = (typeof data.durationMs === 'number')
+          ? data.durationMs
+          : Number(data.durationMs);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `durationMs must be a finite number > 0, got '${data.durationMs}'`,
+          }));
+        }
+        mixer.startMasterFade(tv.value, durationMs);
+        // Note: we deliberately do NOT saveAllState() here. The master fade
+        // is a transient animation; the final master value is persisted on
+        // the next mutation (or by the periodic save). Persisting an
+        // in-flight intermediate would be misleading on restart.
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          masterFade: mixer.getMasterFade(),
+        }));
+      });
+    }
+    // ── MIXER SNAPSHOTS / LOOK RECALL (F-A) ──────────────────────────────
+    else if (req.method === 'GET' && req.url === '/mixer/snapshots') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ snapshots: snapshotManager.list() }));
+    } else if (req.method === 'POST' && req.url === '/mixer/snapshots') {
+      // Capture the current full mixer state under a name.
+      readBody(data => {
+        if (typeof data.name !== 'string' || data.name.trim() === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        try {
+          const saved = snapshotManager.save(data.name, captureLook());
+          broadcastWs({ type: 'snapshots', action: 'saved', name: saved.name, snapshots: snapshotManager.list() });
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name: saved.name }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'GET' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const look = snapshotManager.load(name);
+        if (!look) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `snapshot '${name}' not found` })); }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(look));
+      } catch (e) {
+        // SnapshotLoadError (malformed YAML / shape) ⇒ structured 400.
+        if (e instanceof SnapshotLoadError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const removed = snapshotManager.delete(name);
+        if (!removed) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `snapshot '${name}' not found` })); }
+        broadcastWs({ type: 'snapshots', action: 'deleted', name, snapshots: snapshotManager.list() });
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      let look;
+      try {
+        look = snapshotManager.load(name);
+      } catch (e) {
+        // Malformed snapshot ⇒ fail loud with a structured error.
+        if (e instanceof SnapshotLoadError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+      if (!look) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
+      }
+      try {
+        recallLook(look);
+      } catch (e) {
+        // An over-cap snapshot (or other structural failure) is a real
+        // error, not a silent truncation — surface it.
+        const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message, code: e.code || 'SNAPSHOT_RECALL_FAILED' }));
+      }
+      saveAllState();
+      broadcastWs({ type: 'snapshots', action: 'recalled', name, snapshots: snapshotManager.list() });
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist
@@ -3148,6 +3354,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // visually-mid-fade animation just because the operator
           // tapped the lock icon.
           channel.faderLocked = !!data.faderLocked;
+        }
+        // F-C: per-channel intensity ceiling. Validated identically to a
+        // fader (finite, clamped to [0,1]); non-finite ⇒ 400 (Codex P0,
+        // no silent coercion). Applied as a hard cap at the composite.
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
+          }
+          channel.faderMax = fm.value;
+        }
+        // F-D: per-channel color metadata. Pure metadata (no render effect);
+        // accept a string (e.g. hex) or null to clear. A non-string/non-null
+        // value is a malformed payload ⇒ 400 (fail loud).
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          channel.color = data.color === null ? null : data.color;
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
@@ -3967,6 +4194,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
         if (data.faderLocked !== undefined) channel.faderLocked = !!data.faderLocked;
+        // F-C: per-channel intensity ceiling on the deck channel. (The deck
+        // drives the mission-critical exterior — a clamp here caps its own
+        // contribution; same validation as the mixer PATCH.)
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
+          }
+          channel.faderMax = fm.value;
+        }
+        // F-D: per-channel color metadata on the deck channel.
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          channel.color = data.color === null ? null : data.color;
+        }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;

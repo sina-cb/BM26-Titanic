@@ -30,6 +30,15 @@ export function serializeChannel(ch) {
     // Per-channel view-selection so the engine boots back into the exact
     // mixer layout the operator left it in (docs/27).
     viewSelection: ch.viewSelection || { type: 'all', target: null, invert: false },
+    // ── Additive fields (channel_features wave, 2026-06) ──────────────
+    // Appended AFTER viewSelection so the pre-existing on-disk key order is
+    // unchanged for all earlier fields — an old state file (no faderMax/
+    // color) still loads and restores to the documented defaults (1.0 / null).
+    // faderMax: per-channel intensity ceiling (F-C). color: metadata tag (F-D).
+    faderMax: (typeof ch.faderMax === 'number' && Number.isFinite(ch.faderMax))
+      ? Math.max(0, Math.min(1, ch.faderMax))
+      : 1.0,
+    color: (typeof ch.color === 'string') ? ch.color : null,
   };
 }
 
@@ -79,6 +88,17 @@ export class StateManager {
    * best-effort unlink the temp file and re-throw so the caller's existing
    * try/catch logs it — we do not silently swallow the write error here.
    */
+  /**
+   * Public crash-safe write for callers that manage their own file paths
+   * outside the StateManager's flat `stateDir` (e.g. SnapshotManager, which
+   * writes into a `snapshots/` subdirectory). Delegates to the same atomic
+   * temp+fsync+rename machinery as save() so snapshots get the identical
+   * torn-write guarantee. Re-throws on failure (no silent swallow).
+   */
+  writeFileAtomic(filePath, data) {
+    this._writeFileAtomic(filePath, data);
+  }
+
   _writeFileAtomic(filePath, data) {
     const dir = path.dirname(filePath);
     const base = path.basename(filePath);
@@ -246,6 +266,11 @@ export class StateManager {
           localControls: core.localControls,
           playlist: core.playlist,
           viewSelection: core.viewSelection,
+          // Additive (channel_features wave): persisted AFTER the existing
+          // overlay fields so old files stay loadable. serializeChannel
+          // already clamped/typed these — reuse its values verbatim.
+          faderMax: core.faderMax,
+          color: core.color,
         };
       }),
     };
