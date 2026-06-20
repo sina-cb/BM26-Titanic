@@ -157,3 +157,11 @@ Proof entry template:
 - Command(s) BY INSTIGATOR: manifest valid JSON (63 entries); `node engine.js --pattern 62_genre_palette --model test_bench --dry-run` → compiles, **exit 0**.
 - Agent proof (report 20260620_16): all 5 COMPILE_OK/ANIMATING/silence-safe via a real-DSP derived-signal harness; HTML clips `~/tmp/reactive_patterns/clips/{59..63}_*.html`. NOTE flagged: micSub/audioChestHit need the analyzer `sub:{minHz,maxHz}` window (config.yaml 30–60 Hz) to be non-silent.
 - Verdict: D3 crossed off. ✅
+
+### D2 — 9 new derived signals  [PASS]  2026-06-20T09:00Z
+- Branch/commit: `dev/new_derived_signals` @ `e10bb02` → merged into `feat/audio_analysis_2` (--no-ff, clean — stacks on genre/onset blocks).
+- New CPC keys: audioRiserScore, audioBuildEta[0,60s], audioRiserConf, audioSilence, audioTrackChange, audioClimax, audioPhrasePhase, audioPhraseBoundary, audioDropCountdown. New modules build_anticipation/track_change/climax/phrase_tracker/drop_countdown.js.
+- Command(s) BY INSTIGATOR: `node --test tests/audio_signals.test.js tests/new_derived_signals.test.js` → **28 pass** (registry ORDER preserved); perf in isolation **p99 0.486ms** (<0.5 budget); dry-run **exit 0**.
+- Agent proof (report 20260620_15): 22 new tests, 830/830 suite; riser peaks 0.81-0.85 + resets on drop; track-change fires once across silence gap; climax holds 1.0 on sustained sections; phrase boundary on 8-bar wraps; countdown 3-4× before drop, 0 on false builds.
+- Honest caveats (documented): audioBuildEta absolute seconds unreliable (BPM octave) — shipped best-effort behind riserConf, countdown gates on riser PEAK not ETA; chord_progression reads riserScore~0.78 (soft synth FP, no countdown/climax trigger).
+- Verdict: D2 crossed off. ✅
