@@ -220,6 +220,60 @@ export function buildScenarios(sampleRate = DEFAULT_SR) {
       stems: { bass: 0.05, drums: 0.0, vocals: 0.2 } },
   ]));
 
+  // ── Adversarial additions (report 20260620_9: false-fire bait + recall holes).
+  //    These are the cases the prior pass left as a documented gap; they
+  //    measure BOTH false-fires on the bait AND recall on real-shaped drops.
+
+  // 7) loud_intro_no_drop — a LOUD full mix from t=0 with NO preceding build
+  //    (a DJ slamming straight into a banging track at the top of a set). The
+  //    loud onset looks like a drop's energy slam, but no riser precedes it, so
+  //    the build→drop transition gate MUST reject it. NEGATIVE for drops.
+  clips.push(make('loud_intro_no_drop', 0xA707, [
+    { name: 'slam', durSec: 16.0, label: 'SUSTAIN', synth: makeFullMixSynth({ fadeSec: 0 }),
+      stems: { bass: 0.85, drums: 0.85, vocals: 0.1 } },
+  ]));
+
+  // 8) riser_no_drop — a long riser that builds tension and then resolves into
+  //    a CALM breakdown WITHOUT a drop (a fake-out: the energy lifts, the
+  //    buildScore climbs, then it deflates). A real build memory is present, so
+  //    this is the hardest false-fire bait for the build-memory gate — there
+  //    MUST be an actual energy slam, not just a recent build, to fire.
+  //    NEGATIVE for drops.
+  clips.push(make('riser_no_drop', 0xA808, [
+    { name: 'intro',  durSec: 3.0, label: 'THIN',  slow: true, synth: makeAmbientSynth({ level: 0.05 }) },
+    { name: 'riser',  durSec: 8.0, label: 'BUILD', synth: makeBuildSynth({ amp0: 0.07, amp1: 0.55 }) },
+    { name: 'deflate', durSec: 7.0, label: 'THIN', slow: true, synth: makeAmbientSynth({ level: 0.05, padHz: 247 }) },
+  ]));
+
+  // 9) double_drop — two drops in quick succession (build → DROP → very short
+  //    re-build → DROP2 ~4.5 s later). Tests that the eventRefractory does not
+  //    swallow a legitimately-spaced second drop AND that a short re-build
+  //    still arms the transition gate. POSITIVE (two labeled drops).
+  clips.push(make('double_drop', 0xA909, [
+    { name: 'intro',  durSec: 4.0, label: 'THIN',  slow: true, synth: makeAmbientSynth({ level: 0.05 }) },
+    { name: 'build1', durSec: 5.0, label: 'BUILD', realBuild: true, synth: makeBuildSynth({ amp0: 0.08, amp1: 0.62 }) },
+    { name: 'drop1',  durSec: 4.5, label: 'SUSTAIN', dropAtStart: true,
+      synth: makeFullMixSynth({ fadeSec: 0 }), stems: { bass: 0.85, drums: 0.85, vocals: 0.1 } },
+    { name: 'rebuild', durSec: 3.0, label: 'BUILD', realBuild: true, synth: makeBuildSynth({ amp0: 0.45, amp1: 0.66 }) },
+    { name: 'drop2',  durSec: 7.0, label: 'SUSTAIN', dropAtStart: true,
+      synth: makeFullMixSynth({ fadeSec: 0 }), stems: { bass: 0.86, drums: 0.86, vocals: 0.1 } },
+  ]));
+
+  // 10) breakdown_then_drop — a loud body → long quiet breakdown → second build
+  //     → second drop, with the second drop landing AFTER an extended quiet
+  //     section (the post-breakdown second drop the prior pass missed even at
+  //     4.5 s spacing). POSITIVE (one labeled drop — the post-breakdown one;
+  //     the opening body is a pre-rolled sustain, not a labeled drop instant).
+  clips.push(make('breakdown_then_drop', 0xAA10, [
+    { name: 'body',     durSec: 7.0, label: 'SUSTAIN', synth: makeFullMixSynth({ fadeSec: 4.0 }),
+      stems: { bass: 0.8, drums: 0.8, vocals: 0.1 } },
+    { name: 'breakdown', durSec: 7.0, label: 'THIN', slow: true, synth: makeAmbientSynth({ level: 0.05, padHz: 165 }),
+      stems: { bass: 0.05, drums: 0.05, vocals: 0.4 } },
+    { name: 'build2',   durSec: 5.0, label: 'BUILD', realBuild: true, synth: makeBuildSynth({ amp0: 0.07, amp1: 0.6 }) },
+    { name: 'drop2',    durSec: 7.0, label: 'SUSTAIN', dropAtStart: true,
+      synth: makeFullMixSynth({ fadeSec: 0 }), stems: { bass: 0.86, drums: 0.86, vocals: 0.1 } },
+  ]));
+
   return clips;
 }
 

@@ -54,7 +54,9 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // state machine actually reads).
   structureDetector: [
     'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-    'dropMinLevel', 'dropLevelAssist', 'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+    'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
+    'dropSlowZoneMax', 'dropRelLevel',
+    'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
     'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
     'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
   ],
@@ -121,6 +123,19 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // Absolute sub-energy floor a drop's short-envelope must reach (rejects
     // near-silent build noise-ratio false edges). 0 disables; ≤1 (micLow domain).
     dropMinLevel:      (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // Build→drop transition gate: the recent buildScore peak (within
+    // dropBuildMemoryMs) required for the windowed/level edge to fire from THIN.
+    // 0 reverts to the BUILD-state-only edge. Real drops carry ≥0.74, bare
+    // loud-body onsets ≤0.22, so ~0.5 separates them.
+    dropBuildGate:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    dropBuildMemoryMs: (v) => (v >= 0 && v <= 30000) ? null : `must be in [0, 30000]; got ${v}`,
+    // The build-memory THIN-firing edge only fires when slowZone < this (rejects
+    // a build's onset out of a breakdown). [0,1]; 1 disables the slow-zone gate.
+    dropSlowZoneMax:   (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // Mic-gain-relative drop floor factor: effective floor =
+    // max(dropMinLevel, dropRelLevel · runningLoudnessRef). 0 → pure absolute
+    // floor; ≤1 keeps it below the loud-passage level.
+    dropRelLevel:      (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     // Kalman+NIS drop gate (χ² statistic). 6.63 = χ²₁ 99%; tune sensitivity
     // here (lower → more sensitive). slowZoneRef = the activity level
     // (max of micLow/micFlux) at/below which we read as a "slow zone".
