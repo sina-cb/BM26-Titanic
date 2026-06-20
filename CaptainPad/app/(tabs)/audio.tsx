@@ -53,7 +53,8 @@ import {
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
-import { audioAccentHex, audioGenreName, isGenreKey } from '@/utils/audioSignals';
+import { PulseFlash } from '@/components/audio/PulseFlash';
+import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -327,6 +328,12 @@ type SignalSlot = {
   accent: SignalAccent;
   kind: 'intensity' | 'frequency' | 'bpm';
   max: number;
+  // True for one-frame PULSE keys (onset/beat/boundary/switch cues). These
+  // render a hold+decay flashing DOT instead of a flatlined bar — a one-hop
+  // pulse blinks imperceptibly through a [0,1] bar (Adv-D P2-A). Classified
+  // in utils/audioSignals.ts (isPulseKey); only an intensity-kind signal can
+  // be a pulse.
+  isPulse: boolean;
 };
 
 function resolveAccent(accent: SignalAccent, palette: Palette): string {
@@ -355,6 +362,9 @@ function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {
     accent: accentFor(sig),
     kind: sig.kind,
     max: sig.max,
+    // Only intensity-kind keys can be pulses (genre/Hz/bpm have their own
+    // readouts and are never one-hop transients).
+    isPulse: sig.kind === 'intensity' && isPulseKey(sig.key),
   };
 }
 
@@ -436,6 +446,39 @@ const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active,
   const hasRaw = slot.rawKey !== null;
   const pv = normalizeSlot(slot, post);
   const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
+
+  // ── PULSE keys — a flashing DOT (hold+decay) instead of a flatlined bar.
+  // A one-frame onset/beat/boundary/switch pulse spikes to 1 for a single
+  // analyser hop that almost always lands BETWEEN the ~20 Hz param polls, so
+  // a [0,1] bar reads as dead. PulseFlash arms on the rising edge and decays
+  // over ~150-250 ms so the operator actually SEES the cue (Adv-D P2-A).
+  if (slot.isPulse) {
+    return (
+      <View style={{ flex: 1 }}>
+        {/* header — slot label only; the dot IS the value, a numeric POST
+            readout on a one-hop pulse is meaningless (it reads 0.00 the rest
+            of the time). */}
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'baseline', marginBottom: 3 }}>
+          <Text numberOfLines={1} style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: accentColor, textTransform: 'uppercase',
+            letterSpacing: 0.5, flexShrink: 1,
+          }}>{slot.label}</Text>
+        </View>
+        {/* Flash dot sized to fill the same vertical space the bar+trace block
+            occupied, so the grid rows stay aligned. */}
+        <PulseFlash
+          value={post}
+          color={accentColor}
+          restColor={C.ghostBorder}
+          background={C.surfaceContainerLowest}
+          height={traceHeight + 8}
+          active={active}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
       {/* header — slot label + live POST value */}

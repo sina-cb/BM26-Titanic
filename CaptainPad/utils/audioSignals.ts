@@ -86,6 +86,75 @@ export function audioGenreName(value: number): string | null {
   return AUDIO_GENRE_NAMES[idx];
 }
 
+// ── pulse signals (one-frame transients) ────────────────────────────
+//
+// A growing class of Companion CPC keys are NOT continuous [0,1] levels —
+// they are 30 Hz, one-frame PULSES that snap to 1 for a single analyser hop
+// on an event (an onset, a beat, a phrase boundary) and sit at 0 otherwise.
+// Rendered as a normal intensity BAR they flatline at ~0 and the single-hop
+// spike almost always falls BETWEEN the CaptainPad ~20 Hz param polls, so the
+// operator sees a dead bar that imperceptibly twitches — the bug Adv-D P2-A
+// flagged.
+//
+// The Audio Companion desktop UI already solved this with an
+// arm-on-rising-edge / decay envelope (companion_app.js: armPulse / tickFlash
+// / tickLit) so a one-hop pulse HOLDS a visible flash for ~150-250 ms. We
+// mirror that posture on the iPad: a pulse key renders a flashing DOT driven
+// by a hold+decay envelope instead of a flatlined bar.
+//
+// This set is the single source of truth for which dynamic keys are pulses
+// (matched by a TRAILING band token as a word segment, so the Companion's
+// `audio*` / `mic*` prefixes both resolve). Keep it in lockstep with the
+// Companion's pulse-routed signals. Tokens are lowercase word segments as
+// produced by keyHasBandToken's camelCase/underscore split:
+//   micOnsetLow  → ['mic','onset','low']        → 'onsetlow'   (joined below)
+//   audioChestHit→ ['audio','chest','hit']      → 'chesthit'
+// We therefore match on a JOINED multi-word token where the split would break
+// the pair (onsetLow / chestHit), and on a single segment for the rest.
+//
+// Continuous keys (low/mid/high/kick bands, dom1/dom2, energy, climax, the
+// genre/Hz/bpm specials) are NOT pulses and keep their bar + trace.
+export const PULSE_KEY_TOKENS: readonly string[] = [
+  'onsetlow',   // micOnsetLow      — per-band low onset
+  'onsetmid',   // micOnsetMid      — per-band mid onset
+  'onsethigh',  // micOnsetHigh     — per-band high onset
+  'chesthit',   // audioChestHit    — sub-bass chest thump
+  'dropcountdown', // audioDropCountdown — drop imminent
+  'beat',       // audioBeat        — beat tick
+  'phraseboundary', // audioPhraseBoundary — 4/8/16-bar phrase edge
+  'trackchange',    // audioTrackChange    — new track detected
+  'switchcolor',    // audioSwitchColor    — auto colour-switch cue
+  'switchpattern',  // audioSwitchPattern  — auto pattern-switch cue
+];
+
+/**
+ * Whether an audio CPC key is a one-frame PULSE (an onset / beat / boundary /
+ * switch cue) rather than a continuous [0,1] level. Matched by stripping the
+ * camelCase/underscore separators and testing whether the resulting lower
+ * key CONTAINS one of the known pulse tokens as a contiguous run — so
+ * `micOnsetLow`, `audioChestHit`, `audioDropCountdown`, `audioBeat`,
+ * `audioPhraseBoundary`, `audioTrackChange`, `audioSwitchColor`,
+ * `audioSwitchPattern` all resolve regardless of the `mic`/`audio` prefix.
+ *
+ * Used by the AUDIO tab to render these as a flashing dot (hold+decay
+ * envelope) instead of a flatlined bar — a one-hop pulse otherwise blinks
+ * imperceptibly between the ~20 Hz param polls (Adv-D P2-A).
+ *
+ * The genre/Hz/bpm specials are NOT pulses (they have their own readouts), so
+ * a pulse key is necessarily an `intensity`-kind signal; callers should still
+ * guard on kind === 'intensity' before treating a match as a pulse.
+ */
+export function isPulseKey(key: string): boolean {
+  // Join the word segments so multi-word tokens (onsetLow, chestHit) match a
+  // contiguous run: 'micOnsetLow' → 'mic onset low' → 'miconsetlow'.
+  const joined = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  return PULSE_KEY_TOKENS.some((token) => joined.includes(token));
+}
+
 /**
  * Whether an audio CPC key is the genre classifier NAME output (the float
  * INDEX into AUDIO_GENRE_NAMES) — not its companion `audioGenreConf` key.
