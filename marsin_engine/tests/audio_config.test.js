@@ -167,7 +167,9 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // is the build/drop/sustain detector group (docs/30). The 2026-06-20 detector
   // super-tuning pass added `dropMinLevel` (absolute sub floor), `dropLevelAssist`
   // (windowed-edge level assist toggle), and the slow-zone soft-knee knobs
-  // `slowZoneWidth` + `slowFluxFloor`.
+  // `slowZoneWidth` + `slowFluxFloor`. The 2026-06-20 detector-RECALL pass added
+  // the build→drop transition gate (`dropBuildGate` + `dropBuildMemoryMs`) and
+  // the mic-gain-relative drop floor (`dropRelLevel`).
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
     bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
@@ -175,7 +177,9 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
     sub:     ['minHz', 'maxHz'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-      'dropMinLevel', 'dropLevelAssist', 'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+      'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
+      'dropSlowZoneMax', 'dropRelLevel',
+      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
       'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],

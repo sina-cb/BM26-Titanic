@@ -190,6 +190,104 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   assert.ok(pc.store.audioDropPulse > 0);
 });
 
+// ── Build→drop transition gate + recall (2026-06-20 detector-recall pass) ──
+
+test('drop fires from THIN when a riser preceded but BUILD state never latched', () => {
+  // The recall fix: through the playa mic, energyRatio saturates at 1.0 during
+  // a build so the brittle THIN→BUILD "rising for >1s" gate never latches —
+  // the machine is still THIN when the drop lands. The old edge fired ONLY from
+  // BUILD, so the drop was missed. With the build-memory gate, a recent high
+  // buildScore (the riser) lets the edge fire from THIN.
+  const broadcasts = [];
+  const { pc, det } = makeDetector(
+    // buildThreshold huge so the state machine CANNOT enter the BUILD state;
+    // proves the drop fires on build-MEMORY, not the BUILD state.
+    { dropEdgeMode: 'windowed', buildThreshold: 0.99, dropEnergyJump: 1.5,
+      dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: 0, stemsTimeoutMs: 100000 },
+    broadcasts,
+  );
+  let now = 1000; const tickMs = 12;
+  // Quiet baseline so longEnv settles low.
+  for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  // Riser: strong sustained flux (drives buildScore well past 0.5) + a gently
+  // compounding sub. The state stays THIN (buildThreshold 0.99) but the
+  // build-score MEMORY climbs high.
+  for (let i = 0; i < 250; i++) {
+    pc.store.micLowRaw = Math.min(0.45, 0.06 * Math.pow(1.010, i));
+    pc.store.micFluxRaw = 0.5;
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  assert.equal(det.getStatus().state, 'THIN', 'BUILD state must NOT have latched (buildThreshold 0.99)');
+  assert.ok(det.getStatus().buildScore >= 0.5, `buildScore should be high from the riser; got ${det.getStatus().buildScore}`);
+  // The slam.
+  for (let i = 0; i < 60; i++) {
+    pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
+    det.tick(now, tickMs / 1000); now += tickMs;
+    if (det.getStatus().state === 'SUSTAIN') break;
+  }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 1, `expected exactly one dropFired from THIN; got ${drops.length}`);
+  assert.equal(det.getStatus().state, 'SUSTAIN');
+});
+
+test('build→drop gate rejects a loud-body onset with NO preceding riser', () => {
+  // A bare loud onset (techno/sustain start) — loud energy slam but buildScore
+  // stayed low (no flux riser). The build-memory gate (dropBuildGate) must
+  // reject it: recentBuildPeak never reached the gate.
+  const broadcasts = [];
+  const { pc, det } = makeDetector(
+    { dropEdgeMode: 'windowed', buildThreshold: 0.99, dropEnergyJump: 1.5,
+      dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: 0, stemsTimeoutMs: 100000 },
+    broadcasts,
+  );
+  let now = 1000; const tickMs = 12;
+  // Quiet baseline, NO flux (so buildScore never rises).
+  for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  // A loud slam with NO flux riser (buildScore stays ~0).
+  for (let i = 0; i < 120; i++) { pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 0, `loud onset with no riser must NOT fire a drop; got ${drops.length}`);
+});
+
+test('mic-gain-relative floor: a scaled-down drop still fires; absolute-only would miss it', () => {
+  // dropMinLevel is an ABSOLUTE micLow floor calibrated for a normal feed. On a
+  // QUIET feed (low mic gain) a genuine drop sits below it and the absolute
+  // floor blocks it. The relative term (dropRelLevel·loudnessRef) scales the
+  // effective floor down with the feed, so the drop still clears it. We model a
+  // quiet feed: a riser + slam at ~0.04 levels (well below dropMinLevel 0.06).
+  const run = (relLevel) => {
+    const broadcasts = [];
+    const { pc, det } = makeDetector(
+      { dropEdgeMode: 'windowed', buildThreshold: 0.99, dropEnergyJump: 1.5,
+        dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: relLevel, stemsTimeoutMs: 100000 },
+      broadcasts,
+    );
+    let now = 1000; const tickMs = 12;
+    // Very quiet baseline so loudnessRef stays tiny.
+    for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.008; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+    // Quiet riser: strong flux drives buildScore, but the SUB stays low (~0.012)
+    // — like a real build where the sub is absent until the drop. loudnessRef
+    // stays small, so the relative floor relaxes below the absolute 0.06.
+    for (let i = 0; i < 250; i++) {
+      pc.store.micLowRaw = 0.012; pc.store.micFluxRaw = 0.5;
+      det.tick(now, tickMs / 1000); now += tickMs;
+    }
+    // A quiet slam: the sub jumps to ~0.042 (a ~3.5× rate-of-change) — ABOVE the
+    // analyzer noise floor but BELOW the absolute dropMinLevel 0.06. The relative
+    // floor must let it fire; the absolute floor blocks it.
+    for (let i = 0; i < 80; i++) {
+      pc.store.micLowRaw = 0.042; pc.store.micFluxRaw = 0.3;
+      det.tick(now, tickMs / 1000); now += tickMs;
+      if (det.getStatus().state === 'SUSTAIN') break;
+    }
+    return broadcasts.filter(b => b.type === 'dropFired').length;
+  };
+  // Absolute-only floor (dropRelLevel 0): the quiet drop is blocked.
+  assert.equal(run(0), 0, 'absolute-only floor should MISS the quiet drop (regression baseline)');
+  // Relative floor on: the quiet drop fires.
+  assert.equal(run(0.5), 1, 'mic-gain-relative floor should fire the quiet drop');
+});
+
 // ── Kalman+NIS drop edge (the adopted default) ──────────────────────────
 
 test('kalman edge fires a drop on a simultaneous micLow+micFlux step-up', () => {

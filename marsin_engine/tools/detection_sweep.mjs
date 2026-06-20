@@ -30,6 +30,11 @@ const GRID = {
   dropMinLevel:      [0.0, 0.03, 0.045, 0.06, 0.08],
   dropEnergyJump:    [1.3, 1.5, 1.8],
   dropDeltaWindowMs: [400, 700],   // only matters for windowed
+  // build→drop transition gate: the recall lever (fire the edge from THIN when a
+  // riser recently happened). 1.0 ≈ the old BUILD-state-only edge (never fires
+  // from THIN); lower opens the gate (more recall, risk of loud-onset false
+  // fires below the threshold real drops carry).
+  dropBuildGate:     [0.35, 0.5, 0.65, 1.0],
   eventRefractoryMs: [2000],
 };
 
@@ -85,12 +90,12 @@ function main() {
   rows.sort((a, b) => b.score - a.score);
 
   console.log(`swept ${count} configs over all scenarios × 3 tiers. Top ${top} by composite (F1 − ffPerMin·0.10 − latPenalty):\n`);
-  console.log('score  F1    P     gP    R     lat   ff/min negFP  edge      minLvl jump  win');
+  console.log('score  F1    P     gP    R     lat   ff/min negFP  edge      minLvl jump  gate  win');
   for (const row of rows.slice(0, top)) {
     const c = row.cfg, d = row.drop;
     console.log(
       `${fmt(row.score)}  ${fmt(d.f1)}  ${fmt(d.precision)}  ${fmt(d.guardedPrecision)}  ${fmt(d.recall)}  ${fmt(d.meanLatencyMs, 0).padStart(4)}  ${fmt(d.falseFiresPerMin).padStart(5)}  ${String(d.negFp).padStart(4)}   ` +
-      `${c.dropEdgeMode.padEnd(9)} ${String(c.dropMinLevel).padEnd(5)}  ${String(c.dropEnergyJump).padEnd(4)}  ${c.dropEdgeMode === 'windowed' ? c.dropDeltaWindowMs : '—'}`,
+      `${c.dropEdgeMode.padEnd(9)} ${String(c.dropMinLevel).padEnd(5)}  ${String(c.dropEnergyJump).padEnd(4)}  ${String(c.dropBuildGate).padEnd(4)}  ${c.dropEdgeMode === 'windowed' ? c.dropDeltaWindowMs : '—'}`,
     );
   }
 

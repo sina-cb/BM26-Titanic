@@ -50,8 +50,16 @@ const MIC_SEED = 0x5EED;
 const DROP_TOLERANCE_MS = 1200;
 
 // Drop-bearing vs negative (no-drop) scenarios. Negatives must fire ~0 drops.
-const POSITIVES = new Set(['full_arc', 'single_drop_long']);
-const NEGATIVES = new Set(['ambient_long', 'techno_steady', 'false_build_long', 'sustain_then_slow']);
+const POSITIVES = new Set([
+  'full_arc', 'single_drop_long',
+  // adversarial recall cases (report 20260620_9): double drop + post-breakdown 2nd drop.
+  'double_drop', 'breakdown_then_drop',
+]);
+const NEGATIVES = new Set([
+  'ambient_long', 'techno_steady', 'false_build_long', 'sustain_then_slow',
+  // adversarial false-fire bait (report 20260620_9): loud no-build intro + riser fake-out.
+  'loud_intro_no_drop', 'riser_no_drop',
+]);
 
 // Named detector configs to compare. `enabled` is forced on by the runner.
 // baseline = the ORIGINALLY-shipped level edge; default = the current shipped
