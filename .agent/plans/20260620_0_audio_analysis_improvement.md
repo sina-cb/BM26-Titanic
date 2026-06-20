@@ -270,3 +270,6 @@ Protocol unchanged: don't stop when blocked — pivot to another avenue. Keep re
   `sparkle`/`sparkleVar` to measured centroids, add a working 2nd axis beyond BPM. Target a
   real-audio accuracy lift from 22%. Keep/refresh the synthetic tests. THIS is now the
   highest-value audio task — genre is structurally sound but near-chance until re-tuned on real data.
+
+- ✅ D7 genre v2 real-audio re-tune MERGED — honest 22%→44.4% on real corpus (agent's 63.9% was a replay-tool artifact; verified 44.4% live). 4 engineered features.
+- 📋 D8 genre v3 (follow-up): re-tune the genre WEIGHTS directly against the LIVE tools/genre_eval.mjs (not a replay) to recover the gap to ~60%; fix BPM half/double-tempo (octave-doubling) which kills downtempo + would help all genres; consider a techno harmonic-stability feature.

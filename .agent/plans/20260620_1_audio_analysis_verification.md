@@ -173,3 +173,10 @@ Proof entry template:
 - Before→after (agent, report 20260620_14): dom1 bass-root err **4.46→0.66 Hz**; note pitch-class **5/8→8/8**; sub separation (80Hz kick) micSub **0.49→0.13**; drop **P=1.00 R=0.78 F1=0.875 negFP=0** (vs 1024 R=0.56); analyzer per-hop p99 **0.17→0.28ms** (<0.5).
 - Genre: NOT re-tuned on real corpus (harness/corpus weren't in D1's worktree); classification invariant across the bump on synth (9/9). → D7 will do the real-corpus re-tune at 2048.
 - Verdict: D1 crossed off. ✅
+
+### D7 — genre v2 real-audio re-tune  [PASS w/ corrected number]  2026-06-20T13:00Z
+- Branch/commit: `dev/genre_v2_retune` → merged into `feat/audio_analysis_2` (--no-ff, clean).
+- New features in genre_classifier.js: bassW=low/(l+m+h), midW=mid/(l+m+h), tilt=high/(low+mid), fluxVar; profiles re-anchored to measured real-corpus centroids; dead axes zeroed (BPM octave-doubles → harmful, kickDens saturated, sparkle/sparkleVar lost polarity).
+- Command(s) BY INSTIGATOR on merged tip: `node tools/genre_eval.mjs --corpus ~/tmp/genre_corpus` → **OVERALL 16/36 = 44.4%** (per-genre: tech_house 100%, melodic_house 67%, melodic_techno 67%, techno 17%, deep_house 17%, downtempo 0%). `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/genre_eval_harness.test.mjs` → **166 pass**. dry-run exit 0.
+- DISCREPANCY (verification-discipline catch): the agent REPORTED 63.9% from a private in-engine tuning-REPLAY tool (~/tmp); the HONEST reproducible number via the live genre_eval.mjs is **44.4%** — confirmed identical in D7's own worktree (16/36). Still a 2× lift over 22% baseline; merged with the corrected number logged.
+- Verdict: D7 crossed off (at 44.4% honest). ✅
