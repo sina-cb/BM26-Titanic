@@ -213,12 +213,34 @@ test('TrackChange (unit): a 1-bar breakdown is NOT a track change', () => {
 // 3. CLIMAX / sustained-peak (#8)
 // ════════════════════════════════════════════════════════════════════════════
 
-test('climax HOLDS on a sustained loud full-spectrum section', () => {
-  const s = driveChain([{ synth: 'full_track', seconds: 12 }], { detectorEnabled: false });
-  assert.ok(peak(s.climax) > 0.8, `a sustained loud groove should climax; peak=${peak(s.climax).toFixed(2)}`);
-  // And HOLD (many hops near the top, not a single spike).
-  const held = s.climax.filter((v) => v > 0.7).length;
-  assert.ok(held > 50, `climax should hold across the section; ${held} hops > 0.7`);
+test('climax RAMPS on a rise INTO a sustained loud full-spectrum peak, then HOLDS', () => {
+  // REAL-AUDIO RE-BASELINE (E2 P0-3): a climax is a SPECIAL MOMENT reached by
+  // CLIMBING into the peak (post-drop / breakdown→hands-up), NOT steady state.
+  // A flat groove from t0 no longer climaxes (it never rises above its own
+  // baseline) — that was the over-fire bug. We drive a genuine rise: a quiet
+  // intro then the loud full-spectrum groove. The loudness CLIMBS into the
+  // plateau, so the climax ramps up and HOLDS through the peak section.
+  const s = driveChain([
+    { synth: 'silence', seconds: 4 },
+    { synth: 'full_track', seconds: 14 },
+  ], { detectorEnabled: false });
+  // The near-true-peak gate (ceilFrac 0.95 of a 40 s top-decile reference) ramps
+  // the climax CLEARLY on the rise into the loud groove. It does not pin to 1.0
+  // on a STEADY synth groove (whose per-bar ripple sits just under the inflated
+  // top-bin reference) — that's correct: only a true post-drop slam pins high.
+  assert.ok(peak(s.climax) > 0.6, `a rise into a loud peak should climax; peak=${peak(s.climax).toFixed(2)}`);
+  // And HOLD (a stretch of hops up, not a single spike) through the grace.
+  const held = s.climax.filter((v) => v > 0.4).length;
+  assert.ok(held > 20, `climax should hold across the peak section; ${held} hops > 0.4`);
+});
+
+test('climax does NOT fire on a FLAT steady groove (no rise into a peak) — E2 P0-3', () => {
+  // The over-fire fix: a continuous loud groove that is at level from t0 has no
+  // rise-into-plateau, so it must NOT read as a climax. (On the real 60-track
+  // no-drop corpus this dropped climax≥0.5 from 47.6 % to ~1 % of hops.)
+  const s = driveChain([{ synth: 'full_track', seconds: 14 }], { detectorEnabled: false });
+  const held = s.climax.filter((v) => v >= 0.5).length;
+  assert.ok(held < 30, `a flat steady groove must not saturate the climax; ${held} hops ≥ 0.5`);
 });
 
 test('climax does NOT fire on a riser (bright but no bass body)', () => {
@@ -306,9 +328,13 @@ test('drop-countdown fires NOTHING on silence', () => {
 test('DropCountdown (unit): disarms immediately on a drop pulse', () => {
   const cd = new DropCountdown();
   let now = 0;
-  // Confident peaked build, bpm locked — arm + fire on beats.
+  // E2 P1-4: the arm gate now requires a MONOTONIC CLIMB into the peak — the
+  // riser must have been clearly LOW recently before reaching the peak. Drive a
+  // few LOW hops first so the climb origin is established, THEN the peak.
+  for (let i = 0; i < 5; i++) { cd.update({ riserScore: 0.1, riserConf: 0.0, buildEta: 0, bpm: 128, bpmLocked: true, beat: 0, dropPulse: 0, dtMs: HOP_MS, nowMs: now }); now += HOP_MS; }
+  // Confident peaked build (climbed in from the low above), bpm locked.
   const peaked = (beat, drop = 0) => cd.update({ riserScore: 0.85, riserConf: 0.9, buildEta: 0, bpm: 128, bpmLocked: true, beat, dropPulse: drop, dtMs: HOP_MS, nowMs: now });
-  // hold the peak past peakHoldMs
+  // hold the peak past peakHoldMs (but within peakMaxMs)
   for (let i = 0; i < Math.floor(700 / HOP_MS); i++) { peaked(0); now += HOP_MS; }
   const f1 = peaked(0.9); now += HOP_MS;   // a beat → fire
   assert.equal(f1.fired, true, 'a beat during a held peak should fire');
@@ -316,6 +342,20 @@ test('DropCountdown (unit): disarms immediately on a drop pulse', () => {
   peaked(0.0, 1.0); now += HOP_MS;
   const f2 = cd.update({ riserScore: 0.85, riserConf: 0.9, buildEta: 0, bpm: 128, bpmLocked: true, beat: 0.9, dropPulse: 0.0, dtMs: HOP_MS, nowMs: now });
   assert.equal(f2.active, false, 'countdown is inactive in the post-drop refractory');
+});
+
+test('DropCountdown (unit): does NOT arm without a monotonic climb (steady-high riser) — E2 P1-4', () => {
+  const cd = new DropCountdown();
+  let now = 0;
+  // A riser that sits HIGH from t0 (never was low) is steady-state, not a build
+  // top — it must not count down even with a held peak + bpm lock + beats.
+  let fires = 0;
+  for (let i = 0; i < Math.floor(3000 / HOP_MS); i++) {
+    const beat = (i % 8 === 0) ? 0.9 : 0.0;   // a beat every few hops
+    if (cd.update({ riserScore: 0.85, riserConf: 0.9, buildEta: 0, bpm: 128, bpmLocked: true, beat, dropPulse: 0, dtMs: HOP_MS, nowMs: now }).fired) fires++;
+    now += HOP_MS;
+  }
+  assert.equal(fires, 0, `a steady-high riser (no climb-in) must not count down; got ${fires}`);
 });
 
 // ════════════════════════════════════════════════════════════════════════════

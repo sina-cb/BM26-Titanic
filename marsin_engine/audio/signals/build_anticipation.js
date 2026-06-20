@@ -60,6 +60,13 @@ export const BUILD_ANTICIPATION_DEFAULTS = Object.freeze({
   beatsPerBar: 4,       // 4/4 assumption (matches bpm_tracker barPhase)
   warmupHops: 30,       // seed the EMAs before scoring (no phantom build at boot)
   confNoDetector: 0.8,  // confidence ceiling when the detector is OFF (raw slopes only)
+  // ── ETA honesty gate (E2 P1-5, 2026-06-20) ──────────────────────────────
+  // On REAL continuous tracks the raw flux/high slopes wobble above the score
+  // threshold constantly, so a bars-to-boundary ETA was published for ~69 % of
+  // hops — fiction (there is no impending drop on a steady track). The ETA is
+  // now published ONLY when the riser is genuinely confident: riserConf ≥
+  // `etaMinConf` (and the detector, when enabled, corroborates BUILD). Else 0.
+  etaMinConf: 0.55,     // riserConf must clear this for a nonzero ETA (honest)
 });
 
 export class BuildAnticipation {
@@ -177,10 +184,17 @@ export class BuildAnticipation {
     this.riserConf = clamp01(conf);
 
     // ── ETA (best-effort, honest) ─────────────────────────────────────────────
-    // Only with a real tempo grid: bars to the next barsToPredict-boundary.
-    // Without a BPM lock OR a building score we publish 0 (no dishonest guess).
+    // Only with a real tempo grid AND a CONFIDENT build: bars to the next
+    // barsToPredict-boundary. Without a BPM lock, a building score, OR high
+    // confidence we publish 0 (no dishonest guess). The riserConf gate is what
+    // stops a steady-track slope wobble from emitting a fictional ETA (E2 P1-5):
+    // on real continuous music conf rarely clears etaMinConf, so the ETA is
+    // nonzero only during a genuine, confident build.
     let eta = 0;
-    if (s.bpmLocked && s.bpm > 0 && this._risingSinceMs !== null && this._score >= 0.25) {
+    const detectorOnEta = s.buildScore > 0 || s.structure === 1;
+    const detectorCorroborates = !detectorOnEta || s.structure === 1 || clamp01(s.buildScore) >= 0.3;
+    if (s.bpmLocked && s.bpm > 0 && this._risingSinceMs !== null && this._score >= 0.25
+        && this.riserConf >= p.etaMinConf && detectorCorroborates) {
       const beatSec = 60 / s.bpm;
       const barSec = beatSec * p.beatsPerBar;
       // Bars elapsed since the build began (continuous), then bars to the next

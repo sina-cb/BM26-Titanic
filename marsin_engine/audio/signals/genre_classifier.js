@@ -193,7 +193,34 @@ export const GENRE_DEFAULTS = Object.freeze({
   // windowed EMAs (featTau ~4 s) need a few seconds to characterize the
   // section before the FIRST commit, or a transient opening reads as the
   // wrong genre and the min-dwell then pins it.
+  //
+  // COLD-START FIX (E2 P1-A, 2026-06-20): at ~5 s the kick-regularity ring is
+  // NOT yet full, so kickReg reads near-0 and the argmax of instantaneous
+  // similarity is melodic_house (the lowest-kickReg profile) — it committed
+  // melodic_house at every section start (~28 % of corpus tracks) and minDwell
+  // then pinned it. The first commit is now ALSO gated on the kick ring being
+  // full (`_kickFilled >= kickRingN`) so kickReg is trustworthy before the FIRST
+  // commit; after that the normal dwell/hysteresis runs unchanged. warmupMs is
+  // kept at 5000 (the tail-vote accuracy is anchored to it — the kick-ready gate
+  // is the cold-start fix, NOT a longer warmup, which would shift the deployed
+  // 63.9 % tail vote).
   warmupMs: 5000,
+  // A GENUINELY sparse-kick track (soft/irregular kicks — itself a melodic_house
+  // trait) may never fill the kick ring for tens of seconds. We must not starve
+  // its decision (and the deployed tail vote) waiting forever: once
+  // warmupMs + kickWaitCapMs has elapsed in party mode we commit on whatever
+  // kickReg we have. The cap is sized so even a slow-fill track still commits
+  // before the eval's 12 s tail-vote window starts, preserving the 63.9 % vote.
+  kickWaitCapMs: 7000,
+  // FIRST-commit floor (cold-start, E2 P1-A): even with a full kick ring at ~5 s,
+  // the slow band/flux EMAs (featTau ~4 s) and the score EMA (scoreTau 2.5 s)
+  // have NOT converged, so the instantaneous argmax transiently picks
+  // melodic_house (high-midW / low-kickReg attractor) and minDwell pins it for a
+  // few seconds before it corrects. Holding the FIRST commit until the windows
+  // are settled removes that transient. Kept < 12 s so the deployed tail vote is
+  // untouched. (Applies ONLY to the first commit; mid-set re-scores are
+  // unaffected.)
+  firstCommitMinMs: 7000,
 });
 
 export class GenreClassifier {
@@ -275,8 +302,24 @@ export class GenreClassifier {
     this._updateKick(s.kick, now, dt);
     this._updateNoteRate(s.pitchClass, s.noteStable, dt);
 
-    // ── Warmup: hold ambient until the window has had time to fill. ──
-    if ((now - this._partySinceMs) < p.warmupMs) {
+    // ── Warmup: hold ambient until the window has had time to fill AND the
+    // kick-regularity ring is full. The kick-ring gate is the real cold-start
+    // fix: until kickReg is measurable the argmax defaults to the lowest-kickReg
+    // profile (melodic_house). The first commit only happens once we have a
+    // trustworthy kickReg. (Once committed, this gate no longer applies — a mid-
+    // set re-score never resets _kickFilled.) ──
+    const elapsedParty = now - this._partySinceMs;
+    const warmTime = elapsedParty >= p.warmupMs;
+    const kickReady = this._kickFilled >= p.kickRingN;
+    // Hard cap: a genuinely sparse-kick track may never fill the ring; commit
+    // anyway once warmupMs + kickWaitCapMs has elapsed so the decision (and the
+    // tail vote) is not starved.
+    const kickWaitedOut = elapsedParty >= (p.warmupMs + p.kickWaitCapMs);
+    // First-commit floor: hold the FIRST commit until the windows have settled,
+    // so the melodic_house cold-start transient can't be committed + dwell-pinned.
+    const firstFloorOk = elapsedParty >= p.firstCommitMinMs;
+    if (this._committed < FIRST_PARTY_GENRE
+        && (!warmTime || !firstFloorOk || (!kickReady && !kickWaitedOut))) {
       this.genre = 0;
       this.confidence = 0;
       return { genre: 0, confidence: 0 };
@@ -446,6 +489,15 @@ export class GenreClassifier {
     }
 
     // Confidence = how separated the winner is from the field.
+    //
+    // ⚠ SEMANTICS (E2 P1-B, 2026-06-20): audioGenreConf is a DECISION MARGIN —
+    // the score gap between the winning genre and the runner-up — NOT a
+    // probability that the label is CORRECT. On the real corpus it is slightly
+    // ANTI-correlated with correctness (mean conf on WRONG calls 0.229 > on
+    // RIGHT calls 0.176): a big margin often means the track sits cleanly in a
+    // WRONG attractor, while genuinely ambiguous-but-correct tracks have a small
+    // margin. Treat it as "how decisively the classifier picked", a UI/
+    // smoothing hint, NOT as accuracy. Do not gate correctness decisions on it.
     const spread = secondS > -Infinity ? (bestS - secondS) : bestS;
     this.confidence = clamp01(spread / p.confSpread);
 

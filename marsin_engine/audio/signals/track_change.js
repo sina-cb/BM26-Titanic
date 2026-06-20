@@ -13,9 +13,14 @@
  *   audioTrackChange  pulse — a one-shot edge marking a likely new track. Fires
  *                             on the strongest cue available:
  *                               (a) silence → re-onset (a gap then music returns),
- *                               (b) BPM unlock → relock at a NEW tempo,
- *                               (c) a sharp note / dominant-frequency discontinuity
- *                                   coincident with a loudness dip+recover.
+ *                               (b) BPM unlock → relock at a NEW tempo.
+ *                             (cue (c) — harmonic-cut — was REMOVED 2026-06-20,
+ *                             E2 P1-7: on real continuous tracks the dominant
+ *                             pitch class flips constantly and a shallow groove
+ *                             dip brackets it, so it fired spuriously mid-track.
+ *                             The gap-reonset + tempo-relock cues are the honest
+ *                             ones; a harmonic cut is not separable from a normal
+ *                             chord change without labels.)
  *
  * ── Algorithm ─────────────────────────────────────────────────────────────
  * Reuses PartyMode's loudness-EMA + hysteresis + HOLD discipline so a 1-bar
@@ -29,8 +34,6 @@
  *        fire. The canonical, highest-confidence cue.
  *    (b) TEMPO RELOCK. BPM was locked, unlocked for ≥ `tempoUnlockMs`, then
  *        relocked at a tempo differing by ≥ `tempoJumpBpm` → fire.
- *    (c) HARMONIC DISCONTINUITY. The dominant pitch class jumps AND a loudness
- *        dip-then-recover bracketed it (a hard cut, not a melodic note change).
  *
  * Pure Math, allocation-free. Warmup-gates the change pulse so the engine's
  * first onset (silence→music at boot) isn't reported as a track change.
@@ -49,8 +52,6 @@ export const TRACK_CHANGE_DEFAULTS = Object.freeze({
   changeRefractoryMs: 4000, // min spacing between track-change fires
   tempoUnlockMs: 1500,     // BPM must stay unlocked this long to arm a relock cue
   tempoJumpBpm: 6,         // relock tempo must differ by this many BPM to count
-  noteDipWindowMs: 700,    // a loudness dip within this window brackets a hard cut
-  noteDipDepth: 0.5,       // loudness must dip to ≤ depth×recentMax to count as a cut
   warmupMs: 1500,          // suppress the change pulse for the first warmupMs
 });
 
@@ -75,11 +76,6 @@ export class TrackChange {
     this._unlockedSinceMs = null;
     this._lastLockedBpm = 0;
 
-    // harmonic-cut cue
-    this._prevPc = -1;
-    this._recentLoudMax = 0;
-    this._loudDipAtMs = -Infinity;
-
     this.trackChange = false;    // published pulse (one hop)
   }
 
@@ -87,7 +83,6 @@ export class TrackChange {
    * @param {object} s
    *   s.low, s.mid, s.high  — raw bands [0,1]
    *   s.bpm, s.bpmLocked    — tempo
-   *   s.pitchClass (0..11/-1), s.noteStable (bool)
    *   s.dt (seconds), s.nowMs
    * @returns {{silence:boolean, trackChange:boolean}}
    */
@@ -107,15 +102,6 @@ export class TrackChange {
       this._loud += a * (target - this._loud);
     }
     this.loudness = this._loud;
-
-    // Track a slow-decaying recent loudness max (for the dip-depth test).
-    if (this._loud > this._recentLoudMax) this._recentLoudMax = this._loud;
-    else this._recentLoudMax *= 0.999;   // ~ slow bleed so a dip is relative to recent music
-
-    // Dip detector: note when loudness drops well below the recent max.
-    if (this._recentLoudMax > p.offThresh && this._loud <= p.noteDipDepth * this._recentLoudMax) {
-      this._loudDipAtMs = now;
-    }
 
     // Schmitt silence with confirm-hold.
     const wasSilent = this.silence;
@@ -159,14 +145,6 @@ export class TrackChange {
     }
     if (s.bpmLocked && s.bpm > 0) this._lastLockedBpm = s.bpm;
     this._wasLocked = s.bpmLocked;
-
-    // ── Cue (c): harmonic discontinuity bracketed by a loudness dip ─────────
-    if (s.noteStable && s.pitchClass >= 0 && this._prevPc >= 0
-        && s.pitchClass !== this._prevPc) {
-      const dipRecent = (now - this._loudDipAtMs) <= p.noteDipWindowMs;
-      if (dipRecent && !this.silence && refractoryOk && warmedUp) fire = true;
-    }
-    if (s.noteStable && s.pitchClass >= 0) this._prevPc = s.pitchClass;
 
     if (fire) {
       this.trackChange = true;
