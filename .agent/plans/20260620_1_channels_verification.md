@@ -27,5 +27,21 @@ $ npm run lint                 → ✖ 12 problems (0 errors, 12 warnings) [exit
 
 ## Merge proofs
 
-(appended per merge)
+### MERGE 1 — dev/engine_state_hardening (E3, slot 2) — VERIFIED ON MERGED TIP
+Boundary: only `lib/state_manager.js` modified + 4 additive test files + report.
+Verified in main checkout on merged tip (pre-commit):
+```
+$ git diff --check -- marsin_engine                        → DIFFCHECK_OK
+$ node --check {state_manager.js + 4 test files}           → all ok
+$ node engine.js --list                                    → 60 pattern(s) found
+$ node engine.js --pattern test_const --model test_bench --dry-run
+  🏁 Dry run complete.   DRYRUN_EXIT=0 (no missing-blend warning)
+$ node --test "tests/*.test.js"                            → 787 pass / 0 fail
+$ ENGINE_PORT=31268 node tests/hil/hil_concurrent_entry_test.mjs (live engine)
+  → 7/7 assertions passed, HIL_EXIT=0; states/test_bench residue: clean (restored)
+```
+Content: atomic temp+fsync+rename state writes; `serializeChannel()` de-dup
+(byte-compatible on disk); +27 tests (atomicity 14, invariants 10,
+blend-fallback-presence 5 doc-only, HIL concurrent 7). Backward-compatible
+state_manager (no export/signature removed). Merge commit: see git log.
 </content>
