@@ -171,7 +171,18 @@ Two Explore agents mapped engine + CaptainPad. Reports captured in this plan.
       Render-loop benchmark feat (after) vs origin/main (before): ms/frame + GC/alloc
       from vis-buffer reuse, blend precompile, alloc-free transition order. Report-only
       (harness in ~/tmp, no code change). Honest numbers incl. any null result.
-      bench_baseline worktree = origin/main for the "before". After this: truly done.
+      bench_baseline worktree = origin/main for the "before".
+- [ ] OPERATING MODE CHANGE (operator, 2026-06-20): do NOT close/wind down. KEEP
+      kicking off agents to find + build NEW CHANNEL features until the timeline ends.
+      Stay in the channels lane (deck/mixer/playlists/channel engine + CaptainPad deck/
+      mixer views). EXCLUDE areas owned by other branches: timeline/scheduling
+      (feat/timeline_support — different agent), MIDI (feat/captainpad-midi-control),
+      audio DSP (feat/audio_analysis_2), UI rehaul (feat/views_rehaul). Maintain
+      disjoint file ownership across parallel feature agents; merge+verify+push each;
+      refill from the backlog; re-discover when it empties.
+- [ ] WAVE 11: feature-discovery agent → ranked NEW-channel-feature backlog +
+      recommended first parallel batch (disjoint ownership). RUNNING.
+- [ ] WAVE 12+: implement top safe features in parallel worktrees; repeat to deadline.
 
 ## STATUS LOG (cont. 2)
 
