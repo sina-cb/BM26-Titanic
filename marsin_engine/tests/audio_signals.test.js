@@ -85,6 +85,18 @@ const EXPECTED_AUDIO_ENTRIES = [
   // 2026-06-20 (dev/genre_signals). No inbound OSC — engine-internal derived.
   { key: 'audioGenre', label: 'Audio · Genre', ...LIVE({ range: [0, 6], broadcastHz: 5, sharedFnName: 'audioGenre' }) },
   { key: 'audioGenreConf', label: 'Audio · Genre Conf', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioGenreConf' }) },
+  // new_derived_signals (2026-06-20): riser/anticipation, track-change/silence,
+  // climax, phrase, drop-countdown. Engine-internal derived (no inbound OSC).
+  // audioBuildEta carries SECONDS (range [0,60]); the rest are [0,1].
+  { key: 'audioRiserScore', label: 'Audio · Riser Score', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioRiserScore' }) },
+  { key: 'audioBuildEta', label: 'Audio · Build ETA', ...LIVE({ range: [0, 60], broadcastHz: 10, sharedFnName: 'audioBuildEta' }) },
+  { key: 'audioRiserConf', label: 'Audio · Riser Conf', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioRiserConf' }) },
+  { key: 'audioSilence', label: 'Audio · Silence', ...LIVE({ broadcastHz: 5, sharedFnName: 'audioSilence' }) },
+  { key: 'audioTrackChange', label: 'Audio · Track Change', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioTrackChange' }) },
+  { key: 'audioClimax', label: 'Audio · Climax', ...LIVE({ broadcastHz: 10, sharedFnName: 'audioClimax' }) },
+  { key: 'audioPhrasePhase', label: 'Audio · Phrase Phase', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioPhrasePhase' }) },
+  { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', ...LIVE({ broadcastHz: 15, sharedFnName: 'audioPhraseBoundary' }) },
+  { key: 'audioDropCountdown', label: 'Audio · Drop Countdown', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioDropCountdown' }) },
   // analyzer_features (slot 3): per-band onset RAW mirrors + shaped pulses,
   // then sub-bass raw + chest-hit pulse. All live, [0,1], no OSC inbound.
   { key: 'micOnsetLowRaw', label: 'Mic · Onset Low (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetLowRaw' }) },

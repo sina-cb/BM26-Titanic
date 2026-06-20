@@ -31,6 +31,13 @@ import { BandOnsetBank } from './band_onsets.js';
 import { SubBass } from './sub_bass.js';
 // ── genre_signals (slot 0): party-mode dance-genre classifier ────────────────
 import { GenreClassifier } from './genre_classifier.js';
+// ── new_derived_signals: riser/anticipation, track-change, climax, phrase,
+//    drop-countdown (report 20260620_2 #1/#3/#8/#6/#7) ─────────────────────────
+import { BuildAnticipation } from './build_anticipation.js';
+import { TrackChange } from './track_change.js';
+import { Climax } from './climax.js';
+import { PhraseTracker } from './phrase_tracker.js';
+import { DropCountdown } from './drop_countdown.js';
 
 // Corpus-tuned params (signals_params.json). Hop rate ~86.13/s.
 const PARAMS = Object.freeze({
@@ -59,6 +66,12 @@ export class DerivedSignals {
     this._onsets = new BandOnsetBank();
     this._sub = new SubBass();
     this._genre = new GenreClassifier();   // genre_signals (slot 0): tuned DEFAULTS baked in
+    // new_derived_signals: anticipation/track-change/climax/phrase/countdown.
+    this._riser = new BuildAnticipation();
+    this._trackChange = new TrackChange();
+    this._climax = new Climax();
+    this._phrase = new PhraseTracker();
+    this._countdown = new DropCountdown();
     this._fatal = false;
     // Last note actually committed by the estimator. We HOLD this on the
     // published audioNote/audioNoteHue keys whenever the estimator currently
@@ -73,6 +86,9 @@ export class DerivedSignals {
     this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
     this._onsets.reset(); this._sub.reset();   // analyzer_features (slot 3)
     this._genre.reset();                        // genre_signals (slot 0)
+    // new_derived_signals: anticipation/track-change/climax/phrase/countdown.
+    this._riser.reset(); this._trackChange.reset(); this._climax.reset();
+    this._phrase.reset(); this._countdown.reset();
     this._heldPc = 0; this._heldHue = 0;
     if (!this._fatal) this._zero();
   }
@@ -131,6 +147,37 @@ export class DerivedSignals {
         flux: g('micFluxRaw'), kick: g('micKickRaw'),
         pitchClass: n.pitchClass, noteStable: n.stable,
       });
+      // ── new_derived_signals: riser/anticipation, track-change/silence, ──────
+      //    climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
+      //    All read the CPC keys the analyzer + structure detector + BPM tracker
+      //    already wrote this hop; no analyzer change. Countdown depends on the
+      //    riser's ETA/conf (computed above) and the beat grid. Keep this block
+      //    localized so the merge into derived_signals.js stays a union-add.
+      const rz = this._riser.update({
+        flux: g('micFluxRaw'), high: g('micHighRaw'),
+        low: g('micLowRaw'), mid: g('micMidRaw'),
+        buildScore: g('audioBuildScore'), structure: g('audioStructure'),
+        dropPulse: g('audioDropPulse'), bpm: b.bpm, bpmLocked: b.locked,
+        barPhase: b.barPhase || 0, dt, nowMs: now,
+      });
+      const tc = this._trackChange.update({
+        low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+        bpm: b.bpm, bpmLocked: b.locked,
+        pitchClass: n.pitchClass, noteStable: n.stable, dt, nowMs: now,
+      });
+      const cx = this._climax.update({
+        low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+        dropPulse: g('audioDropPulse'), dt, nowMs: now,
+      });
+      const ph = this._phrase.update({
+        downbeat: b.downbeat ? 1.0 : 0.0, barPhase: b.barPhase || 0,
+        dropPulse: g('audioDropPulse'), bpmLocked: b.locked, active: p.party, nowMs: now,
+      });
+      const cd = this._countdown.update({
+        riserScore: rz.riserScore, riserConf: rz.riserConf, buildEta: rz.buildEta,
+        bpm: b.bpm, bpmLocked: b.locked, beat: b.beat,
+        dropPulse: g('audioDropPulse'), dtMs, nowMs: now,
+      });
       pc.setMany([
         { kind: 'scalar', key: 'audioBpm',           value: b.bpm },
         { kind: 'scalar', key: 'audioBeat',          value: b.beat },
@@ -150,6 +197,17 @@ export class DerivedSignals {
         // genre_signals (slot 0): party-mode dance-genre + confidence.
         { kind: 'scalar', key: 'audioGenre',         value: gn.genre },
         { kind: 'scalar', key: 'audioGenreConf',     value: gn.confidence },
+        // new_derived_signals: riser/anticipation, track-change/silence, climax,
+        // phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
+        { kind: 'scalar', key: 'audioRiserScore',     value: rz.riserScore },
+        { kind: 'scalar', key: 'audioBuildEta',       value: rz.buildEta },
+        { kind: 'scalar', key: 'audioRiserConf',      value: rz.riserConf },
+        { kind: 'scalar', key: 'audioSilence',        value: tc.silence ? 1.0 : 0.0 },
+        { kind: 'scalar', key: 'audioTrackChange',    value: tc.trackChange ? 1.0 : 0.0 },
+        { kind: 'scalar', key: 'audioClimax',         value: cx.climax },
+        { kind: 'scalar', key: 'audioPhrasePhase',    value: ph.phrasePhase },
+        { kind: 'scalar', key: 'audioPhraseBoundary', value: ph.phraseBoundary ? 1.0 : 0.0 },
+        { kind: 'scalar', key: 'audioDropCountdown',  value: cd.countdown },
       ], 'derivedSignals');
     } catch (e) {
       this._fatal = true;
@@ -170,6 +228,13 @@ export class DerivedSignals {
       { kind: 'scalar', key: 'micOnsetHigh', value: 0.0 }, { kind: 'scalar', key: 'audioChestHit', value: 0.0 },
       // genre_signals (slot 0): party-mode dance-genre + confidence.
       { kind: 'scalar', key: 'audioGenre', value: 0.0 }, { kind: 'scalar', key: 'audioGenreConf', value: 0.0 },
+      // new_derived_signals: riser/anticipation, track-change/silence, climax,
+      // phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).
+      { kind: 'scalar', key: 'audioRiserScore', value: 0.0 }, { kind: 'scalar', key: 'audioBuildEta', value: 0.0 },
+      { kind: 'scalar', key: 'audioRiserConf', value: 0.0 }, { kind: 'scalar', key: 'audioSilence', value: 0.0 },
+      { kind: 'scalar', key: 'audioTrackChange', value: 0.0 }, { kind: 'scalar', key: 'audioClimax', value: 0.0 },
+      { kind: 'scalar', key: 'audioPhrasePhase', value: 0.0 }, { kind: 'scalar', key: 'audioPhraseBoundary', value: 0.0 },
+      { kind: 'scalar', key: 'audioDropCountdown', value: 0.0 },
     ], 'derivedSignals');
   }
 }

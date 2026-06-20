@@ -40,6 +40,17 @@ const NEW_KEYS = [
   { key: 'audioChestHit', min: 0, max: 1 },
   { key: 'audioGenre', min: 0, max: 6 },
   { key: 'audioGenreConf', min: 0, max: 1 },
+  // new_derived_signals (2026-06-20): riser/anticipation, track-change/silence,
+  // climax, phrase, drop-countdown. audioBuildEta carries SECONDS (range [0,60]).
+  { key: 'audioRiserScore', min: 0, max: 1 },
+  { key: 'audioBuildEta', min: 0, max: 60 },
+  { key: 'audioRiserConf', min: 0, max: 1 },
+  { key: 'audioSilence', min: 0, max: 1 },
+  { key: 'audioTrackChange', min: 0, max: 1 },
+  { key: 'audioClimax', min: 0, max: 1 },
+  { key: 'audioPhrasePhase', min: 0, max: 1 },
+  { key: 'audioPhraseBoundary', min: 0, max: 1 },
+  { key: 'audioDropCountdown', min: 0, max: 1 },
 ];
 
 // A deterministic loud-music input generator: a 4-on-the-floor kick + busy

@@ -119,6 +119,19 @@ const DERIVED = [
   // index 0..6 (GENRE_NAMES in audio/signals/genre_classifier.js); conf 0..1.
   { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5 },
   { key: 'audioGenreConf',     label: 'Audio · Genre Conf',     range: [0, 1],   hz: 5 },
+  // new_derived_signals (2026-06-20): riser/anticipation, track-change/silence,
+  // climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7). All
+  // engine-internal derived (no inbound OSC). audioBuildEta carries SECONDS
+  // (best-effort, 0 when no honest estimate); the rest are [0,1].
+  { key: 'audioRiserScore',     label: 'Audio · Riser Score',     range: [0, 1],  hz: 15 },
+  { key: 'audioBuildEta',       label: 'Audio · Build ETA',       range: [0, 60], hz: 10 },
+  { key: 'audioRiserConf',      label: 'Audio · Riser Conf',      range: [0, 1],  hz: 10 },
+  { key: 'audioSilence',        label: 'Audio · Silence',         range: [0, 1],  hz: 5 },
+  { key: 'audioTrackChange',    label: 'Audio · Track Change',    range: [0, 1],  hz: 15 },
+  { key: 'audioClimax',         label: 'Audio · Climax',          range: [0, 1],  hz: 10 },
+  { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15 },
+  { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15 },
+  { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30 },
 ];
 
 // analyzer_features (slot 3): per-band onset → spatial-chase pulses + sub-bass
