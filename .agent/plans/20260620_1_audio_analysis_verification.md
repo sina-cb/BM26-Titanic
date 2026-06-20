@@ -206,3 +206,9 @@ Proof entry template:
 - 64 drop_countdown (audioDropCountdown→bri 0.99/0.84), 65 climax_hold (audioClimax 0.94), 66 phrase_stepped (phrasePhase + 8-bar step), 67 track_reset (silence→fade, never dark), 68 riser_sweep (riserScore 0.81, conf-gated).
 - Command(s) BY INSTIGATOR: manifest 68 entries valid; `node engine.js --pattern 64_drop_countdown --dry-run` → compiles, complete. Agent: all 5 COMPILE_OK/ANIMATING/silence-safe via real-DSP harness; clips in ~/tmp/patterns_new_signals/clips/.
 - Verdict: D10 crossed off. ✅ — rig now has 10 Round-2 reactive patterns (59–68).
+
+### E4 — visibility + observability  [PASS]  2026-06-20T14:50Z
+- Branch `dev/e4_visibility` @ `84258b5` → merged (--no-ff, clean, disjoint).
+- Pattern silence floors on titanic 970px (peak/mean before→after): 59 11/8.3→56/46.6, 64 11/4.3→81/41.3, 65 10/2.7→79/31.0, 66 12/5.6→90/50.6 (audio events still max()-composite to 254-255 — negative-space contrast preserved). New `tools/pattern_derived_harness.mjs` (committed reproducible reactivity: 64 dropPulse 0.99, 65 climax 0.91, 66 phrasePhase 0.94, 68 riser 0.97). `/osc_accounting` adds engineInternalDerived (29 keys) + themed panel. #55/#56 documented intentional.
+- Command(s) BY INSTIGATOR: `node --test tests/companion_*.test.js` → 72 pass; manifest 68; `node engine.js --pattern 65_climax_hold --dry-run` → exit 0. Agent: full suite 850 pass.
+- Verdict: E4 crossed off. ✅
