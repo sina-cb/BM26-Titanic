@@ -6,7 +6,8 @@
  * It sweeps the cartesian product of the grids below (edge mode, the absolute
  * sub floor, the energy-jump ratio, the windowed look-back), evaluates each
  * over ALL scenarios × ALL mic tiers via evalConfig, and ranks by a composite
- * score: F1 first, then fewer spurious negatives, then lower latency.
+ * score: F1 first, then fewer false-fires (the HONEST falseFiresPerMin, not the
+ * raw negFp count), then lower latency.
  *
  * USAGE (from marsin_engine/):
  *   node tools/detection_sweep.mjs                 # full grid, top 15
@@ -47,11 +48,16 @@ function* product(grid) {
 }
 
 function score(r) {
-  // Composite: F1 dominates; tie-break on fewer spurious-negative drops, then
-  // lower absolute latency. (negFp penalised heavily — false drops on calm
-  // music are the worst failure on a dance floor.)
+  // Composite: F1 dominates; tie-break on fewer false-fires, then lower
+  // absolute latency. We penalise on the HONEST falseFiresPerMin (phantom
+  // drops per minute of calm/steady audio) rather than the raw negFp count, so
+  // the ranking is normalized to how much non-drop audio the false-fires
+  // happened over — a config that false-fires once over 60 s of calm music is
+  // penalised the same regardless of how many negative clips the set carries.
+  // False drops on calm music are the worst failure on a dance floor, so this
+  // is weighted heavily (0.10 per false-fire/min).
   const f1 = r.drop.f1 ?? 0;
-  const negPenalty = r.drop.negFp * 0.05;
+  const negPenalty = (r.drop.falseFiresPerMin ?? 0) * 0.10;
   const latPenalty = Math.min(0.1, Math.abs(r.drop.meanLatencyMs ?? 600) / 6000);
   return f1 - negPenalty - latPenalty;
 }
@@ -78,12 +84,12 @@ function main() {
   }
   rows.sort((a, b) => b.score - a.score);
 
-  console.log(`swept ${count} configs over all scenarios × 3 tiers. Top ${top} by composite (F1 − negFP·0.05 − latPenalty):\n`);
-  console.log('score  F1    P     R     lat   negFP  edge      minLvl jump  win');
+  console.log(`swept ${count} configs over all scenarios × 3 tiers. Top ${top} by composite (F1 − ffPerMin·0.10 − latPenalty):\n`);
+  console.log('score  F1    P     gP    R     lat   ff/min negFP  edge      minLvl jump  win');
   for (const row of rows.slice(0, top)) {
     const c = row.cfg, d = row.drop;
     console.log(
-      `${fmt(row.score)}  ${fmt(d.f1)}  ${fmt(d.precision)}  ${fmt(d.recall)}  ${fmt(d.meanLatencyMs, 0).padStart(4)}  ${String(d.negFp).padStart(4)}   ` +
+      `${fmt(row.score)}  ${fmt(d.f1)}  ${fmt(d.precision)}  ${fmt(d.guardedPrecision)}  ${fmt(d.recall)}  ${fmt(d.meanLatencyMs, 0).padStart(4)}  ${fmt(d.falseFiresPerMin).padStart(5)}  ${String(d.negFp).padStart(4)}   ` +
       `${c.dropEdgeMode.padEnd(9)} ${String(c.dropMinLevel).padEnd(5)}  ${String(c.dropEnergyJump).padEnd(4)}  ${c.dropEdgeMode === 'windowed' ? c.dropDeltaWindowMs : '—'}`,
     );
   }

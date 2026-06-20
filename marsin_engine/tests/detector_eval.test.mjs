@@ -37,6 +37,44 @@ test('drop scoring: ZERO false positives on calm/build scenarios (the dance-floo
   assert.equal(r.drop.negFp, 0, `spurious drops on negative scenarios: ${r.drop.negFp}`);
 });
 
+test('honest metrics: with ZERO false-fires, guardedPrecision == precision and falseFiresPerMin == 0', () => {
+  const r = evalConfig(SHIPPED, { quiet: true });
+  // The shipped detector fires no phantom drops, so the honest guarded
+  // precision must equal the positive-only precision and the headline
+  // false-fire rate must be exactly zero.
+  assert.equal(r.drop.negFp, 0, 'precondition: shipped config has no phantom drops');
+  assert.equal(r.drop.guardedPrecision, r.drop.precision,
+    `guardedPrecision ${r.drop.guardedPrecision} != precision ${r.drop.precision} with negFp=0`);
+  assert.equal(r.drop.falseFiresPerMin, 0,
+    `falseFiresPerMin ${r.drop.falseFiresPerMin} != 0 with no phantom drops`);
+  assert.ok(r.drop.negDurationMs > 0, 'negative-clip duration must be measured (denominator)');
+});
+
+test('honest metrics: a config with KNOWN phantom drops exposes falseFiresPerMin>0 and guardedPrecision<precision', () => {
+  // The `level`-edge baseline historically false-fires on the calm/steady
+  // NEGATIVE scenarios. The positive-only precision can still look healthy
+  // because it ignores those phantom drops (`negFp`) — exactly the dishonesty
+  // the guarded metrics are here to catch. This is the "inject a known phantom
+  // drop → falseFiresPerMin > 0" assertion.
+  const r = evalConfig({ enabled: true, dropEdgeMode: 'level', eventRefractoryMs: 2000 },
+    { quiet: true });
+  assert.ok(r.drop.negFp > 0, `expected the baseline to false-fire; negFp=${r.drop.negFp}`);
+  assert.ok(r.drop.falseFiresPerMin > 0,
+    `falseFiresPerMin ${r.drop.falseFiresPerMin} must be > 0 when negFp=${r.drop.negFp}`);
+  // guardedPrecision folds negFp into the denominator, so it must be STRICTLY
+  // lower than the positive-only precision whenever there are phantom drops —
+  // the honest number cannot be flattered by them.
+  assert.ok(r.drop.guardedPrecision < r.drop.precision,
+    `guardedPrecision ${r.drop.guardedPrecision} should be < precision ${r.drop.precision}`);
+  // Verify the exact formulas (no rounding fudge).
+  const expectedGuarded = r.drop.tp / (r.drop.tp + r.drop.fp + r.drop.negFp);
+  assert.ok(Math.abs(r.drop.guardedPrecision - expectedGuarded) < 1e-12,
+    `guardedPrecision ${r.drop.guardedPrecision} != tp/(tp+fp+negFp) ${expectedGuarded}`);
+  const expectedFfpm = r.drop.negFp / (r.drop.negDurationMs / 60000);
+  assert.ok(Math.abs(r.drop.falseFiresPerMin - expectedFfpm) < 1e-9,
+    `falseFiresPerMin ${r.drop.falseFiresPerMin} != negFp/min ${expectedFfpm}`);
+});
+
 test('drop scoring: high precision + meaningful recall + low latency on labeled drops', () => {
   const r = evalConfig(SHIPPED, { quiet: true });
   assert.ok(r.drop.precision >= 0.9, `drop precision ${r.drop.precision} < 0.9`);

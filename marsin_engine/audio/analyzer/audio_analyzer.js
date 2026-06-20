@@ -71,11 +71,13 @@ import FFT from 'fft.js';
 import { DominantFreqTracker } from './dominant_freq_tracker.js';
 
 // Dominant-frequency tracker tuning — validated offline on the EDM corpus
-// (report 202606/..._dominant_freq_tracker.md). EMA smoothing beat the Kalman
-// path (which converges to a fixed-gain EMA), so useKalman:false. energyGain
-// matches PRE_CLAMP_GAIN so dom energy shares the bands' [0,1] softCompress
-// scale. Works at fftSize 1024; bump the analyzer FFT to 2048 (config) to
-// resolve sub-bass partials below ~200 Hz more cleanly.
+// (report 202606/..._dominant_freq_tracker.md). The shipped path uses the
+// scalar Kalman smoother (useKalman:true) tuned for stability (low process
+// noise + high measurement noise → the filter trusts its model and glides,
+// killing the bin-to-bin freq jitter). energyGain matches PRE_CLAMP_GAIN so dom
+// energy shares the bands' [0,1] softCompress scale. Works at fftSize 1024;
+// bump the analyzer FFT to 2048 (config) to resolve sub-bass partials below
+// ~200 Hz more cleanly.
 const DOM_FREQ_PARAMS = Object.freeze({
   numTracks: 2, numPeaks: 8, relFloor: 0.06, absFloor: 1e-4,
   maxJumpHz: 90, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
