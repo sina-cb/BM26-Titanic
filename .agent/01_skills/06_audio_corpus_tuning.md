@@ -279,10 +279,33 @@ output. **`audio.bands.inputGain` is the software mic-preamp applied first.**
 ### 9.5 STRUCTURE DETECTOR (drop/build/sustain) — DEFERRED, under development
 - Currently **disabled by default + locked in the UI** ("under development").
 - Tuning recipe + open work live in the Notion task ("Audio structure detector
-  — tune to reliable, then re-enable") and report §3/§9. Measure with
-  `synthetic_accuracy.mjs` (rigorous P/R/latency on known ground truth) +
-  `corpus_sweep.mjs` (false-positive/min on real). Needs a real labeled EDM
-  corpus + a human listening pass before re-enabling.
+  — tune to reliable, then re-enable") and report §3/§9. Needs a real labeled
+  EDM corpus + a human listening pass before re-enabling.
+- **Scoring/eval harness (2026-06-20 super-tuning pass — USE THIS):**
+  `tools/detection_eval.mjs` scores DROP (precision/recall/F1 + latency +
+  spurious-drops), BUILD (buildScore↔ramp correlation + peak timing), and
+  SLOW-ZONE (calm-vs-active separation margin + accuracy) against the labeled
+  synthetic arcs in `tests/integration/detector_scenarios.mjs` (intro→build→
+  drop→sustain→breakdown→drop2, ambient, techno, false-build) degraded through
+  the playa mic at 3 SNR tiers. It writes a score JSON + a per-scenario HTML
+  overlay (`~/tmp/detection_eval/overlays/<config>.html`). `tools/detection_sweep.mjs`
+  grid-sweeps the drop knobs ranked by F1 − negFP penalty.
+  ```bash
+  node tools/detection_eval.mjs                 # baseline vs default vs tuned, all tiers
+  node tools/detection_eval.mjs --config default --overlays   # + HTML traces
+  node tools/detection_eval.mjs --json '{"dropEdgeMode":"windowed","dropMinLevel":0.06}'  # ad-hoc
+  node tools/detection_sweep.mjs --top 20        # find the best drop config
+  ```
+- **Tuned defaults that landed (DETECTOR_DEFAULTS):** windowed drop edge +
+  `dropMinLevel` (absolute sub floor, kills the near-silent-build noise-ratio
+  false edge) + `dropEnergyJump` 1.8 → **zero spurious drops** at precision
+  1.00 (F1 0.29→0.71 on the scenarios). Slow-zone reworked to a SMOOTHSTEP
+  soft-knee on `max(micLow, micFlux−slowFluxFloor)` centered at `slowZoneRef`
+  0.12→0.07 (margin 0.12→0.65, acc 0.46→0.91). `dropLevelAssist` is a
+  higher-recall/higher-FP arm shipped OFF (enable per-scene if a miss is worse
+  than a phantom). Regression: `tests/detector_eval.test.mjs` +
+  `tests/integration/detection_metrics.test.mjs`. Report:
+  `.agent/02_reports/202606/20260620_4_detector_supertuning_and_scoring.md`.
 
 ### Applying the result — defaults vs SHOW SCENES (read before you celebrate)
 The engine boots `config.yaml` < `states/<model>/audio_state.yaml`, and loads

@@ -164,13 +164,17 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // software preamp). `kickEma` was REMOVED 2026-06-14 — it was advertised
   // live-tunable but never wired into the analyzer (silent no-op); the kick
   // EMA coefficients are hardcoded in audio_analyzer.js. `structureDetector`
-  // is the build/drop/sustain detector group (docs/30).
+  // is the build/drop/sustain detector group (docs/30). The 2026-06-20 detector
+  // super-tuning pass added `dropMinLevel` (absolute sub floor), `dropLevelAssist`
+  // (windowed-edge level assist toggle), and the slow-zone soft-knee knobs
+  // `slowZoneWidth` + `slowFluxFloor`.
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
     bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
+      'dropMinLevel', 'dropLevelAssist', 'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+      'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });

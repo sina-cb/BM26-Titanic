@@ -51,7 +51,8 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // state machine actually reads).
   structureDetector: [
     'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-    'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
+    'dropMinLevel', 'dropLevelAssist', 'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+    'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
     'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
   ],
 });
@@ -61,6 +62,16 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
  * dropEdgeMode selects the drop discriminator (see audio_structure_detector
  * DETECTOR_DEFAULTS). Validated as an exact-match enum; anything else 400s.
  */
+/**
+ * Boolean live group fields (besides the top-level `enabled` toggle). These
+ * are validated as strict booleans, NOT numbers. dropLevelAssist toggles the
+ * windowed drop edge's level-ratio assist (see audio_structure_detector
+ * DETECTOR_DEFAULTS).
+ */
+const LIVE_BOOLEAN_FIELDS = Object.freeze({
+  structureDetector: Object.freeze(['enabled', 'dropLevelAssist']),
+});
+
 const LIVE_STRING_ENUMS = Object.freeze({
   structureDetector: Object.freeze({
     // 'windowed' (DEFAULT) — rate-of-change discriminator; the corpus-validated
@@ -98,6 +109,9 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     dropEnergyJump:    (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
     dropDeltaWindowMs: (v) => (v >= 50 && v <= 5000) ? null : `must be in [50, 5000]; got ${v}`,
+    // Absolute sub-energy floor a drop's short-envelope must reach (rejects
+    // near-silent build noise-ratio false edges). 0 disables; ≤1 (micLow domain).
+    dropMinLevel:      (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     // Kalman+NIS drop gate (χ² statistic). 6.63 = χ²₁ 99%; tune sensitivity
     // here (lower → more sensitive). slowZoneRef = the activity level
     // (max of micLow/micFlux) at/below which we read as a "slow zone".
@@ -108,6 +122,11 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // Kalman-edge co-occurrence window: low & flux NIS may clear within this many ms.
     dropCoWindowMs:    (v) => (v >= 0 && v <= 2000) ? null : `must be in [0, 2000]; got ${v}`,
     slowZoneRef:       (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    // Slow-zone soft-knee half-width (activity domain). 0 → a hard step at ref.
+    slowZoneWidth:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // Mic flux floor discounted from slow-zone activity (rejects capsule/room
+    // flux noise so ambient reads calm). 0 → count all flux as activity.
+    slowFluxFloor:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     stemsTimeoutMs:    (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     eventRefractoryMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     falseFireCount:    (v) => (Number.isInteger(v) && v >= 1 && v <= 100)
@@ -292,11 +311,12 @@ export function validateLivePatch(partial) {
       if (!allowedFields.includes(k)) {
         return { ok: false, error: `field "${key}.${k}" is not live-tunable` };
       }
-      // Boolean group fields (e.g. structureDetector.enabled) — the
-      // numeric guard below doesn't apply. Only the field literally
-      // named `enabled` is allowed to be boolean; everything else in a
-      // group is a finite number. (Codex P0: no silent coercion.)
-      if (k === 'enabled') {
+      // Boolean group fields (e.g. structureDetector.enabled /
+      // dropLevelAssist) — the numeric guard below doesn't apply. The
+      // allowed boolean fields per group are declared in LIVE_BOOLEAN_FIELDS;
+      // everything else is a finite number. (Codex P0: no silent coercion.)
+      const boolFields = LIVE_BOOLEAN_FIELDS[key] || [];
+      if (boolFields.includes(k)) {
         if (typeof v !== 'boolean') {
           return { ok: false, error: `"${key}.${k}" must be a boolean` };
         }
