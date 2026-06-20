@@ -27,6 +27,24 @@ $ npm run lint                 → ✖ 12 problems (0 errors, 12 warnings) [exit
 
 ## Merge proofs
 
+> NOTE: deliverable branch is `feat/optimize_channels` (promoted from the old
+> auto-named claude branch on 2026-06-20 per operator). Merges 1-3 below landed
+> on that branch (same commits, renamed).
+
+### MERGE 4 — dev/captainpad_hotswap_ui (WAVE 3) — VERIFIED ON MERGED TIP
+Boundary: CaptainPad PlaylistPanel.tsx + api.ts + report (additive UI, no
+mixer.tsx/index.tsx edits). Verified on merged tip:
+```
+$ npx tsc --noEmit              → TSC=0
+$ npm run lint                  → 0 errors / 12 warnings (baseline held)
+$ npm run web:build             → WEBBUILD=0, dist exported, 21 routes
+```
+Content: swapDeckPlaylist / swapMixerChannelPlaylist / swapChannelPlaylist
+(typed fail-loud ApiResult, EBUSY on 409, cache-invalidating); PlaylistPanel
+SWAP button + SwapPlaylistModal (>=44pt rows) + ConfirmSheet confirm,
+respects soft-swap in-flight lock, WS reconcile. Wires the engine
+/deck/playlist/swap + /mixer/channels/:id/playlist/swap endpoints.
+
 ### MERGE 1 — dev/engine_state_hardening (E3, slot 2) — VERIFIED ON MERGED TIP
 Boundary: only `lib/state_manager.js` modified + 4 additive test files + report.
 Verified in main checkout on merged tip (pre-commit):

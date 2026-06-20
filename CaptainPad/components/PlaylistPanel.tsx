@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import {
   fetchPlaylists, fetchPlaylist, savePlaylist, deletePlaylist,
   fetchChannelPlaylist, setChannelPlaylist, setChannelPlaylistEntry,
+  swapChannelPlaylist,
   fetchPatterns, fetchPatternDirs, fetchPatternsInDir,
   getApiBaseAsync,
   invalidatePlaylistCache, invalidatePlaylistsCache, primePlaylistCache,
@@ -152,6 +153,16 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // pay an extra GET it rarely needs.
   const [patternDirs, setPatternDirs] = useState<string[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
+  // Hot-swap picker (feat/timeline_support). Distinct from the LOAD
+  // dropdown: this opens a picker of DIFFERENT playlists and rides the
+  // deck/mixer transition machinery to crossfade onto the picked one's
+  // first usable entry, rather than the plain assignment LOAD does.
+  const [showSwap, setShowSwap] = useState(false);
+  // ConfirmSheet target for the hot swap — picking a playlist in the
+  // swap picker arms this; the swap only fires on explicit confirmation
+  // so an accidental tap can't crossfade the whole channel mid-show.
+  const [swapPrompt, setSwapPrompt] = useState<string | null>(null);
+  const [swapInFlight, setSwapInFlight] = useState(false);
   const [showAddPattern, setShowAddPattern] = useState(false);
   const [showLoadDir, setShowLoadDir] = useState(false);
   // "New playlist from folder" name prompt. `pendingNewDir` holds the
@@ -672,6 +683,62 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     refresh();
   }, [role, channelId, flashSaved, refresh]);
 
+  // ── Hot swap: crossfade onto a DIFFERENT playlist ──────────────────
+  // Unlike handleLoadPlaylist (a plain assignment that the engine lands
+  // on the first entry of with a hard load), this rides the deck's
+  // soft-swap transition machinery — the engine crossfades from the
+  // current pattern to the new playlist's first usable entry. On the
+  // mixer it's an instant overlay load of the different playlist (the
+  // overlay path has no double-buffer transition machinery), still via
+  // the explicit /swap route.
+  //
+  // Gating mirrors handleEntryTap: a no-op while `disabled` (the deck's
+  // soft-swap-in-flight lock), and we guard our own `swapInFlight` so a
+  // double-tap can't queue two crossfades. The engine ALSO rejects a
+  // concurrent swap with 409/EBUSY, which we swallow silently (no alert
+  // spam) exactly like the entry-tap path. Any other failure surfaces
+  // loudly (Codex P0 — no silent fallback).
+  //
+  // We do NOT optimistically flip local state here: the deck transition
+  // takes ~Ns and the engine keeps reporting the prior entry until it
+  // completes (see shouldSuppressReconcile). We let the WS broadcast
+  // (deck / mixer / channelPlaylistData) reconcile the final state, and
+  // arm the pending-gate with the engine-reported target entry so the
+  // row highlight settles on the swapped-in entry without bouncing.
+  const handleHotSwap = useCallback(async (name: string) => {
+    if (disabled) return;                              // soft-swap-in-flight lock
+    if (swapInFlight) return;                          // our own re-entrancy guard
+    setSwapInFlight(true);
+    try {
+      const res = await swapChannelPlaylist(role, channelId, name);
+      if (!res.ok) {
+        // 409 = a transition is already running; swallow silently like
+        // the entry-tap path (operator double-tap / mid-crossfade).
+        const code = (res as { code?: string }).code;
+        if (code === 'EBUSY' || code === '409') return;
+        Alert.alert('Hot swap failed', (res as { error?: string }).error || 'Unknown error');
+        return;
+      }
+      // Adopt the engine-reported assignment as the pending target so the
+      // mid-transition gate keeps the UI pinned to the swapped-in entry
+      // until the broadcast confirms. The HTTP body carries the canonical
+      // { playlist } the engine settled on.
+      const next = (res.data && res.data.playlist) as PlaylistAssignment | undefined;
+      if (next && next.activeEntryId) {
+        pendingActiveEntryIdRef.current = next.activeEntryId;
+        armPendingWatchdog();
+      }
+      flashSaved();
+      // Pull the swapped-in playlist's entries / assignment. The /swap
+      // caches were invalidated in the api helper, so this re-converges.
+      refresh();
+    } catch (e) {
+      Alert.alert('Hot swap failed', (e as Error)?.message || 'Network error');
+    } finally {
+      setSwapInFlight(false);
+    }
+  }, [role, channelId, disabled, swapInFlight, flashSaved, refresh, armPendingWatchdog]);
+
   const handleEntryTap = useCallback(async (entryId: string) => {
     if (disabled) return;                                  // tap-during-transition lock
     if (!assignment || assignment.activeEntryId === entryId) return;
@@ -1102,6 +1169,48 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           </View>
         )}
 
+        {/* HOT SWAP button (feat/timeline_support) — opens a picker of
+            DIFFERENT playlists and crossfades onto the picked one's first
+            usable entry, riding the deck/mixer transition machinery.
+            Distinct from the LOAD dropdown (plain assignment) and the
+            per-entry tap (advance within the current playlist).
+
+            Gating mirrors the entry-tap contract: disabled while the
+            deck soft-swap is in flight (`disabled`) or while our own
+            swap POST is mid-flight (`swapInFlight`). A confirm sheet
+            arms before the crossfade actually fires. hitSlop keeps the
+            tap target >= 44pt even though the visible chrome is btnH
+            (22/26). Hidden in locked / playlist-edits-locked modes for
+            the same reason the + / folder buttons are: a frozen show
+            playlist must not be mutated mid-set. */}
+        {editable && !(role === 'deck' && playlistEditsLocked) && (
+          <TouchableOpacity
+            onPress={() => setShowSwap(true)}
+            disabled={disabled || swapInFlight}
+            hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+            style={{
+              height: sz.btnH,
+              paddingHorizontal: 8,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.secondary,
+              backgroundColor: C.surfaceContainerHigh,
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'row',
+              gap: 4,
+              opacity: (disabled || swapInFlight) ? 0.4 : 1,
+            }}
+            accessibilityLabel="Hot swap to a different playlist"
+            accessibilityRole="button"
+          >
+            <IconSymbol name="shuffle" size={sz.btnFont + 2} color={C.secondary} />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: sz.btnFont, color: C.secondary }}>
+              SWAP
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Load-directory button — opens the directory picker where a
             folder can be loaded as a NEW playlist or appended to the
             current one. Always enabled (the "new playlist" action needs
@@ -1331,6 +1440,33 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         onCreateNew={handleCreateNew}
       />
 
+      {/* Hot-swap picker: list of DIFFERENT playlists. Picking one arms
+          the confirm sheet rather than swapping immediately. */}
+      <SwapPlaylistModal
+        visible={showSwap}
+        onClose={() => setShowSwap(false)}
+        playlists={playlists}
+        currentName={assignment?.name || null}
+        onPick={(name) => { setShowSwap(false); setSwapPrompt(name); }}
+      />
+
+      {/* Hot-swap confirmation (production-console safety) — a crossfade
+          of the whole channel onto a different playlist is a deliberate
+          show action, not a one-tap accident. */}
+      <ConfirmSheet
+        visible={!!swapPrompt}
+        title="Hot swap playlist?"
+        message={`Crossfade ${channelLabel ? `"${channelLabel}"` : 'this channel'} onto "${swapPrompt ?? ''}" — it transitions to that playlist's first entry, riding the active transition.`}
+        confirmLabel="HOT SWAP"
+        cancelLabel="CANCEL"
+        onConfirm={() => {
+          const name = swapPrompt;
+          setSwapPrompt(null);
+          if (name) handleHotSwap(name);
+        }}
+        onCancel={() => setSwapPrompt(null)}
+      />
+
       <AddPatternModal
         visible={showAddPattern}
         onClose={() => setShowAddPattern(false)}
@@ -1454,6 +1590,87 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: '#FFF' }}>NEW</Text>
               </TouchableOpacity>
             </View>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface SwapPlaylistModalProps {
+  visible: boolean;
+  onClose: () => void;
+  playlists: string[];
+  currentName: string | null;
+  onPick: (name: string) => void;
+}
+
+// Hot-swap picker (feat/timeline_support). Lists the playlist library so
+// the operator can crossfade the channel onto a DIFFERENT playlist. The
+// currently-assigned playlist is shown but disabled — swapping onto the
+// already-active playlist is a no-op (use the per-entry tap to move within
+// it). Picking a different one calls onPick, which arms a confirm sheet in
+// the parent before the crossfade fires.
+const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
+  visible, onClose, playlists, currentName, onPick,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const others = playlists.filter((n) => n !== currentName);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onClose}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close hot-swap picker"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={[modalStyles.card, { maxHeight: '80%' }]}>
+          <Text style={modalStyles.title}>HOT SWAP PLAYLIST</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            {'Pick a different playlist to crossfade onto. It transitions to that playlist’s first usable entry, riding the active transition.'}
+          </Text>
+          <ScrollView style={{ maxHeight: 360 }}>
+            {currentName && (
+              <View
+                style={{
+                  paddingHorizontal: 10, paddingVertical: 10, marginBottom: 4, borderRadius: 8,
+                  borderWidth: 1, borderColor: C.ghostBorder, opacity: 0.45,
+                }}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.icon }}>
+                  {`▶ ${currentName} (current)`}
+                </Text>
+              </View>
+            )}
+            {others.length === 0 && (
+              <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                No other playlists to swap to.
+              </Text>
+            )}
+            {others.map((name) => (
+              <TouchableOpacity
+                key={name}
+                onPress={() => onPick(name)}
+                // >= 44pt tap area (10pt vert padding + ~22pt text +
+                // hitSlop) per the production-console safety bar.
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                style={{
+                  paddingHorizontal: 10, paddingVertical: 12, marginBottom: 4, borderRadius: 8,
+                  backgroundColor: C.surfaceContainerHigh,
+                  flexDirection: 'row', alignItems: 'center', gap: 8,
+                }}
+                accessibilityLabel={`Hot swap to ${name}`}
+                accessibilityRole="button"
+              >
+                <IconSymbol name="shuffle" size={14} color={C.secondary} />
+                <Text style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }} numberOfLines={1}>
+                  {name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
       </TouchableOpacity>
     </TouchableOpacity>
