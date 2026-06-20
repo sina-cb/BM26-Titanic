@@ -225,3 +225,10 @@ Proof entry template:
 - Command(s) BY INSTIGATOR: `node tools/genre_eval.mjs --corpus ~/tmp/genre_corpus` → **63.9% (unchanged)**; `node --test tests/audio_*.test.js tests/genre_classifier.test.js tests/new_derived_signals.test.js` → **191 pass**.
 - Fixes (all internal to the 5 modules): climax long-history top-decile + rise gate; countdown monotonic-climb; eta riserConf+BUILD gate; track-change drop cue-c; genre first-commit kick-ring gate; conf documented as decision-margin.
 - Verdict: E2 crossed off. ✅ — the over-firing signals are now quiet on real continuous music; genre cold-start fixed.
+
+### E1 — detector real-audio re-tune (finished after stall takeover)  [PASS]  2026-06-20T23:10Z
+- Branch `dev/e1_detector_realaudio` @ `a7d1801` → merged (--no-ff, clean, disjoint). Prior agent STALLED at 0.87/min; relaunched to finish to target.
+- **REAL falseFiresPerMin 1.48(baseline)→0.87(WIP)→0.12(shipped)** (7 phantom drops/59.8min, 6/60 tracks); synthetic recall 0.94→**0.28** (documented Pareto: precision-first per codex); latency 202ms; inf-buildDur=0.
+- Both edges gated (dropEnergyJump 1.9→4.0, dropBuildRise 0.15→0.30, dropNoveltyRatio 2.5→5.0, dropSlowZoneMax 0.4→0.30). Key finding: THIN-edge-off only reaches 0.55/min — BOTH edges false-fire on busy music; the fix is gating both, not disabling one.
+- Command(s) BY INSTIGATOR on merged tip: `node --test tests/audio_structure_detector.test.js` → **15 pass**; merge clean; config values confirmed. Agent: detector 15/15 + detector_eval 11/11 (incl REAL-corpus ff/min≤0.15 safety test that ran + passed); dry-run exit 0.
+- Verdict: E1 crossed off. ✅ — **WAVE E COMPLETE.** Honest limitation: precision-first detector under-fires real drops; documented for operator.
