@@ -371,3 +371,17 @@ node_modules symlinked to main checkout (gitignored, never committed).
   WAVE 12 (engine: snapshots+master-fade+clamp+color) RUNNING (sole engine writer).
   Parallel read-only design agent for WAVE 15 groups+solo composite precedence RUNNING.
   Cadence: engine waves serialize on api_server.js/pattern_mixer.js; UI parallel after.
+
+## STATUS LOG (cont. 4)
+- 2026-06-20 T8: WAVE 12 engine features MERGED (132504e): snapshots/look-recall,
+  master-fade, faderMax clamp, color. 869 pass/0 fail, HIL 25/25, persists across restart.
+  Designs done: groups+solo (report _13, for WAVE 15) and playlist tags/hold-loop
+  (zero-to-minimal api_server.js). Launched 3 PARALLEL disjoint feature agents:
+  * WAVE 13-A dev/ui_master_fade — master-fade UI (DeckTopBar + new masterApi.ts)
+  * WAVE 13-B dev/ui_snapshots_clamp_color — snapshots bar + clamp + color
+    (mixer.tsx + new SnapshotBar.tsx + new channelExtrasApi.ts)
+  * WAVE 16 dev/playlist_tags_holdloop — tags/search + hold/loop (playlist_manager.js
+    + 2 surgical api_server.js lines + PlaylistPanel.tsx + api.ts). SOLE engine writer.
+  Disjoint files: DeckTopBar|masterApi ‖ mixer.tsx|SnapshotBar|channelExtrasApi ‖
+  PlaylistPanel|api.ts|playlist_manager|api_server. No shared file across the three.
+  NEXT engine waves (serial): WAVE 14 metering, WAVE 15 groups+solo (spec ready _13).
