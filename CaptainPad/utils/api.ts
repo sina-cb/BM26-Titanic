@@ -1103,12 +1103,23 @@ export interface PlaylistEntry {
   label: string | null;
   defaults: Record<string, any>;
   notes?: string | null;
+  // Per-entry autopilot flags (#12). Honored by the DECK autopilot only:
+  // hold = park on this entry until released (manual tap clears it);
+  // loop = repeat this entry every beat (overrides shuffle). Both default
+  // false / absent on older playlists. Mixer overlays persist these but
+  // have no live autopilot, so they are inert there.
+  hold?: boolean;
+  loop?: boolean;
   _missing?: boolean;
 }
 
 export interface PlaylistData {
   schemaVersion: number;
   name: string;
+  // Playlist-level free-form tags (#11), lowercased + trimmed by the
+  // engine. Absent on older playlists; the client filters the library by
+  // these. Optional so old cached objects still satisfy the type.
+  tags?: string[];
   entries: PlaylistEntry[];
 }
 
@@ -1327,7 +1338,9 @@ engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
   }
 });
 
-export async function savePlaylist(playlist: { name: string; entries: PlaylistEntry[] }): Promise<ApiResult<any>> {
+export async function savePlaylist(
+  playlist: { name: string; tags?: string[]; entries: PlaylistEntry[] },
+): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/playlists`, {
       method: 'POST',

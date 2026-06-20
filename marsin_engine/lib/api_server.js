@@ -2235,10 +2235,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
         const cur = baseCh.playlist.activeEntryId;
         let nextEntry;
-        if (baseCh.playlist.autopilot && baseCh.playlist.autopilot.shuffle) {
+        // Per-entry hold/loop (#12) — autopilot-advance gate ONLY. Manual
+        // entry taps (POST /deck/playlist/entry) are NOT gated; that tap is
+        // the release mechanism for a held entry. If curEntry is undefined
+        // (stale/removed activeEntryId) we skip the gate and let the existing
+        // shuffle/sequential logic run — pre-existing behavior.
+        const curEntry = pl.entries.find(e => e.id === cur);
+        if (curEntry) {
+          // hold = park here until released (manual tap / clearing the flag).
+          // Binary, NOT a timed/scheduled hold — return WITHOUT cancelling
+          // the autopilot timer so the daemon keeps re-checking each beat.
+          if (curEntry.hold) return;
+          // loop = replay the same entry every beat (overrides shuffle).
+          if (curEntry.loop) nextEntry = curEntry;
+        }
+        if (!nextEntry && baseCh.playlist.autopilot && baseCh.playlist.autopilot.shuffle) {
           const others = usable.filter(e => e.id !== cur);
           nextEntry = others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-        } else {
+        } else if (!nextEntry) {
           const idx = pl.entries.findIndex(e => e.id === cur);
           // Walk forward until we hit a non-missing entry.
           let nextIdx = (idx + 1) % pl.entries.length;
@@ -3984,7 +3998,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             defaults: e.defaults || {},
             notes: e.notes ?? null,
           }));
-          const saved = playlistManager.save({ name: data.name, entries });
+          const saved = playlistManager.save({ name: data.name, tags: data.tags, entries });
           // Re-sync per-channel cursor for any channel whose playlist
           // points at the saved name (operator reorder, slot 5 May
           // 2026). `cursor` is a display index used in WS broadcasts;

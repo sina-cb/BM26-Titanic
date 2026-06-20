@@ -104,6 +104,55 @@ On engine boot, if `simulation/scenes/<scene>/playlists/` is empty:
 2. Create `default.yaml` with one entry per pattern, auto-generated IDs, no labels, empty defaults
 3. Write to disk immediately
 
+### 2.5 Tags + Per-Entry Hold/Loop (additive, 2026-06)
+
+Two additive, backward-compatible fields extend the schema. Both follow the
+same lenient coercion precedent as `defaults` / `modulations` (a malformed or
+older file never throws on load):
+
+**Playlist-level `tags: string[]`** (#11) — free-form labels for searching /
+filtering the library in CaptainPad. On `load()` a non-array coerces to `[]`;
+string members are trimmed + lowercased + empties dropped. On `save()` the same
+plus a `Set` dedupe. Old playlists (no `tags` key) load as `[]`.
+
+```yaml
+schemaVersion: 1
+name: chill_night
+tags: [chill, ambient, night]   # lowercased, trimmed, deduped on save
+entries: [ ... ]
+```
+
+**Per-entry `hold: boolean` + `loop: boolean`** (#12) — autopilot advance
+control. Strict `=== true` coercion in BOTH `load()` and `save()`: absent /
+null / `0` / `"false"` / any non-boolean → `false`. Old entries (no flags) load
+as `hold: false, loop: false` (byte-compatible).
+
+```yaml
+entries:
+  - id: e_1
+    pattern: 13_sparkle
+    hold: true     # autopilot PARKS on this entry until released
+    loop: false
+  - id: e_2
+    pattern: 08_ocean_liner
+    hold: false
+    loop: true     # autopilot REPEATS this entry; overrides shuffle
+```
+
+Honored **only by the DECK autopilot advance** (see §11). The gate lives in the
+`changePattern` callback (`lib/api_server.js`): after loading the current entry,
+`hold` → `return` (park, timer keeps re-checking each beat — a binary
+park-until-released flag, NOT a timed/scheduled hold); else `loop` → next =
+current; else the existing shuffle/sequential pick runs. A stale/undefined
+current entry skips the gate (pre-existing behavior). **Manual entry taps
+(`POST /deck/playlist/entry`) are NOT gated** — a tap is the release mechanism
+for a held entry. Mixer overlays persist these flags on save but have no live
+autopilot, so they are inert metadata there.
+
+The `tags` field rides `GET /playlists/:name` for free (it returns the whole
+loaded object). On `POST /playlists`, `save({ name, tags, entries })` persists
+them. No new routes were added.
+
 ---
 
 ## 3. Playlist vs Assignment
