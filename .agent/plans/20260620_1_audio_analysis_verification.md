@@ -212,3 +212,9 @@ Proof entry template:
 - Pattern silence floors on titanic 970px (peak/mean before→after): 59 11/8.3→56/46.6, 64 11/4.3→81/41.3, 65 10/2.7→79/31.0, 66 12/5.6→90/50.6 (audio events still max()-composite to 254-255 — negative-space contrast preserved). New `tools/pattern_derived_harness.mjs` (committed reproducible reactivity: 64 dropPulse 0.99, 65 climax 0.91, 66 phrasePhase 0.94, 68 riser 0.97). `/osc_accounting` adds engineInternalDerived (29 keys) + themed panel. #55/#56 documented intentional.
 - Command(s) BY INSTIGATOR: `node --test tests/companion_*.test.js` → 72 pass; manifest 68; `node engine.js --pattern 65_climax_hold --dry-run` → exit 0. Agent: full suite 850 pass.
 - Verdict: E4 crossed off. ✅
+
+### E3 — perf + robustness  [PASS]  2026-06-20T15:05Z
+- Branch `dev/e3_perf_robustness` @ `0038e42` → merged (--no-ff, clean — hub rewrite preserved key set).
+- Fail-loud: per-module `_runModule` isolates a throwing signal (others keep publishing), loud once, surfaced via getStatus().moduleErrors + engine audioStatus broadcast; `_fatal` only on CPC-publish failure. Alloc: hoisted derived+engine setMany payloads → 0 obj/s (was ~3800). Perf tests: full-chain vs 11.6ms deadline, hard mean+p50, soft p99 (hard under PERF_GATE=1). genre harness fft 1024→2048. hypot→sqrt in flux loop.
+- Command(s) BY INSTIGATOR: full audio suite **270 pass x2 (deterministic)**; dry-run exit 0. Agent: 3× suite 228/228/228, full-chain mean 0.39ms/p99 0.94ms vs 11.6ms, injected-throw test → degraded=true/fatal=false/party+bpm keep publishing.
+- Verdict: E3 crossed off. ✅ — flaky perf gate fixed; codex fail-loud + allocation-free restored.
