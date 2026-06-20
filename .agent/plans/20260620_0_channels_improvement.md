@@ -405,3 +405,26 @@ node_modules symlinked to main checkout (gitignored, never committed).
   ENGINE (pattern_mixer viz+api_server) — disjoint, parallel. Then ops cluster (spec _17,
   after 15). FEATURES SHIPPED so far: hot-swap, snapshots, master-fade, clamp, color,
   playlist tags/search, hold/loop (+ all hardening/QoL/perf/audit/docs).
+
+## INCIDENT (2026-06-20 T11) — WAVE 15 editing MAIN checkout, not its worktree
+- dev/groups_solo_engine agent (a298669) is writing groups+solo engine edits to
+  /home/user/BM26-Titanic/marsin_engine/lib/ (MAIN, on feat/optimize_channels working
+  tree) instead of its worktree (which is clean). Anti-pattern §9. ~394 insertions across
+  pattern_channel.js, pattern_mixer.js, api_server.js, state_manager.js.
+- BACKUP of the in-progress edits: ~/tmp/wave15_backup/ (4 files) — insurance vs self-clobber.
+- HOLDING all git ops in main while the agent is live (avoid index-lock race; it may run git
+  in main cwd). Do NOT revert (destroys work), do NOT commit (incomplete/unverified).
+- RESOLUTION PLAN when WAVE 15 reports: its edits are already in main's feat working tree →
+  I verify them myself (full suite + groups/solo HIL, run carefully with state restore),
+  then COMMIT directly to feat/optimize_channels with a merge-style message (I become the
+  committer for this slice; worktree-branch isolation lost but outcome — verified work on
+  feat — is the same). Then clean up the empty dev/groups_solo_engine worktree/branch.
+- deck-extras (ece7cf1, dev/ui_deck_extras) is DONE + correct in its worktree (index.tsx
+  only) — MERGE IT AFTER WAVE 15's edits are committed (index.tsx is clean in main, but
+  merge needs a clean main tree first).
+
+## INCIDENT RESOLVED (T11) — WAVE 15 self-recovered
+The agent caught its own misdirection: copied the work into the worktree, restored main to
+baseline (verified: main lib diff empty, only this plan note pending). Work properly committed
+to dev/groups_solo_engine (9974153). 910 pass/0 fail (+34), HIL 18/18 incl. soloSafe-stays-lit.
+Normal worktree-merge flow applies. ~/tmp/wave15_backup no longer needed. No cross-contamination.
