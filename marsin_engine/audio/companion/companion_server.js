@@ -65,13 +65,32 @@ import {
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
-import { emitDerivedBpm } from './bpm_emit.js';
+import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
 const SR = 44100, FFT = 1024, HOP = 512;
+
+// Canonical GENRE name list — index-aligned with the sibling slot-0 detector's
+// `audioGenre` CPC key (an integer index) and its exported GENRE_NAMES. Kept
+// here so the Companion frame can carry both the index AND the human name; the
+// UI maps index→name for the DERIVED panel. (Display-side mapping, not a
+// forbidden fallback.) MUST stay in lock-step with the sibling's GENRE_NAMES.
+const GENRE_NAMES = Object.freeze([
+  'ambient', 'deep_house', 'melodic_house', 'tech_house',
+  'techno', 'melodic_techno', 'downtempo',
+]);
+
+// Read a CPC scalar that MAY NOT be registered yet (a sibling agent's key that
+// isn't merged into this tree). paramCenter.get() THROWS on an unknown key, so
+// gate on isRegisteredKey and return null when absent — the UI renders "—".
+// This is NOT a value fallback (codex P0): an absent KEY is a different thing
+// from a present-but-zero value; we report "not published" honestly.
+function safeGet(key) {
+  return paramCenter.isRegisteredKey(key) ? paramCenter.get(key) : null;
+}
 
 // Server-side file browser for the File source. Defaults to the datasets dir:
 // `--datasets <dir>` / $COMPANION_DATASETS, else the corpus build dir, else $HOME.
@@ -138,13 +157,92 @@ function oscOutOf(sig) {
 const oscSock = dgram.createSocket('udp4');
 oscSock.on('error', (e) => console.warn(`[companion OSC] socket error: ${e && e.message}`));
 let oscSent = 0;
+
+// ── OSC OUT ACCOUNTING (observability) ───────────────────────────────────────
+// Per-address tally of every packet sendOsc emits: the live POST value, the
+// running send count, and an EWMA of the send rate (msgs/sec). This is the data
+// the UI's "OSC OUT" page renders. It is keyed by the OSC ADDRESS (the wire
+// identity) so it stays GENERIC — any current OR future emitter (designed
+// signals, the BPM emit, a sibling agent's new derived emit) shows up the moment
+// it calls sendOsc, with NO hardcoded list. The operator label / cpcKey is
+// attached separately by enumerating the live outputs at broadcast time.
+const oscAccounting = new Map();   // address -> { address, count, lastValue, _lastMs, rateHz }
+const OSC_RATE_TAU_MS = 1000;      // EWMA time-constant for the per-signal rate
+function recordOscSend(address, value) {
+  oscSent++;
+  let acc = oscAccounting.get(address);
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (!acc) {
+    acc = { address, count: 0, lastValue: 0, _lastMs: 0, rateHz: 0 };
+    oscAccounting.set(address, acc);
+  }
+  if (acc._lastMs) {
+    const dtMs = now - acc._lastMs;
+    if (dtMs > 0) {
+      const inst = 1000 / dtMs;                       // instantaneous msgs/sec
+      const a = Math.min(1, dtMs / OSC_RATE_TAU_MS);  // EWMA weight (dt-aware)
+      acc.rateHz = a * inst + (1 - a) * acc.rateHz;
+    }
+  }
+  acc._lastMs = now;
+  acc.count++;
+  acc.lastValue = value;
+}
+
 function sendOsc(address, value) {
   const v = Number.isFinite(value) ? value : 0;
   const buf = osc.toBuffer({ address, args: [{ type: 'float', value: v }] });
   oscSock.send(buf, design.osc.port, design.osc.host, (err) => {
     if (err) console.warn(`[companion OSC] send ${address} failed: ${err.message}`);
   });
-  oscSent++;
+  recordOscSend(address, v);
+}
+
+// Build the live OSC-OUT accounting snapshot for the UI. GENERIC: it enumerates
+// (a) every OUTPUT designed signal (chain ending in an enabled osc_out tap) and
+// (b) the always-on built-in emits (currently just BPM), then joins each to its
+// live tally in `oscAccounting` by ADDRESS. Sibling agents adding new derived
+// outputs only need to (i) sendOsc to a /marsin/... address and (ii) — if they
+// want a row even before the first packet — register it via
+// `registerBuiltinOscOutput`. Rows with no packets yet still render (count 0).
+const builtinOscOutputs = [];   // [{ address, label, cpcKey, kind }] — non-designed emits
+function registerBuiltinOscOutput(entry) {
+  if (!builtinOscOutputs.some(e => e.address === entry.address)) builtinOscOutputs.push(entry);
+}
+// BPM is the one always-on built-in emit today (bpm_emit.js → /marsin/audio/bpm).
+registerBuiltinOscOutput({ address: BPM_OSC_ADDRESS, label: 'BPM (derived)', cpcKey: 'audioBpm', kind: 'derived' });
+
+function buildOscAccounting() {
+  const rows = [];
+  const seen = new Set();
+  const push = (address, label, cpcKey, kind) => {
+    if (seen.has(address)) return;
+    seen.add(address);
+    const acc = oscAccounting.get(address);
+    rows.push({
+      address, label, cpcKey, kind,
+      count: acc ? acc.count : 0,
+      value: acc ? acc.lastValue : null,
+      rateHz: acc ? +acc.rateHz.toFixed(2) : 0,
+    });
+  };
+  // Designed OUTPUT signals — one row each, only when the tap is enabled.
+  for (const sig of design.signals) {
+    const tap = oscOutOf(sig);   // terminal, enabled osc_out or null
+    if (!tap) continue;
+    const { cpcKey, address } = resolveOscOut(tap.params.name);
+    push(address, tap.params.name, cpcKey, sig.type);
+  }
+  // Always-on built-in emits (BPM, plus anything a sibling registers).
+  for (const b of builtinOscOutputs) push(b.address, b.label, b.cpcKey, b.kind);
+  // Any address that emitted but isn't claimed above (defensive — e.g. a future
+  // emit that forgot to register). Never hide a real packet stream.
+  for (const acc of oscAccounting.values()) push(acc.address, acc.address, '', 'unknown');
+  return {
+    target: { host: design.osc.host, port: design.osc.port },
+    totalSent: oscSent,
+    outputs: rows,
+  };
 }
 
 // ── SIGNAL MANIFEST → engine (auto-route new signals to CaptainPad) ──────────
@@ -602,6 +700,10 @@ const analyzer = new AudioAnalyzer({
         party: paramCenter.get('audioParty'), note: paramCenter.get('audioNote'),
         hue: paramCenter.get('audioNoteHue'),
         sp: paramCenter.get('audioSwitchPattern'), sc: paramCenter.get('audioSwitchColor'),
+        // GENRE (sibling slot-0 detector). Absent until that code merges into
+        // this tree → safeGet returns null → the UI shows "—". index → name
+        // via GENRE_NAMES on the client.
+        genre: safeGet('audioGenre'), genreConf: safeGet('audioGenreConf'),
       },
     });
   },
@@ -624,6 +726,15 @@ setInterval(() => {
     pendingFrames = [];
   }
 }, BROADCAST_MS);
+
+// OSC-OUT accounting → UI, on its OWN slow cadence (the table doesn't need
+// 60 fps; a steady ~4 Hz keeps the WS light while the values + rates stay
+// live). Decoupled from the analysis frame so it never inflates the hot path.
+const OSC_ACCOUNTING_MS = 250;
+setInterval(() => {
+  if (clients.size === 0) return;   // nobody listening — skip the work
+  broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+}, OSC_ACCOUNTING_MS);
 
 // ── Audio sources ──────────────────────────────────────────────────────────
 let mode = 'test';        // 'test' | 'mic' | 'file'
@@ -881,6 +992,7 @@ function catalog() {
     views: design.views,
     osc: design.osc,
     source, gains: {}, inputGain, sourceSmoothHz,
+    genreNames: GENRE_NAMES,
     synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
   };
 }
@@ -974,6 +1086,13 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(catalog()));
     return;
   }
+  if (p === '/osc_accounting') {
+    // Point-in-time snapshot of every OSC signal sent to the engine (address,
+    // cpcKey, label, live value, count, rate) + the target + running total.
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(buildOscAccounting()));
+    return;
+  }
   if (p === '/file') {
     const fp = new URL(req.url, 'http://x').searchParams.get('path') || '';
     if (!fp || !AUDIO_EXT.has(path.extname(fp).toLowerCase())) { res.writeHead(400); res.end('bad file'); return; }
@@ -1035,6 +1154,7 @@ wss.on('connection', (ws) => {
     ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES, viewTypes: VIEW_TYPES,
     signals: design.signals, views: design.views, osc: design.osc,
+    genreNames: GENRE_NAMES,
     synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
