@@ -192,8 +192,8 @@ Legend: ⏳ ACTIVE · 📋 QUEUED · ✅ DONE(+verified) · ⚠️ PARTIAL/BLOCK
 - ✅ C-find: 5 adversarial auditors ran; consolidated findings `20260620_9`.
 - ✅ C-fix-signals: P1 batch (dead startup guard, party warmup, genre conf, dead BPM params)
   MERGED on feat @ `a775398` (271 tests green; confirmed by 2 auditors).
-- ⏳ C-fix-companion: companion/CaptainPad/test-gap safe fixes (items 5–10 of `20260620_9`)
-  — `dev/companion_captainpad_fixes`.
+- ✅ C-fix-companion: companion/CaptainPad/test-gap safe fixes (items 5–10 of `20260620_9`)
+  — `dev/companion_captainpad_fixes` MERGED (279 audio tests green; proof in `_verification` 07:00Z).
 - 🔭 C-backlog (coordinated follow-ups, documented in `20260620_9`): FFT 1024→2048 +
   sub-window overlap; fixed-dt; genre v2 robustness (needs real audio); detector scoring
   honesty + mic-gain + 2nd-drop recall; P3 cleanups.
