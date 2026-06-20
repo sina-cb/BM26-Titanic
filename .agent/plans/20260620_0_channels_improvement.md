@@ -362,3 +362,12 @@ node_modules symlinked to main checkout (gitignored, never committed).
   {name, entryId?} + /mixer/channels/:id/playlist/swap. Cron re-armed.
 </content>
 </invoke>
+
+## STATUS LOG (cont. 3)
+- 2026-06-20 T7: Operator: do NOT close — continuous new-channel features to deadline.
+  Perf benchmark MERGED (ad08141): vis-pool 3.9-24x + -12/-33% heap (real win),
+  precompile -6/-12ms first-frame, mean frame -1.6/-2.5% at 312-1000px; 40fps-capped
+  so win = CPU headroom/GC stability. WAVE 11 discovery → 13-feature backlog.
+  WAVE 12 (engine: snapshots+master-fade+clamp+color) RUNNING (sole engine writer).
+  Parallel read-only design agent for WAVE 15 groups+solo composite precedence RUNNING.
+  Cadence: engine waves serialize on api_server.js/pattern_mixer.js; UI parallel after.
