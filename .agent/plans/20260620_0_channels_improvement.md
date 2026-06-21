@@ -477,3 +477,14 @@ Likely build order once files free: (4) mixer readability fix [mixer.tsx, high-i
 (2)+(3) hue engine [one engine writer: global effect + per-channel field + composite] →
 hue UI [mixer.tsx global-effects bar + per-strip]. The cramp fix (4) should go FIRST so the
 new per-channel hue control lands into an already-decluttered strip.
+
+## STATUS LOG (cont. 10) — RESUME after ~16h dormancy
+- 2026-06-21 ~08:00Z: session resumed. Found ops-UI + cue-to-deck agents STALLED (dead):
+  last write ~959 min ago, uncommitted partials, 123-byte output stubs, no completion, no live
+  proc. Took over per protocol — discarded the stale partials (based on old tip 6557b7c),
+  cleaned worktrees/branches. Readability fix (operator req #3) already MERGED a5ee521.
+- PIVOT to operator's HUE requests (priority). Relaunched 2 parallel (disjoint, worktree-scoped):
+  * dev/hue_engine — global + per-channel hue ENGINE (plan _27). Sole engine writer.
+  * dev/channel_ops_ui (re-do) — dup/reorder/panic UI in mixer.tsx + channelOpsApi.ts.
+  Disjoint: engine files (hue) vs mixer.tsx (ops-UI). NEXT: hue UI (mixer.tsx + GlobalEffectMacros,
+  after both land) + re-queue cue-to-deck #7 (api_server, after hue_engine).
