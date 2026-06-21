@@ -932,6 +932,14 @@ export interface MixerChannel {
   exports?: any[];
   playlist?: PlaylistAssignment | null;
   viewSelection?: { type: string; target: string | number | null; invert?: boolean } | null;
+  // Per-channel phase clock (round-2 #3/#11, design 20260620_33). The engine
+  // serializes these on every mixer-state broadcast: `speed` is a multiplier
+  // on this channel's phase accumulator (clamp [0.05,8], default 1), `phaseOffsetMs`
+  // is a constant phase shift (clamp [-10000,10000] ms, default 0), and
+  // `followsTempo` opts the channel into the global tap-tempo multiplier.
+  speed?: number;
+  phaseOffsetMs?: number;
+  followsTempo?: boolean;
   [key: string]: any;
 }
 
@@ -940,6 +948,9 @@ export interface MixerState {
   channels: MixerChannel[];
   baseChannelId?: string;
   maxChannels?: number;
+  // Global tap-tempo (round-2 #4). 120 BPM = 1×; null when never set. Affects
+  // only `followsTempo` channels. Rides the existing mixer-state broadcast.
+  tempoBpm?: number | null;
   [key: string]: any;
 }
 

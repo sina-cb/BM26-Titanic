@@ -28,7 +28,7 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
-import { setChannelFaderMax, setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
+import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -51,6 +51,15 @@ import {
 // floor. An 8pt hitSlop on every edge expands the *interactive* area to
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// Per-channel phase-clock domain bounds (round-2 #3/#11, design 20260620_33).
+// These mirror the engine's clamp ranges (speed [0.05,8], phaseOffsetMs
+// [-10000,10000] ms) and define how the normalized 0..1 HorizontalFader maps
+// onto the engine's domain at the UI boundary (same pattern as HUE's ×360).
+const SPEED_MIN = 0.05;
+const SPEED_MAX = 8;
+const OFFSET_MIN = -10000;
+const OFFSET_MAX = 10000;
 
 // Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
 // no render effect). A small fixed set of high-contrast hex accents so the
@@ -214,7 +223,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -604,6 +613,86 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: C.secondary }]}>
             {Math.round(channel.hue ?? 0)}
           </Text>
+        </View>
+      )}
+
+      {/* Per-channel SPEED (round-2 #3, design 20260620_33). A multiplier on
+          THIS channel's own phase accumulator — the engine accumulates each
+          channel's phase from the shared global delta scaled by `speed`, so a
+          speed change never makes absolute-time patterns jump. Engine clamps
+          [0.05,8] (0.05 floor = anti-silent-failure; 0 would freeze). The
+          0..1 fader maps onto [SPEED_MIN, SPEED_MAX] at the boundary; the
+          display reads the resolved multiplier (e.g. 1.00×). Same lock gate as
+          the CAP/HUE rows. */}
+      {onSpeedChange && (
+        <View style={styles.speedRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>SPEED</Text>
+          <HorizontalFader
+            value={(((channel.speed ?? 1) - SPEED_MIN) / (SPEED_MAX - SPEED_MIN))}
+            onChange={(v: number) => {
+              if (!locked) {
+                const sp = Math.round((SPEED_MIN + v * (SPEED_MAX - SPEED_MIN)) * 100) / 100;
+                onSpeedChange(channel.id, sp);
+              }
+            }}
+            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            fillStyle={styles.speedFill}
+          />
+          <Text style={[styles.displayMono, { width: 40, textAlign: 'right', fontSize: 13, color: '#4FC3F7' }]}>
+            {(channel.speed ?? 1).toFixed(2)}×
+          </Text>
+        </View>
+      )}
+
+      {/* Per-channel phase OFFSET (round-2 #11, design 20260620_33). A constant
+          shift added to this channel's phase (in ms). Same-pattern channels
+          with staggered offsets ({0,250,500}ms) chase/ripple. Engine clamps
+          [-10000,10000] ms (default 0). The 0..1 fader maps onto that signed
+          range; the display reads ms (signed). Same lock gate. */}
+      {onPhaseOffsetChange && (
+        <View style={styles.offsetRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>OFFSET</Text>
+          <HorizontalFader
+            value={(((channel.phaseOffsetMs ?? 0) - OFFSET_MIN) / (OFFSET_MAX - OFFSET_MIN))}
+            onChange={(v: number) => {
+              if (!locked) {
+                const ms = Math.round(OFFSET_MIN + v * (OFFSET_MAX - OFFSET_MIN));
+                onPhaseOffsetChange(channel.id, ms);
+              }
+            }}
+            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            fillStyle={styles.offsetFill}
+          />
+          <Text style={[styles.displayMono, { width: 52, textAlign: 'right', fontSize: 13, color: '#BA68C8' }]}>
+            {`${(channel.phaseOffsetMs ?? 0) > 0 ? '+' : ''}${Math.round(channel.phaseOffsetMs ?? 0)}ms`}
+          </Text>
+        </View>
+      )}
+
+      {/* FOLLOW TEMPO toggle (round-2 #4). Opts this channel into the global
+          tap-tempo multiplier (120 BPM = 1×) — opt-in so the mission-critical
+          exterior is immune unless explicitly enabled. Server-authoritative;
+          the next mixer broadcast reconciles. Same lock gate. State carried by
+          the ✓ glyph + accessibilityState (not color-only). */}
+      {onFollowsTempoChange && (
+        <View style={styles.followTempoRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>TEMPO</Text>
+          <TouchableOpacity
+            style={[
+              styles.followTempoBtn,
+              !!channel.followsTempo && { backgroundColor: '#00a86b', borderColor: '#00a86b' },
+              locked && { opacity: 0.5 },
+            ]}
+            disabled={locked}
+            onPress={() => { if (!locked) onFollowsTempoChange(channel.id, !channel.followsTempo); }}
+            accessibilityRole="switch"
+            accessibilityLabel="Follow global tempo"
+            accessibilityState={{ checked: !!channel.followsTempo, disabled: locked }}
+          >
+            <Text style={[styles.labelCaps, !!channel.followsTempo && { color: '#FFF' }]}>
+              {channel.followsTempo ? '✓ FOLLOW TEMPO' : 'FOLLOW TEMPO'}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1584,6 +1673,56 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // Per-channel phase clock (round-2 #3/#11, design 20260620_33). SPEED scales
+  // this channel's phase accumulator (engine clamps [0.05,8], default 1×);
+  // OFFSET adds a constant phase shift (clamp [-10000,10000] ms, default 0) so
+  // same-pattern channels with staggered offsets chase/ripple. Same optimistic
+  // + PATCH + reconcile-from-broadcast + fail-loud revert shape as hue/faderMax.
+  const handleSpeedChange = useCallback(async (channelId: string, speed: number) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.speed;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, speed } : c));
+    const res = await setChannelSpeed(channelId, speed);
+    if (!res.ok) {
+      console.error(`[Mixer] speed change rejected for ${channelId}:`, res.error);
+      // Revert to the prior speed; the next mixer broadcast re-syncs too.
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, speed: prev ?? 1.0 } : c));
+      Alert.alert(
+        'Speed not applied',
+        `The engine rejected this speed. ${res.error || ''} The channel kept its previous speed.`.trim(),
+      );
+    }
+  }, []);
+
+  const handlePhaseOffsetChange = useCallback(async (channelId: string, phaseOffsetMs: number) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.phaseOffsetMs;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, phaseOffsetMs } : c));
+    const res = await setChannelPhaseOffset(channelId, phaseOffsetMs);
+    if (!res.ok) {
+      console.error(`[Mixer] phaseOffset change rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, phaseOffsetMs: prev ?? 0 } : c));
+      Alert.alert(
+        'Phase offset not applied',
+        `The engine rejected this offset. ${res.error || ''} The channel kept its previous offset.`.trim(),
+      );
+    }
+  }, []);
+
+  // FOLLOW TEMPO toggle: opts this channel into the global tap-tempo
+  // multiplier. Boolean PATCH, same optimistic + fail-loud revert shape.
+  const handleFollowsTempoChange = useCallback(async (channelId: string, followsTempo: boolean) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.followsTempo ?? false;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, followsTempo } : c));
+    const res = await setChannelFollowsTempo(channelId, followsTempo);
+    if (!res.ok) {
+      console.error(`[Mixer] followsTempo toggle rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, followsTempo: prev } : c));
+      Alert.alert(
+        'Follow-tempo not applied',
+        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -2107,6 +2246,9 @@ export default function MixerScreen() {
               onFaderMaxChange={handleFaderMaxChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
+              onSpeedChange={handleSpeedChange}
+              onPhaseOffsetChange={handlePhaseOffsetChange}
+              onFollowsTempoChange={handleFollowsTempoChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
               onSoloSafeToggle={handleSoloSafeToggle}
@@ -2546,6 +2688,59 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   hueSwatch: {
     width: 16, height: 16, borderRadius: 4,
     borderWidth: 1, borderColor: C.ghostBorder,
+  },
+  // Per-channel phase-clock rows (round-2 #3/#11) — same geometry as the
+  // LEVEL/CAP/HUE rows. SPEED fill is cyan (time/motion), OFFSET fill is
+  // purple (phase shift); both distinct from the level/cap/hue fills so the
+  // operator reads them as their own cluster of time controls.
+  speedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  speedFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#4FC3F7',
+    borderRadius: 4,
+  },
+  offsetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  offsetFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#BA68C8',
+    borderRadius: 4,
+  },
+  // FOLLOW TEMPO toggle row (round-2 #4). The button mirrors the Mute/Solo
+  // toggle visual language (green = on).
+  followTempoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  followTempoBtn: {
+    flex: 1,
+    marginLeft: 6,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
   },
   // Channel color picker swatch grid.
   swatchGrid: {

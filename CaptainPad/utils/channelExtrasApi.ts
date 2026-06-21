@@ -239,6 +239,114 @@ export async function setChannelHue(
   }
 }
 
+// ── Per-channel phase clock (round-2 #3/#11, docs design 20260620_33) ──────
+// Three orthogonal time controls on the SAME PATCH /mixer/channels/:id (or
+// /deck/channel when { deck: true }) the rest of the channel metadata uses:
+//   - speed:        finite multiplier on this channel's phase accumulator;
+//                   engine clamps [0.05, 8]; non-finite ⇒ 400.
+//   - phaseOffsetMs: finite constant added to phase (ms); engine clamps
+//                   [-10000, 10000]; non-finite ⇒ 400.
+//   - followsTempo: bool; when true this channel's speed is scaled by the
+//                   global tap-tempo multiplier (120 BPM = 1×). Sent as `!!`.
+
+export async function setChannelSpeed(
+  channelId: string,
+  speed: number,
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speed }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setChannelPhaseOffset(
+  channelId: string,
+  phaseOffsetMs: number,
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phaseOffsetMs }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setChannelFollowsTempo(
+  channelId: string,
+  followsTempo: boolean,
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ followsTempo: !!followsTempo }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Global tap-tempo (round-2 #4) ─────────────────────────────────────────
+// The client computes BPM from tap intervals and posts the resolved BPM. The
+// engine validates finite [20,400] (else 400), sets _tempoMultiplier =
+// clamp(bpm/120, 0.05, 8), persists, and broadcasts the new tempoBpm on the
+// existing mixer-state WS. Affects ONLY followsTempo channels (opt-in).
+// POST /mixer/tempo { bpm }.
+
+export async function postTapTempo(
+  bpm: number,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/tempo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bpm }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global hue shifter (F-hue, docs/39 §F-hue) ────────────────────────────
 // A first-class rig knob (NOT a GEM slot): a continuous hue rotation applied
 // POST-composite on the whole output buffer, plus an optional auto-rotate

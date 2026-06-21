@@ -33,6 +33,7 @@ import { HealthChip } from '@/components/ui/HealthChip';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 import { fadeMaster } from '@/utils/masterApi';
+import { postTapTempo } from '@/utils/channelExtrasApi';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 
 interface Props {
@@ -57,6 +58,40 @@ interface MasterFade {
 // operator can always drag the master directly for anything bespoke.
 const FADE_SECONDS = [1, 3, 5, 10] as const;
 const DEFAULT_FADE_SECONDS = 3;
+
+// Tap-tempo (round-2 #4, design 20260620_33). The client computes BPM from the
+// intervals between the last few taps, averages them, clamps the DISPLAY to the
+// engine's accepted range [20,400] BPM, and POSTs the resolved BPM. Taps older
+// than TAP_RESET_MS start a fresh series (the operator has stopped tapping).
+const TAP_BPM_MIN = 20;
+const TAP_BPM_MAX = 400;
+const TAP_MAX_SAMPLES = 5; // average over the last few intervals
+const TAP_RESET_MS = 2500; // gap longer than this ⇒ new series
+
+/**
+ * Read the global `tempoBpm` off the SAME control-bus broadcasts that drive
+ * the master value (no new polling path — `mixer`/`deck` are existing push
+ * events). `null` until the engine reports a tempo.
+ */
+function useTempoBpm(): number | null {
+  const [bpm, setBpm] = useState<number | null>(null);
+  useEffect(() => {
+    const onMessage = (msg: EngineMessage) => {
+      if (msg.type !== 'mixer' && msg.type !== 'deck') return;
+      const raw = (msg as unknown as { tempoBpm?: unknown }).tempoBpm;
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        setBpm(raw);
+      } else if (raw === null) {
+        setBpm((prev) => (prev === null ? prev : null));
+      }
+    };
+    const unsubscribe = engineEvents.subscribe(onMessage);
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+  return bpm;
+}
 
 /**
  * Read the in-flight `masterFade` descriptor off the SAME control-bus
@@ -107,6 +142,49 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   const lastWriteRef = useRef(0);
   // Selected fade duration (seconds). Local UI state only.
   const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
+
+  // ── Tap tempo (round-2 #4) ────────────────────────────────────────────
+  // The engine owns `tempoBpm` (broadcast on the mixer/deck bus); the deck
+  // computes a BPM from the operator's taps and POSTs it. `tempoBpm` is the
+  // resolved value the button shows.
+  const tempoBpm = useTempoBpm();
+  // Tap timestamps (ms). Kept in a ref so taps don't re-render the bar; only
+  // the resolved-BPM label (engine-authoritative `tempoBpm`) drives re-render.
+  const tapTimesRef = useRef<number[]>([]);
+
+  const handleTap = () => {
+    const now = Date.now();
+    const times = tapTimesRef.current;
+    // A long gap means a new series — drop the stale taps.
+    if (times.length > 0 && now - times[times.length - 1] > TAP_RESET_MS) {
+      times.length = 0;
+    }
+    times.push(now);
+    // Keep only the most recent samples (need N taps ⇒ N-1 intervals).
+    if (times.length > TAP_MAX_SAMPLES + 1) {
+      times.splice(0, times.length - (TAP_MAX_SAMPLES + 1));
+    }
+    // Need at least two taps to derive an interval.
+    if (times.length < 2) return;
+    let sum = 0;
+    for (let i = 1; i < times.length; i++) sum += times[i] - times[i - 1];
+    const avgIntervalMs = sum / (times.length - 1);
+    if (!(avgIntervalMs > 0)) return;
+    const rawBpm = 60000 / avgIntervalMs;
+    // Clamp the DISPLAY to the engine's accepted range; the engine validates
+    // [20,400] and 400s anything out of band, so clamping here matches.
+    const bpm = Math.round(Math.max(TAP_BPM_MIN, Math.min(TAP_BPM_MAX, rawBpm)));
+    void sendTempo(bpm);
+  };
+
+  const sendTempo = async (bpm: number) => {
+    const res = await postTapTempo(bpm);
+    if (!res.ok) {
+      // Codex P0 — fail loud: a rejected tempo must be visible.
+      console.error('Tap tempo failed:', res.error);
+      Alert.alert('Tap tempo failed', res.error || 'The engine rejected the tempo.');
+    }
+  };
 
   const handleMasterChange = (val: number) => {
     const now = Date.now();
@@ -208,6 +286,27 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             </TouchableOpacity>
           </View>
         )}
+        {/* TAP TEMPO (round-2 #4) — tap in time; the client averages the
+            tap intervals into a BPM and POSTs it. The resolved engine
+            `tempoBpm` is shown beneath the label (— until set). Affects only
+            channels with FOLLOW TEMPO enabled. Shown in both orientations
+            (compact) — tempo is a performance affordance the deck always wants.*/}
+        <TouchableOpacity
+          onPress={handleTap}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          style={styles.tapTempoBtn}
+          accessibilityRole="button"
+          accessibilityLabel={
+            typeof tempoBpm === 'number'
+              ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute`
+              : 'Tap tempo, not set'
+          }
+        >
+          <Text style={styles.tapTempoLabel}>TAP</Text>
+          <Text style={styles.tapTempoBpm}>
+            {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)} BPM` : '— BPM'}
+          </Text>
+        </TouchableOpacity>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
         <HorizontalFader
           value={master}
@@ -380,6 +479,34 @@ function makeStyles(C: Palette) {
       letterSpacing: 1.0,
       color: C.primary,
       textTransform: 'uppercase' as const,
+    },
+    // ── Tap tempo ─────────────────────────────────────────────────────
+    // A two-line pill (TAP / "<n> BPM") so the operator both triggers and
+    // reads the resolved tempo in one spot. 36pt visible height + 8pt
+    // vertical hitSlop ⇒ ≥44pt effective touch target.
+    tapTempoBtn: {
+      height: 36,
+      minWidth: 64,
+      paddingHorizontal: 10,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: C.primary,
+      backgroundColor: C.surfaceContainerHigh,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    tapTempoLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 1.2,
+      color: C.secondary,
+      textTransform: 'uppercase' as const,
+    },
+    tapTempoBpm: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      letterSpacing: 0.4,
+      color: C.primary,
     },
     // Same fixed 36pt slot as the master readout so swapping in the hint
     // keeps the row width stable — no layout shift when a fade starts.
