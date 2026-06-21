@@ -940,6 +940,11 @@ export interface MixerChannel {
   speed?: number;
   phaseOffsetMs?: number;
   followsTempo?: boolean;
+  // Per-channel color INVERT (F-invert, docs/39 §F-invert; engine #8). A pure
+  // boolean the engine serializes on every mixer-state broadcast (same path as
+  // soloSafe/hue — no new WS type): when true this channel's RGB contribution
+  // is inverted PRE-blend, AFTER the per-channel hue. Default false = no-op.
+  invert?: boolean;
   [key: string]: any;
 }
 

@@ -321,6 +321,39 @@ export async function setChannelFollowsTempo(
   }
 }
 
+// ── Per-channel color INVERT (F-invert, docs/39 §F-invert; engine #8) ─────
+// A pure-boolean per-channel flag: when true the engine inverts this
+// channel's RGB contribution (applied AFTER the per-channel hue —
+// hue-then-invert). W/A/UV are never touched and the render loop gates on
+// the flag, so invert=false is a no-op. Same PATCH /mixer/channels/:id (or
+// /deck/channel when { deck: true }) the rest of the channel metadata uses;
+// the engine coerces with `!!`, so a non-bool can't half-apply. Mirrors
+// setChannelFollowsTempo exactly (boolean, `!!`, same fail-loud shape).
+
+export async function setChannelInvert(
+  channelId: string,
+  invert: boolean,
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invert: !!invert }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global tap-tempo (round-2 #4) ─────────────────────────────────────────
 // The client computes BPM from tap intervals and posts the resolved BPM. The
 // engine validates finite [20,400] (else 400), sets _tempoMultiplier =
